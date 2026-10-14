@@ -546,8 +546,9 @@ class CallRecord:
     own text, which no persisted store keeps. `hop` is "" for a call of the
     chain itself, and `HOP_ESCALATION` for a call an escalation hop made.
 
-    A row is what costs money, so this counts requests; nothing in production
-    reads it (the eval runner does)."""
+    A row is what costs money, so this counts requests. The eval runner reads
+    it, and so does the history rerank (`routes/history_recall.py`), which
+    reads only `error_kind` to say why an unanswered rerank was skipped."""
 
     stage: int
     mode: str

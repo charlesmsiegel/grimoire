@@ -60,6 +60,7 @@ const DRAFT_FIELDS = [
   "prompt_log_depth", "offscene_known_limit",
   "speaker_turn_taking", "prompt_layout_enabled",
   "semantic_recall_depth", "semantic_recall_threshold",
+  "history_recall_depth", "history_recall_budget", "history_recall_threshold", "history_recall_rerank",
   "system_prompt",
   "quote_color", "user_label", "assistant_label",
   "rolling_summary_every", "scene_break_every", "replay_fork_threshold",
@@ -142,7 +143,9 @@ const SECTIONS: SectionDef[] = [
   { id: "context", group: "What the model sees", label: "Context",
     fields: ["context_budget", "context_scan_depth", "lore_recursion_depth", "archive_depth",
              "prompt_log_depth", "offscene_known_limit", "speaker_turn_taking", "send_images",
-             "send_images_limit", "semantic_recall_depth", "semantic_recall_threshold"] },
+             "send_images_limit", "semantic_recall_depth", "semantic_recall_threshold",
+             "history_recall_depth", "history_recall_budget", "history_recall_threshold",
+             "history_recall_rerank"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
   { id: "tracker", group: "What the model sees", label: "Scene tracker",
@@ -876,6 +879,37 @@ export default function ConfigView() {
               and lore owned by an absent character stays hidden either way. Set recalled entries
               to <code>0</code> to turn recall off. It needs the Embedding role.
             </p>
+            <h3>Historical recall</h3>
+            <p className="config-copy">
+              Recall bounded summaries and excerpts from earlier scenes. Set recalled scenes
+              to <code>0</code> to turn it off. Embeddings are optional: structural relationships
+              and keyword matches also find scenes. With an Embedding role configured, semantic
+              recall sends recent scene text to its provider and may cost money. An endpoint
+              that reports no price (a local or OpenAI-compatible server) makes the Costs
+              totals read incomplete until you set per-token rates for its model.
+            </p>
+            <p className="config-copy">
+              Reranking adds a decision call and may cost money. The live inspector previews
+              structural and keyword recall without embedding or reranking calls.
+            </p>
+            <div className="config-fields">
+              <NumField id="cfg-history-depth" label="Historical scene depth" placeholder="0"
+                        caption="0 = history recall off" value={draft.history_recall_depth}
+                        onChange={(v) => edit("history_recall_depth", v)} />
+              <NumField id="cfg-history-budget" label="History recall budget" placeholder="1200"
+                        unit="tokens" caption="also bounded by the model window and context budget"
+                        value={draft.history_recall_budget}
+                        onChange={(v) => edit("history_recall_budget", v)} />
+              <NumField id="cfg-history-threshold" label="History minimum cosine" decimal
+                        placeholder="0.35" caption="minimum cosine similarity"
+                        value={draft.history_recall_threshold}
+                        onChange={(v) => edit("history_recall_threshold", v)} />
+              <label className="toggle">
+                <input type="checkbox" checked={draft.history_recall_rerank === "on"}
+                       onChange={(e) => edit("history_recall_rerank", e.target.checked ? "on" : "off")} />
+                Rerank history
+              </label>
+            </div>
             <p className="config-copy">{EMBEDDINGS_COPY}</p>
             <div className="config-fields">
               <NumField id="cfg-semantic-depth" label="Recalled entries" placeholder="0"

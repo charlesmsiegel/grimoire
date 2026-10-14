@@ -17,7 +17,9 @@ within a tier the largest section is dropped first, so sharing a tier let
 recalled lore evict the Earlier-scenes section — swapping context the prompt
 already had for context it never did. A user-editable tier is a control whose
 only function is to break that promise. Prompt order and drop order are two
-axes, and only the first is a preference.
+axes, and only the first is a preference. `HISTORY_RECALL` sits below
+`RECALLED`, giving up targeted history before lore so the new section only
+adds to what the prompt already carried.
 
 `except_opener` is the same kind of thing rather than a taste: the opener is
 streamed unpersisted into a box the reader adopts by hand, and the scene state

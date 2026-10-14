@@ -21,6 +21,7 @@ from grimoire.store import (
     campaigns,
     characters,
     compiled,
+    embed_space,
     modules,
     paths,
     proclock,
@@ -85,6 +86,12 @@ def _default_home_never_the_real_one(tmp_path_factory):
         mp.setattr(paths, "pointer_path", lambda: pointer)
         mp.setattr(proclock, "lock_dir", lambda: machine_locks)
         yield
+
+
+@pytest.fixture(autouse=True)
+def _no_embedding_outage_from_another_test(monkeypatch):
+    """Shared history/lore process memory belongs to one test's fake endpoint."""
+    monkeypatch.setattr(embed_space, "_OUTAGES", {})
 
 
 @pytest.fixture(autouse=True)

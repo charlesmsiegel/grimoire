@@ -26,7 +26,14 @@ from typing import NamedTuple
 import pytest
 
 from grimoire import adapters, decisions
-from grimoire.store import response_protocol, routing, scene_break, turn_plan, voice_drift
+from grimoire.store import (
+    history_rerank,
+    response_protocol,
+    routing,
+    scene_break,
+    turn_plan,
+    voice_drift,
+)
 from grimoire.store.continuity import identity, reconcile
 from grimoire.store.inference import resolve
 
@@ -38,6 +45,7 @@ TaskPolicy = routing.TaskPolicy
 #: (spec §4.3: "`question` equals the store constant"). Every task on a
 #: decide route must be here (`test_every_decide_task_is_pinned`).
 _QUESTION: dict[str, str] = {
+    "history-rerank": history_rerank.RELEVANCE_ID,
     "response-selector": response_protocol.SELECTOR_QUESTION,
     "continuity-identity": identity.DECISION_ID,
     "continuity-reconcile": reconcile.DECISION_ID,
@@ -110,6 +118,8 @@ def _answers() -> dict[str, _Vocab]:
     lazily: the builders render templates."""
     [row] = identity.build_items([_BARE_ROW], {})
     return {
+        "history-rerank": _Vocab(_keys(history_rerank.build_items("", [
+            history_rerank.Candidate("scene-1", "")])[0], _QUESTION["history-rerank"])),
         # An empty roster: the one option every pick offers. Each NPC's ref
         # is per scene, so no exact entry can name one.
         "response-selector": _Vocab(_keys(response_protocol.selector_item([], []),
@@ -374,7 +384,7 @@ def test_every_task_is_off_at_landing():
     # Roadmap 02-S3 lists the two sampling tasks -- sampling is the caller's,
     # and runs only where a campaign switches it on -- with escalation off.
     assert set(routing.TASK_POLICY) == {"response-selector", "turn-intent", "turn-plan",
-                                        "turn-tool-decision"}
+                                        "turn-tool-decision", "history-rerank"}
     for task, p in routing.TASK_POLICY.items():
         assert p.escalate_to == "", task
         assert p.fallback == "role", task
@@ -388,7 +398,8 @@ def test_every_decide_task_is_pinned():
     assert _QUESTION == {"response-selector": "next", "continuity-identity": "decision",
                          "continuity-reconcile": "decision", "scene-break": "over",
                          "voice-drift": "verdict", "turn-intent": "stance",
-                         "turn-plan": "stance", "turn-tool-decision": "choice"}
+                         "turn-plan": "stance", "turn-tool-decision": "choice",
+                         "history-rerank": "relevance"}
     assert not _answers()["continuity-reconcile"].exact & {
         "duplicate", "continuation", "subthread", "pays_off"}
     # The builders' vocabularies, as each call site offers them.

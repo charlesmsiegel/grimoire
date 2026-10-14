@@ -212,6 +212,7 @@ cannot fail a test run.
 | `test_pydantic_guard.py` | pydantic usage stays v1/v2-agnostic | `# pydantic-ok:` |
 | `test_paths_guard.py` | filesystem access goes through the resolvers | `# paths-ok:` |
 | `test_lock_order_guard.py` | only `locks.hold_all` holds more than one campaign lock | `# lock-order-ok:` |
+| `test_history_lock_guard.py` | route retrieval calls (`retrieve`, `gather`, `gather_sync`) never appear lexically inside a campaign-lock hold | none |
 | `test_lock_domain_guard.py` | campaign-scoped mutators take `locks.campaign_lock(cid)` | `# lock-domain-ok:` |
 | `test_usage_guard.py` | every generation route meters what it spends -- `decide_native` included, one meter per item -- every `inference.generate` call -- in the package, `backend/scripts/` and `evals/` -- passes `usage=` a meter's holder (`generate` itself forwards its caller's; the eval runner and the ingest script are named, capped exemptions), and every embeddings request passes a meter's holder | `# usage-ok:` |
 | `test_routing_guard.py` | every generation names a task, and every task belongs to a route in `store/routing.py`; the escalation seam (`escalation_inference`) names a task whose policy escalates to a role; every generation goes through `inference.generate`, so `client.stream`/`complete` appear only in `inference.py`, `client.single` only in the model test and `client.decide_native` only there and in `inference.py` | `# routing-ok:` |

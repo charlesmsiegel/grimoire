@@ -193,10 +193,9 @@ CLIENT_MODULE = "grimoire.embeddings"
 CLIENT_DOORS = frozenset({EMBED_MODULE, "grimoire.routes.config"})
 
 #: At least this many operation calls exist (vacuity insurance): lore recall
-#: 2, library search 2, art 1, continuity 1. The async `embed` (01h-C4b, a
-#: native door on the app's `routes.get_embeddings` client) has no caller
-#: yet: 09 and 10 are its consumers.
-MIN_EMBED_CALLS = 7
+#: 2, library search 2, art 1, continuity 1, history-index 1 and history
+#: recall's two native async calls (the second is its query-only retry).
+MIN_EMBED_CALLS = 9
 
 
 def _is_embed_module(node: ast.AST, modules: set[str]) -> bool:
@@ -460,6 +459,8 @@ class Provenance:
     def ok(self, expr: ast.expr | None, ctx: _Ctx) -> bool:
         if expr is None or (isinstance(expr, ast.Constant) and expr.value is None):
             return True
+        if isinstance(expr, ast.Await):
+            return self.ok(expr.value, ctx)
         if isinstance(expr, ast.Call):
             return self._call(expr, ctx)
         if isinstance(expr, ast.Dict):
@@ -563,6 +564,21 @@ class Provenance:
 
     def _call(self, call: ast.Call, ctx: _Ctx) -> bool:
         mod, _fn, bound = ctx
+        # 09-S4 resolves the synchronous endpoint in a worker before its async
+        # embed. Accept only anyio's imported, argument-free worker callback --
+        # a `limiter=` choosing which threads run it changes nothing it
+        # returns -- and follow the callback's actual returns, never the worker
+        # as a source.
+        if (_dotted(call.func) == "anyio.to_thread.run_sync" and len(call.args) == 1
+                and all(k.arg == "limiter" for k in call.keywords) and any(
+                    isinstance(n, ast.Import) and any(a.name == "anyio" and a.asname is None
+                                                     for a in n.names)
+                    for n in self.trees[mod][0].body)
+                and not any((isinstance(n, ast.Name) and n.id == "anyio"
+                             and isinstance(n.ctx, ast.Store)) or (isinstance(n, ast.arg)
+                             and n.arg == "anyio") for n in ast.walk(self.trees[mod][0]))):
+            target = self.resolve(call.args[0], mod)
+            return target is not None and self._returns(target, call=None, ctx=ctx)
         if isinstance(call.func, ast.Name) and bound and call.func.id in bound:
             # A function handed in as an argument (`_soft(fn, ...)`): what it
             # returns, followed at the reference the caller passed.
@@ -962,6 +978,32 @@ def test_the_warm_up_exception_flags_planted_cases(src):
 ])
 def test_the_provenance_guard_flags_planted_cases(src):
     assert _planted_space_problems(_PRELUDE + src), src
+
+
+@pytest.mark.parametrize("callback, accepted", [
+    ("embed_space.endpoint", True),
+    ("embed_space.endpoint, limiter=pool", True),
+    ("made", False),
+    ("made, limiter=pool", False),
+    ("embed_space.endpoint, unknown", False),
+    ("embed_space.endpoint, abandon_on_cancel=True", False),
+])
+def test_awaited_worker_endpoint_provenance(callback, accepted):
+    src = (_PRELUDE + "import anyio\n"
+           "def made():\n"
+           "    return {'space': 'other', 'model': 'other'}\n"
+           "async def f():\n"
+           f"    space = await anyio.to_thread.run_sync({callback})\n"
+           "    await embed.embed('history-recall', t, space=space, client=c)\n")
+    assert bool(_planted_space_problems(src)) is not accepted
+
+
+def test_awaited_worker_provenance_rejects_shadowed_executor():
+    src = (_PRELUDE + "import anyio\n"
+           "async def f(anyio):\n"
+           "    space = await anyio.to_thread.run_sync(embed_space.endpoint)\n"
+           "    await embed.embed('history-recall', t, space=space, client=c)\n")
+    assert _planted_space_problems(src)
 
 
 @pytest.mark.parametrize("src", [
@@ -1619,11 +1661,12 @@ def _generate_problems() -> tuple[str, ...]:
 
 
 def test_the_generate_walk_reaches_the_scripts_and_the_evals():
-    """Vacuity insurance for `OUTSIDE`: the eval runner's and the ingest
-    script's generations are found and judged."""
+    """Vacuity insurance for `OUTSIDE`: the eval runners' (the history suite's
+    live downstream arm included) and the ingest script's generations are
+    found and judged."""
     found = {modname for modname, tree, is_pkg in outside_walk()
              if generate_calls(tree, modname, is_pkg)}
-    assert found == {"evals.runner", "scripts.ingest_scene"}, found
+    assert found == {"evals.runner", "evals.history.runner", "scripts.ingest_scene"}, found
 
 
 def test_the_eval_runners_data_task_is_held_to_generate_routes():

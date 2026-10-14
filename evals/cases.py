@@ -2548,18 +2548,13 @@ CASES: tuple[Case, ...] = (
              Recording("native", (), "json", native="openai"))),
 )
 
-BY_ID = {c.id: c for c in CASES}
-
 
 # ------------------------------------------------- the decide kits (02-S7)
 #
-# Cases for the two kits whose call sites land with 11 and 09 (roadmap 02
-# §9.1). Held OUTSIDE `CASES`: a registered case's task must be on a route,
-# and these routes land with those call sites. Their recordings are replayed
-# by each kit's own unit test (`test_epistemic_access.py`,
-# `test_history_rerank.py`), and `test_no_orphan_recordings` claims them
-# through `KIT_CASES`. The consumer's first slice moves its case into
-# `CASES`.
+# A registered case's task must be on a route (roadmap 02 §9.1). 09-S5
+# activates the history case below, with its call site; the epistemic case
+# stays outside `CASES` until 11 lands. `KIT_CASES` keeps the latter's
+# recordings claimed by `test_no_orphan_recordings` and its kit unit test.
 
 EPISTEMIC_QUESTION = epistemic_access.AccessQuestion(
     actor_ref="characters:mara", actor_name="Mara", evidence_ref="scene-3#12",
@@ -2672,6 +2667,11 @@ KIT_CASES: tuple[Case, ...] = (
              Recording("native", (), "json", native="openai"),
              # Refused natively: never a class, so UNKNOWN.
              Recording("native-refused", ("decide.answer",), "json", native="openai"))),
+)
+
+
+# 09-S5 activates the history kit when its decide call site registers.
+CASES = (*CASES,
     Case(id="decide-history-rerank",
          task=history_rerank.TASK,
          hypothesis="asked through decide() how much a scene in which the missing ledger "
@@ -2691,3 +2691,4 @@ KIT_CASES: tuple[Case, ...] = (
              Recording("native", (), "json", native="openai"),
              Recording("native-refused", ("decide.answer",), "json", native="openai"))),
 )
+BY_ID = {c.id: c for c in CASES}

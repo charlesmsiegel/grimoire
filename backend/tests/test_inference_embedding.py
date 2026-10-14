@@ -269,7 +269,7 @@ def test_a_rev_independent_no_is_still_no_move():
 
 def test_embed_tasks_are_registered_apart():
     assert routing.EMBED_TASKS == ("semantic-recall", "semantic-search", "art-catalog",
-                                   "continuity-similarity", "history-index")
+                                   "continuity-similarity", "history-index", "history-recall")
     assert not set(routing.EMBED_TASKS) & set(routing.TASK_ROUTE)
     assert not set(routing.EMBED_TASKS) & set(routing.NON_ROUTE_TASKS)
     for task in routing.EMBED_TASKS:

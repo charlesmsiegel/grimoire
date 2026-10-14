@@ -46,6 +46,8 @@ const cfg = {
   advance_fork_threshold: "30",
   embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
   semantic_recall_threshold: "0.4",
+  history_recall_depth: "0", history_recall_budget: "1200",
+  history_recall_threshold: "0.35", history_recall_rerank: "off",
   prompt_layout_enabled: "off", speaker_turn_taking: "off",
   backup_enabled: "off", backup_interval_hours: "24", backup_keep: "7", backup_dir: "",
   // The roles as `GET /config` names them (`settings.summary`). Decision
@@ -937,4 +939,21 @@ test("recall lives with the context, privacy sentence and all", async () => {
   expect(screen.getByText("This sends text to the Embedding role's provider.")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Embedding role" })).toHaveAttribute("href", "/models/edit");
   expect(screen.getByText(EMBEDDINGS_COPY)).toBeInTheDocument();
+});
+
+
+test("Context exposes and saves all four history controls with cost disclosure", async () => {
+  renderView();
+  await open(/^Context/);
+  fireEvent.change(screen.getByLabelText("Historical scene depth"), { target: { value: "2" } });
+  fireEvent.change(screen.getByLabelText("History recall budget"), { target: { value: "900" } });
+  fireEvent.change(screen.getByLabelText("History minimum cosine"), { target: { value: "0.5" } });
+  fireEvent.click(screen.getByLabelText("Rerank history"));
+  expect(screen.getByText(/Embeddings are optional/i)).toBeInTheDocument();
+  expect(screen.getByText(/reranking adds a decision call/i)).toBeInTheDocument();
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({
+    history_recall_depth: "2", history_recall_budget: "900",
+    history_recall_threshold: "0.5", history_recall_rerank: "on",
+  }));
 });

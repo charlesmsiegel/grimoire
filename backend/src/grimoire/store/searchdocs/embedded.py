@@ -104,11 +104,14 @@ def vector_kind(space: dict) -> str:
     return f"vector:{PROJECTION}:{compiled.space_digest(space['space'])}"
 
 
-def record_embedded(cid: str, docs: Sequence, *, space: dict) -> None:
+def record_embedded(cid: str, docs: Sequence, *, space: dict,
+                    keep: Callable[[], bool] = lambda: True) -> None:
     """For each of `docs` (`live.LiveDocument`s) whose text now has a vector
     under `space["space"]`, a row on every input path the document read. No
     network; never raises: the rows are advisory, and a failure costs 05 a
-    re-embed it would otherwise have skipped."""
+    re-embed it would otherwise have skipped. A cancelled 09 recall passes
+    `keep` to discard a staged batch before flush, and to start no later batch.
+    An atomic flush already executing cannot be interrupted mid-commit."""
     try:
         sid_space = space["space"]
         if not isinstance(sid_space, str) or not sid_space or not docs:
@@ -122,8 +125,15 @@ def record_embedded(cid: str, docs: Sequence, *, space: dict) -> None:
         # 03 stages a bounded number of rows per request; past it a row is
         # dropped silently, so the rows go in batches that fit.
         for start in range(0, len(rows), compiled.MAX_STAGED_ROWS):
-            with compiled.batch() as request:
+            if not keep():
+                return
+            with compiled.batch(keep=keep) as request:
                 for path, instance in rows[start:start + compiled.MAX_STAGED_ROWS]:
+                    if not keep():
+                        request.disabled = True
+                        break
                     request.mark_materialized(path, kind, instance=json.loads(instance))
+                if not keep():
+                    request.disabled = True
     except (KeyError, TypeError, ValueError, OSError):
         return

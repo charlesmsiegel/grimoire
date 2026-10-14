@@ -34,7 +34,7 @@ from ..store.continuity import review as continuity_review
 from ..store.continuity import similarity as continuity_similarity
 from ..store.inference import resolve as inference
 from ..store.inference.resolved import ResolvedInference
-from . import character_turns, decision_capture, runs, streaming
+from . import character_turns, decision_capture, history_recall, runs, streaming
 from . import continuity as continuity_routes
 from . import tracker as tracker_routes
 from .common import (
@@ -55,6 +55,7 @@ from .common import (
     _write_response,
     computes_only,
     draft_completion,
+    get_embeddings,
     get_llm,
     model_window,
     override_inference,
@@ -831,6 +832,7 @@ def _disown_dead_pending(cid: str, sid: str) -> None:
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
 def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
               client: LLMClient = Depends(get_llm),
+              embed_client=Depends(get_embeddings),
               x_grimoire_attempt: str | None = Header(default=None)):
     # BEFORE the preflight checks, and that order is the whole point of an
     # attempt id. This is a REPLAY: the work already ran and its outcome is
@@ -882,7 +884,8 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
         # response. Replay it rather than doing the work twice.
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _chat_run(cid, sid, turn, request, client, resolved, run)
+        return _chat_run(cid, sid, turn, request, client, resolved, run,
+                         embed_client=embed_client)
 
 
 def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run,
@@ -927,7 +930,7 @@ def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run,
 
 
 def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
-              client: LLMClient, resolved: UsableInference | None, run):
+              client: LLMClient, resolved: UsableInference | None, run, *, embed_client=None):
     """The body of a send, once the scene is reserved.
 
     Split out so `runs.reservation` can wrap every exit from it. The run is
@@ -980,6 +983,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a new send retires any pending decision
         posted_at, content, speaker, post_id, tracked = None, "", None, None, None
+        note_at = None
         if note_text:
             # In the same locked, fenced hold the player's post is written in,
             # and for its reasons. Macros are expanded at persist time exactly
@@ -1001,7 +1005,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             # note rather than a resurrection.
             content = store.context.expand_macros(
                 note_text, store.context.scene_substitutions(cid, sid), cid, sid)
-            store.scenes.append_message(
+            note_at = store.scenes.append_message(
                 cid, sid, "assistant", content,
                 speaker=store.scenes.DIRECTOR_SPEAKER)
         if not ephemeral:
@@ -1060,7 +1064,8 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         tracker_routes.start(request.app, cid, sid, tracked, client, run.scene_identity)
     if character_turns.enabled() or turn.speaker_ref:
         return _start_round(cid, sid, turn, request, client, resolved, run, ephemeral=ephemeral,
-                            posted_at=posted_at, content=content, post_id=post_id)
+                            posted_at=posted_at, content=content, post_id=post_id,
+                            embed_client=embed_client)
     resolved = _resolved_for_a_turn(resolved)
     primary = resolved.chain.primary
     if ephemeral:
@@ -1070,10 +1075,13 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         # message and `_project_history` drops the stored copy, so the prompt
         # is byte-identical to what it was before notes were persisted.
         note = content or prompts.render("scene/director_note.j2")
+        evidence = history_recall.gather_sync(
+            request.app, cid, sid, seed=note, resolved=resolved,
+            llm_client=client, embed_client=embed_client, run_id=run.id, post=note_at)
         messages, breakdown = store.context.compose_director_turn(
             cid, sid, note, turn=_turn_override(turn),
             describe=store.prompt_log.capturing(), model=primary.model,
-            images=store.post_images.images_for(primary))
+            images=store.post_images.images_for(primary), history=evidence)
         # AFTER the stream is constructed, not before. `_chat_stream` claims the
         # turn under the campaign lock synchronously, before it returns -- so a
         # contended campaign raises StoreBusy there and nothing is ever sent.
@@ -1098,10 +1106,13 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         runs.start_detached(request.app, run, lambda: stream.body_iterator,
                             outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+    evidence = history_recall.gather_sync(
+        request.app, cid, sid, seed="", resolved=resolved,
+        llm_client=client, embed_client=embed_client, run_id=run.id, post=posted_at)
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(turn),
         describe=store.prompt_log.capturing(), model=primary.model,
-        images=store.post_images.images_for(primary))
+        images=store.post_images.images_for(primary), history=evidence)
 
     # The post has to precede the stream — `build_messages` renders history out
     # of the transcript, so a turn the model never sees is a turn it cannot
@@ -1154,7 +1165,7 @@ def _resolved_for_a_turn(resolved: UsableInference | None) -> UsableInference:
 def _start_round(cid: str, sid: str, turn: ChatTurn, request: Request,
                  client: LLMClient, resolved: UsableInference | None, run, *,
                  ephemeral: bool, posted_at,
-                 content: str, post_id: str | None):
+                 content: str, post_id: str | None, embed_client=None):
     """`_chat_run`'s hand-off to the round engine (`character_turns.start`).
 
     A refusal from `start` comes before any round opened (its defence
@@ -1170,7 +1181,8 @@ def _start_round(cid: str, sid: str, turn: ChatTurn, request: Request,
             kind="post" if not ephemeral else ("note" if content else "continue"),
             trigger=content,
             # The player's own words only: the template above is app wording.
-            typed_note=content if ephemeral else "")
+            typed_note=content if ephemeral else "",
+            embed_client=embed_client, history_enabled=True)
     except HTTPException:
         if posted_at is not None:
             with store.locks.campaign_lock(cid):
@@ -1181,6 +1193,7 @@ def _start_round(cid: str, sid: str, turn: ChatTurn, request: Request,
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
 def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = None,
                client: LLMClient = Depends(get_llm),
+               embed_client=Depends(get_embeddings),
                x_grimoire_attempt: str | None = Header(default=None)):
     replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
     if replay is not None:
@@ -1198,16 +1211,18 @@ def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = No
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _retry_run(cid, sid, body, request, client, resolved, run)
+        return _retry_run(cid, sid, body, request, client, resolved, run,
+                          embed_client=embed_client)
 
 
 def _retry_run(cid: str, sid: str, body, request: Request,
-               client: LLMClient, resolved: UsableInference, run):
+               client: LLMClient, resolved: UsableInference, run, *, embed_client=None):
     """The body of a retry, once the scene is reserved -- see `_chat_run` for
     why every exit from it has to be wrapped rather than audited."""
     if character_turns.enabled():
         return character_turns.retry(cid,sid,request,client,resolved,run,
-                                      _follow_up_hook(request.app,cid,sid,client))
+                                      _follow_up_hook(request.app,cid,sid,client),
+                                      embed_client=embed_client)
     # Same order as the send above, for the same reason — see there. Fenced like
     # it too: a scene replaced between the reservation and here must not collect
     # this turn's heal and retired proposal.
@@ -1218,10 +1233,13 @@ def _retry_run(cid: str, sid: str, body, request: Request,
         _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     primary = resolved.chain.primary
+    evidence = history_recall.gather_sync(
+        request.app, cid, sid, seed="", resolved=resolved,
+        llm_client=client, embed_client=embed_client, run_id=run.id)
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body),
         describe=store.prompt_log.capturing(), model=primary.model,
-        images=store.post_images.images_for(primary))
+        images=store.post_images.images_for(primary), history=evidence)
     outcome = StreamOutcome()
     stream = _chat_stream(cid, sid, messages, resolved, client,   # claims the turn; see above
                           task="retry", identity=run.scene_identity, outcome=outcome,
@@ -1289,6 +1307,7 @@ def _put_back(cid: str, sid: str, showing: str | None) -> bool:
 def post_regenerate(cid: str, sid: str, request: Request,
                     body: RegenerateBody | None = None,
                     client: LLMClient = Depends(get_llm),
+                    embed_client=Depends(get_embeddings),
                     x_grimoire_attempt: str | None = Header(default=None)):
     """Redo the most recent post: park the trailing assistant reply as an
     alternate, stream a fresh one."""
@@ -1326,11 +1345,12 @@ def post_regenerate(cid: str, sid: str, request: Request,
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _regenerate_run(cid, sid, body, request, client, resolved, run, routed=routed)
+        return _regenerate_run(cid, sid, body, request, client, resolved, run, routed=routed,
+                               embed_client=embed_client)
 
 
 def _regenerate_run(cid: str, sid: str, body, request: Request,
-                    client: LLMClient, resolved: UsableInference, run, *, routed: bool):
+                    client: LLMClient, resolved: UsableInference, run, *, routed: bool, embed_client=None):
     """The body of a reroll, once the scene is reserved -- see `_chat_run`."""
     guidance = (body.guidance or "").strip() if body else ""
     # What this reroll will actually be sent to, after `override_inference`
@@ -1488,11 +1508,14 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         # `appended` rather than reserved-then-appended, so the snapshot reports
         # the guidance the model actually read (#157).
         block = prompts.render("scene/regenerate_guidance.j2", guidance=guidance) if guidance else ""
+        evidence = history_recall.gather_sync(
+            request.app, cid, sid, seed="", resolved=resolved,
+            llm_client=client, embed_client=embed_client, run_id=run.id)
         messages, breakdown = store.context.compose_turn(
             cid, sid, turn=_turn_override(body),
             appended=(("Regenerate guidance", "system", block),) if block else (),
             describe=store.prompt_log.capturing(), model=primary.model,
-            images=store.post_images.images_for(primary))
+            images=store.post_images.images_for(primary), history=evidence)
     except BaseException:
         if restore is not None:
             restore()
@@ -5394,7 +5417,8 @@ def get_scene_context(cid: str, sid: str):
     # facade dropping it in silence (sampler presets spec). A frozen snapshot
     # carries the same block for the attempt it captured.
     breakdown = store.context.context_breakdown(
-        cid, sid, model=model, images=store.post_images.images_for(_primary(resolved.chain)))
+        cid, sid, model=model, images=store.post_images.images_for(_primary(resolved.chain)),
+        resolved=resolved)
     return {"model": model, **breakdown,
             "model_window": model_window(_primary(resolved.chain)),
             "token_count": store.tokens.counting(model, _target_kind(resolved.chain),
@@ -5521,7 +5545,7 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         # routing-ok: the live side of a prompt diff is a display; it must never refuse
         chat = inference.resolve("chat", cid)
         model = _target_model(chat.chain)
-        live = store.context.context_breakdown(cid, sid, model=model,
+        live = store.context.context_breakdown(cid, sid, model=model, resolved=chat,
                                                images=store.post_images.images_for(
                                                    _primary(chat.chain)))
         head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "", "model": model, **live,

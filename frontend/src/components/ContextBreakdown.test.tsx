@@ -128,3 +128,58 @@ test("the smaller of budget and window still bounds the bar", () => {
     token_count: NATIVE, budget_tokens: 8000, model_window: { value: 500, source: "user" } })} />);
   expect(screen.getByText("100 / 500 tok")).toBeInTheDocument();
 });
+
+
+test("history inspector shows raw signals, rounds, excerpts, coverage and shed status", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_recall", label: "Recalled history", text: "Mara kept the ledger.", tokens: 90,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [{ scene: "001--saltmarch", identity: null, key: "sid:001--saltmarch", title: "Saltmarch",
+        tier: 1, admitted_by: ["structural", "lexical"],
+        rounds: [{ structural: [{ relation: "relationship", refs: ["characters:mara"] }],
+          lexical: { score: 4.2, matched: ["silver key"] }, semantic: { cosine: 0.61, query: 0 },
+          rerank: { level: "high", position: 1, backend: "native" } }],
+        ranks: [{ round: 0, signal: "lexical", rank: 3 }], excerpts: [[41, 43]],
+        summary: "omitted:archive", tokens: 90, shed: true }],
+      coverage: { tiers: [1], semantic: "skipped:preview", admitted: 5, agreement: 2, verdict: "sufficient" },
+      ceiling: 1200, budget_from: ["config"],
+    },
+  }] })} />);
+  for (const value of [/Ceiling: 1,200/, /sufficient/, /skipped:preview/, /relationship.*characters:mara/,
+    /lexical.*rank 3/, /4.2.*silver key/, /cosine 0.61/, /high.*native/, /41.*43/,
+    /omitted:archive/, /shed: budget/]) expect(screen.getByText(value)).toBeInTheDocument();
+});
+
+test("an empty history row still says why, rerank status included", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_recall", label: "Recalled history", text: "", tokens: 0,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [],
+      coverage: { tiers: [1], semantic: "failed:network", admitted: 0, agreement: 0,
+                  verdict: "error", rerank: "skipped:unanswered" },
+      ceiling: 1200, budget_from: ["config"],
+    },
+  }] })} />);
+  for (const value of [/Coverage: error/, /failed:network/, /Rerank: skipped:unanswered/])
+    expect(screen.getByText(value)).toBeInTheDocument();
+});
+
+test("history inspector lists what was found but not selected", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_recall", label: "Recalled history", text: "", tokens: 0,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [],
+      coverage: { tiers: [1], semantic: "ok", admitted: 3, agreement: 0, verdict: "sufficient" },
+      ceiling: 1200, budget_from: ["config"], unselected: 3,
+      candidates: [{ scene: "004--saltmarch", key: "sid:004--saltmarch", tier: 2,
+                     admitted_by: ["semantic"], rounds: [],
+                     ranks: [{ round: 0, signal: "semantic", rank: 7 }] }],
+    },
+  }] })} />);
+  for (const value of [/Found, not selected: 3/, /004--saltmarch; tier 2; admitted by semantic/,
+                       /semantic rank 7/])
+    expect(screen.getByText(value)).toBeInTheDocument();
+});

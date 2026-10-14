@@ -47,6 +47,7 @@ from evals import costs, escalation, gate, play, runfile, runner  # noqa: E402
 from evals.embed import corpus as embed_corpus  # noqa: E402
 from evals.embed import harness as embed_harness  # noqa: E402
 from evals.embed import metrics as embed_metrics  # noqa: E402
+from evals.history import runner as history_runner  # noqa: E402
 from grimoire import wire  # noqa: E402
 from grimoire.llm_errors import LLMError  # noqa: E402
 from grimoire.store import paths, usage  # noqa: E402
@@ -497,11 +498,45 @@ def run_play(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0 if passed else 1
 
 
+def run_history(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """Caller-selected offline/long/live history matrix; never ordinary cases."""
+    if any((args.play, args.embed, args.embed_options, args.gate, args.compare,
+            args.escalation_sweep, args.escalation, args.record, args.case,
+            args.provider, args.model, args.decide_backend, args.repeat)):
+        ap.error("--history owns its corpus and arms; other case/matrix flags cannot be combined")
+    targets, space, rates, real_home = {}, None, None, None
+    if args.live:
+        real_home = paths.home()
+        space = embed_harness.resolve_live()
+        rates = usage.Rates.current()
+        targets = {task: runner.resolve_connections((case_mod.Case(
+            id="history-live", hypothesis="synthetic history", build=dict,
+            prompt=lambda ctx: [], grade=lambda ctx, out: [], recordings=(), task=task,
+            schema=(lambda ctx: {}) if task == "history-rerank" else None),))[task if task == "chat" else task + " (decide)"]
+            for task in ("chat", "history-rerank")}
+    results, metrics = history_runner.run_all(long=args.long, live=args.live, targets=targets,
+        space=space, rates=rates, real_home=real_home, run_id=args.run_id)
+    print(history_runner.summary(metrics))
+    print(runner.report(results))
+    arms = (*history_runner.cases.ARMS, "hybrid+rerank") if args.live else history_runner.cases.ARMS
+    configs = [runfile.config(f"c{n}", arm, {"history_arm": arm,
+        "mode": "live" if args.live else "long" if args.long else "offline"})
+        for n, arm in enumerate(arms, 1)]
+    doc = runfile.build(results, configs, run_id=args.run_id,
+                        started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    doc["history"] = {"provenance": history_runner.recording()["provenance"] if not args.live else "LIVE",
+                      "metrics": metrics, "aggregate": history_runner.aggregate(metrics),
+                      "gate": history_runner.gate(metrics)}
+    if args.out:
+        runfile.write(Path(args.out), doc)
+    return 0 if all(r.passed for r in results) and history_runner.gate(metrics) else 1
+
+
 def _other_mode(args: argparse.Namespace):
     """The mode that is not a case run, when one is asked for: the embedding
     evals (`--embed`, or `--embed-options`, which it refuses alone), the
     decide gate, a comparison, or the escalation sweep. None for a case run."""
-    for asked, mode in ((bool(args.play), run_play),
+    for asked, mode in ((args.history, run_history), (bool(args.play), run_play),
                         (args.embed or bool(args.embed_options), run_embed),
                         (args.gate, run_gate), (bool(args.compare), run_compare),
                         (args.escalation_sweep, run_sweep)):
@@ -564,8 +599,12 @@ def main(argv: list[str] | None = None) -> int:
                          "(repeatable: the plan matrix's further rows)")
     ap.add_argument("--decision", action="append", metavar="SELECTION",
                     help="with --play, a Decision selection, provider/model (repeatable)")
+    ap.add_argument("--history", action="store_true", help="synthetic history retrieval arms; offline unless --live")
+    ap.add_argument("--long", action="store_true", help="with --history, long archive recipes exercising 64/1000 bounds")
     args = ap.parse_args(argv)
     args.run_id = str(uuid.uuid4())
+    if args.long and not args.history:
+        ap.error("--long requires --history")
 
     mode = _other_mode(args)
     if mode is not None:

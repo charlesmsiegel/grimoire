@@ -411,6 +411,8 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = ""
     same run) -- `cfg` is the endpoint the cache was read under, never
     re-resolved, so the vectors land in the space they are scored in.
     """
+    if embed_space.outage(cfg["space"]):
+        return None
     deadline = time.monotonic() + embeddings.TIMEOUT
     # `bad_response` unless the provider says otherwise, so a wrong-length reply
     # -- which raises nothing -- is treated as the response-shaped failure it is.
@@ -420,11 +422,14 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = ""
                                client=_CLIENT, deadline=deadline, campaign=campaign,
                                scene=scene, cached=cached, uncached=uncached, queries=1)
         if len(got) == 1 + len(missing):  # defensive: the client promises this
+            embed_space.clear_outage(cfg["space"])
             return got
     except LLMError as exc:
         kind = exc.kind
     except OSError:
         kind = "network"
+    if kind in embed_space.OUTAGE_KINDS:
+        embed_space.note_outage(cfg["space"])
     if not missing:
         return None  # the query itself is what failed; there is nothing else
     if kind != "bad_response":
@@ -439,10 +444,14 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = ""
         # The same run: its hits and misses were on the first call's line.
         got = embed.embed_sync("semantic-recall", [query_text], space=cfg, client=_CLIENT,
                                deadline=deadline, campaign=campaign, scene=scene, queries=1)
-    except (LLMError, OSError):
+    except (LLMError, OSError) as exc:
         # The turn proceeds on keyword activation. Deliberately silent: this
         # runs on every turn, and a provider that is down would otherwise fill
         # the log with one identical line per message. The meter has already
         # recorded the failed request.
+        kind = exc.kind if isinstance(exc, LLMError) else "network"
+        if kind in embed_space.OUTAGE_KINDS:
+            embed_space.note_outage(cfg["space"])
         return None
+    embed_space.clear_outage(cfg["space"])
     return got + [[] for _ in missing] if len(got) == 1 else None

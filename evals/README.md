@@ -806,3 +806,60 @@ be true.
 Fixture content uses invented placeholder names only (Realm, Saltmarch,
 Seraphine Vale, Mara, Winifred, Rowan, Tobin). See CLAUDE.md: real world, campaign and
 character names must never enter this repo, not even as examples.
+
+Historical retrieval has its own isolated matrix:
+
+Set `PYTHONPATH=backend/src:.` on macOS/Linux, or `$env:PYTHONPATH="backend/src;."`
+in PowerShell on Windows, then run the pair for your platform:
+
+```sh
+backend/.venv/bin/python evals/run.py --history
+backend/.venv/Scripts/python.exe -X utf8 evals/run.py --history
+backend/.venv/bin/python evals/run.py --history --long --out evals/out/history-long.json
+backend/.venv/Scripts/python.exe -X utf8 evals/run.py --history --long --out evals/out/history-long.json
+backend/.venv/bin/python evals/run.py --history --live --out evals/out/history-live.json
+backend/.venv/Scripts/python.exe -X utf8 evals/run.py --history --live --out evals/out/history-live.json
+```
+
+In a worktree use the main checkout's interpreter while keeping this checkout's
+`backend/src` first on `PYTHONPATH`.
+
+`--history` plants ten recipe shapes through actual store APIs and compares
+context-only, lexical, semantic, structural+lexical and hybrid. Context-only
+is the real packed recap/archive prompt. Recall and excerpt ranges come from
+facts recorded when the generator plants them. The long mode adds archives
+larger than the 64-document pool and 1000-document total semantic bound, with
+an old shared-group case requiring widening. The ordinary offline matrix is
+registered in `backend/tests/test_history_evals.py`.
+
+The offline vector asset in `evals/recordings/history/` explicitly records
+synthetic three-dimensional directions and their deterministic text rules.
+The harness seeds the production exact-space/exact-SearchDocument-text cache
+and serves queries through the production asynchronous adapter with an offline
+transport. These directions test scorer, cache, admission and packing mechanics;
+they measure no provider's embedding or generation quality. Query vectors are
+never saved. An offline transport request is reported separately from live
+provider activity.
+
+`--history --live` is opt-in and costs money. It captures configured Embedding,
+chat and history-rerank selections before isolation, then uses only generated
+campaigns and temporary caches/ledgers. It adds hybrid+rerank through the existing
+captured relevance adapter and downstream generation, graded for the planted
+fact token. Results use the existing eval-run format and comparison/reporting
+scopes; billed, subscription-equivalent and modelled money remain separate.
+The saved file adds a `history` measurement block with per-arm recall@1/3/5,
+excerpt recall, packed added tokens, phase timing, embed tasks and decision
+counts. Reported network time includes the production semantic phase's cache
+work; file time is the remainder, not a filesystem profiler.
+
+The proposed ordering gate requires hybrid@3 at least every other arm and
+strictly above context-only/lexical, no hard-rule failure and added packed tokens
+within the ceiling. Basic S6 implementation was shipped at the user's request
+before a final matrix/long acceptance run; this documentation is a recipe, not
+a claim that the gate passed. The feature default remains off.
+
+Explicit non-turn tier-3 retrieval takes `source_campaigns=(...)` alongside
+`origin="search"` and `Query(tier_limit=3)`. Callers enumerate their own scope;
+the retriever discovers no campaigns. Every result key and expansion is source
+qualified, all sources share semantic bounds, and unknown sources prevent
+exhausted coverage. Ordinary turns retain their existing refs and tiers.

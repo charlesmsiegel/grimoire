@@ -60,3 +60,12 @@ test("a snapshot frozen before tokenizers were recorded reads as an estimate", (
   render(<ContextBudgetBar label="LAST TURN" ctx={ctx({ token_count: undefined })} />);
   expect(screen.getByText("≈ 1,000 / 4,000 · 25%")).toBeInTheDocument();
 });
+
+
+test("targeted history shares the recalled bucket", () => {
+  render(<ContextBudgetBar label="LAST TURN" ctx={ctx({
+    sections: [section("history-recall", 120)],
+  })} />);
+  expect(screen.getByText(/RECALLED 120/)).toBeInTheDocument();
+  expect(screen.queryByText(/STANDING FRAME/)).toBeNull();
+});

@@ -49,6 +49,10 @@ class ConfigUpdate(BaseModel):
     offscene_known_limit: str | None = None
     embeddings_connection_id: str | None = None
     embeddings_model: str | None = None
+    history_recall_depth: str | None = None
+    history_recall_budget: str | None = None
+    history_recall_threshold: str | None = None
+    history_recall_rerank: str | None = None
     semantic_recall_depth: str | None = None
     semantic_recall_threshold: str | None = None
     prompt_layout_enabled: str | None = None

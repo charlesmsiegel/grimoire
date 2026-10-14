@@ -17,7 +17,7 @@ import pytest
 
 from grimoire import decisions, inference, prompts, tool_calls
 from grimoire.llm_errors import LLMError
-from grimoire.store import routing, suggest, voice_drift
+from grimoire.store import history_rerank, routing, suggest, voice_drift
 from grimoire.store.absorb import prompt as absorb_prompt
 from grimoire.store.continuity import identity, reconcile
 from tests import llm_fakes, wire_kit
@@ -308,7 +308,11 @@ def _decide_prompts() -> dict[str, tuple[str, str]]:
              "continuity-identity": inference.structured_messages(
                  identity.build_items([_IDENTITY_ROW], {}), explain=identity.explain()),
              "continuity-reconcile": inference.structured_messages(
-                 reconcile.build_items(_RECONCILE_PAYLOAD), explain=reconcile.explain())}
+                 reconcile.build_items(_RECONCILE_PAYLOAD), explain=reconcile.explain()),
+             "history-rerank": inference.structured_messages(list(history_rerank.build_items(
+                 "Mara asks about the silver ledger.",
+                 [history_rerank.Candidate("sid:001--saltmarch",
+                                           "Saltmarch: Mara hands Seraphine the ledger.")])))}
     return {task: (system["content"], user["content"])
             for task, (system, user) in pairs.items()}
 
@@ -494,6 +498,18 @@ def test_the_reconcile_body_is_the_shape_the_parser_expects():
     reply = _shipped().reply(_as_messages(_decide_prompts()["continuity-reconcile"]))
     results = decisions.parse("".join(reply), items, explain=True)
     assert reconcile.proposals_of(_RECONCILE_PAYLOAD, results) == {}
+
+
+def test_the_history_rerank_body_is_the_shape_the_parser_expects():
+    """The rerank's canned reply must decode to a grade on the kit's scale,
+    or a test that turns the rerank on would see every candidate ungraded."""
+    candidates = [history_rerank.Candidate("sid:001--saltmarch",
+                                           "Saltmarch: Mara hands Seraphine the ledger.")]
+    items = history_rerank.build_items("Mara asks about the silver ledger.", candidates)
+    reply = _shipped().reply(_as_messages(_decide_prompts()["history-rerank"]))
+    results = decisions.parse("".join(reply), items, explain=True)
+    grade = history_rerank.grades_of(candidates, results)["sid:001--saltmarch"]
+    assert history_rerank.LEVELS[grade.level] == "bears directly on this turn"
 
 
 def test_each_continuity_entry_answers_only_its_own_decision():

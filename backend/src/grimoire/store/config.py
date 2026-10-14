@@ -226,6 +226,11 @@ _LENGTH_KEYS = ("response_preset", "length_reply_words", "length_blocks",
                 "response_opening_words", "response_opening_paragraphs",
                 "response_continuation_words", "response_continuation_paragraphs")
 
+DEFAULT_HISTORY_RECALL_DEPTH = "0"
+DEFAULT_HISTORY_RECALL_BUDGET = "1200"
+DEFAULT_HISTORY_RECALL_THRESHOLD = "0.35"
+DEFAULT_HISTORY_RECALL_RERANK = "off"
+
 _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "system_prompt",
                 "quote_color", "recap_depth", "archive_depth", "context_budget",
                 "user_label", "assistant_label",
@@ -237,6 +242,8 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "offscene_known_limit",
                 "embeddings_connection_id", "embeddings_model",
                 "semantic_recall_depth", "semantic_recall_threshold",
+                "history_recall_depth", "history_recall_budget",
+                "history_recall_threshold", "history_recall_rerank",
                 # `context.art`'s two knobs, config.md-only like the recall pair
                 # above. Omitted at first, which is exactly the failure the
                 # comment on this tuple describes: both were documented, both
@@ -321,6 +328,10 @@ def read_config() -> dict[str, str]:
                 "offscene_known_limit": DEFAULT_OFFSCENE_KNOWN_LIMIT,
                 "semantic_recall_depth": DEFAULT_SEMANTIC_RECALL_DEPTH,
                 "semantic_recall_threshold": DEFAULT_SEMANTIC_RECALL_THRESHOLD,
+                "history_recall_depth": DEFAULT_HISTORY_RECALL_DEPTH,
+                "history_recall_budget": DEFAULT_HISTORY_RECALL_BUDGET,
+                "history_recall_threshold": DEFAULT_HISTORY_RECALL_THRESHOLD,
+                "history_recall_rerank": DEFAULT_HISTORY_RECALL_RERANK,
                 "art_catalog_depth": DEFAULT_ART_CATALOG_DEPTH,
                 "art_catalog_threshold": DEFAULT_ART_CATALOG_THRESHOLD,
                 "prompt_layout_enabled": DEFAULT_PROMPT_LAYOUT_ENABLED,

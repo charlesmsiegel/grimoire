@@ -68,10 +68,14 @@ MAX_MARKERS = 3
 #: Readers that turn posts into prompt text without `transcript_text`.
 PINNED = {
     "store/context/assemble.py": ("_assemble",),
+    "store/history/query.py": ("prepare",),
     "routes/character_turns.py": ("_selector_inputs", "_turn_inputs"),
     "routes/tracker.py": ("_locate", "_context_posts"),
     "routes/passage_characters.py": ("draft_character",),
 }
+
+# Readers whose transcript view belongs to 08, rather than to their own body.
+EXPANSION_PINNED = {"store/history/expand.py": ("excerpts",)}
 
 _FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _SCENE_READS = {"read_scene", "_require_scene"}
@@ -245,6 +249,7 @@ class _File:
         yield from self._transcripts()
         yield from self._citations()
         yield from self._pinned()
+        yield from self._expansion_pinned()
         yield from self._new_readers()
         yield from self._expansions()
 
@@ -284,6 +289,17 @@ class _File:
                 yield (f"{self.rel}:{fn.lineno}: {name} reads posts into a prompt "
                        "without regex view()")
 
+    def _expansion_pinned(self):
+        # No fake view call: the adapter must reach the actual 08 door, and
+        # _expansions below independently checks every call's prompt phase.
+        bindings = _expand_bindings(self.tree)
+        for name in EXPANSION_PINNED.get(self.rel, ()):
+            fn = self.helpers.get(name)
+            if fn is None:
+                yield f"{self.rel}: pinned expansion reader {name} no longer exists"
+            elif not any(_is_searchdocs_expand(c, bindings) for c in _calls(fn)):
+                yield f"{self.rel}:{fn.lineno}: {name} never calls searchdocs.expand"
+
     def _new_readers(self):
         for fn in self.fns:
             if fn.name in PINNED.get(self.rel, ()):
@@ -305,7 +321,8 @@ class _File:
             if fn is None:
                 continue
             renders = any(_name(c) in _PROMPT_BUILDS for c in _calls(fn))
-            if not (renders or fn.name in PINNED.get(self.rel, ())):
+            if not (renders or fn.name in PINNED.get(self.rel, ())
+                    or fn.name in EXPANSION_PINNED.get(self.rel, ())):
                 continue
             phase = next((k.value for k in call.keywords if k.arg == "phase"), None)
             if isinstance(phase, ast.Constant) and phase.value == "prompt":
@@ -450,3 +467,14 @@ def test_searchdocs_is_scanned():
     the scan has to actually reach it for that to be held."""
     rels = [rel for rel, _ in _sources()]
     assert "store/searchdocs/expand.py" in rels
+
+def test_history_adapter_pin_requires_real_prompt_expansion():
+    source = ("from ..searchdocs import expand as searchdocs_expand\n"
+              "def excerpts(cid, scene, query, max_bytes):\n"
+              "    return searchdocs_expand.expand(cid, scene.sid, phase='prompt', terms=query.terms)\n")
+    assert not list(_File("store/history/expand.py", source, []).offences())
+    for bad in (source.replace("phase='prompt'", "phase='display'"),
+                source.replace("phase='prompt'", "phase=phase"),
+                source.replace("def excerpts(", "def renamed("),
+                "def excerpts(cid, scene, query, max_bytes):\n    return ()\n"):
+        assert list(_File("store/history/expand.py", bad, []).offences())

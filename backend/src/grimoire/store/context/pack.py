@@ -5,7 +5,7 @@ non-empty — so a long campaign simply overran the model's window and the
 provider truncated it, silently, from whichever end it liked. This module makes
 that decision ours and makes it visible.
 
-Four tiers, most protected first:
+Content tiers, most protected first:
 
 ``lock-in``
     The instructions that define the reply itself: the system prompts, who the
@@ -22,11 +22,16 @@ Four tiers, most protected first:
     conversation touched on them, so worth having — and among the first things
     to go when it does not fit.
 ``recalled``
-    Lore recalled by embedding similarity (`semantic.py`), and the first thing
-    of all to go. A tier of its own rather than a share of ``archive`` because
+    Lore recalled by embedding similarity (`semantic.py`), given up before
+    the older archive. A tier of its own rather than a share of ``archive``
+    because
     that layer promises to be purely additive: within a tier the largest
     section goes first, so sharing one let a recall evict the archive section
     — swapping context the prompt already had for context it never did.
+
+``history-recall``
+    Targeted historical evidence, shed scene by scene before recalled lore so
+    new history can only add to what an older prompt already carried.
 
 Under pressure sections are dropped whole, lowest tier first, and the trailing
 history window is trimmed between ``archive`` and ``background``. Placing the
@@ -49,7 +54,8 @@ inspector still reports what kind of content it is; `pinned` rides beside it.
 Excludes never reach here at all: excluded content is gone before a section is
 rendered.
 
-One section is divisible: World info carries ``shed`` (spec §6), its entries
+World info and Recalled history are divisible. World info carries ``shed``
+(spec §6), its entries
 as units and a function that re-renders it from any subset of them. When its
 turn comes it gives way an entry at a time instead of whole, re-measured after
 each, lowest ``priority`` first, then an entry that only recursion or an
@@ -90,9 +96,12 @@ ARCHIVE = "archive"
 #: `archive` broke that promise. Within a tier the packer drops the largest
 #: section first, so a recalled-lore section could evict the Earlier scenes
 #: section instead -- replacing context the prompt was already carrying with
-#: context it had never had. Anything retrieved by a mechanism that did not
-#: exist before belongs here, ahead of everything that did.
+#: context it had never had. Recalled lore belongs ahead of the older layers;
+#: targeted historical evidence has its own tier below this one.
 RECALLED = "recalled"
+#: Targeted historical evidence gives way before recalled lore, scene by
+#: scene, so adding it cannot evict content an older prompt already carried.
+HISTORY_RECALL = "history-recall"
 #: Not a droppable tier — the label the conversation history reports itself
 #: under, so the inspector can tell it apart from the sections around it.
 HISTORY = "history"
@@ -100,7 +109,7 @@ HISTORY = "history"
 #: The order sections give way in. `LOCK_IN` is absent by construction: this
 #: tuple is what the packer iterates, so lock-in is unreachable rather than
 #: merely last.
-DROP_ORDER = (RECALLED, ARCHIVE, BACKGROUND, SPOTLIGHT)
+DROP_ORDER = (HISTORY_RECALL, RECALLED, ARCHIVE, BACKGROUND, SPOTLIGHT)
 
 #: Projected history messages the trim never goes below. Two keeps the latest
 #: exchange — below that the model is answering a turn it cannot see.

@@ -157,18 +157,18 @@ def test_legacy_surfaces_still_see_twelve_routes():
 
 
 def test_a_route_born_at_format_two_has_no_legacy_key():
-    """A `NO_LEGACY` route (02-S2's `turn_plan`) is no legacy route, adds no
+    """A `NO_LEGACY` route (02-S2's `turn_plan`, 09-S5's `history_check`) is no legacy route, adds no
     legacy key, names no legacy key to read, and lists its tasks in
     `NO_LEGACY_TASKS` -- which the frozen inference baselines leave out."""
     born = [r for r in routing.ROUTES if r.legacy == routing.NO_LEGACY]
-    assert [r.key for r in born] == ["turn_plan"]
+    assert [r.key for r in born] == ["turn_plan", "history_check"]
     for r in born:
         assert r not in routing.LEGACY_ROUTES
         assert r.key not in {x.key for x in routing.LEGACY_ROUTES}
         assert routing.config_key(r.key) not in routing.CONFIG_KEYS
         assert routing.preset_key(r.key) not in routing.PRESET_CONFIG_KEYS
         assert routing.legacy_key(r) == ""
-    assert sorted(routing.NO_LEGACY_TASKS) == ["turn-intent", "turn-plan",
+    assert sorted(routing.NO_LEGACY_TASKS) == ["history-rerank", "turn-intent", "turn-plan",
                                                "turn-tool-decision"]
     assert routing.NO_LEGACY not in routing.TASK_ROUTE.values()
 
@@ -176,9 +176,11 @@ def test_a_route_born_at_format_two_has_no_legacy_key():
 def test_every_route_declares_operation_and_default_role():
     """A route flips to `decide` and the Decision role only in the task whose
     call sites decide (spec 14): scene-break, voice drift and the speaker pick
-    (slice F), both continuity checks (slice G), and the turn intent (02-S2)."""
+    (slice F), both continuity checks (slice G), the turn intent (02-S2) and
+    the history rerank (09-S5)."""
     primary = {"scene", "opener", "suggestions", "voice"}
-    decide = {"scene_break", "voice_drift", "speaker", "continuity", "turn_plan"}
+    decide = {"scene_break", "voice_drift", "speaker", "continuity", "turn_plan",
+              "history_check"}
     for r in routing.ROUTES:
         assert r.operation in routing.OPERATIONS
         assert r.default_role in routing.DEFAULT_ROLES
@@ -187,7 +189,7 @@ def test_every_route_declares_operation_and_default_role():
                 else ("generate", "fast"))
         assert (r.operation, r.default_role) == want, r.key
     assert routing.route_by_key("image").requires == ("vision",)
-    assert len(routing.ROUTES) == 16
+    assert len(routing.ROUTES) == 17
 
 
 def test_the_scene_break_title_is_drafted_on_the_summary_route():

@@ -50,6 +50,8 @@ from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
 from ..continuity import effective
+from ..history import model as history_model
+from ..history import settings as history_settings
 from ..regex import view as regex_view
 from ..scenes import focus as scenes_focus
 from ..scenes import identity as scenes_identity
@@ -78,6 +80,9 @@ from . import (
     world_state,
 )
 from . import cast as cast_data
+from . import (
+    history as history_section,
+)
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 
@@ -151,7 +156,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
               turn: dict | None = None, actor_ref: str | None = None,
               eligible_speakers: list[dict] | None = None,
               opening_narrator: bool = False, opener: bool = False,
-              images: int = 0) -> dict:
+              images: int = 0, recalled_history: history_model.Evidence | None = None) -> dict:
     """One pass gathering the template data + projected history + post-history.
     build_* render templates/scene/system.j2 from data; context_sections renders
     the per-section templates for the token breakdown. `wi_seed` folds extra text
@@ -529,6 +534,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "mechanics_checks": mech["mechanics_checks"],
     }
 
+    history_on = (recalled_history is not None and not actor_scoped
+                  and history_settings.read(cfg) is not None and _section_on("history_recall"))
+    data["history_evidence"] = (list(recalled_history.items)
+                                if history_on and recalled_history is not None else [])
+
     if actor_scoped:
         # These fields have no actor attribution. In particular a recap or a
         # group marked public does not make its private campaign state public.
@@ -538,7 +548,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # optimisation, and this is what an NPC's prompt is allowed to hold.
         for key in ("story_entries", "archive_entries", "plot_lines", "commitment_lines",
                     "group_states", "secret_group_states", "offscene_active", "offscene_known",
-                    "players", "refs", "ref_names", "available_art"):
+                    "players", "refs", "ref_names", "available_art", "history_evidence"):
             data[key] = []
         data["relationship_lines"] = actor.own_relationships(cid, actor_ref, roster)
         data["speaker"] = None
@@ -597,6 +607,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             "notes": notes, "opener_notes": opener_notes,
             "post_history": post_history, "npc_names": npc_names, "wi_result": wi_result,
             "lore": lore,
+            # On, evidence reaches the section even with nothing selected, so
+            # its row can say why (empty, exhausted, failed); off, none does.
+            "recalled_history": recalled_history if history_on else None,
+            "history_omissions": (history_section.summary_omissions(cid, sid, recent_text, full_recap)
+                                  if data["history_evidence"] else {}),
             "prompt_field_statuses": {"world_default_prompt": standing["world"]["status"],
                                       "campaign_default_prompt": standing["status"],
                                       "scene_focus": focus_field["status"]},
@@ -730,7 +745,7 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
     """
     if actor_scoped:
         return {"offscene_active": [], "offscene_known": [], "available_art": [],
-                "story_entries": [], "archive_entries": [], "plot_lines": [],
+                "story_entries": [], "archive_entries": [], "history_evidence": [], "plot_lines": [],
                 "commitment_lines": [], "group_states": [], "secret_group_states": [],
                 "relationship_lines": [], "today": None,
                 "birthdates": birthdays.relevant(cid, birthday_text, excluded_refs)}
@@ -995,6 +1010,8 @@ SECTIONS = [
             pack.LOCK_IN, pcless_only=True),
     Section("story_so_far", "Story so far", "scene/sections/story_so_far", pack.BACKGROUND),
     Section("archive", "Earlier scenes", "scene/sections/archive.j2", pack.ARCHIVE),
+    Section("history_recall", "Recalled history", "scene/sections/history_recall.j2",
+            pack.HISTORY_RECALL),
     Section("plot_threads", "Plot threads", "scene/sections/plot_threads.j2", pack.SPOTLIGHT),
     Section("commitments", "Commitments", "scene/sections/commitments.j2", pack.SPOTLIGHT),
     Section("today", "Today", "scene/sections/today.j2", pack.SPOTLIGHT),
@@ -1169,10 +1186,12 @@ def _recall_run(runs: dict[_RunKey, str], suffixes: set[str], key: _RunKey, expa
 def _held_back_only(section: Section, pinned, extra: dict) -> dict | None:
     """A text-less World info row for an empty section that still held entries
     back -- the turn where cooldown suppresses the only relevant entry is the
-    turn the reader most needs to see why. It puts nothing in the prompt
+    turn the reader most needs to see why -- and the same for Recalled history
+    when recall is on and nothing was selected, so the row still says whether
+    nothing existed or retrieval failed. It puts nothing in the prompt
     (`_compose_system` joins only what has some) and, like any section that
     rendered empty, breaks no heading run."""
-    if not (extra.get("lore") or {}).get("held_back"):
+    if not (extra.get("lore") or {}).get("held_back") and "history" not in extra:
         return None
     return {"id": section.id, "label": section.label, "text": "", "tier": section.tier,
             "pinned": section.id in pinned, "heading": section.heading, "heading_text": "",
@@ -1294,7 +1313,7 @@ def _world_info_section(section: Section, data: dict, lore: dict, head: str,
 
 
 def _expanded_section(section: Section, data: dict, body: str, head: str, lore: dict | None,
-                      expand) -> tuple[str, dict]:
+                      expand, recalled_history=None, history_omissions=None) -> tuple[str, dict]:
     """One rendered section's text after macro expansion, with `head` (already
     expanded) on the front, and any keys it adds to its section dict.
 
@@ -1302,6 +1321,13 @@ def _expanded_section(section: Section, data: dict, body: str, head: str, lore: 
     entry at a time (spec §6) without re-drawing anything: see
     `_world_info_section`. Recalled lore is expanded whole, as
     every other section is, and only gains its inspector detail."""
+    if section.id == "history_recall" and recalled_history is not None:
+        try:
+            return history_section.section(recalled_history, expand, tokens.count_tokens,
+                                           history_omissions or {}, config.read_config())
+        except Exception:  # noqa: BLE001 -- recalled history is additive; it never costs the turn
+            log.warning("Recalled history dropped from a compose: it could not be rendered")
+            return "", {}
     if lore is not None and section.id == _WORLD_INFO_SECTION:
         return _world_info_section(section, data, lore, head, expand)
     body = expand(body).strip()
@@ -1336,7 +1362,7 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
     none. `.get` on the key so a hand-built `a` (several tests) is still
     renderable.
     """
-    data = {"model_guidance": "", **a["data"], "opener": opener}
+    data = {"model_guidance": "", "history_evidence": [], **a["data"], "opener": opener}
     pinned = a.get("pinned_sections") or frozenset()
     # Resolved once by `_assemble`; `None` (a hand-built `a`) resolves per call.
     dt_subs = a.get("datetime_subs")
@@ -1400,7 +1426,8 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
         head = ""
         if body and section.heading and section.heading != last_heading:
             head = expand(prompts.render(section.heading, **data)).strip()
-        text, extra = _expanded_section(section, data, body, head, lore, expand)
+        text, extra = _expanded_section(section, data, body, head, lore, expand,
+                                        a.get("recalled_history"), a.get("history_omissions"))
         if not text:
             # `last_heading` stays put: an empty section breaks no run.
             out.extend(r for r in (_held_back_only(section, pinned, extra),) if r)
@@ -1500,8 +1527,9 @@ def _profile_sections(base: list[dict], guidance: str) -> list[dict]:
         if section["id"] == "model_guidance":
             section["text"] = guidance
         if not section["text"]:
-            # A held-back-only World info row: nothing to frame, opens no run.
-            if (section.get("lore") or {}).get("held_back"):
+            # A held-back-only World info row, or an empty Recalled history
+            # row that says why: nothing to frame, opens no run.
+            if (section.get("lore") or {}).get("held_back") or "history" in section:
                 sections.append(section)
             continue
         heading = section["heading"]
@@ -1670,8 +1698,12 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
                  describe: bool = True, model: str = "", actor_ref: str | None = None,
                  eligible_speakers: list[dict] | None = None,
                  images: int = 0,
-                 plan: dict | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
+                 plan: dict | None = None,
+                 history: history_model.Evidence | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """One turn's messages, and the breakdown describing them.
+
+    `history` is frozen selected evidence, gathered before compose. This pass
+    fits and sheds those choices only; it never retrieves or fills a slot.
 
     `images` is how many of the newest post images to keep as references for a
     route that reads them (#377, `store.post_images.images_for`); 0 composes
@@ -1713,7 +1745,7 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
     prompt is byte-identical to one composed without it.
     """
     a = _assemble(cid, sid, turn=turn, actor_ref=actor_ref, eligible_speakers=eligible_speakers,
-                  images=images)
+                  images=images, recalled_history=history)
     intent = _plan_block(a, plan)
     return _prepare(a, cid, sid, model=model, describe=describe,
                     after_post=tuple({"role": role, "content": content}
@@ -1765,7 +1797,8 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
                           eligible_speakers: list[dict] | None = None,
                           appended: tuple[Appended, ...] = (),
                           images: int = 0,
-                          plan: dict | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
+                          plan: dict | None = None,
+                          history: history_model.Evidence | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """One director turn: full system + history, then the note as the final user
     message. The note rides only this call — never persisted. `turn` is the same
     one-shot response-preset override as `compose_turn`, and the messages and
@@ -1787,7 +1820,7 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
     # scene in a director note could not recall it (nothing else in the scan
     # window has said the word yet).
     a = _assemble(cid, sid, wi_seed=note, turn=turn, actor_ref=actor_ref,
-                  eligible_speakers=eligible_speakers, images=images)
+                  eligible_speakers=eligible_speakers, images=images, recalled_history=history)
     # expanded up front so the note's tokens are reserved before packing: it is
     # a mandatory message, so the budget has to know about it
     note_text = macros.expand_macros(note, a["subs"], cid, sid, datetime_subs=a["datetime_subs"])
@@ -1869,6 +1902,43 @@ def _lore_row(section: dict) -> dict:
     if "held_back" in detail:
         row["held_back"] = deepcopy(detail["held_back"])
     return row
+
+
+def _history_row(section: dict) -> dict:
+    """JSON-safe evidence only: the callable shed hook never reaches a capture."""
+    detail = section.get("history")
+    if detail is None:
+        return {}
+    shed = set(section.get("shed_refs") or ())
+    return {"history": {
+        "items": [{key: deepcopy(item[key]) for key in (
+            "scene", "identity", "key", "title", "date", "location", "tier", "admitted_by",
+            "rounds", "ranks", "excerpts", "evidence_ids", "posts", "summary", "tokens")} | {
+                "shed": item["key"] in shed} for item in detail["items"]],
+        "coverage": deepcopy(detail["coverage"]), "ceiling": detail["ceiling"],
+        "budget_from": list(detail["budget_from"]), "query_digest": detail["query_digest"],
+        **_unselected(detail),
+    }}
+
+
+#: How many candidates that found no place in the section the inspector lists.
+#: Display only: the admitted list can run to the widening window, and every
+#: entry rides each prompt capture, so the row keeps the strongest few in merge
+#: order and counts the rest.
+HISTORY_UNSELECTED_SHOWN = 20
+
+
+def _unselected(detail: dict) -> dict:
+    """What retrieval admitted and the section does not carry -- past depth, or
+    selected and then not fitted -- with its signals, so the reader sees what
+    was found as well as what was chosen. Absent on hand-built detail."""
+    if "candidates" not in detail:
+        return {}
+    chosen = {item["key"] for item in detail["items"]}
+    rest = [c for c in detail["candidates"] if c["key"] not in chosen]
+    return {"unselected": len(rest), "candidates": [
+        {key: deepcopy(c[key]) for key in ("scene", "key", "tier", "admitted_by", "rounds", "ranks")}
+        for c in rest[:HISTORY_UNSELECTED_SHOWN]]}
 
 
 def _notes_row(notes: list[dict], p: dict, count) -> tuple[dict, frozenset[int]]:
@@ -1955,7 +2025,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
         count = tokens.count_tokens
     rows = [{"id": s["id"], "label": s["label"], "text": s["text"], "tier": s["tier"],
              "dropped": s["dropped"], "trimmed": 0, "pinned": bool(s.get("pinned")),
-             "tokens": count(s["text"]), **_lore_row(s)}
+             "tokens": count(s["text"]), **_lore_row(s), **_history_row(s)}
             for s in p["sections"]]
 
     # Every history message, notes included: they are sent, so they cost.
@@ -2011,14 +2081,16 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
     return out
 
 
-def context_breakdown(cid: str, sid: str, model: str = "", images: int = 0) -> dict:
+def context_breakdown(cid: str, sid: str, model: str = "", images: int = 0,
+                      resolved=None) -> dict:
     """The LIVE inspector view: compose the turn as it would be sent right now
     and describe it. Runs the same render and pack `compose_turn` runs.
 
     The live view has no appended blocks — those belong to a specific turn
     (regenerate guidance, a roll result), and this composes a hypothetical one.
     """
-    _messages, detail = compose_turn(cid, sid, model=model, images=images)
+    evidence = history_section.preview(cid, sid, resolved)
+    _messages, detail = compose_turn(cid, sid, model=model, images=images, history=evidence)
     assert detail is not None  # describe=True always builds the inspector
     return detail
 

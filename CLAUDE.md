@@ -1076,8 +1076,9 @@ would answer neither question.
   `unknown`, `no` only when known) on the Decision card and on every decide
   route row -- "No native decision API" is said only of a known `no` -- read off the same resolution the chain
   runs, so the Models page's decide note is the server's sentence and the
-  frontend keeps no capability rule of its own. The five decide routes (`speaker`,
-  `scene_break`, `voice_drift`, `continuity` and `turn_plan`) use the Decision role, which
+  frontend keeps no capability rule of its own. The six decide routes (`speaker`,
+  `scene_break`, `voice_drift`, `continuity`, `turn_plan` and `history_check`) use the
+  Decision role, which
   inherits Fast, so on them a campaign's own Fast override no longer outranks
   a global pin (spec 5.1) -- the duplicate check and the sweep included, which
   a Fast override used to reach: a campaign that wants that sets its own
@@ -1153,10 +1154,13 @@ would answer neither question.
   once, before any text the watcher would show (`stream_tools(visibility=)`),
   and its record rides the variant as `tool`. Routes born at format 2 carry
   `routing.NO_LEGACY` and their tasks sit in `NO_LEGACY_TASKS`, which the
-  frozen inference baselines leave out. `store/epistemic_access.py` and
-  `store/history_rerank.py` are decide KITS for 11 and 09: their routes,
-  policy rows and registered eval cases land with those call sites
-  (`evals/cases.KIT_CASES` holds the cases until then).
+  frozen inference baselines leave out. `store/history_rerank.py` is the
+  relevance kit used by 09-S5's captured `routes/history_recall.py` caller
+  on the `history_check` route, with no sampling or escalation and its
+  registered replay case. The rerank switch defaults off, and an ungraded
+  candidate keeps its RRF slot. `store/epistemic_access.py` remains a decide
+  kit for 11: its route, policy row and registered eval case land with that
+  call site (`evals/cases.KIT_CASES` holds its case until then).
 - **Adding an embedding call site?** The doors are in one module,
   `store/inference/embed.py`: `embed_sync(<task>, texts,
   space=embed_space.endpoint(), client=…, campaign=…)` from a worker thread
@@ -1185,15 +1189,22 @@ would answer neither question.
   embeddings client, and it stays on the provider under test.
   - **Every call that sent a request files one ledger row**, `operation:
     "embed"`, under its embed task, covering all of its batches. It carries the
-    caller's campaign where there is one (lore recall, art, continuity and
-    `history-index` do) because spend is measured per campaign, and the scene
-    where there is one (a turn's lore recall and art, and absorb's identity
+    caller's campaign where there is one (lore recall, art, continuity,
+    `history-index` and `history-recall` do) because spend is measured per
+    campaign, and the scene where there is one (a turn's lore/history recall
+    and art, and absorb's identity
     check), because a scene's own totals are the number that is always right
     and a turn's embeds are part of what playing it cost; library-wide
     semantic search has none and is unattributed. `history-index` is scene
     documents re-embedded out of a turn: its one caller is
     `searchdocs.embedded.vectors_for`, reached only from the `searchdocs` hook
-    of 05's explicit sync, so it is campaign-attributed with no scene. A
+    of 05's explicit sync, so it is campaign-attributed with no scene.
+    `history-recall` is the native async turn caller (`store/history/semantic.py`):
+    one query-plus-warm call with the app client, post/run attribution, and
+    a query-only retry only for a malformed warm response. History and lore
+    share the 60-second outage memo in `embed_space`, keyed by space, which
+    only a failure the provider or transport reported trips -- never the
+    turn's own phase deadline cutting a slow endpoint. A
     call that sends nothing files nothing -- no row, no error, no capture line
     -- whether its input was empty or its deadline lapsed before the first
     request. One named exception: **never on the app's event loop**.
@@ -1208,7 +1219,8 @@ would answer neither question.
     door and a private `asyncio.run` loop are never refused; an `async def`
     caller reaches a compose or an embed through `run_in_threadpool`, as the
     greeting opener does. When the caller's own budget cuts a request that did go out
-    (`budgeted=True`: absorb's identity check and the continuity sweep), the
+    (`budgeted=True`: absorb's identity check, the continuity sweep and
+    history recall's turn-phase deadline), the
     row is `aborted` and nothing reaches the error store: that is the
     caller's clock, not the provider failing. A deadline that only bounds the
     provider (recall's, search's) cutting it is an error like any other.
