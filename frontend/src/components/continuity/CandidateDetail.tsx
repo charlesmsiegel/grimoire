@@ -30,6 +30,7 @@ import type {
 } from "../../api/types";
 import { ledgerHref } from "../../ledgerPaths";
 import { encodeSegment } from "../../urlSegment";
+import { InvestigationTrace } from "../investigation/InvestigationTrace";
 import { KIND_PHRASES, proposalLabel, STALE_SENTENCES } from "./labels";
 
 /** A refusal shown in the sidebar, with the one way forward it may offer
@@ -100,6 +101,12 @@ type Props = {
   onDismiss: (decision: "dismiss" | "keep_open") => void;
   onBack: () => void;
   onRefresh: () => void;
+  /** Investigate this finding (roadmap 12, E2); absent while the switch is off. */
+  onInvestigate?: () => void;
+  /** An investigation of this finding is running. */
+  investigating?: boolean;
+  /** How the last investigation of it ended, in a sentence. */
+  investigationNote?: string | null;
 };
 
 export function CandidateDetail(props: Props) {
@@ -298,6 +305,9 @@ export function CandidateDetail(props: Props) {
             )}
           </div>
         )}
+        {candidate.proposal?.investigation && (
+          <InvestigationTrace trace={candidate.proposal.investigation} sceneLink={sceneLink} />
+        )}
       </div>
 
       <aside className="detail-sidebar" aria-label="Finding actions">
@@ -361,6 +371,24 @@ export function CandidateDetail(props: Props) {
               <button type="button" disabled={busy} onClick={error.action.run}>
                 {error.action.label}
               </button>
+            )}
+          </div>
+        )}
+        {props.onInvestigate && (
+          <div className="side-section continuity-investigate">
+            <h4>Investigate</h4>
+            <button type="button" className="subtle" disabled={off || props.investigating}
+                    onClick={props.onInvestigate}>
+              {candidate.proposal ? "Ask for a second opinion" : "Investigate"}
+            </button>
+            <p className="field-hint">
+              {props.investigating
+                ? "Reading the history…"
+                : "A model reads the campaign's history to suggest a decision. "
+                  + "Experimental; nothing is applied until you apply it."}
+            </p>
+            {props.investigationNote && !props.investigating && (
+              <p className="field-hint" role="status">{props.investigationNote}</p>
             )}
           </div>
         )}

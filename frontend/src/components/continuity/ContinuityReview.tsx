@@ -40,6 +40,7 @@ import {
 } from "./labels";
 import { ReviewedGroup } from "./ReviewedGroup";
 import { SweepCaptures } from "./SweepCaptures";
+import { outcomeSentence } from "../investigation/InvestigationTrace";
 import type { ContinuityReview as Review } from "./useContinuityReview";
 import { api } from "../../api/client";
 
@@ -229,6 +230,45 @@ export function ContinuityReview(
   /** What is open now, read by an answer that lands after the reader moved. */
   const openRef = useRef({ cid, candidate });
   openRef.current = { cid, candidate };
+  /** Whether Settings switched continuity investigation on (roadmap 12, E2). */
+  const [investigable, setInvestigable] = useState(false);
+  /** The finding an investigation is running on, and what the last one said. */
+  const [investigating, setInvestigating] = useState<{ cid: string; id: string } | null>(null);
+  const [investigated, setInvestigated] = useState<{ cid: string; id: string; text: string } | null>(
+    null);
+
+  useEffect(() => {
+    let live = true;
+    api.getConfig()
+      .then((cfg) => { if (live) setInvestigable(cfg.investigation_continuity === "on"); })
+      .catch(() => { if (live) setInvestigable(false); });
+    return () => { live = false; };
+  }, []);
+
+  /** Investigate the open finding, then re-read: a written proposal is the
+   *  review's to show. The sentence stays with the finding it was about. */
+  async function investigate(c: ContinuityCandidate) {
+    if (investigating) return;
+    setInvestigating({ cid, id: c.id });
+    setInvestigated(null);
+    let text: string;
+    try {
+      const got = await api.investigateCandidate(cid, c.id);
+      text = outcomeSentence(got.outcome);
+      if (got.persisted) text += " Its suggestion is shown above.";
+      else if (got.outcome.state === "completed") {
+        text += " The finding moved meanwhile, so its suggestion was not kept.";
+      }
+    } catch (err: unknown) {
+      text = errorText(err);
+    } finally {
+      setInvestigating(null);
+    }
+    if (openRef.current.cid === cid) {
+      setInvestigated({ cid, id: c.id, text });
+      review.reread();
+    }
+  }
 
   // Opening a finding (or another one) starts it clean.
   useEffect(() => {
@@ -373,7 +413,11 @@ export function ContinuityReview(
                          }}
                          onBack={() => navigate(ledgerHref(cid, {
                            section: "continuity", group }))}
-                         onRefresh={() => { void review.refresh(); }} />
+                         onRefresh={() => { void review.refresh(); }}
+                         onInvestigate={investigable ? () => { void investigate(open); } : undefined}
+                         investigating={investigating?.cid === cid && investigating.id === open.id}
+                         investigationNote={investigated?.cid === cid && investigated.id === open.id
+                           ? investigated.text : null} />
       ) : (
         <>
           {missing && <p className="continuity-note" role="status">

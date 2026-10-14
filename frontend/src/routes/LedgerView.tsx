@@ -23,6 +23,7 @@ import {
   KnowledgePane, KnowledgeRows, useKnowledge,
 } from "../components/ledger/Knowledge";
 import { ColumnSection, PageShell } from "../components/PageShell";
+import { AskHistory } from "../components/investigation/AskHistory";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
 
@@ -335,6 +336,17 @@ export default function LedgerView() {
     section === "continuity" || section === "knowledge" ? null : section;
   const addressedRow = target && target.section !== "continuity" ? target.row ?? null : null;
   const [showRetired, setShowRetired] = useState(false);
+  /** Whether Settings switched the history question on (roadmap 12, E3), and
+   *  whether its panel is open, for the campaign it was opened on. */
+  const [askable, setAskable] = useState(false);
+  const [askingIn, setAskingIn] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.getConfig()
+      .then((cfg) => { if (live) setAskable(cfg.investigation_question === "on"); })
+      .catch(() => { if (live) setAskable(false); });
+    return () => { live = false; };
+  }, []);
   const [name, setName] = useState("");
   // Held with the campaign the rows came FROM, the way the panel this replaced
   // held its own: the route is not keyed on `cid`, so a campaign switch keeps
@@ -718,6 +730,14 @@ export default function LedgerView() {
         {matching && <p className="field-hint continuity-matching">{matching}</p>}
         <RefreshControl review={review} />
       </ColumnSection>
+      {askable && (
+        <ColumnSection label="Ask the history">
+          <button className={"column-row" + (askingIn === cid ? " active" : "")}
+                  onClick={() => setAskingIn(askingIn === cid ? null : cid)}>
+            <span className="column-row-label">Ask a question</span>
+          </button>
+        </ColumnSection>
+      )}
     </>
   );
 
@@ -753,6 +773,9 @@ export default function LedgerView() {
   return (
     <PageShell column={column} footer={footer} columnLabel="Ledger sections">
       <div className="page-wide view-anim">
+        {askable && askingIn === cid && (
+          <AskHistory key={cid} cid={cid} onClose={() => setAskingIn(null)} />
+        )}
         {section === "knowledge" && (
           <KnowledgeSection cid={cid} list={knowledge} row={addressedRow}
                             onSaved={(kid) => {

@@ -1963,3 +1963,74 @@ describe("the finding detail", () => {
       .toHaveValue("002--saltmarch-eve");
   });
 });
+
+// ---- roadmap 12: investigating a finding --------------------------------------
+
+describe("investigating a finding", () => {
+  beforeEach(() => {
+    (api.continuityCandidates as any).mockResolvedValue(DETAIL);
+  });
+
+  test("no Investigate is offered while the switch is off", async () => {
+    renderLedger(at(PAIR));
+    expect(await (await sidebar()).findByRole("button", { name: "Keep Mara's map" }))
+      .toBeInTheDocument();
+    expect(aside().queryByRole("button", { name: /investigate|second opinion/i })).toBeNull();
+  });
+
+  test("Investigate starts the run and says how it ended, then re-reads", async () => {
+    (api.getConfig as any).mockResolvedValue(
+      { investigation_continuity: "on", investigation_question: "off" });
+    (api.investigateCandidate as any).mockResolvedValue({
+      candidate: PAIR.id, persisted: true,
+      outcome: { state: "completed", limit: "", reason: "", error: "", result: {},
+                 trace: {} },
+    });
+    renderLedger(at(PAIR));
+    const button = await (await sidebar()).findByRole("button",
+      { name: /investigate|second opinion/i });
+    const reads = (api.continuityCandidates as any).mock.calls.length;
+    fireEvent.click(button);
+    await waitFor(() => expect(api.investigateCandidate).toHaveBeenCalledWith("run", PAIR.id));
+    expect(await aside().findByText(/The investigation finished\. Its suggestion is shown above\./))
+      .toBeInTheDocument();
+    await waitFor(() => expect((api.continuityCandidates as any).mock.calls.length)
+      .toBeGreaterThan(reads));
+    expect(api.applyCandidate).not.toHaveBeenCalled();
+  });
+
+  test("a proposal's investigation trace is shown with it", async () => {
+    (api.continuityCandidates as any).mockResolvedValue({
+      ...DETAIL,
+      candidates: DETAIL.candidates.map((c) => c.id !== PAIR.id ? c : {
+        ...c, proposal: { ...c.proposal!, investigation: {
+          version: 1, run: "r1", mode: "continuity", task: "investigation-continuity",
+          model: "openrouter/vendor/reader", started: "", outcome: "completed", limit: "",
+          steps: [{ turn: 1, tool: "search_history", args: { query: "the map" },
+                    result: { ok: true, refs: [], chars: 10, truncated: false } }],
+          inspected: ["scene:002--saltmarch-eve"], final: null,
+          usage: { model_turns: 2, tool_calls: 1, decisions: 0, seconds: 3,
+                   cost: { cost_usd: null, estimated_usd: null, modelled_usd: null },
+                   unpriced_calls: 2 } } } }),
+    });
+    renderLedger(at(PAIR));
+    expect(await main().findByRole("region", { name: "What the investigation read" }))
+      .toBeInTheDocument();
+    expect(main().getByText("Searched the history")).toBeInTheDocument();
+  });
+});
+
+describe("asking the history", () => {
+  test("the column offers it only while the switch is on, and opens the panel", async () => {
+    renderLedger();
+    expect(await column().findByText("Continuity review")).toBeInTheDocument();
+    expect(column().queryByText("Ask the history")).toBeNull();
+    (api.getConfig as any).mockResolvedValue(
+      { investigation_continuity: "off", investigation_question: "on" });
+    renderLedger();
+    const ask = await screen.findAllByRole("button", { name: "Ask a question" });
+    fireEvent.click(ask[ask.length - 1]);
+    expect(await screen.findByRole("region", { name: "Ask the history" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Your question")).toBeInTheDocument();
+  });
+});

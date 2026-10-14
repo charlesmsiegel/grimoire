@@ -71,6 +71,7 @@ const DRAFT_FIELDS = [
   "tracker", "perception_rider",
   "send_images", "send_images_limit",
   "decide_speaker_sampling", "decide_turn_plan", "decide_play_tool",
+  "investigation_continuity", "investigation_question", "investigation_spend_ceiling",
   // `theme` is deliberately NOT here. The look is persisted the moment it is
   // picked, by `useThemeSetting`, because three controls now offer it (this
   // page, the first-run wizard, the header toggle) and a draft field would let
@@ -99,7 +100,8 @@ function draftOf(c: Config): Draft {
 type SectionId =
   | "storage" | "backups" | "logging" | "timeouts"
   | "setup"
-  | "context" | "layout" | "tracker" | "decisions" | "system-prompt" | "response"
+  | "context" | "layout" | "tracker" | "decisions" | "investigation"
+  | "system-prompt" | "response"
   | "transcript" | "output" | "playing" | "appearance";
 
 /** Ids of panes that became pages of their own (Settings → Inference), and
@@ -153,6 +155,9 @@ const SECTIONS: SectionDef[] = [
     fields: ["tracker", "perception_rider"] },
   { id: "decisions", group: "What the model sees", label: "Play decisions",
     fields: ["decide_speaker_sampling", "decide_turn_plan", "decide_play_tool"] },
+  { id: "investigation", group: "What the model sees", label: "History investigation",
+    fields: ["investigation_continuity", "investigation_question",
+             "investigation_spend_ceiling"] },
   { id: "system-prompt", group: "What the model sees", label: "System prompt",
     fields: ["system_prompt"] },
   { id: "response", group: "What the model sees", label: "Response targets", fields: [] },
@@ -1104,6 +1109,51 @@ export default function ConfigView() {
               <em>Turn planning</em> route and a second scene turn, which re-sends the whole
               prompt.
             </p>
+          </>
+        )}
+
+        {draft && section === "investigation" && (
+          <>
+            <p className="config-copy">
+              A model with tools reads this campaign's scenes and ledger to settle something
+              the cheaper checks could not. Each is something you start, on the <em>History
+              investigation</em> route, and switching one on here spends nothing. Both are
+              experimental: off until their evaluation is recorded.
+            </p>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Offer Investigate on a continuity finding"
+                checked={draft.investigation_continuity === "on"}
+                onChange={(e) => edit("investigation_continuity", e.target.checked ? "on" : "off")}
+              />
+              Offer Investigate on a continuity finding
+            </label>
+            <p className="config-copy">
+              Reads the history behind one finding and suggests a decision for it, citing the
+              scenes it read. Nothing is applied until you apply it.
+            </p>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Offer Ask the history on the ledger"
+                checked={draft.investigation_question === "on"}
+                onChange={(e) => edit("investigation_question", e.target.checked ? "on" : "off")}
+              />
+              Offer Ask the history on the ledger
+            </label>
+            <p className="config-copy">
+              Answers a question about what happened, citing only scenes it read. The answer
+              is not saved.
+            </p>
+            <NumField id="cfg-investigation-ceiling" label="Spend ceiling per investigation"
+                      unit="USD" placeholder="none" decimal
+                      value={draft.investigation_spend_ceiling}
+                      caption={"Blank is no ceiling: a run is still bounded by its turns, tool "
+                        + "calls, time and the model's context. With a ceiling, a model with no "
+                        + "price is refused before it starts; setting rates for it, or clearing "
+                        + "the ceiling, lifts that."}
+                      onChange={(v) => edit("investigation_spend_ceiling", v)} />
           </>
         )}
 

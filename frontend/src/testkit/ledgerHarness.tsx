@@ -45,6 +45,9 @@ const mocked = (fn: unknown) => fn as Mock;
 export function installLedgerMocks() {
   vi.clearAllMocks();
   mocked(api.getCampaign).mockResolvedValue({ meta: { id: "run", name: "Saltmarch" }, body: "" });
+  // Both investigation switches off, as a fresh store ships (roadmap 12).
+  mocked(api.getConfig).mockResolvedValue(
+    { investigation_continuity: "off", investigation_question: "off" });
   mocked(api.campaignLedger).mockResolvedValue(EMPTY_LEDGER);
   mocked(api.campaignChanges).mockResolvedValue([]);
   mocked(api.campaignRelationshipHistory).mockResolvedValue([]);

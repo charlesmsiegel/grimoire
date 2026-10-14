@@ -42,7 +42,8 @@ import {
   type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingDetail, type GreetingDraft,
   type GroupState, type MembershipResponse, type HealthCheckResult,
   type CommitmentSave, type CompositionRow,
-  type CandidateRecord, type ContinuityApply, type ContinuityCandidates, type ContinuityState,
+  type CandidateInvestigated, type CandidateRecord, type ContinuityApply, type ContinuityCandidates,
+  type ContinuityState, type HistoryAnswer,
   type ContinuityApplied, type ReconcileResult,
   type CapabilityNeed, type ControlsPreview, type ModelCapabilities,
   type CampaignInferenceWrite, type InferenceSettings, type InferenceWrite,
@@ -1691,6 +1692,22 @@ export const api = {
             ? new RefreshRefused(err.status, err.detail, err.kind, err.body)
             : err;
         }), { signal }),
+  /** Investigate one finding (roadmap 12, E2) and wait for it: a background
+   *  run, one live per campaign, whose one write is the finding's proposal.
+   *  `notifyShell`, since a written proposal moves what the review shows. */
+  investigateCandidate: (cid: string, id: string, signal?: AbortSignal) =>
+    draftRun<CandidateInvestigated>({ at: "campaign", id: cid }, (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST",
+        `/api/campaigns/${encodeSegment(cid)}/continuity/candidates/${encodeSegment(id)}/investigate`,
+        undefined, { attempt, signal }), { signal }).then(notifyShell),
+  /** Ask the campaign's history a question (roadmap 12, E3): a draft whose
+   *  answer is held on the run and never stored. */
+  askHistory: (cid: string, question: string, signal?: AbortSignal) =>
+    draftRun<HistoryAnswer>({ at: "campaign", id: cid }, (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/campaigns/${encodeSegment(cid)}/history/question`, { question },
+        { attempt, signal }), { signal }),
   /** Follow a campaign run this client did not start -- the sweep End Scene
    *  began, found on the candidates read (Decision 24). It has no attempt id
    *  of ours, so the last word before giving up on it is the subject's run
