@@ -205,6 +205,8 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             "history_recall_budget": cfg.get("history_recall_budget", store.config.DEFAULT_HISTORY_RECALL_BUDGET),
             "history_recall_threshold": cfg.get("history_recall_threshold", store.config.DEFAULT_HISTORY_RECALL_THRESHOLD),
             "history_recall_rerank": cfg.get("history_recall_rerank", store.config.DEFAULT_HISTORY_RECALL_RERANK),
+            "history_plan": cfg.get("history_plan", store.config.DEFAULT_HISTORY_PLAN),
+            "history_plan_repair": cfg.get("history_plan_repair", store.config.DEFAULT_HISTORY_PLAN_REPAIR),
             "semantic_recall_depth": cfg.get("semantic_recall_depth",
                                              store.config.DEFAULT_SEMANTIC_RECALL_DEPTH),
             "semantic_recall_threshold": cfg.get("semantic_recall_threshold",

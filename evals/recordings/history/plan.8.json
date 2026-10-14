@@ -1,0 +1,4 @@
+{
+  "plan": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"Where did Mara leave the silver ledger?\"], \"terms\": [\"silver\", \"ledger\", \"pier\"], \"scopes\": [], \"max_scenes\": 3}",
+  "check": "{\"0\": {\"answers\": {\"sufficient\": true}}}"
+}

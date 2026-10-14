@@ -48,6 +48,7 @@ const cfg = {
   semantic_recall_threshold: "0.4",
   history_recall_depth: "0", history_recall_budget: "1200",
   history_recall_threshold: "0.35", history_recall_rerank: "off",
+  history_plan: "off", history_plan_repair: "on",
   prompt_layout_enabled: "off", speaker_turn_taking: "off",
   backup_enabled: "off", backup_interval_hours: "24", backup_keep: "7", backup_dir: "",
   // The roles as `GET /config` names them (`settings.summary`). Decision
@@ -955,5 +956,21 @@ test("Context exposes and saves all four history controls with cost disclosure",
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({
     history_recall_depth: "2", history_recall_budget: "900",
     history_recall_threshold: "0.5", history_recall_rerank: "on",
+  }));
+});
+
+test("Context saves history planning, its repair inert until planning is on", async () => {
+  renderView();
+  await open(/^Context/);
+  const repair = screen.getByLabelText("Repair a thin plan once");
+  expect(repair).toBeChecked();
+  expect(repair).toBeDisabled();
+  expect(screen.getByText(/History planning spends one short call/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText("Plan history recall"));
+  expect(screen.getByLabelText("Repair a thin plan once")).toBeEnabled();
+  fireEvent.click(screen.getByLabelText("Repair a thin plan once"));
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({
+    history_plan: "auto", history_plan_repair: "off",
   }));
 });

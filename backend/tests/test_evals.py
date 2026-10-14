@@ -622,7 +622,7 @@ def test_every_decide_case_is_counted():
         "decide-continuity-identity", "decide-continuity-reconcile", "decide-rank",
         "decide-select", "decide-joint", "decide-turn-intent",
         "decide-turn-plan", "decide-play-tool", "decide-history-rerank",
-        "decide-epistemic-access"}
+        "decide-epistemic-access", "decide-history-sufficiency"}
 
 
 #: 01e's offline cases: each counterexample read through `decisions.parse` as

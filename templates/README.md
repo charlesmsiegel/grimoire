@@ -878,6 +878,43 @@ around the item.
 
 `scripts/verify_templates.py` holds both kits to these templates.
 
+### `history_plan/` — the history planner (roadmap 10-C1)
+One short structured generation on the `history_plan` route (Fast), asked
+only when the turn's first history retrieval is `thin` or `empty` and
+`history_plan` is `auto` (`routes/history_recall.plan_and_repair`).
+`store/history/plan.py:build_messages` renders both messages:
+- `history_plan/system.j2`: the job, the bounds the schema cannot carry and
+  the schema itself through `schema_json`. Vars `schema` (`plan.schema_for`),
+  `repair` (the repair hop, which adds the paragraph naming the quoted
+  previous search as data), `max_subjects`, `max_questions`,
+  `question_chars`, `max_terms`, `term_chars` and `depth`.
+- `history_plan/user.j2`: the data. Vars `window` (the turn, through the
+  prompt-phase regex view); `cast`, `mentioned`, `threads` and `groups` (each
+  a list of `{handle, name, kind}` -- 09's filtered seeds only, by handle;
+  refs never leave the server); `found` (`{title, date, summary}`);
+  `tried` (the previous plan, normalised by `plan.read`, inside a fenced
+  block, or none); `coverage`, `tiers` and `depth`. `plan.clip` drops entries
+  from the bottom of this list upward to keep the data within
+  `plan.PLAN_INPUT_BYTES`, never the window.
+
+Signals, ranks and scores are never shown. `scripts/verify_templates.py`
+holds the builder to both templates.
+
+### `history_check/` — the evidence-sufficiency check (roadmap 10-C3)
+One decide item on the `history_check` route (task `history-sufficiency`),
+asked only before the planner's repair hop (and, when 12's RP mode asks, once
+after it). `store/history/sufficiency.py:item` renders its context;
+`decide/` renders the prompt around it.
+- `history_check/item.j2`: vars `window` (the turn, through the prompt-phase
+  regex view, clipped as the planner's) and `evidence` (a list of `{title,
+  date, summary, excerpt}`: each recalled scene's header, one-line summary
+  and the first line of its first excerpt). No signal, rank or score.
+- `history_check/question.j2` (no vars) is the `sufficient` predicate. No
+  rationale is asked for: the repair planner is told only that the check
+  said insufficient.
+
+`scripts/verify_templates.py` holds the item to both templates.
+
 ## Keeping templates honest
 
 The verification harness checks the WIRING (each builder passes the documented

@@ -157,18 +157,20 @@ def test_legacy_surfaces_still_see_twelve_routes():
 
 
 def test_a_route_born_at_format_two_has_no_legacy_key():
-    """A `NO_LEGACY` route (02-S2's `turn_plan`, 09-S5's `history_check`) is no legacy route, adds no
+    """A `NO_LEGACY` route (02-S2's `turn_plan`, 09-S5's `history_check`, 10's
+    `history_plan`) is no legacy route, adds no
     legacy key, names no legacy key to read, and lists its tasks in
     `NO_LEGACY_TASKS` -- which the frozen inference baselines leave out."""
     born = [r for r in routing.ROUTES if r.legacy == routing.NO_LEGACY]
-    assert [r.key for r in born] == ["turn_plan", "history_check", "epistemic"]
+    assert [r.key for r in born] == ["turn_plan", "history_check", "epistemic", "history_plan"]
     for r in born:
         assert r not in routing.LEGACY_ROUTES
         assert r.key not in {x.key for x in routing.LEGACY_ROUTES}
         assert routing.config_key(r.key) not in routing.CONFIG_KEYS
         assert routing.preset_key(r.key) not in routing.PRESET_CONFIG_KEYS
         assert routing.legacy_key(r) == ""
-    assert sorted(routing.NO_LEGACY_TASKS) == ["epistemic-access", "history-rerank",
+    assert sorted(routing.NO_LEGACY_TASKS) == ["epistemic-access", "history-query-plan",
+                                               "history-rerank", "history-sufficiency",
                                                "turn-intent", "turn-plan",
                                                "turn-tool-decision"]
     assert routing.NO_LEGACY not in routing.TASK_ROUTE.values()
@@ -178,7 +180,8 @@ def test_every_route_declares_operation_and_default_role():
     """A route flips to `decide` and the Decision role only in the task whose
     call sites decide (spec 14): scene-break, voice drift and the speaker pick
     (slice F), both continuity checks (slice G), the turn intent (02-S2) and
-    the history rerank (09-S5), and the epistemic access check (11-S6)."""
+    the history rerank (09-S5), and the epistemic access check (11-S6). The
+    history planner (10) generates on Fast."""
     primary = {"scene", "opener", "suggestions", "voice"}
     decide = {"scene_break", "voice_drift", "speaker", "continuity", "turn_plan",
               "history_check", "epistemic"}
@@ -190,7 +193,8 @@ def test_every_route_declares_operation_and_default_role():
                 else ("generate", "fast"))
         assert (r.operation, r.default_role) == want, r.key
     assert routing.route_by_key("image").requires == ("vision",)
-    assert len(routing.ROUTES) == 18
+    assert routing.route_by_key("history_plan").tasks == ("history-query-plan",)
+    assert len(routing.ROUTES) == 19
 
 
 def test_the_scene_break_title_is_drafted_on_the_summary_route():

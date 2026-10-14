@@ -233,6 +233,10 @@ DEFAULT_HISTORY_RECALL_DEPTH = "0"
 DEFAULT_HISTORY_RECALL_BUDGET = "1200"
 DEFAULT_HISTORY_RECALL_THRESHOLD = "0.35"
 DEFAULT_HISTORY_RECALL_RERANK = "off"
+#: Roadmap 10: no turn plans until a reader turns it on (`auto`), and the
+#: repair hop is inert while planning is off.
+DEFAULT_HISTORY_PLAN = "off"
+DEFAULT_HISTORY_PLAN_REPAIR = "on"
 
 _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "system_prompt",
                 "quote_color", "recap_depth", "archive_depth", "context_budget",
@@ -247,6 +251,8 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "semantic_recall_depth", "semantic_recall_threshold",
                 "history_recall_depth", "history_recall_budget",
                 "history_recall_threshold", "history_recall_rerank",
+                # Roadmap 10: retrieval query planning, off by default.
+                "history_plan", "history_plan_repair",
                 # `context.art`'s two knobs, config.md-only like the recall pair
                 # above. Omitted at first, which is exactly the failure the
                 # comment on this tuple describes: both were documented, both
@@ -336,6 +342,8 @@ def read_config() -> dict[str, str]:
                 "history_recall_budget": DEFAULT_HISTORY_RECALL_BUDGET,
                 "history_recall_threshold": DEFAULT_HISTORY_RECALL_THRESHOLD,
                 "history_recall_rerank": DEFAULT_HISTORY_RECALL_RERANK,
+                "history_plan": DEFAULT_HISTORY_PLAN,
+                "history_plan_repair": DEFAULT_HISTORY_PLAN_REPAIR,
                 "art_catalog_depth": DEFAULT_ART_CATALOG_DEPTH,
                 "art_catalog_threshold": DEFAULT_ART_CATALOG_THRESHOLD,
                 "prompt_layout_enabled": DEFAULT_PROMPT_LAYOUT_ENABLED,

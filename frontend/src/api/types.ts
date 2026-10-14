@@ -648,6 +648,11 @@ export type Config = {
   history_recall_budget: string;
   history_recall_threshold: string;
   history_recall_rerank: string;
+  /** "auto" plans history recall when the first retrieval looks thin
+   *  (roadmap 10); "off" (the default) never plans. */
+  history_plan: string;
+  /** "on" (the default) lets "auto" take one repair hop after a check. */
+  history_plan_repair: string;
   semantic_recall_depth: string;
   /** Cosine floor a recalled entry must clear. */
   semantic_recall_threshold: string;
@@ -718,6 +723,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "offscene_known_limit" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
   "history_recall_depth" | "history_recall_budget" | "history_recall_threshold" | "history_recall_rerank" |
+  "history_plan" | "history_plan_repair" |
   "prompt_layout_enabled" | "speaker_turn_taking" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
   "replay_fork_threshold" | "advance_fork_threshold" | "log_level" |
@@ -1941,6 +1947,20 @@ export type HistoryEvidenceRow = {
    *  Inspector data only -- no basis code reaches a message. Absent on a
    *  capture taken before 11-S3. */
   epistemic?: EpistemicDetail;
+  /** Roadmap 10's planning trace, present only when planning was in play.
+   *  The questions and terms are model-written and never reach the prompt. */
+  plan?: HistoryPlanTrace;
+};
+export type HistoryPlanRound = {
+  questions: string[]; terms: string[]; subjects: string[];
+  scene_keys: string[]; evidence_ids: string[];
+};
+export type HistoryPlanTrace = {
+  terminal: string; trigger: string; sufficiency: string; sufficiency_source: string;
+  cheap_retrieval_failed: boolean; e0: HistoryPlanRound; rounds: HistoryPlanRound[];
+  steps: { task: string; outcome: string; ms: number; rows: number }[];
+  plans: { subjects: string[]; questions: string[]; terms: string[] }[];
+  gain: string[];
 };
 /** One perspective's access to retrieved history (spec 11 §3). */
 export type EpistemicAccess = "witnessed" | "known" | "suspected" | "narrator_only" | "unknown";

@@ -2,7 +2,8 @@ import { type SceneContext, type TokenCounting } from "../api/client";
 import { type Model } from "../api/models";
 import { EpistemicAccept } from "./EpistemicAccept";
 import { SamplingSummary } from "./SamplingSummary";
-import { type ContextSection, type EpistemicDetail, type EpistemicItem, type EpistemicSlice } from "../api/types";
+import { type ContextSection, type EpistemicDetail, type EpistemicItem, type EpistemicSlice,
+  type HistoryPlanTrace } from "../api/types";
 import { describeHeld, describeReason } from "./loreReasons";
 import { promptFieldWarning } from "./promptFieldWarning";
 
@@ -242,6 +243,18 @@ function EpistemicRows({ detail, acceptCid, carried }: {
 const VISIBLE = new Set(["witnessed", "known", "suspected"]);
 
 /** Historical reasons are kept beside the sent text, including scenes shed by packing. */
+function HistoryPlan({ plan }: { plan: HistoryPlanTrace }) {
+  return <>
+    <div className="field-hint">Planning: {plan.terminal}{plan.trigger && `; trigger ${plan.trigger}`};
+      {" "}added {plan.gain.length} scene{plan.gain.length === 1 ? "" : "s"}
+      {plan.sufficiency !== "not_asked" && `; check ${plan.sufficiency}`}</div>
+    {plan.rounds.map((round, n) => <div className="field-hint" key={round.questions.join("|") + round.terms.join("|")}>
+      Planned round {n + 1}: {round.questions.join(" / ") || "no questions"}
+      {round.terms.length > 0 && `; terms ${round.terms.join(", ")}`}
+    </div>)}
+  </>;
+}
+
 /** The post keys this prompt actually carried in a history section: a
  *  section the packer dropped carries none, and an item it shed carries none
  *  of its posts. What the capture's accept may grant (11-S3). */
@@ -270,6 +283,7 @@ function HistoryEntries({ section, acceptCid, carried }: {
     <div className="field-hint">Semantic: {coverage.semantic}</div>
     {coverage.rerank && coverage.rerank !== "off" && (
       <div className="field-hint">Rerank: {coverage.rerank}</div>)}
+    {history.plan && <HistoryPlan plan={history.plan} />}
     <ul className="ctx-entries">
       {history.items.map((item) => <li key={item.key} className={item.shed ? "shed" : undefined}>
         <span className="chip on">{item.title}</span> {item.scene}; tier {item.tier};

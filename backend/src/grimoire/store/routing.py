@@ -160,6 +160,13 @@ class TaskPolicy(NamedTuple):
 #: names that section, the kind and the run's date.
 TASK_POLICY: dict[str, TaskPolicy] = {
     "history-rerank": TaskPolicy(),
+    # Roadmap 10-C3: the evidence-sufficiency check, which gates the repair
+    # hop. Falls back as its route sibling does; never sampled (a sampled
+    # gate would make spend random). Escalation stays off until its evidence
+    # lands (`evals/README.md`, "Decision escalation"): the spec recommends
+    # `abstained` and `refused` to Primary, and the call site then passes
+    # `escalation=` (`test_operation_guard.py` holds the two together).
+    "history-sufficiency": TaskPolicy(),
     # Roadmap 02-C2a: the pick's caller may draw WHO speaks from a reported
     # distribution (only when the campaign samples, `play_decisions`).
     # Escalation stays off until C2a's play gate measures it, and would be on
@@ -230,8 +237,8 @@ ROUTES: tuple[Route, ...] = (
           legacy=NO_LEGACY),
     Route("history_check", "History checks",
           "Whether a recalled scene bears on the current turn, after retrieval has found it.",
-          ("history-rerank",), True, operation="decide", default_role="decision",
-          legacy=NO_LEGACY),
+          ("history-rerank", "history-sufficiency"), True, operation="decide",
+          default_role="decision", legacy=NO_LEGACY),
     # Roadmap 11-S6: the Decision stage's call site (`routes/epistemic.py`).
     # Spelled here, not imported from `store/epistemic_access.py`, which
     # imports this module; `test_epistemic_refine` holds the two to agree.
@@ -240,6 +247,11 @@ ROUTES: tuple[Route, ...] = (
           "alone cannot say. Off unless switched on by hand.",
           ("epistemic-access",), True, operation="decide", default_role="decision",
           legacy=NO_LEGACY),
+    Route("history_plan", "History recall planning",
+          "When recalled history looks thin, one short call that rewrites what the turn "
+          "needs from the campaign's past. Off unless History planning is switched on; "
+          "a non-reasoning preset suits it.",
+          ("history-query-plan",), True, default_role="fast", legacy=NO_LEGACY),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),
     Route("absorb", "Absorb & mechanics audit",

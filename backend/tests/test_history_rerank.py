@@ -77,7 +77,7 @@ def test_the_consumer_registers_the_kit_route_and_case():
     assert hr.TASK in {c.task for c in case_mod.CASES}
     assert hr.TASK not in {c.task for c in case_mod.KIT_CASES}
     assert (hr.ROUTE.tasks, hr.ROUTE.operation, hr.ROUTE.default_role, hr.ROUTE.legacy) == (
-        (hr.TASK,), "decide", "decision", routing.NO_LEGACY)
+        (hr.TASK, "history-sufficiency"), "decide", "decision", routing.NO_LEGACY)
 
 
 CASE = case_mod.BY_ID["decide-history-rerank"]

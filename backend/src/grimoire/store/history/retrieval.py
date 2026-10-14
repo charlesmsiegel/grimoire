@@ -374,6 +374,42 @@ def _expander(cid, prepared, summary_omissions):
     return item
 
 
+def expander(cid: str, sid: str, query: model.Query, ceiling: int, *,
+             summary_omissions: Mapping[str, str] | None = None):
+    """`merge`'s bound expansion callback for a turn's rounds (10): a scene
+    the merged order selects that neither round expanded is built here into
+    a complete `EvidenceItem` -- the same headers, summary and prompt
+    excerpts as retrieval's own (`_expander`), anchored on `query`'s terms.
+
+    Lazy: nothing is read until the first scene needs it, and then only the
+    catalog and the eligible documents, never a second scoring pass. A scene
+    no longer eligible expands to None, which `select` skips."""
+    validate(query)
+    built: dict[str, object] = {}
+
+    def item(candidate: model.Candidate) -> model.EvidenceItem | None:
+        if "item" not in built:
+            cfg = settings.read()
+            if cfg is None or candidate.scene.campaign:
+                return None
+            depth = (min(cfg.depth, query.max_scenes) if query.max_scenes is not None
+                     else cfg.depth) or 1
+            try:
+                posts = len(scenes_read.read_scene(cid, sid)["messages"])
+            except Exception:  # noqa: BLE001 -- as `_prepare`: another boundary may answer
+                posts = 0
+            cat = query_mod.catalog(cid, sid, posts)
+            docs = _eligible(cid, sid)
+            selection = _Selection(replace(query, terms=cat.filter_terms(query.terms)), cfg,
+                                   max(ceiling, 0), depth, cat, docs, ())
+            built["keys"] = {_source_ref(d).key for d in docs}
+            built["item"] = _expander(cid, selection, summary_omissions)
+        if candidate.scene.key not in built["keys"]:  # type: ignore[operator]
+            return None
+        return built["item"](candidate)  # type: ignore[operator]
+    return item
+
+
 def _expanded(cid, prepared, ordered, summary_omissions):
     item = _expander(cid, prepared, summary_omissions)
     return {c.scene.key: item(c) for c in ordered}

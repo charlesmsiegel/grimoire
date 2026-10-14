@@ -181,6 +181,81 @@ def _signals(signals: Signals) -> dict:
 
 
 @dataclass(frozen=True)
+class RoundRecord:
+    """What one retrieval round left selected (10-C2, a stable field): the
+    plan it ran (empty for `E0`, which ran on the turn window), and the scene
+    keys and 09-C1 evidence ids of the evidence as merged after it, so
+    consecutive records say exactly what each round added."""
+
+    questions: tuple[str, ...] = ()
+    terms: tuple[str, ...] = ()
+    subjects: tuple[str, ...] = ()
+    scene_keys: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+
+    @classmethod
+    def of(cls, items: tuple[EvidenceItem, ...], *, questions: tuple[str, ...] = (),
+           terms: tuple[str, ...] = (), subjects: tuple[str, ...] = ()) -> RoundRecord:
+        return cls(questions, terms, subjects, tuple(i.scene.key for i in items),
+                   tuple(e for i in items for e in i.evidence_ids))
+
+    def projection(self) -> dict:
+        return {"questions": list(self.questions), "terms": list(self.terms),
+                "subjects": list(self.subjects), "scene_keys": list(self.scene_keys),
+                "evidence_ids": list(self.evidence_ids)}
+
+
+@dataclass(frozen=True)
+class Step:
+    """One planning step, diagnostic only: its task, how it ended, its wall
+    time and the ledger rows it filed."""
+
+    task: str
+    outcome: str
+    ms: int = 0
+    rows: int = 0
+
+
+#: `PlanTrace.terminal` values without a reason suffix; `not_run:` and
+#: `skipped:` carry one.
+TERMINALS = ("declined", "unusable", "planned", "unrepaired", "repair_redundant", "repaired")
+
+
+@dataclass(frozen=True)
+class PlanTrace:
+    """Where retrieval planning stopped and why (10-C2).
+
+    `terminal`, `trigger`, `sufficiency`, `sufficiency_source`,
+    `cheap_retrieval_failed`, `e0` and `rounds` are STABLE: 12's RP trigger
+    reads them, and renaming or re-meaning one is a contract change, never a
+    refactor. `steps`, `plans` and `gain` are diagnostic."""
+
+    terminal: str
+    trigger: str = ""
+    sufficiency: str = "not_asked"
+    sufficiency_source: str = "not_asked"
+    cheap_retrieval_failed: bool = False
+    e0: RoundRecord = field(default_factory=RoundRecord)
+    rounds: tuple[RoundRecord, ...] = ()
+    steps: tuple[Step, ...] = ()
+    #: Each parsed plan as `plan.projection` shows it (refs as names).
+    plans: tuple[Mapping, ...] = ()
+    #: Selected scene keys the final evidence carries that `E0` did not.
+    gain: tuple[str, ...] = ()
+
+    def projection(self) -> dict:
+        return {
+            "terminal": self.terminal, "trigger": self.trigger,
+            "sufficiency": self.sufficiency, "sufficiency_source": self.sufficiency_source,
+            "cheap_retrieval_failed": self.cheap_retrieval_failed,
+            "e0": self.e0.projection(), "rounds": [r.projection() for r in self.rounds],
+            "steps": [{"task": s.task, "outcome": s.outcome, "ms": s.ms, "rows": s.rows}
+                      for s in self.steps],
+            "plans": [dict(p) for p in self.plans], "gain": list(self.gain),
+        }
+
+
+@dataclass(frozen=True)
 class Evidence:
     items: tuple[EvidenceItem, ...] = ()
     candidates: tuple[Candidate, ...] = ()
@@ -191,6 +266,10 @@ class Evidence:
     #: the setting -- so composition re-fits each item to the share retrieval
     #: fitted it to. 0 for hand-built evidence: the setting's depth stands.
     depth: int = 0
+    #: 10-C2's trace when the planner was in play (`history_plan` on, or a
+    #: forced gather), else None -- and then `detail` carries no `plan` key,
+    #: so a turn with planning off has exactly 09's row.
+    plan: PlanTrace | None = None
 
     def detail(self) -> dict:
         """JSON-safe inspector data; no callable or fused ordering number."""
@@ -251,4 +330,4 @@ class Evidence:
             },
             "ceiling": self.ceiling,
             "query_digest": self.query_digest,
-        }
+        } | ({"plan": self.plan.projection()} if self.plan is not None else {})
