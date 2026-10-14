@@ -17,6 +17,9 @@ import { InvestigationTrace, outcomeSentence } from "./InvestigationTrace";
 
 const mocked = <T,>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
+/** Where AskHistory remembers a question: per library and campaign. */
+const QUESTION_KEY = 'grimoire.askHistory:["/lib","run"]';
+
 const TRACE: Trace = {
   version: 1, run: "r1", mode: "question", task: "investigation-question",
   model: "openrouter/vendor/reader", started: "2026-10-14T00:00:00Z", outcome: "completed",
@@ -94,7 +97,7 @@ describe("AskHistory", () => {
 
   function ask(answer: HistoryAnswer) {
     mocked(api.askHistory).mockResolvedValue(answer);
-    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("Your question"),
                      { target: { value: "Who keeps the harbour ledger?" } });
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
@@ -124,7 +127,7 @@ describe("AskHistory", () => {
     let answer: (a: HistoryAnswer) => void = () => {};
     mocked(api.askHistory).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
     const onClose = vi.fn();
-    render(<MemoryRouter><AskHistory cid="run" onClose={onClose} /></MemoryRouter>);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={onClose} /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("Your question"),
                      { target: { value: "Who keeps the harbour ledger?" } });
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
@@ -139,7 +142,7 @@ describe("AskHistory", () => {
 
   it("re-attaches to a question still running after it was unmounted", async () => {
     mocked(api.askHistory).mockReturnValue(new Promise(() => {}));
-    const first = render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    const first = render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("Your question"),
                      { target: { value: "Who keeps the harbour ledger?" } });
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
@@ -153,7 +156,7 @@ describe("AskHistory", () => {
       question: "Who keeps the harbour ledger?",
       outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
                  result: null, trace: TRACE } });
-    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
     expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
     expect(api.findHistoryQuestion).toHaveBeenCalledWith("run", attempt, expect.any(AbortSignal));
     // The held run, followed as it stands: no second POST, no second question.
@@ -161,30 +164,30 @@ describe("AskHistory", () => {
                                                            expect.any(AbortSignal));
     expect(api.askHistory).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText("Your question")).toHaveValue("Who keeps the harbour ledger?");
-    expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
+    expect(localStorage.getItem(QUESTION_KEY)).toBeNull();
   });
 
   it("never asks again for a question the server no longer holds", async () => {
-    localStorage.setItem("grimoire.askHistory.run",
+    localStorage.setItem(QUESTION_KEY,
                          JSON.stringify({ attempt: "a-old", question: "Who keeps the ledger?" }));
     mocked(api.findHistoryQuestion).mockResolvedValue(null);
-    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
     expect(await screen.findByText(/no longer held/)).toBeInTheDocument();
     expect(api.askHistory).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Your question")).toHaveValue("Who keeps the ledger?");
-    expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
+    expect(localStorage.getItem(QUESTION_KEY)).toBeNull();
   });
 
   it("keeps a question whose failure carried no reply, and re-asks it as the same run", async () => {
     mocked(api.askHistory).mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("Your question"),
                      { target: { value: "Who keeps the harbour ledger?" } });
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
     expect(await screen.findByText(/Failed to fetch|reach/)).toBeInTheDocument();
     const [, , , attempt] = mocked(api.askHistory).mock.calls[0];
     // Nothing proved the run absent, so it is still remembered...
-    expect(JSON.parse(localStorage.getItem("grimoire.askHistory.run") ?? "null"))
+    expect(JSON.parse(localStorage.getItem(QUESTION_KEY) ?? "null"))
       .toEqual({ attempt, question: "Who keeps the harbour ledger?" });
     // ...and asking it again goes out under the same attempt, which the
     // server adopts rather than starting (and paying for) a second run.
@@ -195,46 +198,73 @@ describe("AskHistory", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
     expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
     expect(mocked(api.askHistory).mock.calls[1][3]).toBe(attempt);
-    expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
+    expect(localStorage.getItem(QUESTION_KEY)).toBeNull();
   });
 
   it("forgets a question the server answered with a refusal", async () => {
     mocked(api.askHistory).mockRejectedValueOnce(
       new ApiError(409, "the question switch is off", "off"));
-    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("Your question"),
                      { target: { value: "Who keeps the harbour ledger?" } });
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
     expect(await screen.findByText(/switch is off/)).toBeInTheDocument();
-    expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
+    expect(localStorage.getItem(QUESTION_KEY)).toBeNull();
   });
 
   it("shows the campaign's budget level where a question is asked", async () => {
     mocked(api.getCampaignBudget).mockResolvedValue(
       { limit_usd: 5, period: "monthly", level: "over", warn_fraction: 0.8, spent_usd: 6,
         unpriced_calls: 2 });
-    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
     expect(await screen.findByText(
       "Campaign budget: $6.00 of $5.00 spent this month, not counting 2 unpriced calls. "
       + "Over budget: an investigation still runs, and adds to it.")).toBeInTheDocument();
   });
 
   it("follows a running question with the switch off, and starts none", async () => {
-    localStorage.setItem("grimoire.askHistory.run",
+    localStorage.setItem(QUESTION_KEY,
                          JSON.stringify({ attempt: "a-old", question: "Who keeps the ledger?" }));
     mocked(api.findHistoryQuestion).mockResolvedValue({ id: "r1", state: "running" });
     mocked(api.followHistoryQuestion).mockResolvedValue({
       question: "Who keeps the ledger?",
       outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
                  result: null, trace: TRACE } });
-    render(<MemoryRouter><AskHistory cid="run" canAsk={false} onClose={() => {}} /></MemoryRouter>);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" canAsk={false} onClose={() => {}} /></MemoryRouter>);
     expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
     expect(screen.getByText("Asking is switched off in Settings.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
   });
 
+  it("never shows another library's remembered question", () => {
+    localStorage.setItem(QUESTION_KEY,
+                         JSON.stringify({ attempt: "a-old", question: "Who keeps the ledger?" }));
+    render(<MemoryRouter><AskHistory cid="run" root="/elsewhere" onClose={() => {}} />
+      </MemoryRouter>);
+    expect(screen.getByLabelText("Your question")).toHaveValue("");
+    expect(api.findHistoryQuestion).not.toHaveBeenCalled();
+  });
+
+  it("starts no other question over one still unresolved, until it is forgotten", async () => {
+    mocked(api.askHistory).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Your question"),
+                     { target: { value: "Who keeps the harbour ledger?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(await screen.findByText(/Failed to fetch|reach/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Your question"),
+                     { target: { value: "Who sold the ferry?" } });
+    expect(screen.getByText(/An earlier question may still be being answered/))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Forget it" }));
+    expect(localStorage.getItem(QUESTION_KEY)).toBeNull();
+    expect(screen.getByRole("button", { name: "Ask" })).toBeEnabled();
+    expect(api.askHistory).toHaveBeenCalledTimes(1);
+  });
+
   it("asks nothing for an empty question", () => {
-    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
     expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
   });
 });

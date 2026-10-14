@@ -433,3 +433,15 @@ def test_a_scene_renamed_or_deleted_after_its_read_is_no_longer_read(cid, run):
     scenes.delete_scene(cid, gone)
     tools.revalidate(run)
     assert run.inspected == {kept}
+
+
+def test_a_scene_edited_after_its_read_is_no_longer_read_but_one_played_on_is(cid, run):
+    """What the model read there is gone once a read post is edited; a post
+    appended after it changes nothing the model read."""
+    edited, played_on = played(cid, "The docks"), played(cid, "The guild")
+    for sid in (edited, played_on):
+        _call(run, "get_scene_excerpt", scene=f"scene:{sid}", query="ledger", max_posts=2)
+    scenes.edit_message(cid, edited, 0, "Mara burns the silver ledger.")
+    scenes.append_message(cid, played_on, "user", "Seraphine asks after the ledger.")
+    tools.revalidate(run)
+    assert run.inspected == {played_on}

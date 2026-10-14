@@ -233,7 +233,7 @@ test("what the sweep asked says so when nothing was captured", async () => {
 
 test("an investigation's captures are listed apart from the sweep's", async () => {
   (api.getConfig as any).mockResolvedValue(
-    { investigation_continuity: "on", investigation_question: "off" });
+    { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
   const QUESTION = { ...SWEEP_ENTRY, id: "000008", task: "investigation-question",
                      operation: "tools" };
   (api.listCampaignPrompts as any).mockResolvedValue({ entries: [SWEEP_ENTRY, QUESTION] });
@@ -1995,7 +1995,7 @@ describe("investigating a finding", () => {
 
   test("Investigate starts the run and says how it ended, then re-reads", async () => {
     (api.getConfig as any).mockResolvedValue(
-      { investigation_continuity: "on", investigation_question: "off" });
+      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
     (api.investigateCandidate as any).mockResolvedValue({
       candidate: PAIR.id, persisted: true,
       outcome: { state: "completed", limit: "", reason: "", error: "", result: {},
@@ -2017,7 +2017,7 @@ describe("investigating a finding", () => {
 
   test("another finding's Investigate waits while one runs in this campaign", async () => {
     (api.getConfig as any).mockResolvedValue(
-      { investigation_continuity: "on", investigation_question: "off" });
+      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
     (api.investigateCandidate as any).mockReturnValue(new Promise(() => {}));
     render(
       <MemoryRouter initialEntries={[at(PAIR)]}>
@@ -2039,8 +2039,8 @@ describe("investigating a finding", () => {
 
   test("an investigation left running is followed on return, never started again", async () => {
     (api.getConfig as any).mockResolvedValue(
-      { investigation_continuity: "on", investigation_question: "off" });
-    localStorage.setItem("grimoire.investigation.run",
+      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
+    localStorage.setItem('grimoire.investigation:["/lib","run"]',
                          JSON.stringify({ attempt: "a-earlier", candidate: PAIR.id }));
     const handle = { id: "r1", state: "running" };
     (api.findCandidateInvestigation as any).mockResolvedValue(handle);
@@ -2056,11 +2056,11 @@ describe("investigating a finding", () => {
     expect(api.followCandidateInvestigation)
       .toHaveBeenCalledWith("run", handle, "a-earlier", expect.any(AbortSignal));
     expect(api.investigateCandidate).not.toHaveBeenCalled();
-    expect(localStorage.getItem("grimoire.investigation.run")).toBeNull();
+    expect(localStorage.getItem('grimoire.investigation:["/lib","run"]')).toBeNull();
   });
 
   test("an investigation left running is still followed once the switch is off", async () => {
-    localStorage.setItem("grimoire.investigation.run",
+    localStorage.setItem('grimoire.investigation:["/lib","run"]',
                          JSON.stringify({ attempt: "a-earlier", candidate: PAIR.id }));
     (api.findCandidateInvestigation as any).mockResolvedValue({ id: "r1", state: "running" });
     (api.followCandidateInvestigation as any).mockResolvedValue({
@@ -2073,9 +2073,26 @@ describe("investigating a finding", () => {
     expect(aside().queryByRole("button", { name: /investigate|second opinion/i })).toBeNull();
   });
 
+  test("another finding's remembered investigation is followed, not replaced", async () => {
+    (api.getConfig as any).mockResolvedValue(
+      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
+    (api.findCandidateInvestigation as any).mockResolvedValue(null);
+    renderLedger(at(PAIR));
+    // Remembered for another finding after the review mounted (a failure
+    // with no reply, in another tab): Investigate here follows it first.
+    const button = await (await sidebar()).findByRole("button",
+      { name: /investigate|second opinion/i });
+    localStorage.setItem('grimoire.investigation:["/lib","run"]',
+                         JSON.stringify({ attempt: "a-other", candidate: "another-finding" }));
+    fireEvent.click(button);
+    await waitFor(() => expect(api.findCandidateInvestigation)
+      .toHaveBeenCalledWith("run", "a-other", expect.any(AbortSignal)));
+    expect(api.investigateCandidate).not.toHaveBeenCalled();
+  });
+
   test("Investigate shows the campaign's budget level beside it", async () => {
     (api.getConfig as any).mockResolvedValue(
-      { investigation_continuity: "on", investigation_question: "off" });
+      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
     (api.getCampaignBudget as any).mockResolvedValue(
       { limit_usd: 5, period: "total", level: "warn", warn_fraction: 0.8, spent_usd: 4.5 });
     renderLedger(at(PAIR));
@@ -2086,14 +2103,14 @@ describe("investigating a finding", () => {
 
   test("a retry after a failure with no reply follows the first run", async () => {
     (api.getConfig as any).mockResolvedValue(
-      { investigation_continuity: "on", investigation_question: "off" });
+      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
     (api.investigateCandidate as any).mockRejectedValueOnce(new TypeError("Failed to fetch"));
     renderLedger(at(PAIR));
     fireEvent.click(await (await sidebar()).findByRole("button",
       { name: /investigate|second opinion/i }));
     expect(await aside().findByText(/Failed to fetch|reach/)).toBeInTheDocument();
     const [, , , attempt] = (api.investigateCandidate as any).mock.calls[0];
-    expect(JSON.parse(localStorage.getItem("grimoire.investigation.run") ?? "null"))
+    expect(JSON.parse(localStorage.getItem('grimoire.investigation:["/lib","run"]') ?? "null"))
       .toEqual({ attempt, candidate: PAIR.id });
     const handle = { id: "r1", state: "landed" };
     (api.findCandidateInvestigation as any).mockResolvedValue(handle);
@@ -2136,7 +2153,7 @@ describe("asking the history", () => {
     expect(await column().findByText("Continuity review")).toBeInTheDocument();
     expect(column().queryByText("Ask the history")).toBeNull();
     (api.getConfig as any).mockResolvedValue(
-      { investigation_continuity: "off", investigation_question: "on" });
+      { data_dir: "/lib", investigation_continuity: "off", investigation_question: "on" });
     renderLedger();
     const ask = await screen.findAllByRole("button", { name: "Ask a question" });
     fireEvent.click(ask[ask.length - 1]);
@@ -2145,7 +2162,7 @@ describe("asking the history", () => {
   });
 
   test("a question still running stays reachable with the switch off", async () => {
-    localStorage.setItem("grimoire.askHistory.run",
+    localStorage.setItem('grimoire.askHistory:["/lib","run"]',
                          JSON.stringify({ attempt: "a-earlier", question: "Who keeps it?" }));
     (api.findHistoryQuestion as any).mockResolvedValue(null);
     renderLedger();

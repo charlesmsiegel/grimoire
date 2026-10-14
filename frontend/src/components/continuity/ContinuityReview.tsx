@@ -41,7 +41,7 @@ import {
 import { ReviewedGroup } from "./ReviewedGroup";
 import { INVESTIGATION_TASKS, SweepCaptures } from "./SweepCaptures";
 import { outcomeSentence } from "../investigation/InvestigationTrace";
-import { readPending, settles, writePending } from "../investigation/pending";
+import { pendingKey, readPending, settles, writePending } from "../investigation/pending";
 import { isAbortError, newAttemptId } from "../../api/stream";
 import type { ContinuityReview as Review } from "./useContinuityReview";
 import { api } from "../../api/client";
@@ -194,12 +194,11 @@ function andList(names: string[]): string {
  *  stop) or let a second paid run start over it. */
 type PendingInvestigation = { attempt: string; candidate: string };
 
-const investigationKey = (cid: string) => `grimoire.investigation.${cid}`;
-const readInvestigation = (cid: string) =>
-  readPending<PendingInvestigation>(investigationKey(cid),
-                                    (v) => typeof v.candidate === "string");
-const writeInvestigation = (cid: string, p: PendingInvestigation | null) =>
-  writePending(investigationKey(cid), p);
+const keyOf = (root: string, cid: string) => pendingKey("investigation", root, cid);
+const readInvestigation = (root: string, cid: string) =>
+  readPending<PendingInvestigation>(keyOf(root, cid), (v) => typeof v.candidate === "string");
+const writeInvestigation = (root: string, cid: string, p: PendingInvestigation | null) =>
+  writePending(keyOf(root, cid), p);
 
 /** What an investigation said, as the finding's note. */
 function investigationText(got: CandidateInvestigated): string {
@@ -255,8 +254,13 @@ export function ContinuityReview(
   /** What is open now, read by an answer that lands after the reader moved. */
   const openRef = useRef({ cid, candidate });
   openRef.current = { cid, candidate };
-  /** Whether Settings switched continuity investigation on (roadmap 12, E2). */
+  /** Whether Settings switched continuity investigation on (roadmap 12, E2),
+   *  and the history question (E3), whose captures are listed here too. */
   const [investigable, setInvestigable] = useState(false);
+  const [questionable, setQuestionable] = useState(false);
+  /** The library open now (the store root): an investigation is remembered
+   *  per library, and nothing remembered is read until it is known. */
+  const [root, setRoot] = useState<string | null>(null);
   /** The finding each campaign's investigation is running on (the server
    *  takes one per campaign), and what the last one said. */
   const [investigating, setInvestigating] = useState<Record<string, string>>({});
@@ -266,7 +270,12 @@ export function ContinuityReview(
   useEffect(() => {
     let live = true;
     api.getConfig()
-      .then((cfg) => { if (live) setInvestigable(cfg.investigation_continuity === "on"); })
+      .then((cfg) => {
+        if (!live) return;
+        setInvestigable(cfg.investigation_continuity === "on");
+        setQuestionable(cfg.investigation_question === "on");
+        setRoot(cfg.data_dir);
+      })
       .catch(() => { if (live) setInvestigable(false); });
     return () => { live = false; };
   }, []);
@@ -283,7 +292,7 @@ export function ContinuityReview(
    *  written proposal is the review's to show. The sentence stays with the
    *  finding it was about. `work` answers null when the server no longer
    *  holds a run it was asked to find. */
-  async function watch(at: string, candidateId: string,
+  async function watch(lib: string, at: string, candidateId: string,
                        work: (signal: AbortSignal) => Promise<CandidateInvestigated | null>) {
     const ctl = new AbortController();
     watching.current.set(at, ctl);
@@ -292,12 +301,12 @@ export function ContinuityReview(
     let text: string;
     try {
       const got = await work(ctl.signal);
-      writeInvestigation(at, null);
+      writeInvestigation(lib, at, null);
       text = got ? investigationText(got)
         : "The earlier investigation's outcome is no longer held. Investigate again to rerun it.";
     } catch (err: unknown) {
       if (isAbortError(err)) return;
-      if (settles(err)) writeInvestigation(at, null);
+      if (settles(err)) writeInvestigation(lib, at, null);
       text = errorText(err);
     }
     if (watching.current.get(at) === ctl) watching.current.delete(at);
@@ -322,21 +331,31 @@ export function ContinuityReview(
   // An investigation left running by an earlier mount is followed, never
   // started again.
   useEffect(() => {
-    const p = readInvestigation(cid);
-    if (p && !watching.current.has(cid)) void watch(cid, p.candidate, (s) => held(cid, p, s));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per campaign
-  }, [cid]);
+    if (root === null) return;
+    const p = readInvestigation(root, cid);
+    if (p && !watching.current.has(cid)) {
+      void watch(root, cid, p.candidate, (s) => held(cid, p, s));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per campaign and library
+  }, [cid, root]);
 
-  /** Investigate the open finding. One still remembered for it (a failure
-   *  that carried no reply proves nothing) is followed first, so a retry
-   *  never pays for a second run while the first may still be going. */
+  /** Investigate the open finding. One still remembered for the campaign (a
+   *  failure that carried no reply proves nothing) is followed first, so a
+   *  retry never pays for a second run while the first may still be going.
+   *  Remembered for ANOTHER finding, it is followed instead of starting this
+   *  one: replacing it would lose the only handle to that run's outcome, and
+   *  once it settles this finding can be investigated. */
   function investigate(c: ContinuityCandidate) {
-    if (investigating[cid]) return;
+    if (investigating[cid] || root === null) return;
     const at = cid;
-    const before = readInvestigation(at);
-    const p = before?.candidate === c.id ? before : { attempt: newAttemptId(), candidate: c.id };
-    writeInvestigation(at, p);
-    void watch(at, c.id, async (signal) =>
+    const before = readInvestigation(root, at);
+    if (before && before.candidate !== c.id) {
+      void watch(root, at, before.candidate, (signal) => held(at, before, signal));
+      return;
+    }
+    const p = before ?? { attempt: newAttemptId(), candidate: c.id };
+    writeInvestigation(root, at, p);
+    void watch(root, at, c.id, async (signal) =>
       (p === before ? await held(at, p, signal) : null)
         ?? api.investigateCandidate(at, c.id, signal, p.attempt));
   }
@@ -462,7 +481,7 @@ export function ContinuityReview(
       </div>
       {/* Under Refresh, which is what starts a sweep: what it asked. */}
       <SweepCaptures key={cid} cid={cid} />
-      {investigable && (
+      {(investigable || questionable) && (
         <SweepCaptures key={`${cid}-investigations`} cid={cid} tasks={INVESTIGATION_TASKS}
                        label="What the investigations asked" what="investigation" />
       )}

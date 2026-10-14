@@ -8,6 +8,14 @@
  *  blocked site data), and a panel that cannot remember still works. */
 import { ApiError } from "../../api/client";
 
+/** Where a run is remembered: per library (`root`, the store root a config
+ *  read reports) and per campaign. A campaign id is a slug, and another
+ *  library can hold one of the same name, so a record keyed by the slug
+ *  alone would show one library's question in another. */
+export function pendingKey(kind: string, root: string, cid: string): string {
+  return `grimoire.${kind}:${JSON.stringify([root, cid])}`;
+}
+
 export function readPending<T>(key: string, valid: (v: Record<string, unknown>) => boolean): T | null {
   try {
     const raw = localStorage.getItem(key);

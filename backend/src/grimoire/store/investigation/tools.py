@@ -199,7 +199,9 @@ def _settled(run: state.RunState, name: str, args: dict, ctx: tool_calls.ToolCon
     if found is not None:
         for sid in found.read:
             if not dropped or f"scene:{sid}" in sent:
-                run.inspect(sid, scenes_identity.scene_identity(run.cid, sid))
+                run.inspect(sid, (None, None) if run.seen(sid) else
+                            (scenes_identity.scene_identity(run.cid, sid),
+                             readers.scene_print(run.cid, sid)))
     ok = found is not None
     truncated = ok and any(i.get("truncated") for i in delivered)
     refs = (tuple(r for r in found.refs if not dropped or r in sent)
@@ -213,15 +215,20 @@ def _settled(run: state.RunState, name: str, args: dict, ctx: tool_calls.ToolCon
 def revalidate(run: state.RunState) -> None:
     """Hold `inspected` to the scenes still as they were read, for the check
     of the final call. The run holds the campaign, not its scenes: a scene
-    renamed, deleted or replaced under the same id after a tool read it is
-    not one a citation can name, so it is dropped -- and a proposal or answer
-    that stood on it falls back as one citing a scene never read."""
+    renamed, deleted or replaced under the same id after a tool read it, or
+    one whose posts were edited, cut or retconned since, is not one a
+    citation can name -- what the model read there is gone -- so it is
+    dropped, and a proposal or answer that stood on it falls back as one
+    citing a scene never read. A post appended after the read is not a
+    change: play goes on while a run reads."""
     with locks.best_effort_campaign_lock(run.cid):
         held = readers.scene_ids(run.cid)
         with run.lock:
             read = dict(run.read_as)
-        moved = {sid for sid in read
-                 if sid not in held or scenes_identity.scene_identity(run.cid, sid) != read[sid]}
+        moved = {sid for sid, (identity, printed) in read.items()
+                 if sid not in held
+                 or scenes_identity.scene_identity(run.cid, sid) != identity
+                 or not readers.still_printed(run.cid, sid, printed)}
     with run.lock:
         run.inspected -= moved
 

@@ -2231,6 +2231,7 @@ class _Loop:
             return self._result("budget_exhausted")
         except LLMError as exc:
             self._trace(k, "model", ok=False, note=exc.kind, started=started)
+            await self._captured_failure(sending, exc)
             if k == 1:
                 raise
             return self._result("failed", error=exc)
@@ -2588,6 +2589,24 @@ class _Loop:
         except Exception as exc:  # noqa: BLE001 - see the docstring
             log.warning("could not capture tool turn %d of run %s: %s", turn.turn,
                         self.run_id, type(exc).__name__)
+
+    async def _captured_failure(self, sending: list[dict], exc: LLMError) -> None:
+        """A turn that failed, for the caller's `TurnCapture`: the request as
+        it would have gone, and the failure's kind, status and code -- never
+        the provider's words, which can echo the input or a key. Guarded like
+        `_captured`."""
+        if self.capture is None or self.resolved.chain is None:
+            return
+        try:
+            shown = [{"role": "system", "content": json.dumps(list(self.defs))}, *list(sending)]
+            outcome: dict = {"finish": "error", "error_kind": exc.kind,
+                             "error_status": exc.status}
+            if exc.code:
+                outcome["code"] = exc.code
+            await self.capture(shown, outcome, self.resolved.chain.primary)
+        except Exception as error:  # noqa: BLE001 - see `_captured`
+            log.warning("could not capture failed tool turn %d of run %s: %s", self.turns,
+                        self.run_id, type(error).__name__)
 
     # ---- one tool call ----
     def _problem(self, call: tool_calls.ToolCall, spec: tool_calls.ToolSpec | None) -> str:

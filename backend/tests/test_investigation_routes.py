@@ -15,6 +15,7 @@ import threading
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.llm_errors import LLMError
 from grimoire.routes import investigation, runs
 from grimoire.store.continuity import candidates, canon
 
@@ -339,6 +340,24 @@ def test_e3_files_its_turns_as_one_tool_loop_prompt_entry(client):
     # The last turn's messages are kept whole: they carry the tool result.
     assert outcome["elided_calls"] == 1
     assert any(s["label"].endswith("tool") for s in entry["sections"])
+
+
+def test_e3_files_a_failed_turn_without_the_providers_words(client):
+    cid, _sid = _campaign(client)
+    _on(client)
+    _install(client, FakeToolTurns(LLMError("rate_limit", "slow down, key sk-secret",
+                                            status=429)))
+    run = _settled(client, cid, _ask(client, cid))
+    assert run["result"]["outcome"]["state"] == "failed"
+    rows = [e for e in store.prompt_log.list_entries(cid, store.prompt_log.NO_SCENE)
+            if e["task"] == "investigation-question"]
+    entry = store.prompt_log.read_entry(cid, rows[0]["id"], store.prompt_log.NO_SCENE)
+    assert entry is not None
+    text = json.dumps(entry)
+    outcome = json.loads(next(s["text"] for s in entry["sections"] if s["id"] == "decision"))
+    assert outcome["calls"][0]["error_kind"] == "rate_limit"
+    assert outcome["calls"][0]["error_status"] == 429
+    assert "sk-secret" not in text
 
 
 def test_e3_with_no_read_citation_is_insufficient_evidence(client):

@@ -14,7 +14,7 @@ import type { HistoryAnswer } from "../../api/types";
 import { encodeSegment } from "../../urlSegment";
 import { InvestigationTrace, outcomeSentence } from "./InvestigationTrace";
 import { BudgetLevel } from "./BudgetLevel";
-import { readPending, settles, writePending } from "./pending";
+import { pendingKey, readPending, settles, writePending } from "./pending";
 
 /** The longest question the server takes. */
 export const QUESTION_CHARS = 500;
@@ -22,20 +22,24 @@ export const QUESTION_CHARS = 500;
 /** A question still being answered, kept past this panel (`pending.ts`). */
 type Pending = { attempt: string; question: string };
 
-const pendingKey = (cid: string) => `grimoire.askHistory.${cid}`;
-const readQuestion = (cid: string) =>
-  readPending<Pending>(pendingKey(cid), (v) => typeof v.question === "string");
-const writeQuestion = (cid: string, p: Pending | null) => writePending(pendingKey(cid), p);
+const keyOf = (root: string, cid: string) => pendingKey("askHistory", root, cid);
+const readQuestion = (root: string, cid: string) =>
+  readPending<Pending>(keyOf(root, cid), (v) => typeof v.question === "string");
+const writeQuestion = (root: string, cid: string, p: Pending | null) =>
+  writePending(keyOf(root, cid), p);
 
-/** Whether a question asked here is still remembered for `cid`: its panel
- *  stays reachable to collect the answer, whatever the switch now says. */
-export const hasPendingQuestion = (cid: string) => readQuestion(cid) !== null;
+/** Whether a question asked here is still remembered for `cid` in library
+ *  `root`: its panel stays reachable to collect the answer, whatever the
+ *  switch now says. */
+export const hasPendingQuestion = (root: string, cid: string) => readQuestion(root, cid) !== null;
 
 /** `canAsk` is false once Settings switched the question off: a question
  *  already running is still followed to its answer, but none is started. */
-export function AskHistory({ cid, onClose, canAsk = true }:
-  { cid: string; onClose: () => void; canAsk?: boolean }) {
-  const [question, setQuestion] = useState(() => readQuestion(cid)?.question ?? "");
+export function AskHistory({ cid, root, onClose, canAsk = true }:
+  { cid: string; root: string; onClose: () => void; canAsk?: boolean }) {
+  const [question, setQuestion] = useState(() => readQuestion(root, cid)?.question ?? "");
+  /** Bumped when a remembered question is forgotten, so the notice re-reads. */
+  const [, setForgotten] = useState(0);
   const [asking, setAsking] = useState(false);
   const [answer, setAnswer] = useState<HistoryAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,13 +65,13 @@ export function AskHistory({ cid, onClose, canAsk = true }:
     setAnswer(null);
     try {
       const got = await api.askHistory(cid, p.question, ctl.signal, p.attempt);
-      writeQuestion(cid, null);
+      writeQuestion(root, cid, null);
       setAnswer(got);
     } catch (err: unknown) {
       // An unmount stops only the watching; the run, and its record here,
       // stay for the next mount to pick up.
       if (isAbortError(err)) return;
-      if (settles(err)) writeQuestion(cid, null);
+      if (settles(err)) writeQuestion(root, cid, null);
       setError(errorText(err));
     } finally {
       if (!ctl.signal.aborted) setAsking(false);
@@ -89,36 +93,47 @@ export function AskHistory({ cid, onClose, canAsk = true }:
         // start's checks (the switch, the model) over an answer the run
         // already holds, and lose it if either had changed meanwhile.
         const got = await api.followHistoryQuestion(cid, held, p.attempt, ctl.signal);
-        writeQuestion(cid, null);
+        writeQuestion(root, cid, null);
         setAnswer(got);
       } else {
-        writeQuestion(cid, null);
+        writeQuestion(root, cid, null);
         setError("The earlier question's answer is no longer held. Ask it again to rerun it.");
       }
     } catch (err: unknown) {
       if (isAbortError(err)) return;
-      if (settles(err)) writeQuestion(cid, null);
+      if (settles(err)) writeQuestion(root, cid, null);
       setError(errorText(err));
     }
     if (!ctl.signal.aborted) setAsking(false);
   }
 
   useEffect(() => {
-    const p = readQuestion(cid);
+    const p = readQuestion(root, cid);
     if (p) void resume(p);
     return () => live.current?.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per campaign
-  }, [cid]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per campaign and library
+  }, [cid, root]);
+
+  // A question whose failure proved nothing is still remembered: its run may
+  // be going. Another is not started over it until it is checked or forgotten,
+  // or the only handle to that run (and its answer) would be lost.
+  const unresolved = asking ? null : readQuestion(root, cid);
+  const blocked = unresolved !== null && unresolved.question !== question.trim();
+
+  function forget() {
+    writeQuestion(root, cid, null);
+    setForgotten((n) => n + 1);
+  }
 
   function ask() {
     const q = question.trim();
-    if (!q || asking || !canAsk) return;
+    if (!q || asking || !canAsk || blocked) return;
     // The same question as one still remembered re-asks under its attempt
     // id, which the server adopts: a failure that proved nothing must not
     // let a second run start and spend again.
-    const held = readQuestion(cid);
+    const held = readQuestion(root, cid);
     const p = held?.question === q ? held : { attempt: newAttemptId(), question: q };
-    writeQuestion(cid, p);
+    writeQuestion(root, cid, p);
     void follow(p);
   }
 
@@ -149,10 +164,20 @@ export function AskHistory({ cid, onClose, canAsk = true }:
       <textarea aria-label="Your question" rows={3} value={question} disabled={asking}
                 maxLength={QUESTION_CHARS} onChange={(e) => setQuestion(e.target.value)} />
       <div className="form-actions">
-        <button type="button" disabled={asking || !question.trim() || !canAsk} onClick={ask}>
+        <button type="button" disabled={asking || !question.trim() || !canAsk || blocked}
+                onClick={ask}>
           {asking ? "Reading the history…" : "Ask"}
         </button>
       </div>
+      {blocked && unresolved && (
+        <div className="field-hint" role="status">
+          An earlier question may still be being answered: “{unresolved.question}”.{" "}
+          <button type="button" className="subtle" onClick={() => { void resume(unresolved); }}>
+            Check on it
+          </button>{" "}
+          <button type="button" className="subtle" onClick={forget}>Forget it</button>
+        </div>
+      )}
       {canAsk ? <BudgetLevel cid={cid} />
         : <p className="field-hint">Asking is switched off in Settings.</p>}
       {error && <p className="continuity-error" role="alert">{error}</p>}

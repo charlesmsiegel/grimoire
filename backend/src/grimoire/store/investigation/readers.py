@@ -22,6 +22,8 @@ Two rules shape every reader here:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -47,6 +49,7 @@ from ..appearances import paths as appearances_paths
 from ..campaigns import paths as campaigns_paths
 from ..continuity import canon, effective, involvement, pressure
 from ..regex import view as regex_view
+from ..scenes import paths as scenes_paths
 from ..scenes import read as scenes_read
 from ..scenes import serialize as scenes_serialize
 from ..searchdocs import expand as searchdocs_expand
@@ -108,6 +111,35 @@ def _scene_rows(cid: str) -> list[dict]:
 def scene_ids(cid: str) -> set[str]:
     """Every scene id the campaign holds now."""
     return {r["id"] for r in _scene_rows(cid)}
+
+
+def _digest(messages: list[dict]) -> str:
+    return hashlib.sha256(json.dumps(messages, sort_keys=True, default=str)
+                          .encode("utf-8")).hexdigest()
+
+
+def scene_print(cid: str, sid: str) -> tuple[int, str] | None:
+    """How many posts scene `sid` holds and a digest of them, or None when it
+    is gone: what a read is held to (`tools.revalidate`)."""
+    try:
+        messages = scenes_read.read_scene(cid, sid)["messages"]
+    except (scenes_paths.SceneNotFound, FileNotFoundError):
+        return None
+    return len(messages), _digest(messages)
+
+
+def still_printed(cid: str, sid: str, printed: tuple[int, str] | None) -> bool:
+    """Whether the posts `printed` covered are still the scene's first posts,
+    word for word: an edit, a cut or a retcon of one is a change, a post
+    appended after them is not (play goes on while a run reads)."""
+    if printed is None:
+        return False
+    try:
+        messages = scenes_read.read_scene(cid, sid)["messages"]
+    except (scenes_paths.SceneNotFound, FileNotFoundError):
+        return False
+    count, digest = printed
+    return len(messages) >= count and _digest(messages[:count]) == digest
 
 
 def scene(cid: str, ref: object) -> dict:

@@ -340,13 +340,20 @@ export default function LedgerView() {
    *  whether its panel is open, for the campaign it was opened on. */
   const [askable, setAskable] = useState(false);
   const [askingIn, setAskingIn] = useState<string | null>(null);
+  /** The library open now (the store root): a remembered question is kept
+   *  per library, and nothing remembered is read until it is known. */
+  const [root, setRoot] = useState<string | null>(null);
   // A question still running is reachable even with the switch now off: its
   // answer was paid for, and only its panel collects it.
-  const offerAsk = askable || hasPendingQuestion(cid);
+  const offerAsk = root !== null && (askable || hasPendingQuestion(root, cid));
   useEffect(() => {
     let live = true;
     api.getConfig()
-      .then((cfg) => { if (live) setAskable(cfg.investigation_question === "on"); })
+      .then((cfg) => {
+        if (!live) return;
+        setAskable(cfg.investigation_question === "on");
+        setRoot(cfg.data_dir);
+      })
       .catch(() => { if (live) setAskable(false); });
     return () => { live = false; };
   }, []);
@@ -776,8 +783,9 @@ export default function LedgerView() {
   return (
     <PageShell column={column} footer={footer} columnLabel="Ledger sections">
       <div className="page-wide view-anim">
-        {offerAsk && askingIn === cid && (
-          <AskHistory key={cid} cid={cid} canAsk={askable} onClose={() => setAskingIn(null)} />
+        {offerAsk && root !== null && askingIn === cid && (
+          <AskHistory key={`${root}\u0000${cid}`} cid={cid} root={root} canAsk={askable}
+                      onClose={() => setAskingIn(null)} />
         )}
         {section === "knowledge" && (
           <KnowledgeSection cid={cid} list={knowledge} row={addressedRow}
