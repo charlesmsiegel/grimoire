@@ -275,6 +275,13 @@ def _run_arm(case, arm, planted, *, live, targets, space, run_id
     finally:
         if live:
             asyncio.run(_close(client, embed))
+        # A tool the loop stopped waiting on still runs in its thread, and
+        # reads through `GRIMOIRE_HOME`: the throwaway home stays pinned and
+        # in place until none is left, or a late read would resolve against
+        # whatever the variable names after it -- the real library included.
+        # Unbounded on purpose: never touching the real home outranks the
+        # eval's wall time.
+        tool_calls.idle()
     if not error and ran.get("state") in ("failed", "refused"):
         # `investigate` returns a failed or refused run rather than raising:
         # it is no more a clean comparison than a raise.

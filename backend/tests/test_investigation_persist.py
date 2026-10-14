@@ -26,7 +26,10 @@ def _trace(**changes) -> dict:
                        outcome="completed", limit="", steps=[], inspected=set(),
                        final={"decision": "duplicate"},
                        usage_block={"model_turns": 1, "tool_calls": 0, "decisions": 0,
-                                    "seconds": 1.0, "cost": {}, "unpriced_calls": 1})
+                                    "seconds": 1.0,
+                                    "cost": {"cost_usd": None, "estimated_usd": None,
+                                             "modelled_usd": None},
+                                    "unpriced_calls": 1})
     return {**base, **changes}
 
 
@@ -101,6 +104,23 @@ def test_the_trace_round_trips_and_a_misshapen_one_is_dropped_alone(found):
     candidates.write(cid, data)
     kept = candidates.read(cid)["records"][PAIR]["proposal"]
     assert "investigation" not in kept and kept["decision"] == "duplicate"
+
+
+@pytest.mark.parametrize("usage", [
+    {},
+    {"model_turns": 1, "tool_calls": 0, "decisions": 0, "seconds": 1.0, "unpriced_calls": 0},
+    {"model_turns": "1", "tool_calls": 0, "decisions": 0, "seconds": 1.0, "unpriced_calls": 0,
+     "cost": {"cost_usd": None, "estimated_usd": None, "modelled_usd": None}},
+    {"model_turns": 1, "tool_calls": 0, "decisions": 0, "seconds": 1.0, "unpriced_calls": 0,
+     "cost": {"cost_usd": "free", "estimated_usd": None, "modelled_usd": None}},
+    {"model_turns": 1, "tool_calls": 0, "decisions": 0, "seconds": 1.0, "unpriced_calls": 0,
+     "cost": {"cost_usd": None, "estimated_usd": None}},
+])
+def test_a_trace_whose_usage_the_view_cannot_read_is_dropped(usage):
+    """The trace view reads usage field by field: a JSON-safe but misshapen
+    block drops the trace, never the finding, and never reaches the view."""
+    assert trace.valid(_trace())
+    assert not trace.valid(_trace(usage=usage))
 
 
 # ---- the final call ----

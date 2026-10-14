@@ -95,6 +95,23 @@ describe("AskHistory", () => {
     expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
   });
 
+  it("will not close while its question is being answered", async () => {
+    let answer: (a: HistoryAnswer) => void = () => {};
+    mocked(api.askHistory).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const onClose = vi.fn();
+    render(<MemoryRouter><AskHistory cid="run" onClose={onClose} /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Your question"),
+                     { target: { value: "Who keeps the harbour ledger?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+    answer({ question: "Who keeps the harbour ledger?",
+             outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
+                        result: null, trace: TRACE } });
+    expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it("asks nothing for an empty question", () => {
     render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
     expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();

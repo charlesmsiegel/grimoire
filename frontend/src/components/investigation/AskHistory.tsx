@@ -47,7 +47,11 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
     <section className="ask-history" aria-label="Ask the history">
       <div className="ask-history-head">
         <h3>Ask the history</h3>
-        <button type="button" className="subtle" onClick={onClose}>Close</button>
+        {/* Closing unmounts the panel, and a run still asking would answer
+            nobody while it spends -- and a reopened panel could start a
+            second. So it closes only once its question is answered. */}
+        <button type="button" className="subtle" disabled={asking} onClick={onClose}
+                title={asking ? "Wait for the answer before closing" : undefined}>Close</button>
       </div>
       <p className="field-hint">
         A model reads this campaign's scenes and ledger to answer. Experimental: it may

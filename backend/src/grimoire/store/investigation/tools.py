@@ -116,8 +116,14 @@ def _cut(text: str, limit: int) -> str:
     return head[:at] if at > 0 else head
 
 
+#: The longest title an item carries: a scene's title is unbounded where it
+#: is set, and an item's metadata must leave room for its text.
+TITLE_CHARS = 200
+
+
 def item(id_: str, ref: str, title: str, text: str, truncated: bool = False) -> dict:
-    return {"id": id_, "ref": ref, "title": title, "text": text, "truncated": truncated}
+    return {"id": id_, "ref": ref, "title": title[:TITLE_CHARS], "text": text,
+            "truncated": truncated}
 
 
 def _lines(payload: Any, indent: str = "") -> str:
@@ -183,11 +189,17 @@ def _settled(run: state.RunState, name: str, args: dict, ctx: tool_calls.ToolCon
         text = envelope_error("unavailable")
     else:
         text = envelope_ok(found.items)
+    delivered = json.loads(text).get("items", ())
+    sent = {i.get("ref") for i in delivered}
+    if found is not None:
+        # Only what survived the envelope was read: an item `envelope_ok`
+        # had to drop whole is a scene the model never saw a word of.
         for sid in found.read:
-            run.inspect(sid)
+            if f"scene:{sid}" in sent:
+                run.inspect(sid)
     ok = found is not None
-    truncated = ok and any(i.get("truncated") for i in json.loads(text).get("items", ()))
-    refs = found.refs if found is not None else ()
+    truncated = ok and any(i.get("truncated") for i in delivered)
+    refs = tuple(r for r in found.refs if r in sent) if found is not None else ()
     run.note(trace.step(ctx.turn, name, _args_for_trace(args), ok=ok, refs=refs,
                         chars=len(text), truncated=truncated,
                         error="" if ok else json.loads(text)["error"]))

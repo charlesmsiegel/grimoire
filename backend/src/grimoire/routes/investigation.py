@@ -217,26 +217,20 @@ def _model_of(result: tool_calls.LoopResult | None, resolved: ResolvedInference)
     return f"{primary.provider_id}/{primary.model}" if primary is not None else ""
 
 
-#: The task `search_history`'s semantic stage meters its embedding under
-#: (09's turn caller, whose door it shares).
-SEARCH_EMBED_TASK = "history-recall"
-
-
-def _filed(cid: str, tasks: frozenset[str], run_id: str) -> tuple[dict, ...]:
-    """This run's ledger rows under `tasks`, read back where nothing handed
-    them over: the loop's own turns when it raised instead of returning them
-    (a turn-1 `LLMError`, or a stop after a request went out -- each turn's
-    meter filed its row before the raise), and `search_history`'s embedding
-    calls, which 09's retrieval meters with the run's id and returns no rows
-    of. The window is two days, which a run bounded by its wall cannot
-    outlast across midnight. A ledger that cannot be read gives none, as a
-    trace whose money says so."""
+def _filed(cid: str, run_id: str) -> tuple[dict, ...] | None:
+    """Every ledger row this run filed: the loop's turns, the decide tool's
+    calls (answered or failed), `search_history`'s embedding calls -- each
+    metered apart, all under the run's id. The ledger is the one place they
+    all are: a loop that raises hands back none of its turns, a decide that
+    fails is a tool result with no rows, and 09's retrieval returns none of
+    its own. The window is two days, which a run bounded by its wall cannot
+    outlast across midnight. None when the ledger cannot be read."""
     try:
         return tuple(r for r in store.usage.calls(days=2, campaign=cid)
-                     if r.get("run_id") == run_id and r.get("task") in tasks)
+                     if r.get("run_id") == run_id)
     except OSError:
         log.warning("Investigation %s could not read back its ledger rows", run_id)
-        return ()
+        return None
 
 
 def _counts(result: tool_calls.LoopResult | None, steps: int,
@@ -293,8 +287,7 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
                       client: LLMClient, resolved: ResolvedInference,
                       budget: tool_calls.RunBudget, run_id: str, post: int | None = None,
                       cancelled: Callable[[], bool] | None = None,
-                      extra: tuple[tool_calls.ToolSpec, ...] = (),
-                      extra_rows: Sequence[dict] = ()) -> Outcome:
+                      extra: tuple[tool_calls.ToolSpec, ...] = ()) -> Outcome:
     """One bounded investigation (spec 5): `seed` sent with `state.mode`'s
     toolset (and `extra`, the decide tool), each turn metered under `task`
     with `run_id` and its loop turn (01g-C3), stopped by the first terminal
@@ -306,9 +299,9 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
     terminal tool. A last turn that ends in prose anyway is an implicit
     `finish_insufficient_evidence`, its prose dropped.
 
-    `extra_rows` is the ledger rows `extra`'s own calls file (the decide
-    tool's sink, filled as the loop runs): the trace's usage folds them
-    with the loop's turns, so a decision's cost is part of the run's."""
+    The trace's money is every row the run filed under `run_id` (`_filed`):
+    the loop's turns, `extra`'s own calls and the search's embeddings, so
+    what a decision or an embedding cost is part of the run's."""
     started, t0 = store.paths.now_iso(), time.monotonic()
     toolset = investigation_tools.toolset(state, extra=extra)
     tokens = await anyio.to_thread.run_sync(investigation_budget.prompt_tokens, resolved, budget)
@@ -333,22 +326,18 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
     checked: investigation_final.Final | None = None
     if result is not None:
         stopped, checked = await _settled(state, result, seed)
-        loop_rows: Sequence[dict] = result.rows
     else:
         # Nothing to check against, but a tool thread may still be running.
         state.freeze()
-        loop_rows = (() if stopped.get("state") == "refused"
-                     else await anyio.to_thread.run_sync(
-                         _filed, state.cid, frozenset({task}), run_id))
-    searched: Sequence[dict] = ()
-    if state.embed_client is not None and stopped.get("state") != "refused":
-        searched = await anyio.to_thread.run_sync(
-            _filed, state.cid, frozenset({SEARCH_EMBED_TASK}), run_id)
-    turns, calls, decided = _counts(result, len(state.steps), loop_rows)
+    filed = await anyio.to_thread.run_sync(_filed, state.cid, run_id)
+    # An unreadable ledger leaves the loop's own turns, which it handed back.
+    rows: Sequence[dict] = filed if filed is not None else (
+        result.rows if result is not None else ())
+    turns, calls, decided = _counts(result, len(state.steps),
+                                    [r for r in rows if r.get("task") == task])
     if checked is not None and result is not None:
         _final_step(state, result.final_call, turns)
     elapsed = time.monotonic() - t0
-    rows = (*loop_rows, *extra_rows, *searched)
 
     def usage_block() -> dict:
         return investigation_trace.usage_of(
@@ -373,32 +362,30 @@ async def investigate_with_decide(
         decide_resolution: Callable[[], UsableInference] | None = None) -> Outcome:
     """A maintenance-mode run as both entry points start one: `investigate`
     with the decide tool (`_decide_tool`), its calls captured in one
-    campaign-level decision scope fenced on `cancelled`, and their rows
-    folded into the trace's usage. `decide_resolution` stands in for the
+    campaign-level decision scope fenced on `cancelled`, and their cost in
+    the trace's usage (`_filed`). `decide_resolution` stands in for the
     seam's own resolution of `investigation-decide` -- the eval resolves it
     from the real store before it moves the home."""
     async with decision_capture.capturing(
             state.cid, decision_capture.NO_SCENE, "investigation-decide",
             fence=lambda: not cancelled()) as scope:
-        decided: list[dict] = []
-        extra = await _decide_tool(state.cid, client, budget, seed, scope, state, decided,
+        extra = await _decide_tool(state.cid, client, budget, seed, scope, state,
                                    resolve=decide_resolution)
         return await investigate(app, state=state, task=task, seed=seed, client=client,
                                  resolved=resolved, budget=budget, run_id=run_id,
-                                 cancelled=cancelled, extra=extra, extra_rows=decided)
+                                 cancelled=cancelled, extra=extra)
 
 
 async def _decide_tool(cid: str, client: LLMClient, budget: tool_calls.RunBudget,
                        seed: Seed, scope: decision_capture.Scope,
-                       state: investigation_state.RunState, rows: list[dict], *,
+                       state: investigation_state.RunState, *,
                        resolve: Callable[[], UsableInference] | None = None
                        ) -> tuple[tool_calls.ToolSpec, ...]:
     """The `decide` tool for a maintenance-mode run, on 12's own
     `investigation_decide` route, or none: a run whose budget allows no
     decision, a resolution that softly refuses, or -- under a spend ceiling
     -- a decision that would answer on a stage the ceiling cannot price
-    (01g 3.9), each leaves the tool out and the run proceeds without it.
-    Each call's ledger rows are handed to `rows`, for the trace's usage."""
+    (01g 3.9), each leaves the tool out and the run proceeds without it."""
     if budget.max_decisions < 1:
         return ()
     resolved, why, _kind = await anyio.to_thread.run_sync(
@@ -407,7 +394,7 @@ async def _decide_tool(cid: str, client: LLMClient, budget: tool_calls.RunBudget
     spec, _why = await anyio.to_thread.run_sync(lambda: tool_decision.decision_tool(
         "investigation-decide", resolved, client, cid=cid, why=why,
         context=seed.context[:tool_decision.MAX_DECIDE_CONTEXT // 2],
-        ceiling=budget.spend_ceiling_usd, capture=scope.hook(), rows=rows))
+        ceiling=budget.spend_ceiling_usd, capture=scope.hook()))
     return (_traced(spec, state),) if spec is not None else ()
 
 

@@ -977,6 +977,37 @@ def rewrite_ids(messages: list[dict], mint: Callable[[], str]) -> list[dict]:
     return out
 
 
+class _Running:
+    """Tool threads running in any executor's pool, and the condition a
+    caller waits on for none (`idle`)."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.changed = threading.Condition()
+
+    def started(self) -> None:
+        with self.changed:
+            self.count += 1
+
+    def finished(self, _future: Future) -> None:
+        with self.changed:
+            self.count -= 1
+            self.changed.notify_all()
+
+
+_RUNNING = _Running()
+
+
+def idle(timeout: float | None = None) -> bool:
+    """True once no tool thread of any executor is running -- one a
+    timed-out wait abandoned included -- or False at `timeout`. For a caller
+    that must not move what a thread could still read: an eval leaving its
+    throwaway home, which a late read would otherwise resolve against
+    whatever `GRIMOIRE_HOME` names next."""
+    with _RUNNING.changed:
+        return _RUNNING.changed.wait_for(lambda: _RUNNING.count == 0, timeout)
+
+
 class _Workers:
     """A bounded thread pool that says when it is full rather than queueing:
     a thread a timed-out wait abandoned keeps its worker until it returns."""
@@ -992,8 +1023,10 @@ class _Workers:
             if self._busy >= self._size:
                 return None
             self._busy += 1
+        _RUNNING.started()
         future = self._pool.submit(fn, *args)
         future.add_done_callback(self._release)
+        future.add_done_callback(_RUNNING.finished)
         return future
 
     def _release(self, _future: Future) -> None:

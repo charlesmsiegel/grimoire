@@ -737,3 +737,32 @@ def test_the_spend_preflight_never_prices_a_fallback_the_loop_drops(monkeypatch)
     refused = inference.tool_run_refusal("chat", rides, RunBudget(spend_ceiling_usd=1.0),
                                          prices)
     assert refused is not None and "tiny" in str(refused)
+
+
+def test_idle_waits_out_a_tool_thread_the_loop_abandoned():
+    """`idle` says when no executor's tool thread runs any more -- one a
+    timed-out wait left behind included -- for a caller that must not move
+    the store root from under it."""
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow(args, ctx):
+        started.set()
+        release.wait(10)
+        return ToolOutput("done")
+    toolset = Toolset((ToolSpec("slow", "slow", {"type": "object", "properties": {},
+                                                 "required": [],
+                                                 "additionalProperties": False}, slow),))
+    execute = tool_calls.registered(toolset)
+    call = tool_calls.ToolCall(id="c1", name="slow", arguments={}, raw_arguments="{}")
+    ctx = tool_calls.ToolContext(campaign="", scene_identity="", run_id="r",
+                                 deadline=float("inf"), root="")
+
+    async def abandon():
+        task = asyncio.ensure_future(execute(call, ctx))
+        await asyncio.to_thread(started.wait, 10)
+        task.cancel()
+    asyncio.run(abandon())
+    assert tool_calls.idle(timeout=0) is False
+    release.set()
+    assert tool_calls.idle(timeout=10) is True

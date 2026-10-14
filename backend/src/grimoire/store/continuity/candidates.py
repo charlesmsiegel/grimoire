@@ -213,9 +213,33 @@ def investigation_trace(value) -> dict | None:
     if not isinstance(inspected, list) or not all(isinstance(x, str) for x in inspected):
         return None
     final = value.get("final")
-    if not (final is None or isinstance(final, dict)) or not isinstance(value.get("usage"), dict):
+    if not (final is None or isinstance(final, dict)) or not _trace_usage(value.get("usage")):
         return None
     return value if _json_safe(value) else None
+
+
+def _count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _money(value) -> bool:
+    return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool))
+
+
+def _trace_usage(usage) -> bool:
+    """A trace's `usage` in the shape `investigation.trace.usage_of` writes
+    and the trace view reads field by field: three counts, seconds (or
+    None), the three money columns (each a number or None) and the
+    unpriced count. Anything else drops the trace, not the finding."""
+    if not isinstance(usage, dict):
+        return False
+    cost = usage.get("cost")
+    return (all(_count(usage.get(k)) for k in ("model_turns", "tool_calls", "decisions",
+                                                "unpriced_calls"))
+            and _money(usage.get("seconds"))
+            and isinstance(cost, dict)
+            and all(k in cost and _money(cost[k])
+                    for k in ("cost_usd", "estimated_usd", "modelled_usd")))
 
 
 def _record(value) -> dict | None:

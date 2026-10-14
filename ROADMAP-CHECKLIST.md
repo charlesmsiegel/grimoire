@@ -498,9 +498,10 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
     none to retrieval; a scene counts as read only when the loop delivered
     its text (a timed-out read is not one).
   - The trace's steps end with the terminal call (its structure, never its
-    prose) and its usage counts it; the decide tool's ledger rows are folded
-    into the trace's money through a sink on `tool_decision.decision_tool`
-    (`LoopResult.rows` holds the loop's own turns only).
+    prose) and its usage counts it. The trace's money is every ledger row
+    filed under the run's id -- the loop's turns, the decide tool's calls
+    (failed ones too) and the search's embeddings -- since `LoopResult.rows`
+    holds the loop's own turns only, and nothing else hands its rows back.
   - `search_history` builds its query under the best-effort lock; 09's
     `retrieve` keeps gathering outside every campaign hold, as on the turn
     path.
@@ -512,10 +513,11 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
     a denial list.
   - Once the loop returns, the run's state is frozen: a tool thread it
     stopped waiting on adds no read and no step, and steps stand only against
-    calls the loop handed back. A loop that raised reads its own turns' rows
-    back from the ledger for the trace, as it reads `search_history`'s
-    `history-recall` embedding rows. Under a spend ceiling the search sends
-    no embedding, since its cost is metered outside the loop's guard.
+    calls the loop handed back, and only scenes whose items survived the
+    envelope count as read. Under a spend ceiling the search sends no
+    embedding, since its cost is metered outside the loop's guard. The eval
+    keeps each throwaway home pinned until `tool_calls.idle()`: no tool
+    thread a loop abandoned is still reading.
   - Every eval campaign is a long history (filler scenes around the ones
     that matter, `cases.LONG_HISTORY`), and a run that came back failed or
     refused counts as an arm error.

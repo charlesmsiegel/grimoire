@@ -150,6 +150,19 @@ def test_the_investigation_arm_runs_as_the_entry_point_does(monkeypatch):
     assert live["budget"].wall_seconds > 0
 
 
+def test_an_arm_leaves_its_home_only_once_no_tool_thread_runs(monkeypatch):
+    """A tool the loop abandoned still reads through `GRIMOIRE_HOME`: the arm
+    waits for `tool_calls.idle` before its throwaway home is let go."""
+    waited = []
+    monkeypatch.setattr(runner.tool_calls, "idle", lambda timeout=None: waited.append(
+        runner.os.environ.get("GRIMOIRE_HOME")) or True)
+    monkeypatch.setattr(runner.cases, "CASES",
+                        tuple(c for c in cases.CASES if c.id == "thread-change-question"))
+    real = runner.os.environ.get("GRIMOIRE_HOME")
+    runner.run_all(selected=("question",))
+    assert len(waited) == 2 and all(h and h != real for h in waited)
+
+
 def test_both_arms_search_with_the_embeddings_client_they_are_handed(monkeypatch):
     """Live, the run hands both arms an embeddings client (and the real
     store's space in the planted home's place), as production searches."""

@@ -104,6 +104,19 @@ def test_a_pair_naming_an_actor_no_roster_holds_is_not_found(run):
     assert env["ok"] is True
 
 
+def test_a_read_the_envelope_could_not_carry_is_not_a_read(run, monkeypatch):
+    """`envelope_ok` drops an item whole only when nothing of it fits; the
+    scene it was is then no scene the model saw, and is not inspected."""
+    sid = played(run.cid)
+    absorbed(run.cid, sid, "Mara gives Seraphine the silver ledger.")
+    monkeypatch.setattr(tools, "envelope_ok",
+                        lambda items: json.dumps({"ok": True, "items": []}))
+    out, env = _call(run, "get_scene_summary", scene=f"scene:{sid}")
+    assert env == {"ok": True, "items": []}
+    assert sid not in run.inspected and out.refs == ()
+    assert tools.item("e1", "scene:x", "t" * 5000, "")["title"] == "t" * tools.TITLE_CHARS
+
+
 def test_out_of_range_arguments_are_bad_args(run):
     sid = played(run.cid)
     assert _call(run, "read_scene_window", scene=f"scene:{sid}", limit=40)[1] == \
