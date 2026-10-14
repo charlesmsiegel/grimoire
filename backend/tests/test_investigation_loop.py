@@ -249,6 +249,69 @@ def test_a_fallback_that_cannot_call_tools_bounds_no_context(monkeypatch):
     assert seen["rides"] is False
 
 
+def test_steps_stand_against_their_own_call_ids(cid):
+    """Two calls to one tool in one turn: the timed-out one's late step is
+    dropped and the delivered one's kept, by call id, not by position."""
+    run_state = state.RunState(cid=cid, mode="question")
+    run_state.note(trace.step(1, "read_scene_window", {"offset": 0}, ok=True), call_id="c-late")
+    run_state.note(trace.step(1, "read_scene_window", {"offset": 9}, ok=True), call_id="c-ok")
+    result = tool_calls.LoopResult(status="completed", trace=(
+        tool_calls.TraceEntry(1, "tool", "read_scene_window", call_id="c-late", ok=False),
+        tool_calls.TraceEntry(1, "tool", "read_scene_window", call_id="c-ok", ok=True),
+    ))
+    investigation._keep_delivered(run_state, result)
+    assert [s["args"]["offset"] for s in run_state.steps] == [9]
+    built = trace.build(run="r", mode="question", task=TASK, model="", started="",
+                        outcome="completed", limit="", steps=run_state.steps,
+                        inspected=set(), final=None,
+                        usage_block={"model_turns": 0, "tool_calls": 0, "decisions": 0,
+                                     "seconds": 0.0, "cost": {}, "unpriced_calls": 0})
+    assert "_call" not in built["steps"][0]
+
+
+def test_refused_calls_count_and_cancelled_runs_keep_their_decisions():
+    result = tool_calls.LoopResult(status="completed", trace=(
+        tool_calls.TraceEntry(1, "model"),
+        tool_calls.TraceEntry(1, "tool", "search_history", ok=True),
+        tool_calls.TraceEntry(1, "tool", "nonsense", ok=False, note="refused"),
+        tool_calls.TraceEntry(2, "tool", "search_history", ok=False, note="not_run"),
+    ))
+    assert investigation._counts(result, []) == (1, 2, 0)
+    steps = [trace.step(1, "decide", {}, ok=True), trace.step(1, "search_history", {}, ok=True)]
+    assert investigation._counts(None, steps, [{"task": TASK}]) == (1, 2, 1)
+
+
+def test_the_last_allowed_decision_leaves_a_turn_to_answer(cid, scene):
+    """The decide tool keeps the run's cap; the loop is given one more, so
+    taking the last decision does not stop the run before it can finish."""
+    async def decide(args, ctx):
+        assert ctx.run.take_decision()
+        return tool_calls.ToolOutput(json.dumps({"answer": "a", "status": "answered"}))
+    params = {"type": "object",
+              "properties": {"question": {"type": "string"},
+                             "options": {"type": "array", "items": {"type": "string"}}},
+              "required": ["question", "options"], "additionalProperties": False}
+    spec = tool_calls.ToolSpec("decide", "d", params, decide)
+    run_state = state.RunState(cid=cid, mode="question")
+    budget = _budget(max_decisions=1)
+    traced = investigation._traced(spec, run_state, budget.max_decisions)
+    fake = FakeToolTurns(("", [("decide", {"question": "q", "options": []})]),
+                         ("", [("decide", {"question": "again", "options": []})]),
+                         ("", [("search_history", {"query": "compass", "max": None})]),
+                         ("", [("get_scene_excerpt", {"scene": f"scene:{scene}",
+                                                      "query": "compass", "max_posts": 4})]),
+                         ("", [("answer", {"text": "Mara buried it.",
+                                           "citations": [f"scene:{scene}"]})]))
+    outcome = asyncio.run(investigation.investigate(
+        None, state=run_state, task=TASK, seed=SEED, client=fake, resolved=_resolved(),
+        budget=replace(budget, max_decisions=2, max_turns=6), run_id=RUN, extra=(traced,)))
+    assert outcome.state == "completed"
+    decides = [s for s in outcome.trace["steps"] if s["tool"] == "decide"]
+    # The first answered; the second, over the run's own cap, was refused --
+    # a failed call, whose step goes with the undelivered ones.
+    assert [s["result"]["ok"] for s in decides] == [True]
+
+
 def test_a_thread_that_finishes_after_the_check_writes_nothing(cid):
     """A tool thread the loop stopped waiting on can finish late: what it
     notes was never delivered, before the freeze or after it."""

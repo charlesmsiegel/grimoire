@@ -2656,7 +2656,7 @@ class _Loop:
                                      scene_identity=self.scene_identity, run_id=self.run_id,
                                      deadline=end, root=self.root, turn=self.turns,
                                      run=_RunView(self), call_budget=self.call_budget,
-                                     reserve=reserve)
+                                     reserve=reserve, call_id=call.id)
         seconds: float | None = min(spec.timeout, end - time.monotonic())
         if seconds == math.inf:
             # No wait on either side: the decide tool, in a run with no wall,

@@ -25,6 +25,7 @@ model unpriceable under the spend ceiling), and ends in one of `STATES`.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import Counter
@@ -190,6 +191,7 @@ def _keep_delivered(state: investigation_state.RunState,
     delivered = {ref.removeprefix("scene:") for e in result.trace
                  if e.kind == "tool" and e.ok and e.name in investigation_tools.READS
                  for ref in e.refs if ref.startswith("scene:")}
+    calls = {e.call_id for e in result.trace if e.kind == "tool" and e.ok and e.call_id}
     returned: Counter[tuple[object, object]] = Counter(
         (e.turn, e.name) for e in result.trace if e.kind == "tool" and e.ok)
     with state.lock:
@@ -197,12 +199,17 @@ def _keep_delivered(state: investigation_state.RunState,
         state.inspected &= delivered
         # A step a timed-out thread noted before the freeze is no delivered
         # call either: a step stands only against a call the loop handed
-        # back, turn for turn and tool for tool. The decide tool is awaited,
-        # never left behind, and keeps its own steps.
+        # back -- by that call's id, so two calls to one tool in one turn are
+        # never mistaken for each other. A step with no id (none of the
+        # loop's tools leaves one) falls back to turn and tool.
         kept = []
         for step in state.steps:
+            call = step.get(investigation_state.CALL_KEY)
             key = (step.get("turn"), step.get("tool"))
-            if step.get("tool") == "decide" or returned[key] > 0:
+            if call:
+                if call in calls:
+                    kept.append(step)
+            elif returned[key] > 0:
                 returned[key] -= 1
                 kept.append(step)
         state.steps[:] = kept
@@ -235,17 +242,26 @@ def _filed(cid: str, run_id: str) -> tuple[dict, ...] | None:
         return None
 
 
-def _counts(result: tool_calls.LoopResult | None, steps: int,
+#: A tool call's trace note when the call took a slot of the budget: run
+#: (no note) or refused at the loop's own checks (`refused`: a schema-invalid,
+#: unknown or cut-off call, which still reached the model as an error). A
+#: call `not_run` or declined took none.
+COUNTED_NOTES = frozenset({"", "refused"})
+
+
+def _counts(result: tool_calls.LoopResult | None, steps: Sequence[dict],
             filed: Sequence[dict] = ()) -> tuple[int, int, int]:
     """(model turns, tool calls, decisions) from the loop's own trace -- or,
-    when the loop raised, the turns its filed rows show. The calls count the
-    terminal one: the loop hands it back unexecuted, but the model made it,
-    and it is what the run ended on."""
+    when the loop raised, the turns its filed rows show and the calls and
+    decisions its retained steps do. The calls count the terminal one: the
+    loop hands it back unexecuted, but the model made it, and it is what the
+    run ended on."""
     if result is None:
-        return len(filed), steps, 0
+        return (len(filed), len(steps),
+                sum(1 for s in steps if s.get("tool") == "decide"))
     entries = result.trace
     turns = sum(1 for e in entries if e.kind == "model")
-    calls = sum(1 for e in entries if e.kind == "tool" and e.note == "")
+    calls = sum(1 for e in entries if e.kind == "tool" and e.note in COUNTED_NOTES)
     decisions = sum(1 for e in entries if e.kind == "decide")
     return turns, calls + (result.final_call is not None), decisions
 
@@ -336,7 +352,7 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
     rows: Sequence[dict] = filed if filed is not None else (
         result.rows if result is not None else ())
     turned = [r for r in rows if r.get("task") == task]
-    turns, calls, decided = _counts(result, len(state.steps), turned)
+    turns, calls, decided = _counts(result, list(state.steps), turned)
     if checked is not None and result is not None:
         _final_step(state, result.final_call, turns)
     elapsed = time.monotonic() - t0
@@ -373,8 +389,12 @@ async def investigate_with_decide(
             fence=lambda: not cancelled()) as scope:
         extra = await _decide_tool(state.cid, client, budget, seed, scope, state,
                                    resolve=decide_resolution)
+        # One decision of headroom for the loop: the decide tool keeps the
+        # run's real cap itself (`_traced`), so taking the last decision
+        # leaves the model a turn to finish on.
+        looped = replace(budget, max_decisions=budget.max_decisions + 1) if extra else budget
         return await investigate(app, state=state, task=task, seed=seed, client=client,
-                                 resolved=resolved, budget=budget, run_id=run_id,
+                                 resolved=resolved, budget=looped, run_id=run_id,
                                  cancelled=cancelled, extra=extra)
 
 
@@ -397,28 +417,63 @@ async def _decide_tool(cid: str, client: LLMClient, budget: tool_calls.RunBudget
         "investigation-decide", resolved, client, cid=cid, why=why,
         context=seed.context[:tool_decision.MAX_DECIDE_CONTEXT // 2],
         ceiling=budget.spend_ceiling_usd, capture=scope.hook()))
-    return (_traced(spec, state),) if spec is not None else ()
+    return (_traced(spec, state, budget.max_decisions),) if spec is not None else ()
 
 
-def _traced(spec: tool_calls.ToolSpec, state: investigation_state.RunState
-            ) -> tool_calls.ToolSpec:
-    """The decide tool, noting a trace step per call as the reading tools do:
-    the question and options asked (clipped), and whether it answered."""
+#: What the decide tool says when the run's own decisions are spent: the
+#: words `tool_decision` refuses with at its cap.
+DECISIONS_SPENT = "not run: the run's decision budget is spent"
+
+
+def _answered(text: str) -> bool:
+    """Whether a decide result the tool returned is an answer: its status is
+    `answered`. An abstention, a refusal or an unanswered call comes back as
+    a result too, and is no usable decision."""
+    try:
+        found = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(found, dict) and found.get("status") == "answered"
+
+
+def _traced(spec: tool_calls.ToolSpec, state: investigation_state.RunState,
+            cap: int) -> tool_calls.ToolSpec:
+    """The decide tool, noting a trace step per call as the reading tools do
+    -- the question and options asked (clipped), and whether it answered --
+    and holding the run to its own `cap` of decisions.
+
+    The cap is kept here rather than by the loop: 01g's loop stops the run as
+    soon as the last allowed decision is taken, and an investigation reserves
+    no finalize turn, so a run that used its last decision could never call
+    its terminal tool. The loop is given one decision more
+    (`investigate_with_decide`); past `cap` this refuses before the tool
+    takes one, as the tool refuses at its own cap."""
     inner = spec.fn
+    taken = [0]
 
     async def fn(args: dict, ctx: tool_calls.ToolContext) -> tool_calls.ToolOutput:
         options = args.get("options")
         asked = {"question": args.get("question"),
                  "options": [o.get("id") for o in options if isinstance(o, dict)]
                  if isinstance(options, list) else []}
+        if taken[0] >= cap:
+            if ctx.run is not None:
+                ctx.run.note_decision("cap")
+            state.note(investigation_trace.step(ctx.turn, "decide", asked, ok=False,
+                                                error="refused"), call_id=ctx.call_id)
+            raise tool_calls.ToolError(DECISIONS_SPENT)
+        taken[0] += 1
         try:
             out = await inner(args, ctx)  # type: ignore[misc]
         except tool_calls.ToolError:
             state.note(investigation_trace.step(ctx.turn, "decide", asked, ok=False,
-                                                error="refused"))
+                                                error="refused"), call_id=ctx.call_id)
             raise
-        state.note(investigation_trace.step(ctx.turn, "decide", asked, ok=True,
-                                            chars=len(out.text)))
+        ok = _answered(out.text)
+        state.note(investigation_trace.step(ctx.turn, "decide", asked, ok=ok,
+                                            chars=len(out.text),
+                                            error="" if ok else "unanswered"),
+                   call_id=ctx.call_id)
         return out
 
     return replace(spec, fn=fn)

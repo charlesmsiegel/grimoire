@@ -19,6 +19,7 @@ from collections.abc import Iterable
 
 from .. import usage
 from ..continuity import candidates
+from . import state
 
 VERSION = candidates.TRACE_VERSION
 #: The longest string a trace keeps from a step's arguments.
@@ -79,10 +80,12 @@ def usage_of(rows: Iterable[dict], *, model_turns: int, tool_calls: int, decisio
 def build(*, run: str, mode: str, task: str, model: str, started: str, outcome: str,
           limit: str, steps: list[dict], inspected: Iterable[str], final: dict | None,
           usage_block: dict) -> dict:
-    """The stored shape (spec 8.1)."""
+    """The stored shape (spec 8.1). A step's loop-call tag
+    (`state.CALL_KEY`) is the run's own bookkeeping and is not stored."""
     return {"version": VERSION, "run": run, "mode": mode, "task": task, "model": model,
             "started": started, "outcome": outcome, "limit": limit,
-            "steps": list(steps)[:MAX_STEPS],
+            "steps": [{k: v for k, v in s.items() if k != state.CALL_KEY}
+                      for s in list(steps)[:MAX_STEPS]],
             "inspected": [f"scene:{sid}" for sid in sorted(inspected)],
             "final": final, "usage": usage_block}
 

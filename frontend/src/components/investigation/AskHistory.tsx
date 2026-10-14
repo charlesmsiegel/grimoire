@@ -50,6 +50,17 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
   const [answer, setAnswer] = useState<HistoryAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const live = useRef<AbortController | null>(null);
+  const [titles, setTitles] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let current = true;
+    api.listScenes(cid)
+      .then((list) => {
+        if (current) setTitles(Object.fromEntries(list.map((s) => [s.id, s.title])));
+      })
+      .catch(() => { /* links fall back to "a scene" */ });
+    return () => { current = false; };
+  }, [cid]);
 
   async function follow(p: Pending) {
     live.current?.abort();
@@ -84,13 +95,19 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
     try {
       const held = await api.findHistoryQuestion(cid, p.attempt, ctl.signal);
       if (held) {
-        void follow(p);
-        return;
+        // Followed as it stands, never re-posted: a re-post would face the
+        // start's checks (the switch, the model) over an answer the run
+        // already holds, and lose it if either had changed meanwhile.
+        const got = await api.followHistoryQuestion(cid, held, p.attempt, ctl.signal);
+        writePending(cid, null);
+        setAnswer(got);
+      } else {
+        writePending(cid, null);
+        setError("The earlier question's answer is no longer held. Ask it again to rerun it.");
       }
-      writePending(cid, null);
-      setError("The earlier question's answer is no longer held. Ask it again to rerun it.");
     } catch (err: unknown) {
       if (isAbortError(err)) return;
+      writePending(cid, null);
       setError(errorText(err));
     }
     if (!ctl.signal.aborted) setAsking(false);
@@ -111,8 +128,12 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
     void follow(p);
   }
 
+  // A scene is named by its title, never its id; until the titles arrive (or
+  // for a scene the list no longer holds) it is simply "a scene".
   const sceneLink = (sid: string) => (
-    <Link to={`/campaigns/${encodeSegment(cid)}/scenes/${encodeSegment(sid)}`}>{sid}</Link>
+    <Link to={`/campaigns/${encodeSegment(cid)}/scenes/${encodeSegment(sid)}`}>
+      {titles[sid] || "a scene"}
+    </Link>
   );
   const outcome = answer?.outcome;
   const result = outcome?.state === "completed" ? outcome.result : null;

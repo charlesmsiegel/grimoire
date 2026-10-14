@@ -16,6 +16,10 @@ from ..history import model as history_model
 MODES: tuple[str, ...] = ("rp_narrator", "continuity", "question")
 
 
+#: The key a step carries its loop call's id under while the run is live.
+CALL_KEY = "_call"
+
+
 @dataclass
 class RunState:
     """One run's state. `inspected` holds the scene ids whose transcript text
@@ -72,7 +76,10 @@ class RunState:
             self.evidence[key] = item
             return key
 
-    def note(self, step: dict, *, final: bool = False) -> None:
+    def note(self, step: dict, *, final: bool = False, call_id: str = "") -> None:
+        """`step` appended, tagged with the loop call it records (`call_id`,
+        the `ToolContext`'s) so the run can keep only steps of calls the loop
+        delivered; `trace.build` drops the tag."""
         with self.lock:
             if final or not self.frozen:
-                self.steps.append(step)
+                self.steps.append({**step, CALL_KEY: call_id} if call_id else step)

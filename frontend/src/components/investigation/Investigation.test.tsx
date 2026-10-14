@@ -5,7 +5,9 @@ import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../../api/client", async () => {
   const actual = await vi.importActual<typeof import("../../api/client")>("../../api/client");
-  return { ...actual, api: { askHistory: vi.fn(), findHistoryQuestion: vi.fn() } };
+  return { ...actual,
+           api: { askHistory: vi.fn(), findHistoryQuestion: vi.fn(),
+                  followHistoryQuestion: vi.fn(), listScenes: vi.fn() } };
 });
 import { api } from "../../api/client";
 import type { HistoryAnswer, InvestigationTrace as Trace } from "../../api/types";
@@ -80,7 +82,12 @@ describe("InvestigationTrace", () => {
 });
 
 describe("AskHistory", () => {
-  beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    mocked(api.listScenes).mockResolvedValue([{ id: "001--docks", title: "The docks", model: "",
+                                                 created: "", updated: "", date: "" }]);
+  });
 
   function ask(answer: HistoryAnswer) {
     mocked(api.askHistory).mockResolvedValue(answer);
@@ -98,7 +105,9 @@ describe("AskHistory", () => {
     expect(await screen.findByText("Mara keeps it.")).toBeInTheDocument();
     expect(api.askHistory).toHaveBeenCalledWith("run", "Who keeps the harbour ledger?",
                                                 expect.any(AbortSignal), expect.any(String));
-    expect(screen.getAllByRole("link", { name: "001--docks" }).length).toBeGreaterThan(0);
+    // Cited and read scenes are named by their titles, never their ids.
+    expect((await screen.findAllByRole("link", { name: "The docks" })).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: "001--docks" })).toBeNull();
   });
 
   it("says so when the history could not answer", async () => {
@@ -135,16 +144,19 @@ describe("AskHistory", () => {
     expect(typeof attempt).toBe("string");
     first.unmount();
 
-    mocked(api.findHistoryQuestion).mockResolvedValue({ id: "r1", state: "running" });
-    mocked(api.askHistory).mockResolvedValue({
+    const held = { id: "r1", state: "running" };
+    mocked(api.findHistoryQuestion).mockResolvedValue(held);
+    mocked(api.followHistoryQuestion).mockResolvedValue({
       question: "Who keeps the harbour ledger?",
       outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
                  result: null, trace: TRACE } });
     render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
     expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
     expect(api.findHistoryQuestion).toHaveBeenCalledWith("run", attempt, expect.any(AbortSignal));
-    // The same run, followed by the same attempt id -- never a second question.
-    expect(mocked(api.askHistory).mock.calls[1][3]).toBe(attempt);
+    // The held run, followed as it stands: no second POST, no second question.
+    expect(api.followHistoryQuestion).toHaveBeenCalledWith("run", held, attempt,
+                                                           expect.any(AbortSignal));
+    expect(api.askHistory).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText("Your question")).toHaveValue("Who keeps the harbour ledger?");
     expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
   });

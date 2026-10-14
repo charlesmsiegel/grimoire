@@ -156,6 +156,9 @@ class ToolContext:
     run: RunView | None = None
     call_budget: float = 0.0
     reserve: float = 0.0
+    #: The id of the call this context runs, as the loop's trace entry for it
+    #: names it: what lets a caller tie a record of its own to that entry.
+    call_id: str = ""
 
 
 class ToolError(Exception):

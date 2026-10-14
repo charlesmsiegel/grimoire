@@ -206,7 +206,7 @@ def _settled(run: state.RunState, name: str, args: dict, ctx: tool_calls.ToolCon
             if found is not None else ())
     run.note(trace.step(ctx.turn, name, _args_for_trace(args), ok=ok, refs=refs,
                         chars=len(text), truncated=truncated,
-                        error="" if ok else json.loads(text)["error"]))
+                        error="" if ok else json.loads(text)["error"]), call_id=ctx.call_id)
     return tool_calls.ToolOutput(text, refs=refs)
 
 

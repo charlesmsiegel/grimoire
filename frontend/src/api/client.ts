@@ -1708,6 +1708,17 @@ export const api = {
    *  before repeating the POST, which would otherwise ask again. */
   findHistoryQuestion: (cid: string, attempt: string, signal?: AbortSignal) =>
     findDraftRun({ at: "campaign", id: cid }, attempt, signal),
+  /** Follow a held history question's run to its answer WITHOUT the POST: a
+   *  re-attach must not pass the start's own checks again (the switch, the
+   *  model) to collect an answer the run already holds. */
+  followHistoryQuestion: async (cid: string, handle: RunHandle, attempt: string,
+                                signal?: AbortSignal): Promise<HistoryAnswer> => {
+    const scope: DraftScope = { at: "campaign", id: cid };
+    const run = await awaitRunAt(draftBase(scope), handle,
+                                 () => findDraftRun(scope, attempt, signal).catch(() => null),
+                                 signal, noteRunSettled);
+    return (run.result ?? {}) as HistoryAnswer;
+  },
   /** `attempt`, when given, re-attaches: the server adopts a repeat of a
    *  live question's attempt id rather than asking again. */
   askHistory: (cid: string, question: string, signal?: AbortSignal, attempt?: string) =>
