@@ -85,7 +85,7 @@ last**, an ordering preference rather than a fabricated technical edge.
 - **Specs that can run end-to-end now:** 06, whose one external hard need (05-C2) is on main.
 - **Parallel partial implementations:** 11 (S1 and S4 landed; S2 and S3 implemented in PR #511 with their gates passed; S5 and S6 follow S3). The ready command reports the individual eligible slices, not a promise that the whole spec can finish.
 - **Scheduled LAST:** 13 (Mechanics II). Do not dispatch it until **every other** roadmap spec, including 04, 05, 06, 08, 09, 10, 11 and 12, has landed. This is a scheduling hold only: the technical slice dependency graph and waves remain unchanged. `ready` hides 13 until then; `ready --include-deferred` displays technical readiness without the scheduling hold.
-- **Review debt kept visible:** 02's per-slice reviews were substitutes (CLI Codex gates owed). For 03-S2 through S6, review and final-gate boxes remain unticked; for 07-S1 through S8, review and final-gate boxes remain unticked, and 07-S8's plan gate is still unticked. For 05-S1 through S7 (merged in #512), plan gates, and the review and final gates the table leaves open, remain unticked. For 10-S1 through S3, the plan gates, reviews and final gates are owed to the PR's Codex review. No missing gate is inferred from a merged PR.
+- **Review debt kept visible:** 02's per-slice reviews were substitutes (CLI Codex gates owed). For 03-S2 through S6, review and final-gate boxes remain unticked; for 07-S1 through S8, review and final-gate boxes remain unticked, and 07-S8's plan gate is still unticked. For 05-S1 through S7 (merged in #512), plan gates, and the review and final gates the table leaves open, remain unticked. No missing gate is inferred from a merged PR.
 - **Decision lane:** ~~01a + 01b~~ → ~~01c + 01d~~ → ~~02~~ → 11 (Decision stage). 01e feeds 09 and the deferred 13.
 - **Generate lane:** ~~01f~~ → ~~01g~~ → 12.
 - **Cache lane:** ~~03~~ → ~~04~~ → ~~05~~ → 06; ~~03~~ + ~~05~~ + ~~01h~~ → 08.
@@ -407,8 +407,9 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
 - **All three slices land in one PR** (plan in
   `docs/superpowers/plans/2026-10-14-roadmap-10.md`, execution record in
   `docs/superpowers/validation/2026-10-14-spec-10-execution.md`). The plan
-  gate, review and final gate are owed to the PR's Codex review and stay
-  unticked until a round comes back clean. `history_plan` ships `off`, and
+  gates, reviews and final gates were met by the PR's Codex review (PR #516):
+  six rounds of findings fixed and answered on their threads, then a clean
+  review of the fixed head. `history_plan` ships `off`, and
   the `history-sufficiency` policy row ships with escalation off until its
   evidence lands (`evals/README.md`, "Decision escalation").
 
@@ -716,9 +717,9 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 10-S1 | The planner and one planned round | L | 8 | 01f-S1, 01f-S2 (S), 01f-S3, 09-S2, 09-S3 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
-| 10-S2 | The sufficiency check and the repair hop | M | 9 | 01b-S2 (S), 01d-S1 (S), 01d-S2 (S), 01d-S4 (S), 02-S7 (S), 10-S1 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
-| 10-S3 | Planning evals | M | 10 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S6, 10-S2 | [x] | [ ] | [x] | [ ] | [ ] | [x] |
+| 10-S1 | The planner and one planned round | L | 8 | 01f-S1, 01f-S2 (S), 01f-S3, 09-S2, 09-S3 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 10-S2 | The sufficiency check and the repair hop | M | 9 | 01b-S2 (S), 01d-S1 (S), 01d-S2 (S), 01d-S4 (S), 02-S7 (S), 10-S1 | [x] | [x] | [x] | [x] | [x] | [x] |
+| 10-S3 | Planning evals | M | 10 | 01a-S2, 01a-S3, 01a-S4 (S), 09-S6, 10-S2 | [x] | [x] | [x] | [x] | [x] | [x] |
 
 ### 11
 

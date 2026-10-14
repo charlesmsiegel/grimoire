@@ -6,9 +6,9 @@ Spec: `docs/superpowers/specs/2026-10-09-roadmap-10-retrieval-query-planning-des
 Plan: `docs/superpowers/plans/2026-10-14-roadmap-10.md`.
 
 The originating request asked for Spec 10 to be implemented. All three slices
-are in one PR. The plan gate, review and final gate are owed to the PR's Codex
-review; the checklist leaves those boxes unticked until a round comes back
-clean. No private store content was read or written: every fixture and eval
+are in one PR. The plan gate, review and final gate were met by the PR's Codex
+review (#516): six rounds of findings, each fixed and answered on its thread,
+then a clean review of the fixed head. No private store content was read or written: every fixture and eval
 recipe is synthetic and uses the codebase's placeholder names.
 
 ## Rulings
