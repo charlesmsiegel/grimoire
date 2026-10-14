@@ -11,6 +11,7 @@ import pytest
 from evals import run as eval_run
 from evals import runner as reports
 from evals.epistemic import cases, decision, graders, live
+from evals.graders import Check
 from tests.llm_fakes import FakeLLM, decision_reply
 
 RULE_WORDS = ("override", "witnessed", "unaware", "suspect", "narrator", "withheld",
@@ -369,3 +370,36 @@ def test_the_judge_and_the_gate_decide_on_the_epistemic_route():
         route = routing.route(task)
         assert route is not None and route.key == "epistemic" and route.operation == "decide"
     assert live.TASK == "chat" and routing.route(live.TASK).operation == "generate"
+
+
+def test_a_gated_part_no_call_answered_is_never_answered(monkeypatch, tmp_path):
+    # Review finding 1: a failed call renders as a null, which reads as an
+    # abstention -- so "answered" comes from the decision's own records.
+    from grimoire.llm_errors import LLMError
+    _store(monkeypatch, tmp_path / "real")
+    fake = FakeLLM([["x"]], error=LLMError("rate_limit", "slow down"))
+    _results, records = decision.run(_judge(), client=fake, real_home=tmp_path / "real")
+    assert records and not any(r["answered"] for r in records)
+    assert not any(r["false_known"] for r in records)
+    assert not decision.gate(records)
+    assert f"{len(records)} failed" in decision.summary(records)
+    # A reply that never reaches the item is no answer either.
+    fake = FakeLLM([["{}"]])
+    _results, records = decision.run(_judge(), client=fake, real_home=tmp_path / "real")
+    assert not any(r["answered"] for r in records) and not decision.gate(records)
+
+
+def test_an_accuracy_miss_alone_does_not_fail_the_run(monkeypatch, tmp_path, capsys):
+    # Review finding 2: the bar is no false known and every part answered.
+    _store(monkeypatch, tmp_path / "real")
+    clean = {"case": "1", "check": 0, "reader": "m", "repeat": 0, "answered": True,
+             "error": "", "prompt_clean": True, "exposed": [], "leaks": [],
+             "contamination": [], "recall": 1.0, "judge": "", "judged": []}
+    missed = reports.Result(decision.as_case(decision.gated()[0]), "baseline",
+                            [Check("gate.false_known", True, ""),
+                             Check("gate.gold", False, "missed")], "")
+    gate_record = {"case": "15", "needle": "KEPTNEEDLE15", "repeat": 0, "negative": True,
+                   "answered": True, "error": "", "correct": False, "false_known": False}
+    monkeypatch.setattr(eval_run, "_epistemic_live",
+                        lambda args: ([], [missed], [clean], [gate_record]))
+    assert eval_run.main(["--epistemic", "--live", "--repeat", "1"]) == 0

@@ -15,8 +15,9 @@ The rules it keeps, each one a reason it exists as its own step:
 - **Capped and bounded.** At most `EPISTEMIC_DECIDE_ITEMS` parts per step and
   `EPISTEMIC_ROUND_ITEMS` per round (carried on the round record), and one
   total deadline, `EPISTEMIC_CEILING_S`, across every call `decide` makes --
-  a fallback stage, a schema re-send and the capture included. No `_noting`: a slow Decision
-  model is not marked failing because of this stage.
+  a fallback stage and a schema re-send included (the capture is filed after,
+  outside it). No `_noting`: a slow Decision model is not marked failing
+  because of this stage.
 - **Fail-soft and fail-closed.** Every failure -- a route that does not
   resolve, a refused or failed call, a spent deadline, a crash -- leaves every
   eligible part `unknown`, which is withheld, and the turn plays on. A cancel
@@ -52,8 +53,9 @@ log = logging.getLogger("grimoire")
 TASK = epistemic_access.TASK
 
 #: Seconds the epistemic Decision pass may hold one actor step before its
-#: stream starts, across every call it makes (chunks, a schema re-send, a
-#: fallback stage, the 01d escalation hop, the 01b capture write). Argued
+#: stream starts, across every call `decide` makes (a chunk, a schema
+#: re-send, a fallback stage; the task does not escalate, and the 01b capture
+#: is filed after the call, outside it). Argued
 #: structurally: it is optional, it sits before the first token beside 09's
 #: rerank and 10's planning phase, and a step should not wait longer for it
 #: than for 02's own pre-generation decision. Below `PLAN_CEILING_S` (20 s)
@@ -65,7 +67,9 @@ EPISTEMIC_CEILING_S = 10.0
 EPISTEMIC_DECIDE_ITEMS = 8
 #: Parts asked about across a round's steps, first come first served: two
 #: chunks. Carried on the round record (`epistemic_asked`), so a resumed
-#: round does not reset it.
+#: round does not reset it. A part is charged once it is handed to `decide`,
+#: even when a spent deadline then refuses it unsent: the cap errs on the
+#: side of asking less.
 EPISTEMIC_ROUND_ITEMS = 16
 #: The round record's field.
 ROUND_FIELD = "epistemic_asked"
@@ -163,6 +167,11 @@ async def _ask(call: _Call, actor: str, parts, ask, *, cid, sid, client, post,
     if resolved is None:
         call.skipped = kind or "unresolved"
         call.decided.update({p.ident: _SKIPPED for p in ask})
+        # Nothing is sent, but the skip is said where a capture is looked
+        # for (§5.4).
+        async with decision_capture.capturing(cid, sid, TASK) as scope:
+            scope.note("", "skipped", call.skipped)
+            scope.note("", "parts", _record(parts, call.decided, "", 0)["parts"])
         return
     limit = await run_in_threadpool(ceiling)
     questions, items = await run_in_threadpool(_questions, cid, sid, actor, ask)
@@ -170,10 +179,16 @@ async def _ask(call: _Call, actor: str, parts, ask, *, cid, sid, client, post,
     call.decided.update({p.ident: _FAILED for p in ask})
     async with decision_capture.capturing(cid, sid, TASK) as scope:
         call.sent = len(ask)
-        decision = await operations.decide(
-            "epistemic-access", list(items), client=client, resolved=resolved,
-            campaign=cid, scene=sid, post=post, round_id=round_id,
-            response_id=call.response_id, capture=scope.hook(), around=plan_deadline(limit))
+        try:
+            decision = await operations.decide(
+                "epistemic-access", list(items), client=client, resolved=resolved,
+                campaign=cid, scene=sid, post=post, round_id=round_id,
+                response_id=call.response_id, capture=scope.hook(),
+                around=plan_deadline(limit))
+        except LLMError as exc:
+            # Said in the capture too, before `refine` reads the raise.
+            scope.note("", "skipped", exc.kind or "error")
+            raise
         scope.note_escalations("", decision)
         access = epistemic_access.access_of(questions, decision)
         for q, p in zip(questions, ask, strict=True):

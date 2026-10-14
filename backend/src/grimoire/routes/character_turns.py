@@ -1692,10 +1692,18 @@ async def _refine_step(cid, sid, client, turn, actor, view, response_id, run=Non
         round_id=turn.round_record["id"],
         asked=epistemic_stage.asked_in(turn.round_record), response_id=response_id)
     if refined.sent:
-        turn.round_record = await run_in_threadpool(
-            store.responses.update_round, cid, sid, turn.round_record["id"],
-            **{epistemic_stage.ROUND_FIELD:
-               epistemic_stage.asked_in(turn.round_record) + refined.sent})
+        spent = epistemic_stage.asked_in(turn.round_record) + refined.sent
+        try:
+            turn.round_record = await run_in_threadpool(
+                store.responses.update_round, cid, sid, turn.round_record["id"],
+                **{epistemic_stage.ROUND_FIELD: spent})
+        except Exception as exc:  # noqa: BLE001 - an optional step never fails a turn (§5.4)
+            # Fail closed: the round reads as spent for the rest of this
+            # request, so a count that could not be kept never asks more.
+            _log.error("epistemic round budget not recorded for %s/%s: %s", cid, sid,
+                       type(exc).__name__)
+            turn.round_record = {**turn.round_record,
+                                 epistemic_stage.ROUND_FIELD: epistemic_stage.EPISTEMIC_ROUND_ITEMS}
     turn.history_by_round[key] = refined.view
     turn.refined[key] = refined.record
     if run is not None and run.cancel_requested:

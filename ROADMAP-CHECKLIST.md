@@ -406,7 +406,7 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   12 reuses.
 
 ### 11: Epistemic history retrieval
-- [ ] **11-C1** Per-actor classes, deterministic first, with a capped
+- [x] **11-C1** Per-actor classes, deterministic first, with a capped
   Decision pass that is off by default.
 - [x] **11-C2** Narrator and actor prompt separation, refused on a mismatched
   perspective.
@@ -438,9 +438,21 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   recorded rather than fixed -- a summary or the chronicle's cast and
   location can steer which scenes an NPC's retrieval ranks, never what it
   renders -- and are put to the user.
-- [ ] **11-C4** A leakage eval suite (the offline arm and the live arm's
-  needle check implemented, 11-S3 and 11-S5; the live arm's decide judge and
-  the Decision gate are 11-S6).
+- **Implemented in PR #511 (11-S6):** `routes/epistemic.refine`, the
+  Decision stage: eligibility (`store/context/epistemic_items`), 8 parts per
+  step and 16 per round on the round record, one `EPISTEMIC_CEILING_S`
+  deadline, fail-closed, `classify(..., decided=)`, the view on the
+  response's snapshot for a roll resume, and the capture's accept of an
+  answer. The `epistemic` route and task landed with escalation off, and the
+  `epistemic_decide` switch is off and drawn by no Settings control.
+  **Still the user's:** ratifying the switch needs a recorded `--epistemic
+  --live` run that meets the Decision gate's bar of zero false-`known`
+  answers, plus 02's play gate (`--play epistemic`, with the PR that exposes
+  the switch). Plan, code and final gates were substitute reviews, recorded
+  in the plan.
+- [x] **11-C4** A leakage eval suite: the offline arm (11-S3), the live
+  arm's needle check (11-S5), and its decide judge and the Decision gate
+  (11-S6).
 
 ### 12: Bounded agentic investigation
 - [ ] **12-C1** A read-only toolset, perspective-filtered in RP.
@@ -710,7 +722,7 @@ alone. This table is generated: after a spec's slices change, run
 | 11-S3 | Perspective-aware retrieval and prompt separation | L | 7 | 09-S1, 09-S2, 10-S1 (S), 10-S2 (S), 11-S2 | [x] | [x] | [x] | [x] | [x] | [ ] |
 | 11-S4 | The Knowledge ledger: routes, UI and accept | M | 2 | 11-S1, 11-S3 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
 | 11-S5 | Live leakage evals | S | 8 | 01a-S2 (S), 01a-S3 (S), 11-S3 | [x] | [x] | [x] | [x] | [x] | [ ] |
-| 11-S6 | The Decision stage | L | 8 | 01b-S2 (S), 01c-S1 (S), 01d-S4, 02-S5, 02-S7, 11-S3, 11-S4 (S), 11-S5 (S) | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 11-S6 | The Decision stage | L | 8 | 01b-S2 (S), 01c-S1 (S), 01d-S4, 02-S5, 02-S7, 11-S3, 11-S4 (S), 11-S5 (S) | [x] | [x] | [x] | [x] | [x] | [ ] |
 
 ### 12
 

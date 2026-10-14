@@ -558,6 +558,12 @@ async def refine(view: EpistemicView, *, client: LLMClient, post: int | None,
                  round_id: str, round_budget: RoundBudget) -> EpistemicView
 ```
 
+(**Amended by 11-S6:** `refine(view, *, cid, sid, client, post, round_id,
+asked, response_id="") -> Refined`. `Refined` carries the view, the Decision
+record, the response id and how many parts were sent. The round's count is
+read off and written back to the round record by the turn path,
+`_refine_step`.)
+
 It runs on the turn path after retrieval and before `_prepare`, outside any
 campaign lock, as the speaker pick does (`routes/character_turns.py:728-761`):
 the resolution and item building happen in the threadpool, and the capture
@@ -1519,7 +1525,9 @@ stays off behind its switch until its gates pass.
   - the Decision stage runs only for actor perspectives, only on eligible
     parts with a structural channel, within 8 items per step and 16 per
     round, never on a replay, and passes `escalation=` as 02-C5a's policy
-    requires;
+    requires (**amended by 11-S6:** the task landed with escalation off, as
+    every task does, so it passes `escalation=` exactly when its policy
+    escalates, which today is never);
   - it keeps every 02-C6 rule: soft resolution, failure never fails the
     turn, asked once per contribution, off byte-identical, one total named
     deadline (`EPISTEMIC_CEILING_S`) with no `_noting`, `response_id`
@@ -1569,7 +1577,9 @@ stays off behind its switch until its gates pass.
 - The cases of 8.1.
 - The offline needle-absence grader runs in `pytest backend`.
 - The Decision gate runs through `evals/run.py --gate`, with channel-present
-  negatives and the false-`known` rate as its leakage line.
+  negatives and the false-`known` rate as its leakage line (**amended by
+  11-S6:** through `evals/run.py --epistemic --live`, `evals/epistemic/decision.py`;
+  see 8.2).
 - Live leakage is reported apart from recall (**amended by 11-S5:** the
   needle check in 11-S5, the decide judge in 11-S6).
 - 12-C2c's eval gate reuses the graders.
@@ -1597,7 +1607,12 @@ stays off behind its switch until its gates pass.
   (**amended by 11-S2:** the pinned function is `epistemic._read_scene`, which
   reads the scene and recomputes its prompt view; the slice renderer is 09's
   `budget._excerpt` over 09's texts and never views, so it cannot satisfy the
-  pin):
+  pin; **amended by 11-S6:** the Decision item builder,
+  `store/context/epistemic_items`, is held by a source test instead. It reads
+  no transcript, only slice sources, which are 08's prompt-phase view, and
+  the actor's own state. `test_items_read_the_prompt_view_never_the_display`
+  plants a display-only rule and a prompt rule and checks which one reaches
+  the sent item):
   `epistemic`'s slice renderer, and `epistemic_access.build_items`, with the
   guard's `_sources` extended to `store/epistemic_access.py` if 02-C5a has not
   already done so.

@@ -312,3 +312,24 @@ Two more amendments from the implementation:
     that nothing past it is read, resolved, called or minted, and that a
     fresh compose sends what it sent before. The roll-resume fix rides
     alongside, because the view is stored whenever one was composed.
+
+## 6. Code review and final gate dispositions
+
+One independent reviewer ran both gates over `5433a5f`. Verdict "not ready,
+but close", with nothing blocking on safety. Every finding is taken.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | A gated part no call answered read as "answered" (a failure renders as a null) | **Fixed.** `decision.read` reads the decision's own item records; a failed, unreached or off-option item is unread, outside the false-known denominator, and fails the gate. Tested with a failing call and an empty reply |
+| 2 | The run's exit code also required accuracy | **Fixed.** `--epistemic --live` passes on the reply arm's results and `decision.gate` alone; accuracy is reported, never the bar. Tested |
+| 3 | The promised regex source test did not exist | **Fixed.** `test_items_read_the_prompt_view_never_the_display` |
+| 4 | No capture test; a raised call and a soft-resolution skip left no note | **Fixed.** A raise is noted inside the scope before it propagates; a resolution skip files a capture with the skip and the parts. Both tested |
+| 5 | A stale summary was asked about, and an answer could narrow an override's scene class | **Fixed.** A summary that is not the chronicle's now carries basis `moved` (never eligible); `_answered` changes a scene class only when it is itself open on an eligible basis. Both tested |
+| 6 | A failed round-budget write failed the turn | **Fixed.** Caught and logged by class name; the round reads as spent for the rest of the request. Tested |
+| 7 | §5's signature, 11-C1, 11-C4 and §10 contradicted the amendments | **Fixed.** "Amended by 11-S6" notes at each |
+| 8 | The docstrings claimed the deadline covered the capture and an escalation hop | **Fixed.** Reworded |
+| 9 | `_stood` missed a chronicle-cast-only actor | **Fixed.** A missing appearance entry reads as empty, as `_presence` reads it. Tested |
+| 10 | The no-`_noting` test checked nothing, and its basis was loose | **Fixed.** The test asserts `decision_failed` and that the connection's health is not failing; the property holds by construction (`plan_deadline` takes no `on_timeout`) |
+| 11 | Unsent parts are charged to the round | **Kept, documented.** The cap errs on the side of asking less (`EPISTEMIC_ROUND_ITEMS`' comment) |
+| 12 | A Decision answer on a summary cannot be accepted | **Kept, amendment.** 11-S3's accept never offers the summary: a whole-scene grant covers more than this turn showed. A summary answer is accepted from the Knowledge ledger as a whole-scene statement |
+| 13 | Some §11 tests are covered by structure only | **Taken.** A cancel test after refine, and a parametrised test of every settled basis (`moved`, `unverifiable`, `unkeyed`, the overrides, a prior decision) as never eligible. A reroll replays its snapshot without composing (`regenerate_response` never reaches `_round_history`), which 11-S3's replay test already holds |

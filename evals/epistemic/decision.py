@@ -125,9 +125,26 @@ def as_case(item: Gated) -> Case:
                 recordings=(Recording(BASELINE, ext="json"),), task=TASK)
 
 
+#: An item's answer reasons that mean no call answered it: the reply held no
+#: object or never reached the item, the call failed, or the value was not
+#: one the question offers. A rendered decision writes each as a null, which
+#: would read as an abstention, so "answered" is read off the decision's own
+#: item records (`Result.items`), never off the rendered reply.
+UNREAD = frozenset({decisions.NO_OBJECT, decisions.NO_ITEM, "error", "unreadable"})
+
+
+def read(result: reports.Result) -> bool:
+    """Whether a call answered the gated item: a class, or a null the model
+    chose (an abstention or a refusal), never a failure rendered as one."""
+    if result.error or not result.items:
+        return False
+    [item] = result.items
+    return not set(item.get("reasons") or ()) & UNREAD
+
+
 def record(item: Gated, result: reports.Result) -> dict:
     """One answer's line, read off its result: no reply text."""
-    answered = not result.error
+    answered = read(result)
     gold = next((c for c in result.checks if c.name == "gate.gold"), None)
     false_known = next((c for c in result.checks if c.name == "gate.false_known"), None)
     return {"case": item.case.id, "needle": item.needle, "repeat": result.repeat,
@@ -171,7 +188,8 @@ def summary(records: list[dict]) -> str:
 
 def gate(records: list[dict]) -> bool:
     """Zero false-`known` answers, every gated part answered, and at least
-    one negative asked: the bar set before any run (module docstring)."""
+    one negative asked: the bar set before any run (module docstring).
+    Accuracy is reported, never part of the bar."""
     return bool(records) and all(r["answered"] for r in records) \
         and not any(r["false_known"] for r in records) \
         and any(r["negative"] for r in records)

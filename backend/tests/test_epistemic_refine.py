@@ -10,6 +10,7 @@ The corpus's own recipes (`evals/epistemic/cases.py`) plant the stores.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 
 import pytest
@@ -24,6 +25,10 @@ from grimoire.store import epistemic_access, routing
 from grimoire.store.context import assemble, epistemic
 from grimoire.store.context import epistemic_items as items_mod
 from tests.llm_fakes import FakeLLM, decision_reply
+
+#: What a deadline spent before the first call reads as (set below, from
+#: what the code does, so the test pins it exactly).
+DEADLINE_BASIS = "decision_failed"
 
 CASE = {c.id: c for c in cases.CASES}
 
@@ -286,15 +291,17 @@ def test_a_failed_call_withholds_and_says_why(home):
 
 
 def test_a_spent_deadline_is_refused_unsent_and_never_noted(home, monkeypatch):
+    # No `_noting` by construction: `plan_deadline` takes no `on_timeout`, so
+    # the refusal is the app's clock, never the connection's health.
     cast, items, _ = plant("7")
     clock = iter([0.0, 100.0, 100.0, 100.0, 100.0, 100.0])
     monkeypatch.setattr(common, "_plan_clock", lambda: next(clock, 100.0))
-    monkeypatch.setattr(common, "_noting", lambda *a, **k: pytest.fail("noted"),
-                        raising=False)
     fake = answering("known")
     out = refine(cast, view_for(cast, cast.mara, items), fake)
     assert fake.calls == 0 and _withheld(out)
-    assert out.record["parts"][0]["basis"] in ("decision_failed", "decision_abstained")
+    assert out.record["parts"][0]["basis"] == DEADLINE_BASIS
+    health = store.llm_connections.read_connection("openrouter").get("health") or {}
+    assert health.get("status") != "failing"
 
 
 def test_a_route_that_does_not_resolve_skips(home, monkeypatch):
@@ -455,3 +462,126 @@ def test_a_turn_with_the_switch_off_sends_what_it_sent_before(home, monkeypatch)
     assert "epistemic" not in record and not rows(cast.now.cid)
     assert "TOLDNEEDLE7" not in json.dumps(fake.requests[0]["messages"])
     assert record["snapshot"]["history_view"]["decided"] == 0
+
+
+
+# ---------------------------------------------------------------- review follow-ups
+
+
+def test_items_read_the_prompt_view_never_the_display(home):
+    # The regex-guard pin, as a source test (11-S6 amendment): the item's
+    # excerpt is the part's posts as 09 handed them over -- 08's prompt-phase
+    # view -- so a display-only rule never reaches it, and a prompt rule does.
+    cast = runner._cast()
+    rules = [{"name": "Shown only", "pattern": "customs seal", "replacement": "DISPLAYONLY",
+              "targets": ["model", "user"], "applies": ["display"]},
+             {"name": "Sent", "pattern": "slip past", "replacement": "PROMPTVIEW slip past",
+              "targets": ["model", "user"], "applies": ["prompt"]}]
+    response = home.put(f"/api/campaigns/{cast.now.cid}/regex", json={"rules": rules})
+    assert response.status_code == 200, response.text
+    items, _checks = CASE["7"].build(cast)
+    runner._seat(cast)
+    fake = answering("known")
+    refine(cast, view_for(cast, cast.mara, items), fake)
+    sent = json.dumps(fake.requests[0]["messages"])
+    assert "PROMPTVIEW" in sent and "DISPLAYONLY" not in sent
+
+
+def _captured(cid, sid):
+    entries = [e for e in store.prompt_log.list_entries(cid, sid) if e["task"] == stage.TASK]
+    assert len(entries) == 1, entries
+    payload = store.prompt_log.read_entry(cid, entries[0]["id"], scene=sid)
+    return json.loads(payload["sections"][-1]["text"])
+
+
+def test_the_capture_holds_the_parts_and_answers(home):
+    cast, items, _ = plant("7")
+    refine(cast, view_for(cast, cast.mara, items), answering("suspected"))
+    envelope = _captured(cast.now.cid, cast.now.sid)
+    [part] = envelope["notes"][""]["parts"]
+    assert (part["access"], part["basis"]) == ("suspected", "decision")
+    assert envelope["calls"]
+
+
+def test_a_skip_is_said_in_the_capture(home, monkeypatch):
+    cast, items, _ = plant("7")
+
+    def refuse(*a, **k):
+        raise HTTPException(409, {"kind": "incapable", "detail": "no"})
+    monkeypatch.setattr(stage, "require_inference", refuse)
+    refine(cast, view_for(cast, cast.mara, items), answering("known"))
+    envelope = _captured(cast.now.cid, cast.now.sid)
+    assert envelope["notes"][""]["skipped"] and not envelope["calls"]
+
+
+def test_a_failed_round_write_never_fails_the_turn(home, monkeypatch):
+    cast, items, _ = plant("7")
+    cid, sid = cast.now.cid, cast.now.sid
+    rnd = store.responses.new_round(cid, sid, eligible=[], automatic=False, post=None,
+                                    run_id="t")
+    turn = character_turns._Progress(rnd, (), None)
+
+    def busy(*a, **k):
+        raise OSError("disk")
+    monkeypatch.setattr(store.responses, "update_round", busy)
+    view, record, _rid = asyncio.run(character_turns._refine_step(
+        cid, sid, answering("known"), turn, cast.mara, view_for(cast, cast.mara, items), ""))
+    assert record["asked"] == 1 and "TOLDNEEDLE7" in shown(view)
+    # Fail closed: the rest of the request reads the round as spent.
+    assert stage.asked_in(turn.round_record) == stage.EPISTEMIC_ROUND_ITEMS
+
+
+def test_a_stop_during_the_call_sends_no_generation(home):
+    cast, items, _ = plant("7")
+    turn = character_turns._Progress({"id": "r1"}, (), None)
+
+    class Run:
+        cancel_requested = True
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(character_turns._refine_step(
+            cast.now.cid, cast.now.sid, answering("known"), turn, cast.mara,
+            view_for(cast, cast.mara, items), "", run=Run()))
+
+
+@pytest.mark.parametrize("basis", ["moved", "unverifiable", "unkeyed", "override",
+                                   "override_group", "decision"])
+def test_a_part_on_a_settled_basis_is_never_eligible(basis):
+    assert not epistemic.eligible(epistemic.Slice("posts", (0,), "unknown", (basis,), ""))
+    assert not epistemic.eligible(
+        epistemic.Slice("posts", (0, 1), "unknown", ("no_record", basis), ""))
+    assert epistemic.eligible(epistemic.Slice("posts", (0,), "unknown", ("no_record",), ""))
+
+
+def test_a_summary_that_is_not_the_chronicles_now_is_never_asked(home):
+    # The chronicle's summary moved on since retrieval: no grant and no
+    # answer could show that text, so it is not paid for.
+    cast, items, _ = plant("8")
+    [item] = items
+    stale = dataclasses.replace(item, summary="An older SECRETNEEDLE8 summary.")
+    view = view_for(cast, cast.mara, [stale])
+    summary = next(s for c in view.items for s in c.slices if s.part == "summary")
+    assert summary.basis == ("moved",) and not epistemic.eligible(summary)
+    fake = answering("known")
+    assert refine(cast, view, fake).record["parts"] == [] and fake.calls == 0
+
+
+def test_an_answer_never_moves_a_scene_class_an_override_settled():
+    own = epistemic._Classes({0: ("unknown", "no_record")}, ("known", "override"))
+    slices = [epistemic.Slice("summary", (), "unknown", ("summary_needs_grant",), "")]
+    out = epistemic._answered("k", own, slices,
+                              {("k", "summary", ()): ("unknown", "decision")})
+    assert out.scene == ("known", "override")
+
+
+def test_a_chronicle_cast_member_stood_there(home):
+    # Named only by the chronicle's cast, with no appearance record at all.
+    cast = runner._cast()
+    st = cases._src(cast, "The Weighhouse")
+    st.say("The CASTNEEDLE crates are weighed.")
+    aid = cast.ids["Mara"][0]
+    store.chronicle.absorb(cast.now.cid, {"id": st.sid, "one_line": "x", "summary": "x",
+                                          "keywords": [], "cast": [f"characters/{aid}"],
+                                          "location": "", "date": ""})
+    runner._seat(cast)
+    view = view_for(cast, cast.mara, [st.item()])
+    assert view.items[0].stood

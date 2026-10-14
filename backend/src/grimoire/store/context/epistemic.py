@@ -506,7 +506,7 @@ def _stood(env: _Env, ref: str) -> bool:
     unreadable record is False, which only closes a channel."""
     entry = env.src.presence.get(ref.replace(":", "/", 1)) if env.src.presence else None
     if not isinstance(entry, dict):
-        return False
+        entry = {}     # the chronicle cast may still name it, as `_presence` reads
     ok, found = _intervals(entry, env.sc.sid)
     scenes = entry.get("scenes")
     cast = (env.sc.record or {}).get("cast")
@@ -646,9 +646,14 @@ def _summary_slice(item: model.EvidenceItem, sc: _Scene | None,
     if scene is None:
         return Slice("summary", (), "known", ("narrator",), item.summary)
     access, basis = scene
-    if access in VISIBLE and (sc is None or not sc.chron_ok or sc.record is None
-                              or sc.record.get("summary") != item.summary):
+    stale = (sc is None or not sc.chron_ok or sc.record is None
+             or sc.record.get("summary") != item.summary)
+    if stale and access in VISIBLE:
         access, basis = "unknown", "summary_needs_grant"
+    if stale and access == "unknown" and basis in ELIGIBLE_BASES:
+        # No grant and no answer could show this text (11-S6): it is not the
+        # chronicle's summary now, so it is never asked about.
+        basis = "moved"
     return Slice("summary", (), access, (basis,), item.summary if access in VISIBLE else "")
 
 
@@ -730,7 +735,11 @@ def _answered(key: str, own: _Classes, slices: Sequence[Slice],
         if access not in DECIDED_ACCESS or basis not in DECIDED_BASES:
             raise ValueError(f"not a Decision answer: {found!r}")
         if s.part == "summary":
-            scene = (access, basis)
+            # Only a scene class that is itself open: an answer never moves
+            # what an override settled, even one the summary's own staleness
+            # withheld.
+            if own.scene[0] == "unknown" and own.scene[1] in ELIGIBLE_BASES:
+                scene = (access, basis)
         else:
             posts.update((i, (access, basis)) for i in s.posts)
     return _Classes(posts, scene)

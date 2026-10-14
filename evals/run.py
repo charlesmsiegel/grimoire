@@ -544,7 +544,8 @@ def _probe(task: str, *, decide: bool = False) -> case_mod.Case:
 
 
 def _epistemic_live(args: argparse.Namespace):
-    """`--epistemic --live`'s model work: `(results, records, gate_records)`,
+    """`--epistemic --live`'s model work: `(results, gate_results, records,
+    gate_records)` -- the replies and their judges, then the Decision gate --
     or None when a resolution was refused (said on stderr)."""
     # Everything read from the real store is read before any home moves:
     # `chat` for the replies, and `epistemic-access`'s decide resolution
@@ -574,7 +575,7 @@ def _epistemic_live(args: argparse.Namespace):
     gate_results, gate_records = epistemic_decision.run(
         judge, real_home=real_home, rates=rates, run_id=args.run_id, run_day=run_day,
         repeat=args.repeat or 1)
-    return [*results, *gate_results], records, gate_records
+    return results, gate_results, records, gate_records
 
 
 def run_epistemic(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
@@ -610,23 +611,26 @@ def run_epistemic(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         ap.error(f"--repeat must be between 1 and {runner.MAX_REPEAT}")
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     offline_records = epistemic_runner.run_all()
-    results, records, gate_records = [], [], []
+    results, gate_results, records, gate_records = [], [], [], []
     if args.live:
         ran = _epistemic_live(args)
         if ran is None:
             return 1
-        results, records, gate_records = ran
-        print(runner.report(results))
+        results, gate_results, records, gate_records = ran
+        print(runner.report([*results, *gate_results]))
     print(runner.ascii_safe(epistemic_live.summary(records, offline_records)))
     if gate_records:
         print(runner.ascii_safe(epistemic_decision.summary(gate_records)))
+    # The gate's results report accuracy too, which is never the bar: the
+    # Decision gate passes on its own records (`decision.gate`).
     passed = epistemic_live.gate(records, offline_records, live=args.live, results=results)
     if args.live:
         passed = passed and epistemic_decision.gate(gate_records)
     if args.out:
         configs = [runfile.config("c1", "live" if args.live else "offline",
                                   {"mode": "live" if args.live else "offline"})]
-        doc = runfile.build(results, configs, run_id=args.run_id, started=started)
+        doc = runfile.build([*results, *gate_results], configs, run_id=args.run_id,
+                            started=started)
         doc["epistemic"] = {"offline": [{k: r[k] for k in ("case", "label", "reader", "leaks",
                                                             "missing", "misplaced")}
                                         for r in offline_records],
