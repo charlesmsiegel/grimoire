@@ -352,6 +352,9 @@ NOT_IN_CASSETTE = {
                            "on, which `test_play_tool.py` drives with scripted replies"),
     "epistemic-access": ("spec 11's Decision stage, off unless switched on, which "
                          "`test_epistemic_refine.py` drives with scripted decide replies"),
+    "investigation-decide": ("the decide tool an investigation may call, off unless "
+                             "switched on, which `test_investigation_routes.py` drives "
+                             "with scripted tool turns"),
 }
 
 

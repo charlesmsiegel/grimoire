@@ -74,10 +74,15 @@ PINNED = {
     "routes/passage_characters.py": ("draft_character",),
     # 11-S2: re-matches 09's evidence against the prompt view it recomputes.
     "store/context/epistemic.py": ("_read_scene",),
+    # 12-S1: an investigation's paged transcript read (spec 4.2 rule 2). Its
+    # `read_scene_window` is no `_SCENE_READS` member, so only the pin sees it.
+    "store/investigation/readers.py": ("window",),
 }
 
 # Readers whose transcript view belongs to 08, rather than to their own body.
-EXPANSION_PINNED = {"store/history/expand.py": ("excerpts",)}
+EXPANSION_PINNED = {"store/history/expand.py": ("excerpts",),
+                    # 12-S1: an investigation's `get_scene_excerpt`.
+                    "store/investigation/readers.py": ("excerpt",)}
 
 # Prompt builders over text another function already took through the view
 # (roadmap 10): the planner's window is 09's `query.prepare` window (pinned
@@ -97,7 +102,8 @@ _PROMPT_BUILDS = {"render"}
 
 #: Scanned directories, relative to the package. `store/history/` is 09's and
 #: does not exist yet; a missing directory contributes nothing.
-SCANNED = ("routes", "store/context", "store/searchdocs", "store/history")
+SCANNED = ("routes", "store/context", "store/searchdocs", "store/history",
+           "store/investigation")
 
 
 def _sources():

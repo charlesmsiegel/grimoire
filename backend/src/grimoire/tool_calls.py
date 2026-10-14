@@ -779,7 +779,7 @@ TOOL_WORKERS = 4
 
 #: The limits a run can stop on (`LoopResult.limit`). `spend` is 01g-S5's.
 LIMITS: tuple[str, ...] = ("turns", "tool_calls", "decisions", "wall", "spend",
-                           "result_chars")
+                           "result_chars", "context")
 
 #: The results a model is sent for a call the loop did not run as asked.
 NOT_RUN = "not run: the run's tool budget is spent"
@@ -826,6 +826,13 @@ class RunBudget:
     #: creative turn whose continuation IS the answer (roadmap 02 §8.5),
     #: where "give your final answer now" would be prompt text in the story.
     finalize_note: bool = True
+    #: The most tokens a turn's prompt may hold, counted as the spend guard
+    #: counts one (`tokens.count_if_loaded`: the encoder when loaded, else
+    #: four characters a token) over the messages and the tool definitions; a
+    #: send past it is refused and the run stops on `context`. None is no
+    #: stop. A caller derives it from 01i's `prompt_ceiling` (roadmap 12 §7.3);
+    #: the loop never guesses a window.
+    max_prompt_tokens: int | None = None
 
     def __post_init__(self) -> None:
         ceiling = self.spend_ceiling_usd
@@ -845,6 +852,8 @@ class RunBudget:
         if isinstance(self.max_decisions, bool) or not isinstance(self.max_decisions, int) \
                 or self.max_decisions < 0:
             raise ValueError("RunBudget.max_decisions is a whole number")
+        if self.max_prompt_tokens is not None and not _positive_int(self.max_prompt_tokens):
+            raise ValueError("RunBudget.max_prompt_tokens is a positive whole number or None")
 
 
 @dataclass(frozen=True)

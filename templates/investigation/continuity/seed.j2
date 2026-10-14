@@ -1,0 +1,11 @@
+{#- The opening user message of a continuity investigation: the finding as the
+    sweep's own item shows it (`continuity_reconcile/item.j2`, already
+    rendered) and its criteria (`continuity_reconcile/question.j2`). Vars:
+      item — str: the rendered candidate block.
+      vocabulary — str: the candidate's `reconcile.DECISIONS` key.
+      decisions — list[str]: the words `propose` may use. -#}
+{{ item }}
+
+{% include "continuity_reconcile/question.j2" %}
+
+propose takes one of: {{ decisions | join(", ") }}. Name records by their letters, A and B, never by id.

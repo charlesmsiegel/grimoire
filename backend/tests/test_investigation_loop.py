@@ -1,0 +1,232 @@
+"""Roadmap 12-S2: the loop driver, budgets and trace (spec 5, 7, 8; 14 "Loop
+and budgets").
+
+The model is `llm_fakes.FakeToolTurns`, scripted by call order; the store is
+synthetic and placeholder-named.
+"""
+
+import asyncio
+import json
+from dataclasses import replace
+
+import pytest
+
+from grimoire import tool_calls
+from grimoire.llm_errors import LLMError
+from grimoire.routes import investigation
+from grimoire.store import config, llm_connections
+from grimoire.store.inference import limits
+from grimoire.store.investigation import budget as inv_budget
+from grimoire.store.investigation import state, trace
+from tests import wire_kit
+from tests.history_fixtures import absorbed, played
+from tests.history_fixtures import cid as cid
+from tests.llm_fakes import FakeToolTurns
+
+RUN = "runinvestigate01"
+TARGET = wire_kit.target(provider_id="openrouter", model="vendor/reader", api_key="sk-test")
+TASK = "investigation-question"
+SEED = investigation.Seed([{"role": "system", "content": "Answer from the history."},
+                           {"role": "user", "content": "Who buried the brass compass?"}])
+CATALOG = {("openrouter", "vendor/reader"): {"prompt": "0.001", "completion": "0.001"}}
+
+
+def _resolved(target=TARGET):
+    return wire_kit.resolution(target, TASK)
+
+
+def _budget(**changes):
+    return replace(inv_budget.for_entry("question"), **{"wall_seconds": 0, **changes})
+
+
+def _run(cid, fake, *, budget=None, cancelled=None, resolved=None):
+    run_state = state.RunState(cid=cid, mode="question")
+    outcome = asyncio.run(investigation.investigate(
+        None, state=run_state, task=TASK, seed=SEED, client=fake,
+        resolved=resolved or _resolved(), budget=budget or _budget(), run_id=RUN,
+        cancelled=cancelled))
+    return outcome, run_state
+
+
+@pytest.fixture
+def scene(cid):
+    sid = played(cid, text="Mara buries the brass compass under the pier.")
+    absorbed(cid, sid, "Mara buries the brass compass under the pier.")
+    return sid
+
+
+def _read_then_answer(sid, citations=None):
+    return FakeToolTurns(
+        ("", [("search_history", {"query": "brass compass", "max": 3})]),
+        ("", [("get_scene_excerpt", {"scene": f"scene:{sid}", "query": "compass",
+                                     "max_posts": 4})]),
+        ("", [("answer", {"text": "Mara buried it under the pier.",
+                          "citations": citations or [f"scene:{sid}"]})]))
+
+
+def test_a_run_that_reads_and_answers_completes_with_its_trace(cid, scene):
+    fake = _read_then_answer(scene)
+    outcome, _state = _run(cid, fake)
+    assert outcome.state == "completed"
+    assert outcome.result == {"text": "Mara buried it under the pier.",
+                              "citations": [f"scene:{scene}"]}
+    t = outcome.trace
+    assert trace.valid(t)
+    assert t["run"] == RUN and t["mode"] == "question" and t["task"] == TASK
+    assert t["model"] == "openrouter/vendor/reader"
+    assert [s["tool"] for s in t["steps"]] == ["search_history", "get_scene_excerpt"]
+    assert t["steps"][0]["args"] == {"query": "brass compass", "max": 3}
+    assert t["inspected"] == [f"scene:{scene}"]
+    assert t["final"] == outcome.result
+    assert t["usage"]["model_turns"] == 3 and t["usage"]["tool_calls"] == 2
+    # No ledger row carried a price, so no column claims one.
+    assert t["usage"]["cost"] == {"cost_usd": None, "estimated_usd": None,
+                                  "modelled_usd": None}
+    # No result text in the trace: only refs and sizes.
+    assert "pier" not in json.dumps(t["steps"])
+    # Every turn is a required tool call, metered under the run id.
+    assert all(r["tool_choice"] == "required" for r in fake.requests)
+
+
+def test_a_prose_final_turn_is_insufficient_evidence(cid, scene):
+    fake = FakeToolTurns(("", [("search_history", {"query": "compass", "max": None})]),
+                         ("I think it was Mara.", []))
+    outcome, _ = _run(cid, fake)
+    assert outcome.state == "insufficient_evidence" and outcome.result is None
+    assert outcome.trace["final"] is None
+
+
+def test_an_answer_citing_only_unread_scenes_is_insufficient(cid, scene):
+    fake = FakeToolTurns(("", [("search_history", {"query": "compass", "max": None})]),
+                         ("", [("answer", {"text": "Mara.", "citations": [f"scene:{scene}"]})]))
+    outcome, run_state = _run(cid, fake)
+    assert outcome.state == "insufficient_evidence"
+    assert scene not in run_state.inspected
+
+
+@pytest.mark.parametrize("budget,limit", [
+    ({"max_turns": 2}, "turns"),
+    ({"max_tool_calls": 1}, "tool_calls"),
+    ({"max_result_chars_total": 10}, "result_chars"),
+])
+def test_each_limit_ends_the_run_with_01gs_name_and_sends_nothing_further(
+        cid, scene, budget, limit):
+    fake = FakeToolTurns(("", [("search_history", {"query": "compass", "max": None}),
+                               ("get_timeline", {"from": None, "to": None})]))
+    outcome, _ = _run(cid, fake, budget=_budget(**budget))
+    assert outcome.state == "budget_exhausted" and outcome.limit == limit
+    assert outcome.trace["limit"] == limit
+    sent = len(fake.requests)
+    assert sent <= budget.get("max_turns", 6)
+
+
+def test_the_wall_stops_before_a_turn_that_cannot_fit(cid, scene):
+    fake = _read_then_answer(scene)
+    outcome, _ = _run(cid, fake, budget=_budget(wall_seconds=1.0))
+    assert (outcome.state, outcome.limit) == ("budget_exhausted", "wall")
+    assert fake.requests == []
+
+
+def test_the_context_stop_uses_the_fallback_when_no_window_is_known(cid, scene, monkeypatch):
+    monkeypatch.setattr(inv_budget, "FALLBACK_PROMPT_TOKENS", 5)
+    fake = _read_then_answer(scene)
+    outcome, _ = _run(cid, fake)
+    assert (outcome.state, outcome.limit) == ("budget_exhausted", "context")
+    assert fake.requests == []
+
+
+def test_the_context_stop_reads_prompt_ceiling_with_the_turns_own_cap(monkeypatch):
+    seen = {}
+
+    def ceiling(resolved, *, reserve=None, max_tokens=None):
+        seen["max_tokens"] = max_tokens
+        return limits.Ceiling(tokens=3000, window=4000, reserve=1000, complete=True,
+                              binding=None, reason="")
+    monkeypatch.setattr(limits, "prompt_ceiling", ceiling)
+    budget = inv_budget.for_entry("question")
+    assert inv_budget.prompt_tokens(_resolved(), budget) == 3000
+    assert seen["max_tokens"] == budget.max_output_tokens == 2048
+    monkeypatch.setattr(limits, "prompt_ceiling", lambda *a, **k: limits.Ceiling(
+        tokens=None, window=None, reserve=0, complete=False, binding=None, reason=""))
+    assert inv_budget.prompt_tokens(_resolved(), budget) == inv_budget.FALLBACK_PROMPT_TOKENS
+
+
+def test_a_cancel_stops_the_run(cid, scene):
+    flag = {"stop": False}
+
+    def stop_after_first():
+        return flag["stop"]
+    fake = FakeToolTurns(("", [("search_history", {"query": "compass", "max": None})]))
+    original = fake.complete
+
+    async def complete(*a, **k):
+        flag["stop"] = True
+        return await original(*a, **k)
+    fake.complete = complete
+    outcome, _ = _run(cid, fake, cancelled=stop_after_first)
+    assert outcome.state == "cancelled"
+    assert len(fake.requests) == 1
+
+
+@pytest.mark.parametrize("script", [
+    (LLMError("rate_limit", "slow down, says the provider"),),
+    (("", [("search_history", {"query": "compass", "max": None})]),
+     LLMError("timeout", "the provider said something private")),
+])
+def test_a_failed_call_is_failed_with_its_kind_only(cid, scene, script):
+    outcome, _ = _run(cid, FakeToolTurns(*script))
+    assert outcome.state == "failed"
+    assert outcome.error in ("rate_limit", "timeout")
+    assert "says" not in json.dumps(outcome.as_dict())
+    assert "private" not in json.dumps(outcome.as_dict())
+
+
+def test_an_unpriced_model_under_a_ceiling_is_refused_having_sent_nothing(
+        cid, scene, monkeypatch):
+    monkeypatch.setattr(llm_connections, "cached_row", lambda conn, model: None)
+    fake = _read_then_answer(scene)
+    outcome, _ = _run(cid, fake, budget=_budget(spend_ceiling_usd=1.0))
+    assert (outcome.state, outcome.reason) == ("refused", "unpriceable")
+    assert fake.requests == []
+
+
+def test_a_priced_run_under_a_ceiling_stops_on_spend(cid, scene, monkeypatch):
+    monkeypatch.setattr(llm_connections, "cached_row",
+                        lambda conn, model: CATALOG.get((conn, model)))
+    fake = FakeToolTurns(("", [("search_history", {"query": "compass", "max": None})]))
+    outcome, _ = _run(cid, fake, budget=_budget(spend_ceiling_usd=0.0001))
+    assert (outcome.state, outcome.limit) == ("budget_exhausted", "spend")
+
+
+def test_the_budgets_are_the_specs():
+    config.write_config(llm_call_budget="300")
+    turn = inv_budget.for_entry("turn")
+    assert (turn.max_turns, turn.max_tool_calls, turn.max_decisions,
+            turn.max_output_tokens, turn.max_result_chars_total) == (3, 4, 0, 512, 12_000)
+    assert turn.wall_seconds == inv_budget.E1_WALL_S == 20.0
+    cont = inv_budget.for_entry("continuity")
+    assert (cont.max_turns, cont.max_tool_calls, cont.max_decisions, cont.wall_seconds) \
+        == (6, 12, 2, 900.0)
+    question = inv_budget.for_entry("question")
+    assert (question.max_turns, question.max_tool_calls, question.max_decisions,
+            question.wall_seconds, question.max_result_chars_total) == (5, 10, 1, 600.0, 36_000)
+    assert cont.spend_ceiling_usd is None
+    config.write_config(llm_call_budget="10", investigation_spend_ceiling="0.5")
+    assert inv_budget.for_entry("turn").wall_seconds == 10.0
+    assert inv_budget.for_entry("question").spend_ceiling_usd == 0.5
+    for bad in ("", "0", "-1", "nan", "inf", "lots"):
+        config.write_config(investigation_spend_ceiling=bad)
+        assert inv_budget.spend_ceiling() is None
+
+
+@pytest.fixture(autouse=True)
+def _home_for_budgets(monkeypatch, tmp_path):
+    # `test_the_budgets_are_the_specs` writes config with no campaign fixture.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+
+
+def test_a_budget_refuses_a_bad_context_stop():
+    with pytest.raises(ValueError):
+        tool_calls.RunBudget(max_prompt_tokens=0)
+    assert tool_calls.RunBudget(max_prompt_tokens=10).max_prompt_tokens == 10
+    assert "context" in tool_calls.LIMITS

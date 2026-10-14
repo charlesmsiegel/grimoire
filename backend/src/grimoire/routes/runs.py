@@ -513,6 +513,7 @@ class RunRegistry:
                           review_generation: str | None = None,
                           single_live: bool = False,
                           refuse_live: bool = False,
+                          single_match: Callable[[Run], bool] | None = None,
                           ) -> tuple[Run, bool]:
         """Reserve a run, or hand back the one this attempt already made.
 
@@ -530,7 +531,11 @@ class RunRegistry:
         live reconcile per campaign, whether End Scene or Refresh asked first.
         It is a scan under this lock rather than an exclusion key because the
         loser is not refused -- it is handed the running sweep, under its own
-        attempt id (`_adopt`).
+        attempt id (`_adopt`). With ``single_match`` the live run is adopted
+        only when it matches -- a run about the same thing -- and otherwise
+        refuses this one with `RunInFlightError` naming it: one live
+        investigation per campaign, adopted by a start for its own candidate
+        and refused to a start for another (roadmap 12 §9.2).
 
         ``refuse_live`` is the opposite answer to the same question: a live run
         of this class and kind on the subject refuses a new one with
@@ -559,6 +564,8 @@ class RunRegistry:
                 return existing, False
 
             if single_live and (live := self._live_single(subject, cls, kind)) is not None:
+                if single_match is not None and not single_match(live):
+                    raise RunInFlightError(live.id)
                 return self._adopt(live, subject, attempt_id), False
             if refuse_live and (live := self._live_kind(subject, cls, kind)) is not None:
                 raise RunInFlightError(live.id)
@@ -2069,6 +2076,8 @@ def reserve_background(app, cid: str, sid: str, kind: str) -> Run | None:
 
 def reserve_campaign_background(app, cid: str, kind: str,
                                 attempt_id: str | None = None,
+                                *, labels: dict | None = None,
+                                match: Callable[[Run], bool] | None = None,
                                 ) -> tuple[Run, bool] | None:
     """Reserve the campaign's one live `background` run of this kind, or adopt
     the live one. ``None`` if the store is moving.
@@ -2084,12 +2093,17 @@ def reserve_campaign_background(app, cid: str, kind: str,
     reservation, and the store-move refusal lives inside `start_or_existing`
     under the registry lock. The adoption scan is in there too, which is what
     makes two simultaneous triggers get one run rather than two.
+
+    ``labels`` add to the subject's own; ``match`` narrows adoption to a live
+    run it accepts, and a live run it refuses raises `RunInFlightError`
+    naming that run (`start_or_existing`'s ``single_match``).
     """
     subject = campaign_subject(cid)
     try:
         return app.state.runs.start_or_existing(
             subject, "background", kind, attempt_id, None,
-            _subject_labels(subject), single_live=True)
+            {**_subject_labels(subject), **(labels or {})}, single_live=True,
+            single_match=match)
     except StoreMovingError:
         return None
 
@@ -2226,7 +2240,7 @@ def reserve_scene_draft(app, cid: str, sid: str, kind: str,
 
 
 def run_draft(app, subject: Subject, kind: str, attempt_id: str | None,
-              work) -> dict:
+              work, *, pass_run: bool = False) -> dict:
     """Reserve a computing `draft`, hand `work` to the runner, answer the 202.
 
     THE route-side half of the shared contract, so that the thirteen call sites
@@ -2248,12 +2262,16 @@ def run_draft(app, subject: Subject, kind: str, attempt_id: str | None,
     it costs more here than it looks: a draft is a whole provider call, so a
     retried POST that started a second one would be paid for twice and the two
     answers would disagree.
+
+    `pass_run` hands `work` the reserved run (`work(run)` returns the
+    coroutine) for a draft whose calls are filed under its id -- a tool loop
+    runs under the caller's run id (roadmap 12's history question).
     """
     run, fresh = reserve_draft(app, subject, kind, attempt_id)
     if not fresh:
         return {"run": run_payload(run)}
     with reservation(app, run):
-        start_computing(app, run, work)
+        start_computing(app, run, (lambda: work(run)) if pass_run else work)
         return {"run": run_payload(run)}
 
 

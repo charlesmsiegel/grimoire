@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import unicodedata
 import uuid
 from datetime import datetime
@@ -231,6 +232,16 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             # back, and drawn by no control until its play gate is ratified.
             "epistemic_decide": cfg.get("epistemic_decide",
                                         store.config.DEFAULT_EPISTEMIC_DECIDE),
+            # Roadmap 12's investigation switches and spend ceiling (§3, §7.1):
+            # flipping one spends nothing; each entry point is a reader's
+            # action on a play surface.
+            "investigation_continuity": cfg.get(
+                "investigation_continuity", store.config.DEFAULT_INVESTIGATION_CONTINUITY),
+            "investigation_question": cfg.get(
+                "investigation_question", store.config.DEFAULT_INVESTIGATION_QUESTION),
+            "investigation_spend_ceiling": cfg.get(
+                "investigation_spend_ceiling",
+                store.config.DEFAULT_INVESTIGATION_SPEND_CEILING),
             "send_images": cfg.get("send_images", store.config.DEFAULT_SEND_IMAGES),
             "send_images_limit": cfg.get("send_images_limit",
                                          store.config.DEFAULT_SEND_IMAGES_LIMIT),
@@ -353,9 +364,24 @@ def _recursion_depth_ok(value: str | None) -> bool:
     return 0 <= depth <= store.config.LORE_RECURSION_MAX
 
 
+def _ceiling_ok(value: str | None) -> bool:
+    """An investigation spend ceiling (roadmap 12 §7.1): blank, which is no
+    spend axis, or a finite dollar amount above zero -- refused otherwise
+    rather than read as none, since a ceiling typed and silently ignored is
+    exactly the limit a reader thought they had."""
+    if value is None or not value.strip():
+        return True
+    try:
+        amount = float(value)
+    except ValueError:
+        return False
+    return math.isfinite(amount) and amount > 0
+
+
 #: Config keys whose only meaningful values are "on" and "off".
 _ON_OFF_KEYS = ("tracker", "perception_rider", "send_images",
-                "decide_speaker_sampling", "decide_play_tool", "epistemic_decide")
+                "decide_speaker_sampling", "decide_play_tool", "epistemic_decide",
+                "investigation_continuity", "investigation_question")
 
 
 #: The legacy keys that pick the Embedding role on a store not yet at format 2.
@@ -410,6 +436,10 @@ def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(g
     # A bound, refused rather than clamped: the cap in `config.lore_recursion_depth`
     # is for a hand edit, and a value typed into the page that silently became
     # another one would be a setting nobody chose. Blank clears to the default.
+    if not _ceiling_ok(fields.get("investigation_spend_ceiling")):
+        raise HTTPException(status_code=400, detail=(
+            "investigation_spend_ceiling must be blank (no ceiling) or a dollar "
+            "amount above zero"))
     if not _recursion_depth_ok(fields.get("lore_recursion_depth")):
         raise HTTPException(status_code=400,
                             detail=f"lore_recursion_depth must be 0-{store.config.LORE_RECURSION_MAX}")

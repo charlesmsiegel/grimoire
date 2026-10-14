@@ -102,6 +102,11 @@ DEFAULT_DECIDE_PLAY_TOOL = "off"
 #: Spec 11's Decision stage (11-S6): off, and hidden from Settings until its
 #: play gate is ratified (§5.4); a hand edit or an eval switches it on.
 DEFAULT_EPISTEMIC_DECIDE = "off"
+#: Roadmap 12's investigation entry points, each off until its eval gate is
+#: recorded (spec 10.4); the spend ceiling, in USD, is unset -- no spend axis.
+DEFAULT_INVESTIGATION_CONTINUITY = "off"
+DEFAULT_INVESTIGATION_QUESTION = "off"
+DEFAULT_INVESTIGATION_SPEND_CEILING = ""
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
 DEFAULT_CLAUDE_MODEL = "opus"
@@ -263,6 +268,8 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "tracker", "perception_rider",
                 "decide_speaker_sampling", "decide_turn_plan", "decide_play_tool",
                 "epistemic_decide",
+                "investigation_continuity", "investigation_question",
+                "investigation_spend_ceiling",
                 "send_images", "send_images_limit",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
@@ -354,6 +361,9 @@ def read_config() -> dict[str, str]:
                 "decide_turn_plan": DEFAULT_DECIDE_TURN_PLAN,
                 "decide_play_tool": DEFAULT_DECIDE_PLAY_TOOL,
                 "epistemic_decide": DEFAULT_EPISTEMIC_DECIDE,
+                "investigation_continuity": DEFAULT_INVESTIGATION_CONTINUITY,
+                "investigation_question": DEFAULT_INVESTIGATION_QUESTION,
+                "investigation_spend_ceiling": DEFAULT_INVESTIGATION_SPEND_CEILING,
                 "send_images": DEFAULT_SEND_IMAGES,
                 "send_images_limit": DEFAULT_SEND_IMAGES_LIMIT,
                 "backup_enabled": DEFAULT_BACKUP_ENABLED,

@@ -184,7 +184,38 @@ def _proposal(value) -> dict | None:
     if not isinstance(scenes, list) or not all(isinstance(s, str) for s in scenes):
         return None
     out["evidence_scenes"] = list(scenes)
+    trace = investigation_trace(value.get("investigation"))
+    if trace is not None:
+        out["investigation"] = trace
     return out
+
+
+#: The version of an investigation trace a proposal may carry (roadmap 12
+#: §8.1; `store/investigation/trace.py` writes it).
+TRACE_VERSION = 1
+_TRACE_TEXT = ("run", "mode", "task", "model", "started", "outcome", "limit")
+
+
+def investigation_trace(value) -> dict | None:
+    """A proposal's `investigation` field (roadmap 12 §6.2): the trace of the
+    run that proposed it, kept when it has the trace's shape -- a JSON-safe
+    dict of `TRACE_VERSION` whose text fields are strings, whose steps are
+    dicts and whose inspected scenes are strings -- and None (the field
+    dropped, the proposal kept) otherwise. Not one of `_PROPOSAL_TEXT`,
+    because it is not text."""
+    if not isinstance(value, dict) or value.get("version") != TRACE_VERSION:
+        return None
+    if not all(isinstance(value.get(k), str) for k in _TRACE_TEXT):
+        return None
+    steps, inspected = value.get("steps"), value.get("inspected")
+    if not isinstance(steps, list) or not all(isinstance(x, dict) for x in steps):
+        return None
+    if not isinstance(inspected, list) or not all(isinstance(x, str) for x in inspected):
+        return None
+    final = value.get("final")
+    if not (final is None or isinstance(final, dict)) or not isinstance(value.get("usage"), dict):
+        return None
+    return value if _json_safe(value) else None
 
 
 def _record(value) -> dict | None:

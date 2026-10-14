@@ -2197,11 +2197,17 @@ class _Loop:
     # ---- one model turn ----
     async def _turn(self, *, final: bool, extra: dict | None = None
                     ) -> _Turn | tool_calls.LoopResult | None:
-        """One model turn, or None when the spend ceiling refused it unsent
-        (`limit` says `spend`)."""
+        """One model turn, or None when the spend ceiling or the context stop
+        refused it unsent (`limit` says `spend` or `context`)."""
         chain, notes = self._chain(final)
         choice = self._final_choice(chain, notes) if final else self._choice(chain, notes)
         sending = self._outgoing(extra)
+        cap = self.budget.max_prompt_tokens
+        if cap is not None and await asyncio.to_thread(
+                _prompt_count, list(sending), self.defs) > cap:
+            # The caller's context stop (roadmap 12 §7.3): refused unsent.
+            self.limit = self.limit or "context"
+            return None
         projection = await self._projected(chain, sending, extra)
         if projection is not None and self._spent() + projection > (
                 self.budget.spend_ceiling_usd or 0.0):

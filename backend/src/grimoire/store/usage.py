@@ -118,6 +118,7 @@ import calendar
 import json
 import re
 import time
+from collections.abc import Iterable
 from datetime import date, timedelta
 from functools import partial
 from pathlib import Path
@@ -1088,6 +1089,18 @@ def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
         bucket["estimated_usd"] += cost
     else:
         bucket["cost_usd"] += cost
+
+
+def fold_rows(rows: Iterable[dict], rates: Rates | None = None) -> dict:
+    """`rows` -- a caller's own rows, such as one tool run's -- folded by
+    `_add` into one rounded bucket: the three money columns kept apart, each
+    with the count of calls priced that way. `rates` models what no provider
+    priced; None models nothing."""
+    bucket = dict(_ZERO)
+    for row in rows:
+        if isinstance(row, dict):
+            _add(bucket, row, rates)
+    return _rounded(bucket)
 
 
 def _add_unpriced(bucket: dict, row: dict, subscription: bool) -> None:
