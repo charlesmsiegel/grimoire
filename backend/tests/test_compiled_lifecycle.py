@@ -498,6 +498,43 @@ def test_idle_reschedule_thread_failure_releases_the_session(cache, tmp_path, mo
     assert cache._state.session is None
 
 
+def test_a_stray_idle_timer_never_takes_the_current_states_lock(cache, key, tmp_path, monkeypatch):
+    """An idle timer outlives the state that scheduled it: each cache test
+    installs a fresh `_State`, while a session another test opened keeps its
+    30 s daemon timer. Firing into a state that does not hold its session, it
+    must not take that state's exclusion even briefly: a batch's first fence
+    read acquires it without blocking, so a put would be refused and dropped."""
+    stray = _put(cache, tmp_path, key)
+    current = compiled._State()
+    taken = []
+
+    class Spy:
+        def __init__(self):
+            self.inner = threading.Lock()
+
+        def acquire(self, *args, **kwargs):
+            taken.append(threading.current_thread().name)
+            return self.inner.acquire(*args, **kwargs)
+
+        def release(self):
+            self.inner.release()
+
+        def __enter__(self):
+            return self.acquire()
+
+        def __exit__(self, *exc):
+            self.release()
+
+    current.lock = Spy()
+    monkeypatch.setattr(compiled, "_state", current)
+    try:
+        compiled._idle(stray)
+        assert taken == []
+    finally:
+        stray.timer.cancel()
+        stray.conn.close()
+
+
 def test_build_is_pinned_at_startup_not_at_first_use(monkeypatch, tmp_path):
     monkeypatch.setattr(compiled, "_state", compiled._State())
     monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)

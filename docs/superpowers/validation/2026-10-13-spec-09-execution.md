@@ -477,3 +477,17 @@ before the fix:
 - Lexical terms came from the whole scan window while the semantic text was
   clipped. Terms now come from the same `QUERY_BYTES` window, starting at its
   first whole word, which bounds a long post's term list and scoring pass.
+
+**CI on `a26be68`.** `backend (py3.14)` failed one spec-03 test,
+`test_compiled_purge.py::test_owned_schema_literals_are_erased_before_completion[fresh-metadata-current-enabled]`.
+The test's last cache write was dropped. The cause was a compiled-cache session's
+30 s idle timer, which outlives the state that scheduled it. Each cache test
+installs a fresh `_State`, while sessions that other tests open (09's lexical
+statistics among them) keep their timers. On firing, `_idle` took the lock of
+whatever state was current. A batch's first fence read acquires that lock
+without blocking, so a stray timer firing at the wrong instant refused the put.
+This PR's tests open many more sessions, which raised the odds. `_idle` now
+leaves a state alone when that state does not hold the timer's session.
+Sessions are only ever built new, so the unlocked check turns away only what
+the locked one would. `test_a_stray_idle_timer_never_takes_the_current_states_lock`
+fails without the change.

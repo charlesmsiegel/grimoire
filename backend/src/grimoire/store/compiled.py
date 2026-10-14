@@ -2853,6 +2853,13 @@ def _schedule_idle(session: _Session, delay: float = IDLE_SECONDS) -> None:
 def _idle(session: _Session) -> None:
     if os.getpid() != session.pid:
         return
+    # A session the current state does not hold is not this timer's to touch,
+    # and neither is that state's exclusion: taking it even briefly refuses
+    # the non-blocking fence read a batch starts with, and drops its put.
+    # Sessions are only ever built new, so one that is not current never will
+    # be again; the unlocked read turns away only what the locked check would.
+    if _state.session is not session:
+        return
     with _state.lock:
         if _state.session is not session:
             return
