@@ -375,17 +375,18 @@ def test_a_repair_round_never_starts_past_the_deadline(cid, monkeypatch):
 
 def test_an_actor_perspective_is_refused_not_relabelled(cid):
     """Until 11-C1 classifies what an actor may know, planning an actor's
-    query fails closed rather than planning it as the narrator."""
+    query fails closed rather than planning it as the narrator: no request,
+    the first evidence kept, traced `skipped:error`."""
     sid, *_ = setup_thin(cid)
     turn = history_recall.Turn(model.Query(("Where?",), perspective="actor:characters:mara"),
                                query.catalog(cid, sid), 4, {})
     first = model.Evidence(coverage=model.Coverage("thin"))
     fake = FakeLLM([[plan_reply()]])
-    with pytest.raises(ValueError):
-        asyncio.run(history_recall.plan_and_repair(
-            None, cid, sid, turn, first, client=fake, ceiling=1200,
-            deadline=time.monotonic() + 5))
-    assert fake.calls == 0
+    got, trace = asyncio.run(history_recall.plan_and_repair(
+        None, cid, sid, turn, first, client=fake, ceiling=1200,
+        deadline=time.monotonic() + 5))
+    assert fake.calls == 0 and got is first
+    assert trace.terminal == "skipped:error" and trace.plans == () and trace.rounds == ()
 
 
 def test_an_actor_step_never_plans(cid):
@@ -484,3 +485,25 @@ def test_recall_switched_off_mid_phase_keeps_the_first_evidence(cid, monkeypatch
     monkeypatch.setattr(history_recall, "_plan_step", then_off)
     ev = gather(cid, sid, FakeLLM([[plan_reply()]]))
     assert ev.items and [i.scene.key for i in ev.items] == list(ev.plan.e0.scene_keys)
+
+
+def test_a_planned_round_that_raises_keeps_the_steps_that_ran(cid, monkeypatch):
+    """The planner's row is filed before the planned retrieval fails: the
+    trace keeps that step and its plan, and the turn keeps `E0`."""
+    sid, *_ = setup_thin(cid)
+    real = store.history.retrieve
+    seen = []
+
+    async def second_raises(*a, **k):
+        seen.append(1)
+        if len(seen) > 1:
+            raise OSError("unreadable archive")
+        return await real(*a, **k)
+    monkeypatch.setattr(store.history, "retrieve", second_raises)
+    ev = gather(cid, sid, FakeLLM([[plan_reply()]]))
+    trace = ev.plan
+    assert trace.terminal == "skipped:error" and len(seen) == 2
+    assert [s.task for s in trace.steps] == ["history-query-plan"]
+    assert trace.steps[0].rows == len(rows()) == 1
+    assert len(trace.plans) == 1 and trace.rounds == ()
+    assert [i.scene.key for i in ev.items] == list(trace.e0.scene_keys)

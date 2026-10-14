@@ -372,6 +372,8 @@ class _Phase:
         self.semantic: list[str] = [first.coverage.semantic]
         self.cap = MAX_PLAN_STEPS + (1 if final_check else 0)
         self.before = {i.scene.key for i in first.items}
+        # The evidence the last finished round left: what a failure keeps.
+        self.evidence = first
 
     def capped(self):
         return len(self.steps) >= self.cap
@@ -403,7 +405,9 @@ async def plan_and_repair(app, cid, sid, turn, first, *, client, ceiling, deadli
     """10-C2: plan when 09's first retrieval is thin or empty (or `force`),
     retrieve once more with the plan, and merge; on an `insufficient` check,
     take ONE repair plan -- never another after it. Never raises into the
-    turn; the worst case returns `first` unchanged. `(evidence, PlanTrace)`.
+    turn; the worst case returns what the last finished round left (`first`
+    when none did), traced `skipped:error` with the steps that ran.
+    `(evidence, PlanTrace)`.
 
     `turn` is a `Turn`. Every step takes `min(own ceiling, remaining)` of
     the turn-phase `deadline`; at most `MAX_PLAN_STEPS` (one more with
@@ -414,6 +418,21 @@ async def plan_and_repair(app, cid, sid, turn, first, *, client, ceiling, deadli
         # The free gate: nothing more exists, retrieval failed, or it found enough.
         return first, _trace("not_run:" + verdict, first)
     phase = _Phase(first, "forced" if force else verdict, final_check)
+    try:
+        return await _plan_phase(phase, cid, sid, turn, first, client=client, ceiling=ceiling,
+                                 deadline=deadline, final_check=final_check,
+                                 embed_client=embed_client, run_id=run_id)
+    except Exception:  # noqa: BLE001 -- planning is optional: at worst, what was found so far
+        # Ids only: a plan's text is model-written and stays out of the log.
+        _log.warning("History planning failed for campaign %s scene %s", cid, sid)
+        # The steps that ran filed their rows; the trace keeps them, and the
+        # evidence the last finished round left.
+        return phase.done("skipped:error", phase.evidence)
+
+
+async def _plan_phase(phase, cid, sid, turn, first, *, client, ceiling, deadline, final_check,
+                      embed_client, run_id):
+    """`plan_and_repair`'s steps past the free gate, bookkept on `phase`."""
     resolved, skipped = await _planner(cid, phase, deadline)
     if resolved is None:
         return phase.done(skipped, first)
@@ -437,6 +456,7 @@ async def plan_and_repair(app, cid, sid, turn, first, *, client, ceiling, deadli
                                             run_id=run_id)
     phase.rounds.append(record)
     phase.semantic.append(status)
+    phase.evidence = evidence
     if not turn.repair or phase.capped():
         return phase.done("planned", evidence)
     return await _repair(phase, cid, sid, turn, evidence, got, offered, client=client,
@@ -475,6 +495,7 @@ async def _repair(phase, cid, sid, turn, evidence, got, offered, *, client, reso
                                             run_id=run_id)
     phase.rounds.append(record)
     phase.semantic.append(status)
+    phase.evidence = evidence
     # Never another plan. One more check only when the caller will act on its
     # answer (12's RP mode): it is what `cheap_retrieval_failed` reads.
     if not final_check or phase.capped():

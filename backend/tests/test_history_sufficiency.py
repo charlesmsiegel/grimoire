@@ -303,3 +303,27 @@ def test_a_failed_check_still_reports_the_rows_it_filed(cid):
     assert (said, source) == ("unknown", "unknown")
     filed = rows("history-sufficiency")
     assert filed and step.rows == len(filed)
+
+
+def test_a_repair_round_that_raises_keeps_the_first_round(cid, monkeypatch):
+    """A failure after a planned round landed keeps that round's evidence and
+    record, and every step that ran, rather than falling back to `E0`."""
+    sid, _found, lanterns = setup(cid)
+    real = store.history.retrieve
+    seen = []
+
+    async def third_raises(*a, **k):
+        seen.append(1)
+        if len(seen) > 2:
+            raise OSError("unreadable archive")
+        return await real(*a, **k)
+    monkeypatch.setattr(store.history, "retrieve", third_raises)
+    fake = FakeLLM([[plan_reply()], [check(False)], [repair_reply()]])
+    ev = gather(cid, sid, fake)
+    trace = ev.plan
+    assert trace.terminal == "skipped:error" and len(seen) == 3
+    assert [s.task for s in trace.steps] == [
+        "history-query-plan", "history-sufficiency", "history-query-plan"]
+    assert len(trace.plans) == 2 and len(trace.rounds) == 1
+    assert lanterns in [i.scene.sid for i in ev.items]
+    assert tuple(i.scene.key for i in ev.items) == trace.rounds[0].scene_keys
