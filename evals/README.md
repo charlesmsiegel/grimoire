@@ -692,6 +692,53 @@ Decision stage answers about the corpus's gated parts:
 - Offline, `pytest backend` holds that each gated part is one production
   would ask about, and grades canned answers.
 
+## Investigation (roadmap 12)
+
+`evals/run.py --investigate continuity|question|all` is the adoption gate for
+roadmap 12's investigation entry points (spec 10). Each case plants a small
+campaign in a throwaway home (`evals/investigation/synth.py`, placeholder names
+only) whose deciding evidence is adaptive -- a promise kept by someone called
+only by a nickname, two records whose sameness is said only in a transcript, a
+debt settled without its title beside a hidden post naming it -- and runs it
+through two arms:
+
+| Entry point | Incumbent (B) | Challenger (C) |
+|---|---|---|
+| `continuity` (E2) | the reconcile sweep's own answer for the finding | `investigate`, then the proposal it would persist |
+| `question` (E3) | one `search_history` over the question, answered from what it showed | `investigate`, then the answer it would hold |
+| `rp` (E1) | absent until 12-S6 (spec 10's `PlanTrace`) | absent |
+
+**Offline** (the default, and what `pytest backend` runs) the challenger's
+model is a canned script and the incumbents make no call: it proves the loop,
+the final-call checks and the graders, never a model's quality. **`--live`**
+runs the models the app routes each task to (`--provider`/`--model` override
+them), metered in the throwaway home as every live run is, with the money in
+its three columns.
+
+The lines, per entry point: correctness (a proposal against its gold
+decision, `uncertain` scored as an abstention; an answer against its needles,
+its citations against the gold scenes), **text leakage** (a hidden word in
+what the run wrote), **selection leakage** (a cited scene that only a
+hidden-word query returned, read off the trace) and the **hidden route** (a
+search over a hidden-only word answers exactly as one over a word that appears
+nowhere).
+
+### The adoption rule (spec 10.4)
+
+Every entry point ships with its switch **off**. A switch's default may become
+`on` only in a PR that records here, under a dated heading naming the entry
+point:
+
+- the `--investigate <mode> --live --out FILE` table, with the models it ran on;
+- that C beats B on that entry point's correctness by at least the margin stated
+  in advance, `evals/investigation/cases.MARGIN` (0.20);
+- that neither leakage line is worse in C than in B, and the hidden route is
+  clean;
+- the cost (the three money columns, never added), latency and
+  `budget_exhausted` limits C paid.
+
+An offline PASS is not that record: it is the machinery passing.
+
 ## How a case works
 
 ```

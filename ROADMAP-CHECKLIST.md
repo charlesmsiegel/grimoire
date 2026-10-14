@@ -76,7 +76,7 @@ last**, an ordering preference rather than a fabricated technical edge.
 | 09 | Hybrid historical retrieval | 08 (the turn path also waits for 01h-C4) | [x] | [x] CLI Codex (2026-10-13) | 6 | [x] |
 | 10 | Retrieval query planning | merged with its PR (see 10 below) | [x] | [~] substitute | 3 | [x] |
 | 11 | Epistemic history retrieval | S1 and S4 landed; S2 and S3 implemented (PR #511); S5/S6 follow | [x] | [~] substitute | 6 | [ ] |
-| 12 | Bounded agentic investigation | 01g, 08, 09 (01i has landed; RP mode also waits for 10, 11) | [x] | [~] substitute | 7 | [ ] |
+| 12 | Bounded agentic investigation | S1-S5 and S7 implemented (plan and code; Codex gates owed); S6 (RP mode) waits for 10-S2 | [x] | [~] substitute | 7 | [ ] |
 | 13 | Mechanics II (supersedes parts of `2026-10-04-mechanics-ii-design.md`) | **SCHEDULED LAST:** only after all other roadmap specs land (technical S1 is ready) | [x] | [~] substitute | 16 | [ ] |
 
 ## Parallel lanes
@@ -468,6 +468,32 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
 - [ ] **12-C3** Write posture: selection in RP, one proposal for continuity,
   nothing for questions.
 - [ ] **12-C4** Three entry points and their run classes.
+- **Implemented (12-S1-S5, S7; plans `docs/superpowers/plans/2026-10-14-roadmap-12-s*.md`):**
+  the narrator-side toolset (`store/investigation/`), the loop driver
+  (`routes/investigation.investigate`), the per-entry-point budgets, the trace,
+  E2 (`post_candidate_investigate`, one proposal through
+  `reconcile.persist_investigation`), the decide tool on `investigation_decide`,
+  E3 (`post_history_question`, a draft), both switches and the spend ceiling in
+  Settings, and `evals/run.py --investigate`. Every switch ships **off**. No
+  contract is ticked: each one's RP half (rp_actor filtering, E1's selection,
+  trigger and stage, E1's capture section and eval arm) is 12-S6's. Plan gates,
+  reviews and final gates were not run in-session (no Codex CLI);
+  `@codex review` on the PR stands in, per CLAUDE.md.
+- **12-S6 is blocked on 10-S2:** E1's trigger reads spec 10's `PlanTrace`,
+  and no planner has landed (`history_plan`, `plan_and_repair` are absent on
+  main). Its 08-C3b admission predicate (spec 15.2) is also still absent from
+  `searchdocs.expand`, so rp_actor would offer no `get_scene_excerpt` yet.
+- **Spec amendments, recorded rather than silent:**
+  - 01g has no per-turn hook, so the context stop (7.3) is
+    `tool_calls.RunBudget.max_prompt_tokens`, a stop in the loop itself
+    (`LIMITS` gains `context`).
+  - No entry point reserves a finalize turn (`reserve_final=False`): a run ends
+    on a terminal tool, and finalize prose is dropped unread.
+  - 09's `retrieve` gains `sid=""` (the whole campaign, no current scene) and
+    `depth=` (independent of the recall setting), and `history.query.for_text`
+    builds a query's terms from free text; every turn call is unchanged.
+  - Spec 15.3 is met by 01g's existing `inference.tool_run_refusal`; spec
+    15.4: with `tier_limit=2` pinned in every mode, 09's tier 3 has no caller.
 
 ### 13: Mechanics II
 - [ ] **13-C1a** Actions and the legal set. **13-C1b** The Effect DSL and
@@ -736,13 +762,13 @@ alone. This table is generated: after a spec's slices change, run
 
 | Slice | Title | Size | Wave | Needs | Plan | Plan gate | Code | Review | Final gate | Landed |
 |---|---|:-:|:-:|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| 12-S1 | The narrator-side toolset | L | 9 | 01g-S2, 08-S4, 09-S4 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 12-S2 | The loop driver, budgets and trace recorder | M | 10 | 01g-S4, 01g-S5, 01i-S1, 12-S1 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 12-S3 | E2, continuity investigation (the pilot) | L | 11 | 01g-S1, 12-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 12-S4 | Decision as a tool for maintenance modes | S | 12 | 01g-S7, 12-S3 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 12-S5 | E3, history question | M | 11 | 01g-S1, 12-S2, 12-S4 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 12-S1 | The narrator-side toolset | L | 9 | 01g-S2, 08-S4, 09-S4 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 12-S2 | The loop driver, budgets and trace recorder | M | 10 | 01g-S4, 01g-S5, 01i-S1, 12-S1 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 12-S3 | E2, continuity investigation (the pilot) | L | 11 | 01g-S1, 12-S2 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 12-S4 | Decision as a tool for maintenance modes | S | 12 | 01g-S7, 12-S3 | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
+| 12-S5 | E3, history question | M | 11 | 01g-S1, 12-S2, 12-S4 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 | 12-S6 | E1, RP escalation | L | 11 | 02-S1, 08-S4 (S), 10-S2, 11-S2, 11-S3, 12-S2 | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
-| 12-S7 | The adoption gate | M | 12 | 01a-S2, 01a-S3, 11-S5 (S), 12-S3, 12-S5 (S), 12-S6 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| 12-S7 | The adoption gate | M | 12 | 01a-S2, 01a-S3, 11-S5 (S), 12-S3, 12-S5 (S), 12-S6 (S) | [x] | [ ] | [x] | [ ] | [ ] | [ ] |
 
 ### 13
 

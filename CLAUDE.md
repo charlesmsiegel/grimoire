@@ -326,7 +326,7 @@ post the player can see.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Thirty-three handlers** start detached runs, in five classes:
+subscriber. **Thirty-five handlers** start detached runs, in five classes:
 
 - `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn`,
   `post_roll_proposal`, and the per-response pair in `character_turns.py`,
@@ -338,25 +338,28 @@ subscriber. **Thirty-three handlers** start detached runs, in five classes:
   streams: each answers **202** with a run to poll and persists its result to
   `store/pending_reviews.py`, because a review's value is a payload nobody has
   written down and losing it costs the longest generation in the app.
-- `draft` — `post_opener`, plus the fifteen computing previews: scene
+- `draft` — `post_opener`, plus the sixteen computing previews: scene
   suggestions and intent, the five image-description drafts (a campaign
   library, a world library, a character version, an entity and a PC), both voice
   anchors, taglines, both scenario parses, character-from-passage, the
   model-catalog refresh, and the model test (`post_connection_test`, which
   refuses without `confirm: true` before anything is sent, and sends each probe
-  once through `LLMClient.single`). The
-  fifteen answer **202** and hand back a result held on the run and reaped;
+  once through `LLMClient.single`), and the history question
+  (`post_history_question`, roadmap 12's E3, a tool loop whose answer is held
+  on the run -- `run_draft(pass_run=True)`, since the loop runs under the run's
+  id). The sixteen answer **202** and hand back a result held on the run and reaped;
   `post_opener` streams and buffers its frames like a turn. **A draft declares
   no exclusion key** — it neither holds a scene nor is refused by one, which is
   what stops a tagline preview from being able to refuse a chat, and its result
   is deliberately *not* durable: a sentence nobody has agreed to yet is
   regenerable, and storing it would be a second store to keep consistent.
 
-  All fifteen go through **one contract** rather than fifteen variants —
+  All sixteen go through **one contract** rather than sixteen variants —
   `runs.run_draft` on the route side (the two scenario parses reserve through
   `runs.reserve_draft`, which it wraps), `common.draft_completion` for the call
   (the catalog refresh and the model test excepted, which list or probe rather
-  than complete, and are the two whose run writes beside the connection), and
+  than complete, and are the two whose run writes beside the connection, and
+  the history question, which runs a tool loop), and
   `api.draftRun` in the client (`api.runModelTest` included, which the test
   call dialog reaches only after its preview). `post_opener` is the exception on the
   client side only, where `api.streamDraft` re-attaches by attempt id instead
@@ -376,6 +379,12 @@ subscriber. **Thirty-three handlers** start detached runs, in five classes:
   **202**: one at a time and never merged -- a request while one is live is
   refused 409 `sync_in_flight` naming it, except a repeat of its own attempt
   id -- in a worker thread it never abandons, stopped by `cancel_requested`.
+  `post_candidate_investigate` (`routes/investigation.py`, roadmap 12's E2)
+  runs one continuity investigation, kind `continuity-investigate`, on
+  `("campaign", cid)`, answering **202** under `@computes_only`: one live per
+  campaign, adopted by a start for the same finding and refused 409 `busy`
+  (naming it) to a start for another, its one write
+  `reconcile.persist_investigation` stamping the revision itself.
   The class's other runs are outside the count: a landed
   turn's rolling summary and scene-break check (below), and the
   `tracker-update` that a turn, `post_start_from_greeting` or `post_first_post`
@@ -1113,9 +1122,9 @@ would answer neither question.
   `unknown`, `no` only when known) on the Decision card and on every decide
   route row -- "No native decision API" is said only of a known `no` -- read off the same resolution the chain
   runs, so the Models page's decide note is the server's sentence and the
-  frontend keeps no capability rule of its own. The seven decide routes (`speaker`,
-  `scene_break`, `voice_drift`, `continuity`, `turn_plan`, `history_check` and
-  `epistemic`) use the
+  frontend keeps no capability rule of its own. The eight decide routes (`speaker`,
+  `scene_break`, `voice_drift`, `continuity`, `turn_plan`, `history_check`,
+  `epistemic` and `investigation_decide`) use the
   Decision role, which
   inherits Fast, so on them a campaign's own Fast override no longer outranks
   a global pin (spec 5.1) -- the duplicate check and the sweep included, which
@@ -1211,6 +1220,18 @@ would answer neither question.
   with escalation off. The kit's `policy()` is the candidate row, to be
   switched on only with its "Decision escalation" evidence. Its eval case is
   registered, and `evals/cases.KIT_CASES` is empty.
+- **An investigation is a bounded tool loop a reader starts** (roadmap 12,
+  `routes/investigation.py` over `store/investigation/`). Each entry point is
+  its own task on the `investigation` route (`requires=("tools",)`, born at
+  format 2), its own default-off switch and its own budget
+  (`store/investigation/budget.py`, the one home of its numbers); its decide
+  tool is `investigation-decide` on `investigation_decide`. Every loop turn
+  files a ledger row under its task with `run_id` and `loop_turn`, so its cost
+  lands in the three columns like any call, and a trace's money is those rows
+  folded the same way, never added. The tools only read --
+  `test_investigation_writer_guard.py` -- and what the model names is checked,
+  never taken: a proposal cites only scenes the run READ, an answer only
+  citations read, and the one write is `reconcile.persist_investigation`.
 - **Adding an embedding call site?** The doors are in one module,
   `store/inference/embed.py`: `embed_sync(<task>, texts,
   space=embed_space.endpoint(), client=…, campaign=…)` from a worker thread
