@@ -242,6 +242,10 @@ class PlanTrace:
     plans: tuple[Mapping, ...] = ()
     #: Selected scene keys the final evidence carries that `E0` did not.
     gain: tuple[str, ...] = ()
+    #: Each retrieval's semantic status, `E0`'s first and then each planned
+    #: round's: a merge reads `mixed`, so this is what says how many query
+    #: embeddings the phase sent (`history_recall.embeds`).
+    semantic: tuple[str, ...] = ()
 
     def projection(self) -> dict:
         return {
@@ -252,7 +256,39 @@ class PlanTrace:
             "steps": [{"task": s.task, "outcome": s.outcome, "ms": s.ms, "rows": s.rows}
                       for s in self.steps],
             "plans": [dict(p) for p in self.plans], "gain": list(self.gain),
+            "semantic": list(self.semantic),
         }
+
+    @classmethod
+    def from_projection(cls, data: object) -> PlanTrace | None:
+        """`projection`'s trace again (a frozen history view's, 11's
+        `to_record`), or None for anything that does not read as one: a
+        trace is diagnostic, so an unreadable one is dropped, never fatal."""
+        try:
+            if not isinstance(data, dict):
+                return None
+
+            def strings(value) -> tuple[str, ...]:
+                return tuple(str(v) for v in value) if isinstance(value, list) else ()
+
+            def record(value) -> RoundRecord:
+                value = value if isinstance(value, dict) else {}
+                return RoundRecord(*(strings(value.get(k)) for k in (
+                    "questions", "terms", "subjects", "scene_keys", "evidence_ids")))
+            return cls(
+                str(data["terminal"]), trigger=str(data.get("trigger", "")),
+                sufficiency=str(data.get("sufficiency", "not_asked")),
+                sufficiency_source=str(data.get("sufficiency_source", "not_asked")),
+                cheap_retrieval_failed=data.get("cheap_retrieval_failed") is True,
+                e0=record(data.get("e0")),
+                rounds=tuple(record(r) for r in data.get("rounds") or ()),
+                steps=tuple(Step(str(s["task"]), str(s["outcome"]), int(s.get("ms", 0)),
+                                 int(s.get("rows", 0)))
+                            for s in data.get("steps") or () if isinstance(s, dict)),
+                plans=tuple(dict(p) for p in data.get("plans") or () if isinstance(p, dict)),
+                gain=strings(data.get("gain")), semantic=strings(data.get("semantic")))
+        except (KeyError, TypeError, ValueError):
+            return None
 
 
 @dataclass(frozen=True)

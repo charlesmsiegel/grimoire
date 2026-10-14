@@ -398,3 +398,41 @@ def test_an_actor_step_never_plans(cid):
     fake = FakeLLM([[plan_reply()]])
     ev = gather(cid, sid, fake, actor_ref=f"characters:{aid}")
     assert fake.calls == 0 and ev.plan is None
+
+
+
+def test_the_first_rerank_status_survives_the_merge(cid):
+    """The first retrieval's paid rerank is reapplied over the merge, and its
+    status stays on the merged coverage rather than reading `off`."""
+    sid, *_ = setup_thin(cid)
+    store.config.write_config(history_recall_rerank="on")
+    grade = json.dumps({str(i): {"answers": {"relevance": 3}} for i in range(4)})
+    fake = FakeLLM([[grade], [plan_reply()]])
+    ev = gather(cid, sid, fake)
+    assert ev.plan.terminal == "planned"
+    assert ev.coverage.rerank not in ("off", "")
+
+
+def test_a_planned_step_counts_every_retrieval_and_embedding():
+    from types import SimpleNamespace
+    trace = model.PlanTrace("repaired", rounds=(model.RoundRecord(), model.RoundRecord()),
+                            semantic=("ok", "failed:network", "skipped:deadline"))
+    view = SimpleNamespace(evidence=model.Evidence(
+        coverage=model.Coverage("thin", semantic="mixed"), plan=trace))
+    assert history_recall.retrievals(view) == 3 and history_recall.embeds(view) == 2
+    plain = SimpleNamespace(evidence=model.Evidence(coverage=model.Coverage("thin", semantic="ok")))
+    assert history_recall.retrievals(plain) == 1 and history_recall.embeds(plain) == 1
+    assert history_recall.retrievals(None) == 0 and history_recall.embeds(None) == 0
+
+
+def test_the_trace_rides_a_frozen_history_view(cid):
+    """A roll resume composes with the view stored on the response: the
+    planning trace comes back with it."""
+    sid, *_ = setup_thin(cid)
+    ev = gather(cid, sid, FakeLLM([[plan_reply()]]))
+    view = epistemic.narrator_view(cid, sid, ev)
+    again = epistemic.from_record(json.loads(json.dumps(epistemic.to_record(view))))
+    assert again.evidence.plan == ev.plan
+    record = epistemic.to_record(view)
+    del record["evidence"]["plan"]
+    assert epistemic.from_record(record).evidence.plan is None

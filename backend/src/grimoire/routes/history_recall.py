@@ -337,8 +337,12 @@ async def _planned_round(cid, sid, turn, evidence, got, *, ceiling, embed_client
     expand = retrieval.expander(cid, sid, anchor, ceiling, summary_omissions=turn.omissions)
     merged = await history_threads.run(lambda: store.history.merge(
         evidence, found, ceiling=ceiling, expand=expand, rerank=_reapplied))
+    # The merge builds a fresh coverage; the first retrieval's rerank -- the
+    # one opinion `_reapplied` carries -- keeps its status on the result.
+    merged = replace(merged, coverage=replace(merged.coverage, rerank=evidence.coverage.rerank))
     return merged, model.RoundRecord.of(merged.items, questions=got.questions,
-                                        terms=got.terms, subjects=got.subjects)
+                                        terms=got.terms, subjects=got.subjects), \
+        found.coverage.semantic
 
 
 class _Phase:
@@ -350,6 +354,7 @@ class _Phase:
         self.steps: list[model.Step] = []
         self.plans: list[dict] = []
         self.rounds: list[model.RoundRecord] = []
+        self.semantic: list[str] = [first.coverage.semantic]
         self.cap = MAX_PLAN_STEPS + (1 if final_check else 0)
         self.before = {i.scene.key for i in first.items}
 
@@ -360,7 +365,8 @@ class _Phase:
         gain = tuple(i.scene.key for i in evidence.items if i.scene.key not in self.before)
         return evidence, _trace(terminal, self.first, trigger=self.trigger,
                                 rounds=tuple(self.rounds), steps=tuple(self.steps),
-                                plans=tuple(self.plans), gain=gain, **kwargs)
+                                plans=tuple(self.plans), gain=gain,
+                                semantic=tuple(self.semantic), **kwargs)
 
 
 async def _planner(cid, phase, deadline):
@@ -411,10 +417,11 @@ async def plan_and_repair(app, cid, sid, turn, first, *, client, ceiling, deadli
         # A round's file stages run to completion once started, so a round
         # begun past the deadline would overrun it by the archive's read.
         return phase.done("skipped:deadline", first)
-    evidence, record = await _planned_round(cid, sid, turn, first, got, ceiling=ceiling,
+    evidence, record, status = await _planned_round(cid, sid, turn, first, got, ceiling=ceiling,
                                             embed_client=embed_client, deadline=deadline,
                                             run_id=run_id)
     phase.rounds.append(record)
+    phase.semantic.append(status)
     if not turn.repair or phase.capped():
         return phase.done("planned", evidence)
     return await _repair(phase, cid, sid, turn, evidence, got, offered, client=client,
@@ -448,10 +455,11 @@ async def _repair(phase, cid, sid, turn, evidence, got, offered, *, client, reso
         return phase.done("repair_redundant", evidence, **asked)
     if time.monotonic() >= deadline:
         return phase.done("unrepaired", evidence, **asked)
-    evidence, record = await _planned_round(cid, sid, turn, evidence, repair, ceiling=ceiling,
+    evidence, record, status = await _planned_round(cid, sid, turn, evidence, repair, ceiling=ceiling,
                                             embed_client=embed_client, deadline=deadline,
                                             run_id=run_id)
     phase.rounds.append(record)
+    phase.semantic.append(status)
     # Never another plan. One more check only when the caller will act on its
     # answer (12's RP mode): it is what `cheap_retrieval_failed` reads.
     if not final_check or phase.capped():
@@ -464,11 +472,13 @@ async def _repair(phase, cid, sid, turn, evidence, got, offered, *, client, reso
                       cheap_retrieval_failed=said == sufficiency.INSUFFICIENT)
 
 
-def _check_around(deadline):
+def _check_around(deadline, started=None):
     """`decide`'s `around` for the sufficiency check: each facade call bounded
     by `min(CHECK_CEILING, remaining)` of the turn-phase deadline, and a call
     that would start after it refused unsent (`DeadlineRefused`, which is the
-    app's clock, never the provider failing)."""
+    app's clock, never the provider failing). `started`, when given, counts
+    the calls it let start: each runs under its own meter and files a row,
+    which is how a decide that raises still reports what it filed."""
     async def bound(call, _holder):
         left = deadline - time.monotonic()
         if left <= 0:
@@ -477,6 +487,8 @@ def _check_around(deadline):
                 close()   # a coroutine never awaited would warn at collection
             raise common.DeadlineRefused(
                 "timeout", "the history phase's deadline passed before this call")
+        if started is not None:
+            started.append(1)
         return await common._bounded_call(call, ceiling=min(CHECK_CEILING, left))
     return bound
 
@@ -501,16 +513,18 @@ async def _sufficiency(cid, sid, window, evidence, *, client, deadline, post=Non
         if time.monotonic() >= deadline:
             return unknown("skipped:deadline")
         item = await history_threads.run(sufficiency.item, window, evidence)
+        sent: list[int] = []
         async with decision_capture.capturing(cid, sid, "history-sufficiency") as scope:
             decision = await operations.decide(
                 "history-sufficiency", [item], client=client, resolved=resolved,
                 campaign=cid, scene=sid, post=post, run_id=run_id, capture=scope.hook(),
-                around=_check_around(deadline))
+                around=_check_around(deadline, sent))
             said, source = sufficiency.verdict_of(decision)
             scope.note("", "post", post)
             scope.note("", "sufficiency", said)
     except LLMError as exc:
-        return unknown(exc.kind)
+        # The chain's meters filed a row per call it started before raising.
+        return unknown(exc.kind, len(sent))
     rows = len(decision.usage)
     if said == sufficiency.UNKNOWN:
         failures = [call.error_kind for call in decision.calls if call.error_kind]
@@ -626,6 +640,29 @@ async def gather_view(app, cid, sid, *, seed, resolved, llm_client, embed_client
     return await history_threads.run(_view, cid, sid, evidence, actor_ref, identity)
 
 
+def _sent(status: str) -> bool:
+    return status == "ok" or status.startswith("failed:")
+
+
+def retrievals(view) -> int:
+    """How many retrievals produced `view`'s evidence: one, and one more per
+    planned round (10), which `costed` charges to the round."""
+    plan = view.evidence.plan if view is not None else None
+    return 0 if view is None else 1 + (len(plan.rounds) if plan is not None else 0)
+
+
+def embeds(view) -> int:
+    """How many query embeddings the retrievals behind `view` sent: each
+    planned round's own, read off the trace -- a merged coverage reads
+    `mixed` -- and `embedded` for a phase that did not plan."""
+    if view is None:
+        return 0
+    plan = view.evidence.plan
+    if plan is not None and plan.semantic:
+        return sum(_sent(status) for status in plan.semantic)
+    return int(embedded(view))
+
+
 def embedded(view) -> bool:
     """Whether the retrieval behind `view` sent a query embedding: its
     semantic stage ran ("ok") or failed after trying, never one that was off
@@ -677,4 +714,4 @@ def gather_view_sync(app, cid, sid, *, seed, resolved, llm_client, embed_client,
                    seed=seed, resolved=resolved, llm_client=llm_client,
                    embed_client=embed_client, deadline=deadline, post=post, run_id=run_id,
                    actor_ref=actor_ref, identity=identity)
-    return costed(view, 1, int(embedded(view)))
+    return costed(view, retrievals(view), embeds(view))

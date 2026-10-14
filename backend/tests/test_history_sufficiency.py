@@ -264,7 +264,10 @@ def test_the_stable_fields_and_their_projection():
         "rounds": [{"questions": ["q"], "terms": ["t"], "subjects": ["characters:mara"],
                     "scene_keys": ["a", "b"], "evidence_ids": ["a@1", "b@2"]}],
         "steps": [{"task": "history-query-plan", "outcome": "ok", "ms": 5, "rows": 1}],
-        "plans": [], "gain": []}
+        "plans": [], "gain": [], "semantic": []}
+    assert model.PlanTrace.from_projection(trace.projection()) == trace
+    assert model.PlanTrace.from_projection({"no": "terminal"}) is None
+    assert model.PlanTrace.from_projection("garbled") is None
     stable = ("terminal", "trigger", "sufficiency", "sufficiency_source",
               "cheap_retrieval_failed", "e0", "rounds")
     assert all(name in model.PlanTrace.__dataclass_fields__ for name in stable)
@@ -288,3 +291,15 @@ def test_the_registered_case_replays(monkeypatch, tmp_path, recording):
     result = runner.replay(CASE, recording)
     assert not result.error, result.error
     assert result.passed, "\n".join(f"{c.name}: {c.detail}" for c in result.failures)
+
+
+
+def test_a_failed_check_still_reports_the_rows_it_filed(cid):
+    from grimoire.llm_errors import LLMError
+    sid, *_ = setup(cid)
+    fake = FakeLLM([[check(False)]], error=LLMError("network", "connection reset"))
+    said, source, step = asyncio.run(history_recall._sufficiency(
+        cid, sid, "window", model.Evidence(), client=fake, deadline=time.monotonic() + 5))
+    assert (said, source) == ("unknown", "unknown")
+    filed = rows("history-sufficiency")
+    assert filed and step.rows == len(filed)

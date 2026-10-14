@@ -908,7 +908,10 @@ def to_record(view: EpistemicView) -> dict:
         "pending": [[k, part, list(posts)] for k, part, posts in view.pending],
         "round": dict(view.round_cost),
         "evidence": {"ceiling": ev.ceiling, "depth": ev.depth, "digest": ev.query_digest,
-                     "coverage": {**asdict(ev.coverage), "tiers": list(ev.coverage.tiers)}},
+                     "coverage": {**asdict(ev.coverage), "tiers": list(ev.coverage.tiers)},
+                     # Roadmap 10's trace, so a resumed compose still says how
+                     # its evidence was planned. Absent when nothing planned.
+                     **({"plan": ev.plan.projection()} if ev.plan is not None else {})},
         "items": [{
             "scene": [c.item.scene.sid, c.item.scene.identity, c.item.scene.campaign],
             "title": c.item.title, "date": c.item.date, "location": c.item.location,
@@ -991,7 +994,8 @@ def from_record(record) -> EpistemicView | None:
         coverage = dict(ev["coverage"])
         coverage["tiers"] = _ints(coverage.get("tiers", [1]))
         evidence = model.Evidence(coverage=model.Coverage(**coverage), ceiling=int(ev["ceiling"]),
-                                  depth=int(ev["depth"]), query_digest=str(ev["digest"]))
+                                  depth=int(ev["depth"]), query_digest=str(ev["digest"]),
+                                  plan=model.PlanTrace.from_projection(ev.get("plan")))
         pending = tuple((str(k), str(part), _ints(posts)) for k, part, posts in record["pending"])
         round_cost = {str(k): int(v) for k, v in record["round"].items()}
         return EpistemicView(perspective, tuple(_item_of(c) for c in record["items"]),

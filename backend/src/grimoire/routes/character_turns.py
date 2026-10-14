@@ -1667,8 +1667,9 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
         # row shows what recall per speaker has cost (spec 11 §14 Q7).
         spent = turn.history_cost.setdefault(turn.round_record["id"], [0, 0])
         if view is not None:
-            spent[0] += 1
-            spent[1] += int(history_recall.embedded(view))
+            # A planned step retrieves (and may embed) once per round (10).
+            spent[0] += history_recall.retrievals(view)
+            spent[1] += history_recall.embeds(view)
         turn.history_by_round[key] = history_recall.costed(view, *spent)
     if run is not None and run.cancel_requested:
         raise anyio.get_cancelled_exc_class()()
