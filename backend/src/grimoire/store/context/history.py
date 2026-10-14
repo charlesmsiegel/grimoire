@@ -159,6 +159,7 @@ def parts(view: epistemic.EpistemicView, names: Mapping[str, str],
     # the view in it: listing the second's items again would show each part
     # (and its accept) twice.
     first_rows = {"perspective": detail["perspective"], "decided": detail["decided"],
+                  **({"round": detail["round"]} if "round" in detail else {}),
                   # Who the rows' refs are, for the inspector and the accept.
                   "names": {r: names[r] for r in view.perspective.present if r in names},
                   "items": [rows[id(c)] for c in view.items]}

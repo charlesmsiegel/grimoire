@@ -1475,6 +1475,8 @@ class _Progress:
         #: stored on its variant; None when it was not offered.
         self.tool_record = None
         self.history_by_round = {}
+        #: round id -> [history retrievals, query embeddings] so far.
+        self.history_cost: dict[str, list[int]] = {}
 
 
 async def _frames(
@@ -1617,7 +1619,7 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
             # field records player-role posts only. An untyped continue stays
             # unattributed, rather than charging some earlier visible post.
             post = await run_in_threadpool(_round_post, cid, sid)
-        turn.history_by_round[key] = await history_recall.gather_view(
+        view = await history_recall.gather_view(
             app, cid, sid,
             # A director note steers the narrator; no character heard it.
             seed=(turn.round_record.get("note") or "") if narrator else "",
@@ -1626,6 +1628,13 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
             actor_ref=None if narrator else actor,
             identity=run.scene_identity if run is not None else None,
         )
+        # The round's history cost so far, carried on each step's view so its
+        # row shows what recall per speaker has cost (spec 11 §14 Q7).
+        spent = turn.history_cost.setdefault(turn.round_record["id"], [0, 0])
+        if view is not None:
+            spent[0] += 1
+            spent[1] += int(history_recall.embedded(view))
+        turn.history_by_round[key] = history_recall.costed(view, *spent)
     if run is not None and run.cancel_requested:
         raise anyio.get_cancelled_exc_class()()
     return turn.history_by_round[key]

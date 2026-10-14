@@ -820,8 +820,8 @@ thing 03 refuses to cache.
 - **An actor's retrieval is never reranked.** The rerank grades rendered
   items, summaries included, which would be narrator-only material steering
   an actor's pick.
-- **Residual: a summary can steer which scenes an actor's retrieval looks
-  at.** Lexical and semantic scoring read 08's search documents, and a
+- **Residual (accepted by the user, 2026-10-14): a summary can steer which
+  scenes an actor's retrieval looks at.** Lexical and semantic scoring read 08's search documents, and a
   document carries its scene's summary, so an actor's query can match a
   summary's words. That admits or orders a scene; it never renders one:
   classification still gates every slice, and a summary reaches an actor only
@@ -1704,7 +1704,13 @@ Points for the plan to confirm against the landed specs:
 7. **Per-step retrieval cost** (6.1). Accept N retrievals per round, or cap
    history recall to the first K actor steps of a round? *Recommendation:*
    accept it, behind `history_recall_depth` (off by default), and report the
-   per-round embed count in 09's history row so the cost is visible.
+   per-round embed count in 09's history row so the cost is visible. **Resolved
+   (the user, 2026-10-14):** accepted, and done. Each step's view carries its
+   round's history cost so far (`EpistemicView.round_cost`: retrievals, one
+   per speaker that recalled, and the query embeddings they sent), set by the
+   round driver and by a legacy door as a one-step round, and the history row
+   shows it ("This round: 3 history retrievals, 2 query embeddings"). The
+   live preview composes no round and shows none.
 
 ## 15. Review record
 

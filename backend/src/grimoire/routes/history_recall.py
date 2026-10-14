@@ -239,6 +239,22 @@ async def gather_view(app, cid, sid, *, seed, resolved, llm_client, embed_client
     return await history_threads.run(_view, cid, sid, evidence, actor_ref, identity)
 
 
+def embedded(view) -> bool:
+    """Whether the retrieval behind `view` sent a query embedding: its
+    semantic stage ran ("ok") or failed after trying, never one that was off
+    or skipped before any request."""
+    status = view.evidence.coverage.semantic if view is not None else "off"
+    return status == "ok" or status.startswith("failed:")
+
+
+def costed(view, retrievals: int, embeds: int):
+    """`view` carrying its round's history cost so far (spec 11 §14 Q7), for
+    the history row to show what recall per speaker costs."""
+    if view is None:
+        return None
+    return replace(view, round_cost={"retrievals": retrievals, "embeds": embeds})
+
+
 def _bridge(app, cid, sid, coroutine, failed, **kwargs):
     """Run a gather from a def route; ownership is checked in its worker
     before the portal, whose own thread cannot observe it."""
@@ -266,10 +282,12 @@ def gather_sync(app, cid, sid, *, seed, resolved, llm_client, embed_client, dead
 def gather_view_sync(app, cid, sid, *, seed, resolved, llm_client, embed_client,
                      deadline=None, post=_QUERY_POST, run_id="", actor_ref=None,
                      identity=None):
-    """`gather_view` from a def route. A gather that could not run is the
-    narrator's error row and an actor's nothing, as `_view` decides."""
-    return _bridge(app, cid, sid, gather_view,
+    """`gather_view` from a def route: a legacy door's one-step round, its
+    cost carried as such. A gather that could not run is the narrator's error
+    row and an actor's nothing, as `_view` decides."""
+    view = _bridge(app, cid, sid, gather_view,
                    lambda evidence: _view(cid, sid, evidence, actor_ref, identity),
                    seed=seed, resolved=resolved, llm_client=llm_client,
                    embed_client=embed_client, deadline=deadline, post=post, run_id=run_id,
                    actor_ref=actor_ref, identity=identity)
+    return costed(view, 1, int(embedded(view)))

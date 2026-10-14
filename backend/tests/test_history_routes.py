@@ -232,7 +232,7 @@ def test_round_views_cached_per_round_and_speaker(cid, monkeypatch):
     calls = []
     async def gather(*a, **k):
         calls.append((k["seed"], k["actor_ref"]))
-        return SimpleNamespace(round=len(calls))
+        return epistemic.narrator_view(cid, sid, model.Evidence(ceiling=len(calls)))
     monkeypatch.setattr(history_recall, "gather_view", gather)
     async def run():
         npc = await character_turns._round_history(app, cid, sid, None, None, None, turn, "characters:mara")
@@ -256,6 +256,28 @@ def test_round_views_cached_per_round_and_speaker(cid, monkeypatch):
         assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is None
     asyncio.run(run())
     assert calls == [("", "characters:mara"), ("silver ledger", None), ("", None)]
+
+
+def test_each_step_carries_its_rounds_history_cost(cid, monkeypatch):
+    # Spec 11 §14 Q7: what recall per speaker costs a round is on the row.
+    sid = played(cid)
+    turn = character_turns._Progress({"id": "round-1", "note": ""}, (), None)
+    semantics = iter(["ok", "skipped:deadline", "failed:network"])
+
+    async def gather(*a, **k):
+        coverage = model.Coverage("thin", semantic=next(semantics))
+        return epistemic.narrator_view(cid, sid, model.Evidence(coverage=coverage))
+    monkeypatch.setattr(history_recall, "gather_view", gather)
+
+    async def run():
+        return [await character_turns._round_history(object(), cid, sid, None, None, None,
+                                                     turn, actor)
+                for actor in ("grimoire", "characters:mara", "characters:win")]
+    views = asyncio.run(run())
+    assert [v.round_cost for v in views] == [{"retrievals": 1, "embeds": 1},
+                                            {"retrievals": 2, "embeds": 1},
+                                            {"retrievals": 3, "embeds": 2}]
+    assert views[2].detail()["round"] == {"retrievals": 3, "embeds": 2}
 
 
 @pytest.mark.parametrize("stale_peek", [False, True])

@@ -211,6 +211,10 @@ function EpistemicRows({ detail, acceptCid, carried }: {
       return access.length ? `${named(ref)}: ${access.join("/")}` : "";
     }).filter(Boolean);
   return <>
+    {detail.round && <div className="field-hint">
+      This round: {detail.round.retrievals} history {detail.round.retrievals === 1 ? "retrieval" : "retrievals"},{" "}
+      {detail.round.embeds} query {detail.round.embeds === 1 ? "embedding" : "embeddings"}
+    </div>}
     <div className="field-hint">Access, for {reader}:</div>
     <ul className="ctx-entries">
       {detail.items.map((item) => <li key={`${item.key}:${item.scene}:${item.slices.map((x) => x.posts.join(".")).join("/")}`}>

@@ -1966,6 +1966,10 @@ export type EpistemicDetail = {
   decided: number;
   /** Who the refs are, as the prompt named them. */
   names?: Record<string, string>;
+  /** What history has cost this step's round so far (spec 11 §14 Q7): its
+   *  retrievals, one per speaker that recalled, and the query embeddings
+   *  they sent. Absent on the live preview. */
+  round?: { retrievals: number; embeds: number };
   items: EpistemicItem[];
 };
 export type ContextSection = {

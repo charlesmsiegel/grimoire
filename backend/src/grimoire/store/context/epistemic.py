@@ -160,6 +160,10 @@ class EpistemicView:
     #: sections, its coverage is the inspector's row. Its items are the
     #: narrator's; an actor's sections read `visible()`, never these.
     evidence: model.Evidence = field(default_factory=model.Evidence)
+    #: What history cost the round this view's step belongs to, so far
+    #: (spec 11 §14 Q7): `retrievals` and the query `embeds` they sent.
+    #: Set by the turn path; empty for a preview or hand-built view.
+    round_cost: Mapping[str, int] = field(default_factory=dict)
 
     def visible(self) -> tuple[Classified, ...]:
         """For an actor, the items with a visible slice, holding only those
@@ -185,6 +189,7 @@ class EpistemicView:
         return {
             "perspective": self.perspective.to_string(),
             "decided": self.decided,
+            **({"round": dict(self.round_cost)} if self.round_cost else {}),
             "items": [{
                 "key": c.item.scene.key, "scene": c.sid or c.item.scene.sid,
                 "admitted": c.admitted, "state": c.state, "header": dict(c.header),

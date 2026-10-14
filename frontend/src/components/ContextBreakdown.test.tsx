@@ -212,7 +212,7 @@ test("the narrator's access rows name who knows and who suspects", () => {
       items: [],
       coverage: { tiers: [1], semantic: "off", admitted: 1, agreement: 0, verdict: "thin" },
       ceiling: 1200, budget_from: ["config"],
-      epistemic: { perspective: "narrator", decided: 0,
+      epistemic: { perspective: "narrator", decided: 0, round: { retrievals: 3, embeds: 1 },
         names: { "characters:mara": "Mara", "characters:winifred": "Winifred" },
         items: [{
         key: "k", scene: "001--pier", admitted: true, state: "attributed",
@@ -230,6 +230,7 @@ test("the narrator's access rows name who knows and who suspects", () => {
   }] })} />);
   for (const value of [/Access, for the narrator/, /Known to: Mara/,
     /Suspected by: Winifred/, /Posts 0, 1: known \(narrator\)/,
-    /Mara: witnessed; Winifred: unknown\/suspected/])
+    /Mara: witnessed; Winifred: unknown\/suspected/,
+    /This round: 3 history retrievals, 1 query embedding/])
     expect(screen.getByText(value)).toBeInTheDocument();
 });
