@@ -7,6 +7,10 @@ transcript, a debt settled without its title, a thread whose change is a
 beat two scenes from its reason -- and whose gold is written down as it is planted. Placeholder
 names only (Seraphine, Mara, Winifred, Realm, Saltmarch).
 
+Every recipe is a long history (`LEADING_FILLER`, `FILLER_BETWEEN`): the
+scenes that matter sit among everyday filler scenes that share no word with
+any case.
+
 A continuity finding is filed as the sweep files one: a pair by deterministic
 discovery, a lifecycle finding at the fingerprint `pending` computes for it
 now (a lifecycle record is otherwise nominated only by the calendar or by a
@@ -43,12 +47,62 @@ class Planted:
     hidden_terms: tuple[str, ...] = ()
 
 
+#: Spec 10.2's "long history": every case's answer sits in an archive, not a
+#: short campaign. Filler scenes are played before the story starts and
+#: before each scene that matters, so the scene that answers is one among
+#: many a search has to rank past. Sized structurally -- at least
+#: `cases.LONG_HISTORY` scenes for the shortest recipe -- to be tuned
+#: against live runs later.
+LEADING_FILLER = 8
+FILLER_BETWEEN = 1
+
+#: Everyday scenes that share no word with any case's question, claim,
+#: search or hidden term, cycled in order.
+FILLER = (
+    ("Rope and tar", "Seraphine mends a torn sail on the quay while the gulls quarrel.",
+     "Seraphine mends a sail."),
+    ("The bakery queue", "Winifred waits for the morning loaves and talks about the weather.",
+     "Winifred buys bread."),
+    ("A lesson in knots", "Mara teaches two children the bowline and the sheet bend.",
+     "Mara teaches knots."),
+    ("Lamps at dusk", "The lamplighter makes his slow round of the square.",
+     "The square is lit for the evening."),
+    ("Rain on slate", "A long grey rain keeps everyone indoors over cards.",
+     "A rainy afternoon of cards."),
+    ("The goat at the gate", "Seraphine chases a stray goat out of the herb garden.",
+     "A goat in the garden."),
+    ("Mending nets", "Old fishers sit in a row and sing while their needles work.",
+     "The fishers sing at their nets."),
+    ("A letter from inland", "Winifred reads a cousin's letter about the apple harvest.",
+     "Winifred reads a family letter."),
+    ("Fog morning", "Fog rolls over Saltmarch so thick the bells sound muffled.",
+     "A foggy morning in Saltmarch."),
+    ("The new mule", "Mara haggles for a patient grey mule and names her Pebble.",
+     "Mara buys a mule."),
+)
+
+
+def _filler(cid: str, n: int) -> None:
+    for _ in range(n):
+        count = len(scenes.list_scenes(cid))
+        title, text, summary = FILLER[count % len(FILLER)]
+        _played(cid, title, [("assistant", text)], summary)
+
+
 def _campaign(name: str) -> str:
     wid = worlds.create_world("Realm")
-    return campaigns.create_campaign(name, wid)
+    cid = campaigns.create_campaign(name, wid)
+    _filler(cid, LEADING_FILLER)
+    return cid
 
 
 def _scene(cid: str, title: str, posts: list[tuple[str, str]], summary: str) -> str:
+    """One scene that matters, after `FILLER_BETWEEN` that do not."""
+    _filler(cid, FILLER_BETWEEN)
+    return _played(cid, title, posts, summary)
+
+
+def _played(cid: str, title: str, posts: list[tuple[str, str]], summary: str) -> str:
     sid = scenes.create_scene(cid, title)
     for role, text in posts:
         scenes.append_message(cid, sid, role, text)

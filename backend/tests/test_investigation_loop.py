@@ -200,6 +200,23 @@ def test_a_loop_that_raises_still_reports_the_turns_it_filed(cid, scene):
     assert usage["model_turns"] == 1 and usage["unpriced_calls"] == 1
 
 
+def test_the_searchs_embedding_rows_are_part_of_the_runs_usage(cid, scene):
+    """09's retrieval meters its embedding under `history-recall` with the
+    run's id and hands back no rows: the trace reads them from the ledger."""
+    from grimoire.store import usage
+    usage.record(task="history-recall", campaign=cid, run_id=RUN, operation="embed",
+                 model="vendor/embed", provider="openrouter", prompt_tokens=12,
+                 cost_usd=0.125)
+    usage.record(task="history-recall", campaign=cid, run_id="another-run",
+                 operation="embed", model="vendor/embed", provider="openrouter",
+                 prompt_tokens=12, cost_usd=9.0)
+    run_state = state.RunState(cid=cid, mode="question", embed_client=object())
+    outcome = asyncio.run(investigation.investigate(
+        None, state=run_state, task=TASK, seed=SEED, client=_read_then_answer(scene),
+        resolved=_resolved(), budget=_budget(), run_id=RUN))
+    assert outcome.trace["usage"]["cost"]["cost_usd"] == 0.125
+
+
 def test_a_thread_that_finishes_after_the_check_writes_nothing(cid):
     """A tool thread the loop stopped waiting on can finish late: what it
     notes was never delivered, before the freeze or after it."""

@@ -49,10 +49,34 @@ def test_the_gate_reads_per_entry_point_and_e1_is_absent(records):
     assert "absent until 12-S6" in runner.summary(records, live=False)
 
 
+def test_every_case_runs_in_a_long_history_and_a_short_one_fails_the_gate(records):
+    assert all(r["scenes"] >= cases.LONG_HISTORY for r in records)
+    brief = [{**r, "scenes": 3} if r["case"] == "same-errand-duplicate" else r
+             for r in records]
+    assert runner.gate(brief)["continuity"] is False
+    assert "same-errand-duplicate" in runner.summary(brief, live=False)
+
+
+def test_a_run_that_came_back_failed_is_an_error(records, monkeypatch):
+    """`investigate` returns a failed run rather than raising; the gate
+    counts it as it counts a raise."""
+    async def failing(case, planted, **_kw):
+        return {"state": "failed", "error": "rate_limit", "result": None, "trace": {}}
+    monkeypatch.setitem(runner.ARM_FNS, "investigation", failing)
+    _results, ran = runner.run_all(selected=("question",))
+    failed = [r for r in ran if r["arm"] == "investigation"]
+    assert failed and all(r["error"] == "rate_limit" for r in failed)
+    assert runner.gate(ran)["question"] is False
+
+
 def test_an_incumbent_that_errored_is_no_baseline(records):
     broken = [{**r, "error": "LLMError", "grade": graders.ABSTAINED}
               if r["arm"] != "investigation" else r for r in records]
     assert runner.gate(broken) == {"rp": False, "continuity": False, "question": False}
+
+
+#: How long the slowed probe sleeps: well past any offline arm's own time.
+PROBE_S = 2.0
 
 
 def test_an_arms_wall_time_is_its_own(records, monkeypatch):
@@ -60,11 +84,13 @@ def test_an_arms_wall_time_is_its_own(records, monkeypatch):
     slow = runner._hidden_route
 
     async def probe(planted):
-        await runner.asyncio.sleep(0.3)
+        await runner.asyncio.sleep(PROBE_S)
         return await slow(planted)
     monkeypatch.setattr(runner, "_hidden_route", probe)
+    monkeypatch.setattr(runner.cases, "CASES",
+                        tuple(c for c in cases.CASES if c.id == "thread-change-question"))
     _results, timed = runner.run_all(selected=("question",))
-    assert all(r["wall_ms"] < 300 for r in timed)
+    assert len(timed) == 2 and all(r["wall_ms"] < PROBE_S * 1000 for r in timed)
 
 
 def test_the_gate_fails_without_the_margin(records):

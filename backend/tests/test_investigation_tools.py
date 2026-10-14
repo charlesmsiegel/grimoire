@@ -314,6 +314,36 @@ def test_search_builds_its_query_under_the_best_effort_lock_and_retrieves_outsid
     assert [i["ref"] for i in env["items"]] == [f"scene:{sid}"]
 
 
+class _Room:
+    """The loop's view of a run, as far as the search asks of it."""
+
+    def __init__(self, room):
+        self.room = room
+
+    def room_usd(self):
+        return self.room
+
+
+@pytest.mark.parametrize("room,semantic", [(None, True), (0.5, False)])
+def test_search_under_a_spend_ceiling_sends_no_embedding(run, monkeypatch, room, semantic):
+    """An embedding is metered apart from the loop, so the ceiling cannot
+    see it: under one the search is lexical and structural only."""
+    seen = {}
+    real = retrieval.retrieve
+
+    async def spy(cid, sid, query, **kwargs):
+        seen.update(kwargs)
+        return await real(cid, sid, query, **{**kwargs, "embed_client": None})
+    monkeypatch.setattr(retrieval, "retrieve", spy)
+    run.embed_client = client = object()
+    played(run.cid, text="Mara waits.")
+    spec = tools.toolset(run).get("search_history")
+    ctx = tool_calls.ToolContext(campaign="", scene_identity="", run_id="run1",
+                                 deadline=float("inf"), root="", turn=1, run=_Room(room))
+    asyncio.run(spec.fn({"query": "ledger", "max": 2}, ctx))
+    assert (seen["embed_client"] is client) is semantic
+
+
 def test_search_works_with_turn_recall_off(run):
     from grimoire.store import config
     config.write_config(history_recall_depth="0")

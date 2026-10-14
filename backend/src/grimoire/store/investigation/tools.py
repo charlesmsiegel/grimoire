@@ -237,7 +237,14 @@ def _search(run: state.RunState):
     it gathers outside campaign holds (a turn's recall calls it the same
     way), each stage reading files the store writes atomically, and a
     thread lock held across its awaits would be owned by whichever worker
-    took it. Rendering reads no campaign file."""
+    took it. Rendering reads no campaign file.
+
+    Under a spend ceiling the search is lexical and structural only: an
+    embedding is metered apart from the loop, so its cost is neither in
+    the price check a run passes before it starts nor in the room the loop
+    projects each turn against -- and a search the ceiling cannot see could
+    carry a run past it. With no ceiling the run's embeddings client is
+    used, and its rows reach the trace (`routes.investigation._filed`)."""
 
     def query_for(text: str, most: int) -> history_model.Query:
         with locks.best_effort_campaign_lock(run.cid):
@@ -251,8 +258,10 @@ def _search(run: state.RunState):
             return _settled(run, "search_history", args, ctx, _raise(BadArgs()))
         try:
             q = await anyio.to_thread.run_sync(query_for, query, most)
+            ceilinged = ctx.run is not None and ctx.run.room_usd() is not None
             evidence = await history_retrieval.retrieve(
-                run.cid, run.sid, q, ceiling=SEARCH_TOKENS, embed_client=run.embed_client,
+                run.cid, run.sid, q, ceiling=SEARCH_TOKENS,
+                embed_client=None if ceilinged else run.embed_client,
                 deadline=min(ctx.deadline, time.monotonic() + SEARCH_SECONDS),
                 origin="investigation", run_id=ctx.run_id, depth=most)
             rendered = await anyio.to_thread.run_sync(

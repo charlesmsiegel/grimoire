@@ -217,16 +217,23 @@ def _model_of(result: tool_calls.LoopResult | None, resolved: ResolvedInference)
     return f"{primary.provider_id}/{primary.model}" if primary is not None else ""
 
 
-def _filed(cid: str, task: str, run_id: str) -> tuple[dict, ...]:
-    """The loop's own ledger rows, read back for a run whose loop raised
-    instead of returning them (a turn-1 `LLMError`, or a stop after a
-    request went out): each turn's meter filed its row before the raise, so
-    the ledger is the one place they are. The window is two days, which a
-    run bounded by its wall cannot outlast across midnight. A ledger that
-    cannot be read gives none, as a trace whose money says so."""
+#: The task `search_history`'s semantic stage meters its embedding under
+#: (09's turn caller, whose door it shares).
+SEARCH_EMBED_TASK = "history-recall"
+
+
+def _filed(cid: str, tasks: frozenset[str], run_id: str) -> tuple[dict, ...]:
+    """This run's ledger rows under `tasks`, read back where nothing handed
+    them over: the loop's own turns when it raised instead of returning them
+    (a turn-1 `LLMError`, or a stop after a request went out -- each turn's
+    meter filed its row before the raise), and `search_history`'s embedding
+    calls, which 09's retrieval meters with the run's id and returns no rows
+    of. The window is two days, which a run bounded by its wall cannot
+    outlast across midnight. A ledger that cannot be read gives none, as a
+    trace whose money says so."""
     try:
         return tuple(r for r in store.usage.calls(days=2, campaign=cid)
-                     if r.get("run_id") == run_id and r.get("task") == task)
+                     if r.get("run_id") == run_id and r.get("task") in tasks)
     except OSError:
         log.warning("Investigation %s could not read back its ledger rows", run_id)
         return ()
@@ -331,12 +338,17 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
         # Nothing to check against, but a tool thread may still be running.
         state.freeze()
         loop_rows = (() if stopped.get("state") == "refused"
-                     else await anyio.to_thread.run_sync(_filed, state.cid, task, run_id))
+                     else await anyio.to_thread.run_sync(
+                         _filed, state.cid, frozenset({task}), run_id))
+    searched: Sequence[dict] = ()
+    if state.embed_client is not None and stopped.get("state") != "refused":
+        searched = await anyio.to_thread.run_sync(
+            _filed, state.cid, frozenset({SEARCH_EMBED_TASK}), run_id)
     turns, calls, decided = _counts(result, len(state.steps), loop_rows)
     if checked is not None and result is not None:
         _final_step(state, result.final_call, turns)
     elapsed = time.monotonic() - t0
-    rows = (*loop_rows, *extra_rows)
+    rows = (*loop_rows, *extra_rows, *searched)
 
     def usage_block() -> dict:
         return investigation_trace.usage_of(

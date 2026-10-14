@@ -513,7 +513,12 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   - Once the loop returns, the run's state is frozen: a tool thread it
     stopped waiting on adds no read and no step, and steps stand only against
     calls the loop handed back. A loop that raised reads its own turns' rows
-    back from the ledger for the trace.
+    back from the ledger for the trace, as it reads `search_history`'s
+    `history-recall` embedding rows. Under a spend ceiling the search sends
+    no embedding, since its cost is metered outside the loop's guard.
+  - Every eval campaign is a long history (filler scenes around the ones
+    that matter, `cases.LONG_HISTORY`), and a run that came back failed or
+    refused counts as an arm error.
 - **Still owed by the implemented slices** (found in review, not built here):
   E2's and E3's per-turn prompt-log captures (spec 8.2, "when capturing is
   on" -- 01g's `TurnCapture` has no prompt-log filer yet; the decide tool's

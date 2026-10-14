@@ -44,7 +44,7 @@ from grimoire import embeddings, inference, schemas, tool_calls, wire
 from grimoire.llm import LLMClient
 from grimoire.routes import investigation
 from grimoire.routes.common import UsableInference
-from grimoire.store import embed_space, routing, usage
+from grimoire.store import embed_space, routing, scenes, usage
 from grimoire.store.continuity import candidates, reconcile
 from grimoire.store.inference.resolved import Attempt
 from grimoire.store.investigation import budget as inv_budget
@@ -250,6 +250,39 @@ async def _close(*clients) -> None:
             await client.aclose()
 
 
+def _run_arm(case, arm, planted, *, live, targets, space, run_id
+             ) -> tuple[dict, bool | None, str, float]:
+    """One arm over one planted case: `(what it returned, the hidden route's
+    verdict, its error, its own wall time in ms)`. Live, the planted home
+    reads the real store's embedding endpoint (`space`) and the arm is handed
+    a live embeddings client; the clients are closed after."""
+    started, error = time.monotonic(), ""
+    client, resolved = _client(case, arm, planted, live=live, targets=targets)
+    decider = targets.get(DECIDE_TASK) if live else offline_resolution(DECIDE_TASK, "decide")
+    embed = embeddings.AsyncEmbeddingsClient() if live and space else None
+    hidden: bool | None = None
+    wall: float | None = None
+    try:
+        with contextlib.ExitStack() as stack:
+            if live:
+                stack.enter_context(patch.object(embed_space, "endpoint", return_value=space))
+            ran, wall = asyncio.run(_timed(
+                ARM_FNS[arm], case, planted, client=client, resolved=resolved, run_id=run_id,
+                live=live, decider=decider, embed_client=embed))
+            hidden = asyncio.run(_hidden_route(planted))
+    except Exception as exc:  # noqa: BLE001 - one failed case is graded as failed
+        error, ran = type(exc).__name__, {"state": "failed"}
+    finally:
+        if live:
+            asyncio.run(_close(client, embed))
+    if not error and ran.get("state") in ("failed", "refused"):
+        # `investigate` returns a failed or refused run rather than raising:
+        # it is no more a clean comparison than a raise.
+        error = ran.get("error") or ran.get("reason") or ran["state"]
+    # An arm that raised is timed to the raise.
+    return ran, hidden, error, wall if wall is not None else (time.monotonic() - started) * 1000
+
+
 def run_all(*, live: bool = False, targets: dict | None = None, rates=None, run_id: str = "",
             real_home: Path | None = None, selected: tuple[str, ...] = (),
             space: dict | None = None) -> tuple[list, list[dict]]:
@@ -272,31 +305,14 @@ def run_all(*, live: bool = False, targets: dict | None = None, rates=None, run_
                 if real_home is not None and reports._is_real_home(real_home):
                     raise RuntimeError(reports.ISOLATE_ERROR)
                 planted = synth.RECIPES[case.recipe]()
-                day, started, error = usage._today(), time.monotonic(), ""
-                client, resolved = _client(case, arm, planted, live=live, targets=targets)
-                decider = (targets.get(DECIDE_TASK) if live
-                           else offline_resolution(DECIDE_TASK, "decide"))
-                embed = embeddings.AsyncEmbeddingsClient() if live and space else None
-                hidden, wall = None, None
-                try:
-                    with contextlib.ExitStack() as stack:
-                        if live:
-                            stack.enter_context(patch.object(embed_space, "endpoint",
-                                                             return_value=space))
-                        ran, wall = asyncio.run(_timed(
-                            ARM_FNS[arm], case, planted, client=client, resolved=resolved,
-                            run_id=run_id, live=live, decider=decider, embed_client=embed))
-                        hidden = asyncio.run(_hidden_route(planted))
-                except Exception as exc:  # noqa: BLE001 - one failed case is graded as failed
-                    error, ran = type(exc).__name__, {"state": "failed"}
-                    if wall is None:  # the arm itself raised
-                        wall = (time.monotonic() - started) * 1000
-                finally:
-                    if live:
-                        asyncio.run(_close(client, embed))
+                day = usage._today()
+                ran, hidden, error, wall = _run_arm(case, arm, planted, live=live,
+                                                    targets=targets, space=space,
+                                                    run_id=run_id)
                 rows = reports.harvest(day, run_id, case.id)
                 metric = {**_grade(case, planted, arm, ran), "hidden_route": hidden,
-                          "error": error, "wall_ms": wall}
+                          "error": error, "wall_ms": wall,
+                          "scenes": len(scenes.list_scenes(planted.cid))}
                 bucket = costs.fold(rows, rates)
                 metric["money"] = {
                     "cost_usd": bucket.get("cost_usd") if costs.billed_calls(bucket) else None,
@@ -366,16 +382,25 @@ def uncovered(records: list[dict], mode: str) -> frozenset[str]:
     return cases.COVERAGE[mode] - frozenset.intersection(*map(frozenset, covered))
 
 
+def short(records: list[dict], mode: str) -> list[str]:
+    """The cases of `mode` that ran in a campaign shorter than
+    `cases.LONG_HISTORY` scenes."""
+    return sorted({r["case"] for r in records
+                   if r["mode"] == mode and r.get("scenes", 0) < cases.LONG_HISTORY})
+
+
 def gate(records: list[dict]) -> dict[str, bool]:
     """Per entry point (spec 10.4): the investigation arm beats its incumbent
     by `cases.MARGIN` on correctness, with no leakage line worse and no
-    error in either arm, over a run that covered every one of spec 10.2's items for it
-    (`cases.COVERAGE`). E1 is absent until 12-S6, and so cannot pass."""
+    error in either arm -- a raise, or a run that came back failed or
+    refused -- over a run that covered every one of spec 10.2's items for
+    it (`cases.COVERAGE`), each in a long history (`cases.LONG_HISTORY`). E1
+    is absent until 12-S6, and so cannot pass."""
     totals = aggregate(records)
     out: dict[str, bool] = {"rp": False}
     for mode, (incumbent, challenger) in cases.ARMS.items():
         b, c = totals.get(f"{mode}/{incumbent}"), totals.get(f"{mode}/{challenger}")
-        if b is None or c is None or uncovered(records, mode):
+        if b is None or c is None or uncovered(records, mode) or short(records, mode):
             out[mode] = False
             continue
         # An incumbent that errored is no baseline: its abstentions would be
@@ -397,8 +422,10 @@ def summary(records: list[dict], *, live: bool) -> str:
     verdict = gate(records)
     lines.append("rp (E1): absent until 12-S6 -- no arm, no leakage line, cannot pass")
     for mode in cases.ARMS:
-        missing = sorted(uncovered(records, mode))
+        missing, brief = sorted(uncovered(records, mode)), short(records, mode)
         lines.append(f"{mode}: {'PASS' if verdict[mode] else 'FAIL'} "
                      f"(margin {cases.MARGIN:.2f} over its incumbent)"
-                     + (f"; corpus items not run: {', '.join(missing)}" if missing else ""))
+                     + (f"; corpus items not run: {', '.join(missing)}" if missing else "")
+                     + (f"; under {cases.LONG_HISTORY} scenes: {', '.join(brief)}"
+                        if brief else ""))
     return "\n".join(lines)

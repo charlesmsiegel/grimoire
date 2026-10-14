@@ -701,7 +701,10 @@ only) whose deciding evidence is adaptive -- a promise kept by someone called
 only by a nickname, two records whose sameness, continuation or mere relation is
 said only in a transcript, a debt settled without its title beside a hidden post
 naming it, a thread whose change is a beat two scenes from its reason -- and
-runs it through two arms. Each case names the spec 10.2 item it stands for
+runs it through two arms. Every campaign is a long history: the scenes that
+matter sit among everyday filler scenes that share no word with any case
+(`synth.LEADING_FILLER`, at least `cases.LONG_HISTORY` scenes), and a case run
+in a shorter one fails its entry point. Each case names the spec 10.2 item it stands for
 (`cases.COVERAGE`), and an entry point whose run did not cover every one of its
 items in both arms fails the gate, however it scored:
 
@@ -722,7 +725,10 @@ throwaway home as every live run is, with the money in its three columns.
 Both arms search with the real store's Embedding role and a live embeddings
 client (hybrid where the store is, lexical where its role is off), and each
 arm's wall time is its own, apart from the leakage probes. An entry point
-fails if either arm errored: an incumbent that did not run is no baseline.
+fails if either arm errored -- raised, or came back failed or refused: an
+incumbent that did not run is no baseline. A run under a spend ceiling
+searches without embeddings (their cost is metered apart from the loop, so
+the ceiling could not see it).
 
 The lines, per entry point: correctness (a proposal against its gold
 decision, direction and cited scenes -- at least one, and only gold ones --

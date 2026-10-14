@@ -83,6 +83,11 @@ COVERAGE: dict[str, frozenset[str]] = {
     "question": frozenset({"nickname_promise", "thread_change"}),
 }
 
+#: The fewest scenes a planted campaign may hold for its case to count
+#: (spec 10.2's "long history"; `synth.LEADING_FILLER`): the gate refuses an
+#: entry point any of whose cases ran in a shorter one.
+LONG_HISTORY = 10
+
 THREADS = ("thread:deliver-the-harbour-ledger", "thread:find-the-harbour-ledger")
 
 CASES: tuple[Case, ...] = (
