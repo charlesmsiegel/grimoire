@@ -479,10 +479,11 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   trigger and stage, E1's capture section and eval arm) is 12-S6's. Plan gates,
   reviews and final gates were not run in-session (no Codex CLI);
   `@codex review` on the PR stands in, per CLAUDE.md.
-- **12-S6 is blocked on 10-S2:** E1's trigger reads spec 10's `PlanTrace`,
-  and no planner has landed (`history_plan`, `plan_and_repair` are absent on
-  main). Its 08-C3b admission predicate (spec 15.2) is also still absent from
-  `searchdocs.expand`, so rp_actor would offer no `get_scene_excerpt` yet.
+- **12-S6 is not built here.** It was blocked on 10-S2 when these slices
+  were written; spec 10's `PlanTrace` (`history.model.PlanTrace`) has since
+  landed on main, so that edge is clear. Its 08-C3b admission predicate
+  (spec 15.2) is still absent from `searchdocs.expand`, so rp_actor would
+  offer no `get_scene_excerpt` yet.
 - **Spec amendments, recorded rather than silent:**
   - 01g has no per-turn hook, so the context stop (7.3) is
     `tool_calls.RunBudget.max_prompt_tokens`, a stop in the loop itself
