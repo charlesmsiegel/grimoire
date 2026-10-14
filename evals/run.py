@@ -50,6 +50,7 @@ from evals.embed import metrics as embed_metrics  # noqa: E402
 from evals.epistemic import decision as epistemic_decision  # noqa: E402
 from evals.epistemic import live as epistemic_live  # noqa: E402
 from evals.epistemic import runner as epistemic_runner  # noqa: E402
+from evals.history import planning as history_planning  # noqa: E402
 from evals.history import runner as history_runner  # noqa: E402
 from grimoire import wire  # noqa: E402
 from grimoire.llm_errors import LLMError  # noqa: E402
@@ -501,12 +502,74 @@ def run_play(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0 if passed else 1
 
 
+def _history_targets(tasks: tuple[str, ...]) -> dict:
+    """Live: each task's resolution from the real store, before isolation --
+    a decide task's with `operation="decide"`."""
+    decide = {"history-rerank", "history-sufficiency"}
+    return {task: runner.resolve_connections((case_mod.Case(
+        id="history-live", hypothesis="synthetic history", build=dict,
+        prompt=lambda ctx: [], grade=lambda ctx, out: [], recordings=(), task=task,
+        schema=(lambda ctx: {}) if task in decide else None),))[
+            task + " (decide)" if task in decide else task]
+        for task in tasks}
+
+
+def _check_history_flags(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """`--long` and `--plan` are `--history`'s, and do not combine."""
+    if args.long and not args.history:
+        ap.error("--long requires --history")
+    if args.plan and not args.history:
+        ap.error("--plan requires --history")
+    if args.plan and args.long:
+        ap.error("--plan runs its own recipes; --long is 09's")
+    if args.plan_cost_bound is not None and not args.plan:
+        ap.error("--plan-cost-bound requires --history --plan")
+
+
+def run_history_plan(args: argparse.Namespace) -> int:
+    """Roadmap 10-S3: the planning arms, offline on recorded planner replies
+    unless --live, which answers with the real Fast, Decision and Embedding
+    roles and grades the downstream reply."""
+    targets, space, rates, real_home = {}, None, None, None
+    if args.live:
+        real_home = paths.home()
+        space = embed_harness.resolve_live()
+        rates = usage.Rates.current()
+        targets = _history_targets(("chat", "history-query-plan", "history-sufficiency"))
+    results, metrics = history_planning.run_all(live=args.live, targets=targets, space=space,
+                                                rates=rates, real_home=real_home,
+                                                run_id=args.run_id)
+    validation = history_planning.run_validation()
+    bound = args.plan_cost_bound
+    print(history_planning.summary(metrics, validation, bound))
+    print(runner.report(results))
+    configs = [runfile.config(f"c{n}", arm, {"history_arm": arm,
+        "mode": "live" if args.live else "offline"})
+        for n, arm in enumerate(history_planning.ARMS, 1)]
+    doc = runfile.build(results, configs, run_id=args.run_id,
+                        started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    doc["history_plan"] = {"provenance": "LIVE" if args.live else "RECORDED synthetic planner replies",
+                           "metrics": metrics,
+                           "aggregate": history_planning.aggregate(metrics),
+                           "validation": [vars(v) for v in validation],
+                           "gate": history_planning.gate(metrics, validation),
+                           "recall_gain": history_planning.recall_gain(metrics),
+                           "cost_bound_usd_per_planned_turn": bound,
+                           "default_gate": history_planning.default_gate(metrics, bound)}
+    if args.out:
+        runfile.write(Path(args.out), doc)
+    passed = all(r.passed for r in results) and history_planning.gate(metrics, validation)
+    return 0 if passed else 1
+
+
 def run_history(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     """Caller-selected offline/long/live history matrix; never ordinary cases."""
     if any((args.play, args.embed, args.embed_options, args.gate, args.compare,
             args.escalation_sweep, args.escalation, args.record, args.case,
             args.provider, args.model, args.decide_backend, args.repeat)):
         ap.error("--history owns its corpus and arms; other case/matrix flags cannot be combined")
+    if args.plan:
+        return run_history_plan(args)
     targets, space, rates, real_home = {}, None, None, None
     if args.live:
         real_home = paths.home()
@@ -713,10 +776,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="spec 11's leakage suite: every reader's prompt offline; with "
                          "--live, each asked NPC's reply too (reply leaks apart from recall)")
     ap.add_argument("--long", action="store_true", help="with --history, long archive recipes exercising 64/1000 bounds")
+    ap.add_argument("--plan", action="store_true",
+                    help="with --history, the retrieval-planning arms (roadmap 10) beside 09's hybrid")
+    ap.add_argument("--plan-cost-bound", type=float, default=None, metavar="USD",
+                    help="with --history --plan, the added USD per planned turn the default "
+                         "gate allows (agreed in conversation); without it the gate is not met")
     args = ap.parse_args(argv)
     args.run_id = str(uuid.uuid4())
-    if args.long and not args.history:
-        ap.error("--long requires --history")
+    _check_history_flags(ap, args)
 
     mode = _other_mode(args)
     if mode is not None:

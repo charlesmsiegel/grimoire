@@ -61,6 +61,7 @@ const DRAFT_FIELDS = [
   "speaker_turn_taking", "prompt_layout_enabled",
   "semantic_recall_depth", "semantic_recall_threshold",
   "history_recall_depth", "history_recall_budget", "history_recall_threshold", "history_recall_rerank",
+  "history_plan", "history_plan_repair",
   "system_prompt",
   "quote_color", "user_label", "assistant_label",
   "rolling_summary_every", "scene_break_every", "replay_fork_threshold",
@@ -145,7 +146,7 @@ const SECTIONS: SectionDef[] = [
              "prompt_log_depth", "offscene_known_limit", "speaker_turn_taking", "send_images",
              "send_images_limit", "semantic_recall_depth", "semantic_recall_threshold",
              "history_recall_depth", "history_recall_budget", "history_recall_threshold",
-             "history_recall_rerank"] },
+             "history_recall_rerank", "history_plan", "history_plan_repair"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
   { id: "tracker", group: "What the model sees", label: "Scene tracker",
@@ -912,6 +913,27 @@ export default function ConfigView() {
                 <input type="checkbox" checked={draft.history_recall_rerank === "on"}
                        onChange={(e) => edit("history_recall_rerank", e.target.checked ? "on" : "off")} />
                 Rerank history
+              </label>
+            </div>
+            <p className="config-copy">
+              History planning spends one short call on the Fast role when recalled history
+              looks thin: it asks what earlier events the turn needs and searches once more.
+              The repair step may add a decision call and one more planning call. Each may
+              cost money, a model with no stated price makes the Costs totals read
+              incomplete until you set its rates, and a turn that plans can wait a few seconds
+              longer before its reply starts.
+            </p>
+            <div className="config-fields">
+              <label className="toggle">
+                <input type="checkbox" checked={draft.history_plan === "auto"}
+                       onChange={(e) => edit("history_plan", e.target.checked ? "auto" : "off")} />
+                Plan history recall
+              </label>
+              <label className="toggle">
+                <input type="checkbox" checked={draft.history_plan_repair !== "off"}
+                       disabled={draft.history_plan !== "auto"}
+                       onChange={(e) => edit("history_plan_repair", e.target.checked ? "on" : "off")} />
+                Repair a thin plan once
               </label>
             </div>
             <p className="config-copy">{EMBEDDINGS_COPY}</p>

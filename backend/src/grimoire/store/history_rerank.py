@@ -41,13 +41,14 @@ MAX_RANKED = decisions.MAX_ITEMS_PER_CALL
 #: The task 09's call site names, on the `history_check` route it lands.
 TASK = "history-rerank"
 
-#: The route entry registered by 09-S5 in `routing.ROUTES`, to which 10
-#: later adds `history-sufficiency`. This pure kit describes the contract;
+#: The route entry registered by 09-S5 in `routing.ROUTES`, to which 10-C3
+#: added `history-sufficiency`. This pure kit describes the contract;
 #: routing owns registration and the default policy: no escalation or sampling.
 ROUTE = routing.Route(
     "history_check", "History checks",
     "Whether a recalled scene bears on the current turn, after retrieval has found it.",
-    (TASK,), True, operation="decide", default_role="decision", legacy=routing.NO_LEGACY)
+    (TASK, "history-sufficiency"), True, operation="decide", default_role="decision",
+    legacy=routing.NO_LEGACY)
 
 
 @dataclass(frozen=True)

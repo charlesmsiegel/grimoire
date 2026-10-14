@@ -1,4 +1,7 @@
-"""The four history keys; off costs no document or transcript reads."""
+"""The history keys; off costs no document or transcript reads.
+
+09's four, and 10's two planning keys (`history_plan`, `history_plan_repair`),
+which have no effect while `history_recall_depth` is 0."""
 
 from __future__ import annotations
 
@@ -14,6 +17,11 @@ class Settings:
     budget: int
     threshold: float
     rerank: bool
+    #: `history_plan`: "auto" plans on thin or empty coverage; anything else
+    #: is "off" (roadmap 10).
+    plan: str = "off"
+    #: `history_plan_repair`: whether "auto" may take the repair hop.
+    repair: bool = True
 
 
 def integer(value: object, default: int) -> int:
@@ -39,4 +47,6 @@ def read(cfg: dict | None = None) -> Settings | None:
         integer(cfg.get("history_recall_budget"), 1200),
         threshold,
         cfg.get("history_recall_rerank") == "on",
+        "auto" if cfg.get("history_plan") == "auto" else "off",
+        cfg.get("history_plan_repair", "on") != "off",
     )

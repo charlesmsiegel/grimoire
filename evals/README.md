@@ -935,3 +935,56 @@ Explicit non-turn tier-3 retrieval takes `source_campaigns=(...)` alongside
 the retriever discovers no campaigns. Every result key and expansion is source
 qualified, all sources share semantic bounds, and unknown sources prevent
 exhausted coverage. Ordinary turns retain their existing refs and tiers.
+
+### Retrieval query planning (roadmap 10)
+
+`--history --plan` runs the planning arms beside 09's: `hybrid` (09 alone),
+`plan` (`history_plan: auto`, no repair), `plan+repair` (`auto`) and
+`plan-always` (forced on every turn, the upper bound on recall and on cost).
+With `PYTHONPATH` set as above, run the pair for your platform:
+
+```sh
+backend/.venv/bin/python evals/run.py --history --plan
+backend/.venv/Scripts/python.exe -X utf8 evals/run.py --history --plan
+backend/.venv/bin/python evals/run.py --history --plan --live --out evals/out/history-plan-live.json
+backend/.venv/Scripts/python.exe -X utf8 evals/run.py --history --plan --live --out evals/out/history-plan-live.json
+```
+
+`evals/history/planning.py` plants spec 10's cases through the store: a
+generic accusation, a callback to an old promise, "you said you'd never"
+against a scene many scenes back, a relationship reversal, hidden object
+knowledge and similarly named incidents -- each a gold scene sharing no two
+words with the turn -- and three controls (nothing needed, already found, a
+young campaign whose coverage is `exhausted`). Offline, the planner's and the
+sufficiency check's replies are RECORDED, hand-authored in
+`evals/recordings/history/plan.<shape>.json`, and replayed through the real
+facade (`LLMClient` over a recorded provider), so each arm runs the
+production phase -- the free gate, the meter, the trace, the merge -- with only
+the model's words canned. The offline arms run structural and lexical
+retrieval: 09's synthetic vectors are recorded for 09's corpus, not for
+planned questions. `plan.validation.json` beside them replays recorded replies
+(an invented handle, a bare string where an array belongs, a fenced object,
+prose with no object, an over-long question, and a maximal plan held to
+`PLAN_MAX_TOKENS`) through `plan.read`. The offline run is registered in
+`backend/tests/test_history_plan_evals.py`.
+
+The report prints per arm: recall@1/3/5 and excerpt recall on cases 1-6,
+`gain` (selected scenes not in `E0`), the trigger rate and the controls'
+false-trigger rate (a planned round on a control), plan validity and drops,
+steps, ledger rows and tokens per turn (`n/a` where nothing reported a
+count), wall time, terminal-state counts and the `cheap_retrieval_failed`
+rate, with the three money columns per case through 01a. `--live` answers with
+the configured Fast, Decision and Embedding roles, captured before isolation,
+and adds 09's downstream-consistency grader; it costs money.
+
+The offline gate holds the validation cases, the bounds and quiet controls.
+**The gate for a default** -- `plan+repair` improving recall@3 over `hybrid`
+on cases 1-6 with a low false-trigger rate and an added cost per planned turn
+within a bound agreed in conversation -- is printed as `default gate` and
+never enforced: recorded replies prove the mechanics, and only a live run
+says whether a model plans well. The bound is `--plan-cost-bound USD`
+(per planned turn -- every turn a planning call was charged on, a declined
+or unusable plan included -- the planner's and the check's calls only). Each money
+column is held to it on its own, never added, and without a bound, or with
+any planning call unpriced, the gate reads `not met`: an unknown cost never
+passes. `history_plan` stays `off` until that run.

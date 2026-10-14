@@ -79,6 +79,17 @@ PINNED = {
 # Readers whose transcript view belongs to 08, rather than to their own body.
 EXPANSION_PINNED = {"store/history/expand.py": ("excerpts",)}
 
+# Prompt builders over text another function already took through the view
+# (roadmap 10): the planner's window is 09's `query.prepare` window (pinned
+# above) and its found evidence 08's prompt excerpts; the sufficiency check
+# reads the same two. Each is pinned by name and may never read a scene
+# itself, so a builder that starts reading posts on its own is caught here
+# rather than trusted.
+VIEWED_INPUT_PINNED = {
+    "store/history/plan.py": ("build_input", "build_messages"),
+    "store/history/sufficiency.py": ("item",),
+}
+
 _FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _SCENE_READS = {"read_scene", "_require_scene"}
 _PROMPT_BUILDS = {"render"}
@@ -252,6 +263,7 @@ class _File:
         yield from self._citations()
         yield from self._pinned()
         yield from self._expansion_pinned()
+        yield from self._viewed_input_pinned()
         yield from self._new_readers()
         yield from self._expansions()
 
@@ -301,6 +313,15 @@ class _File:
                 yield f"{self.rel}: pinned expansion reader {name} no longer exists"
             elif not any(_is_searchdocs_expand(c, bindings) for c in _calls(fn)):
                 yield f"{self.rel}:{fn.lineno}: {name} never calls searchdocs.expand"
+
+    def _viewed_input_pinned(self):
+        for name in VIEWED_INPUT_PINNED.get(self.rel, ()):
+            fn = self.helpers.get(name)
+            if fn is None:
+                yield f"{self.rel}: pinned viewed-input builder {name} no longer exists"
+            elif any(_name(c) in _SCENE_READS for c in _calls(fn)) or _reads_content(fn):
+                yield (f"{self.rel}:{fn.lineno}: {name} reads posts itself; its text "
+                       "must arrive already through regex view()")
 
     def _new_readers(self):
         for fn in self.fns:

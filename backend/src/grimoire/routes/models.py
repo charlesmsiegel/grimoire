@@ -53,6 +53,8 @@ class ConfigUpdate(BaseModel):
     history_recall_budget: str | None = None
     history_recall_threshold: str | None = None
     history_recall_rerank: str | None = None
+    history_plan: str | None = None
+    history_plan_repair: str | None = None
     semantic_recall_depth: str | None = None
     semantic_recall_threshold: str | None = None
     prompt_layout_enabled: str | None = None

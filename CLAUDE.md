@@ -1196,7 +1196,17 @@ would answer neither question.
   relevance kit used by 09-S5's captured `routes/history_recall.py` caller
   on the `history_check` route, with no sampling or escalation and its
   registered replay case. The rerank switch defaults off, and an ungraded
-  candidate keeps its RRF slot. `store/epistemic_access.py` is the kit 11-S6's
+  candidate keeps its RRF slot. Roadmap 10's planner shares that phase:
+  `history_plan` (`off` by default) lets a narrator step's `thin` or `empty`
+  first retrieval (never an NPC's: 10 plans for the narrator only)
+  ask the `history_plan` route (Fast, `NO_LEGACY`) for one structured plan
+  (`store/history/plan.py`: records offered by handle, every bound in the
+  reader), merge one planned round under the same depth and ceiling, and --
+  gated on a `history-sufficiency` decide on `history_check` that asks no
+  rationale and reads a non-answer as `unknown` -- take at most one repair
+  plan, never another (`routes/history_recall.plan_and_repair`). Its
+  `PlanTrace` rides the evidence and the inspector row, never the prompt, and
+  its stable fields are what 12 reads. `store/epistemic_access.py` is the kit 11-S6's
   `routes/epistemic.py` decides with, on the `epistemic` route. Its task landed
   with escalation off. The kit's `policy()` is the candidate row, to be
   switched on only with its "Decision escalation" evidence. Its eval case is

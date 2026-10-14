@@ -1,0 +1,5 @@
+{
+  "plan": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"What changed between Winifred and Seraphine after the storm?\"], \"terms\": [\"forgave\", \"harbour\", \"storm\"], \"scopes\": [], \"max_scenes\": 3}",
+  "check": "{\"0\": {\"answers\": {\"sufficient\": false}}}",
+  "repair": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"WHAT changed between Winifred and Seraphine after the storm?\"], \"terms\": [\"Forgave\", \"harbour\"], \"scopes\": [], \"max_scenes\": 3}"
+}

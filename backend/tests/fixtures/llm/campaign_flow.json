@@ -42,6 +42,14 @@
       "reply": "A keeper who measures every debt in salt and has never left the keep to collect one."
     },
     {
+      "when": {"system_contains": "You answer closed questions about material you are given.", "user_contains": "Recalled earlier scenes:"},
+      "reply": "{\"0\": {\"answers\": {\"sufficient\": true}}}"
+    },
+    {
+      "when": {"system_contains": "You decide what earlier events of a role-play campaign the next reply needs."},
+      "reply": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"When did Winifred last pay the salt she owed?\"], \"terms\": [\"salt\", \"debt\"], \"scopes\": [], \"max_scenes\": 2}"
+    },
+    {
       "when": {"system_contains": "Write continuous prose for the assigned speaker"},
       "reply": [
         "\"Salt first,\" she says again, ",

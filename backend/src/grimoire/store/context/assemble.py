@@ -1992,6 +1992,9 @@ def _history_row(section: dict) -> dict:
         # 11's classification: each item's state and names, and each part's
         # class and basis. Inspector data only; no basis reaches a message.
         **({"epistemic": deepcopy(detail["epistemic"])} if "epistemic" in detail else {}),
+        # Roadmap 10's trace, only when the planner was in play: model-written
+        # questions and terms are shown here and never reach the prompt.
+        **({"plan": deepcopy(detail["plan"])} if "plan" in detail else {}),
     }}
 
 

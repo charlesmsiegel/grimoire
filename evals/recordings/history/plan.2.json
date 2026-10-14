@@ -1,0 +1,5 @@
+{
+  "plan": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"What did Seraphine vow to do?\"], \"terms\": [\"vowed\", \"return\"], \"scopes\": [], \"max_scenes\": 3}",
+  "check": "{\"0\": {\"answers\": {\"sufficient\": false}}}",
+  "repair": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"What did Seraphine promise to bring back before the thaw?\"], \"terms\": [\"copperkey\", \"thaw\"], \"scopes\": [], \"max_scenes\": 3}"
+}

@@ -82,6 +82,8 @@ from grimoire.store.absorb import membership as absorb_membership
 from grimoire.store.absorb import parse as absorb_parse
 from grimoire.store.continuity import canon, identity, pending, pressure, reconcile
 from grimoire.store.continuity import drivers as continuity_drivers
+from grimoire.store.history import model as history_model
+from grimoire.store.history import sufficiency as history_sufficiency
 from grimoire.store.regex import view as regex_view
 from grimoire.store.tracker import records as tracker_records
 from grimoire.store.tracker import walk as tracker_walk
@@ -2647,6 +2649,51 @@ def grade_decide_rerank(ctx: dict, output: str) -> list[Check]:
     return checks
 
 
+#: 10-C3's check: the turn asks where the ledger went, and the recalled
+#: scene never says -- so the evidence is NOT enough, and the expected answer
+#: is false.
+SUFFICIENCY_WINDOW = "Mara: Where did my ledger go after the storm?"
+SUFFICIENCY_EVIDENCE = history_model.Evidence(items=(history_model.EvidenceItem(
+    history_model.SceneRef("scene-2", None), "The storm", "the night of the storm",
+    summary="Seraphine and Mara shelter from the storm in the boathouse.",
+    excerpts=(history_model.Excerpt((), "Seraphine: Keep the lamp low."),)),))
+
+
+def build_decide_sufficiency() -> dict:
+    """No store: the item is built from what 10's phase hands it."""
+    return {"window": SUFFICIENCY_WINDOW, "evidence": SUFFICIENCY_EVIDENCE}
+
+
+def _decide_sufficiency_prompt(ctx: dict) -> list[dict]:
+    items = (history_sufficiency.item(ctx["window"], ctx["evidence"]),)
+    ctx.update(items=items)
+    return inference.structured_messages(list(items))
+
+
+def grade_decide_sufficiency(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    checks = [*graders.grade_prompt_section(messages, "question",
+                                            "history_check/question.j2"),
+              Check("prompt.context", ctx["items"][0].context in text,
+                    "the turn and the recalled evidence are not in the prompt"),
+              Check("prompt.no_rationale", "rationale" not in text,
+                    "the check asks for a rationale nothing reads"),
+              *graders.grade_decision(output, ctx["items"], explain=False,
+                                      question=history_sufficiency.QUESTION_ID,
+                                      expected=False)]
+    if decisions.find_object(output) is not None:
+        results = tuple(decisions.parse(output, ctx["items"], explain=False))
+        said = results[0].answers[history_sufficiency.QUESTION_ID].answer
+        verdict, _source = history_sufficiency.verdict_of(
+            decisions.Decision(items=results, backend="structured"))
+        want = ("sufficient" if said is True else "insufficient" if said is False
+                else "unknown")
+        checks.append(Check("sufficiency.non_answer_unknown", verdict == want,
+                            f"mapped {verdict!r} from an answer of {said!r}"))
+    return checks
+
+
 KIT_CASES: tuple[Case, ...] = ()
 
 # 11-S6 activates the epistemic kit with its call site.
@@ -2693,6 +2740,27 @@ CASES = (*CASES,
              Recording("off-scale", ("decide.answer",), "json"),
              # A null: ungraded, never level 0.
              Recording("abstained", ("decide.answer",), "json"),
+             Recording("native", (), "json", native="openai"),
+             Recording("native-refused", ("decide.answer",), "json", native="openai"))),
+)
+# 10-S2 registers the sufficiency check with its call site.
+CASES = (*CASES,
+    Case(id="decide-history-sufficiency",
+         task=history_sufficiency.TASK,
+         hypothesis="asked through decide() whether a recalled storm scene that never "
+                    "says where the ledger went is enough for a turn asking where it went, "
+                    "the reply is the schema's object and answers false",
+         build=build_decide_sufficiency,
+         prompt=_decide_sufficiency_prompt,
+         grade=grade_decide_sufficiency,
+         schema=_kit_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             Recording("undecodable", ("decide.json",), "json"),
+             # A null: a non-answer, so unknown -- never insufficient.
+             Recording("abstained", ("decide.answer",), "json"),
+             # The wrong answer, read as given.
+             Recording("wrong", ("decide.answer",), "json"),
              Recording("native", (), "json", native="openai"),
              Recording("native-refused", ("decide.answer",), "json", native="openai"))),
 )

@@ -20,6 +20,9 @@ from grimoire.llm_errors import LLMError
 from grimoire.store import history_rerank, routing, suggest, voice_drift
 from grimoire.store.absorb import prompt as absorb_prompt
 from grimoire.store.continuity import identity, reconcile
+from grimoire.store.history import model as history_model
+from grimoire.store.history import plan as history_plan
+from grimoire.store.history import sufficiency as history_sufficiency
 from tests import llm_fakes, wire_kit
 from tests.llm_fakes import (
     Cassette,
@@ -260,7 +263,17 @@ def _generate_prompts() -> list[str]:
         prompts.render("scene/sections/response_format.j2", player_names=[],
                        response_actor={"ref": "grimoire", "name": "Grimoire"}),
         prompts.render("tracker/update_system.j2"),
+        # Roadmap 10: the history planner's system prompt, as `build_messages`
+        # renders it (the repair form is the superset).
+        history_plan.build_messages(_PLAN_INPUT)[0]["content"],
     ]
+
+
+#: A planner input offering one record, on the repair hop (the superset).
+_PLAN_INPUT = history_plan.PlanInput(
+    window="Winifred sets the salt on the table.",
+    cast=(history_plan.Record("characters:winifred", "winifred", "characters"),),
+    tried=history_plan.Tried(("s1",), ("Who owed salt?",), ("salt",)), depth=3)
 
 
 #: One examined row as `Examination.prompt_rows` shapes it, offering one
@@ -312,7 +325,12 @@ def _decide_prompts() -> dict[str, tuple[str, str]]:
              "history-rerank": inference.structured_messages(list(history_rerank.build_items(
                  "Mara asks about the silver ledger.",
                  [history_rerank.Candidate("sid:001--saltmarch",
-                                           "Saltmarch: Mara hands Seraphine the ledger.")])))}
+                                           "Saltmarch: Mara hands Seraphine the ledger.")]))),
+             "history-sufficiency": inference.structured_messages([history_sufficiency.item(
+                 "Mara asks about the silver ledger.",
+                 history_model.Evidence(items=(history_model.EvidenceItem(
+                     history_model.SceneRef("001--saltmarch", None), "Saltmarch",
+                     summary="Mara hands Seraphine the ledger."),)))])}
     return {task: (system["content"], user["content"])
             for task, (system, user) in pairs.items()}
 
@@ -512,6 +530,26 @@ def test_the_history_rerank_body_is_the_shape_the_parser_expects():
     results = decisions.parse("".join(reply), items, explain=True)
     grade = history_rerank.grades_of(candidates, results)["sid:001--saltmarch"]
     assert history_rerank.LEVELS[grade.level] == "bears directly on this turn"
+
+
+def test_the_history_plan_body_is_a_plan_the_reader_accepts():
+    """The planner's canned reply must read as a usable plan, or a test that
+    turns planning on would only ever see `unusable`."""
+    messages = history_plan.build_messages(_PLAN_INPUT)
+    reply = "".join(_shipped().reply(messages))
+    got, why = history_plan.read(reply, history_plan.offered(_PLAN_INPUT), 3)
+    assert why == "ok" and got is not None and got.questions and got.needs_history
+
+
+def test_the_history_sufficiency_body_is_a_verdict():
+    """The check's canned reply must read as `sufficient`, so a test that
+    turns repair on and drives the cassette stops after one plan."""
+    item = history_sufficiency.item("Mara asks about the silver ledger.",
+                                    history_model.Evidence())
+    reply = _shipped().reply(_as_messages(_decide_prompts()["history-sufficiency"]))
+    results = decisions.parse("".join(reply), (item,), explain=False)
+    decision = decisions.Decision(items=tuple(results), backend="structured")
+    assert history_sufficiency.verdict_of(decision) == ("sufficient", "answer")
 
 
 def test_each_continuity_entry_answers_only_its_own_decision():

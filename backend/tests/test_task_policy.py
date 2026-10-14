@@ -36,6 +36,8 @@ from grimoire.store import (
     voice_drift,
 )
 from grimoire.store.continuity import identity, reconcile
+from grimoire.store.history import model as history_model
+from grimoire.store.history import sufficiency as history_sufficiency
 from grimoire.store.inference import resolve
 
 REPO = Path(__file__).resolve().parents[2]
@@ -47,6 +49,7 @@ TaskPolicy = routing.TaskPolicy
 #: decide route must be here (`test_every_decide_task_is_pinned`).
 _QUESTION: dict[str, str] = {
     "history-rerank": history_rerank.RELEVANCE_ID,
+    "history-sufficiency": history_sufficiency.QUESTION_ID,
     "response-selector": response_protocol.SELECTOR_QUESTION,
     "continuity-identity": identity.DECISION_ID,
     "continuity-reconcile": reconcile.DECISION_ID,
@@ -122,6 +125,8 @@ def _answers() -> dict[str, _Vocab]:
     return {
         "history-rerank": _Vocab(_keys(history_rerank.build_items("", [
             history_rerank.Candidate("scene-1", "")])[0], _QUESTION["history-rerank"])),
+        "history-sufficiency": _Vocab(_keys(history_sufficiency.item("", history_model.Evidence()),
+                                            _QUESTION["history-sufficiency"])),
         # An empty roster: the one option every pick offers. Each NPC's ref
         # is per scene, so no exact entry can name one.
         "response-selector": _Vocab(_keys(response_protocol.selector_item([], []),
@@ -390,7 +395,7 @@ def test_every_task_is_off_at_landing():
     # and runs only where a campaign switches it on -- with escalation off.
     assert set(routing.TASK_POLICY) == {"response-selector", "turn-intent", "turn-plan",
                                         "turn-tool-decision", "history-rerank",
-                                        "epistemic-access"}
+                                        "epistemic-access", "history-sufficiency"}
     for task, p in routing.TASK_POLICY.items():
         assert p.escalate_to == "", task
         assert p.fallback == "role", task
@@ -405,7 +410,8 @@ def test_every_decide_task_is_pinned():
                          "continuity-reconcile": "decision", "scene-break": "over",
                          "voice-drift": "verdict", "turn-intent": "stance",
                          "turn-plan": "stance", "turn-tool-decision": "choice",
-                         "history-rerank": "relevance", "epistemic-access": "access"}
+                         "history-rerank": "relevance", "epistemic-access": "access",
+                         "history-sufficiency": "sufficient"}
     assert not _answers()["continuity-reconcile"].exact & {
         "duplicate", "continuation", "subthread", "pays_off"}
     # The builders' vocabularies, as each call site offers them.

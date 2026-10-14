@@ -1,0 +1,104 @@
+{
+  "note": "Recorded planner replies read by store/history/plan.read against evals/history/planning.VALIDATION_INPUT (handles s1-s6: two cast, four items). Hand-authored, not recorded from a provider.",
+  "replies": [
+    {
+      "id": "invented-handle",
+      "reply": "{\"needs_history\": true, \"subjects\": [\"s1\", \"s42\", \"characters:mara\"], \"questions\": [\"Who hid it?\"], \"terms\": [\"compass\", \"winter\"], \"scopes\": [], \"max_scenes\": 3}",
+      "expect": {
+        "subjects": [
+          "characters:mara"
+        ],
+        "questions": [
+          "Who hid it?"
+        ]
+      }
+    },
+    {
+      "id": "bare-string",
+      "reply": "{\"needs_history\": true, \"subjects\": \"s1\", \"questions\": [\"Who hid it?\"], \"terms\": \"compass\"}",
+      "expect": {
+        "subjects": [],
+        "questions": [
+          "Who hid it?"
+        ],
+        "terms": []
+      }
+    },
+    {
+      "id": "fenced-object",
+      "reply": "Here is the plan:\n```json\n{\"needs_history\": true, \"subjects\": [\"s2\"], \"questions\": [\"Who hid it?\"], \"terms\": [\"compass\", \"winter\"], \"scopes\": [], \"max_scenes\": 3}\n```",
+      "expect": {
+        "subjects": [
+          "characters:seraphine"
+        ],
+        "terms": [
+          "compass",
+          "winter"
+        ]
+      }
+    },
+    {
+      "id": "prose-no-object",
+      "reply": "I would search for the compass scene first.",
+      "expect": null,
+      "why": "unreadable"
+    },
+    {
+      "id": "over-long-question",
+      "reply": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"Who really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really really hid it?\"], \"terms\": [\"compass\", \"winter\"], \"scopes\": [], \"max_scenes\": 3}",
+      "expect": {
+        "questions": [
+          "Who really really really really really really really really really really really really really really really really really really really really really really really really really really really really"
+        ]
+      }
+    },
+    {
+      "id": "declined",
+      "reply": "{\"needs_history\": false, \"subjects\": [], \"questions\": [], \"terms\": [], \"scopes\": [], \"max_scenes\": 3}",
+      "expect": {
+        "needs_history": false,
+        "subjects": [],
+        "questions": [],
+        "terms": []
+      }
+    },
+    {
+      "id": "empty",
+      "reply": "{\"needs_history\": true, \"subjects\": [], \"questions\": [], \"terms\": [\"a\", \"the\"], \"scopes\": [], \"max_scenes\": 3}",
+      "expect": null,
+      "why": "empty"
+    },
+    {
+      "id": "maximal",
+      "max_tokens": true,
+      "reply": "{\"needs_history\": true, \"subjects\": [\"s1\", \"s2\", \"s3\", \"s4\", \"s5\", \"s6\"], \"questions\": [\"What did Mara say to Seraphine about the brass compass and the winter harbour and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier an q0\", \"What did Mara say to Seraphine about the brass compass and the winter harbour and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier an q1\", \"What did Mara say to Seraphine about the brass compass and the winter harbour and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier an q2\"], \"terms\": [\"term0xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"term1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"term2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"term3xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"term4xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"term5xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"term6xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"term7xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"], \"scopes\": [\"actor\", \"group\", \"location\", \"relationship\", \"shared_cast\", \"thread\"], \"max_scenes\": 3}",
+      "expect": {
+        "needs_history": true,
+        "subjects": [
+          "characters:mara",
+          "characters:seraphine",
+          "items:i1",
+          "items:i2",
+          "items:i3",
+          "items:i4"
+        ],
+        "questions": [
+          "What did Mara say to Seraphine about the brass compass and the winter harbour and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier an q0",
+          "What did Mara say to Seraphine about the brass compass and the winter harbour and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier an q1",
+          "What did Mara say to Seraphine about the brass compass and the winter harbour and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier and the pier an q2"
+        ],
+        "terms": [
+          "term0xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "term1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "term2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "term3xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "term4xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "term5xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "term6xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "term7xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ],
+        "max_scenes": 3
+      }
+    }
+  ]
+}

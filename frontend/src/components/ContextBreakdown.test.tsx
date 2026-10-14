@@ -234,3 +234,45 @@ test("the narrator's access rows name who knows and who suspects", () => {
     /This round: 3 history retrievals, 1 query embedding/])
     expect(screen.getByText(value)).toBeInTheDocument();
 });
+
+test("history inspector shows the planning trace: where it stopped and what it asked", () => {
+  const round = { questions: ["Who counted the lanterns?"], terms: ["lanterns", "ferryman"],
+                  subjects: [], scene_keys: ["k1", "k2"], evidence_ids: ["k1@0", "k2@0"] };
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_recall", label: "Recalled history", text: "", tokens: 0,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [],
+      coverage: { tiers: [1], semantic: "off", admitted: 1, agreement: 0, verdict: "thin" },
+      ceiling: 1200, budget_from: ["config"],
+      plan: { terminal: "repaired", trigger: "thin", sufficiency: "insufficient",
+              sufficiency_source: "answer", cheap_retrieval_failed: false,
+              e0: { questions: [], terms: [], subjects: [], scene_keys: ["k1"],
+                    evidence_ids: ["k1@0"] },
+              rounds: [round], steps: [], plans: [], gain: ["k2"] },
+    },
+  }] })} />);
+  for (const value of [/Planning: repaired; trigger thin/, /added 1 scene/, /check insufficient/,
+                       /Planned round 1: Who counted the lanterns\?; terms lanterns, ferryman/])
+    expect(screen.getByText(value)).toBeInTheDocument();
+});
+
+test("two planned rounds asking the same questions both render", () => {
+  const round = (subjects: string[]) => ({ questions: ["Who hid it?"], terms: ["ledger"], subjects,
+                                           scene_keys: [], evidence_ids: [] });
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_recall", label: "Recalled history", text: "", tokens: 0,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [],
+      coverage: { tiers: [1], semantic: "off", admitted: 1, agreement: 0, verdict: "thin" },
+      ceiling: 1200, budget_from: ["config"],
+      plan: { terminal: "repaired", trigger: "thin", sufficiency: "not_asked",
+              sufficiency_source: "not_asked", cheap_retrieval_failed: false,
+              e0: round([]), rounds: [round([]), round(["characters:mara"])],
+              steps: [], plans: [], gain: [] },
+    },
+  }] })} />);
+  expect(screen.getByText(/Planned round 1: Who hid it\?/)).toBeInTheDocument();
+  expect(screen.getByText(/Planned round 2: Who hid it\?/)).toBeInTheDocument();
+});

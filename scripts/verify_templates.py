@@ -621,6 +621,60 @@ check("rerank ranked question", rank.instructions,
       render("history_rerank/rank_question.j2").strip())
 check("rerank ranked pointwise", rank.pointwise, render("history_rerank/pointwise.j2").strip())
 
+# --- the history planner (roadmap 10-C1): `store/history/plan.build_messages`
+from grimoire import schemas  # noqa: E402
+from grimoire.store.history import plan as history_plan  # noqa: E402
+
+for tried in (None, history_plan.Tried(("s1",), ("Who <hid> it?",), ("ledger",))):
+    label = f"repair={tried is not None}"
+    plan_input = history_plan.PlanInput(
+        window="Mara <asks> about the ledger.",
+        cast=(history_plan.Record("characters:mara", "mara", "characters"),),
+        threads=(history_plan.Record("thread:debt", "The Debt", "thread"),),
+        found=(history_plan.Found("The pier", "spring", "Mara hides it."),),
+        tried=tried, coverage="thin", tiers=(1,), depth=3)
+    plan_schema = history_plan.schema_for(history_plan.offered(plan_input), 3)
+    built = history_plan.build_messages(plan_input)
+    check(f"history plan system ({label})", built[0]["content"],
+          render("history_plan/system.j2", schema=plan_schema, repair=tried is not None,
+                 max_subjects=history_plan.MAX_SUBJECTS,
+                 max_questions=history_plan.MAX_QUESTIONS,
+                 question_chars=history_plan.QUESTION_CHARS,
+                 max_terms=history_plan.MAX_TERMS, term_chars=history_plan.TERM_CHARS,
+                 depth=3).strip())
+    REPORT.require(f"history plan schema in prompt ({label})",
+                   schemas.render(plan_schema) in built[0]["content"],
+                   "the system prompt lost the rendered schema")
+    check(f"history plan user ({label})", built[1]["content"],
+          render("history_plan/user.j2", window=plan_input.window,
+                 cast=[{"handle": "s1", "name": "mara", "kind": "characters"}], mentioned=[],
+                 threads=[{"handle": "s2", "name": "The Debt", "kind": "thread"}], groups=[],
+                 found=[{"title": "The pier", "date": "spring", "summary": "Mara hides it."}],
+                 tried=None if tried is None else {"subjects": ["s1"],
+                                                   "questions": ["Who <hid> it?"],
+                                                   "terms": ["ledger"]},
+                 coverage="thin", tiers=[1], depth=3).strip())
+
+# --- the evidence-sufficiency check (roadmap 10-C3): `store/history/sufficiency.item`
+from grimoire.store.history import sufficiency as history_sufficiency  # noqa: E402
+
+for found in ((), (history_model.EvidenceItem(
+        history_model.SceneRef("001--a", None), "The pier", "spring",
+        summary="Mara <hides> it.", excerpts=(history_model.Excerpt((), "Mara: here.\nmore"),)),)):
+    label = f"evidence={len(found)}"
+    check_item = history_sufficiency.item("Where is the <ledger>?",
+                                          history_model.Evidence(items=found))
+    check(f"sufficiency item context ({label})", check_item.context,
+          render("history_check/item.j2", window="Where is the <ledger>?",
+                 evidence=[{"title": "The pier", "date": "spring", "summary": "Mara <hides> it.",
+                            "excerpt": "Mara: here."}] if found else []).strip())
+    (sufficient_q,) = check_item.questions
+    check(f"sufficiency question ({label})", sufficient_q.instructions,
+          render("history_check/question.j2").strip())
+    REPORT.require(f"sufficiency predicate ({label})",
+                   sufficient_q.id == history_sufficiency.QUESTION_ID,
+                   f"asks {sufficient_q.id}")
+
 #: The driver keys of the suggestion snapshot (`build_snapshot(drivers=True)`,
 #: which has no `upcoming`), empty.
 DRIVER_KEYS = {"commitments": [], "timeline": [], "driver_index": [], "anchors": [],
