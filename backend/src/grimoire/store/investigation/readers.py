@@ -98,8 +98,11 @@ def split(ref: object, kinds: tuple[str, ...]) -> tuple[str, str]:
 
 def _scene_rows(cid: str) -> list[dict]:
     """The campaign's scenes in play order: sorted ids, as the graph orders
-    them (`continuity/graph.py`), never `list_scenes`' recency order."""
-    return sorted(scenes_read.list_scenes(cid), key=lambda row: row["id"])
+    them (`continuity/graph.py`), never `list_scenes`' recency order. A scene
+    a branch closed (`closed_by`, the sibling that was not kept) is no
+    history: retrieval never admits one, and no reader returns one."""
+    return sorted((r for r in scenes_read.list_scenes(cid) if not r.get("closed_by")),
+                  key=lambda row: row["id"])
 
 
 def scene(cid: str, ref: object) -> dict:

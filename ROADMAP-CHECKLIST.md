@@ -494,6 +494,14 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
     builds a query's terms from free text; every turn call is unchanged.
   - Spec 15.3 is met by 01g's existing `inference.tool_run_refusal`; spec
     15.4: with `tier_limit=2` pinned in every mode, 09's tier 3 has no caller.
+  - A scene a branch closed (`closed_by`) is no history to any tool, as it is
+    none to retrieval; a scene counts as read only when the loop delivered
+    its text (a timed-out read is not one).
+- **Still owed by the implemented slices** (found in review, not built here):
+  E2's and E3's per-turn prompt-log captures (spec 8.2, "when capturing is
+  on" -- 01g's `TurnCapture` has no prompt-log filer yet; the decide tool's
+  calls are captured), and E2's and E3's start showing the campaign's budget
+  level (spec 7.1).
 
 ### 13: Mechanics II
 - [ ] **13-C1a** Actions and the legal set. **13-C1b** The Effect DSL and

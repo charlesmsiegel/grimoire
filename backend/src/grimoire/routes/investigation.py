@@ -176,6 +176,20 @@ async def _loop(task: str, messages: list[dict], *, resolved: ResolvedInference,
     raise ValueError(f"not an investigation task: {task!r}")
 
 
+def _keep_delivered(state: investigation_state.RunState,
+                    result: tool_calls.LoopResult) -> None:
+    """`inspected` held to the reads the model was actually handed: a tool's
+    thread the loop stopped waiting on (`timed out`) can still finish and note
+    its scene, but the model was told it failed, so that scene was never read.
+    The loop's own trace says which reading calls delivered, and their refs
+    name the scenes they returned text of (`tools.READS`)."""
+    delivered = {ref.removeprefix("scene:") for e in result.trace
+                 if e.kind == "tool" and e.ok and e.name in investigation_tools.READS
+                 for ref in e.refs if ref.startswith("scene:")}
+    with state.lock:
+        state.inspected &= delivered
+
+
 def _model_of(result: tool_calls.LoopResult | None, resolved: ResolvedInference) -> str:
     rows = result.rows if result is not None else ()
     for row in reversed(rows):
@@ -234,6 +248,7 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
         stopped = {"state": "cancelled"}
     checked: investigation_final.Final | None = None
     if result is not None:
+        _keep_delivered(state, result)
         if result.status == "failed":
             stopped = {"state": "failed",
                        "error": getattr(result.error, "kind", "") or "error"}
@@ -367,7 +382,7 @@ async def _continuity_work(app, run: runs.Run, cid: str, candidate_id: str,
         proposal = {**outcome.result, "investigation": outcome.trace}
         persisted = await anyio.to_thread.run_sync(lambda: reconcile.persist_investigation(
             cid, candidate_id, proposal, started_fingerprint=record["fingerprint"],
-            started_proposal=record.get("proposal")))
+            started_proposal=record.get("proposal"), stillborn=lambda: _stillborn(run)))
     body = {"outcome": outcome.as_dict(), "persisted": persisted, "candidate": candidate_id}
     return {"state": "cancelled" if outcome.state == "cancelled" else "landed",
             "result": body}

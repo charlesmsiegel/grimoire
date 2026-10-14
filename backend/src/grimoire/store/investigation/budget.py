@@ -96,9 +96,14 @@ def prompt_tokens(resolved: inference_resolved.ResolvedInference,
                   budget: tool_calls.RunBudget) -> int:
     """The context stop's ceiling (spec 7.3): 01i-C2's `prompt_ceiling` with a
     reserve sized for the turn's own output cap -- never `window -
-    max_output` -- else `FALLBACK_PROMPT_TOKENS` when no window is known."""
+    max_output` -- else `FALLBACK_PROMPT_TOKENS` when a window is unknown on
+    any attempt the chain may send."""
     ceiling = limits.prompt_ceiling(resolved, max_tokens=budget.max_output_tokens)
-    return FALLBACK_PROMPT_TOKENS if ceiling.tokens is None else ceiling.tokens
+    if ceiling.tokens is None:
+        return FALLBACK_PROMPT_TOKENS
+    # A window known on some attempts only bounds those: an attempt with none
+    # stated (a riding fallback, say) gets the fallback's bound too.
+    return ceiling.tokens if ceiling.complete else min(ceiling.tokens, FALLBACK_PROMPT_TOKENS)
 
 
 def with_context(budget: tool_calls.RunBudget, tokens: int) -> tool_calls.RunBudget:

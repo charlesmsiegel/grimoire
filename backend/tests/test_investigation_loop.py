@@ -230,3 +230,25 @@ def test_a_budget_refuses_a_bad_context_stop():
         tool_calls.RunBudget(max_prompt_tokens=0)
     assert tool_calls.RunBudget(max_prompt_tokens=10).max_prompt_tokens == 10
     assert "context" in tool_calls.LIMITS
+
+
+def test_only_reads_the_loop_delivered_count_as_read(cid):
+    run_state = state.RunState(cid=cid, mode="question")
+    run_state.inspect("001--a")
+    run_state.inspect("002--b")
+    result = tool_calls.LoopResult(status="completed", trace=(
+        tool_calls.TraceEntry(1, "tool", "get_scene_excerpt", ok=True, refs=("scene:001--a",)),
+        # Timed out: the model was told so, though its thread noted the read.
+        tool_calls.TraceEntry(2, "tool", "read_scene_window", ok=False),
+        tool_calls.TraceEntry(2, "tool", "search_history", ok=True, refs=("scene:002--b",)),
+    ))
+    investigation._keep_delivered(run_state, result)
+    assert run_state.inspected == {"001--a"}
+
+
+def test_a_window_known_on_some_attempts_only_falls_back(monkeypatch):
+    monkeypatch.setattr(limits, "prompt_ceiling", lambda *a, **k: limits.Ceiling(
+        tokens=190_000, window=200_000, reserve=10_000, complete=False, binding=None,
+        reason=""))
+    budget = inv_budget.for_entry("question")
+    assert inv_budget.prompt_tokens(_resolved(), budget) == inv_budget.FALLBACK_PROMPT_TOKENS

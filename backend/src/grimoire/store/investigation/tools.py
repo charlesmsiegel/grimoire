@@ -60,6 +60,12 @@ SEARCH_TOKENS = TOOL_RESULT_CHARS // 4
 
 ERRORS: tuple[str, ...] = ("not_found", "not_in_mode", "bad_args", "unavailable")
 
+#: The tools whose result is a scene's own text: what `inspected` -- the
+#: evidence floor -- is made of (spec 6.2). Each names the scene in its
+#: result's refs only when it returned that scene's text.
+READS: frozenset[str] = frozenset({"get_scene_summary", "get_scene_excerpt",
+                                   "read_scene_window"})
+
 #: The terminal tools, by name (spec 4.3).
 FINISH_EVIDENCE = "finish_evidence"
 PROPOSE = "propose"
@@ -264,7 +270,7 @@ def _summary(run: state.RunState, args: dict) -> Answer:
     sid = row["id"]
     found = readers.summary(run.cid, sid)
     if not found["summary"]:
-        return Answer([], refs=(_scene_ref(sid),))
+        return Answer([])
     held = history_model.EvidenceItem(
         history_model.SceneRef(sid, scenes_identity.scene_identity(run.cid, sid)),
         found["title"], found["date"], found["location"], found["summary"])
@@ -283,7 +289,7 @@ def _excerpt(run: state.RunState, args: dict) -> Answer:
     if expansion is None:
         raise readers.NotFound(args.get("scene"))
     if not expansion.excerpts:
-        return Answer([], refs=(_scene_ref(sid),))
+        return Answer([])
     found = expansion.excerpts[0]
     held = history_model.EvidenceItem(
         history_model.SceneRef(sid, expansion.identity or None),
@@ -308,11 +314,16 @@ def _window(run: state.RunState, args: dict) -> Answer:
     lines = [line for _, line in found["posts"]]
     budget = TOOL_RESULT_CHARS - 400
     kept: list[str] = []
+    clipped = False
     for line in reversed(lines):
         if sum(len(x) + 1 for x in kept) + len(line) + 1 > budget:
+            if not kept:
+                # One post longer than the whole result: its head, cut, rather
+                # than a page that skips it and can never show it.
+                kept, clipped = [line[:budget - 20] + " [post cut short]"], True
             break
         kept.insert(0, line)
-    truncated = len(kept) < len(lines)
+    truncated = clipped or len(kept) < len(lines)
     if kept:
         first = found["posts"][len(lines) - len(kept)][0]
         head = f"posts {first}-{found['posts'][-1][0]} of {found['total']}"
@@ -324,7 +335,7 @@ def _window(run: state.RunState, args: dict) -> Answer:
     text = "\n".join([head, *kept])
     return Answer([item(f"w{sid}@{first}", _scene_ref(sid), str(row.get("title") or sid), text,
                         truncated)],
-                  refs=(_scene_ref(sid),), read=(sid,) if kept else ())
+                  refs=(_scene_ref(sid),) if kept else (), read=(sid,) if kept else ())
 
 
 def _record(run: state.RunState, args: dict) -> Answer:

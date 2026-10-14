@@ -143,3 +143,11 @@ def test_no_terminal_call_is_insufficient_evidence():
     # A terminal tool of another mode is not this mode's finish.
     assert final.settle(run, _call("propose", decision="duplicate")).state \
         == "insufficient_evidence"
+
+
+def test_a_stop_pressed_while_the_persist_waited_writes_nothing(found):
+    cid, _sid, record = found
+    assert reconcile.persist_investigation(
+        cid, PAIR, PROPOSAL, started_fingerprint=record["fingerprint"],
+        started_proposal=None, stillborn=lambda: True) is False
+    assert candidates.read(cid)["records"][PAIR]["proposal"] is None

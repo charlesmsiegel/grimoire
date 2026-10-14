@@ -563,9 +563,13 @@ class RunRegistry:
             if existing is not None:
                 return existing, False
 
+            if single_live and single_match is not None \
+                    and (held := self._live_kind(subject, cls, kind)) is not None \
+                    and (held.cancel_requested or not single_match(held)):
+                # A run about something else, or one still stopping, holds
+                # the subject until it ends: never two at once.
+                raise RunInFlightError(held.id)
             if single_live and (live := self._live_single(subject, cls, kind)) is not None:
-                if single_match is not None and not single_match(live):
-                    raise RunInFlightError(live.id)
                 return self._adopt(live, subject, attempt_id), False
             if refuse_live and (live := self._live_kind(subject, cls, kind)) is not None:
                 raise RunInFlightError(live.id)

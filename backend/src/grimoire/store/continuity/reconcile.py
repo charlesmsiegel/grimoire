@@ -945,7 +945,8 @@ def persist_proposals(cid: str, sweep: Sweep, proposals: dict[str, dict], *,
 
 
 def persist_investigation(cid: str, key: str, proposal: dict, *,
-                          started_fingerprint: str, started_proposal: dict | None) -> bool:
+                          started_fingerprint: str, started_proposal: dict | None,
+                          stillborn: Callable[[], bool] = lambda: False) -> bool:
     """Roadmap 12's one write (§6.2): one investigation's proposal on the
     candidate it was about, and whether it landed.
 
@@ -957,8 +958,12 @@ def persist_investigation(cid: str, key: str, proposal: dict, *,
     ``basis`` are left as they are, so this write neither fences a sweep nor
     is fenced by one (a sweep that started earlier and lands later keeps or
     replaces it by its own rules). It stamps the campaign's revision itself,
-    once, because the 202 that started the run never waits for it."""
+    once, because the 202 that started the run never waits for it.
+    `stillborn` is the run's stop, asked inside the hold as `_commit` asks
+    it: a Stop pressed while this waited on the lock writes nothing."""
     with locks.campaign_lock(cid):
+        if stillborn():
+            return False
         if not campaigns_paths.campaign_exists(cid) or candidates.malformed(cid):
             return False
         stored = candidates.read(cid)

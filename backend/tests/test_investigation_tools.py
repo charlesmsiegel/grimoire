@@ -300,3 +300,26 @@ def test_the_envelope_never_passes_the_result_cap():
     assert any(i["truncated"] for i in json.loads(text)["items"])
     with pytest.raises(ValueError):
         tools.envelope_error("withheld")
+
+
+def test_a_closed_branch_scene_is_not_found(run, monkeypatch):
+    sid = played(run.cid, text="Mara pays the debt.")
+    real = readers.scenes_read.list_scenes
+
+    def closed(cid):
+        return [{**r, "closed_by": "002--kept"} if r["id"] == sid else r for r in real(cid)]
+    monkeypatch.setattr(readers.scenes_read, "list_scenes", closed)
+    assert _call(run, "read_scene_window", scene=f"scene:{sid}", before=None,
+                 limit=4)[1] == {"ok": False, "error": "not_found"}
+    _, env = _call(run, "get_timeline", **{"from": None, "to": None})
+    assert sid not in env["items"][0]["text"]
+
+
+def test_one_post_longer_than_the_result_is_cut_not_skipped(run):
+    sid = played(run.cid, text="opening")
+    scenes.append_message(run.cid, sid, "assistant", "Mara speaks. " + "word " * 2000)
+    _, env = _call(run, "read_scene_window", scene=f"scene:{sid}", before=None, limit=1)
+    (found,) = env["items"]
+    assert found["truncated"] is True and "[post cut short]" in found["text"]
+    assert "Mara speaks." in found["text"]
+    assert sid in run.inspected

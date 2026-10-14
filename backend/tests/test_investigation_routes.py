@@ -361,3 +361,25 @@ def test_e2_a_finding_gone_before_the_run_reads_it_fails_cleanly(client, monkeyp
     assert run["result"]["outcome"]["error"] == "gone"
     assert run["result"]["persisted"] is False
     assert fake.requests == []
+
+
+def test_e2_a_stopping_investigation_still_holds_the_campaign(client):
+    cid, sid = _campaign(client)
+    store.plot.set_movement(cid, "find-the-harbour-ledger", "Find the harbour ledger",
+                            "open", "Mara searches the harbour for the ledger.", sid)
+    _found(client, cid)
+    _on(client)
+    others = [k for k in candidates.read(cid)["records"] if k != PAIR]
+    held = _install(client, HeldTools(("", [("finish_no_change", {"reason": "same"})])))
+    first = _investigate(client, cid, attempt="s1")
+    assert held.held.wait(10)
+    try:
+        run = client.app.state.runs.for_attempt(runs.campaign_subject(cid), "s1")
+        run.cancel_requested = True
+        for candidate in (PAIR, others[0]):
+            refused = _investigate(client, cid, candidate=candidate)
+            assert refused.status_code == 409 and refused.json()["kind"] == "busy"
+    finally:
+        held.go.set()
+    assert run.terminal.wait(10)
+    assert first.status_code == 202
