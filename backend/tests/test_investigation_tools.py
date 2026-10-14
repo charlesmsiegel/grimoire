@@ -117,6 +117,15 @@ def test_a_read_the_envelope_could_not_carry_is_not_a_read(run, monkeypatch):
     assert tools.item("e1", "scene:x", "t" * 5000, "")["title"] == "t" * tools.TITLE_CHARS
 
 
+def test_an_aggregate_tool_keeps_the_refs_its_text_was_built_from(run):
+    """`get_timeline` answers one `timeline` item built from many scenes: its
+    step keeps those scenes' refs, since the item was delivered whole."""
+    first = played(run.cid, text="Mara arrives.")
+    absorbed(run.cid, first, "Mara arrives in Saltmarch.")
+    _call(run, "get_timeline", **{"from": None, "to": None})
+    assert f"scene:{first}" in run.steps[-1]["result"]["refs"]
+
+
 def test_out_of_range_arguments_are_bad_args(run):
     sid = played(run.cid)
     assert _call(run, "read_scene_window", scene=f"scene:{sid}", limit=40)[1] == \

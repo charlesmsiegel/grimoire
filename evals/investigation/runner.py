@@ -183,15 +183,25 @@ async def _retrieval(case, planted, *, client, resolved, run_id, live, decider,
             "shown": shown}
 
 
-async def _hidden_route(planted: synth.Planted) -> bool | None:
+def probe_run(run_id: str) -> str:
+    """The run id the hidden-route probe files its calls under: apart from
+    the arm's, so its embedding rows are never the arm's cost."""
+    return f"{run_id}:hidden-route"
+
+
+async def _hidden_route(planted: synth.Planted, *, embed_client=None,
+                        run_id: str = "hidden") -> bool | None:
     """Spec 10.2's hidden route, for the narrator: a search over a word that
     appears only in a hidden post answers exactly as one over a word that
-    appears nowhere. None when the case plants no hidden word."""
+    appears nowhere. None when the case plants no hidden word. Live, it
+    searches as the arms do -- semantic too, with `embed_client` -- since
+    semantic ranking is exactly what could tell the two apart."""
     if not planted.hidden_terms:
         return None
-    run_state = inv_state.RunState(cid=planted.cid, mode="continuity")
+    run_state = inv_state.RunState(cid=planted.cid, mode="continuity",
+                                   embed_client=embed_client)
     spec = inv_tools.toolset(run_state).get("search_history")
-    ctx = tool_calls.ToolContext(campaign=planted.cid, scene_identity="", run_id="hidden",
+    ctx = tool_calls.ToolContext(campaign=planted.cid, scene_identity="", run_id=run_id,
                                  deadline=float("inf"), root="")
     nowhere = json.loads((await spec.fn({"query": NOWHERE, "max": 4}, ctx)).text)
     clean = True
@@ -269,7 +279,8 @@ def _run_arm(case, arm, planted, *, live, targets, space, run_id
             ran, wall = asyncio.run(_timed(
                 ARM_FNS[arm], case, planted, client=client, resolved=resolved, run_id=run_id,
                 live=live, decider=decider, embed_client=embed))
-            hidden = asyncio.run(_hidden_route(planted))
+            hidden = asyncio.run(_hidden_route(planted, embed_client=embed,
+                                               run_id=probe_run(run_id)))
     except Exception as exc:  # noqa: BLE001 - one failed case is graded as failed
         error, ran = type(exc).__name__, {"state": "failed"}
     finally:
@@ -316,10 +327,14 @@ def run_all(*, live: bool = False, targets: dict | None = None, rates=None, run_
                 ran, hidden, error, wall = _run_arm(case, arm, planted, live=live,
                                                     targets=targets, space=space,
                                                     run_id=run_id)
-                rows = reports.harvest(day, run_id, case.id)
+                harvested = reports.harvest(day, run_id, case.id)
+                # The probe's calls are the grader's, not the arm's cost.
+                probe = probe_run(run_id)
+                rows = tuple(r for r in harvested if r.get("run_id") != probe)
                 metric = {**_grade(case, planted, arm, ran), "hidden_route": hidden,
                           "error": error, "wall_ms": wall,
-                          "scenes": len(scenes.list_scenes(planted.cid))}
+                          "scenes": len(scenes.list_scenes(planted.cid)),
+                          "probe_calls": len(harvested) - len(rows)}
                 bucket = costs.fold(rows, rates)
                 metric["money"] = {
                     "cost_usd": bucket.get("cost_usd") if costs.billed_calls(bucket) else None,

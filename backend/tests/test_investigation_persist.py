@@ -123,6 +123,21 @@ def test_a_trace_whose_usage_the_view_cannot_read_is_dropped(usage):
     assert not trace.valid(_trace(usage=usage))
 
 
+@pytest.mark.parametrize("step", [
+    {},
+    {"turn": 1, "tool": "search_history", "args": {}},
+    {"turn": 1, "tool": "search_history", "args": {}, "result": {"ok": True}},
+    {"turn": "1", "tool": "search_history", "args": {},
+     "result": {"ok": True, "refs": [], "chars": 0, "truncated": False}},
+    {"turn": 1, "tool": "search_history", "args": {},
+     "result": {"ok": True, "refs": [3], "chars": 0, "truncated": False}},
+])
+def test_a_trace_with_a_step_the_view_cannot_read_is_dropped(step):
+    good = trace.step(1, "search_history", {"query": "ledger"}, ok=True, refs=("scene:a",))
+    assert trace.valid(_trace(steps=[good]))
+    assert not trace.valid(_trace(steps=[good, step]))
+
+
 # ---- the final call ----
 def _call(name, **args):
     return tool_calls.ToolCall(id="c1", name=name, arguments=args, raw_arguments="")

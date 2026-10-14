@@ -84,7 +84,7 @@ def test_an_arms_wall_time_is_its_own(monkeypatch):
     async def arm(case, planted, **_kw):
         return {"state": "completed", "result": None, "trace": {}}
 
-    async def probe(planted):
+    async def probe(planted, **_kw):
         probed.append(planted.cid)
         await runner.asyncio.sleep(PROBE_S)
     for name in cases.ARMS["question"]:
@@ -161,6 +161,38 @@ def test_an_arm_leaves_its_home_only_once_no_tool_thread_runs(monkeypatch):
     real = runner.os.environ.get("GRIMOIRE_HOME")
     runner.run_all(selected=("question",))
     assert len(waited) == 2 and all(h and h != real for h in waited)
+
+
+def test_the_hidden_route_probe_searches_as_the_arms_do_and_costs_them_nothing(monkeypatch):
+    """Live, the probe gets the arms' embeddings client -- semantic ranking is
+    what could tell a hidden word from a missing one -- and files under its
+    own run id, so its calls are never the arm's cost."""
+    from grimoire.store import usage
+    seen = []
+
+    async def probe(planted, *, embed_client=None, run_id=""):
+        seen.append((embed_client, run_id))
+        usage.record(task="history-recall", campaign=planted.cid, run_id=run_id,
+                     operation="embed", model="vendor/embed", provider="openrouter",
+                     prompt_tokens=4, cost_usd=7.0)
+        return True
+    monkeypatch.setattr(runner, "_hidden_route", probe)
+    monkeypatch.setattr(runner.cases, "CASES",
+                        tuple(c for c in cases.CASES if c.id == "unnamed-debt-resolution"))
+    client = object()
+    monkeypatch.setattr(runner.embeddings, "AsyncEmbeddingsClient", lambda: client)
+
+    async def arm(case, planted, **_kw):
+        return {"state": "completed", "result": None, "trace": {}}
+    for name in cases.ARMS["continuity"]:
+        monkeypatch.setitem(runner.ARM_FNS, name, arm)
+    monkeypatch.setattr(runner, "_close", lambda *a: runner.asyncio.sleep(0))
+    monkeypatch.setattr(runner, "_client", lambda *a, **k: (None, None))
+    _results, ran = runner.run_all(live=True, selected=("continuity",), run_id="r9",
+                                   space={"space": "s"})
+    assert [e for e, _ in seen] == [client, client]
+    assert all(rid == runner.probe_run("r9") for _, rid in seen)
+    assert all(r["probe_calls"] == 1 and r["money"]["cost_usd"] is None for r in ran)
 
 
 def test_both_arms_search_with_the_embeddings_client_they_are_handed(monkeypatch):

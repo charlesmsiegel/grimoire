@@ -68,7 +68,7 @@ describe("InvestigationTrace", () => {
 });
 
 describe("AskHistory", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); });
 
   function ask(answer: HistoryAnswer) {
     mocked(api.askHistory).mockResolvedValue(answer);
@@ -84,7 +84,8 @@ describe("AskHistory", () => {
                      result: { text: "Mara keeps it.", citations: ["scene:001--docks"] },
                      trace: TRACE } });
     expect(await screen.findByText("Mara keeps it.")).toBeInTheDocument();
-    expect(api.askHistory).toHaveBeenCalledWith("run", "Who keeps the harbour ledger?");
+    expect(api.askHistory).toHaveBeenCalledWith("run", "Who keeps the harbour ledger?",
+                                                expect.any(AbortSignal), expect.any(String));
     expect(screen.getAllByRole("link", { name: "001--docks" }).length).toBeGreaterThan(0);
   });
 
@@ -110,6 +111,28 @@ describe("AskHistory", () => {
     expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("re-attaches to a question still running after it was unmounted", async () => {
+    mocked(api.askHistory).mockReturnValue(new Promise(() => {}));
+    const first = render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Your question"),
+                     { target: { value: "Who keeps the harbour ledger?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    const [, , , attempt] = mocked(api.askHistory).mock.calls[0];
+    expect(typeof attempt).toBe("string");
+    first.unmount();
+
+    mocked(api.askHistory).mockResolvedValue({
+      question: "Who keeps the harbour ledger?",
+      outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
+                 result: null, trace: TRACE } });
+    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    // The same run, followed by the same attempt id -- never a second question.
+    expect(mocked(api.askHistory).mock.calls[1][3]).toBe(attempt);
+    expect(screen.getByLabelText("Your question")).toHaveValue("Who keeps the harbour ledger?");
+    expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
+    expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
   });
 
   it("asks nothing for an empty question", () => {

@@ -208,7 +208,7 @@ def investigation_trace(value) -> dict | None:
     if not all(isinstance(value.get(k), str) for k in _TRACE_TEXT):
         return None
     steps, inspected = value.get("steps"), value.get("inspected")
-    if not isinstance(steps, list) or not all(isinstance(x, dict) for x in steps):
+    if not isinstance(steps, list) or not all(_trace_step(x) for x in steps):
         return None
     if not isinstance(inspected, list) or not all(isinstance(x, str) for x in inspected):
         return None
@@ -224,6 +224,22 @@ def _count(value) -> bool:
 
 def _money(value) -> bool:
     return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool))
+
+
+def _trace_step(step) -> bool:
+    """One step in the shape `investigation.trace.step` writes and the trace
+    view reads: its turn, tool and arguments, and a result with its ok flag,
+    refs, size and truncation (an error code only beside a failure)."""
+    if not isinstance(step, dict):
+        return False
+    result = step.get("result")
+    return (_count(step.get("turn")) and isinstance(step.get("tool"), str)
+            and isinstance(step.get("args"), dict) and isinstance(result, dict)
+            and isinstance(result.get("ok"), bool)
+            and isinstance(result.get("refs"), list)
+            and all(isinstance(r, str) for r in result["refs"])
+            and _count(result.get("chars")) and isinstance(result.get("truncated"), bool)
+            and isinstance(result.get("error", ""), str))
 
 
 def _trace_usage(usage) -> bool:

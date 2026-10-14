@@ -1703,11 +1703,13 @@ export const api = {
         undefined, { attempt, signal }), { signal }).then(notifyShell),
   /** Ask the campaign's history a question (roadmap 12, E3): a draft whose
    *  answer is held on the run and never stored. */
-  askHistory: (cid: string, question: string, signal?: AbortSignal) =>
-    draftRun<HistoryAnswer>({ at: "campaign", id: cid }, (attempt) =>
+  /** `attempt`, when given, re-attaches: the server adopts a repeat of a
+   *  live question's attempt id rather than asking again. */
+  askHistory: (cid: string, question: string, signal?: AbortSignal, attempt?: string) =>
+    draftRun<HistoryAnswer>({ at: "campaign", id: cid }, (a) =>
       request<{ run: RunHandle }>(
         "POST", `/api/campaigns/${encodeSegment(cid)}/history/question`, { question },
-        { attempt, signal }), { signal }),
+        { attempt: a, signal }), { signal, attempt }),
   /** Follow a campaign run this client did not start -- the sweep End Scene
    *  began, found on the candidates read (Decision 24). It has no attempt id
    *  of ours, so the last word before giving up on it is the subject's run

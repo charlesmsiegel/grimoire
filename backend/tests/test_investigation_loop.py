@@ -215,6 +215,40 @@ def test_the_searchs_embedding_rows_are_part_of_the_runs_usage(cid, scene):
     assert outcome.trace["usage"]["cost"]["cost_usd"] == 0.125
 
 
+def test_a_failed_first_turn_is_attributed_to_the_model_that_served_it(cid, scene):
+    """A turn-1 failure raises with no `LoopResult`; the trace names the
+    model its filed row names (a fallback that served), not the primary."""
+    from grimoire.store import usage
+    usage.record(task=TASK, campaign=cid, run_id=RUN, model="vendor/backup",
+                 provider="openrouter", provider_id="backup", status="error",
+                 error="rate_limit")
+
+    class Raising(FakeToolTurns):
+        async def complete(self, *a, **k):
+            raise LLMError("rate_limit", "slow down")
+    outcome, _ = _run(cid, Raising())
+    assert outcome.state == "failed"
+    assert outcome.trace["model"] == "backup/vendor/backup"
+
+
+def test_a_fallback_that_cannot_call_tools_bounds_no_context(monkeypatch):
+    """A tool run never sends a fallback known unable to call tools, so its
+    window -- unknown here -- is no reason to stop on `context`."""
+    from grimoire.store.inference import resolve as inference_resolve
+    seen = {}
+
+    def ceiling(resolved, *, reserve=None, max_tokens=None):
+        seen["rides"] = resolved.rides
+        return limits.Ceiling(tokens=3000, window=4000, reserve=1000,
+                              complete=not resolved.rides, binding=None, reason="")
+    monkeypatch.setattr(limits, "prompt_ceiling", ceiling)
+    monkeypatch.setattr(inference_resolve, "known_lacks",
+                        lambda resolved, cap, fallback=False: fallback and cap == "tools")
+    riding = replace(_resolved(), rides=True)
+    assert inv_budget.prompt_tokens(riding, inv_budget.for_entry("question")) == 3000
+    assert seen["rides"] is False
+
+
 def test_a_thread_that_finishes_after_the_check_writes_nothing(cid):
     """A tool thread the loop stopped waiting on can finish late: what it
     notes was never delivered, before the freeze or after it."""

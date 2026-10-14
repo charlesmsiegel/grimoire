@@ -5,10 +5,11 @@
  *  only scenes the run actually read; an answer citing nothing it read is
  *  "not enough to answer" rather than a claim. What the run looked at is shown
  *  under the answer, so a reader can check it. Nothing here writes. */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api/client";
 import { errorText } from "../../api/errors";
+import { isAbortError, newAttemptId } from "../../api/stream";
 import type { HistoryAnswer } from "../../api/types";
 import { encodeSegment } from "../../urlSegment";
 import { InvestigationTrace, outcomeSentence } from "./InvestigationTrace";
@@ -16,25 +17,76 @@ import { InvestigationTrace, outcomeSentence } from "./InvestigationTrace";
 /** The longest question the server takes. */
 export const QUESTION_CHARS = 500;
 
+/** A question still being answered, kept past this panel: the run is
+ *  detached on the server and spends whether or not anyone is watching, so
+ *  leaving the page must not lose its answer or let a second one start. A
+ *  remount re-attaches by the same attempt id, which the server adopts. */
+type Pending = { attempt: string; question: string };
+
+const pendingKey = (cid: string) => `grimoire.askHistory.${cid}`;
+
+/** Every storage touch is wrapped: storage can throw (a private window,
+ *  blocked site data), and a panel that cannot remember still asks. */
+function readPending(cid: string): Pending | null {
+  try {
+    const raw = localStorage.getItem(pendingKey(cid));
+    const v: unknown = raw ? JSON.parse(raw) : null;
+    if (v && typeof v === "object" && typeof (v as Pending).attempt === "string"
+        && typeof (v as Pending).question === "string") return v as Pending;
+  } catch { /* nothing remembered */ }
+  return null;
+}
+
+function writePending(cid: string, p: Pending | null): void {
+  try {
+    if (p) localStorage.setItem(pendingKey(cid), JSON.stringify(p));
+    else localStorage.removeItem(pendingKey(cid));
+  } catch { /* in memory only */ }
+}
+
 export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void }) {
-  const [question, setQuestion] = useState("");
+  const [question, setQuestion] = useState(() => readPending(cid)?.question ?? "");
   const [asking, setAsking] = useState(false);
   const [answer, setAnswer] = useState<HistoryAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const live = useRef<AbortController | null>(null);
 
-  async function ask() {
-    const q = question.trim();
-    if (!q || asking) return;
+  async function follow(p: Pending) {
+    live.current?.abort();
+    const ctl = new AbortController();
+    live.current = ctl;
     setAsking(true);
     setError(null);
     setAnswer(null);
     try {
-      setAnswer(await api.askHistory(cid, q));
+      const got = await api.askHistory(cid, p.question, ctl.signal, p.attempt);
+      writePending(cid, null);
+      setAnswer(got);
     } catch (err: unknown) {
+      // An unmount stops only the watching; the run, and its record here,
+      // stay for the next mount to pick up.
+      if (isAbortError(err)) return;
+      writePending(cid, null);
       setError(errorText(err));
     } finally {
-      setAsking(false);
+      if (!ctl.signal.aborted) setAsking(false);
     }
+  }
+
+  // A question left running by an earlier mount is followed, not re-asked.
+  useEffect(() => {
+    const p = readPending(cid);
+    if (p) void follow(p);
+    return () => live.current?.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per campaign
+  }, [cid]);
+
+  function ask() {
+    const q = question.trim();
+    if (!q || asking) return;
+    const p = { attempt: newAttemptId(), question: q };
+    writePending(cid, p);
+    void follow(p);
   }
 
   const sceneLink = (sid: string) => (
@@ -47,9 +99,9 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
     <section className="ask-history" aria-label="Ask the history">
       <div className="ask-history-head">
         <h3>Ask the history</h3>
-        {/* Closing unmounts the panel, and a run still asking would answer
-            nobody while it spends -- and a reopened panel could start a
-            second. So it closes only once its question is answered. */}
+        {/* Closing while asking would leave a run spending with no one
+            watching; navigation is covered by the pending record, the
+            Close button simply waits for the answer. */}
         <button type="button" className="subtle" disabled={asking} onClick={onClose}
                 title={asking ? "Wait for the answer before closing" : undefined}>Close</button>
       </div>
@@ -60,7 +112,7 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
       <textarea aria-label="Your question" rows={3} value={question} disabled={asking}
                 maxLength={QUESTION_CHARS} onChange={(e) => setQuestion(e.target.value)} />
       <div className="form-actions">
-        <button type="button" disabled={asking || !question.trim()} onClick={() => { void ask(); }}>
+        <button type="button" disabled={asking || !question.trim()} onClick={ask}>
           {asking ? "Reading the history…" : "Ask"}
         </button>
       </div>

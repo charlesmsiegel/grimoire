@@ -32,6 +32,7 @@ from dataclasses import replace
 from ... import tool_calls
 from .. import config
 from ..inference import limits
+from ..inference import resolve as inference_resolve
 from ..inference import resolved as inference_resolved
 
 ENTRIES: tuple[str, ...] = ("turn", "continuity", "question")
@@ -97,7 +98,13 @@ def prompt_tokens(resolved: inference_resolved.ResolvedInference,
     """The context stop's ceiling (spec 7.3): 01i-C2's `prompt_ceiling` with a
     reserve sized for the turn's own output cap -- never `window -
     max_output` -- else `FALLBACK_PROMPT_TOKENS` when a window is unknown on
-    any attempt the chain may send."""
+    any attempt the chain may send.
+
+    The chain is the one a tool run sends (`inference._tool_chain`'s rule):
+    a fallback known unable to call tools never rides a tool loop, so its
+    window -- or its unknown one -- bounds nothing here."""
+    if resolved.rides and inference_resolve.known_lacks(resolved, "tools", fallback=True):
+        resolved = replace(resolved, rides=False)
     ceiling = limits.prompt_ceiling(resolved, max_tokens=budget.max_output_tokens)
     if ceiling.tokens is None:
         return FALLBACK_PROMPT_TOKENS

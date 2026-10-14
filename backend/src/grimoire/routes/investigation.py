@@ -208,8 +208,10 @@ def _keep_delivered(state: investigation_state.RunState,
         state.steps[:] = kept
 
 
-def _model_of(result: tool_calls.LoopResult | None, resolved: ResolvedInference) -> str:
-    rows = result.rows if result is not None else ()
+def _model_of(rows: Sequence[dict], resolved: ResolvedInference) -> str:
+    """The model that served the loop's last turn, by its row -- the loop's
+    own or, when it raised, the one it filed (a fallback that served a
+    failed first turn is that turn's model) -- else the primary configured."""
     for row in reversed(rows):
         if row.get("model"):
             return f"{row.get('provider_id', '')}/{row['model']}"
@@ -333,8 +335,8 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
     # An unreadable ledger leaves the loop's own turns, which it handed back.
     rows: Sequence[dict] = filed if filed is not None else (
         result.rows if result is not None else ())
-    turns, calls, decided = _counts(result, len(state.steps),
-                                    [r for r in rows if r.get("task") == task])
+    turned = [r for r in rows if r.get("task") == task]
+    turns, calls, decided = _counts(result, len(state.steps), turned)
     if checked is not None and result is not None:
         _final_step(state, result.final_call, turns)
     elapsed = time.monotonic() - t0
@@ -345,7 +347,7 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
             rates=store.usage.Rates.current())
 
     trace = investigation_trace.build(
-        run=run_id, mode=state.mode, task=task, model=_model_of(result, resolved),
+        run=run_id, mode=state.mode, task=task, model=_model_of(turned, resolved),
         started=started, outcome=stopped["state"], limit=stopped.get("limit", ""),
         steps=list(state.steps), inspected=set(state.inspected),
         final=checked.payload if checked is not None else None,

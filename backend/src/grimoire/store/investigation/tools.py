@@ -191,15 +191,19 @@ def _settled(run: state.RunState, name: str, args: dict, ctx: tool_calls.ToolCon
         text = envelope_ok(found.items)
     delivered = json.loads(text).get("items", ())
     sent = {i.get("ref") for i in delivered}
+    # `envelope_ok` drops an item whole only when nothing of it fits. Every
+    # item delivered keeps its refs -- an aggregate item (`timeline`,
+    # `pressure`) names the scenes or records its text was built from -- and
+    # a dropped scene item's are dropped with it: the model saw none of it.
+    dropped = found is not None and len(delivered) < len(found.items)
     if found is not None:
-        # Only what survived the envelope was read: an item `envelope_ok`
-        # had to drop whole is a scene the model never saw a word of.
         for sid in found.read:
-            if f"scene:{sid}" in sent:
+            if not dropped or f"scene:{sid}" in sent:
                 run.inspect(sid)
     ok = found is not None
     truncated = ok and any(i.get("truncated") for i in delivered)
-    refs = tuple(r for r in found.refs if r in sent) if found is not None else ()
+    refs = (tuple(r for r in found.refs if not dropped or r in sent)
+            if found is not None else ())
     run.note(trace.step(ctx.turn, name, _args_for_trace(args), ok=ok, refs=refs,
                         chars=len(text), truncated=truncated,
                         error="" if ok else json.loads(text)["error"]))
