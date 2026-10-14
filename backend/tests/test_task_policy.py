@@ -58,6 +58,7 @@ _QUESTION: dict[str, str] = {
     "turn-intent": turn_plan.STANCE_ID,
     "turn-plan": turn_plan.STANCE_ID,
     "turn-tool-decision": "choice",
+    "investigation-decide": "choice",
     "epistemic-access": epistemic_access.ACCESS_ID,
 }
 
@@ -153,6 +154,8 @@ def _answers() -> dict[str, _Vocab]:
         # The decide tool's options are the asking model's, per call: none
         # can be listed in advance.
         "turn-tool-decision": _Vocab(frozenset()),
+        # An investigation's decide tool (12-S4): the same per-call options.
+        "investigation-decide": _Vocab(frozenset()),
         "epistemic-access": _Vocab(_keys(epistemic_access.build_items([
             epistemic_access.AccessQuestion("characters:mara", "Mara", "scene-1", "")])[0],
             _QUESTION["epistemic-access"])),
@@ -410,6 +413,7 @@ def test_every_decide_task_is_pinned():
                          "continuity-reconcile": "decision", "scene-break": "over",
                          "voice-drift": "verdict", "turn-intent": "stance",
                          "turn-plan": "stance", "turn-tool-decision": "choice",
+                         "investigation-decide": "choice",
                          "history-rerank": "relevance", "epistemic-access": "access",
                          "history-sufficiency": "sufficient"}
     assert not _answers()["continuity-reconcile"].exact & {

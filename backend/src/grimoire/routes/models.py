@@ -65,6 +65,9 @@ class ConfigUpdate(BaseModel):
     decide_turn_plan: str | None = None
     decide_play_tool: str | None = None
     epistemic_decide: str | None = None
+    investigation_continuity: str | None = None
+    investigation_question: str | None = None
+    investigation_spend_ceiling: str | None = None
     send_images: str | None = None
     send_images_limit: str | None = None
     backup_enabled: str | None = None
@@ -1466,3 +1469,8 @@ class ActorGroup(BaseModel):
 class ActorMembershipResponse(BaseModel):
     actor: str
     groups: tuple[ActorGroup, ...]
+
+
+class HistoryQuestion(BaseModel):
+    """A reader's question to a campaign's history (roadmap 12, E3)."""
+    question: str = ""

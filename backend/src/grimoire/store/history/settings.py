@@ -6,7 +6,7 @@ which have no effect while `history_recall_depth` is 0."""
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .. import config
 
@@ -36,6 +36,21 @@ def read(cfg: dict | None = None) -> Settings | None:
     depth = integer(cfg.get("history_recall_depth"), 0)
     if not depth:
         return None
+    return _settings(cfg, depth)
+
+
+def explicit(depth: int, cfg: dict | None = None) -> Settings:
+    """The settings for a caller that names its own `depth` (12's
+    `search_history`): the configured budget and threshold, whether or not
+    turn recall is on, and never a rerank -- an investigation's own model is
+    the one reading the results."""
+    if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
+        raise ValueError("an explicit history depth is a positive whole number")
+    cfg = config.read_config() if cfg is None else cfg
+    return replace(_settings(cfg, depth), rerank=False)
+
+
+def _settings(cfg: dict, depth: int) -> Settings:
     try:
         threshold = float(cfg.get("history_recall_threshold", 0.35))
     except (ValueError, TypeError, OverflowError):

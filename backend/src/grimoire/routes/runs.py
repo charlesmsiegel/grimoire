@@ -429,6 +429,9 @@ class RunRegistry:
         # a batch, never while the write-through queue merely holds paths, so
         # an idle queue never refuses a data-dir move. See `sync_hold`.
         self._sync_holds = 0
+        #: Runs that ended with a tool thread still reading (`pin_root`): the
+        #: root stays still for them, as for a live run, until it returns.
+        self._root_pins: dict[str, int] = {}
         self._by_key: dict[str, str] = {}
         # Records a trigger asked a campaign's reconcile to look at while one
         # was already live, keyed by subject. Here, on the per-app registry and
@@ -513,6 +516,7 @@ class RunRegistry:
                           review_generation: str | None = None,
                           single_live: bool = False,
                           refuse_live: bool = False,
+                          single_match: Callable[[Run], bool] | None = None,
                           ) -> tuple[Run, bool]:
         """Reserve a run, or hand back the one this attempt already made.
 
@@ -530,7 +534,11 @@ class RunRegistry:
         live reconcile per campaign, whether End Scene or Refresh asked first.
         It is a scan under this lock rather than an exclusion key because the
         loser is not refused -- it is handed the running sweep, under its own
-        attempt id (`_adopt`).
+        attempt id (`_adopt`). With ``single_match`` the live run is adopted
+        only when it matches -- a run about the same thing -- and otherwise
+        refuses this one with `RunInFlightError` naming it: one live
+        investigation per campaign, adopted by a start for its own candidate
+        and refused to a start for another (roadmap 12 §9.2).
 
         ``refuse_live`` is the opposite answer to the same question: a live run
         of this class and kind on the subject refuses a new one with
@@ -558,6 +566,12 @@ class RunRegistry:
             if existing is not None:
                 return existing, False
 
+            if single_live and single_match is not None \
+                    and (held := self._live_kind(subject, cls, kind)) is not None \
+                    and (held.cancel_requested or not single_match(held)):
+                # A run about something else, or one still stopping, holds
+                # the subject until it ends: never two at once.
+                raise RunInFlightError(held.id)
             if single_live and (live := self._live_single(subject, cls, kind)) is not None:
                 return self._adopt(live, subject, attempt_id), False
             if refuse_live and (live := self._live_kind(subject, cls, kind)) is not None:
@@ -710,6 +724,28 @@ class RunRegistry:
         longer be the store's root."""
         with self._lock:
             self._pending_touched.clear()
+
+    def forget_root(self) -> int:
+        """Make every run unreachable, after the store root moved. Returns how
+        many went.
+
+        `forget_subject` for a whole library: every subject's ids are slugs of
+        the OLD tree, and the new one can hold a campaign of the same slug, so
+        inside the retention window a reader there could otherwise rediscover
+        a draft by its attempt id -- a history answer or an investigation of
+        the other library's campaign -- and show it as this one's. The move is
+        refused while anything is live (`hold_still`), so every run this
+        reaches is terminal; the flag rather than `_runs` for the same reason
+        `forget_subject` gives, and the reaper collects them as ever."""
+        with self._lock:
+            for run in self._runs.values():
+                run.forgotten = True
+            count = len(self._runs)
+            self._by_subject.clear()
+            self._by_attempt.clear()
+            self._precancelled.clear()
+            self._pending_touched.clear()
+            return count
 
     @staticmethod
     def _now() -> float:
@@ -879,6 +915,8 @@ class RunRegistry:
             for run in self._runs.values():
                 if run.state == "running":
                     raise RunInFlightError(run.id)
+            if self._root_pins:
+                raise RunInFlightError(next(iter(self._root_pins)))
             if self._sync_holds:
                 raise SyncRunningError()
             self._store_moves += 1
@@ -887,6 +925,21 @@ class RunRegistry:
         finally:
             with self._lock:
                 self._store_moves -= 1
+
+    def pin_root(self, run_id: str) -> None:
+        """Hold the root still for a run that ended with a thread still
+        reading the store through `store.home()`, until `unpin_root`: a move
+        is refused (`hold_still`) as if the run were live."""
+        with self._lock:
+            self._root_pins[run_id] = self._root_pins.get(run_id, 0) + 1
+
+    def unpin_root(self, run_id: str) -> None:
+        with self._lock:
+            left = self._root_pins.get(run_id, 0) - 1
+            if left > 0:
+                self._root_pins[run_id] = left
+            else:
+                self._root_pins.pop(run_id, None)
 
     @contextlib.contextmanager
     def sync_hold(self):
@@ -2069,6 +2122,8 @@ def reserve_background(app, cid: str, sid: str, kind: str) -> Run | None:
 
 def reserve_campaign_background(app, cid: str, kind: str,
                                 attempt_id: str | None = None,
+                                *, labels: dict | None = None,
+                                match: Callable[[Run], bool] | None = None,
                                 ) -> tuple[Run, bool] | None:
     """Reserve the campaign's one live `background` run of this kind, or adopt
     the live one. ``None`` if the store is moving.
@@ -2084,12 +2139,17 @@ def reserve_campaign_background(app, cid: str, kind: str,
     reservation, and the store-move refusal lives inside `start_or_existing`
     under the registry lock. The adoption scan is in there too, which is what
     makes two simultaneous triggers get one run rather than two.
+
+    ``labels`` add to the subject's own; ``match`` narrows adoption to a live
+    run it accepts, and a live run it refuses raises `RunInFlightError`
+    naming that run (`start_or_existing`'s ``single_match``).
     """
     subject = campaign_subject(cid)
     try:
         return app.state.runs.start_or_existing(
             subject, "background", kind, attempt_id, None,
-            _subject_labels(subject), single_live=True)
+            {**_subject_labels(subject), **(labels or {})}, single_live=True,
+            single_match=match)
     except StoreMovingError:
         return None
 
@@ -2097,6 +2157,28 @@ def reserve_campaign_background(app, cid: str, kind: str,
 def drop_pending_touched(app) -> None:
     """Forget every ref a trigger left pending, after the store root moved."""
     app.state.runs.drop_pending_touched()
+
+
+def pin_root_until(app, run_id: str, drained: Callable[[float | None], bool]) -> None:
+    """Hold the store root still for `run_id` until `drained(None)` returns,
+    on a daemon thread of its own: a run whose tool thread outlived it ends
+    without waiting on that thread, and the root still does not move under
+    it (`RunRegistry.pin_root`)."""
+    registry = app.state.runs
+    registry.pin_root(run_id)
+
+    def wait() -> None:
+        try:
+            drained(None)
+        finally:
+            registry.unpin_root(run_id)
+    threading.Thread(target=wait, name=f"grimoire-root-pin-{run_id}", daemon=True).start()
+
+
+def forget_root(app) -> int:
+    """Drop every run from discovery after the store root moved -- see
+    `RunRegistry.forget_root`."""
+    return app.state.runs.forget_root()
 
 
 def _reserve(app, cid: str, sid: str, cls: RunClass, kind: str,
@@ -2226,7 +2308,7 @@ def reserve_scene_draft(app, cid: str, sid: str, kind: str,
 
 
 def run_draft(app, subject: Subject, kind: str, attempt_id: str | None,
-              work) -> dict:
+              work, *, pass_run: bool = False) -> dict:
     """Reserve a computing `draft`, hand `work` to the runner, answer the 202.
 
     THE route-side half of the shared contract, so that the thirteen call sites
@@ -2248,12 +2330,16 @@ def run_draft(app, subject: Subject, kind: str, attempt_id: str | None,
     it costs more here than it looks: a draft is a whole provider call, so a
     retried POST that started a second one would be paid for twice and the two
     answers would disagree.
+
+    `pass_run` hands `work` the reserved run (`work(run)` returns the
+    coroutine) for a draft whose calls are filed under its id -- a tool loop
+    runs under the caller's run id (roadmap 12's history question).
     """
     run, fresh = reserve_draft(app, subject, kind, attempt_id)
     if not fresh:
         return {"run": run_payload(run)}
     with reservation(app, run):
-        start_computing(app, run, work)
+        start_computing(app, run, (lambda: work(run)) if pass_run else work)
         return {"run": run_payload(run)}
 
 

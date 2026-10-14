@@ -119,11 +119,11 @@ _CRC = "<I"
 _CRC_WIDTH = struct.calcsize(_CRC)
 
 
-def _cache_dir() -> Path:
-    return home() / ".cache" / "embeddings"
+def _cache_dir(root: Path | None = None) -> Path:
+    return (root if root is not None else home()) / ".cache" / "embeddings"
 
 
-def _path(space: str, text: str) -> Path:
+def _path(space: str, text: str, root: Path | None = None) -> Path:
     # The space is hashed WITH the text rather than becoming a directory:
     # it carries a URL and a model id, both full of slashes, and slugifying
     # them would let two spaces share a directory. A hex digest also cannot
@@ -132,7 +132,7 @@ def _path(space: str, text: str) -> Path:
     # is sent: the NUL-joined key is injective only while no text carries one,
     # and a NUL-free text -- every real one -- keys exactly as it always did.
     key = hashlib.sha256(f"{space}\0{text.replace(chr(0), '')}".encode()).hexdigest()
-    return _cache_dir() / f"{key}{SUFFIX}"
+    return _cache_dir(root) / f"{key}{SUFFIX}"
 
 
 def unit(vector: list[float]) -> list[float] | None:
@@ -207,7 +207,7 @@ def _load(space: str, texts: list[str], sources: Mapping[str, compiled.WrittenIn
 
 
 @contextlib.contextmanager
-def _history_batch(enabled: bool) -> Iterator[compiled.Batch | None]:
+def _history_batch(enabled: bool, root: Path | None = None) -> Iterator[compiled.Batch | None]:
     # Pin the root/epoch AND durable delete boundary before vector key hashing
     # or I/O. Opening a new batch after I/O could adopt a completed purge and
     # reintroduce a deleted source path from the caller's earlier snapshot.
@@ -216,7 +216,7 @@ def _history_batch(enabled: bool) -> Iterator[compiled.Batch | None]:
     try:
         if enabled:
             try:
-                request = stack.enter_context(compiled.batch())
+                request = stack.enter_context(compiled.batch(root))
                 request.begin_compute()
             except _HISTORY_ERRORS:
                 if request is not None:
@@ -308,8 +308,13 @@ def flush_deferred() -> int:
 
 
 def save(space: str, text: str, vector: list[float], *, source: compiled.WrittenInput | None = None,
-         projection: str = 'body', instance: object = None) -> None:
+         projection: str = 'body', instance: object = None, root: Path | None = None) -> None:
     """Cache `vector` for (`space`, `text`), normalized.
+
+    `root` pins the store root the vector is written under, for a caller
+    that took it before work that can outlive a move of the root (a
+    retrieval cancelled mid-save): the vector of a text read in one library
+    is never written into another's cache. None resolves `home()` now.
 
     A vector with no direction is dropped rather than stored: the caller must
     see a miss and re-embed, not a cached vector that scores 0 against
@@ -318,24 +323,25 @@ def save(space: str, text: str, vector: list[float], *, source: compiled.Written
     scene the recall was meant to improve.
     """
     if source is not None and compiled.unavailable_reason() in _DEFERRABLE:
-        _save(space, text, vector, None, projection, instance, None)
+        _save(space, text, vector, None, projection, instance, None, root)
         if unit(vector) is not None:
             _defer(space, text, source, projection, instance)
         return
-    with _history_batch(source is not None) as request:
-        _save(space, text, vector, source, projection, instance, request)
+    with _history_batch(source is not None, root) as request:
+        _save(space, text, vector, source, projection, instance, request, root)
 
 
 def _save(space: str, text: str, vector: list[float], source: compiled.WrittenInput | None,
-          projection: str, instance: object, request: compiled.Batch | None) -> None:
+          projection: str, instance: object, request: compiled.Batch | None,
+          root: Path | None = None) -> None:
     normalized = unit(vector)
     if normalized is None:
         return
     payload = struct.pack(f"<{len(normalized)}f", *normalized)
     payload = struct.pack(_CRC, zlib.crc32(payload)) + payload
     try:
-        _cache_dir().mkdir(parents=True, exist_ok=True)
-        atomic.write_bytes(_path(space, text), payload)
+        _cache_dir(root).mkdir(parents=True, exist_ok=True)
+        atomic.write_bytes(_path(space, text, root), payload)
     except OSError:
         return
     if request is not None and source is not None:

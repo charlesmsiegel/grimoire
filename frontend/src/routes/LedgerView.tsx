@@ -23,6 +23,7 @@ import {
   KnowledgePane, KnowledgeRows, useKnowledge,
 } from "../components/ledger/Knowledge";
 import { ColumnSection, PageShell } from "../components/PageShell";
+import { AskHistory, hasPendingQuestion } from "../components/investigation/AskHistory";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
 
@@ -335,6 +336,27 @@ export default function LedgerView() {
     section === "continuity" || section === "knowledge" ? null : section;
   const addressedRow = target && target.section !== "continuity" ? target.row ?? null : null;
   const [showRetired, setShowRetired] = useState(false);
+  /** Whether Settings switched the history question on (roadmap 12, E3), and
+   *  whether its panel is open, for the campaign it was opened on. */
+  const [askable, setAskable] = useState(false);
+  const [askingIn, setAskingIn] = useState<string | null>(null);
+  /** The library open now (the store root): a remembered question is kept
+   *  per library, and nothing remembered is read until it is known. */
+  const [root, setRoot] = useState<string | null>(null);
+  // A question still running is reachable even with the switch now off: its
+  // answer was paid for, and only its panel collects it.
+  const offerAsk = root !== null && (askable || hasPendingQuestion(root, cid));
+  useEffect(() => {
+    let live = true;
+    api.getConfig()
+      .then((cfg) => {
+        if (!live) return;
+        setAskable(cfg.investigation_question === "on");
+        setRoot(cfg.data_dir);
+      })
+      .catch(() => { if (live) setAskable(false); });
+    return () => { live = false; };
+  }, []);
   const [name, setName] = useState("");
   // Held with the campaign the rows came FROM, the way the panel this replaced
   // held its own: the route is not keyed on `cid`, so a campaign switch keeps
@@ -718,6 +740,14 @@ export default function LedgerView() {
         {matching && <p className="field-hint continuity-matching">{matching}</p>}
         <RefreshControl review={review} />
       </ColumnSection>
+      {offerAsk && (
+        <ColumnSection label="Ask the history">
+          <button className={"column-row" + (askingIn === cid ? " active" : "")}
+                  onClick={() => setAskingIn(askingIn === cid ? null : cid)}>
+            <span className="column-row-label">Ask a question</span>
+          </button>
+        </ColumnSection>
+      )}
     </>
   );
 
@@ -753,6 +783,10 @@ export default function LedgerView() {
   return (
     <PageShell column={column} footer={footer} columnLabel="Ledger sections">
       <div className="page-wide view-anim">
+        {offerAsk && root !== null && askingIn === cid && (
+          <AskHistory key={`${root}\u0000${cid}`} cid={cid} root={root} canAsk={askable}
+                      onClose={() => setAskingIn(null)} />
+        )}
         {section === "knowledge" && (
           <KnowledgeSection cid={cid} list={knowledge} row={addressedRow}
                             onSaved={(kid) => {

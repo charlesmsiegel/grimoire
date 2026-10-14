@@ -1665,11 +1665,13 @@ def _generate_problems() -> tuple[str, ...]:
 
 def test_the_generate_walk_reaches_the_scripts_and_the_evals():
     """Vacuity insurance for `OUTSIDE`: the eval runners' (the history
-    suite's and the planning suite's live downstream arms included) and the
-    ingest script's generations are found and judged."""
+    suite's and the planning suite's live downstream arms, and the
+    investigation gate's live E3 incumbent, included) and the ingest
+    script's generations are found and judged."""
     found = {modname for modname, tree, is_pkg in outside_walk()
              if generate_calls(tree, modname, is_pkg)}
     assert found == {"evals.runner", "evals.history.runner", "evals.history.planning",
+                     "evals.investigation.runner",
                      "scripts.ingest_scene"}, found
 
 

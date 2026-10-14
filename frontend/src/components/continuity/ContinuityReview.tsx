@@ -29,7 +29,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../../api/errors";
 import type {
-  CandidateRecord, ContinuityApply, ContinuityCandidate, ContinuityGroup,
+  CandidateInvestigated, CandidateRecord, ContinuityApply, ContinuityCandidate, ContinuityGroup,
 } from "../../api/types";
 import { ledgerHref } from "../../ledgerPaths";
 import { CandidateDetail, formKey, type DetailError } from "./CandidateDetail";
@@ -39,7 +39,10 @@ import {
   proposalLabel, RELATION_PHRASES, STALE_TEXT,
 } from "./labels";
 import { ReviewedGroup } from "./ReviewedGroup";
-import { SweepCaptures } from "./SweepCaptures";
+import { INVESTIGATION_TASKS, SweepCaptures } from "./SweepCaptures";
+import { outcomeSentence } from "../investigation/InvestigationTrace";
+import { pendingKey, readPending, settles, writePending } from "../investigation/pending";
+import { isAbortError, newAttemptId } from "../../api/stream";
 import type { ContinuityReview as Review } from "./useContinuityReview";
 import { api } from "../../api/client";
 
@@ -185,6 +188,28 @@ function andList(names: string[]): string {
     : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
+/** A campaign's investigation, remembered past this view (`pending.ts`): it
+ *  is a background run on the server, so leaving the review must not lose an
+ *  outcome that writes nothing (no change, not enough evidence, a budget
+ *  stop) or let a second paid run start over it. */
+type PendingInvestigation = { attempt: string; candidate: string };
+
+const keyOf = (root: string, cid: string) => pendingKey("investigation", root, cid);
+const readInvestigation = (root: string, cid: string) =>
+  readPending<PendingInvestigation>(keyOf(root, cid), (v) => typeof v.candidate === "string");
+const writeInvestigation = (root: string, cid: string, p: PendingInvestigation | null) =>
+  writePending(keyOf(root, cid), p);
+
+/** What an investigation said, as the finding's note. */
+function investigationText(got: CandidateInvestigated): string {
+  let text = outcomeSentence(got.outcome);
+  if (got.persisted) text += " Its suggestion is shown above.";
+  else if (got.outcome.state === "completed") {
+    text += " The finding moved meanwhile, so its suggestion was not kept.";
+  }
+  return text;
+}
+
 /** The one line a landed action leaves behind (Decision 24). A merge names the
  *  other records that now resolve to the kept one too, so the reader sees its
  *  whole effect (§5.1). */
@@ -229,6 +254,118 @@ export function ContinuityReview(
   /** What is open now, read by an answer that lands after the reader moved. */
   const openRef = useRef({ cid, candidate });
   openRef.current = { cid, candidate };
+  /** Whether Settings switched continuity investigation on (roadmap 12, E2),
+   *  and the history question (E3), whose captures are listed here too. */
+  const [investigable, setInvestigable] = useState(false);
+  const [questionable, setQuestionable] = useState(false);
+  /** The library open now (the store root): an investigation is remembered
+   *  per library, and nothing remembered is read until it is known. */
+  const [root, setRoot] = useState<string | null>(null);
+  /** The finding each campaign's investigation is running on (the server
+   *  takes one per campaign), and what the last one said. */
+  const [investigating, setInvestigating] = useState<Record<string, string>>({});
+  /** What each campaign's last investigation said, kept per campaign: one
+   *  that settles while another campaign is open is still there on return,
+   *  and an outcome that wrote nothing has nowhere else to be. */
+  const [investigated, setInvestigated] =
+    useState<Record<string, { id: string; text: string }>>({});
+
+  useEffect(() => {
+    let live = true;
+    api.getConfig()
+      .then((cfg) => {
+        if (!live) return;
+        setInvestigable(cfg.investigation_continuity === "on");
+        setQuestionable(cfg.investigation_question === "on");
+        setRoot(cfg.data_dir);
+      })
+      .catch(() => { if (live) setInvestigable(false); });
+    return () => { live = false; };
+  }, []);
+
+  /** The watcher of each campaign's investigation. Unmounting stops only the
+   *  watching: the run, and its record, stay for the next mount. */
+  const watching = useRef(new Map<string, AbortController>());
+  useEffect(() => () => {
+    for (const ctl of watching.current.values()) ctl.abort();
+    watching.current.clear();
+  }, []);
+
+  /** Watch one campaign's investigation to its outcome, then re-read: a
+   *  written proposal is the review's to show. The sentence stays with the
+   *  finding it was about. `work` answers null when the server no longer
+   *  holds a run it was asked to find. */
+  async function watch(lib: string, at: string, candidateId: string,
+                       work: (signal: AbortSignal) => Promise<CandidateInvestigated | null>) {
+    const ctl = new AbortController();
+    watching.current.set(at, ctl);
+    setInvestigating((cur) => ({ ...cur, [at]: candidateId }));
+    setInvestigated((cur) => {
+      const rest = { ...cur };
+      delete rest[at];
+      return rest;
+    });
+    let text: string;
+    try {
+      const got = await work(ctl.signal);
+      // Consumed only where it is shown: settled while another campaign is
+      // open, the handle stays for that campaign's next mount to collect.
+      if (openRef.current.cid === at) writeInvestigation(lib, at, null);
+      text = got ? investigationText(got)
+        : "The earlier investigation's outcome is no longer held. Investigate again to rerun it.";
+    } catch (err: unknown) {
+      if (isAbortError(err)) return;
+      if (settles(err)) writeInvestigation(lib, at, null);
+      text = errorText(err);
+    }
+    if (watching.current.get(at) === ctl) watching.current.delete(at);
+    setInvestigating((cur) => {
+      const rest = { ...cur };
+      delete rest[at];
+      return rest;
+    });
+    setInvestigated((cur) => ({ ...cur, [at]: { id: candidateId, text } }));
+    if (openRef.current.cid === at) review.reread();
+  }
+
+  /** The run a remembered attempt names, followed without a second start;
+   *  null once the server holds it no longer. */
+  async function held(at: string, p: PendingInvestigation, signal: AbortSignal) {
+    const run = await api.findCandidateInvestigation(at, p.attempt, signal);
+    return run ? api.followCandidateInvestigation(at, run, p.attempt, signal) : null;
+  }
+
+  // An investigation left running by an earlier mount is followed, never
+  // started again.
+  useEffect(() => {
+    if (root === null) return;
+    const p = readInvestigation(root, cid);
+    if (p && !watching.current.has(cid)) {
+      void watch(root, cid, p.candidate, (s) => held(cid, p, s));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per campaign and library
+  }, [cid, root]);
+
+  /** Investigate the open finding. One still remembered for the campaign (a
+   *  failure that carried no reply proves nothing) is followed first, so a
+   *  retry never pays for a second run while the first may still be going.
+   *  Remembered for ANOTHER finding, it is followed instead of starting this
+   *  one: replacing it would lose the only handle to that run's outcome, and
+   *  once it settles this finding can be investigated. */
+  function investigate(c: ContinuityCandidate) {
+    if (investigating[cid] || root === null) return;
+    const at = cid;
+    const before = readInvestigation(root, at);
+    if (before && before.candidate !== c.id) {
+      void watch(root, at, before.candidate, (signal) => held(at, before, signal));
+      return;
+    }
+    const p = before ?? { attempt: newAttemptId(), candidate: c.id };
+    writeInvestigation(root, at, p);
+    void watch(root, at, c.id, async (signal) =>
+      (p === before ? await held(at, p, signal) : null)
+        ?? api.investigateCandidate(at, c.id, signal, p.attempt));
+  }
 
   // Opening a finding (or another one) starts it clean.
   useEffect(() => {
@@ -351,6 +488,10 @@ export function ContinuityReview(
       </div>
       {/* Under Refresh, which is what starts a sweep: what it asked. */}
       <SweepCaptures key={cid} cid={cid} />
+      {(investigable || questionable) && (
+        <SweepCaptures key={`${cid}-investigations`} cid={cid} tasks={INVESTIGATION_TASKS}
+                       label="What the investigations asked" what="investigation" />
+      )}
       {error && error.cid === cid
         && <p className="continuity-error" role="alert">{error.text}</p>}
       {group === "reviewed" ? (
@@ -373,7 +514,12 @@ export function ContinuityReview(
                          }}
                          onBack={() => navigate(ledgerHref(cid, {
                            section: "continuity", group }))}
-                         onRefresh={() => { void review.refresh(); }} />
+                         onRefresh={() => { void review.refresh(); }}
+                         onInvestigate={investigable ? () => { investigate(open); } : undefined}
+                         investigating={investigating[cid] === open.id}
+                         investigationBusy={!!investigating[cid] && investigating[cid] !== open.id}
+                         investigationNote={investigated[cid]?.id === open.id
+                           ? investigated[cid].text : null} />
       ) : (
         <>
           {missing && <p className="continuity-note" role="status">

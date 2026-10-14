@@ -184,7 +184,78 @@ def _proposal(value) -> dict | None:
     if not isinstance(scenes, list) or not all(isinstance(s, str) for s in scenes):
         return None
     out["evidence_scenes"] = list(scenes)
+    trace = investigation_trace(value.get("investigation"))
+    if trace is not None:
+        out["investigation"] = trace
     return out
+
+
+#: The version of an investigation trace a proposal may carry (roadmap 12
+#: §8.1; `store/investigation/trace.py` writes it).
+TRACE_VERSION = 1
+_TRACE_TEXT = ("run", "mode", "task", "model", "started", "outcome", "limit")
+
+
+def investigation_trace(value) -> dict | None:
+    """A proposal's `investigation` field (roadmap 12 §6.2): the trace of the
+    run that proposed it, kept when it has the trace's shape -- a JSON-safe
+    dict of `TRACE_VERSION` whose text fields are strings, whose steps are
+    dicts and whose inspected scenes are strings -- and None (the field
+    dropped, the proposal kept) otherwise. Not one of `_PROPOSAL_TEXT`,
+    because it is not text."""
+    if not isinstance(value, dict) or value.get("version") != TRACE_VERSION:
+        return None
+    if not all(isinstance(value.get(k), str) for k in _TRACE_TEXT):
+        return None
+    steps, inspected = value.get("steps"), value.get("inspected")
+    if not isinstance(steps, list) or not all(_trace_step(x) for x in steps):
+        return None
+    if not isinstance(inspected, list) or not all(isinstance(x, str) for x in inspected):
+        return None
+    final = value.get("final")
+    if not (final is None or isinstance(final, dict)) or not _trace_usage(value.get("usage")):
+        return None
+    return value if _json_safe(value) else None
+
+
+def _count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _money(value) -> bool:
+    return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool))
+
+
+def _trace_step(step) -> bool:
+    """One step in the shape `investigation.trace.step` writes and the trace
+    view reads: its turn, tool and arguments, and a result with its ok flag,
+    refs, size and truncation (an error code only beside a failure)."""
+    if not isinstance(step, dict):
+        return False
+    result = step.get("result")
+    return (_count(step.get("turn")) and isinstance(step.get("tool"), str)
+            and isinstance(step.get("args"), dict) and isinstance(result, dict)
+            and isinstance(result.get("ok"), bool)
+            and isinstance(result.get("refs"), list)
+            and all(isinstance(r, str) for r in result["refs"])
+            and _count(result.get("chars")) and isinstance(result.get("truncated"), bool)
+            and isinstance(result.get("error", ""), str))
+
+
+def _trace_usage(usage) -> bool:
+    """A trace's `usage` in the shape `investigation.trace.usage_of` writes
+    and the trace view reads field by field: three counts, seconds (or
+    None), the three money columns (each a number or None) and the
+    unpriced count. Anything else drops the trace, not the finding."""
+    if not isinstance(usage, dict):
+        return False
+    cost = usage.get("cost")
+    return (all(_count(usage.get(k)) for k in ("model_turns", "tool_calls", "decisions",
+                                                "unpriced_calls"))
+            and _money(usage.get("seconds"))
+            and isinstance(cost, dict)
+            and all(k in cost and _money(cost[k])
+                    for k in ("cost_usd", "estimated_usd", "modelled_usd")))
 
 
 def _record(value) -> dict | None:

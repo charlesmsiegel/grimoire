@@ -18,7 +18,7 @@ import anyio
 
 from ... import embeddings
 from ...llm_errors import LLMError
-from .. import embed_space, vectors
+from .. import embed_space, paths, vectors
 from ..inference import embed
 from ..searchdocs import embedded
 from . import model, threads
@@ -81,7 +81,8 @@ def _by_campaign(docs, missing, held, campaign):
     return groups
 
 
-def _publish(docs, score_docs, missing, returned, queries, held, space, campaign, stopped):
+def _publish(docs, score_docs, missing, returned, queries, held, space, campaign, stopped,
+             root=None):
     """Save the warmed vectors campaign by campaign, each just before its rows
     are recorded for 05, then score -- unless the retrieval was cancelled
     (10.4: vectors a cancelled retrieval received are not kept).
@@ -91,7 +92,13 @@ def _publish(docs, score_docs, missing, returned, queries, held, space, campaign
     text, and deleting one could take another retrieval's concurrent save with
     it. Only a stop landing inside a campaign's save can leave a vector of that
     campaign unrecorded -- a harmless cache entry, never a row naming a vector
-    that is gone."""
+    that is gone.
+
+    Every vector is written under `root`, the store root the retrieval took
+    before it read a document: a save a cancelled retrieval's thread was
+    already inside when the root moved still lands in the library its text
+    came from, never in the new one. Its rows (`record_embedded`) go through
+    `compiled.batch`, which a root change already fences."""
     raws = {}
     for text, raw in zip(missing, returned, strict=True):
         unit = vectors.unit(raw)
@@ -105,7 +112,7 @@ def _publish(docs, score_docs, missing, returned, queries, held, space, campaign
             if stopped.is_set():
                 return {}, 0
             if text not in saved:
-                vectors.save(space["space"], text, raws[text])
+                vectors.save(space["space"], text, raws[text], root=root)
                 saved.add(text)
         if stopped.is_set():
             return {}, 0
@@ -178,6 +185,9 @@ async def score(texts, docs, *, space, embed_client, deadline, campaign, scene,
     if embed_space.outage(space["space"]):
         return SemanticResult(status="backoff")
     score_docs = docs if pool is None else pool
+    # The root every vector this retrieval saves is written under (`_publish`),
+    # taken before anything is read.
+    root = await threads.run(paths.home)
     held, wanted, missing, uncached = await threads.run(partial(
         _load, docs, score_docs, space, texts))
     cached = len(held)
@@ -212,7 +222,8 @@ async def score(texts, docs, *, space, embed_client, deadline, campaign, scene,
     try:
         await anyio.lowlevel.checkpoint()
         signals, warmed = await threads.run(partial(
-            _publish, docs, score_docs, missing, returned, directions, held, space, campaign, stopped),
+            _publish, docs, score_docs, missing, returned, directions, held, space, campaign, stopped,
+            root),
             abandon_on_cancel=True)
     except BaseException:
         stopped.set()

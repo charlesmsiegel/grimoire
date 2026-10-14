@@ -645,7 +645,9 @@ def _round_trip_every_key(client, writable: list[str]) -> None:
     # which makes this a real round trip rather than an exemption.
     live = {"active_connection_id": "claude", "character_response_mode": "individual",
             # A turn-plan mode is one of three words, refused otherwise.
-            "decide_turn_plan": "intent"}
+            "decide_turn_plan": "intent",
+            # A spend ceiling is blank or a dollar amount above zero (12 §7.1).
+            "investigation_spend_ceiling": "2.5"}
     for key in writable:
         before = client.get("/api/config").json()
         wanted = live.get(key) or _other_config_value(str(before.get(key, "")))

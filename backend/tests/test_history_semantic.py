@@ -615,6 +615,24 @@ def test_a_cancelled_retrieval_never_deletes_a_concurrent_save(cid, space):
     assert set(vectors.load(space["space"], texts)) == {texts[0]}
 
 
+def test_a_save_lands_in_the_library_the_retrieval_read_after_a_root_move(
+        cid, space, monkeypatch, tmp_path):
+    """A retrieval takes its root before it reads, and a save its thread is
+    already making when the root moves still writes there: the vector of a
+    text from one library never lands in another's cache."""
+    docs = _two_docs()
+    texts = [d.doc.text for d in docs]
+    read_from = semantic.paths.home()
+    moved_to = tmp_path / "another-library"
+    monkeypatch.setattr(embedded, "record_embedded", lambda *a, **k: None)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(moved_to))  # the root moved mid-retrieval
+    semantic._publish(docs, docs, texts, [[1.0, 0.0], [0.0, 1.0]], ([1.0, 0.0],), {},
+                      space, cid, threading.Event(), read_from)
+    assert not (moved_to / ".cache" / "embeddings").exists()
+    monkeypatch.setenv("GRIMOIRE_HOME", str(read_from))
+    assert set(vectors.load(space["space"], texts)) == set(texts)
+
+
 def test_a_held_back_structural_match_is_in_the_semantic_pool(cid, space, monkeypatch):
     """5.4: the pool is cut from the structural list and the admitted lexical
     list. Plain co-presence past STRUCTURAL_PLAIN_CAP ranks without admitting,

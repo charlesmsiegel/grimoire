@@ -82,6 +82,7 @@ from . import (
     greetings,
     images,
     inference,
+    investigation,
     ledger,
     maintenance,
     mechanics,
@@ -193,7 +194,8 @@ def _compose(domain: APIRouter) -> None:
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, inference, modules, record_art, worlds, characters, world_images, images, greetings,
                 runs, maintenance, cache, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
-                campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies,
+                campaigns, continuity, investigation, ledger, search, shell, todo, tracker, regex_rules,
+                quick_replies,
                 default_prompts):
     _compose(_domain.router)
 

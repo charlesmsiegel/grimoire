@@ -24,7 +24,16 @@ import { taskLabel, whenLabel } from "../turnLabels";
 type Listed = { cid: string; entries: PromptEntry[] | "failed" };
 type Shown = { cid: string; eid: string; data: PromptSnapshot | "failed" | null };
 
-export function SweepCaptures({ cid }: { cid: string }) {
+/** The tasks each pane lists. Every campaign-level capture comes back from
+ *  one read, so a pane keeps its own: the sweep's under "What the sweep
+ *  asked", roadmap 12's investigations under a pane of their own. */
+export const SWEEP_TASKS: readonly PromptEntry["task"][] = ["continuity-reconcile"];
+export const INVESTIGATION_TASKS: readonly PromptEntry["task"][] = [
+  "investigation-continuity", "investigation-question", "investigation-decide"];
+
+export function SweepCaptures({ cid, tasks = SWEEP_TASKS, label = "What the sweep asked",
+                                what = "sweep" }:
+  { cid: string; tasks?: readonly PromptEntry["task"][]; label?: string; what?: string }) {
   const [open, setOpen] = useState(false);
   const [listed, setListed] = useState<Listed | null>(null);
   const [shown, setShown] = useState<Shown | null>(null);
@@ -35,7 +44,7 @@ export function SweepCaptures({ cid }: { cid: string }) {
     if (!next) return;
     // Re-read on every opening: a sweep may have landed since the last one.
     api.listCampaignPrompts(cid)
-      .then((r) => setListed({ cid, entries: r.entries }))
+      .then((r) => setListed({ cid, entries: r.entries.filter((e) => tasks.includes(e.task)) }))
       .catch(() => setListed({ cid, entries: "failed" }));
   }
 
@@ -54,12 +63,12 @@ export function SweepCaptures({ cid }: { cid: string }) {
   return (
     <div className="continuity-captures">
       <button type="button" className="subtle" aria-expanded={open} onClick={toggle}>
-        What the sweep asked
+        {label}
       </button>
       {open && (
         entries === null ? <p className="field-hint">Reading…</p>
-        : entries === "failed" ? <p className="field-hint">The sweep's captures could not be read.</p>
-        : entries.length === 0 ? <p className="field-hint">No sweep has been captured yet.</p>
+        : entries === "failed" ? <p className="field-hint">The {what}'s captures could not be read.</p>
+        : entries.length === 0 ? <p className="field-hint">No {what} has been captured yet.</p>
         : (
           <>
             {entries.map((e) => (

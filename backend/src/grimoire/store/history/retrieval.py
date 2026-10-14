@@ -50,6 +50,10 @@ def validate(query: model.Query) -> None:
 
 
 def _eligible(cid: str, sid: str) -> tuple[live.LiveDocument, ...]:
+    if not sid:
+        # No current scene (an investigation's author-facing search, 12-S1):
+        # every live, unclosed scene is history, with no branch to exclude.
+        return tuple(d for d in live.scene_documents(cid).documents if not d.closed_by)
     try:
         rows = scenes_read.list_scenes(cid)
     except Exception:  # noqa: BLE001 -- 08's independent tolerant listing can still answer
@@ -151,9 +155,10 @@ class _Selection:
     held_back: tuple[model.Candidate, ...] = ()
 
 
-def _prepare(cid, sid, query, ceiling, *, documents=None, structural_catalog=None, others=()):
+def _prepare(cid, sid, query, ceiling, *, documents=None, structural_catalog=None, others=(),
+             depth=None):
     validate(query)
-    cfg = settings.read()
+    cfg = settings.read() if depth is None else settings.explicit(depth)
     cap = max(ceiling, 0)
     if cfg is None:
         return None
@@ -554,6 +559,7 @@ async def retrieve(
     summary_omissions: Mapping[str, str] | None = None,
     run_id: str = "",
     source_campaigns: tuple[str, ...] = (),
+    depth: int | None = None,
 ) -> model.Evidence:
     """Gather independent signals outside campaign holds (09-S3/S4).
 
@@ -562,10 +568,16 @@ async def retrieve(
     Semantic and S5 stages check remaining time before network work. Clients
     are supplied by the app, never constructed here. Preview and turns share the
     same eligibility, selection, expansion and omission-before-depth rules.
+
+    `sid` "" asks of the whole campaign, with no current scene; `depth`, a
+    positive count, stands in for the recall setting's depth so a caller that
+    is not a turn's recall (12's `search_history`) can search while recall is
+    off. Neither changes a turn's call.
     """
     _validate_scope(query, origin, source_campaigns)
     prepare = (partial(_prepare_sources, cid, sid, query, ceiling, source_campaigns)
-               if query.tier_limit == 3 else partial(_prepare, cid, sid, query, ceiling))
+               if query.tier_limit == 3 else partial(_prepare, cid, sid, query, ceiling,
+                                                     depth=depth))
     prepared = await threads.run(prepare)
     if prepared is None:
         return model.Evidence(ceiling=max(ceiling, 0))

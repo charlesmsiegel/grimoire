@@ -42,6 +42,12 @@ export async function ledgerApiMock() {
       removeAlias: vi.fn(), removeLink: vi.fn(),
       // What the sweep asked (roadmap 01b): its campaign-level captures.
       listCampaignPrompts: vi.fn(), getCampaignPrompt: vi.fn(),
+      // Roadmap 12: the switches the review and the column read, and the two
+      // investigations they start.
+      getConfig: vi.fn(), investigateCandidate: vi.fn(), askHistory: vi.fn(),
+      findCandidateInvestigation: vi.fn(), followCandidateInvestigation: vi.fn(),
+      getCampaignBudget: vi.fn(),
+      findHistoryQuestion: vi.fn(), followHistoryQuestion: vi.fn(),
       staleCurrent: actual.api.staleCurrent,
     },
   };

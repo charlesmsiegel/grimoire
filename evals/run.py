@@ -41,6 +41,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))                      # for `evals`
 sys.path.insert(0, str(REPO / "backend" / "src"))  # for `grimoire`
+# For `tests.llm_fakes`, the investigation gate's offline model
+# (`evals/investigation/runner.py`): appended, so nothing here shadows a name.
+sys.path.append(str(REPO / "backend"))
 
 from evals import cases as case_mod  # noqa: E402
 from evals import costs, escalation, gate, play, runfile, runner  # noqa: E402
@@ -52,9 +55,11 @@ from evals.epistemic import live as epistemic_live  # noqa: E402
 from evals.epistemic import runner as epistemic_runner  # noqa: E402
 from evals.history import planning as history_planning  # noqa: E402
 from evals.history import runner as history_runner  # noqa: E402
+from evals.investigation import cases as investigation_cases  # noqa: E402
+from evals.investigation import runner as investigation_runner  # noqa: E402
 from grimoire import wire  # noqa: E402
 from grimoire.llm_errors import LLMError  # noqa: E402
-from grimoire.store import paths, usage  # noqa: E402
+from grimoire.store import embed_space, paths, usage  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -703,11 +708,81 @@ def run_epistemic(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0 if passed else 1
 
 
+#: `--investigate`'s entry points (roadmap 12 §10): `rp` is E1, absent until
+#: 12-S6; `all` is every built one.
+INVESTIGATE_MODES = ("continuity", "question", "rp", "all")
+
+
+def _probe_task(task: str, *, decide: bool = False) -> case_mod.Case:
+    """A case that only names `task`, for `resolve_connections`."""
+    return case_mod.Case(id=f"investigate-{task}", hypothesis="roadmap 12 gate", build=dict,
+                         prompt=lambda ctx: [], grade=lambda ctx, out: [], recordings=(),
+                         task=task, schema=(lambda ctx: {}) if decide else None)
+
+
+def run_investigate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """`--investigate MODE`: roadmap 12's adoption gate (spec 10). Offline (the
+    default) runs every case's arms in throwaway homes with the investigation
+    arm's model a canned script -- the loop, the checks and the graders, never
+    a model's quality; `--live` runs the real models the app routes each task
+    to. Each entry point's gate is printed apart; E1 (`rp`) is absent until
+    12-S6 and cannot pass. Changes no default."""
+    others = [flag for flag, on in (("--history", args.history), ("--play", bool(args.play)),
+                                    ("--epistemic", args.epistemic),
+                                    ("--embed", args.embed or bool(args.embed_options)),
+                                    ("--gate", args.gate), ("--compare", bool(args.compare)),
+                                    ("--case", bool(args.case)), ("--record", args.record))
+              if on]
+    if others:
+        ap.error(f"--investigate owns its corpus; it takes no {', '.join(others)}")
+    if args.investigate == "rp":
+        print("rp (E1): absent until 12-S6 -- spec 10's PlanTrace has not landed")
+        return 1
+    modes = (tuple(investigation_cases.ARMS) if args.investigate == "all"
+             else (args.investigate,))
+    targets, rates, real_home, space = {}, None, None, None
+    if args.live:
+        probes = tuple(_probe_task(t) for m in modes for t in (investigation_runner.TASKS[m],))
+        if "continuity" in modes:
+            probes = (*probes, _probe_task("continuity-reconcile", decide=True))
+        # The investigation arm's decide tool, as the entry points offer it.
+        probes = (*probes, _probe_task(investigation_runner.DECIDE_TASK, decide=True))
+        try:
+            conns = runner.resolve_connections(probes, provider=args.provider, model=args.model)
+        except RuntimeError as exc:
+            print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
+            return 1
+        targets = {p.task: conns[runner.conn_key(p)] for p in probes}
+        real_home, rates = paths.home(), usage.Rates.current()
+        # The Embedding role as the app would search with it; None runs both
+        # arms lexical and structural, as the app would on this store.
+        space = embed_space.endpoint()
+    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    results, records = investigation_runner.run_all(
+        live=args.live, targets=targets, rates=rates, run_id=args.run_id,
+        real_home=real_home, selected=modes, space=space)
+    print(runner.report(results))
+    print(runner.ascii_safe(investigation_runner.summary(records, live=args.live)))
+    verdict = investigation_runner.gate(records)
+    if args.out:
+        configs = [runfile.config("c1", "incumbent", {"arm": "incumbent"}),
+                   runfile.config("c2", "investigation", {"arm": "investigation"})]
+        doc = runfile.build(results, configs, run_id=args.run_id, started=started)
+        doc["investigation"] = {"mode": "live" if args.live else "offline",
+                                "margin": investigation_cases.MARGIN, "records": records,
+                                "aggregate": investigation_runner.aggregate(records),
+                                "gate": verdict}
+        runfile.write(Path(args.out), doc)
+        print(runner.ascii_safe(f"wrote {args.out}"))
+    return 0 if all(verdict[m] for m in modes) else 1
+
+
 def _other_mode(args: argparse.Namespace):
     """The mode that is not a case run, when one is asked for: the embedding
     evals (`--embed`, or `--embed-options`, which it refuses alone), the
     decide gate, a comparison, or the escalation sweep. None for a case run."""
-    for asked, mode in ((args.epistemic, run_epistemic), (args.history, run_history),
+    for asked, mode in ((bool(args.investigate), run_investigate),
+                        (args.epistemic, run_epistemic), (args.history, run_history),
                         (bool(args.play), run_play),
                         (args.embed or bool(args.embed_options), run_embed),
                         (args.gate, run_gate), (bool(args.compare), run_compare),
@@ -781,6 +856,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--plan-cost-bound", type=float, default=None, metavar="USD",
                     help="with --history --plan, the added USD per planned turn the default "
                          "gate allows (agreed in conversation); without it the gate is not met")
+    ap.add_argument("--investigate", choices=INVESTIGATE_MODES, default="",
+                    help="roadmap 12's adoption gate for an investigation entry point: "
+                         "its incumbent against the investigation, offline unless --live")
     args = ap.parse_args(argv)
     args.run_id = str(uuid.uuid4())
     _check_history_flags(ap, args)

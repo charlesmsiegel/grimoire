@@ -40,6 +40,14 @@ Four rules, each costing the capture and never the decision:
   failure is one `warning` naming the task and the exception type, with no
   capture content.
 
+**A tool loop captures the same way** (roadmap 12's investigations):
+`capturing(..., operation=TOOLS)` opens a scope whose hook is the loop's
+`inference.TurnCapture`, one record per model turn (its finish, the length
+of its text, the calls it made), filed as one entry in a pool of its own.
+Each turn is sent the whole conversation so far, so only the LATEST turn's
+messages are kept in full: they hold every earlier turn and every tool
+result the model was handed.
+
 **No provider text is kept.** A failed call's record has its `error`
 (`"kind: detail"`, the detail being the provider's own words, which can echo
 the input or a key) replaced by `error_kind`, `error_status` and `code`, read
@@ -71,6 +79,9 @@ OUTCOME_SECTION_ID = "decision"
 
 #: The `operation` every decision capture is filed under.
 DECIDE = store.prompt_log.DECIDE
+
+#: The `operation` a tool loop's capture is filed under.
+TOOLS = store.prompt_log.TOOLS
 
 #: The `sid` of a campaign-level scope (the reconcile sweep): filed with no
 #: scene, through `common._record_campaign_prompt`, and fenced on the site's
@@ -166,6 +177,8 @@ class Scope:
 
     task: str
     on: bool
+    #: `DECIDE`, or `TOOLS` for a tool loop's turns.
+    operation: str = DECIDE
     calls: list[_Held] = field(default_factory=list)
     notes: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: A refused request's own sentence (`DecideRequestError`), else "".
@@ -209,6 +222,12 @@ class Scope:
     def _take(self, part: str, messages: list[dict], outcome: dict,
               target: wire.Target) -> None:
         full = len(self.calls) < MAX_CALLS_IN_FULL
+        if self.operation == TOOLS:
+            # Each turn carries every earlier one: only the latest is kept.
+            for held in self.calls:
+                if held.messages is not None:
+                    held.messages, held.elided = None, held.sent
+            full = True
         self.calls.append(_Held(
             record={"part": part, **_sanitised(outcome)}, target=target,
             messages=list(messages) if full else None, sent=bool(messages),
@@ -252,7 +271,8 @@ def _breakdown(scope: Scope) -> dict:
         if held.messages:
             rows.extend(message_sections(held.messages, call=None if single else k))
     total = sum(row["tokens"] for row in rows)
-    rows.append({"id": OUTCOME_SECTION_ID, "label": "decision", "text": _envelope(scope),
+    label = "decision" if scope.operation == DECIDE else "outcome"
+    rows.append({"id": OUTCOME_SECTION_ID, "label": label, "text": _envelope(scope),
                  "tier": "lock-in", "dropped": False, "pinned": False, "trimmed": 0,
                  "tokens": 0})
     return {"sections": rows, "total_tokens": total, "dropped_tokens": 0,
@@ -276,11 +296,11 @@ def _file(scope: Scope, cid: str, sid: str, still: Callable[[], bool]) -> None:
         # native call is filed with no `conn` to read it from.
         breakdown = {**breakdown, "model_window": common.model_window(named.target)}
     if sid == NO_SCENE:
-        common._record_campaign_prompt(cid, scope.task, breakdown, model=model,
-                                       kind=kind, conn=conn, operation=DECIDE, still=still)
+        common._record_campaign_prompt(cid, scope.task, breakdown, model=model, kind=kind,
+                                       conn=conn, operation=scope.operation, still=still)
         return
     common._record_prompt(cid, sid, scope.task, breakdown, model=model, kind=kind,
-                          conn=conn, operation=DECIDE, still=still)
+                          conn=conn, operation=scope.operation, still=still)
 
 
 def _opening(cid: str, sid: str, task: str) -> str | None:
@@ -326,6 +346,7 @@ async def _close(scope: Scope, cid: str, sid: str, identity: str | None,
 async def capturing(cid: str, sid: str, task: str, *,
                     fence: Callable[[], bool] | None = None,
                     abandoned: Callable[[], Awaitable[bool]] | None = None,
+                    operation: str = DECIDE,
                     ) -> AsyncIterator[Scope]:
     """Open one decision scope over scene `sid` of campaign `cid` -- or over
     the campaign itself, `sid=NO_SCENE` -- filed under `task` (see the module
@@ -333,11 +354,12 @@ async def capturing(cid: str, sid: str, task: str, *,
     False answer drops the capture; a campaign-level scope has nothing else
     to be fenced on, so it must pass one (`ValueError`, before anything is
     read). `abandoned` is the review's own check, asked before filing, for a
-    site whose loop swallows `Abandoned` (voice drift)."""
+    site whose loop swallows `Abandoned` (voice drift). `operation` is
+    `TOOLS` for a tool loop's turns, filed in their own pool."""
     if sid == NO_SCENE and fence is None:
         raise ValueError(f"a campaign-level {task} capture needs its site's fence")
     identity = await run_in_threadpool(_opening, cid, sid, task)
-    scope = Scope(task, identity is not None)
+    scope = Scope(task, identity is not None, operation)
     try:
         yield scope
     except decisions.DecideRequestError as exc:

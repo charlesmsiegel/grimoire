@@ -428,3 +428,15 @@ def prepare(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None)
 
 def build(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None) -> model.Query:
     return prepare(cid, sid, seed=seed, actor_ref=actor_ref).query
+
+
+def for_text(cid: str, text: str, *, perspective: str = model.NARRATOR) -> model.Query:
+    """A query from free text alone, with no scene to scan: what an
+    investigation's `search_history` asks (roadmap 12-S1). Its terms and
+    seeds come from `text` by the same catalog rules a turn's do -- weighted
+    names, phrases and plain words, protected names removed -- scoped to
+    `perspective`, with no present cast and no location to seed from."""
+    cat = scoped(catalog(cid, ""), perspective)
+    clean = cat.clean(text)
+    return model.Query((text,), terms=_terms(cat, clean), subjects=subjects(cid, cat, clean),
+                       perspective=perspective)

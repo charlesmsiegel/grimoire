@@ -252,6 +252,19 @@ ROUTES: tuple[Route, ...] = (
           "needs from the campaign's past. Off unless History planning is switched on; "
           "a non-reasoning preset suits it.",
           ("history-query-plan",), True, default_role="fast", legacy=NO_LEGACY),
+    # Roadmap 12: a tool-calling model reading the campaign's history for an
+    # investigation a reader started, each entry point its own task, switched
+    # on in Settings. `requires` tools, so a model known unable to call them
+    # is refused at the seam rather than handed a loop it cannot run.
+    Route("investigation", "History investigation",
+          "Reading a campaign's history with tools, to settle a continuity finding or "
+          "answer a question about what happened. Off unless switched on.",
+          ("investigation-continuity", "investigation-question"), True,
+          requires=("tools",), legacy=NO_LEGACY),
+    Route("investigation_decide", "Investigation checks",
+          "A closed question an investigation asks along the way.",
+          ("investigation-decide",), True, operation="decide", default_role="decision",
+          legacy=NO_LEGACY),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),
     Route("absorb", "Absorb & mechanics audit",

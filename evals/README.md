@@ -692,6 +692,75 @@ Decision stage answers about the corpus's gated parts:
 - Offline, `pytest backend` holds that each gated part is one production
   would ask about, and grades canned answers.
 
+## Investigation (roadmap 12)
+
+`evals/run.py --investigate continuity|question|all` is the adoption gate for
+roadmap 12's investigation entry points (spec 10). Each case plants a small
+campaign in a throwaway home (`evals/investigation/synth.py`, placeholder names
+only) whose deciding evidence is adaptive -- a promise kept by someone called
+only by a nickname, two records whose sameness, continuation or mere relation is
+said only in a transcript, a debt settled without its title beside a hidden post
+naming it, a thread whose change is a beat two scenes from its reason -- and
+runs it through two arms. Every campaign is a long history: the scenes that
+matter sit among everyday filler scenes that share no word with any case
+(`synth.LEADING_FILLER`, at least `cases.LONG_HISTORY` scenes), and a case run
+in a shorter one fails its entry point. Each case names the spec 10.2 item it stands for
+(`cases.COVERAGE`), and an entry point whose run did not cover every one of its
+items in both arms fails the gate, however it scored:
+
+| Entry point | Incumbent (B) | Challenger (C) |
+|---|---|---|
+| `continuity` (E2) | the reconcile sweep's own answer for the finding | the entry point's run (`investigate_with_decide`: the decide tool included), then the proposal it would persist |
+| `question` (E3) | one `search_history` over the question, answered from what it showed and citing the shown items it names, held to those as C's are to what it read | the entry point's run, then the answer it would hold |
+| `rp` (E1) | absent until 12-S6 (spec 10's `PlanTrace`) | absent |
+
+**Offline** (the default, and what `pytest backend` runs) the challenger's
+model is a canned script played by the suite's shared fake,
+`backend/tests/llm_fakes.FakeToolTurns`, its budget has no wall, and the
+incumbents make no call: it proves the loop, the final-call checks and the
+graders, never a model's quality. **`--live`** runs the models the app routes
+each task to (`--provider`/`--model` override them), `investigation-decide`
+included, under each entry point's own budget, wall and all, metered in the
+throwaway home as every live run is, with the money in its three columns.
+Both arms search with the real store's Embedding role and a live embeddings
+client (hybrid where the store is, lexical where its role is off), and each
+arm's wall time is its own, apart from the leakage probes. An entry point
+fails if either arm errored -- raised, or came back failed or refused: an
+incumbent that did not run is no baseline. A run under a spend ceiling
+searches without embeddings (their cost is metered apart from the loop, so
+the ceiling could not see it).
+
+The lines, per entry point: correctness (a proposal against its gold
+decision, direction and cited scenes -- at least one, and only gold ones --
+with `uncertain` scored as an abstention; an answer against the claim it must
+state and the denials it must not, its citations against the gold scenes --
+lexical grading, applied to both arms alike: a denial list and each case's
+own refutations mark an inverted answer wrong, but a phrasing past both can
+still read right, so the run file carries every answer's text and a live
+table is read against it before it is relied on), **text leakage** (a hidden word in
+what the run wrote), **selection leakage** (a cited scene that only a
+hidden-word query returned, read off the trace) and the **hidden route** (no
+excerpt of a hidden post's scene carries a hidden word, and a search for each
+hidden word beside a visible one answers the same before and after the hidden
+posts are rewritten without it -- the same query both times, so a semantic
+match with the visible text is never read as a leak).
+
+### The adoption rule (spec 10.4)
+
+Every entry point ships with its switch **off**. A switch's default may become
+`on` only in a PR that records here, under a dated heading naming the entry
+point:
+
+- the `--investigate <mode> --live --out FILE` table, with the models it ran on;
+- that C beats B on that entry point's correctness by at least the margin stated
+  in advance, `evals/investigation/cases.MARGIN` (0.20);
+- that neither leakage line is worse in C than in B, and the hidden route is
+  clean;
+- the cost (the three money columns, never added), latency and
+  `budget_exhausted` limits C paid.
+
+An offline PASS is not that record: it is the machinery passing.
+
 ## How a case works
 
 ```

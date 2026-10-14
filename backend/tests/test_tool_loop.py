@@ -129,6 +129,23 @@ def test_a_capture_sees_each_turn_with_its_definitions():
     assert second[1]["calls"] == [] and first[2] == "vendor/active"
 
 
+def test_a_failed_turn_is_captured_against_the_attempt_that_failed():
+    """A turn the fallback took and failed is filed under the fallback's
+    model, and with the failure's kind and status only."""
+    captured = []
+
+    async def capture(messages, outcome, target):
+        captured.append((outcome, target.model))
+
+    failing = ToolTurn(fallback=True, error=LLMError("rate_limit", "slow down", status=429))
+    result = _run(FakeToolTurns(("", [("read", {})]), failing), capture=capture,
+                  resolved=_resolved(wire.Chain(PRIMARY, SPARE)))
+    assert result.status == "failed"
+    outcome, model = captured[-1]
+    assert model == "claude-spare"
+    assert outcome == {"finish": "error", "error_kind": "rate_limit", "error_status": 429}
+
+
 def test_a_failing_capture_costs_only_itself():
     async def capture(messages, outcome, target):
         raise RuntimeError("the prompt log is unwell")
@@ -737,3 +754,36 @@ def test_the_spend_preflight_never_prices_a_fallback_the_loop_drops(monkeypatch)
     refused = inference.tool_run_refusal("chat", rides, RunBudget(spend_ceiling_usd=1.0),
                                          prices)
     assert refused is not None and "tiny" in str(refused)
+
+
+def test_idle_waits_out_a_tool_thread_the_loop_abandoned():
+    """`idle` says when no executor's tool thread runs any more -- one a
+    timed-out wait left behind included -- for a caller that must not move
+    the store root from under it."""
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow(args, ctx):
+        started.set()
+        release.wait(10)
+        return ToolOutput("done")
+    toolset = Toolset((ToolSpec("slow", "slow", {"type": "object", "properties": {},
+                                                 "required": [],
+                                                 "additionalProperties": False}, slow),))
+    execute = tool_calls.registered(toolset)
+    call = tool_calls.ToolCall(id="c1", name="slow", arguments={}, raw_arguments="{}")
+    ctx = tool_calls.ToolContext(campaign="", scene_identity="", run_id="r",
+                                 deadline=float("inf"), root="")
+
+    async def abandon():
+        task = asyncio.ensure_future(execute(call, ctx))
+        await asyncio.to_thread(started.wait, 10)
+        task.cancel()
+    asyncio.run(abandon())
+    assert tool_calls.idle(timeout=0) is False
+    # The executor's own drain says the same of its threads alone: what a run
+    # waits on before it gives up holding the store root.
+    assert execute.drain(timeout=0) is False
+    release.set()
+    assert execute.drain(timeout=10) is True
+    assert tool_calls.idle(timeout=10) is True

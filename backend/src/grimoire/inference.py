@@ -1998,6 +1998,10 @@ class _Loop:
         self.t0 = time.monotonic()
         self._hist: list[dict] | None = None
         self._hist_len = 0
+        #: The latest turn's usage holder, which the facade stamps with the
+        #: attempt that went out (`llm.ATTEMPTED`): what a failed turn's
+        #: capture names, a fallback's included.
+        self._holder: dict | None = None
         #: The spend axis (01g-S5): each attempt's price, read at entry, each
         #: sent turn's `(projection, row)`, and the prompt count the next
         #: projection builds on.
@@ -2197,11 +2201,17 @@ class _Loop:
     # ---- one model turn ----
     async def _turn(self, *, final: bool, extra: dict | None = None
                     ) -> _Turn | tool_calls.LoopResult | None:
-        """One model turn, or None when the spend ceiling refused it unsent
-        (`limit` says `spend`)."""
+        """One model turn, or None when the spend ceiling or the context stop
+        refused it unsent (`limit` says `spend` or `context`)."""
         chain, notes = self._chain(final)
         choice = self._final_choice(chain, notes) if final else self._choice(chain, notes)
         sending = self._outgoing(extra)
+        cap = self.budget.max_prompt_tokens
+        if cap is not None and await asyncio.to_thread(
+                _prompt_count, list(sending), self.defs) > cap:
+            # The caller's context stop (roadmap 12 §7.3): refused unsent.
+            self.limit = self.limit or "context"
+            return None
         projection = await self._projected(chain, sending, extra)
         if projection is not None and self._spent() + projection > (
                 self.budget.spend_ceiling_usd or 0.0):
@@ -2225,6 +2235,7 @@ class _Loop:
             return self._result("budget_exhausted")
         except LLMError as exc:
             self._trace(k, "model", ok=False, note=exc.kind, started=started)
+            await self._captured_failure(sending, exc)
             if k == 1:
                 raise
             return self._result("failed", error=exc)
@@ -2343,6 +2354,7 @@ class _Loop:
         try:
             with meter as m:
                 m.usage[tool_calls.KEY] = collector
+                self._holder = m.usage
                 if self.holders is not None:
                     self.holders.append(m.usage)
 
@@ -2583,6 +2595,28 @@ class _Loop:
             log.warning("could not capture tool turn %d of run %s: %s", turn.turn,
                         self.run_id, type(exc).__name__)
 
+    async def _captured_failure(self, sending: list[dict], exc: LLMError) -> None:
+        """A turn that failed, for the caller's `TurnCapture`: the request as
+        it would have gone, the attempt that failed last (a fallback's
+        included; the primary when none was stamped), and the failure's kind,
+        status and code -- never the provider's words, which can echo the
+        input or a key. Guarded like `_captured`."""
+        if self.capture is None or self.resolved.chain is None:
+            return
+        try:
+            shown = [{"role": "system", "content": json.dumps(list(self.defs))}, *list(sending)]
+            outcome: dict = {"finish": "error", "error_kind": exc.kind,
+                             "error_status": exc.status}
+            if exc.code:
+                outcome["code"] = exc.code
+            attempted = (self._holder or {}).get(llm.ATTEMPTED)
+            target = (attempted if isinstance(attempted, wire.Target)
+                      else self.resolved.chain.primary)
+            await self.capture(shown, outcome, target)
+        except Exception as error:  # noqa: BLE001 - see `_captured`
+            log.warning("could not capture failed tool turn %d of run %s: %s", self.turns,
+                        self.run_id, type(error).__name__)
+
     # ---- one tool call ----
     def _problem(self, call: tool_calls.ToolCall, spec: tool_calls.ToolSpec | None) -> str:
         if spec is None:
@@ -2650,7 +2684,7 @@ class _Loop:
                                      scene_identity=self.scene_identity, run_id=self.run_id,
                                      deadline=end, root=self.root, turn=self.turns,
                                      run=_RunView(self), call_budget=self.call_budget,
-                                     reserve=reserve)
+                                     reserve=reserve, call_id=call.id)
         seconds: float | None = min(spec.timeout, end - time.monotonic())
         if seconds == math.inf:
             # No wait on either side: the decide tool, in a run with no wall,

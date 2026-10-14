@@ -156,6 +156,9 @@ class ToolContext:
     run: RunView | None = None
     call_budget: float = 0.0
     reserve: float = 0.0
+    #: The id of the call this context runs, as the loop's trace entry for it
+    #: names it: what lets a caller tie a record of its own to that entry.
+    call_id: str = ""
 
 
 class ToolError(Exception):
@@ -779,7 +782,7 @@ TOOL_WORKERS = 4
 
 #: The limits a run can stop on (`LoopResult.limit`). `spend` is 01g-S5's.
 LIMITS: tuple[str, ...] = ("turns", "tool_calls", "decisions", "wall", "spend",
-                           "result_chars")
+                           "result_chars", "context")
 
 #: The results a model is sent for a call the loop did not run as asked.
 NOT_RUN = "not run: the run's tool budget is spent"
@@ -826,6 +829,13 @@ class RunBudget:
     #: creative turn whose continuation IS the answer (roadmap 02 §8.5),
     #: where "give your final answer now" would be prompt text in the story.
     finalize_note: bool = True
+    #: The most tokens a turn's prompt may hold, counted as the spend guard
+    #: counts one (`tokens.count_if_loaded`: the encoder when loaded, else
+    #: four characters a token) over the messages and the tool definitions; a
+    #: send past it is refused and the run stops on `context`. None is no
+    #: stop. A caller derives it from 01i's `prompt_ceiling` (roadmap 12 §7.3);
+    #: the loop never guesses a window.
+    max_prompt_tokens: int | None = None
 
     def __post_init__(self) -> None:
         ceiling = self.spend_ceiling_usd
@@ -845,6 +855,8 @@ class RunBudget:
         if isinstance(self.max_decisions, bool) or not isinstance(self.max_decisions, int) \
                 or self.max_decisions < 0:
             raise ValueError("RunBudget.max_decisions is a whole number")
+        if self.max_prompt_tokens is not None and not _positive_int(self.max_prompt_tokens):
+            raise ValueError("RunBudget.max_prompt_tokens is a positive whole number or None")
 
 
 @dataclass(frozen=True)
@@ -968,6 +980,37 @@ def rewrite_ids(messages: list[dict], mint: Callable[[], str]) -> list[dict]:
     return out
 
 
+class _Running:
+    """Tool threads running in any executor's pool, and the condition a
+    caller waits on for none (`idle`)."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.changed = threading.Condition()
+
+    def started(self) -> None:
+        with self.changed:
+            self.count += 1
+
+    def finished(self, _future: Future) -> None:
+        with self.changed:
+            self.count -= 1
+            self.changed.notify_all()
+
+
+_RUNNING = _Running()
+
+
+def idle(timeout: float | None = None) -> bool:
+    """True once no tool thread of any executor is running -- one a
+    timed-out wait abandoned included -- or False at `timeout`. For a caller
+    that must not move what a thread could still read: an eval leaving its
+    throwaway home, which a late read would otherwise resolve against
+    whatever `GRIMOIRE_HOME` names next."""
+    with _RUNNING.changed:
+        return _RUNNING.changed.wait_for(lambda: _RUNNING.count == 0, timeout)
+
+
 class _Workers:
     """A bounded thread pool that says when it is full rather than queueing:
     a thread a timed-out wait abandoned keeps its worker until it returns."""
@@ -977,43 +1020,67 @@ class _Workers:
         self._size = size
         self._busy = 0
         self._lock = threading.Lock()
+        self._idle = threading.Condition(self._lock)
 
     def submit(self, fn: Callable, *args: object) -> Future | None:
         with self._lock:
             if self._busy >= self._size:
                 return None
             self._busy += 1
+        _RUNNING.started()
         future = self._pool.submit(fn, *args)
         future.add_done_callback(self._release)
+        future.add_done_callback(_RUNNING.finished)
         return future
 
     def _release(self, _future: Future) -> None:
         with self._lock:
             self._busy -= 1
+            self._idle.notify_all()
+
+    def drain(self, timeout: float | None = None) -> bool:
+        """True once none of this pool's threads is running -- one a
+        timed-out wait abandoned included -- or False at `timeout`."""
+        with self._idle:
+            return self._idle.wait_for(lambda: self._busy == 0, timeout)
 
 
-def registered(toolset: Toolset, *, workers: int = TOOL_WORKERS) -> Execute:
-    """The default executor (spec 3.6): each call dispatched by name to its
-    `ToolSpec.fn`. An async tool is awaited; a sync one runs on this
-    executor's own bounded pool, and once every worker is held -- by threads
-    the loop stopped waiting on -- a call is refused with `CAPACITY` rather
-    than queued. The loop bounds the wait; nothing here kills a thread."""
-    pool = _Workers(workers)
+class Registered:
+    """The default executor (`registered`): an `Execute`, plus `drain`, which
+    waits out the threads its pool still runs."""
 
-    async def execute(call: ToolCall, ctx: ToolContext) -> ToolOutput:
-        spec = toolset.get(call.name)
+    def __init__(self, toolset: Toolset, workers: int):
+        self._toolset = toolset
+        self._pool = _Workers(workers)
+
+    async def __call__(self, call: ToolCall, ctx: ToolContext) -> ToolOutput:
+        spec = self._toolset.get(call.name)
         if spec is None:
             raise ToolError(f"there is no tool named {call.name!r}")
         args = call.arguments or {}
         if inspect.iscoroutinefunction(spec.fn):
             return await spec.fn(args, ctx)
-        future = pool.submit(spec.fn, args, ctx)
+        future = self._pool.submit(spec.fn, args, ctx)
         if future is None:
             raise ToolError(CAPACITY)
         result = await asyncio.wrap_future(future)
         return await result if inspect.isawaitable(result) else result
 
-    return execute
+    def drain(self, timeout: float | None = None) -> bool:
+        """True once no thread this executor started is running, or False at
+        `timeout`. Blocks: call it off the loop. For a run that holds what a
+        late thread could still read -- the store root -- until it returns."""
+        return self._pool.drain(timeout)
+
+
+def registered(toolset: Toolset, *, workers: int = TOOL_WORKERS) -> Registered:
+    """The default executor (spec 3.6): each call dispatched by name to its
+    `ToolSpec.fn`. An async tool is awaited; a sync one runs on this
+    executor's own bounded pool, and once every worker is held -- by threads
+    the loop stopped waiting on -- a call is refused with `CAPACITY` rather
+    than queued. The loop bounds the wait; nothing here kills a thread, and
+    `Registered.drain` waits out the ones it left."""
+    return Registered(toolset, workers)
 
 
 async def text_deltas(events: AsyncIterator[LoopEvent],

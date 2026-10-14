@@ -42,7 +42,8 @@ import {
   type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingDetail, type GreetingDraft,
   type GroupState, type MembershipResponse, type HealthCheckResult,
   type CommitmentSave, type CompositionRow,
-  type CandidateRecord, type ContinuityApply, type ContinuityCandidates, type ContinuityState,
+  type CandidateInvestigated, type CandidateRecord, type ContinuityApply, type ContinuityCandidates,
+  type ContinuityState, type HistoryAnswer,
   type ContinuityApplied, type ReconcileResult,
   type CapabilityNeed, type ControlsPreview, type ModelCapabilities,
   type CampaignInferenceWrite, type InferenceSettings, type InferenceWrite,
@@ -171,6 +172,12 @@ export class ApiError extends Error {
     super(detail);
   }
 }
+
+/** A detached run SEEN to end other than landed: an `ApiError`, so every
+ *  caller reads it as before, and the one sign that its status is the run's
+ *  own failure rather than a request that did not answer -- a 5xx here is
+ *  the provider's, and the run it names is over. */
+export class RunEndedError extends ApiError {}
 
 /** A continuity Refresh refused by its own POST (409 `busy` while the store
  *  moves, 404 for a campaign that is not there): no run was started, so no
@@ -610,9 +617,9 @@ async function awaitRunAt(base: string, started: RunHandle,
   onSettled?.();
   if (run.state === "landed") return run;
   const error = run.error ?? undefined;
-  const failure = new ApiError(error?.status ?? 409,
-                               error?.detail ?? `the run ended ${run.state}`,
-                               error?.kind ?? run.state, error);
+  const failure = new RunEndedError(error?.status ?? 409,
+                                    error?.detail ?? `the run ended ${run.state}`,
+                                    error?.kind ?? run.state, error);
   // The same announcement `requestRaw` makes for a non-2xx, and it has to be
   // repeated here because a detached failure never goes through that branch:
   // the 202 was a success and the provider failed minutes later. Without it a
@@ -731,6 +738,16 @@ async function draftRun<T>(scope: DraftScope,
   // `landed` is the only way out of `awaitRunAt`, so a result is what this run
   // is. An empty object rather than a throw for a route that legitimately
   // produced nothing -- the caller's own type says which fields it expects.
+  return (run.result ?? {}) as T;
+}
+
+/** `draftRun`'s second half alone: follow a run already found by its attempt
+ *  id to what it produced, for a remount that must not repeat the start. */
+async function followDraft<T>(scope: DraftScope, handle: RunHandle, attempt: string,
+                              signal?: AbortSignal): Promise<T> {
+  const run = await awaitRunAt(draftBase(scope), handle,
+                               () => findDraftRun(scope, attempt, signal).catch(() => null),
+                               signal, noteRunSettled);
   return (run.result ?? {}) as T;
 }
 
@@ -1691,6 +1708,48 @@ export const api = {
             ? new RefreshRefused(err.status, err.detail, err.kind, err.body)
             : err;
         }), { signal }),
+  /** Investigate one finding (roadmap 12, E2) and wait for it: a background
+   *  run, one live per campaign, whose one write is the finding's proposal.
+   *  `notifyShell`, since a written proposal moves what the review shows. */
+  /** `attempt`, when given, re-attaches: the server adopts a repeat of the
+   *  attempt that started a campaign's investigation rather than running
+   *  another. */
+  investigateCandidate: (cid: string, id: string, signal?: AbortSignal, attempt?: string) =>
+    draftRun<CandidateInvestigated>({ at: "campaign", id: cid }, (a) =>
+      request<{ run: RunHandle }>(
+        "POST",
+        `/api/campaigns/${encodeSegment(cid)}/continuity/candidates/${encodeSegment(id)}/investigate`,
+        undefined, { attempt: a, signal }), { signal, attempt }).then(notifyShell),
+  /** The run an investigation's attempt id named, or null once the server
+   *  holds it no longer: what a remount checks before following it. */
+  findCandidateInvestigation: (cid: string, attempt: string, signal?: AbortSignal) =>
+    findDraftRun({ at: "campaign", id: cid }, attempt, signal),
+  /** Follow a held investigation to its outcome WITHOUT the POST, which would
+   *  face the start's checks again over an outcome the run already holds. */
+  followCandidateInvestigation: (cid: string, handle: RunHandle, attempt: string,
+                                 signal?: AbortSignal) =>
+    followDraft<CandidateInvestigated>({ at: "campaign", id: cid }, handle, attempt, signal)
+      .then(notifyShell),
+  /** The run a history question's attempt id named, or null once the server
+   *  holds it no longer (reaped, or a restart): what a re-attach checks
+   *  before repeating the POST, which would otherwise ask again. */
+  findHistoryQuestion: (cid: string, attempt: string, signal?: AbortSignal) =>
+    findDraftRun({ at: "campaign", id: cid }, attempt, signal),
+  /** Follow a held history question's run to its answer WITHOUT the POST: a
+   *  re-attach must not pass the start's own checks again (the switch, the
+   *  model) to collect an answer the run already holds. */
+  followHistoryQuestion: (cid: string, handle: RunHandle, attempt: string,
+                          signal?: AbortSignal) =>
+    followDraft<HistoryAnswer>({ at: "campaign", id: cid }, handle, attempt, signal),
+  /** Ask the campaign's history a question (roadmap 12, E3): a draft whose
+   *  answer is held on the run and never stored. `attempt`, when given,
+   *  re-attaches: the server adopts a repeat of a question's attempt id
+   *  rather than asking again. */
+  askHistory: (cid: string, question: string, signal?: AbortSignal, attempt?: string) =>
+    draftRun<HistoryAnswer>({ at: "campaign", id: cid }, (a) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/campaigns/${encodeSegment(cid)}/history/question`, { question },
+        { attempt: a, signal }), { signal, attempt }),
   /** Follow a campaign run this client did not start -- the sweep End Scene
    *  began, found on the candidates read (Decision 24). It has no attempt id
    *  of ours, so the last word before giving up on it is the subject's run

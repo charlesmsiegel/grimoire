@@ -704,6 +704,11 @@ export type Config = {
   decide_speaker_sampling: string;
   decide_turn_plan: string;
   decide_play_tool: string;
+  /** Roadmap 12's investigation switches, "on" | "off", each off by default,
+   *  and its spend ceiling in US dollars ("" for none). */
+  investigation_continuity: string;
+  investigation_question: string;
+  investigation_spend_ceiling: string;
 };
 export type SendImagesReach = "off" | "yes" | "no" | "unknown" | "none";
 /**
@@ -728,7 +733,8 @@ export type ConfigUpdate = Partial<Pick<Config,
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
   "replay_fork_threshold" | "advance_fork_threshold" | "log_level" |
   "tracker" | "perception_rider" | "send_images" | "send_images_limit" |
-  "decide_speaker_sampling" | "decide_turn_plan" | "decide_play_tool">>;
+  "decide_speaker_sampling" | "decide_turn_plan" | "decide_play_tool" |
+  "investigation_continuity" | "investigation_question" | "investigation_spend_ceiling">>;
 /** One archive written by `store/backups.py`. */
 export type BackupEntry = {
   name: string;
@@ -2243,11 +2249,15 @@ export type PromptEntry = {
       | "replay" | "extend"
       // Decision captures (roadmap 01b): one entry per decision, not per turn.
       | "response-selector" | "scene-break" | "voice-drift"
-      | "continuity-identity" | "continuity-reconcile";
-  /** `"decide"` on a decision capture, which is kept in a retention pool of
-   *  its own; absent on a generation, and on a speaker pick filed before
-   *  decisions had an operation (`isDecision` covers both). */
-  operation?: "decide";
+      | "continuity-identity" | "continuity-reconcile"
+      // Roadmap 12's investigations, filed at campaign level: a run's tool
+      // loop (one entry per run) and its decide tool's calls.
+      | "investigation-continuity" | "investigation-question" | "investigation-decide";
+  /** `"decide"` on a decision capture and `"tools"` on an investigation's
+   *  tool loop, each kept in a retention pool of its own; absent on a
+   *  generation, and on a speaker pick filed before decisions had an
+   *  operation (`isDecision` covers both). */
+  operation?: "decide" | "tools";
   total_tokens: number; dropped_tokens: number; budget_tokens: number;
 };
 /** A frozen breakdown: the same shape `getSceneContext` returns, plus which
@@ -2986,6 +2996,48 @@ export type CandidateSignals = {
 export type CandidateProposal = {
   decision: string; from: string; to: string; relation: string; status: string;
   reason: string; evidence_scenes: string[];
+  /** What the investigation that proposed it read (roadmap 12 §6.2), when one did. */
+  investigation?: InvestigationTrace;
+};
+/** One tool call an investigation made (roadmap 12 §8.1): its arguments
+ *  (strings clipped) and its result's refs and size -- never the text. */
+export type InvestigationStep = {
+  turn: number; tool: string; args: Record<string, unknown>;
+  result: { ok: boolean; refs: string[]; chars: number; truncated: boolean; error?: string };
+};
+/** The three money columns of a run, each null where no call was priced
+ *  that way: never added, and never a zero nobody reported. */
+export type InvestigationCost = {
+  cost_usd: number | null; estimated_usd: number | null; modelled_usd: number | null;
+};
+export type InvestigationTrace = {
+  version: number; run: string; mode: string; task: string; model: string;
+  started: string; outcome: string; limit: string;
+  steps: InvestigationStep[];
+  /** The scenes whose text a tool returned, as `scene:<id>` refs. */
+  inspected: string[];
+  final: Record<string, unknown> | null;
+  usage: {
+    model_turns: number; tool_calls: number; decisions: number; seconds: number | null;
+    cost: InvestigationCost; unpriced_calls: number;
+  };
+};
+/** How an investigation ended (roadmap 12 §5). */
+export type InvestigationOutcome<R = Record<string, unknown>> = {
+  state: "completed" | "no_change" | "insufficient_evidence" | "budget_exhausted"
+    | "refused" | "failed" | "cancelled";
+  limit: string; reason: string; error: string;
+  result: R | null;
+  trace: InvestigationTrace;
+};
+/** A continuity investigation's run result (roadmap 12, E2). */
+export type CandidateInvestigated = {
+  outcome: InvestigationOutcome; persisted: boolean; candidate: string;
+};
+/** A history question's run result (roadmap 12, E3): never stored. */
+export type HistoryAnswer = {
+  question: string;
+  outcome: InvestigationOutcome<{ text: string; citations: string[] }>;
 };
 /** One record a finding names, as it is now. `gone` when it is no longer a
  *  current canonical record (deleted, merged away). An event side carries only

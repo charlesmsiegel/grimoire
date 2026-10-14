@@ -943,6 +943,43 @@ def persist_proposals(cid: str, sweep: Sweep, proposals: dict[str, dict], *,
 # ------------------------------------------------------------------ pressure
 
 
+
+def persist_investigation(cid: str, key: str, proposal: dict, *,
+                          started_fingerprint: str, started_proposal: dict | None,
+                          stillborn: Callable[[], bool] = lambda: False) -> bool:
+    """Roadmap 12's one write (§6.2): one investigation's proposal on the
+    candidate it was about, and whether it landed.
+
+    Under the campaign lock it writes only while the candidate is still
+    cached, still ``live``, still at the fingerprint the run started from and
+    still holding the proposal it held then -- anything else means the reader
+    or a sweep moved it since, and the newer state stands. It replaces that one
+    record's ``proposal`` and nothing else: the file's ``generation`` and
+    ``basis`` are left as they are, so this write neither fences a sweep nor
+    is fenced by one (a sweep that started earlier and lands later keeps or
+    replaces it by its own rules). It stamps the campaign's revision itself,
+    once, because the 202 that started the run never waits for it.
+    `stillborn` is the run's stop, asked inside the hold as `_commit` asks
+    it: a Stop pressed while this waited on the lock writes nothing."""
+    with locks.campaign_lock(cid):
+        if stillborn():
+            return False
+        if not campaigns_paths.campaign_exists(cid) or candidates.malformed(cid):
+            return False
+        stored = candidates.read(cid)
+        cached = stored["records"].get(key)
+        if cached is None or cached["fingerprint"] != started_fingerprint \
+                or cached.get("proposal") != started_proposal:
+            return False
+        current = pending.Current.load(cid)
+        if current.continuity_malformed \
+                or _soft(pending.verdict, "", current, cached) != "live":
+            return False
+        records = {**stored["records"], key: {**cached, "proposal": proposal}}
+        candidates.write(cid, {**stored, "records": records})
+        revision.bump(cid)
+        return True
+
 def _reading(item: dict | None) -> dict:
     if item is None:
         return dict(_NO_DEADLINE)
@@ -1440,6 +1477,17 @@ def _decide(item: dict, cand: dict, known: set[str]) -> dict:
     if vocab == "temporal":
         return _temporal_word(word, refs, base)
     return _pair(word, item, refs, base)
+
+
+def rebuild(item: dict, cand: dict, known: set[str]) -> dict:
+    """One answer rebuilt field by field into a cache proposal, by the sweep's
+    own rule (§6, `_decide`): a word outside the candidate's vocabulary is
+    `uncertain`, the letters resolve to its records, evidence outside `known`
+    is dropped and a lifecycle word with none left is `uncertain`. `cand` is
+    one of `build_payload`'s candidates. Roadmap 12's continuity
+    investigation validates its `propose` through this, with `known` the
+    scenes it read."""
+    return _decide(item, cand, known)
 
 
 # ------------------------------------------------------- as decision items

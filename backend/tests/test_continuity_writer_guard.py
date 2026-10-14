@@ -47,17 +47,25 @@ import grimoire.store.continuity as continuity_pkg
 
 CONTINUITY = pathlib.Path(continuity_pkg.__file__).parent
 
-#: The package every scanned module sits in, which relative imports resolve
-#: against.
+#: The continuity package, which relative imports in its modules resolve
+#: against (and the detector's examples below are written in).
 PACKAGE = "grimoire.store.continuity"
 
-#: The discovery modules: they may read everything below and write none of it.
-SCANNED = ("similarity", "identity", "reconcile", "pending", "pressure", "drivers", "graph")
+#: The scanned modules, as `(package, modules)` pairs: each module's relative
+#: imports resolve against its own package. Continuity's discovery modules may
+#: read everything below and write none of it; roadmap 12's investigation
+#: package reads the same records and writes nothing at all (its one write,
+#: `reconcile.persist_investigation`, is the route's to call).
+SCANNED: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (PACKAGE, ("similarity", "identity", "reconcile", "pending", "pressure", "drivers",
+               "graph")),
+    ("grimoire.store.investigation", ("budget", "final", "readers", "state", "tools",
+                                      "trace")),
+)
 
 #: Every scanned module: one missing means a rename the guard would otherwise
 #: follow into scanning nothing.
-REQUIRED_PRESENT = {"similarity", "identity", "reconcile", "pending", "pressure", "drivers",
-                    "graph"}
+REQUIRED_PRESENT = {f"{package}.{module}" for package, modules in SCANNED for module in modules}
 
 #: Mutators the discovery modules may not reach, by absolute module. Matching
 #: is exact on the module, never on its tail: `doc` is a common word.
@@ -149,16 +157,28 @@ def _forbidden(tree: ast.AST, package: str = PACKAGE) -> list[tuple[int, str]]:
             if name in FORBIDDEN.get(module, ())]
 
 
-def _present() -> dict[str, pathlib.Path]:
-    return {m: CONTINUITY / f"{m}.py" for m in SCANNED if (CONTINUITY / f"{m}.py").is_file()}
+def _directory(package: str) -> pathlib.Path:
+    return pathlib.Path(importlib.import_module(package).__file__).parent
+
+
+def _present() -> dict[str, tuple[pathlib.Path, str]]:
+    """`package.module` -> (its file, its package), for each scanned module
+    that exists."""
+    out: dict[str, tuple[pathlib.Path, str]] = {}
+    for package, modules in SCANNED:
+        root = _directory(package)
+        for module in modules:
+            if (root / f"{module}.py").is_file():
+                out[f"{package}.{module}"] = (root / f"{module}.py", package)
+    return out
 
 
 def test_discovery_modules_never_write_reviewed_state():
     offenders = []
-    for name, path in sorted(_present().items()):
+    for name, (path, package) in sorted(_present().items()):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        offenders += [f"{name}.py:{line} calls {rendered}"
-                      for line, rendered in _forbidden(tree)]
+        offenders += [f"{name}:{line} calls {rendered}"
+                      for line, rendered in _forbidden(tree, package)]
     assert not offenders, (
         "a continuity discovery module may only propose: record the finding in "
         "the candidates cache and let `continuity.review` apply what the reader "
@@ -249,6 +269,19 @@ def test_the_detector_does_not_flag_a_module_that_merely_looks_like_this_one():
     assert _found("def add(c):\n    pass\ndef go(c):\n    add(c)\n") == []
     # A reader passed by reference is what the fail-soft helpers are for.
     assert _found("from .. import events\ndef go(c):\n    _soft(events.list_events, None, c)\n") == []
+
+
+def test_a_module_resolves_its_imports_against_its_own_package():
+    """A relative import means a different module in each package: `from .
+    import doc` is continuity's `doc` only inside continuity. The
+    investigation package reaches it as `..continuity`, and a planted write
+    there is caught."""
+    sibling = "from . import doc\ndef go(c):\n    doc.put_link(c, 'a', 'b', 'related')\n"
+    assert [r for _l, r in _forbidden(ast.parse(sibling), PACKAGE)] == ["doc.put_link"]
+    assert _forbidden(ast.parse(sibling), "grimoire.store.investigation") == []
+    reached = "from ..continuity import doc\ndef go(c):\n    doc.put_link(c, 'a', 'b', 'r')\n"
+    assert [r for _l, r in _forbidden(ast.parse(reached), "grimoire.store.investigation")] \
+        == ["doc.put_link"]
 
 
 def test_review_still_uses_the_vocabulary_it_is_supposed_to():
