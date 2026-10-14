@@ -336,7 +336,8 @@ async def _planned_round(cid, sid, turn, evidence, got, *, ceiling, embed_client
                          run_id):
     """One planned round: 09's own retrieval of the plan's `Query`, no rerank,
     merged into the evidence so far by scene identity (09-C1). The merged
-    selection is at most the setting's depth under the same ceiling: a round
+    selection is at most the depth the phase started with (`turn.depth`, so a
+    mid-phase settings edit never resizes it) under the same ceiling: a round
     changes which scenes the section carries, never how many or how large."""
     q = history_plan.query_of(got, turn.query.turn_index)
     found = await store.history.retrieve(
@@ -346,12 +347,7 @@ async def _planned_round(cid, sid, turn, evidence, got, *, ceiling, embed_client
                      max_scenes=None)
     expand = retrieval.expander(cid, sid, anchor, ceiling, summary_omissions=turn.omissions)
     merged = await history_threads.run(lambda: store.history.merge(
-        evidence, found, ceiling=ceiling, expand=expand, rerank=_reapplied))
-    if evidence.candidates and not merged.candidates:
-        # Recall was switched off mid-phase (`merge` reads the live settings
-        # and answers empty): the round adds nothing, and never costs the
-        # evidence already found.
-        merged = evidence
+        evidence, found, ceiling=ceiling, expand=expand, rerank=_reapplied, depth=turn.depth))
     # The merge builds a fresh coverage; the first retrieval's rerank -- the
     # one opinion `_reapplied` carries -- keeps its status on the result.
     merged = replace(merged, coverage=replace(merged.coverage, rerank=evidence.coverage.rerank))

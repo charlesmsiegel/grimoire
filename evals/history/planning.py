@@ -521,8 +521,9 @@ def gate(records, validation):
 def default_gate(records, max_usd_per_planned_turn=None):
     """Spec 11's gate for making `auto` a default: `plan+repair` beats
     `hybrid` at recall@3 on the targets, no control false-triggers, AND the
-    planning calls added per planned turn cost no more than a bound agreed in
-    conversation. Each money column is held to the bound on its own -- the
+    planning calls added per planned turn (every turn a planning call was
+    charged on, whether or not a round landed) cost no more than a bound
+    agreed in conversation. Each money column is held to the bound on its own -- the
     three are never added -- and the gate is not met without a bound, or
     while any planning call went unpriced: an unknown cost never passes."""
     totals = aggregate(records)
@@ -533,7 +534,10 @@ def default_gate(records, max_usd_per_planned_turn=None):
         return False
     if max_usd_per_planned_turn is None:
         return False
-    planned = [r for r in records if r["arm"] == "plan+repair" and r["planned_round"]]
+    # Every turn planning charged, not only those a round landed on: a
+    # declined or unusable plan was still called, and still paid for.
+    planned = [r for r in records if r["arm"] == "plan+repair"
+               and (r["planner"]["rows"] or r["check"]["rows"])]
     if not planned or any(r["plan_money"]["unpriced_calls"] for r in planned):
         return False
     for column in ("cost_usd", "estimated_usd", "modelled_usd"):

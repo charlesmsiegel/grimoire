@@ -507,3 +507,21 @@ def test_a_planned_round_that_raises_keeps_the_steps_that_ran(cid, monkeypatch):
     assert trace.steps[0].rows == len(rows()) == 1
     assert len(trace.plans) == 1 and trace.rounds == ()
     assert [i.scene.key for i in ev.items] == list(trace.e0.scene_keys)
+
+
+def test_a_depth_edit_mid_phase_never_resizes_the_merge(cid, monkeypatch):
+    """The planned round merges under the depth the phase started with: a
+    settings edit from 4 to 1 between the first retrieval and the merge
+    neither truncates what `E0` found nor admits past the captured depth."""
+    sid, found, lanterns = setup_thin(cid)
+    real = history_recall._plan_step
+
+    async def then_shrink(*a, **k):
+        got = await real(*a, **k)
+        store.config.write_config(history_recall_depth="1")
+        return got
+    monkeypatch.setattr(history_recall, "_plan_step", then_shrink)
+    ev = gather(cid, sid, FakeLLM([[plan_reply()]]))
+    selected = [i.scene.sid for i in ev.items]
+    assert found in selected and lanterns in selected
+    assert ev.depth == 4 and len(ev.items) <= 4

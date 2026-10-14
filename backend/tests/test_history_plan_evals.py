@@ -121,6 +121,18 @@ def test_the_default_gate_holds_each_money_column_to_the_bound():
     assert not planning.default_gate(_gate_records(unpriced), max_usd_per_planned_turn=1.0)
     assert not planning.default_gate(_gate_records(cheap, recall=(0.5, 0.5)),
                                      max_usd_per_planned_turn=1.0)
+    # A declined plan lands no round but was still called and charged: it
+    # counts toward the cost per planned turn.
+    declined = {**_gate_records(cheap)[0], "planned_round": False, "terminal": "declined",
+                "plan_money": {**cheap, "cost_usd": 0.02}}
+    assert not planning.default_gate([*_gate_records(cheap), declined],
+                                     max_usd_per_planned_turn=0.005)
+    free = {**declined, "planner": {"rows": 0, "prompt_tokens": None,
+                                    "completion_tokens": None},
+            "plan_money": {"cost_usd": None, "estimated_usd": None, "modelled_usd": None,
+                           "unpriced_calls": 0}}
+    assert planning.default_gate([*_gate_records(cheap), free],
+                                 max_usd_per_planned_turn=0.005)
 
 
 def test_the_cost_bound_flag_needs_the_planning_mode():

@@ -983,7 +983,8 @@ on cases 1-6 with a low false-trigger rate and an added cost per planned turn
 within a bound agreed in conversation -- is printed as `default gate` and
 never enforced: recorded replies prove the mechanics, and only a live run
 says whether a model plans well. The bound is `--plan-cost-bound USD`
-(per planned turn, the planner's and the check's calls only). Each money
+(per planned turn -- every turn a planning call was charged on, a declined
+or unusable plan included -- the planner's and the check's calls only). Each money
 column is held to it on its own, never added, and without a bound, or with
 any planning call unpriced, the gate reads `not met`: an unknown cost never
 passes. `history_plan` stays `off` until that run.

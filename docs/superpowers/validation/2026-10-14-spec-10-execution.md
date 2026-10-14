@@ -98,7 +98,7 @@ the call made, why, and what it costs if wrong:
   id, no planned or repair round starts past the deadline, cast-related
   threads come first under `MAX_THREADS`, and the eval arms aggregate the
   three money columns apart.
-- **Codex review, rounds two to five** (all fixed): embed and retrieval
+- **Codex review, rounds two to six** (all fixed): embed and retrieval
   counts include planned rounds; the merged coverage keeps the rerank status;
   the trace rides a frozen view; a failed check files its row; offline evals
   retrieve at depth 5; a retrieval that raises still traces `not_run:error`
@@ -107,7 +107,10 @@ the call made, why, and what it costs if wrong:
   takes an optional per-planned-turn cost bound (`--plan-cost-bound`), checked
   against each money column apart; and a failure past the free gate keeps
   the steps, plans and rounds that ran, and the evidence the last finished
-  round left (round five).
+  round left (round five); a planned round merges under the depth its phase
+  captured, so a settings edit mid-phase never resizes the evidence
+  (`history.merge(depth=)`), and the default gate's cost counts every turn a
+  planning call was charged on, a declined plan included (round six).
 
 ## Verification
 

@@ -64,10 +64,15 @@ def merge(
     ceiling: int,
     expand: Callable[[model.Candidate], model.EvidenceItem | None],
     rerank: Callable[[list[model.Candidate]], Sequence[model.Candidate]] | None = None,
+    depth: int | None = None,
 ) -> model.Evidence:
-    cfg = settings.read()
-    if cfg is None:
-        return model.Evidence(ceiling=min(ceiling, a.ceiling, b.ceiling))
+    """`depth` is a caller's captured depth (10's planned rounds merge under
+    the depth their phase started with); without it, the live setting."""
+    if depth is None:
+        cfg = settings.read()
+        if cfg is None:
+            return model.Evidence(ceiling=min(ceiling, a.ceiling, b.ceiling))
+        depth = cfg.depth
     offset = max((len(c.rounds) for c in a.candidates), default=0)
     width = max((len(c.rounds) for c in b.candidates), default=0)
     combined: dict[str, model.Candidate] = {}
@@ -100,13 +105,13 @@ def merge(
         if previous_item is None or not previous_item.excerpts:
             held[item.scene.key] = item
     items = select(
-        ordered, cfg.depth, lambda c: held[c.scene.key] if c.scene.key in held else expand(c)
+        ordered, depth, lambda c: held[c.scene.key] if c.scene.key in held else expand(c)
     )
     cap = min(max(ceiling, 0), a.ceiling, b.ceiling)
-    fitted = budget.fit(items, cap, tokens.count_tokens, depth=cfg.depth)
+    fitted = budget.fit(items, cap, tokens.count_tokens, depth=depth)
     cv = coverage.verdict(
         ordered,
-        cfg.depth,
+        depth,
         max(a.coverage.eligible, b.coverage.eligible),
         semantic_complete=_semantic_complete(a.coverage) and _semantic_complete(b.coverage),
     )
@@ -116,4 +121,4 @@ def merge(
         semantic=a.coverage.semantic if a.coverage.semantic == b.coverage.semantic else "mixed",
     )
     digest = hashlib.sha256((a.query_digest + "\0" + b.query_digest).encode()).hexdigest()
-    return model.Evidence(tuple(fitted), tuple(ordered), cv, cap, digest, cfg.depth)
+    return model.Evidence(tuple(fitted), tuple(ordered), cv, cap, digest, depth)
