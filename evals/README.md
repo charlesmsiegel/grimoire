@@ -633,6 +633,34 @@ deterministic, needs no model, and runs inside `pytest backend`
 and are not here; case 3 is visible offline by design, and only a live reply
 could show the perception contract holding (11-S5).
 
+`--epistemic` runs the suite through `evals/run.py`, and `--epistemic --live`
+adds its live arm (`evals/epistemic/live.py`, roadmap 11-S5):
+
+    backend/.venv/bin/python evals/run.py --epistemic --live --repeat 3
+    backend/.venv/Scripts/python.exe evals/run.py --epistemic --live --repeat 3
+
+Every check with an `ask` -- Seraphine's line to one NPC, in the story --
+runs as an ordinary live case in its own throwaway home (`runner.live`: the
+real-home tripwire, metering, the ledger harvest and the three money
+columns), on the model the app routes `chat` to (`--provider`/`--model`
+override it). Replies are graded on planted tokens only, and the report keeps
+three lines apart:
+
+- **Prompt leaks:** forbidden tokens in any reader's prompt, offline or live.
+  Zero by construction since 11-S3; the line proves it stays so.
+- **Reply leaks:** over *exposed* replies only, those whose prompt held a
+  `live_forbidden` token (case 3's whisper, which Mara's prompt carries
+  because she was there, and which she could not have heard). A forbidden
+  token in a reply whose prompt never held it is a harness fault, not a
+  leak. An empty or failed reply is never clean, and "k of m answered" says
+  how many replies the line stands on.
+- **Recall:** the share of allowed tokens a reply uses. Reported, never
+  checked: more recall with more leaks is a regression on the leakage line.
+
+A token check cannot see a paraphrase; 11-S6 adds a decide judge on the
+`epistemic` route for that. Until then the reply-leak line is one exposed
+case, which `--repeat` samples.
+
 ## How a case works
 
 ```

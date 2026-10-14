@@ -47,6 +47,8 @@ from evals import costs, escalation, gate, play, runfile, runner  # noqa: E402
 from evals.embed import corpus as embed_corpus  # noqa: E402
 from evals.embed import harness as embed_harness  # noqa: E402
 from evals.embed import metrics as embed_metrics  # noqa: E402
+from evals.epistemic import live as epistemic_live  # noqa: E402
+from evals.epistemic import runner as epistemic_runner  # noqa: E402
 from evals.history import runner as history_runner  # noqa: E402
 from grimoire import wire  # noqa: E402
 from grimoire.llm_errors import LLMError  # noqa: E402
@@ -532,11 +534,67 @@ def run_history(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0 if all(r.passed for r in results) and history_runner.gate(metrics) else 1
 
 
+def run_epistemic(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """`--epistemic`: spec 11's leakage suite. Offline (the default) composes
+    every case's reader prompts and grades them; never a call, never a
+    client. `--live` also asks each asked NPC its question on the model the
+    app routes `chat` to (`--provider`/`--model` override it, as for any
+    live run), each in its own throwaway home, and reports the reply-leak
+    line apart from recall (`evals/epistemic/live.py`)."""
+    others = [flag for flag, on in (("--history", args.history), ("--play", bool(args.play)),
+                                    ("--embed", args.embed or bool(args.embed_options)),
+                                    ("--gate", args.gate), ("--compare", bool(args.compare)),
+                                    ("--escalation-sweep", args.escalation_sweep),
+                                    ("--escalation", bool(args.escalation)),
+                                    ("--record", args.record), ("--case", bool(args.case)),
+                                    ("--decide-backend", args.decide_backend is not None))
+              if on]
+    if others:
+        ap.error(f"--epistemic owns its corpus; it takes no {', '.join(others)}")
+    if not args.live:
+        live_only = [flag for flag, on in (("--provider", bool(args.provider)),
+                                           ("--model", bool(args.model)),
+                                           ("--repeat", args.repeat is not None)) if on]
+        if live_only:
+            ap.error(f"{', '.join(live_only)} only means anything with --live")
+    if args.repeat is not None and not 1 <= args.repeat <= runner.MAX_REPEAT:
+        ap.error(f"--repeat must be between 1 and {runner.MAX_REPEAT}")
+    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    offline_records = epistemic_runner.run_all()
+    results, records = [], []
+    if args.live:
+        # Everything read from the real store is read before any home moves.
+        real_home = paths.home()
+        rates = usage.Rates.current()
+        target = runner.resolve_connections((case_mod.Case(
+            id="epistemic-live", hypothesis="spec 11 leakage", build=dict,
+            prompt=lambda ctx: [], grade=lambda ctx, out: [], recordings=(), task="chat"),),
+            provider=args.provider, model=args.model)["chat"]
+        results, records = epistemic_live.run(
+            target, real_home=real_home, rates=rates, run_id=args.run_id,
+            run_day=usage._today(), repeat=args.repeat or 1)
+        print(runner.report(results))
+    print(runner.ascii_safe(epistemic_live.summary(records, offline_records)))
+    passed = epistemic_live.gate(records, offline_records)
+    if args.out:
+        configs = [runfile.config("c1", "live" if args.live else "offline",
+                                  {"mode": "live" if args.live else "offline"})]
+        doc = runfile.build(results, configs, run_id=args.run_id, started=started)
+        doc["epistemic"] = {"offline": [{k: r[k] for k in ("case", "label", "reader", "leaks",
+                                                            "missing", "misplaced")}
+                                        for r in offline_records],
+                            "live": records, "gate": passed}
+        runfile.write(Path(args.out), doc)
+        print(runner.ascii_safe(f"wrote {args.out}"))
+    return 0 if passed else 1
+
+
 def _other_mode(args: argparse.Namespace):
     """The mode that is not a case run, when one is asked for: the embedding
     evals (`--embed`, or `--embed-options`, which it refuses alone), the
     decide gate, a comparison, or the escalation sweep. None for a case run."""
-    for asked, mode in ((args.history, run_history), (bool(args.play), run_play),
+    for asked, mode in ((args.epistemic, run_epistemic), (args.history, run_history),
+                        (bool(args.play), run_play),
                         (args.embed or bool(args.embed_options), run_embed),
                         (args.gate, run_gate), (bool(args.compare), run_compare),
                         (args.escalation_sweep, run_sweep)):
@@ -600,6 +658,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--decision", action="append", metavar="SELECTION",
                     help="with --play, a Decision selection, provider/model (repeatable)")
     ap.add_argument("--history", action="store_true", help="synthetic history retrieval arms; offline unless --live")
+    ap.add_argument("--epistemic", action="store_true",
+                    help="spec 11's leakage suite: every reader's prompt offline; with "
+                         "--live, each asked NPC's reply too (reply leaks apart from recall)")
     ap.add_argument("--long", action="store_true", help="with --history, long archive recipes exercising 64/1000 bounds")
     args = ap.parse_args(argv)
     args.run_id = str(uuid.uuid4())

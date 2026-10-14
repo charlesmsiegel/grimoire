@@ -1242,6 +1242,23 @@ evidence set, a perspective, and two sets of needles: propositions the actor
   decide-based judge second). **Leakage is reported separately from
   recall**: a configuration that recalls more but leaks more is a regression
   on the leakage line, whatever its recall line says.
+  **Amended by 11-S5** (plan
+  `docs/superpowers/plans/2026-10-14-roadmap-11-s5-live-leakage-evals.md`):
+  the arm is `evals/run.py --epistemic --live`, and 11-S5 ships the needle
+  check alone; the decide judge lands in 11-S6 with the `epistemic` route
+  (the user's decision, 2026-10-14: a decide call needs a route the routing
+  guard accepts, and that one arrives with 11-S6's call site). Because 11-S3
+  keeps every forbidden needle out of an actor's prompt, a reply can leak
+  only a token its prompt held, so the **reply-leak line is over exposed
+  replies**: a prompt holding a `live_forbidden` token (today case 3's
+  unmarked whisper). A forbidden token in a reply whose prompt never held it
+  is a harness fault, reported apart; an empty or failed reply is never
+  clean; recall is reported, never checked. Until the judge lands the line
+  is one informative item, which `--repeat` samples. Each asked check runs
+  as an ordinary live case in its own throwaway home (`runner.live`: the
+  real-home tripwire, metering, the ledger harvest and the three money
+  columns), and the question rides `compose_turn(appended=)` as the
+  player's line in the story.
 
 ## Slices
 
@@ -1372,7 +1389,8 @@ stays off behind its switch until its gates pass.
   actor reply graded for using a forbidden proposition, with a needle check
   and a decide-based judge, including case 3 (whisper without override),
   which only the live arm can catch. Fixtures are synthetic stores with
-  placeholder names.
+  placeholder names. **Amended by 11-S5:** the needle check only; the judge
+  moves to 11-S6 (8.2's amendment).
 - **Acceptance:** the live arm runs on the synthetic corpus and reports a
   separate leakage line. Its offline graders run in `pytest backend`.
 - **Size:** S
@@ -1380,7 +1398,8 @@ stays off behind its switch until its gates pass.
 ### 11-S6: The Decision stage
 
 - **Delivers:** 11-C1 (full); 11-C4 (full: the Decision gate seeded from
-  cases 7, 10 and 15, with the false-`known` rate as its leakage line)
+  cases 7, 10 and 15, with the false-`known` rate as its leakage line, and
+  **the live arm's decide judge**, moved here from 11-S5)
 - **Needs (this spec):** 11-S3 (H); 11-S5 (S: the live arm the play gate's
   leakage report uses); 11-S4 (S: accepting a Decision answer — until then
   answers are captured but cannot be accepted)
@@ -1413,7 +1432,12 @@ stays off behind its switch until its gates pass.
 - **Acceptance:** section 11's "Decision stage" tests (a call reaches a meter,
   the gate, the caps, each 5.3 row, deadline overrun with no `_noting`, soft
   resolution and exception skips, no call on a replay or reroll). The
-  `decide-epistemic-access` gate case passes offline. The switch stays `off`.
+  `decide-epistemic-access` gate case passes offline. The switch stays `off`. **Amended
+  by 11-S5:** and the live leakage arm gains its decide judge on the
+  `epistemic` route: each live case states its forbidden facts as sentences
+  beside their tokens, which the judge reads to recognise a paraphrase a
+  token check cannot see; the judge's verdict joins the reply-leak line,
+  still apart from recall.
 - **Size:** L
 
 ## 9. Contract
@@ -1489,7 +1513,8 @@ stays off behind its switch until its gates pass.
 - The offline needle-absence grader runs in `pytest backend`.
 - The Decision gate runs through `evals/run.py --gate`, with channel-present
   negatives and the false-`known` rate as its leakage line.
-- Live leakage is reported apart from recall.
+- Live leakage is reported apart from recall (**amended by 11-S5:** the
+  needle check in 11-S5, the decide judge in 11-S6).
 - 12-C2c's eval gate reuses the graders.
 
 ## 10. Interaction with repo rules
@@ -1630,7 +1655,8 @@ The capture view's accept posts the right subject and shows `unkeyed`.
 4. The Decision stage is off by default, gated on its false-`known` rate,
    capped per step and per round, and fail-soft.
 5. The offline leakage grader passes in `make check`, and the live suite
-   reports leakage apart from recall.
+   reports leakage apart from recall (**amended by 11-S5:** its needle check
+   from 11-S5, its decide judge from 11-S6).
 
 ## 12. Non-goals
 

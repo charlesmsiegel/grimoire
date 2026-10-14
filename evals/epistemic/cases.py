@@ -27,6 +27,13 @@ class Check:
     forbidden: tuple[str, ...] = ()
     #: An allowed needle's section: it must be in that one and no other.
     sections: Mapping[str, str] = field(default_factory=dict)
+    #: The live arm (11-S5): Seraphine's line to this NPC, in the story,
+    #: inviting what it was given. Only a check with one is asked; there is
+    #: no default, so no case label or title can reach a question.
+    ask: str = ""
+    #: Needles this NPC's prompt may hold but its reply must not use (case
+    #: 3's unmarked whisper: visible offline, unheard in the fiction).
+    live_forbidden: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,7 +73,8 @@ def _not_present(cast):
     st.say("Mara arrives as the AFTERNEEDLE1 tide turns.")
     return (st.item(),), (
         Check(cast.mara, allowed=("AFTERNEEDLE1",), forbidden=("REVEALNEEDLE1",),
-              sections={"AFTERNEEDLE1": "history_known"}),
+              sections={"AFTERNEEDLE1": "history_known"},
+              ask='Seraphine turns to Mara. "What do you remember of the tide at the quay?"'),
         Check(cast.win, allowed=("REVEALNEEDLE1", "AFTERNEEDLE1")),
     )
 
@@ -79,8 +87,14 @@ def _whisper(cast, override: bool, n: int):
     whisper = st.index_of(f"WHISPERNEEDLE{n}")
     if override:
         synth.grant(st, cast.mara, "Mara", "unaware", keys=(synth.key(st, whisper),))
-    mara = (Check(cast.mara, allowed=(f"OPENNEEDLE{n}",), forbidden=(f"WHISPERNEEDLE{n}",))
-            if override else Check(cast.mara, allowed=(f"OPENNEEDLE{n}", f"WHISPERNEEDLE{n}")))
+    # The whisper reaches Mara's prompt only without the override (R3), and a
+    # whisper to the priest is nothing she could hear: live, she must not
+    # repeat it either way.
+    ask = 'Seraphine leans toward Mara. "What did you make of the vigil at the chapel?"'
+    mara = (Check(cast.mara, allowed=(f"OPENNEEDLE{n}",), forbidden=(f"WHISPERNEEDLE{n}",),
+                  ask=ask)
+            if override else Check(cast.mara, allowed=(f"OPENNEEDLE{n}", f"WHISPERNEEDLE{n}"),
+                                   ask=ask, live_forbidden=(f"WHISPERNEEDLE{n}",)))
     return (st.item(),), (mara, Check(cast.win, allowed=(f"WHISPERNEEDLE{n}",)))
 
 
@@ -90,7 +104,8 @@ def _knows(cast):
     synth.grant(st, cast.mara, "Mara", "knows", keys=(synth.key(st, 0),))
     return (st.item(),), (
         Check(cast.mara, allowed=("KNOWNNEEDLE4", "You know this:"),
-              sections={"KNOWNNEEDLE4": "history_known"}),
+              sections={"KNOWNNEEDLE4": "history_known"},
+              ask='Seraphine asks Mara, "Do you know what the clerk keeps under seal?"'),
         Check(cast.win, forbidden=("KNOWNNEEDLE4",)),
     )
 
@@ -126,7 +141,8 @@ def _whole_attendee(cast):
     st.absorb(summary)
     return (st.item(summary=summary, title="The Gallery"),), (
         Check(cast.mara, allowed=("SEENNEEDLE8",),
-              forbidden=("SECRETNEEDLE8", "The Gallery")),
+              forbidden=("SECRETNEEDLE8", "The Gallery"),
+              ask='Seraphine asks Mara, "How did the auction end, as you saw it?"'),
         Check(None, allowed=("SECRETNEEDLE8", "Known to: Mara")),
     )
 
@@ -139,7 +155,8 @@ def _partial(cast):
     synth.leave(st, aid)
     st.say("After Mara leaves, the AFTERNEEDLE9 changes hands.")
     return (st.item(),), (
-        Check(cast.mara, allowed=("BEFORENEEDLE9",), forbidden=("AFTERNEEDLE9",)),
+        Check(cast.mara, allowed=("BEFORENEEDLE9",), forbidden=("AFTERNEEDLE9",),
+              ask='Seraphine asks Mara, "What happened at the market stalls?"'),
     )
 
 

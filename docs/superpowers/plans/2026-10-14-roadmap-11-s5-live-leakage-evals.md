@@ -73,4 +73,25 @@ Each is a spec amendment ("Amended by 11-S5").
 
 ## 4. Review dispositions
 
-(filled by the plan gate)
+Plan gate: an independent adversarial reviewer (substitute for the Codex CLI
+gate). Verdict "not ready"; every finding is taken, and where these differ
+from §§1–3, these win.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | 11-S3 already keeps every forbidden needle out of an NPC's prompt, so a reply can only leak a needle its prompt held: only case 3 exposes one | **Taken.** The leakage line is over *exposed* replies (the prompt held a `live_forbidden` token). A reply carrying a forbidden token its prompt never held is a harness fault (contamination), reported apart. `--repeat` (≤ `MAX_REPEAT`) gives case 3 more than one sample; the amendment says the line is one informative item until 11-S6's judge |
+| 2 | A default question could carry case labels or titles | **Taken.** No default: only an explicit `ask` makes a live check. A corpus test holds every `ask` to no needle token of any case and no rule vocabulary |
+| 3 | Forbidden strings that are not tokens (a title, a heading phrase) give false leaks | **Taken.** Both live graders read only `[A-Z]+NEEDLE\d+` tokens |
+| 4 | Case 3's offline `allowed` includes the whisper, so recall would reward the leak | **Taken.** Live recall is over `allowed − live_forbidden` |
+| 5 | A failed or empty reply reads as clean | **Taken.** An errored or empty reply fails the gate, is outside both denominators, and is reported as "k of m answered" |
+| 6 | `runner.isolated` does not exist; rates are never read | **Taken.** `real_home = paths.home()` and `usage.Rates.current()` before any repoint; `runner._is_real_home` checked in each isolate before building and again before harvest |
+| 7 | Two checks in one home double-count money | **Taken.** One isolate per asked check (the case rebuilt each time), one `Result` each |
+| 8 | `test_operation_guard`'s walk set must name the new module | **Taken.** `evals.epistemic.live` added; the literal `"chat"` and `usage=meter.usage` inside `usage.meter` |
+| 9 | Results cannot be stored or compared as dicts; recall must not be a `Check` | **Taken.** `reports.Result`s with the leak and harness checks as `Check`s, recall in `note`, `doc["epistemic"]` holding both lines; `--provider`/`--model` accepted through `resolve_connections` |
+| 10 | Compose as play does | **Taken.** `model=resolved.chain.primary.model`, and the prompt-leak check runs on the prompt actually sent |
+| 11 | The question is a second user message in a row | **Taken.** Framed as Seraphine's line in the story; a test holds the last message to it |
+| 12 | Grade the shown text | **Declined, stricter instead.** The raw reply is graded, fences included: a token anywhere in the reply counts, which can only report more |
+| 13 | Mode dispatch and refusals | **Taken.** `--epistemic` joins every other mode's clash list and they join its; offline never builds a client; `--record` and `--case` are refused |
+| 14 | The amendment is too narrow; opaque tokens cannot be paraphrased | **Taken.** 11-S6's Delivers/Scope/Acceptance, the 11-C4 contract and §11's acceptance gain the judge, with each secret stated as a sentence beside its token for the judge to recognise a paraphrase of |
+| 15 | Test isolation and fakes | **Taken.** Tests stub `resolve_connections` and use `llm_fakes`; a tripwire test refuses an isolate equal to the real home before compose and before harvest |
+| 16 | Wording and docs | **Taken.** Prompt-leak and reply-leak lines named apart, n beside every rate, README commands in both venv spellings, money and tokens through `costs.cost_text` / `costs.tokens_text` |
