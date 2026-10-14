@@ -168,7 +168,8 @@ def test_a_route_born_at_format_two_has_no_legacy_key():
         assert routing.config_key(r.key) not in routing.CONFIG_KEYS
         assert routing.preset_key(r.key) not in routing.PRESET_CONFIG_KEYS
         assert routing.legacy_key(r) == ""
-    assert sorted(routing.NO_LEGACY_TASKS) == ["history-rerank", "turn-intent", "turn-plan",
+    assert sorted(routing.NO_LEGACY_TASKS) == ["epistemic-access", "history-rerank",
+                                               "turn-intent", "turn-plan",
                                                "turn-tool-decision"]
     assert routing.NO_LEGACY not in routing.TASK_ROUTE.values()
 
@@ -177,7 +178,7 @@ def test_every_route_declares_operation_and_default_role():
     """A route flips to `decide` and the Decision role only in the task whose
     call sites decide (spec 14): scene-break, voice drift and the speaker pick
     (slice F), both continuity checks (slice G), the turn intent (02-S2) and
-    the history rerank (09-S5)."""
+    the history rerank (09-S5), and the epistemic access check (11-S6)."""
     primary = {"scene", "opener", "suggestions", "voice"}
     decide = {"scene_break", "voice_drift", "speaker", "continuity", "turn_plan",
               "history_check", "epistemic"}
@@ -189,7 +190,7 @@ def test_every_route_declares_operation_and_default_role():
                 else ("generate", "fast"))
         assert (r.operation, r.default_role) == want, r.key
     assert routing.route_by_key("image").requires == ("vision",)
-    assert len(routing.ROUTES) == 17
+    assert len(routing.ROUTES) == 18
 
 
 def test_the_scene_break_title_is_drafted_on_the_summary_route():
