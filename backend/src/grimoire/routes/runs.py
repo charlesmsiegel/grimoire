@@ -429,6 +429,9 @@ class RunRegistry:
         # a batch, never while the write-through queue merely holds paths, so
         # an idle queue never refuses a data-dir move. See `sync_hold`.
         self._sync_holds = 0
+        #: Runs that ended with a tool thread still reading (`pin_root`): the
+        #: root stays still for them, as for a live run, until it returns.
+        self._root_pins: dict[str, int] = {}
         self._by_key: dict[str, str] = {}
         # Records a trigger asked a campaign's reconcile to look at while one
         # was already live, keyed by subject. Here, on the per-app registry and
@@ -912,6 +915,8 @@ class RunRegistry:
             for run in self._runs.values():
                 if run.state == "running":
                     raise RunInFlightError(run.id)
+            if self._root_pins:
+                raise RunInFlightError(next(iter(self._root_pins)))
             if self._sync_holds:
                 raise SyncRunningError()
             self._store_moves += 1
@@ -920,6 +925,21 @@ class RunRegistry:
         finally:
             with self._lock:
                 self._store_moves -= 1
+
+    def pin_root(self, run_id: str) -> None:
+        """Hold the root still for a run that ended with a thread still
+        reading the store through `store.home()`, until `unpin_root`: a move
+        is refused (`hold_still`) as if the run were live."""
+        with self._lock:
+            self._root_pins[run_id] = self._root_pins.get(run_id, 0) + 1
+
+    def unpin_root(self, run_id: str) -> None:
+        with self._lock:
+            left = self._root_pins.get(run_id, 0) - 1
+            if left > 0:
+                self._root_pins[run_id] = left
+            else:
+                self._root_pins.pop(run_id, None)
 
     @contextlib.contextmanager
     def sync_hold(self):
@@ -2137,6 +2157,22 @@ def reserve_campaign_background(app, cid: str, kind: str,
 def drop_pending_touched(app) -> None:
     """Forget every ref a trigger left pending, after the store root moved."""
     app.state.runs.drop_pending_touched()
+
+
+def pin_root_until(app, run_id: str, drained: Callable[[float | None], bool]) -> None:
+    """Hold the store root still for `run_id` until `drained(None)` returns,
+    on a daemon thread of its own: a run whose tool thread outlived it ends
+    without waiting on that thread, and the root still does not move under
+    it (`RunRegistry.pin_root`)."""
+    registry = app.state.runs
+    registry.pin_root(run_id)
+
+    def wait() -> None:
+        try:
+            drained(None)
+        finally:
+            registry.unpin_root(run_id)
+    threading.Thread(target=wait, name=f"grimoire-root-pin-{run_id}", daemon=True).start()
 
 
 def forget_root(app) -> int:

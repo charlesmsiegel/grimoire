@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 
 import grimoire.store as store
 from grimoire import routes
@@ -360,18 +361,30 @@ def test_e3_files_a_failed_turn_without_the_providers_words(client):
     assert "sk-secret" not in text
 
 
-def test_e3_waits_for_its_tool_threads_but_never_past_the_drain_bound(client, monkeypatch):
-    """The run holds the root while a thread it abandoned may still read, and
-    a thread that never returns does not hold it past `DRAIN_S`."""
+def test_e3_waits_for_its_tool_threads_but_never_past_the_drain_bound(client, monkeypatch,
+                                                                     tmp_path):
+    """The run holds the root while a thread it abandoned may still read; a
+    thread still out past `DRAIN_S` does not hold the run, and the root stays
+    pinned on its own until that thread returns."""
     cid, _sid = _campaign(client)
     _on(client)
-    waited = []
-    monkeypatch.setattr(investigation.tool_calls.Registered, "drain",
-                        lambda self, timeout=None: waited.append(timeout) or False)
+    waited, returned = [], threading.Event()
+
+    def drain(self, timeout=None):
+        waited.append(timeout)
+        return returned.wait(10) if timeout is None else False
+    monkeypatch.setattr(investigation.tool_calls.Registered, "drain", drain)
     _install(client, FakeToolTurns(("", [("finish_insufficient_evidence", {"reason": "x"})])))
     run = _settled(client, cid, _ask(client, cid))
     assert run["result"]["outcome"]["state"] == "insufficient_evidence"
-    assert waited == [investigation.investigation_budget.DRAIN_S]
+    assert waited[0] == investigation.investigation_budget.DRAIN_S
+    moved = client.put("/api/config/data-dir", json={"data_dir": str(tmp_path / "other")})
+    assert moved.status_code == 409 and moved.json()["kind"] == "runs_in_flight"
+    returned.set()
+    deadline = time.monotonic() + 10
+    while client.app.state.runs._root_pins and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not client.app.state.runs._root_pins
 
 
 def test_e3_with_no_read_citation_is_insufficient_evidence(client):

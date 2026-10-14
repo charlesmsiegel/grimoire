@@ -219,12 +219,19 @@ def _ledger_record(cid: str, prefix: str, rid: str) -> dict:
         rec = effective.records(cid, prefix).get(f"{prefix}:{rid}")
         if rec is None:
             raise NotFound(f"{prefix}:{rid}")
-        beats = rec.get("beats") or []
-        latest = beats[-1] if beats and isinstance(beats[-1], dict) else {}
+        beats = [b for b in rec.get("beats") or [] if isinstance(b, dict)]
+        # The latest beat a kept scene wrote: a closed branch's is no history.
+        # The record's own summary fields stand in only when it has no beats
+        # at all, since with beats they name the newest one, closed or not.
+        live = _unclosed(cid, beats)
+        latest = live[-1] if live else {}
+        bare = not beats
         out = {"kind": prefix, "title": _text(rec.get("title")),
                "status": _text(rec.get("status")),
-               "latest_beat": _text(latest.get("text")) or _text(rec.get("latest_beat")),
-               "latest_scene": _text(latest.get("scene")) or _text(rec.get("last_scene"))}
+               "latest_beat": _text(latest.get("text"))
+               or (_text(rec.get("latest_beat")) if bare else ""),
+               "latest_scene": _text(latest.get("scene"))
+               or (_text(rec.get("last_scene")) if bare else "")}
         if prefix == "commitment":
             out["due"] = _text(rec.get("due"))
         return out

@@ -360,9 +360,12 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
     # `store.home()`. The run holds the root still while it does (a move is
     # refused while a run is live): frozen, it records nothing, but it must
     # not read another library. Bounded, so a stalled filesystem cannot hold
-    # the run, its campaign and the root forever (`DRAIN_S`).
+    # the run and its campaign forever (`DRAIN_S`); past it the ROOT stays
+    # pinned on its own until the thread returns (`runs.pin_root_until`).
     if not await anyio.to_thread.run_sync(execute.drain, investigation_budget.DRAIN_S):
         log.warning("investigation %s ended with a tool thread still running", run_id)
+        if app is not None:
+            runs.pin_root_until(app, run_id, execute.drain)
     filed = await anyio.to_thread.run_sync(_filed, state.cid, run_id)
     # An unreadable ledger leaves the loop's own turns, which it handed back.
     rows: Sequence[dict] = filed if filed is not None else (

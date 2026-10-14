@@ -450,6 +450,8 @@ def test_a_closed_branchs_rows_are_no_history(run, monkeypatch):
     monkeypatch.setattr(readers.scenes_read, "list_scenes", closed)
     beats = _call(run, "get_record_history", ref="thread:ledger")[1]["items"][0]["text"]
     assert "Mara hides it." in beats and "Mara burns it." not in beats
+    record = _call(run, "get_record", ref="thread:ledger")[1]["items"][0]["text"]
+    assert "Mara hides it." in record and "Mara burns it." not in record
 
 
 def test_one_post_longer_than_the_result_is_cut_not_skipped(run):
