@@ -4,6 +4,7 @@ model -- one generation per asked NPC, each in its own throwaway home,
 metered, harvested and graded, with the reply-leak line apart from recall."""
 
 import re
+import sys
 
 import pytest
 
@@ -45,6 +46,9 @@ def test_the_graders_read_planted_tokens_only():
     assert graders.recall(reply, []) is None
     # A title or heading phrase is something a reply can say honestly.
     assert graders.needles(("The Gallery", "Known to:", "SECRETNEEDLE8")) == ("SECRETNEEDLE8",)
+    # Italics, code spans and a lower-cased spelling are still the token.
+    assert graders.tokens("_WHISPERNEEDLE3_ and `aftERneedle1`.") == {"WHISPERNEEDLE3",
+                                                                     "AFTERNEEDLE1"}
 
 
 def test_case_3s_recall_never_rewards_the_whisper():
@@ -101,8 +105,8 @@ def test_the_arm_asks_each_npc_once_in_its_own_home_and_meters_it(monkeypatch, t
     assert all(r.rows is not None and len(r.rows) == 1 for r in results)
     assert all(not r.error for r in results)
     # Every prompt was clean, every reply answered, none exposed leaked.
-    assert all(r["answered"] and not r["prompt_leaks"] for r in records)
-    assert live.gate(records)
+    assert all(r["answered"] and r["prompt_clean"] for r in records)
+    assert live.gate(records, live=True, results=results)
     line = live.summary(records)
     assert "reply leaks: 0 of 1 exposed replies" in line
     assert "recall (not a leakage measure)" in line
@@ -115,7 +119,7 @@ def test_a_leaking_reply_is_on_the_leakage_line_and_fails_the_gate(monkeypatch, 
                                 repeat=2)
     leaked = [r for r in records if r["leaks"]]
     assert {r["case"] for r in leaked} == {"3"} and len(leaked) == 2
-    assert not live.gate(records)
+    assert not live.gate(records, live=True, results=results)
     assert "reply leaks: 2 of 2 exposed replies" in live.summary(records)
     # Case 2's prompt never held its whisper: the same token there is the
     # harness's fault, not a leak.
@@ -136,13 +140,70 @@ def test_an_empty_or_failed_reply_is_never_clean(monkeypatch, tmp_path):
     assert all(r.error for r in results) and not live.gate(records)
 
 
-def test_the_tripwire_refuses_the_real_home(monkeypatch, tmp_path):
+def test_the_tripwire_refuses_the_real_home_before_planting(monkeypatch, tmp_path):
     _store(monkeypatch, tmp_path / "real")
     fake = FakeLLM([["x"]])
     monkeypatch.setattr(live.offline, "_home", _NotMoved)
-    results, _records = live.run(_target(), client=fake, real_home=tmp_path / "real")
+    with pytest.raises(RuntimeError, match="throwaway"):
+        live.run(_target(), client=fake, real_home=tmp_path / "real")
     assert fake.calls == 0
-    assert all(r.error == reports.ISOLATE_ERROR for r in results)
+
+
+def test_the_tripwire_is_checked_again_before_the_harvest(monkeypatch, tmp_path):
+    # Armed by default (the home active at entry), and asked twice per case:
+    # before it is built, and before its rows are read.
+    _store(monkeypatch, tmp_path / "real")
+    target = _target()
+    real = reports._is_real_home
+
+    def trips_at_the_harvest(home):
+        # The settle step is where the second check runs: trip only there.
+        return sys._getframe(1).f_code.co_name == "_settle" or real(home)
+    monkeypatch.setattr(reports, "_is_real_home", trips_at_the_harvest)
+    results, records = live.run(target, client=FakeLLM([["x"]]))
+    refused = [r for r in results if r.error == reports.ISOLATE_ERROR]
+    # Every case was sent, and none was harvested: the check came after.
+    assert len(refused) == len(results) and all(r.rows is None for r in refused)
+    assert not live.gate(records, live=True, results=results)
+
+
+def test_money_is_reported_never_zero_and_the_real_ledger_stays_empty(monkeypatch, tmp_path):
+    from evals import costs
+    from grimoire.store import usage
+    _store(monkeypatch, tmp_path / "real")
+    results, _records = live.run(_target(), client=FakeLLM([["Plain words."]]),
+                                 real_home=tmp_path / "real")
+    for r in results:
+        assert r.bucket is not None and r.bucket.get("calls") == 1
+        text = costs.cost_text(r.bucket)
+        # A local model reports no price and no rate is set: not reported.
+        assert "not reported" in text and "$0" not in text
+    assert not [row for row in usage._read_rows(usage._today(), usage._today())
+                if usage._is_call(row)]
+
+
+def test_a_crash_fails_its_own_run_and_the_rest_carry_on(monkeypatch, tmp_path):
+    _store(monkeypatch, tmp_path / "real")
+    real = live.assemble.compose_turn
+    seen = {"n": 0}
+
+    def third_raises(*a, **k):
+        seen["n"] += 1
+        if seen["n"] == 3:
+            raise RuntimeError("compose broke")
+        return real(*a, **k)
+    monkeypatch.setattr(live.assemble, "compose_turn", third_raises)
+    fake = FakeLLM([["Plain words."]])
+    results, records = live.run(_target(), client=fake, real_home=tmp_path / "real")
+    assert len(results) == len(live.asked())
+    assert sum(bool(r.error) for r in results) == 1
+    assert fake.calls == len(results) - 1
+    assert not live.gate(records, live=True, results=results)
+
+
+def test_a_live_run_with_nothing_asked_never_passes():
+    assert not live.gate([], [], live=True, results=[])
+    assert live.gate([], [])
 
 
 class _NotMoved:
@@ -187,5 +248,7 @@ def test_live_resolves_before_any_home_moves(monkeypatch, tmp_path, capsys):
         return {"chat": target}
     monkeypatch.setattr(reports, "resolve_connections", resolve)
     monkeypatch.setattr(live, "run", lambda target, **k: ([], []))
-    assert eval_run.main(["--epistemic", "--live", "--repeat", "1"]) == 0
+    # Nothing was asked (the arm is stubbed), so the gate fails: a live run
+    # that asked nothing never passes.
+    assert eval_run.main(["--epistemic", "--live", "--repeat", "1"]) == 1
     assert seen["home"] == tmp_path / "real"

@@ -438,8 +438,9 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   recorded rather than fixed -- a summary or the chronicle's cast and
   location can steer which scenes an NPC's retrieval ranks, never what it
   renders -- and are put to the user.
-- [ ] **11-C4** A leakage eval suite (offline arm implemented; the live arm
-  is 11-S5).
+- [ ] **11-C4** A leakage eval suite (the offline arm and the live arm's
+  needle check implemented, 11-S3 and 11-S5; the live arm's decide judge and
+  the Decision gate are 11-S6).
 
 ### 12: Bounded agentic investigation
 - [ ] **12-C1** A read-only toolset, perspective-filtered in RP.
@@ -708,7 +709,7 @@ alone. This table is generated: after a spec's slices change, run
 | 11-S2 | The deterministic classifier | L | 6 | 08-S4 (S), 09-S1, 11-S1 | [x] | [x] | [x] | [x] | [x] | [ ] |
 | 11-S3 | Perspective-aware retrieval and prompt separation | L | 7 | 09-S1, 09-S2, 10-S1 (S), 10-S2 (S), 11-S2 | [x] | [x] | [x] | [x] | [x] | [ ] |
 | 11-S4 | The Knowledge ledger: routes, UI and accept | M | 2 | 11-S1, 11-S3 (S) | [x] | [x] | [x] | [x] | [x] | [x] |
-| 11-S5 | Live leakage evals | S | 8 | 01a-S2 (S), 01a-S3 (S), 11-S3 | [x] | [x] | [x] | [ ] | [ ] | [ ] |
+| 11-S5 | Live leakage evals | S | 8 | 01a-S2 (S), 01a-S3 (S), 11-S3 | [x] | [x] | [x] | [x] | [x] | [ ] |
 | 11-S6 | The Decision stage | L | 8 | 01b-S2 (S), 01c-S1 (S), 01d-S4, 02-S5, 02-S7, 11-S3, 11-S4 (S), 11-S5 (S) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 
 ### 12

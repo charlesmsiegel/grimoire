@@ -547,7 +547,9 @@ def run_epistemic(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                                     ("--escalation-sweep", args.escalation_sweep),
                                     ("--escalation", bool(args.escalation)),
                                     ("--record", args.record), ("--case", bool(args.case)),
-                                    ("--decide-backend", args.decide_backend is not None))
+                                    ("--decide-backend", args.decide_backend is not None),
+                                    ("--scene", bool(args.scene)),
+                                    ("--decision", bool(args.decision)))
               if on]
     if others:
         ap.error(f"--epistemic owns its corpus; it takes no {', '.join(others)}")
@@ -564,18 +566,30 @@ def run_epistemic(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     results, records = [], []
     if args.live:
         # Everything read from the real store is read before any home moves.
+        try:
+            target = runner.resolve_connections((case_mod.Case(
+                id="epistemic-live", hypothesis="spec 11 leakage", build=dict,
+                prompt=lambda ctx: [], grade=lambda ctx, out: [], recordings=(),
+                task=epistemic_live.TASK),),
+                provider=args.provider, model=args.model)[epistemic_live.TASK]
+        except RuntimeError as exc:
+            print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
+            return 1
+        if target.chain is None:   # the seam refuses a resolution of nothing; never sent
+            print(runner.ascii_safe(f"live: {epistemic_live.TASK} resolved to no connection"),
+                  file=sys.stderr)
+            return 1
+        print(runner.ascii_safe(
+            f"live: {epistemic_live.TASK} -> {target.chain.primary.kind} / "
+            f"{target.chain.primary.model or '(default)'}"))
         real_home = paths.home()
         rates = usage.Rates.current()
-        target = runner.resolve_connections((case_mod.Case(
-            id="epistemic-live", hypothesis="spec 11 leakage", build=dict,
-            prompt=lambda ctx: [], grade=lambda ctx, out: [], recordings=(), task="chat"),),
-            provider=args.provider, model=args.model)["chat"]
         results, records = epistemic_live.run(
             target, real_home=real_home, rates=rates, run_id=args.run_id,
             run_day=usage._today(), repeat=args.repeat or 1)
         print(runner.report(results))
     print(runner.ascii_safe(epistemic_live.summary(records, offline_records)))
-    passed = epistemic_live.gate(records, offline_records)
+    passed = epistemic_live.gate(records, offline_records, live=args.live, results=results)
     if args.out:
         configs = [runfile.config("c1", "live" if args.live else "offline",
                                   {"mode": "live" if args.live else "offline"})]

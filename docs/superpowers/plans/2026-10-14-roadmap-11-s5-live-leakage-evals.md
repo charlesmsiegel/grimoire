@@ -35,8 +35,9 @@ Each is a spec amendment ("Amended by 11-S5").
 ## 2. Pieces
 
 - `evals/epistemic/cases.py`: `Check` gains `ask` (the question; a default
-  built from the case) and `live_forbidden`. Cases 1, 2, 3, 4, 8, 9, 13 get
-  questions that invite the planted facts.
+  built from the case) and `live_forbidden`. Cases 1, 2, 3, 4, 8 and 9 get
+  questions that invite the planted facts (case 13's fingerprint legs are a
+  prompt property, which the offline suite already grades).
 - `evals/epistemic/graders.py`: `reply_leaks(reply, forbidden)` and
   `reply_recall(reply, allowed)` (the share of allowed needles a reply uses;
   the structural phrases like `You know this:` are prompt-only and excluded).
@@ -95,3 +96,22 @@ from §§1–3, these win.
 | 14 | The amendment is too narrow; opaque tokens cannot be paraphrased | **Taken.** 11-S6's Delivers/Scope/Acceptance, the 11-C4 contract and §11's acceptance gain the judge, with each secret stated as a sentence beside its token for the judge to recognise a paraphrase of |
 | 15 | Test isolation and fakes | **Taken.** Tests stub `resolve_connections` and use `llm_fakes`; a tripwire test refuses an isolate equal to the real home before compose and before harvest |
 | 16 | Wording and docs | **Taken.** Prompt-leak and reply-leak lines named apart, n beside every rate, README commands in both venv spellings, money and tokens through `costs.cost_text` / `costs.tokens_text` |
+
+## 5. Code review and final gate dispositions
+
+One independent reviewer ran both gates over `556ecfb`. Verdict "not ready";
+every finding is taken.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | A build or compose crash escaped `live.run` and lost the spend so far | **Fixed.** The arm runs through `runner.live_all`: a crash fails its own run and the rest carry on; a follow-up still running stops the run as everywhere else. Test: the third compose raising |
+| 2 | `live.run`'s tripwire was off by default; `asked()` planted unchecked | **Fixed.** The tripwire defaults to the home active at entry (`live_all`'s rule), and `asked()` refuses to plant in it |
+| 3 | `run_epistemic` skipped `run_live`'s pre-flight | **Fixed.** A refused resolution is `live: …` and exit 1, a resolution of nothing is refused, and the `live: chat -> kind / model` line prints before anything is sent |
+| 4 | The gate passed with nothing exposed, or nothing asked | **Fixed.** An `epistemic.exposed` check fails a case whose prompt never held its `live_forbidden` token, and a live run with no records fails the gate |
+| 5 | The live prompt check read tokens only | **Fixed.** It is 11-S3's check, every forbidden string, on the prompt sent |
+| 6 | The offline line counted missing and misplaced needles as leaks | **Fixed.** Leaks only; other offline failures are their own line |
+| 7 | `list(...)` dropped the per-model prompt variants | **Fixed.** The composition itself is sent |
+| 8 | The token regex missed italics and lower case | **Fixed.** `(?<![A-Za-z])…NEEDLE\d+(?!\d)`, case-insensitive, read back in planted case |
+| 9 | Tests short of their claims | **Fixed.** The check before the harvest, the money columns (never `$0`), and an empty real ledger after a run |
+| 10 | Disposition 8 claimed but not done | **Fixed.** `test_operation_guard`'s data-task check holds `live.TASK` to a generate route |
+| 11 | Plan drift | **Fixed:** recall in `Result.note`; `--scene` and `--decision` refused; 11-S6's Scope amended; the harness-fault line gives its n; case 13 out of §2's list. Disposition 13 is met by dispatch rather than by editing every mode's list: `--epistemic` is checked first and refuses every other mode's flag, so no other mode ever runs with it |

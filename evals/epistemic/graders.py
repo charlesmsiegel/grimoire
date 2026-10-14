@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 #: A planted needle: an invented token, so a reply carrying one used the
 #: planted text. The live graders read nothing else -- a title or a heading
 #: phrase is something a reply can say honestly.
-TOKEN = re.compile(r"\b[A-Z]+NEEDLE\d+\b")
+TOKEN = re.compile(r"(?<![A-Za-z])[A-Za-z]+NEEDLE\d+(?!\d)", re.IGNORECASE)
 
 
 def leaks(messages: Sequence[dict], forbidden: Sequence[str]) -> list[str]:
@@ -34,12 +34,14 @@ def misplaced(sections: Mapping[str, str], placed: Mapping[str, str]) -> list[st
 
 
 def tokens(text: str) -> set[str]:
-    return set(TOKEN.findall(text))
+    """The planted tokens in `text`, in their planted (upper) case: a token
+    in italics, in a code span or lower-cased still counts."""
+    return {t.upper() for t in TOKEN.findall(text)}
 
 
 def needles(values: Iterable[str]) -> tuple[str, ...]:
     """The planted tokens among a check's needles, in order."""
-    return tuple(v for v in values if TOKEN.fullmatch(v))
+    return tuple(v for v in values if TOKEN.fullmatch(v) and v == v.upper())
 
 
 def reply_leaks(reply: str, exposed: Iterable[str]) -> list[str]:

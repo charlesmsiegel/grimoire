@@ -1428,7 +1428,9 @@ stays off behind its switch until its gates pass.
   landed it: `test_routing_guard` fails a route whose task nothing calls, and
   `test_operation_guard` requires the flip to `decide` in the change whose
   call site decides. That rule forces the route and this call site into one
-  slice. Pins `epistemic_access.build_items` in the regex guard.
+  slice. Pins `epistemic_access.build_items` in the regex guard. **Amended by 11-S5:** also
+  the live leakage arm's decide judge on that route (8.2's amendment), each
+  live case stating its forbidden facts as sentences beside their tokens.
 - **Acceptance:** section 11's "Decision stage" tests (a call reaches a meter,
   the gate, the caps, each 5.3 row, deadline overrun with no `_noting`, soft
   resolution and exception skips, no call on a replay or reroll). The
