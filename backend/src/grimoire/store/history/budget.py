@@ -8,7 +8,7 @@ must describe the exact prefix the narrator received.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 
 from ... import prompts
@@ -20,13 +20,22 @@ WINDOW_SHARE = 0.10
 BUDGET_SHARE = 0.15
 
 
-def render_item(item: model.EvidenceItem) -> str:
-    return prompts.render("scene/sections/history_item.j2", item=item).strip()
+#: 09's section frame; 11's three sections bring their own (`context/history`).
+FRAME = "scene/sections/history_recall.j2"
 
 
-def render_blocks(blocks: Sequence[str]) -> str:
+def render_item(item: model.EvidenceItem, note: Mapping[str, object] | None = None) -> str:
+    """One item through the authoritative item template. `note` is 11's
+    annotation for it (`history_item.j2` says which keys); None renders 09's."""
+    notes = {item.scene.key: dict(note)} if note else {}
+    return prompts.render("scene/sections/history_item.j2", item=item,
+                          history_notes=notes).strip()
+
+
+def render_blocks(blocks: Sequence[str], frame: str = FRAME,
+                  frame_vars: Mapping[str, object] | None = None) -> str:
     """The authoritative frame; also accepts S2's already-expanded blocks."""
-    return prompts.render("scene/sections/history_recall.j2", history_blocks=list(blocks)).strip()
+    return prompts.render(frame, history_blocks=list(blocks), **(frame_vars or {})).strip()
 
 
 def render(items: Sequence[model.EvidenceItem]) -> str:

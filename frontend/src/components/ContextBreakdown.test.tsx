@@ -183,3 +183,54 @@ test("history inspector lists what was found but not selected", () => {
                        /semantic rank 7/])
     expect(screen.getByText(value)).toBeInTheDocument();
 });
+
+test("history inspector shows who has each part, with the basis, for its reader", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_known", label: "Recalled history · what the speaker knows", text: "", tokens: 0,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [],
+      coverage: { tiers: [1], semantic: "off", admitted: 1, agreement: 0, verdict: "thin" },
+      ceiling: 1200, budget_from: ["config"],
+      epistemic: { perspective: "actor:characters:winifred", decided: 0, items: [{
+        key: "a".repeat(32), scene: "", admitted: true, state: "unattributed", header: {},
+        known_to: [], suspected_by: [],
+        slices: [{ part: "posts", posts: [0], access: "unknown", basis: ["not_recorded_present"] },
+                 { part: "posts", posts: [1], access: "witnessed", basis: ["presence_interval"] }],
+      }] },
+    },
+  }] })} />);
+  for (const value of [/Access, for characters:winifred/, /Posts 0: unknown \(not_recorded_present\)/,
+    /Posts 1: witnessed \(presence_interval\)/]) expect(screen.getByText(value)).toBeInTheDocument();
+});
+
+test("the narrator's access rows name who knows and who suspects", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx({ sections: [{
+    id: "history_recall", label: "Recalled history", text: "x", tokens: 1,
+    tier: "history-recall", dropped: false, trimmed: 0,
+    history: {
+      items: [],
+      coverage: { tiers: [1], semantic: "off", admitted: 1, agreement: 0, verdict: "thin" },
+      ceiling: 1200, budget_from: ["config"],
+      epistemic: { perspective: "narrator", decided: 0, round: { retrievals: 3, embeds: 1 },
+        names: { "characters:mara": "Mara", "characters:winifred": "Winifred" },
+        items: [{
+        key: "k", scene: "001--pier", admitted: true, state: "attributed",
+        header: { title: "The Pier" }, known_to: ["characters:mara"],
+        suspected_by: ["characters:winifred"],
+        slices: [{ part: "posts", posts: [0, 1], access: "known", basis: ["narrator"] }],
+        by_ref: {
+          "characters:mara": { "0": ["witnessed", "presence_interval"], "1": ["witnessed", "authored"],
+                               summary: ["unknown", "summary_needs_grant"] },
+          "characters:winifred": { "0": ["unknown", "not_recorded_present"], "1": ["suspected", "override"],
+                                   summary: ["unknown", "summary_needs_grant"] },
+        },
+      }] },
+    },
+  }] })} />);
+  for (const value of [/Access, for the narrator/, /Known to: Mara/,
+    /Suspected by: Winifred/, /Posts 0, 1: known \(narrator\)/,
+    /Mara: witnessed; Winifred: unknown\/suspected/,
+    /This round: 3 history retrievals, 1 query embedding/])
+    expect(screen.getByText(value)).toBeInTheDocument();
+});

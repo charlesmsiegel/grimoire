@@ -62,6 +62,7 @@ class ConfigUpdate(BaseModel):
     decide_speaker_sampling: str | None = None
     decide_turn_plan: str | None = None
     decide_play_tool: str | None = None
+    epistemic_decide: str | None = None
     send_images: str | None = None
     send_images_limit: str | None = None
     backup_enabled: str | None = None
@@ -1270,6 +1271,68 @@ class FactSave(BaseModel):
     text: str | None = None
     date: str | None = None
     scene: str | None = None
+
+
+class KnowledgePost(BaseModel):
+    """One post a knowledge statement is about, by its key (`r-<response_id>`
+    with its part, or `p-<post_id>`). An empty key names a post that has none,
+    which only an `unaware` may be about (roadmap 11 §7.4)."""
+    key: str = ""
+    part: str = ""
+
+
+class KnowledgeFingerprint(BaseModel):
+    """What the client was shown of one post: a precondition, never what is
+    stored. A grant is refused 409 `moved` when the post no longer reads so --
+    its raw text (`variant`, `digest`) or the prompt-view text it displayed
+    (`shown`, the digest of what an actor's prompt would carry)."""
+    key: str = ""
+    part: str = ""
+    variant: str = ""
+    digest: str = ""
+    shown: str = ""
+
+
+class KnowledgeSave(BaseModel):
+    """A knowledge statement written by hand, or accepted from a capture.
+    `scene` is the sid. Exactly one of `posts` and `whole_scene`. A grant
+    (`knows`/`suspects`) carries what the user was shown -- `expect` for
+    posts, `expect_digest` and `expect_shown` for the whole scene -- and the
+    route refuses it when the text moved since; the stored fingerprint is
+    computed here. `audience_name` is the name the form displayed for the
+    audience: when given, a different current name is 409 `moved`, so a
+    record renamed or replaced under the open form is never the one granted."""
+    audience: str = ""
+    status: str = ""
+    scene: str = ""
+    posts: list[KnowledgePost] | None = None
+    whole_scene: bool = False
+    expect: list[KnowledgeFingerprint] | None = None
+    expect_digest: str = ""
+    expect_shown: str = ""
+    audience_name: str = ""
+    note: str = ""
+    source: str = "manual"
+
+
+class KnowledgeEdit(BaseModel):
+    """A correction to a stored statement; each field None leaves it alone.
+    A new subject is `scene` with `posts` or `whole_scene`. `restamp`
+    re-fingerprints the stored subject -- the ledger's "confirm against the
+    current text" -- and, for a grant, needs `expect`/`expect_digest` as a POST
+    does. Without either the stored fingerprint is kept, so a note edit never
+    revalidates a stale grant."""
+    audience: str | None = None
+    status: str | None = None
+    note: str | None = None
+    scene: str | None = None
+    posts: list[KnowledgePost] | None = None
+    whole_scene: bool = False
+    expect: list[KnowledgeFingerprint] | None = None
+    expect_digest: str = ""
+    expect_shown: str = ""
+    audience_name: str | None = None
+    restamp: bool = False
 
 
 class FactRecord(BaseModel):

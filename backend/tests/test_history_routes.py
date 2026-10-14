@@ -13,7 +13,7 @@ import pytest
 from grimoire import routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns, history_recall
-from grimoire.store.context import layout
+from grimoire.store.context import epistemic, layout
 from grimoire.store.history import model, query, retrieval
 from tests.history_fixtures import absorbed, actor, played
 from tests.history_fixtures import cid as cid
@@ -60,7 +60,7 @@ def test_gather_refills_depth_one_before_composition(cid, monkeypatch):
     assert seen == [{first: "omitted:archive", usable: "omitted:archive"}]
     assert [i.scene.sid for i in ev.items] == [usable]
     monkeypatch.setattr(retrieval, "retrieve_preview", lambda *a, **k: pytest.fail("compose retrieved"))
-    _messages, detail = store.context.compose_turn(cid, sid, history=ev)
+    _messages, detail = store.context.compose_turn(cid, sid, history_view=epistemic.narrator_view(cid, sid, ev))
     assert next(s for s in detail["sections"] if s["id"] == "history_recall")["history"]["items"][0]["scene"] == usable
 
 
@@ -199,12 +199,12 @@ def test_legacy_compose_doors_gather_without_lock(client, monkeypatch, door):
     fake = FakeLLM([["Mara keeps the ledger."]])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     seen = []
-    real = history_recall.gather_sync
+    real = history_recall.gather_view_sync
     def gather(*args, **kwargs):
         assert not store.locks.holds_campaign(campaign)
         seen.append(kwargs["seed"])
         return real(*args, **kwargs)
-    monkeypatch.setattr(history_recall, "gather_sync", gather)
+    monkeypatch.setattr(history_recall, "gather_view_sync", gather)
     base = f"/api/campaigns/{campaign}/scenes/{sid}"
     if door in ("retry", "regenerate"):
         store.scenes.append_message(campaign, sid, "user", "silver ledger")
@@ -223,27 +223,31 @@ def test_legacy_compose_doors_gather_without_lock(client, monkeypatch, door):
     assert fake.calls == 1
 
 
-def test_round_evidence_cached_by_round_and_skips_other_contributions(cid, monkeypatch):
+def test_round_views_cached_per_round_and_speaker(cid, monkeypatch):
+    # 11-S3: each step gathers for its own perspective, once per (round,
+    # speaker). A director note seeds only the narrator's query.
     sid = played(cid)
     app = object()
     turn = character_turns._Progress({"id": "round-1", "note": "silver ledger"}, (), None)
     calls = []
     async def gather(*a, **k):
-        calls.append(k["seed"])
-        return model.Evidence(ceiling=len(calls))
-    monkeypatch.setattr(history_recall, "gather", gather)
+        calls.append((k["seed"], k["actor_ref"]))
+        return epistemic.narrator_view(cid, sid, model.Evidence(ceiling=len(calls)))
+    monkeypatch.setattr(history_recall, "gather_view", gather)
     async def run():
         npc = await character_turns._round_history(app, cid, sid, None, None, None, turn, "characters:mara")
         first = await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire")
         again = await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire")
-        assert npc is None and first is again
+        npc_again = await character_turns._round_history(app, cid, sid, None, None, None, turn, "characters:mara")
+        assert npc is not first and first is again and npc is npc_again
         turn.round_record = {"id": "round-2", "note": ""}
         second = await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire")
         assert second is not first
         # A roll continuation retrieves nothing, but its second half is
-        # composed with the evidence the round already gathered...
+        # composed with the view the round already gathered for that speaker...
         turn.appended = (("Roll", "system", "result"),)
         assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is second
+        assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "characters:mara") is None
         turn.appended = ()
         turn.continuation = "roll"
         assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is second
@@ -251,7 +255,29 @@ def test_round_evidence_cached_by_round_and_skips_other_contributions(cid, monke
         turn.round_record = {"id": "round-3", "note": ""}
         assert await character_turns._round_history(app, cid, sid, None, None, None, turn, "grimoire") is None
     asyncio.run(run())
-    assert calls == ["silver ledger", ""]
+    assert calls == [("", "characters:mara"), ("silver ledger", None), ("", None)]
+
+
+def test_each_step_carries_its_rounds_history_cost(cid, monkeypatch):
+    # Spec 11 §14 Q7: what recall per speaker costs a round is on the row.
+    sid = played(cid)
+    turn = character_turns._Progress({"id": "round-1", "note": ""}, (), None)
+    semantics = iter(["ok", "skipped:deadline", "failed:network"])
+
+    async def gather(*a, **k):
+        coverage = model.Coverage("thin", semantic=next(semantics))
+        return epistemic.narrator_view(cid, sid, model.Evidence(coverage=coverage))
+    monkeypatch.setattr(history_recall, "gather_view", gather)
+
+    async def run():
+        return [await character_turns._round_history(object(), cid, sid, None, None, None,
+                                                     turn, actor)
+                for actor in ("grimoire", "characters:mara", "characters:win")]
+    views = asyncio.run(run())
+    assert [v.round_cost for v in views] == [{"retrievals": 1, "embeds": 1},
+                                            {"retrievals": 2, "embeds": 1},
+                                            {"retrievals": 3, "embeds": 2}]
+    assert views[2].detail()["round"] == {"retrievals": 3, "embeds": 2}
 
 
 @pytest.mark.parametrize("stale_peek", [False, True])
@@ -275,10 +301,9 @@ def test_pending_retry_and_regenerate_replay_without_retrieval(client, monkeypat
         monkeypatch.setattr(character_turns, "_history_replays", lambda *a: False)
         async def stale(*a, **k):
             gathers.append(True)
-            return model.Evidence(ceiling=1)
-        monkeypatch.setattr(history_recall, "gather", stale)
+        monkeypatch.setattr(history_recall, "gather_view", stale)
     else:
-        monkeypatch.setattr(history_recall, "gather", lambda *a, **k: pytest.fail("snapshot retrieved"))
+        monkeypatch.setattr(history_recall, "gather_view", lambda *a, **k: pytest.fail("snapshot retrieved"))
     finish = FakeLLM([['Finished.\n```handoff\n{"next":null}\n```'], ["Rerolled."]])
     client.app.dependency_overrides[routes.get_llm] = lambda: finish
     retry = client.post(base + "/retry")
@@ -335,7 +360,7 @@ def test_roll_continuation_never_gathers(client, monkeypatch):
     base = f"/api/campaigns/{campaign}/scenes/{sid}"
     client.post(base + "/chat", json={"content": "silver ledger", "speaker_ref": "grimoire"})
     proposal = store.proposals.get(campaign, sid)
-    monkeypatch.setattr(history_recall, "gather", lambda *a, **k: pytest.fail("roll continuation retrieved"))
+    monkeypatch.setattr(history_recall, "gather_view", lambda *a, **k: pytest.fail("roll continuation retrieved"))
     reply = client.post(base + "/roll-proposal", json={"proposal": proposal["id"], "action": "decline"})
     assert reply.status_code == 200 and '"error"' not in reply.text, reply.text
     assert fake.calls == 2
@@ -355,16 +380,28 @@ def test_async_file_stages_run_in_worker(cid, monkeypatch):
     assert threads and all(t != caller for t in threads)
 
 
-def test_npc_contribution_never_gathers(client, monkeypatch):
+def test_an_npc_contribution_gathers_its_own_view(client, monkeypatch):
+    # 11-C2: an NPC step retrieves for its own perspective, and its prompt
+    # holds only what that view allows -- here nothing, for Mara was in none
+    # of the earlier scenes.
     campaign, sid = route_seed(client)
     aid, _vid = actor(campaign, sid, "Mara")
     fake = FakeLLM([['Mara answers.\n```handoff\n{"next":null}\n```']])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    monkeypatch.setattr(history_recall, "gather", lambda *a, **k: pytest.fail("NPC retrieved"))
+    seen = []
+    real = history_recall.gather_view
+    async def gather(*a, **k):
+        seen.append(k["actor_ref"])
+        view = await real(*a, **k)
+        assert view.perspective.actor == "characters:"+aid
+        return view
+    monkeypatch.setattr(history_recall, "gather_view", gather)
     reply = client.post(f"/api/campaigns/{campaign}/scenes/{sid}/chat",
                         json={"content": "silver ledger", "speaker_ref": "characters:"+aid})
     assert reply.status_code == 200 and '"error"' not in reply.text, reply.text
+    assert seen == ["characters:"+aid]
     assert "# Earlier in the campaign" not in str(fake.messages)
+    assert "Mara gives Seraphine" not in str(fake.messages)
 
 
 def test_explicit_replay_never_gathers(client, monkeypatch):
@@ -374,7 +411,7 @@ def test_explicit_replay_never_gathers(client, monkeypatch):
     store.replay.begin(campaign, sid, 0)
     fake = FakeLLM([['New opener.\n```handoff\n{"next":null}\n```']])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    monkeypatch.setattr(history_recall, "gather", lambda *a, **k: pytest.fail("replay retrieved"))
+    monkeypatch.setattr(history_recall, "gather_view", lambda *a, **k: pytest.fail("replay retrieved"))
     reply = client.post(f"/api/campaigns/{campaign}/scenes/{sid}/replay/turn")
     assert reply.status_code == 200 and '"error"' not in reply.text, reply.text
     assert "# Earlier in the campaign" not in str(fake.messages)
@@ -387,7 +424,7 @@ def test_an_off_round_reads_nothing_past_the_config(cid, monkeypatch):
     monkeypatch.setattr(character_turns, "_history_replays",
                         lambda *a: pytest.fail("peeked while off"))
     monkeypatch.setattr(character_turns, "_round_post", lambda *a: pytest.fail("read while off"))
-    monkeypatch.setattr(history_recall, "gather", lambda *a, **k: pytest.fail("gathered while off"))
+    monkeypatch.setattr(history_recall, "gather_view", lambda *a, **k: pytest.fail("gathered while off"))
     turn = SimpleNamespace(appended=(), continuation=None, history_by_round={},
                            round_record={"id": "r1", "pending_response": "x", "typed_note": True})
     got = asyncio.run(character_turns._round_history(None, cid, "001--saltmarch", None, None,

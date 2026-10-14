@@ -1,0 +1,16 @@
+{#- What the assigned NPC suspects of earlier scenes and has not confirmed
+    (spec 11): a guess, which the writer may have it voice as one.
+    Vars: history_actor_name (str), and history_blocks ([str]) or
+    history_suspected ([EvidenceItem]). -#}
+{%- set blocks = history_blocks if history_blocks is defined else [] -%}
+{%- if history_blocks is not defined -%}
+{%- for item in history_suspected -%}
+{%- set block -%}{%- include "scene/sections/history_item.j2" -%}{%- endset -%}
+{%- set _ = blocks.append(block.strip()) -%}
+{%- endfor -%}
+{%- endif -%}
+{%- if blocks %}# What {{ history_actor_name }} suspects, unconfirmed
+
+{{ history_actor_name }} believes these may be so, without having seen them or been told; being there would mean what could be seen or heard, never another person's private thoughts.
+
+{{ blocks | join("\n\n") }}{% endif -%}

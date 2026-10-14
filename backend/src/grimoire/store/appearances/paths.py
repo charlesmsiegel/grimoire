@@ -61,6 +61,26 @@ def record(cid: str) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def observed_indices(cid: str, sid: str, actor_ref: str, history: list[dict]) -> list[int]:
+    """The indices of `history` (a scene's whole transcript, prompt view or
+    stored) that `actor_ref` was present for: its half-open presence
+    intervals. A scene with no recorded presence for it is not proof of
+    observation, so a legacy record gets only the latest player post onwards.
+
+    Indices count every post, hidden ones and director notes included, so a
+    caller filters after windowing, never before."""
+    intervals = record(cid).get(actor_ref.replace(":", "/", 1), {}).get("presence", {}).get(sid)
+    if not isinstance(intervals, list):
+        start = next((i for i in range(len(history) - 1, -1, -1)
+                      if history[i].get("role") == "user"), len(history))
+        return list(range(start, len(history)))
+    valid = [r for r in intervals if isinstance(r, dict)
+             and type(r.get("start")) is int and r["start"] >= 0
+             and (r.get("end") is None or type(r.get("end")) is int)]
+    return [i for i in range(len(history)) if any(
+        r["start"] <= i and (r.get("end") is None or i < r["end"]) for r in valid)]
+
+
 def _write(cid: str, data: dict) -> None:
     atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 

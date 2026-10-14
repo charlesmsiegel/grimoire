@@ -1637,9 +1637,12 @@ def _eval_cases_generate() -> bool:
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
     from evals import cases as case_mod
+    from evals.epistemic import live as epistemic_live
 
+    # Spec 11's live arm builds its cases at run time, all on one task.
     return all(_a_generate_task(case.task, routing.route)
-               for case in case_mod.CASES if case.schema is None)
+               for case in case_mod.CASES if case.schema is None) \
+        and _a_generate_task(epistemic_live.TASK, routing.route)
 
 
 #: The one task that is data rather than code, and what holds it instead.

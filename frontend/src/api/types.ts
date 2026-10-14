@@ -1936,6 +1936,47 @@ export type HistoryEvidenceRow = {
     ranks: { round: number; signal: string; rank: number }[];
   }[];
   unselected?: number;
+  /** Roadmap 11's classification of this section's items for the reader it
+   *  was composed for: the narrator, or one NPC (`actor:characters:<id>`).
+   *  Inspector data only -- no basis code reaches a message. Absent on a
+   *  capture taken before 11-S3. */
+  epistemic?: EpistemicDetail;
+};
+/** One perspective's access to retrieved history (spec 11 §3). */
+export type EpistemicAccess = "witnessed" | "known" | "suspected" | "narrator_only" | "unknown";
+export type EpistemicSlice = {
+  part: "posts" | "summary"; posts: number[]; access: EpistemicAccess; basis: string[];
+  /** Each post's fingerprint as classified (11-S3): what an accept sends as
+   *  `expect`. Empty for the summary and for a post that moved. Absent on a
+   *  capture taken before the accept existed. */
+  keys?: KnowledgeFingerprint[];
+};
+export type EpistemicItem = {
+  key: string; scene: string; admitted: boolean;
+  state: "attributed" | "withheld" | "unattributed";
+  header: { title?: string; date?: string; location?: string };
+  known_to: string[]; suspected_by: string[];
+  slices: EpistemicSlice[];
+  /** Each classified ref's own `[access, basis]`, per post index and for
+   *  the whole scene ("summary"). */
+  by_ref?: Record<string, Record<string, [EpistemicAccess, string]>>;
+  /** The step's actor stood in this scene (spec 11 §5.1 (a)); absent when
+   *  not, and on the narrator's rows. */
+  stood?: boolean;
+};
+export type EpistemicDetail = {
+  perspective: string;
+  /** Parts the Decision stage (11-S6) made visible, and every part it was
+   *  eligible to ask about, as [scene key, part, posts]. */
+  decided: number;
+  pending?: [string, string, number[]][];
+  /** Who the refs are, as the prompt named them. */
+  names?: Record<string, string>;
+  /** What history has cost this step's round so far (spec 11 §14 Q7): its
+   *  retrievals, one per speaker that recalled, and the query embeddings
+   *  they sent. Absent on the live preview. */
+  round?: { retrievals: number; embeds: number };
+  items: EpistemicItem[];
 };
 export type ContextSection = {
   /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen
@@ -1943,7 +1984,7 @@ export type ContextSection = {
    *  too, so their labels are still unique and are a safe fallback key. */
   id?: string;
   label: string; text: string; tokens: number;
-  tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history-recall" | "history";
+  tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history-recall" | "history-aside" | "history";
   dropped: boolean; trimmed: number;
   /** The section carries content the reader pinned, so the packer left it alone
    *  whatever its tier (#129). Optional: snapshots frozen before pins existed
@@ -2808,6 +2849,72 @@ export type RelationshipSave = {
   scene?: string;
 };
 export type ChronicleLineSave = { one_line?: string; date?: string };
+
+/** Roadmap 11's knowledge overrides (`routes/ledger.py`, `store/knowledge.py`):
+ *  the user's word on who knows, suspects or never heard what happened. */
+export type KnowledgeStatus = "knows" | "suspects" | "unaware";
+export type KnowledgePostRef = { key: string; part: string };
+export type KnowledgeEntry = {
+  id: string;
+  /** `characters:<id>`, `groups:<id>` or `*`. */
+  audience: string;
+  /** The audience's name when the statement was written ("" for everyone). */
+  audience_name: string;
+  /** Its name now; null when it no longer resolves (deleted, reclassified). */
+  audience_now: string | null;
+  status: KnowledgeStatus;
+  note: string;
+  source: "manual" | "accepted";
+  created?: string;
+  updated?: string;
+  subject: { kind: "posts"; scene: string; posts: (KnowledgePostRef & { variant: string; digest: string })[] }
+         | { kind: "scene"; scene: string; digest: string };
+  /** The scene it is about, by its current id, with its transcript digest as
+   *  this read saw it; null when that scene was deleted or `unverifiable`. */
+  scene: { sid: string; title: string; digest: string; shown: string } | null;
+  /** The scan for its scene could not finish (a synced folder mid-write). */
+  unverifiable: boolean;
+  /** Each named post as it reads now (display phase), with the fingerprint of
+   *  that text -- what a re-stamp sends back as `expect`. */
+  posts: { key: string; part: string; index: number | null; speaker: string; text: string;
+           missing: boolean; variant?: string; digest?: string; shown?: string }[];
+  /** A grant that no longer grants, and why. */
+  stale: boolean;
+  stale_reason: "changed" | "hidden" | "gone" | "unverifiable" | "audience" | null;
+};
+/** What a statement about one scene could name (`.../knowledge/scenes/{sid}`). */
+export type KnowledgeScene = {
+  sid: string; digest: string; shown: string;
+  /** What a whole-scene grant also exposes, besides the posts. */
+  title: string; summary: string; one_line: string;
+  keyless: number;
+  keyless_posts: { index: number; speaker: string; text: string }[];
+  /** Each keyed post in its prompt view, with its fingerprint; `shown` is the
+   *  digest of `text`, which a grant sends back. */
+  posts: { key: string; part: string; variant: string; digest: string; shown: string;
+           index: number; speaker: string; text: string; hidden: boolean }[];
+};
+export type KnowledgeFingerprint = {
+  key: string; part: string; variant: string; digest: string; shown: string;
+};
+export type KnowledgeList = { entries: KnowledgeEntry[]; intact: boolean };
+/** A grant carries what the reader was shown (`expect` / `expect_digest`);
+ *  the server refuses it 409 `moved` when the text changed since. */
+export type KnowledgeSave = {
+  audience: string; status: KnowledgeStatus; scene: string;
+  /** null with `whole_scene`. */
+  posts: KnowledgePostRef[] | null; whole_scene: boolean;
+  expect: KnowledgeFingerprint[] | null; expect_digest: string; expect_shown: string;
+  /** The audience's name as the form showed it: a different current name is 409. */
+  audience_name?: string;
+  note?: string; source?: "manual" | "accepted";
+};
+export type KnowledgeEdit = {
+  audience?: string; status?: KnowledgeStatus; note?: string;
+  scene?: string; posts?: KnowledgePostRef[] | null; whole_scene?: boolean;
+  expect?: KnowledgeFingerprint[] | null; expect_digest?: string; expect_shown?: string;
+  audience_name?: string; restamp?: boolean;
+};
 
 export type Ledger = {
   plot: PlotThread[]; commitments: Commitment[]; facts: StandingFact[];

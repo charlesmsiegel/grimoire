@@ -99,6 +99,9 @@ DEFAULT_PERCEPTION_RIDER = "on"
 DEFAULT_DECIDE_SPEAKER_SAMPLING = "on"
 DEFAULT_DECIDE_TURN_PLAN = "off"
 DEFAULT_DECIDE_PLAY_TOOL = "off"
+#: Spec 11's Decision stage (11-S6): off, and hidden from Settings until its
+#: play gate is ratified (§5.4); a hand edit or an eval switches it on.
+DEFAULT_EPISTEMIC_DECIDE = "off"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
 DEFAULT_CLAUDE_MODEL = "opus"
@@ -253,6 +256,7 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "prompt_layout_enabled", "speaker_turn_taking",
                 "tracker", "perception_rider",
                 "decide_speaker_sampling", "decide_turn_plan", "decide_play_tool",
+                "epistemic_decide",
                 "send_images", "send_images_limit",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
@@ -341,6 +345,7 @@ def read_config() -> dict[str, str]:
                 "decide_speaker_sampling": DEFAULT_DECIDE_SPEAKER_SAMPLING,
                 "decide_turn_plan": DEFAULT_DECIDE_TURN_PLAN,
                 "decide_play_tool": DEFAULT_DECIDE_PLAY_TOOL,
+                "epistemic_decide": DEFAULT_EPISTEMIC_DECIDE,
                 "send_images": DEFAULT_SEND_IMAGES,
                 "send_images_limit": DEFAULT_SEND_IMAGES_LIMIT,
                 "backup_enabled": DEFAULT_BACKUP_ENABLED,

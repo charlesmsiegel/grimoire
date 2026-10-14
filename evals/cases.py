@@ -2552,15 +2552,17 @@ CASES: tuple[Case, ...] = (
 # ------------------------------------------------- the decide kits (02-S7)
 #
 # A registered case's task must be on a route (roadmap 02 §9.1). 09-S5
-# activates the history case below, with its call site; the epistemic case
-# stays outside `CASES` until 11 lands. `KIT_CASES` keeps the latter's
-# recordings claimed by `test_no_orphan_recordings` and its kit unit test.
+# activated the history case below with its call site, and 11-S6 the
+# epistemic one with its own (`routes/epistemic.py`). `KIT_CASES` holds a kit's
+# case until its call site lands, keeping its recordings claimed by
+# `test_no_orphan_recordings`; none is waiting now.
 
 EPISTEMIC_QUESTION = epistemic_access.AccessQuestion(
     actor_ref="characters:mara", actor_name="Mara", evidence_ref="scene-3#12",
     excerpt=("Seraphine lifts the harbour key from the hook while Mara sleeps in the "
              "corner, her back to the room."),
-    basis=("present", "asleep"))
+    # No basis: 11's call site hands the kit none (spec 11 §3.5).
+    basis=())
 
 
 def build_decide_epistemic() -> dict:
@@ -2645,7 +2647,10 @@ def grade_decide_rerank(ctx: dict, output: str) -> list[Check]:
     return checks
 
 
-KIT_CASES: tuple[Case, ...] = (
+KIT_CASES: tuple[Case, ...] = ()
+
+# 11-S6 activates the epistemic kit with its call site.
+CASES = (*CASES,
     Case(id="decide-epistemic-access",
          task=epistemic_access.TASK,
          hypothesis="asked through decide() whether a character asleep with her back to "

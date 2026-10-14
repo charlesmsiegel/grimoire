@@ -16,7 +16,8 @@ def violations(source):
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
                 name = child.func.attr if isinstance(child.func, ast.Attribute) else child.func.id if isinstance(child.func, ast.Name) else ""
-                if name in {"retrieve", "gather", "gather_sync"}:
+                if name in {"retrieve", "gather", "gather_sync", "gather_view", "gather_view_sync",
+                             "classify", "classify_evidence"}:
                     found.append(child.lineno)
     return found
 
@@ -24,6 +25,9 @@ def violations(source):
 def test_guard_rejects_retrieval_under_lock():
     assert violations("with store.locks.campaign_lock(cid):\n    await history.retrieve(cid, sid, query)\n") == [2]
     assert not violations("with store.locks.campaign_lock(cid):\n    prepare()\nawait history.retrieve(cid, sid, query)\n")
+    # 11-S3's doors: a step's view, and the classification behind it.
+    assert violations("with campaign_lock(cid):\n    gather_view_sync(app, cid, sid)\n") == [2]
+    assert violations("with campaign_lock(cid):\n    epistemic.classify(p, items)\n") == [2]
 
 
 def test_routes_never_retrieve_under_campaign_lock():

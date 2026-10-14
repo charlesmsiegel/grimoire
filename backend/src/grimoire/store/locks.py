@@ -256,6 +256,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # hide edits each pass the check and one is lost. New module, so it starts
     # inside the exclusion rather than joining the frozen `UNREVIEWED` backlog.
     "store.quick_replies",
+    # `knowledge.json` (roadmap 11 overrides) is rewritten whole by every
+    # mutator, and the ledger routes validate a subject against the scene and
+    # write it in one hold -- two unserialized writes would lose one statement,
+    # and a delete hook landing between a check and a write could resurrect a
+    # deleted actor's grant. New module, so it starts inside the exclusion.
+    "store.knowledge",
     # `commitments.json` is rewritten whole by `set_movement` and
     # `repoint_scenes`, exactly like `plot.json` -- but this module is new
     # (#115), so it starts inside the exclusion rather than joining the

@@ -33,6 +33,13 @@ Content tiers, most protected first:
     Targeted historical evidence, shed scene by scene before recalled lore so
     new history can only add to what an older prompt already carried.
 
+``history-aside``
+    The part of that evidence a prompt can best spare (spec 11): the
+    narrator's history kept from the cast, and an NPC's unconfirmed
+    suspicions. A tier of its own, first to go, because within one tier the
+    largest section goes first and these must give way before the history
+    beside them whatever their sizes. The two never share a prompt.
+
 Under pressure sections are dropped whole, lowest tier first, and the trailing
 history window is trimmed between ``archive`` and ``background``. Placing the
 trim there is the one ordering judgement here: history usually dominates a long
@@ -102,6 +109,9 @@ RECALLED = "recalled"
 #: Targeted historical evidence gives way before recalled lore, scene by
 #: scene, so adding it cannot evict content an older prompt already carried.
 HISTORY_RECALL = "history-recall"
+#: History that gives way before `HISTORY_RECALL`'s: the narrator's withheld
+#: items before its recalled ones, an NPC's suspicions before what it knows.
+HISTORY_ASIDE = "history-aside"
 #: Not a droppable tier — the label the conversation history reports itself
 #: under, so the inspector can tell it apart from the sections around it.
 HISTORY = "history"
@@ -109,7 +119,7 @@ HISTORY = "history"
 #: The order sections give way in. `LOCK_IN` is absent by construction: this
 #: tuple is what the packer iterates, so lock-in is unreachable rather than
 #: merely last.
-DROP_ORDER = (HISTORY_RECALL, RECALLED, ARCHIVE, BACKGROUND, SPOTLIGHT)
+DROP_ORDER = (HISTORY_ASIDE, HISTORY_RECALL, RECALLED, ARCHIVE, BACKGROUND, SPOTLIGHT)
 
 #: Projected history messages the trim never goes below. Two keeps the latest
 #: exchange — below that the model is answering a turn it cannot see.

@@ -6,7 +6,26 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+from .. import paths
+
 RELATIONS = frozenset({"shared_cast", "actor", "location", "thread", "relationship", "group"})
+NARRATOR = "narrator"
+#: An NPC's perspective (11-C2): ``actor:characters:<id>``. The same spelling
+#: as `store/context/epistemic.Perspective.to_string`, checked here because
+#: history may not import compose.
+ACTOR_PREFIX = "actor:"
+
+
+def actor_of(perspective: str) -> str | None:
+    """The ``characters:`` ref an actor perspective names, None for the
+    narrator; ValueError for anything else."""
+    if perspective == NARRATOR:
+        return None
+    ref = perspective[len(ACTOR_PREFIX):] if perspective.startswith(ACTOR_PREFIX) else ""
+    kind, _, rid = ref.partition(":")
+    if kind != "characters" or not paths.safe_id(rid):
+        raise ValueError(f"not a history perspective: {perspective!r}")
+    return ref
 
 
 @dataclass(frozen=True)
@@ -16,7 +35,7 @@ class Query:
     subjects: tuple[str, ...] = ()
     scopes: frozenset[str] = RELATIONS
     max_scenes: int | None = None
-    perspective: str = "narrator"
+    perspective: str = NARRATOR
     tier_limit: int = 2
     turn_index: int | None = None
 

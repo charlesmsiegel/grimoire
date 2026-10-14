@@ -116,32 +116,33 @@ def test_escalation_fires_only_on_permissive_answers():
     assert [t.index for t in fired] == [0]
 
 
-def test_the_policy_row_breaks_no_rule(monkeypatch):
-    """The row 11 registers, checked against 01d's rules over the route 11
-    lands -- never sampled, escalated only on refusal or a permissive low
-    margin."""
+def test_the_candidate_policy_row_breaks_no_rule(monkeypatch):
+    """02-C5a's candidate escalation row, checked against 01d's rules over the
+    route 11-S6 landed -- never sampled, escalated only on refusal or a
+    permissive low margin. Not registered: the task landed with escalation
+    off, as every task does."""
     from tests import test_task_policy as tp
 
     route = ea.ROUTE
-    assert route.tasks == (ea.TASK,) and route.legacy == routing.NO_LEGACY
-    assert route.key not in {r.key for r in routing.ROUTES}
-    vocab = {**tp._answers(), ea.TASK: tp._Vocab(tp._keys(ea.build_items([Q])[0],
-                                                           ea.ACCESS_ID))}
-    monkeypatch.setattr(tp, "_answers", lambda: vocab)
-    monkeypatch.setitem(tp._QUESTION, ea.TASK, ea.ACCESS_ID)
+    assert route is not None and route.tasks == (ea.TASK,)
+    assert route.legacy == routing.NO_LEGACY and route.operation == "decide"
+    assert route.key == "epistemic" and route.default_role == "decision"
     p = ea.policy()
     assert not p.samples and "abstained" not in p.escalate_on
     assert set(p.escalate_answers) == set(ea.PERMISSIVE) < set(ea.CLASSES)
-    assert tp.violations({ea.TASK: p}, (*routing.ROUTES, route)) == []
+    assert tp.violations({ea.TASK: p}) == []
 
 
-def test_the_kit_lands_no_route():
-    assert ea.TASK not in routing.TASK_ROUTE
-    assert ea.TASK not in routing.TASK_POLICY
-    assert ea.TASK not in {c.task for c in case_mod.CASES}
+def test_the_call_site_landed_the_route_and_the_case():
+    """11-S6: the route, an escalation-off policy row and the registered eval
+    case land with the call site (`routes/epistemic.py`)."""
+    assert routing.TASK_ROUTE[ea.TASK] == "epistemic"
+    assert routing.TASK_POLICY[ea.TASK] == routing.TaskPolicy()
+    assert ea.TASK in {c.task for c in case_mod.CASES}
+    assert not case_mod.KIT_CASES
 
 
-CASE = next(c for c in case_mod.KIT_CASES if c.id == "decide-epistemic-access")
+CASE = next(c for c in case_mod.CASES if c.id == "decide-epistemic-access")
 
 
 @pytest.mark.parametrize("recording", CASE.recordings, ids=lambda r: r.variant)

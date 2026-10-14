@@ -95,6 +95,7 @@ from . import (
     group_proposals,
     group_refs,
     journal,
+    knowledge,
     locks,
     overlay,
     record_refs,
@@ -244,6 +245,23 @@ def _suspend_membership_lifetimes(wroot: Path, kind: str, eid: str, new_kind: st
     return operations, commit_operations, inherited_operations
 
 
+def _knowledge_preflight(kind: str, cids) -> None:
+    """A group's statements are pruned by the move in every campaign that
+    follows the World record: refuse first if one of those campaigns'
+    knowledge files cannot be read (spec 11 §7.5)."""
+    if kind == "groups":
+        for cid in cids:
+            knowledge.require_readable(cid)
+
+
+def _forget_group_audience(kind: str, eid: str, following) -> None:
+    """Each campaign that followed the World record loses the group under this
+    id; a same-named one created later must not inherit its grants."""
+    if kind == "groups":
+        for cid in following:
+            knowledge.forget_audience(cid, f"groups:{eid}")
+
+
 def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
     """Reclassify a world record and sweep every campaign that inherits it.
 
@@ -276,6 +294,7 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
         # World has since reused its slug. That new record cannot capture the
         # original's file, refs, or membership offers (spec 07 brutal review).
         following = _following_campaigns(cids, kind, eid, wroot)
+        _knowledge_preflight(kind, following)
         aliases = {cid: overlay.capture_record_refs(cid, _ref(kind, eid), extra_refs=(requested,))
                    for cid in following}
         affected: set[str] = set()
@@ -289,6 +308,7 @@ def world_entity(wid: str, kind: str, eid: str, new_kind: str) -> dict:
                 wroot, kind, eid, new_kind, lifetime.captured, following)
             affected.update(cids)  # every held view may change when the World moves
             new_eid = entities.reclassify(wroot, kind, eid, new_kind)
+            _forget_group_audience(kind, eid, following)
             for cid, operation in inherited_operations.items():
                 if operation is not None:
                     commits.complete_membership_relocation(cid, operation, new_kind, new_eid)

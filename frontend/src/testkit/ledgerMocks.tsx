@@ -30,6 +30,11 @@ export async function ledgerApiMock() {
       ledgerDeleteFact: vi.fn(),
       ledgerSaveRelationship: vi.fn(), ledgerDeleteRelationship: vi.fn(),
       ledgerSaveChronicleLine: vi.fn(),
+      // Roadmap 11's knowledge statements, and the lists their form offers.
+      ledgerKnowledge: vi.fn(), ledgerKnowledgeScene: vi.fn(),
+      ledgerCreateKnowledge: vi.fn(), ledgerSaveKnowledge: vi.fn(),
+      ledgerDeleteKnowledge: vi.fn(),
+      listCharacters: vi.fn(), listEntities: vi.fn(), listScenes: vi.fn(),
       // The continuity review (Slice D).
       getContinuity: vi.fn(), continuityCandidates: vi.fn(),
       reconcileContinuity: vi.fn(), awaitCampaignRun: vi.fn(),

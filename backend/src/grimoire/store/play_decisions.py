@@ -15,6 +15,12 @@ changes who speaks, and a cost may not arrive by a typo.
 - `decide_play_tool` (`off` | `on`): offer a contribution the decide tool
   (02-C4).
 
+One more switch is read here and shown nowhere: spec 11's `epistemic_decide`
+(`off` | `on`, default `off`), the Decision stage (11-S6). It stays out of
+`VOCABULARIES` -- so out of `effective`, `own`, the campaign PUT and Settings --
+until its play gate is ratified (spec 11 §5.4); a hand edit of config.md or
+campaign.md is honoured meanwhile.
+
 Defaults: the user ratified all three for Settings (02-S6) with the speaker
 draw `on` and the other two `off` (`config.DEFAULT_DECIDE_*`). The pick was
 already asked, so sampling it adds no call; the other two each add one, and a
@@ -78,6 +84,16 @@ def turn_plan_mode(cid: str) -> str:
 def play_tool(cid: str) -> bool:
     """Whether a contribution is offered the decide tool (02-C4)."""
     return _setting(cid, PLAY_TOOL_KEY, ON_OFF) == "on"
+
+
+#: Spec 11's Decision stage switch; hidden (module docstring).
+EPISTEMIC_KEY = "epistemic_decide"
+
+
+def epistemic_decide(cid: str) -> bool:
+    """Whether an NPC's compose step asks the Decision stage about history
+    the record leaves open (spec 11 §5)."""
+    return _setting(cid, EPISTEMIC_KEY, ON_OFF) == "on"
 
 
 def effective(cid: str) -> dict[str, str]:

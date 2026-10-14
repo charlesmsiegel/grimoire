@@ -621,7 +621,8 @@ def test_every_decide_case_is_counted():
         "decide-scene-break", "decide-voice-drift", "decide-speaker",
         "decide-continuity-identity", "decide-continuity-reconcile", "decide-rank",
         "decide-select", "decide-joint", "decide-turn-intent",
-        "decide-turn-plan", "decide-play-tool", "decide-history-rerank"}
+        "decide-turn-plan", "decide-play-tool", "decide-history-rerank",
+        "decide-epistemic-access"}
 
 
 #: 01e's offline cases: each counterexample read through `decisions.parse` as

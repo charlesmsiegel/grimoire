@@ -1,6 +1,9 @@
 # 11. Epistemic history retrieval
 
-**Status:** Draft — spec gate (substitute review) folded in; Codex gate pending.
+**Status:** Draft, being implemented slice by slice. The spec gate and each
+slice's plan, code and final gates ran as substitute reviews (the Codex CLI
+is not available here); 11-S1, 11-S2, 11-S3 and 11-S4 are implemented, and
+the "Amended by" notes record where they moved the text.
 **Date:** 2026-10-09
 **Roadmap:** 11 in `ROADMAP-CHECKLIST.md`. Lane: retrieval (08 + 01e + 01h +
 01i → 09 → 10 → **11** → 12), fed by the decision lane (02-C5a).
@@ -306,7 +309,10 @@ Each slice carries `basis: tuple[str, ...]` from a closed set:
 `override`, `override_group`, `override_all`, `authored`, `pc_speaker`,
 `presence_interval`, `not_recorded_present`, `scene_cast`, `no_record`,
 `summary_needs_grant`, `decision`, `decision_abstained`, `decision_failed`,
-`decision_skipped`, `unverifiable`, `moved`.
+`decision_skipped`, `unverifiable`, `moved`. **Amended by 11-S2:** plus
+`unkeyed` (a keyless post withheld because its scene has a post-listed
+override) and `narrator` (the narrator's own slices, which carry access
+`known`).
 
 **The basis never reaches a scene prompt.** It feeds the inspector rows and
 the prompt-log capture only, as activation reasons do (CLAUDE.md, "Reasons
@@ -426,6 +432,33 @@ Why each rule is shaped the way it is:
   history it would make a legacy NPC omniscient about every scene they ever
   stood in, arrivals and departures included. Open question 1.
 
+**Amended by 11-S2, against the landed 09 and 08 code** (plan
+`2026-10-13-roadmap-11-s2-deterministic-classifier.md` §1 and §7):
+
+- `EvidencePost.part` is an `int | None` that is `None` for every real
+  continuation (a roll-proposal id does not cast), so R1's `(key, part)` comes
+  from the re-matched message, never from the evidence.
+- No raw digest rides an `EvidencePost`, and its text may be clipped by 08 and
+  trimmed by 09. Re-matching therefore requires the same key, the same
+  rendered speaker, the message still in context, and the evidence text (its
+  ellipses removed) inside the post's prompt view recomputed from this read.
+- A renamed scene is followed through its identity to its current sid; an
+  identity that resolves to nothing drops the item for everyone; the identity
+  is re-checked after every read.
+- The overrides row reads `knowledge.read_checked`; unreadable audiences are
+  the same row. A group `unaware` naming a group that cannot be resolved
+  withholds what it covers from every actor. It is stricter than 7.2: only
+  an entry on the post naming the actor (or, against a whole-scene
+  withholding, any entry on the post) beats it; recency is not consulted.
+- When the best-effort hold is not acquired, the interval rules R3 and R4 are
+  off: an unlocked read can pair a remapped presence record with the old
+  transcript. An unreadable chronicle holds no whole-scene grant. A malformed
+  interval list proves nothing.
+- R2' needs a user post with a stored speaker stamp, matched against every
+  present name.
+- Evidence from another campaign (09's tier 3, never on a turn) is not
+  classified: `unknown`, `unverifiable` for actors.
+
 ### 4.3 The summary rule
 
 **S1. Presence never makes a summary, or the item's title, visible to an
@@ -443,9 +476,27 @@ grader would not catch it either, since a summary paraphrases. So presence,
 which is the only evidence the classifier has, is not allowed to vouch for
 it.
 
+**Amended by 11-S2:** a whole-scene grant shows the summary and title only
+when no post-listed `unaware` in that scene reaches the actor (an unresolvable
+group and `*` reach everyone): the summary may paraphrase the very post
+withheld. And it shows only the summary the chronicle holds at classification
+(a rolling summary, or one changed since retrieval, is text no grant covered),
+and the title only when 09's equals the scene's current title. For an actor,
+`Classified.item` is a redacted copy (permitted header fields, no summary, no
+excerpts), so a renderer cannot reach past the slices.
+
 An actor-rendered item header therefore shows the date and location of an
 item with at least one visible post, and the title only when the summary is
 visible.
+
+**Amended by 11-S2 (review):** the title rides the whole-scene grant itself,
+not the summary's visibility: an item with a grant and no summary text still
+names its scene, and the scene digest the grant holds over covers the title.
+The date and location ride the same grant. 09 takes the date from the scene's
+first moment and the location from the scene's last, so neither belongs to a
+post, and presence for part of the scene vouches for neither (an actor who
+left before the scene moved to another place would otherwise be told where it
+went). An actor's header is therefore empty without a whole-scene grant.
 
 ### 4.4 The narrator
 
@@ -507,10 +558,49 @@ async def refine(view: EpistemicView, *, client: LLMClient, post: int | None,
                  round_id: str, round_budget: RoundBudget) -> EpistemicView
 ```
 
+(**Amended by 11-S6:** `refine(view, *, cid, sid, client, post, round_id,
+asked, response_id="") -> Refined`. `Refined` carries the view, the Decision
+record, the response id and how many parts were sent. The round's count is
+read off and written back to the round record by the turn path,
+`_refine_step`.)
+
 It runs on the turn path after retrieval and before `_prepare`, outside any
 campaign lock, as the speaker pick does (`routes/character_turns.py:728-761`):
 the resolution and item building happen in the threadpool, and the capture
 goes back to the threadpool.
+
+**Amended by 11-S6** (plan
+`docs/superpowers/plans/2026-10-14-roadmap-11-s6-decision-stage.md`, §1 and
+§5):
+
+- **Answers re-enter the classifier.** `classify(..., decided=)` applies them
+  to the actor's own eligible parts as its read cuts them, so a part that
+  becomes visible is rendered by the same path as every visible slice, and a
+  part that moved since it was asked stays `unknown`.
+- **Invisible slices keep their `source`** (09's posts, already the prompt
+  view), so the item builder can excerpt a withheld part. Every renderer
+  still reads `visible()`.
+- **The (b) channel** is read off one classifier pass over the roster.
+  "Later" compares `scene_ids` numbers; a legacy id is never later. A teller
+  has every post of the part visible; "recorded present" is a later post
+  both witnessed.
+- **A summary withheld because a post-listed `unaware` reaches the actor**
+  carries basis `override`, not `summary_needs_grant`, so it is never asked
+  about.
+- **Escalation is off at landing.** 02-C5a's escalating row is the kit's
+  candidate (`epistemic_access.policy()`), switched on only with its "Decision
+  escalation" evidence, as every task is. So `refine` passes no `escalation=`,
+  and 5.2's "`escalation=` is required" no longer holds.
+- **The regex-guard pin is a source test.** The builder reads no transcript.
+- **`history_view` rides the snapshot.** The renderable view, with no
+  withheld text, is stored in the response's primary snapshot. The Decision
+  record (`epistemic`) is stored beside `intent`.
+- **A roll resume uses the stored view**, rebound to the scene's sid when only
+  a rename moved it, whenever a view was composed. This closes 11-S3's gap
+  for any switch setting. With the switch off, nothing past it is read,
+  resolved, called or minted.
+- **The replay skip is the round driver's hint** (`_history_replays`). A
+  misread costs at most one refine whose answers the replay discards.
 
 ### 5.1 Which parts may be asked about
 
@@ -747,6 +837,47 @@ thing 03 refuses to cache.
   removed. The narrator's view wraps the narrator's evidence, so there is one
   path to the section.
 
+**Amended by 11-S3, against the landed 09 code** (plan
+`docs/superpowers/plans/2026-10-13-roadmap-11-s3-perspective-retrieval.md`):
+
+- The per-step hook is 09's `_round_history`, between `_pre_generation` and
+  `_prepare` in `_round_frames`, cached per (round, speaker). The legacy doors
+  (`post_chat` without rounds, the director turn, retry, regenerate) compose
+  the narrator and pass a narrator view. A roll resume still recomposes with
+  no history: storing the view on the response record is 11-S6's. A director
+  note seeds only the narrator's query; no character heard it.
+- `query.prepare(actor_ref=)` builds the actor's query. Its window is the
+  actor's presence intervals (`appearances.paths.observed_indices`, the rule
+  `actor.observed_history` now calls), counted over every post before hidden
+  posts and director notes are filtered. Its seeds are the present roster,
+  the scene's location, the actor's own relationship targets, and records
+  named in that window. Its catalog names no thread or commitment, its
+  `Query.scopes` drop `thread`, and `query.subjects` returns an actor query's
+  own seeds rather than re-deriving the narrator's joins (groups,
+  involvement). The structural relationship reason reads only pairs the actor
+  is in.
+- **An actor's retrieval is never reranked.** The rerank grades rendered
+  items, summaries included, which would be narrator-only material steering
+  an actor's pick.
+- **Residual (accepted by the user, 2026-10-14): a summary can steer which
+  scenes an actor's retrieval looks at.** Lexical and semantic scoring read 08's search documents, and a
+  document carries its scene's summary, so an actor's query can match a
+  summary's words. That admits or orders a scene; it never renders one:
+  classification still gates every slice, and a summary reaches an actor only
+  on a whole-scene grant (S1). Keeping summaries out of an actor's scoring
+  would need a second document set and vector cache per actor. **The same
+  holds for structural ranking:** the `shared_cast`, `actor` and `location`
+  reasons read the chronicle's cast and location for each candidate scene,
+  which is the narrator's record. It can rank or admit a scene for an actor;
+  it never renders one.
+- **The archive and recap are the narrator's**, so an actor's
+  `summary_omissions` are `{}`, and the narrator's are computed whenever the
+  narrator's view has items in either of its sections.
+- `classify` runs after retrieval in `routes/history_recall.gather_view`
+  (there is one retrieval round until 10). A failure narrows: the narrator
+  keeps 09's items unannotated (`epistemic.narrator_view`, also what
+  hand-built evidence uses), an actor gets no history.
+
 ### 6.2 The sections
 
 - **Narrator** (`actor_ref` `None` or `"grimoire"`):
@@ -818,6 +949,50 @@ leakage suite (section 8) adds needles that must be **absent**.
   the turn's prompt-log capture. The basis appears in the inspector and the
   capture, never in a message (`test_epistemic_basis_never_reaches_the_prompt`).
 
+**Amended by 11-S3, against the landed 09 code:**
+
+- **Tiers.** Within a tier the packer drops the largest section first, so
+  "narrator-only before recall, suspected before known" cannot be one tier. A
+  new tier, `HISTORY_ASIDE`, is first in `DROP_ORDER` and holds
+  `history_narrator_only` and `history_suspected` (which never share a
+  prompt); `HISTORY_RECALL` holds `history_recall` and `history_known`.
+- **Shedding.** All four shed per item through one generalized
+  `context/history.section`, which takes each section's frame, notes and
+  share; 09's pin on the functions that carry a shed hook is unchanged, and a
+  test holds each section's units to its items.
+- **Budget.** The two sections of a pair split 09's one ceiling: the first
+  (`history_recall`, or `history_known`) fits exactly as 09's section did,
+  and the second fits in what the first left. So the second gives way first
+  however small the ceiling, every item keeps 09's per-item share, and the
+  pair never spends more than 09's section would. (Amended by the code
+  review: reserving the second's share first starved the first at the
+  per-item floor.)
+- **Rendering.** An unsplit narrator slice reuses 09's own excerpt text, and
+  the annotation lines go directly after the header line, so an
+  `unattributed` item renders byte-identical to 09. An empty title is left
+  out, and an empty header with it. Each actor slice is labelled where its
+  access changes, and an unstamped player post is "The player" in an
+  actor's sections rather than the transcript's `You`, which under "You
+  were there" would read as the actor itself. A section that cannot render drops alone; the turn goes on.
+- **Layout.** `layout.COUPLED` maps each new id to `history_recall`: the
+  editor shows one row, each renders directly after its parent and is on
+  exactly when it is, and a stored entry for a coupled id is stripped on read.
+- **Refusal.** The view's campaign, scene, identity and actor are compared
+  with the compose's before anything renders. Every view on the turn path is
+  built from the run's scene identity, so a pass-through never trips it.
+- **The capture's accept** is offered on each classified post, never the
+  summary: a summary statement is a whole-scene one, which exposes the
+  title, the summary and every post, more than any one turn showed, so it
+  stays the Knowledge ledger's form, which shows all of it. It grants only a
+  post the turn's prompt carried (not shed, not dropped): on an actor's turn
+  a part it was not given shows its class alone and can only be marked
+  unaware, and a keyless part's unaware says it covers the whole scene.
+- **The inspector** carries the pair's classification rows on its first
+  section (each item once), with each present ref's per-part classes; an actor
+  compose with nothing visible keeps a `history_known` row saying why. The
+  live inspector composes the narrator, so it shows the narrator's
+  classification; an NPC's appears in its turn's capture.
+
 ### 6.5 Before 11 lands
 
 Until 11-C2 is implemented, 09-C3 renders history **only into
@@ -874,12 +1049,22 @@ by".
     this reason, `store/tracker/paths.py:44-47`), and a digest of the stored
     (raw) post text at write time.
   - `scene`: the whole scene, with `responses.transcript_hash` of the scene's
-    messages at write time (`store/responses.py:118`).
+    messages at write time (`store/responses.py:118`). **Amended by 11-S4:**
+    the digest also covers the scene's title and its chronicle summary and
+    line (`knowledge_scene.scene_digest`), because a whole-scene grant is what
+    makes those visible to an actor (4.3): an absorb, a rename or a corrected
+    line after the grant is text the user never confirmed.
 - **A `knows` or `suspects` entry matches only while its fingerprint holds**:
   the post's current variant and raw-text digest, or the scene's current
   transcript hash. A swipe, a message edit, a retcon or a hidden-post toggle
   makes it stop matching, which fails closed. An `unaware` entry keeps
   matching through such changes, since withholding is the safe direction.
+  **Ratified in the 11-S4 review:** the stored fingerprint stays on the raw
+  text, never on its prompt-phase regex view. A rule's `min_depth` /
+  `max_depth` makes a post's prompt view change as later posts land, so a
+  view digest would turn every grant stale during ordinary play. The view is
+  checked only at save (`expect[].shown`, `expect_shown`); a prompt rule
+  edited after a grant changes what that grant exposes without re-asking.
   The ledger lists a stale entry as "the text changed since; confirm again",
   with a one-click re-stamp that shows the current text.
 - `source` is `manual` (typed by the user) or `accepted` (a captured
@@ -951,6 +1136,12 @@ listed as a member is still someone "the Watch knows" plainly includes.
     computes the variant and digest itself; a client never supplies a
     fingerprint.
   - A malformed audience, status or subject is 400; an unknown scene is 404.
+- **Grants are about text the user saw (11-S4).** A `knows`/`suspects`
+  write carries the fingerprints the client displayed (`expect`, read from
+  `GET .../ledger/knowledge/scenes/{sid}`) as a precondition, and is refused
+  409 `moved` when the text changed between the read and the save; a re-stamp
+  is the same. A note edit keeps the stored fingerprint, and an `unaware`
+  becomes a grant only with a newly named subject.
 - **Accept from a capture.** The turn's prompt-log capture view offers, on a
   captured Decision answer or a classified part, "Mark as known / suspected
   / unaware to {name}". It posts the same `POST` with `source: "accepted"`.
@@ -971,7 +1162,10 @@ listed as a member is still someone "the Watch knows" plainly includes.
   `store/continuity/` and 12's investigation package explicitly.
 
 The ledger UI follows the list/detail page pattern (CLAUDE.md, Frontend): a
-"Knowledge" section with `.editor-list` rows, a read-only detail view (the
+"Knowledge" section whose rows sit in the ledger's context column (**amended
+by 11-S4**: the ledger owns the screen, so its records go in a
+`ColumnSection` rather than an `.editor-list` rail beside the column), a
+read-only detail view in main (the
 audience as a clickable chip, the scene as a chip to the scene, the status as
 a plain chip, the stale flag as a field hint, the note rendered as markdown),
 and an explicit Edit step. Tests cover row → view, Edit → form, and `+ New` →
@@ -1001,8 +1195,22 @@ form.
   `knowledge.copy_for_branch(cid, src_identity, dst_identity, rid_map,
   copied_keys)` copies post entries whose posts are all among the copied
   posts, re-keying `r-` ids through `rid_map` and keeping variant and digest.
-  Whole-scene entries are not copied: the branch's transcript hash differs
-  by construction. `branch.discard` drops the branch's entries.
+  Whole-scene grants are not copied: the branch's transcript hash differs
+  by construction. **Amended by 11-S1:** an `unaware` never consults its
+  fingerprint, so it travels narrowed to the kept posts, and a whole-scene
+  `unaware` travels as it is -- dropping one would show the branch a post
+  the user said nobody heard. `branch.discard` drops the branch's entries.
+- **Undo after a prune (11-S1):** `forget_audience` also retires every
+  journalled Undo that would restore an entry about the deleted audience,
+  so a same-named actor that later takes the id is not granted it.
+- **Accepted residual (11-S4 review): a group's stale member ref.** An actor
+  delete does not remove the deleted `characters:<id>` from a campaign-owned
+  group's `leader` or `members` (spec 07's membership, not this ledger). A
+  later actor created under the same id is therefore affiliated with that
+  group through `membership.affiliated` and matches the group's grants "as
+  of now" (7.3). The repo owner chose not to fix this here; a fix belongs in
+  07's actor-delete path, scrubbing or fencing the ref the way the journal's
+  membership offers are fenced.
 - **Campaign fork**: the file is campaign-local and travels with the fork
   copy, which keeps scene identities (`store/fork.py`).
 - **The frozen campaign** has no `knowledge.json`. An absent file is no
@@ -1012,7 +1220,9 @@ form.
 
 ### 8.1 Corpus
 
-`evals/cases/epistemic/` holds synthetic campaigns built with placeholder names
+`evals/epistemic/` (**amended by 11-S3:** not `evals/cases/epistemic/`, which
+would shadow `evals/cases.py`, as 09's suite went in `evals/history/`) holds
+synthetic campaigns built with placeholder names
 only (Seraphine, Mara, Winifred, Realm, Saltmarch), through the real store
 APIs as 09's suite builds its recipes. Each case is a store recipe, an
 evidence set, a perspective, and two sets of needles: propositions the actor
@@ -1066,11 +1276,46 @@ evidence set, a perspective, and two sets of needles: propositions the actor
   apart from accuracy. Its bar is set in the plan before the gate is run,
   and `epistemic_decide` stays `off` until a recorded run meets it.
   01a reports cost and latency beside it.
+- **Amended by 11-S6:** the Decision gate runs in `evals/run.py --epistemic
+  --live`, not `--gate`. `--gate` compares a frozen legacy parser, and this
+  decision has none.
+  - Each gated check (cases 7, 10, 15, 15b, and case 8's secret summary as a
+    summary negative) is a decide case. It is built in its own throwaway home
+    through the production eligibility and item builder, and run down the
+    chain `decide()` sends.
+  - **The bar, set before any run, is zero false-`known` answers over every
+    repeat**, with every gated part answered.
+  - `evals/epistemic/decision.py` holds it.
 - **Live** (`evals/run.py --live`, opt-in): generate the actor's reply and
   grade it for using a forbidden proposition (a needle check first, a
   decide-based judge second). **Leakage is reported separately from
   recall**: a configuration that recalls more but leaks more is a regression
   on the leakage line, whatever its recall line says.
+  **Amended by 11-S5** (plan
+  `docs/superpowers/plans/2026-10-14-roadmap-11-s5-live-leakage-evals.md`):
+  the arm is `evals/run.py --epistemic --live`, and 11-S5 ships the needle
+  check alone; the decide judge lands in 11-S6 with the `epistemic` route
+  (the user's decision, 2026-10-14: a decide call needs a route the routing
+  guard accepts, and that one arrives with 11-S6's call site). Because 11-S3
+  keeps every forbidden needle out of an actor's prompt, a reply can leak
+  only a token its prompt held, so the **reply-leak line is over exposed
+  replies**: a prompt holding a `live_forbidden` token (today case 3's
+  unmarked whisper). A forbidden token in a reply whose prompt never held it
+  is a harness fault, reported apart; an empty or failed reply is never
+  clean; recall is reported, never checked. Until the judge lands the line
+  is one informative item, which `--repeat` samples. Each asked check runs
+  as an ordinary live case in its own throwaway home (`runner.live`: the
+  real-home tripwire, metering, the ledger harvest and the three money
+  columns), and the question rides `compose_turn(appended=)` as the
+  player's line in the story.
+  **Amended by 11-S6:**
+  - The judge lands. Each exposed reply that answered is put to one decide
+    call: a predicate per secret, stated as a sentence beside its token
+    (`Check.facts`).
+  - The call runs on the `epistemic` route's one task, since an eval-only
+    task cannot be routed.
+  - A yes joins the reply-leak line. A judge that failed or left a predicate
+    unanswered leaves the reply unclean.
 
 ## Slices
 
@@ -1152,7 +1397,10 @@ stays off behind its switch until its gates pass.
   with `history_view`. Adds the three new sections and their templates, the
   annotation lines in `history_recall.j2`, the blanking-list entries, the
   perspective-mismatch refusal, the layout coupling, per-item shed hooks and
-  09's updated pin test, and the classify-only inspector rows. History stays
+  09's updated pin test, and the classify-only inspector rows. Adds the
+  capture view's "Mark as known / suspected / unaware to {name}" on each
+  classified part, posting 11-S4's route with `source: "accepted"` and
+  showing `unkeyed` (moved here from 11-S4, which landed first). History stays
   behind 09's `history_recall_depth` (off by default), so the golden is
   byte-identical off. This is the slice that ends the "no history in NPC
   prompts" rule.
@@ -1166,18 +1414,22 @@ stays off behind its switch until its gates pass.
 - **Delivers:** 11-C3 (full)
 - **Needs (this spec):** 11-S1 (H); 11-S3 (S: classified parts in the
   capture view — until then there is nothing to accept from, and the ledger's
-  `+ New` form is the only writer)
+  `+ New` form is the only writer). **Amended when 11-S4 landed before
+  11-S3:** this slice delivers the route side of accept (`source:
+  "accepted"`, `unkeyed`, the keyless `unaware` stored whole-scene); the
+  capture view's "Mark as known / suspected / unaware" button moves to 11-S3
+  for classified parts and to 11-S6 for Decision answers, each posting this
+  slice's route
 - **Needs (other specs):** none
 - **Needs (slices):** 11-S1 (H), 11-S3 (S)
 - **Scope:** Adds the three `routes/ledger.py` routes: `ensure_identity`
   under the campaign lock, 409 `busy` on `UnreadableError`, server-side post
   key validation and fingerprinting, 400 `unkeyed`, and journalling as
   `manual`. Adds the frontend Knowledge section on the list/detail pattern,
-  with the stale-entry flag and re-stamp. Adds "Mark as known / suspected /
-  unaware" on classified parts in the capture view.
+  with the stale-entry flag and re-stamp.
 - **Acceptance:** section 11's route tests (legacy scene, `busy`, invalid key,
-  `unkeyed`, unknown scene, journal and undo), the frontend list/detail tests,
-  and the accept posting the right subject.
+  `unkeyed`, unknown scene, journal and undo) and the frontend list/detail
+  tests.
 - **Size:** M
 
 ### 11-S5: Live leakage evals
@@ -1194,7 +1446,8 @@ stays off behind its switch until its gates pass.
   actor reply graded for using a forbidden proposition, with a needle check
   and a decide-based judge, including case 3 (whisper without override),
   which only the live arm can catch. Fixtures are synthetic stores with
-  placeholder names.
+  placeholder names. **Amended by 11-S5:** the needle check only; the judge
+  moves to 11-S6 (8.2's amendment).
 - **Acceptance:** the live arm runs on the synthetic corpus and reports a
   separate leakage line. Its offline graders run in `pytest backend`.
 - **Size:** S
@@ -1202,7 +1455,8 @@ stays off behind its switch until its gates pass.
 ### 11-S6: The Decision stage
 
 - **Delivers:** 11-C1 (full); 11-C4 (full: the Decision gate seeded from
-  cases 7, 10 and 15, with the false-`known` rate as its leakage line)
+  cases 7, 10 and 15, with the false-`known` rate as its leakage line, and
+  **the live arm's decide judge**, moved here from 11-S5)
 - **Needs (this spec):** 11-S3 (H); 11-S5 (S: the live arm the play gate's
   leakage report uses); 11-S4 (S: accepting a Decision answer — until then
   answers are captured but cannot be accepted)
@@ -1224,16 +1478,29 @@ stays off behind its switch until its gates pass.
   caps (`RoundBudget` on the round record), `EPISTEMIC_CEILING_S`, the replay
   skip, and the `history_view` stored on the response record for a roll
   resume. Adds the `epistemic_decide` key (default `off`, hidden in the UI
-  until the play gate is ratified) and seeds the `--gate` corpus.
+  until the play gate is ratified) and seeds the `--gate` corpus. Adds the
+  capture view's accept on a captured Decision answer (moved here from
+  11-S4).
   The `epistemic` route lands here with its call site if 02 has not already
   landed it: `test_routing_guard` fails a route whose task nothing calls, and
   `test_operation_guard` requires the flip to `decide` in the change whose
   call site decides. That rule forces the route and this call site into one
-  slice. Pins `epistemic_access.build_items` in the regex guard.
+  slice. Pins `epistemic_access.build_items` in the regex guard. **Amended by 11-S5:** also
+  the live leakage arm's decide judge on that route (8.2's amendment), each
+  live case stating its forbidden facts as sentences beside their tokens.
+- **Amended by 11-S6:** delivered as 5's and 8.2's amendments say.
+  - Escalation lands off.
+  - The play gate's `--play epistemic` feature lands with the PR that exposes
+    the switch.
 - **Acceptance:** section 11's "Decision stage" tests (a call reaches a meter,
   the gate, the caps, each 5.3 row, deadline overrun with no `_noting`, soft
   resolution and exception skips, no call on a replay or reroll). The
-  `decide-epistemic-access` gate case passes offline. The switch stays `off`.
+  `decide-epistemic-access` gate case passes offline. The switch stays `off`. **Amended
+  by 11-S5:** and the live leakage arm gains its decide judge on the
+  `epistemic` route: each live case states its forbidden facts as sentences
+  beside their tokens, which the judge reads to recognise a paraphrase a
+  token check cannot see; the judge's verdict joins the reply-leak line,
+  still apart from recall.
 - **Size:** L
 
 ## 9. Contract
@@ -1258,7 +1525,9 @@ stays off behind its switch until its gates pass.
   - the Decision stage runs only for actor perspectives, only on eligible
     parts with a structural channel, within 8 items per step and 16 per
     round, never on a replay, and passes `escalation=` as 02-C5a's policy
-    requires;
+    requires (**amended by 11-S6:** the task landed with escalation off, as
+    every task does, so it passes `escalation=` exactly when its policy
+    escalates, which today is never);
   - it keeps every 02-C6 rule: soft resolution, failure never fails the
     turn, asked once per contribution, off byte-identical, one total named
     deadline (`EPISTEMIC_CEILING_S`) with no `_noting`, `response_id`
@@ -1308,8 +1577,11 @@ stays off behind its switch until its gates pass.
 - The cases of 8.1.
 - The offline needle-absence grader runs in `pytest backend`.
 - The Decision gate runs through `evals/run.py --gate`, with channel-present
-  negatives and the false-`known` rate as its leakage line.
-- Live leakage is reported apart from recall.
+  negatives and the false-`known` rate as its leakage line (**amended by
+  11-S6:** through `evals/run.py --epistemic --live`, `evals/epistemic/decision.py`;
+  see 8.2).
+- Live leakage is reported apart from recall (**amended by 11-S5:** the
+  needle check in 11-S5, the decide judge in 11-S6).
 - 12-C2c's eval gate reuses the graders.
 
 ## 10. Interaction with repo rules
@@ -1331,7 +1603,16 @@ stays off behind its switch until its gates pass.
 - **Regex prompt guard**: the heuristic rule needs a scene read and a
   template render in one body, which `epistemic.py`'s renderer does not have,
   and the Decision item builder is 02-C5a's `store/epistemic_access.py`,
-  outside the scanned directories. So both are **pinned by name**:
+  outside the scanned directories. So both are **pinned by name**
+  (**amended by 11-S2:** the pinned function is `epistemic._read_scene`, which
+  reads the scene and recomputes its prompt view; the slice renderer is 09's
+  `budget._excerpt` over 09's texts and never views, so it cannot satisfy the
+  pin; **amended by 11-S6:** the Decision item builder,
+  `store/context/epistemic_items`, is held by a source test instead. It reads
+  no transcript, only slice sources, which are 08's prompt-phase view, and
+  the actor's own state. `test_items_read_the_prompt_view_never_the_display`
+  plants a display-only rule and a prompt rule and checks which one reaches
+  the sent item):
   `epistemic`'s slice renderer, and `epistemic_access.build_items`, with the
   guard's `_sources` extended to `store/epistemic_access.py` if 02-C5a has not
   already done so.
@@ -1423,7 +1704,11 @@ stays off behind its switch until its gates pass.
 - `test_epistemic_basis_never_reaches_the_prompt`, extended to override
   notes;
 - `history_view=None` is byte-identical to the baseline (a golden in the
-  style of `test_lore_golden.py`, recorded before 09 lands);
+  style of `test_lore_golden.py`, recorded before 09 lands); **amended by
+  11-S3:** that golden is `fixtures/lore_golden.json` itself, which predates
+  09 and already pins every scenario with no history, and a test adds depth
+  on with no view (`test_off_is_identical_and_never_prepares_or_retrieves`)
+  and with an empty one (`test_an_empty_view_sends_what_depth_off_sends`);
 - turning `history_recall` off in the layout removes all four sections;
 - each section sheds per item, and the drop order holds;
 - an item appears in `history_recall` or `history_narrator_only`, never both.
@@ -1442,7 +1727,8 @@ The capture view's accept posts the right subject and shows `unkeyed`.
 4. The Decision stage is off by default, gated on its false-`known` rate,
    capped per step and per round, and fail-soft.
 5. The offline leakage grader passes in `make check`, and the live suite
-   reports leakage apart from recall.
+   reports leakage apart from recall (**amended by 11-S5:** its needle check
+   from 11-S5, its decide judge from 11-S6).
 
 ## 12. Non-goals
 
@@ -1516,7 +1802,13 @@ Points for the plan to confirm against the landed specs:
 7. **Per-step retrieval cost** (6.1). Accept N retrievals per round, or cap
    history recall to the first K actor steps of a round? *Recommendation:*
    accept it, behind `history_recall_depth` (off by default), and report the
-   per-round embed count in 09's history row so the cost is visible.
+   per-round embed count in 09's history row so the cost is visible. **Resolved
+   (the user, 2026-10-14):** accepted, and done. Each step's view carries its
+   round's history cost so far (`EpistemicView.round_cost`: retrievals, one
+   per speaker that recalled, and the query embeddings they sent), set by the
+   round driver and by a legacy door as a one-step round, and the history row
+   shows it ("This round: 3 history retrievals, 2 query embeddings"). The
+   live preview composes no round and shows none.
 
 ## 15. Review record
 

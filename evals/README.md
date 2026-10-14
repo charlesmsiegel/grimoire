@@ -620,6 +620,78 @@ What it cannot show: whether a real library retrieves well. A synthetic
 corpus is evidence for a choice of model or options; the recall thresholds
 stay "tune against the inspector".
 
+## The epistemic leakage suite (roadmap 11)
+
+`evals/epistemic/` is spec 11 §8.1's offline arm: each case in `cases.py`
+plays its source scenes into a fresh store through `synth.py`'s recipes
+(the classifier tests use the same ones), builds the view each checked reader
+would get, composes that reader's prompt, and grades it with `graders.py`:
+every forbidden needle absent from every message, every allowed needle
+present, and a placed needle in its own history section and no other. It is
+deterministic, needs no model, and runs inside `pytest backend`
+(`test_epistemic_evals.py`). Cases 7, 15 and 15b settle offline as withheld,
+as every unknown part does; what the Decision stage answers about them is the
+live Decision gate's (below). Case 3 is visible offline by design, and only a
+live reply could show the perception contract holding (11-S5).
+
+`--epistemic` runs the suite through `evals/run.py`, and `--epistemic --live`
+adds its live arm (`evals/epistemic/live.py`, roadmap 11-S5):
+
+    backend/.venv/bin/python evals/run.py --epistemic --live --repeat 3
+    backend/.venv/Scripts/python.exe evals/run.py --epistemic --live --repeat 3
+
+Every check with an `ask` -- Seraphine's line to one NPC, in the story --
+runs as an ordinary live case in its own throwaway home (`runner.live`: the
+real-home tripwire, metering, the ledger harvest and the three money
+columns), on the model the app routes `chat` to (`--provider`/`--model`
+override it). Replies are graded on planted tokens only, and the report keeps
+three lines apart:
+
+- **Prompt leaks:** forbidden tokens in any reader's prompt, offline or live.
+  Zero by construction since 11-S3; the line proves it stays so.
+- **Reply leaks:** over *exposed* replies only, those whose prompt held a
+  `live_forbidden` token (case 3's whisper, which Mara's prompt carries
+  because she was there, and which she could not have heard). A forbidden
+  token in a reply whose prompt never held it is a harness fault, not a
+  leak. An empty or failed reply is never clean, and "k of m answered" says
+  how many replies the line stands on.
+- **Recall:** the share of allowed tokens a reply uses. Reported, never
+  checked: more recall with more leaks is a regression on the leakage line.
+
+A token check cannot see a paraphrase, so each exposed reply that answered is
+also **judged** (11-S6). The judge is one decide call with a predicate per
+secret: "does the reply state, or clearly imply, this?", where each secret is
+the check's `facts` sentence beside its token.
+
+- A yes joins the reply-leak line.
+- A judge that failed or left a predicate unanswered leaves its reply
+  unclean ("judged: k of m exposed replies").
+- The judge asks on the `epistemic` route's one task (`epistemic-access`),
+  because a task nothing under `routes/` names cannot be routed. It runs in
+  its own throwaway home and is metered like every live case.
+
+The reply-leak line is still one exposed case, which `--repeat` samples.
+
+**The Decision gate** (`evals/epistemic/decision.py`, 11-S6) asks what the
+Decision stage answers about the corpus's gated parts:
+
+- Gated parts: case 7 (told later: gold permissive), case 10 (a legacy
+  scene: permissive), case 15 (met a teller later, not told: withheld), case
+  15b (a legacy cast member who had gone: withheld), and case 8's secret
+  summary (withheld).
+- Each runs in its own throwaway home through the production eligibility and
+  item builder, down the chain `decide()` sends. The task's escalation is
+  off, so that chain is production's.
+- **The leakage line is the false-`known` rate**: a permissive answer where
+  the gold withholds, over the negatives answered. It is reported apart from
+  accuracy.
+- Its bar, set before any run: **zero false-`known` answers over every
+  repeat**, and every gated part answered.
+- `epistemic_decide` stays off until a recorded run meets that bar and the
+  switch's play gate is ratified (spec 11 §5.4).
+- Offline, `pytest backend` holds that each gated part is one production
+  would ask about, and grades canned answers.
+
 ## How a case works
 
 ```

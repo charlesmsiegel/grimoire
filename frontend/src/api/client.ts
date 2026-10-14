@@ -32,7 +32,8 @@ import {
   type MonthlyCosts,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkGuards, type ForkReport,
-  type CharacterDetail, type ChronicleLineSave,
+  type CharacterDetail, type ChronicleLineSave, type KnowledgeEdit, type KnowledgeList,
+  type KnowledgeSave, type KnowledgeScene,
   type Scene, type ResponseRecord, type ResponseSwipe, type PassageCharacterDraft, type PassageCharacterInput, type PassageCharacterSave,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
@@ -1635,6 +1636,21 @@ export const api = {
 
   ledgerSaveChronicleLine: (cid: string, sid: string, body: ChronicleLineSave) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/chronicle/${sid}`, body),
+
+  /** Knowledge overrides (roadmap 11). `fresh`, like the ledger: re-read right
+   *  after a write, and a shared read could be older than the write. */
+  ledgerKnowledge: (cid: string) =>
+    request<KnowledgeList>("GET", `/api/campaigns/${cid}/ledger/knowledge`, undefined,
+                           { fresh: true }),
+  ledgerKnowledgeScene: (cid: string, sid: string) =>
+    request<KnowledgeScene>("GET", `/api/campaigns/${cid}/ledger/knowledge/scenes/${sid}`,
+                            undefined, { fresh: true }),
+  ledgerCreateKnowledge: (cid: string, body: KnowledgeSave) =>
+    request<{ id: string }>("POST", `/api/campaigns/${cid}/ledger/knowledge`, body),
+  ledgerSaveKnowledge: (cid: string, kid: string, body: KnowledgeEdit) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/knowledge/${kid}`, body),
+  ledgerDeleteKnowledge: (cid: string, kid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/ledger/knowledge/${kid}`),
 
   /** The continuity review (capstone §12, §21).
    *

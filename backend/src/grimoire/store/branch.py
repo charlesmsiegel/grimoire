@@ -30,7 +30,18 @@ from __future__ import annotations
 import logging
 import uuid
 
-from . import atomic, authors_notes, checks, dice, locks, responses, revision, rolls, scene_ids
+from . import (
+    atomic,
+    authors_notes,
+    checks,
+    dice,
+    knowledge,
+    locks,
+    responses,
+    revision,
+    rolls,
+    scene_ids,
+)
 from .appearances import paths as appearances_paths
 from .audit import baselines
 from .frontmatter import dump_frontmatter
@@ -174,6 +185,10 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
     post means no cut. The whole build is one campaign-lock hold.
     """
     with locks.campaign_lock(cid):
+        # Before anything is written: the knowledge copy below reads the file
+        # strictly, and a garbled one must refuse the branch (409) rather than
+        # build half a sibling or drop a statement that withholds.
+        knowledge.require_readable(cid, intact=True)
         scene = scenes_read.read_scene(cid, sid)
         meta, messages = scene["meta"], scene["messages"]
         if str(meta.get("done", "")).lower() == "true":
@@ -218,6 +233,12 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
             # under the reissued response ids, so Restore original works in
             # the sibling as it did in the source.
             regex_rewrites.copy_for_branch(cid, src_ident, new_ident, rid_map)
+            # Statements about kept posts, under the reissued ids (spec 11
+            # §7.5); whole-scene ones cannot hold for a shorter transcript.
+            knowledge.copy_for_branch(
+                cid, src_ident, new_ident, rid_map,
+                {(knowledge.post_key(m), knowledge.post_part(m))
+                 for m in kept if knowledge.post_key(m)})
             baselines.copy_baseline(cid, sid, new_sid)
             tracker_records.clone(cid, src_ident, new_ident, rid_map)
             # The scene's author's note, under the sibling's own identity
@@ -271,6 +292,11 @@ def discard(cid: str, sid: str) -> None:
             regex_rewrites.drop(cid, identity)
         except Exception:
             log.warning("branch: could not drop the stored rewrites of %s/%s", cid, sid,
+                        exc_info=True)
+        try:
+            knowledge.drop_scene(cid, identity)
+        except Exception:
+            log.warning("branch: could not drop the knowledge entries of %s/%s", cid, sid,
                         exc_info=True)
     try:
         baselines.drop_baseline(cid, sid)
