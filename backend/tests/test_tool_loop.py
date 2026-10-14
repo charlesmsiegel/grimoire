@@ -129,6 +129,23 @@ def test_a_capture_sees_each_turn_with_its_definitions():
     assert second[1]["calls"] == [] and first[2] == "vendor/active"
 
 
+def test_a_failed_turn_is_captured_against_the_attempt_that_failed():
+    """A turn the fallback took and failed is filed under the fallback's
+    model, and with the failure's kind and status only."""
+    captured = []
+
+    async def capture(messages, outcome, target):
+        captured.append((outcome, target.model))
+
+    failing = ToolTurn(fallback=True, error=LLMError("rate_limit", "slow down", status=429))
+    result = _run(FakeToolTurns(("", [("read", {})]), failing), capture=capture,
+                  resolved=_resolved(wire.Chain(PRIMARY, SPARE)))
+    assert result.status == "failed"
+    outcome, model = captured[-1]
+    assert model == "claude-spare"
+    assert outcome == {"finish": "error", "error_kind": "rate_limit", "error_status": 429}
+
+
 def test_a_failing_capture_costs_only_itself():
     async def capture(messages, outcome, target):
         raise RuntimeError("the prompt log is unwell")

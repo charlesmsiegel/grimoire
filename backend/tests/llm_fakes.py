@@ -1005,6 +1005,9 @@ class ToolTurn:
     pause: float = 0.0
     #: Display reasoning fed to the holder before any delta.
     thinking: str = ""
+    #: Raised once the attempt is stamped (`fallback` says which), as a
+    #: facade whose last attempt failed raises: a fallback's failure.
+    error: BaseException | None = None
 
 
 class FakeToolTurns(FakeLLM):
@@ -1056,6 +1059,8 @@ class FakeToolTurns(FakeLLM):
                               "tool_choice": tool_choice, "schema": schema})
         if isinstance(step, BaseException):
             raise step
+        if step.error is not None:
+            raise step.error
         if step.delay:
             await asyncio.sleep(step.delay)
         found = usage.get(tool_calls.KEY) if usage is not None else None

@@ -357,11 +357,12 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
         # Nothing to check against, but a tool thread may still be running.
         state.freeze()
     # A tool thread the loop stopped waiting on still reads the store through
-    # `store.home()`. The run holds the root still until it returns (a move
-    # is refused while a run is live), as a maintenance run holds it until
-    # its thread does: frozen, it records nothing, but it must not read
-    # another library.
-    await anyio.to_thread.run_sync(execute.drain)
+    # `store.home()`. The run holds the root still while it does (a move is
+    # refused while a run is live): frozen, it records nothing, but it must
+    # not read another library. Bounded, so a stalled filesystem cannot hold
+    # the run, its campaign and the root forever (`DRAIN_S`).
+    if not await anyio.to_thread.run_sync(execute.drain, investigation_budget.DRAIN_S):
+        log.warning("investigation %s ended with a tool thread still running", run_id)
     filed = await anyio.to_thread.run_sync(_filed, state.cid, run_id)
     # An unreadable ledger leaves the loop's own turns, which it handed back.
     rows: Sequence[dict] = filed if filed is not None else (

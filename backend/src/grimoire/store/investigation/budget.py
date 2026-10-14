@@ -37,6 +37,13 @@ from ..inference import resolved as inference_resolved
 
 ENTRIES: tuple[str, ...] = ("turn", "continuity", "question")
 
+#: How long a run waits, at most, for a tool thread its loop stopped waiting
+#: on before it ends (`routes.investigation`): long enough for a slow read
+#: of a local store to return, so the run holds the root still until it has,
+#: and short of a stalled filesystem holding the campaign and the store root
+#: forever. A thread still out past it is logged; frozen, it records nothing.
+DRAIN_S = 30.0
+
 #: E1's total deadline, in seconds (02's `PLAN_CEILING_S`).
 E1_WALL_S = 20.0
 

@@ -288,6 +288,18 @@ def _fact_chain(cid: str, rid: str) -> list[dict]:
              "scene": _text(table[fid].get("scene"))} for fid in chain]
 
 
+def _closed(cid: str) -> set[str]:
+    """The scenes a branch closed: no history (`_scene_rows`)."""
+    return {r["id"] for r in scenes_read.list_scenes(cid) if r.get("closed_by")}
+
+
+def _unclosed(cid: str, rows: list[dict]) -> list[dict]:
+    """`rows` without those a closed branch's scene wrote: a beat, a fact or a
+    relationship change from the sibling that was not kept is no history."""
+    closed = _closed(cid)
+    return [r for r in rows if r.get("scene") not in closed] if closed else rows
+
+
 def record_history(cid: str, ref: object) -> list[dict]:
     """The latest `HISTORY_ROWS` rows of a record's history: a thread's or
     commitment's beats in play order, a fact's supersession chain, or a
@@ -302,19 +314,19 @@ def record_history(cid: str, ref: object) -> list[dict]:
             raise NotFound(ref)
         a_ref, b_ref = (f"{k}:{i}" for k, i in sides)
         rows = relationship_history.for_pair(cid, a_ref, b_ref)
-        return [{"scene": _text(r.get("scene")), "kind": _text(r.get("kind")),
-                 "label": _text(r.get("label")), "before": r.get("before"),
-                 "after": r.get("after")}
-                for r in rows if isinstance(r, dict)][-HISTORY_ROWS:]
+        return _unclosed(cid, [{"scene": _text(r.get("scene")), "kind": _text(r.get("kind")),
+                                "label": _text(r.get("label")), "before": r.get("before"),
+                                "after": r.get("after")}
+                               for r in rows if isinstance(r, dict)])[-HISTORY_ROWS:]
     prefix, rid = split(ref, ("thread", "commitment", "fact"))
     if prefix == "fact":
-        return _fact_chain(cid, rid)[-HISTORY_ROWS:]
+        return _unclosed(cid, _fact_chain(cid, rid))[-HISTORY_ROWS:]
     rec = effective.records(cid, prefix).get(f"{prefix}:{rid}")
     if rec is None:
         raise NotFound(ref)
     beats = effective.play_ordered([b for b in rec.get("beats") or [] if isinstance(b, dict)])
-    return [{"scene": _text(b.get("scene")), "text": _text(b.get("text"))}
-            for b in beats][-HISTORY_ROWS:]
+    return _unclosed(cid, [{"scene": _text(b.get("scene")), "text": _text(b.get("text"))}
+                           for b in beats])[-HISTORY_ROWS:]
 
 
 def related(cid: str, ref: object) -> dict:
@@ -329,8 +341,9 @@ def related(cid: str, ref: object) -> dict:
     links = [{"a": link["a"], "relation": link["relation"], "b": link["b"]}
              for link in effective.links(cid) if full in (link.get("a"), link.get("b"))]
     touched = involvement.of(cid, [full]).get(full, {}) if prefix != "event" else {}
+    closed = _closed(cid)
     return {"links": links[-HISTORY_ROWS:],
-            "scenes": list(touched.get("scenes") or [])[-HISTORY_ROWS:],
+            "scenes": [s for s in touched.get("scenes") or [] if s not in closed][-HISTORY_ROWS:],
             "actors": [_actor_name(cid, a) for a in touched.get("actors") or []][:HISTORY_ROWS]}
 
 

@@ -222,6 +222,15 @@ describe("AskHistory", () => {
       + "Over budget: an investigation still runs, and adds to it.")).toBeInTheDocument();
   });
 
+  it("reads the budget again once a question settles", async () => {
+    ask({ question: "Who keeps the harbour ledger?",
+          outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
+                     result: null, trace: TRACE } });
+    expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
+    // Read on mount, and again after the run that may have added to it.
+    expect(mocked(api.getCampaignBudget).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("follows a running question with the switch off, and starts none", async () => {
     localStorage.setItem(QUESTION_KEY,
                          JSON.stringify({ attempt: "a-old", question: "Who keeps the ledger?" }));

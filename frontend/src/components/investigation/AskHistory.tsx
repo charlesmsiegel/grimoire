@@ -178,7 +178,7 @@ export function AskHistory({ cid, root, onClose, canAsk = true }:
           <button type="button" className="subtle" onClick={forget}>Forget it</button>
         </div>
       )}
-      {canAsk ? <BudgetLevel cid={cid} />
+      {canAsk ? <BudgetLevel cid={cid} refresh={asking} />
         : <p className="field-hint">Asking is switched off in Settings.</p>}
       {error && <p className="continuity-error" role="alert">{error}</p>}
       {outcome && (

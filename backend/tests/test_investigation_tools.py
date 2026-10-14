@@ -437,6 +437,21 @@ def test_a_closed_branch_scene_is_not_found(run, monkeypatch):
     assert sid not in env["items"][0]["text"]
 
 
+def test_a_closed_branchs_rows_are_no_history(run, monkeypatch):
+    """A beat or fact a discarded branch wrote is left out of a record's
+    history, as its scene is left out of every scene reader."""
+    kept, gone = played(run.cid, "The docks"), played(run.cid, "The ferry")
+    plot.set_movement(run.cid, "ledger", "silver ledger", "open", "Mara hides it.", kept)
+    plot.set_movement(run.cid, "ledger", "silver ledger", "open", "Mara burns it.", gone)
+    real = readers.scenes_read.list_scenes
+
+    def closed(cid):
+        return [{**r, "closed_by": kept} if r["id"] == gone else r for r in real(cid)]
+    monkeypatch.setattr(readers.scenes_read, "list_scenes", closed)
+    beats = _call(run, "get_record_history", ref="thread:ledger")[1]["items"][0]["text"]
+    assert "Mara hides it." in beats and "Mara burns it." not in beats
+
+
 def test_one_post_longer_than_the_result_is_cut_not_skipped(run):
     sid = played(run.cid, text="opening")
     scenes.append_message(run.cid, sid, "assistant", "Mara speaks. " + "word " * 2000)

@@ -4,8 +4,8 @@
  *  a run's own spend ceiling -- so this line is how the reader starting one
  *  decides with the number in front of them.
  *
- *  Read once per campaign. A read that fails says so rather than going
- *  quiet, since its absence would read as "no budget". */
+ *  Read per campaign, and again on `refresh`. A read that fails says so
+ *  rather than going quiet, since its absence would read as "no budget". */
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { CampaignBudget } from "../../api/types";
@@ -24,7 +24,10 @@ export function budgetSentence(b: CampaignBudget): string {
   return text;
 }
 
-export function BudgetLevel({ cid }: { cid: string }) {
+/** `refresh` re-reads when it changes: a panel that stays mounted across
+ *  runs passes something that moves when one settles, so the next start is
+ *  shown what the last one spent. */
+export function BudgetLevel({ cid, refresh }: { cid: string; refresh?: unknown }) {
   const [read, setRead] = useState<{ cid: string; data: CampaignBudget | "failed" } | null>(null);
   useEffect(() => {
     let live = true;
@@ -32,7 +35,7 @@ export function BudgetLevel({ cid }: { cid: string }) {
       .then((data) => { if (live) setRead({ cid, data }); })
       .catch(() => { if (live) setRead({ cid, data: "failed" }); });
     return () => { live = false; };
-  }, [cid]);
+  }, [cid, refresh]);
   const here = read?.cid === cid ? read.data : null;
   if (here === null) return null;
   const level = here === "failed" ? "unknown" : here.level;

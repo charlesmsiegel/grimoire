@@ -360,6 +360,20 @@ def test_e3_files_a_failed_turn_without_the_providers_words(client):
     assert "sk-secret" not in text
 
 
+def test_e3_waits_for_its_tool_threads_but_never_past_the_drain_bound(client, monkeypatch):
+    """The run holds the root while a thread it abandoned may still read, and
+    a thread that never returns does not hold it past `DRAIN_S`."""
+    cid, _sid = _campaign(client)
+    _on(client)
+    waited = []
+    monkeypatch.setattr(investigation.tool_calls.Registered, "drain",
+                        lambda self, timeout=None: waited.append(timeout) or False)
+    _install(client, FakeToolTurns(("", [("finish_insufficient_evidence", {"reason": "x"})])))
+    run = _settled(client, cid, _ask(client, cid))
+    assert run["result"]["outcome"]["state"] == "insufficient_evidence"
+    assert waited == [investigation.investigation_budget.DRAIN_S]
+
+
 def test_e3_with_no_read_citation_is_insufficient_evidence(client):
     cid, sid = _campaign(client)
     _on(client)
