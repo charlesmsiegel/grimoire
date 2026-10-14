@@ -75,22 +75,30 @@ def test_an_incumbent_that_errored_is_no_baseline(records):
     assert runner.gate(broken) == {"rp": False, "continuity": False, "question": False}
 
 
-#: How long the slowed probe sleeps: well past any offline arm's own time.
-PROBE_S = 2.0
+def test_an_arms_wall_time_is_its_own(monkeypatch):
+    """The hidden-route probe runs after the arm and is not its latency.
+    The arm is stubbed to return at once, so the recorded time can only
+    pass the probe's sleep if the probe was timed -- on any runner speed."""
+    probed = []
 
-
-def test_an_arms_wall_time_is_its_own(records, monkeypatch):
-    """The hidden-route probes run after the arm and are not its latency."""
-    slow = runner._hidden_route
+    async def arm(case, planted, **_kw):
+        return {"state": "completed", "result": None, "trace": {}}
 
     async def probe(planted):
+        probed.append(planted.cid)
         await runner.asyncio.sleep(PROBE_S)
-        return await slow(planted)
+    for name in cases.ARMS["question"]:
+        monkeypatch.setitem(runner.ARM_FNS, name, arm)
     monkeypatch.setattr(runner, "_hidden_route", probe)
     monkeypatch.setattr(runner.cases, "CASES",
                         tuple(c for c in cases.CASES if c.id == "thread-change-question"))
     _results, timed = runner.run_all(selected=("question",))
-    assert len(timed) == 2 and all(r["wall_ms"] < PROBE_S * 1000 for r in timed)
+    assert len(probed) == len(timed) == 2
+    assert all(r["wall_ms"] < PROBE_S * 1000 for r in timed)
+
+
+#: How long the probe sleeps: what an arm's time would hold if it were timed.
+PROBE_S = 1.0
 
 
 def test_the_gate_fails_without_the_margin(records):
