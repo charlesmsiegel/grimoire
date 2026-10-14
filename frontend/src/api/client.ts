@@ -173,6 +173,12 @@ export class ApiError extends Error {
   }
 }
 
+/** A detached run SEEN to end other than landed: an `ApiError`, so every
+ *  caller reads it as before, and the one sign that its status is the run's
+ *  own failure rather than a request that did not answer -- a 5xx here is
+ *  the provider's, and the run it names is over. */
+export class RunEndedError extends ApiError {}
+
 /** A continuity Refresh refused by its own POST (409 `busy` while the store
  *  moves, 404 for a campaign that is not there): no run was started, so no
  *  sweep saved anything (§26). Told apart from the run's own failures by
@@ -611,9 +617,9 @@ async function awaitRunAt(base: string, started: RunHandle,
   onSettled?.();
   if (run.state === "landed") return run;
   const error = run.error ?? undefined;
-  const failure = new ApiError(error?.status ?? 409,
-                               error?.detail ?? `the run ended ${run.state}`,
-                               error?.kind ?? run.state, error);
+  const failure = new RunEndedError(error?.status ?? 409,
+                                    error?.detail ?? `the run ended ${run.state}`,
+                                    error?.kind ?? run.state, error);
   // The same announcement `requestRaw` makes for a non-2xx, and it has to be
   // repeated here because a detached failure never goes through that branch:
   // the 202 was a success and the provider failed minutes later. Without it a

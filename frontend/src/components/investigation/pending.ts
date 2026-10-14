@@ -6,7 +6,7 @@
  *
  *  Every storage touch is wrapped: storage can throw (a private window,
  *  blocked site data), and a panel that cannot remember still works. */
-import { ApiError } from "../../api/client";
+import { ApiError, RunEndedError } from "../../api/client";
 
 /** Where a run is remembered: per library (`root`, the store root a config
  *  read reports) and per campaign. A campaign id is a slug, and another
@@ -33,9 +33,11 @@ export function writePending(key: string, value: object | null): void {
   } catch { /* in memory only */ }
 }
 
-/** Whether a failure settles the run. An `ApiError` is a reply -- the start
- *  refused, the run ended failed, or it is gone (404) -- so the record goes.
- *  Anything else carried no reply (a lost 202, a poll that ran out of
- *  patience over a run still going) and proves nothing: the record stays, for
- *  a remount or a retry to pick the same run back up. */
-export const settles = (err: unknown) => err instanceof ApiError;
+/** Whether a failure settles the run, so its record goes: the run seen to
+ *  end (`RunEndedError`), or the server answering with a refusal or a gone
+ *  run -- any 4xx (a refused start, a 404). Anything else proves nothing: no
+ *  reply at all (a lost 202), or a 5xx after the client's retries ran out,
+ *  which says the server could not answer, not that the run is over. The
+ *  record stays, for a remount or a retry to pick the same run back up. */
+export const settles = (err: unknown) =>
+  err instanceof RunEndedError || (err instanceof ApiError && err.status < 500);

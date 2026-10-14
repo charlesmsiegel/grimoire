@@ -10,7 +10,7 @@ import json
 import pytest
 
 from grimoire import tool_calls
-from grimoire.store import campaigns, entities, facts, locks, plot, regex, scenes
+from grimoire.store import campaigns, chronicle, entities, facts, locks, plot, regex, scenes
 from grimoire.store.history import retrieval
 from grimoire.store.investigation import readers, state, tools
 from tests.history_fixtures import absorbed, actor, played
@@ -387,6 +387,31 @@ def test_a_summary_counts_as_read(run):
     _, env = _call(run, "get_scene_summary", scene=f"scene:{sid}")
     assert "silver ledger" in env["items"][0]["text"]
     assert sid in run.inspected
+
+
+def test_a_summary_with_no_prose_still_returns_its_header_facts(run):
+    """A record whose summary is blank but whose date or place is known still
+    answers with what it holds (the tool's contract), and counts as read."""
+    sid = played(run.cid)
+    chronicle.absorb(run.cid, {"id": sid, "one_line": "", "summary": "", "keywords": [],
+                               "cast": [], "location": "the harbour steps", "date": ""})
+    _, env = _call(run, "get_scene_summary", scene=f"scene:{sid}")
+    assert "the harbour steps" in env["items"][0]["text"]
+    assert sid in run.inspected
+
+
+def test_a_summary_rewritten_after_it_was_read_is_no_longer_read(run):
+    """A re-absorb after the summary was read takes away what the model
+    read there; a scene only excerpted is not held to its summary."""
+    summarised, excerpted = played(run.cid, "The docks"), played(run.cid, "The guild")
+    for sid in (summarised, excerpted):
+        absorbed(run.cid, sid, "Mara gives Seraphine the silver ledger.")
+    _call(run, "get_scene_summary", scene=f"scene:{summarised}")
+    _call(run, "get_scene_excerpt", scene=f"scene:{excerpted}", query="ledger", max_posts=2)
+    for sid in (summarised, excerpted):
+        absorbed(run.cid, sid, "Mara burns the silver ledger.")
+    tools.revalidate(run)
+    assert run.inspected == {excerpted}
 
 
 # ---- the envelope ----

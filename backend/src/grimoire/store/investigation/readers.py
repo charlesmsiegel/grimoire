@@ -128,6 +128,15 @@ def scene_print(cid: str, sid: str) -> tuple[int, str] | None:
     return len(messages), _digest(messages)
 
 
+def summary_print(cid: str, sid: str) -> str | None:
+    """A digest of what `summary` returns for scene `sid`, or None when it is
+    gone: a re-absorb or a header edit after a summary read moves it."""
+    try:
+        return _digest([summary(cid, sid)])
+    except (scenes_paths.SceneNotFound, FileNotFoundError):
+        return None
+
+
 def still_printed(cid: str, sid: str, printed: tuple[int, str] | None) -> bool:
     """Whether the posts `printed` covered are still the scene's first posts,
     word for word: an edit, a cut or a retcon of one is a change, a post

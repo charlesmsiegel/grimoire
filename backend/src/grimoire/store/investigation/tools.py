@@ -199,9 +199,7 @@ def _settled(run: state.RunState, name: str, args: dict, ctx: tool_calls.ToolCon
     if found is not None:
         for sid in found.read:
             if not dropped or f"scene:{sid}" in sent:
-                run.inspect(sid, (None, None) if run.seen(sid) else
-                            (scenes_identity.scene_identity(run.cid, sid),
-                             readers.scene_print(run.cid, sid)))
+                run.inspect(sid, _read(run, sid, summarised=name == "get_scene_summary"))
     ok = found is not None
     truncated = ok and any(i.get("truncated") for i in delivered)
     refs = (tuple(r for r in found.refs if not dropped or r in sent)
@@ -212,6 +210,19 @@ def _settled(run: state.RunState, name: str, args: dict, ctx: tool_calls.ToolCon
     return tool_calls.ToolOutput(text, refs=refs)
 
 
+def _read(run: state.RunState, sid: str, *, summarised: bool) -> state.Read:
+    """How `sid` reads now, for `run.inspect`: its identity and posts on a
+    first sighting, and the summary's digest when the summary was what was
+    read and none is held yet."""
+    had = run.seen(sid)
+    summary = (readers.summary_print(run.cid, sid)
+               if summarised and (had is None or had.summary is None) else None)
+    if had is not None:
+        return state.Read(had.identity, had.posts, summary)
+    return state.Read(scenes_identity.scene_identity(run.cid, sid),
+                      readers.scene_print(run.cid, sid), summary)
+
+
 def revalidate(run: state.RunState) -> None:
     """Hold `inspected` to the scenes still as they were read, for the check
     of the final call. The run holds the campaign, not its scenes: a scene
@@ -219,16 +230,19 @@ def revalidate(run: state.RunState) -> None:
     one whose posts were edited, cut or retconned since, is not one a
     citation can name -- what the model read there is gone -- so it is
     dropped, and a proposal or answer that stood on it falls back as one
-    citing a scene never read. A post appended after the read is not a
-    change: play goes on while a run reads."""
+    citing a scene never read. So is one whose summary changed (a re-absorb,
+    a header edit) after the summary was read. A post appended after the
+    read is not a change: play goes on while a run reads."""
     with locks.best_effort_campaign_lock(run.cid):
         held = readers.scene_ids(run.cid)
         with run.lock:
             read = dict(run.read_as)
-        moved = {sid for sid, (identity, printed) in read.items()
+        moved = {sid for sid, was in read.items()
                  if sid not in held
-                 or scenes_identity.scene_identity(run.cid, sid) != identity
-                 or not readers.still_printed(run.cid, sid, printed)}
+                 or scenes_identity.scene_identity(run.cid, sid) != was.identity
+                 or not readers.still_printed(run.cid, sid, was.posts)
+                 or (was.summary is not None
+                     and readers.summary_print(run.cid, sid) != was.summary)}
     with run.lock:
         run.inspected -= moved
 
@@ -329,7 +343,7 @@ def _summary(run: state.RunState, args: dict) -> Answer:
     row = readers.scene(run.cid, args.get("scene"))
     sid = row["id"]
     found = readers.summary(run.cid, sid)
-    if not found["summary"]:
+    if not any(found[k] for k in ("summary", "date", "location", "cast")):
         return Answer([])
     held = history_model.EvidenceItem(
         history_model.SceneRef(sid, scenes_identity.scene_identity(run.cid, sid)),

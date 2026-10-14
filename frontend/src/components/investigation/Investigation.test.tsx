@@ -10,7 +10,7 @@ vi.mock("../../api/client", async () => {
                   followHistoryQuestion: vi.fn(), listScenes: vi.fn(),
                   getCampaignBudget: vi.fn() } };
 });
-import { api, ApiError } from "../../api/client";
+import { api, ApiError, RunEndedError } from "../../api/client";
 import type { HistoryAnswer, InvestigationTrace as Trace } from "../../api/types";
 import { AskHistory } from "./AskHistory";
 import { InvestigationTrace, outcomeSentence } from "./InvestigationTrace";
@@ -261,6 +261,20 @@ describe("AskHistory", () => {
     expect(localStorage.getItem(QUESTION_KEY)).toBeNull();
     expect(screen.getByRole("button", { name: "Ask" })).toBeEnabled();
     expect(api.askHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["a 5xx once the client's retries ran out", new ApiError(503, "unavailable"), true],
+    ["the run seen to end failed, whatever its status", new RunEndedError(502, "upstream", "network"),
+     false],
+  ])("keeps the question only while nothing proved it over: %s", async (_label, err, kept) => {
+    mocked(api.askHistory).mockRejectedValueOnce(err);
+    render(<MemoryRouter><AskHistory cid="run" root="/lib" onClose={() => {}} /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Your question"),
+                     { target: { value: "Who keeps the harbour ledger?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(localStorage.getItem(QUESTION_KEY) !== null).toBe(kept);
   });
 
   it("asks nothing for an empty question", () => {

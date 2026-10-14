@@ -8,7 +8,7 @@ changes them. The model only ever names refs and words.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ..history import model as history_model
 
@@ -18,6 +18,17 @@ MODES: tuple[str, ...] = ("rp_narrator", "continuity", "question")
 
 #: The key a step carries its loop call's id under while the run is live.
 CALL_KEY = "_call"
+
+
+@dataclass(frozen=True)
+class Read:
+    """A scene as a run first read it: its identity (None for one that
+    predates identities), its posts' count and digest
+    (`readers.scene_print`), and -- once `get_scene_summary` read it -- the
+    digest of what that returned (`readers.summary_print`)."""
+    identity: str | None = None
+    posts: tuple[int, str] | None = None
+    summary: str | None = None
 
 
 @dataclass
@@ -43,11 +54,9 @@ class RunState:
     perspective: str = history_model.NARRATOR
     embed_client: object | None = None
     inspected: set[str] = field(default_factory=set)
-    #: Each inspected scene as it was when first read: its identity (None for
-    #: a scene that predates identities) and its posts' count and digest
-    #: (`readers.scene_print`). What `tools.revalidate` holds a citation to
-    #: at settlement.
-    read_as: dict[str, tuple[str | None, tuple[int, str] | None]] = field(default_factory=dict)
+    #: Each inspected scene as it was when first read (`Read`): what
+    #: `tools.revalidate` holds a citation to at settlement.
+    read_as: dict[str, Read] = field(default_factory=dict)
     evidence: dict[str, history_model.EvidenceItem] = field(default_factory=dict)
     steps: list[dict] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -59,17 +68,23 @@ class RunState:
         if not self.cid:
             raise ValueError("an investigation runs in a campaign")
 
-    def inspect(self, sid: str, seen: tuple[str | None, tuple[int, str] | None] = (None, None)
-                ) -> None:
+    def inspect(self, sid: str, read: Read | None = None) -> None:
+        """`sid` read. Its first sighting stands; a summary digest is added
+        the first time the summary itself is read."""
         with self.lock:
-            if not self.frozen:
-                self.inspected.add(sid)
-                self.read_as.setdefault(sid, seen)
+            if self.frozen:
+                return
+            self.inspected.add(sid)
+            had = self.read_as.get(sid)
+            if had is None:
+                self.read_as[sid] = read or Read()
+            elif had.summary is None and read is not None and read.summary is not None:
+                self.read_as[sid] = replace(had, summary=read.summary)
 
-    def seen(self, sid: str) -> bool:
-        """Whether `sid` was already read, so its first sighting stands."""
+    def seen(self, sid: str) -> Read | None:
+        """How `sid` was first read, or None when it was not."""
         with self.lock:
-            return sid in self.read_as
+            return self.read_as.get(sid)
 
     def freeze(self) -> None:
         """No tool writes after this; the caller's own `note` still lands

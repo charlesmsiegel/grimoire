@@ -264,8 +264,11 @@ export function ContinuityReview(
   /** The finding each campaign's investigation is running on (the server
    *  takes one per campaign), and what the last one said. */
   const [investigating, setInvestigating] = useState<Record<string, string>>({});
-  const [investigated, setInvestigated] = useState<{ cid: string; id: string; text: string } | null>(
-    null);
+  /** What each campaign's last investigation said, kept per campaign: one
+   *  that settles while another campaign is open is still there on return,
+   *  and an outcome that wrote nothing has nowhere else to be. */
+  const [investigated, setInvestigated] =
+    useState<Record<string, { id: string; text: string }>>({});
 
   useEffect(() => {
     let live = true;
@@ -297,11 +300,17 @@ export function ContinuityReview(
     const ctl = new AbortController();
     watching.current.set(at, ctl);
     setInvestigating((cur) => ({ ...cur, [at]: candidateId }));
-    setInvestigated(null);
+    setInvestigated((cur) => {
+      const rest = { ...cur };
+      delete rest[at];
+      return rest;
+    });
     let text: string;
     try {
       const got = await work(ctl.signal);
-      writeInvestigation(lib, at, null);
+      // Consumed only where it is shown: settled while another campaign is
+      // open, the handle stays for that campaign's next mount to collect.
+      if (openRef.current.cid === at) writeInvestigation(lib, at, null);
       text = got ? investigationText(got)
         : "The earlier investigation's outcome is no longer held. Investigate again to rerun it.";
     } catch (err: unknown) {
@@ -315,10 +324,8 @@ export function ContinuityReview(
       delete rest[at];
       return rest;
     });
-    if (openRef.current.cid === at) {
-      setInvestigated({ cid: at, id: candidateId, text });
-      review.reread();
-    }
+    setInvestigated((cur) => ({ ...cur, [at]: { id: candidateId, text } }));
+    if (openRef.current.cid === at) review.reread();
   }
 
   /** The run a remembered attempt names, followed without a second start;
@@ -511,8 +518,8 @@ export function ContinuityReview(
                          onInvestigate={investigable ? () => { investigate(open); } : undefined}
                          investigating={investigating[cid] === open.id}
                          investigationBusy={!!investigating[cid] && investigating[cid] !== open.id}
-                         investigationNote={investigated?.cid === cid && investigated.id === open.id
-                           ? investigated.text : null} />
+                         investigationNote={investigated[cid]?.id === open.id
+                           ? investigated[cid].text : null} />
       ) : (
         <>
           {missing && <p className="continuity-note" role="status">
