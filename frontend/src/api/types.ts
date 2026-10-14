@@ -1960,10 +1960,16 @@ export type EpistemicItem = {
   /** Each classified ref's own `[access, basis]`, per post index and for
    *  the whole scene ("summary"). */
   by_ref?: Record<string, Record<string, [EpistemicAccess, string]>>;
+  /** The step's actor stood in this scene (spec 11 §5.1 (a)); absent when
+   *  not, and on the narrator's rows. */
+  stood?: boolean;
 };
 export type EpistemicDetail = {
   perspective: string;
+  /** Parts the Decision stage (11-S6) made visible, and every part it was
+   *  eligible to ask about, as [scene key, part, posts]. */
   decided: number;
+  pending?: [string, string, number[]][];
   /** Who the refs are, as the prompt named them. */
   names?: Record<string, string>;
   /** What history has cost this step's round so far (spec 11 §14 Q7): its

@@ -563,6 +563,39 @@ campaign lock, as the speaker pick does (`routes/character_turns.py:728-761`):
 the resolution and item building happen in the threadpool, and the capture
 goes back to the threadpool.
 
+**Amended by 11-S6** (plan
+`docs/superpowers/plans/2026-10-14-roadmap-11-s6-decision-stage.md`, §1 and
+§5):
+
+- **Answers re-enter the classifier.** `classify(..., decided=)` applies them
+  to the actor's own eligible parts as its read cuts them, so a part that
+  becomes visible is rendered by the same path as every visible slice, and a
+  part that moved since it was asked stays `unknown`.
+- **Invisible slices keep their `source`** (09's posts, already the prompt
+  view), so the item builder can excerpt a withheld part. Every renderer
+  still reads `visible()`.
+- **The (b) channel** is read off one classifier pass over the roster.
+  "Later" compares `scene_ids` numbers; a legacy id is never later. A teller
+  has every post of the part visible; "recorded present" is a later post
+  both witnessed.
+- **A summary withheld because a post-listed `unaware` reaches the actor**
+  carries basis `override`, not `summary_needs_grant`, so it is never asked
+  about.
+- **Escalation is off at landing.** 02-C5a's escalating row is the kit's
+  candidate (`epistemic_access.policy()`), switched on only with its "Decision
+  escalation" evidence, as every task is. So `refine` passes no `escalation=`,
+  and 5.2's "`escalation=` is required" no longer holds.
+- **The regex-guard pin is a source test.** The builder reads no transcript.
+- **`history_view` rides the snapshot.** The renderable view, with no
+  withheld text, is stored in the response's primary snapshot. The Decision
+  record (`epistemic`) is stored beside `intent`.
+- **A roll resume uses the stored view**, rebound to the scene's sid when only
+  a rename moved it, whenever a view was composed. This closes 11-S3's gap
+  for any switch setting. With the switch off, nothing past it is read,
+  resolved, called or minted.
+- **The replay skip is the round driver's hint** (`_history_replays`). A
+  misread costs at most one refine whose answers the replay discards.
+
 ### 5.1 Which parts may be asked about
 
 A part is **eligible** only when all of these hold:
@@ -1237,6 +1270,16 @@ evidence set, a perspective, and two sets of needles: propositions the actor
   apart from accuracy. Its bar is set in the plan before the gate is run,
   and `epistemic_decide` stays `off` until a recorded run meets it.
   01a reports cost and latency beside it.
+- **Amended by 11-S6:** the Decision gate runs in `evals/run.py --epistemic
+  --live`, not `--gate`. `--gate` compares a frozen legacy parser, and this
+  decision has none.
+  - Each gated check (cases 7, 10, 15, 15b, and case 8's secret summary as a
+    summary negative) is a decide case. It is built in its own throwaway home
+    through the production eligibility and item builder, and run down the
+    chain `decide()` sends.
+  - **The bar, set before any run, is zero false-`known` answers over every
+    repeat**, with every gated part answered.
+  - `evals/epistemic/decision.py` holds it.
 - **Live** (`evals/run.py --live`, opt-in): generate the actor's reply and
   grade it for using a forbidden proposition (a needle check first, a
   decide-based judge second). **Leakage is reported separately from
@@ -1259,6 +1302,14 @@ evidence set, a perspective, and two sets of needles: propositions the actor
   real-home tripwire, metering, the ledger harvest and the three money
   columns), and the question rides `compose_turn(appended=)` as the
   player's line in the story.
+  **Amended by 11-S6:**
+  - The judge lands. Each exposed reply that answered is put to one decide
+    call: a predicate per secret, stated as a sentence beside its token
+    (`Check.facts`).
+  - The call runs on the `epistemic` route's one task, since an eval-only
+    task cannot be routed.
+  - A yes joins the reply-leak line. A judge that failed or left a predicate
+    unanswered leaves the reply unclean.
 
 ## Slices
 
@@ -1431,6 +1482,10 @@ stays off behind its switch until its gates pass.
   slice. Pins `epistemic_access.build_items` in the regex guard. **Amended by 11-S5:** also
   the live leakage arm's decide judge on that route (8.2's amendment), each
   live case stating its forbidden facts as sentences beside their tokens.
+- **Amended by 11-S6:** delivered as 5's and 8.2's amendments say.
+  - Escalation lands off.
+  - The play gate's `--play epistemic` feature lands with the PR that exposes
+    the switch.
 - **Acceptance:** section 11's "Decision stage" tests (a call reaches a meter,
   the gate, the caps, each 5.3 row, deadline overrun with no `_noting`, soft
   resolution and exception skips, no call on a replay or reroll). The

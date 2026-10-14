@@ -10,8 +10,8 @@ import pytest
 
 from evals import run as eval_run
 from evals import runner as reports
-from evals.epistemic import cases, graders, live
-from tests.llm_fakes import FakeLLM
+from evals.epistemic import cases, decision, graders, live
+from tests.llm_fakes import FakeLLM, decision_reply
 
 RULE_WORDS = ("override", "witnessed", "unaware", "suspect", "narrator", "withheld",
               "grant", "R1", "R3", "R4", "R5")
@@ -28,10 +28,18 @@ def _store(monkeypatch, home):
 
 
 def _target():
-    from evals.cases import Case
-    return reports.resolve_connections((Case(
-        id="t", hypothesis="", build=dict, prompt=lambda ctx: [], grade=lambda c, o: [],
-        recordings=(), task="chat"),))["chat"]
+    return reports.resolve_connections((eval_run._probe("chat"),))["chat"]
+
+
+def _judge():
+    probe = eval_run._probe(decision.TASK, decide=True)
+    return reports.resolve_connections((probe,))[reports.conn_key(probe)]
+
+
+def _replies(reply: str, *judge_answers: bool | None) -> FakeLLM:
+    """One reply per asked NPC, then the judge's answers, in call order."""
+    verdict = decision_reply({f"fact{i}": a for i, a in enumerate(judge_answers)})
+    return FakeLLM([[reply]] * len(live.asked()) + [[verdict]])
 
 
 # ------------------------------------------------------------ the graders
@@ -93,16 +101,24 @@ def _check(item):
 def test_the_arm_asks_each_npc_once_in_its_own_home_and_meters_it(monkeypatch, tmp_path):
     _store(monkeypatch, tmp_path / "real")
     target = _target()
-    fake = FakeLLM([["Mara recalls the AFTERNEEDLE1 tide and the OPENNEEDLE3 vigil."]])
+    fake = _replies("Mara recalls the AFTERNEEDLE1 tide and the OPENNEEDLE3 vigil.", False)
     results, records = live.run(target, client=fake, real_home=tmp_path / "real",
-                                run_id="r1", repeat=1)
-    assert len(results) == len(records) == len(live.asked()) == fake.calls
+                                run_id="r1", repeat=1, judge=_judge())
+    # One reply per asked NPC, and one judge of the one exposed reply.
+    assert len(records) == len(live.asked()) == fake.calls - 1
+    assert len(results) == len(records) + 1
+    [judged] = [r for r in records if r["exposed"]]
+    assert judged["judge"] == "clean"
     # The question is the last message, as Seraphine's line in the story.
-    for request in fake.requests:
+    for request in fake.requests[:-1]:
         last = request["messages"][-1]
         assert last["role"] == "user" and last["content"].startswith("Seraphine")
-    # Each case's rows were harvested from its own home: one call each.
+    # Each case's rows were harvested from its own home: one call each, the
+    # judge's included, under its decide task.
     assert all(r.rows is not None and len(r.rows) == 1 for r in results)
+    assert results[-1].rows[0]["task"] == decision.TASK
+    # The judge was handed the reply and the secret as a sentence.
+    assert cases.WHISPER_FACT in str(fake.requests[-1]["messages"])
     assert all(not r.error for r in results)
     # Every prompt was clean, every reply answered, none exposed leaked.
     assert all(r["answered"] and r["prompt_clean"] for r in records)
@@ -242,13 +258,114 @@ def test_live_resolves_before_any_home_moves(monkeypatch, tmp_path, capsys):
     seen = {}
     target = _target()
 
+    judge = _judge()
+
     def resolve(*a, **k):
         from grimoire.store import paths
         seen["home"] = paths.home()
-        return {"chat": target}
+        return {"chat": target, "epistemic-access (decide)": judge}
     monkeypatch.setattr(reports, "resolve_connections", resolve)
     monkeypatch.setattr(live, "run", lambda target, **k: ([], []))
+    monkeypatch.setattr(decision, "run", lambda target, **k: ([], []))
     # Nothing was asked (the arm is stubbed), so the gate fails: a live run
     # that asked nothing never passes.
     assert eval_run.main(["--epistemic", "--live", "--repeat", "1"]) == 1
     assert seen["home"] == tmp_path / "real"
+
+
+# ------------------------------------------------------------ the judge (11-S6)
+
+
+def test_a_paraphrase_the_judge_sees_is_on_the_leakage_line(monkeypatch, tmp_path):
+    _store(monkeypatch, tmp_path / "real")
+    # No token at all: only the judge can see the chalice under the altar.
+    fake = _replies("Mara murmurs that the silver cup lies under the altar stone.", True)
+    results, records = live.run(_target(), client=fake, real_home=tmp_path / "real",
+                                judge=_judge())
+    [exposed] = [r for r in records if r["exposed"]]
+    assert exposed["judge"] == "leak" and exposed["judged"] == ["WHISPERNEEDLE3"]
+    assert not exposed["leaks"]
+    assert "reply leaks: 1 of 1 exposed replies" in live.summary(records)
+    assert not live.gate(records, live=True, results=results)
+
+
+@pytest.mark.parametrize("why", ["unanswered", "failed", "no judge"])
+def test_an_unjudged_exposed_reply_is_never_clean(monkeypatch, tmp_path, why):
+    _store(monkeypatch, tmp_path / "real")
+    if why == "failed":
+        fake = FakeLLM([["Plain words."]] * len(live.asked()) + [["not a decision"]])
+    else:
+        fake = _replies("Plain words.", None)
+    results, records = live.run(_target(), client=fake, real_home=tmp_path / "real",
+                                judge=None if why == "no judge" else _judge())
+    [exposed] = [r for r in records if r["exposed"]]
+    assert exposed["judge"] == ("unjudged" if why == "no judge" else "failed")
+    assert "judged: 0 of 1 exposed replies" in live.summary(records)
+    assert not live.gate(records, live=True, results=results)
+
+
+def test_every_exposure_states_its_secret():
+    asked = [i for i in live.asked() if i.live_forbidden]
+    assert asked and all(dict(i.facts).keys() == set(i.live_forbidden) for i in asked)
+
+
+# ------------------------------------------------------------ the Decision gate
+
+
+GATED = {("7", "TOLDNEEDLE7"): ("told", False), ("15", "KEPTNEEDLE15"): ("told", True),
+         ("15b", "GONENEEDLE15"): ("stood", True), ("10", "LEGACYNEEDLE10"): ("stood", False),
+         ("8", "SECRETNEEDLE8"): ("stood", True)}
+
+
+def test_each_gated_part_is_one_production_would_ask(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    items = decision.gated()
+    assert {(i.case.id, i.needle) for i in items} == set(GATED)
+    for item in items:
+        with live.offline._home():
+            ctx = decision.plant(item)
+        channel, negative = GATED[(item.case.id, item.needle)]
+        assert ctx["part"].channel == channel and item.negative == negative
+        # The item carries the part, and no basis code.
+        context = ctx["items"][0].context
+        assert item.needle in context
+        assert not any(b in context for b in ("not_recorded_present", "scene_cast",
+                                              "summary_needs_grant", "no_record"))
+
+
+@pytest.mark.parametrize(("answer", "leaks", "correct"), [
+    ("known", True, False), ("experienced", True, False), ("narrator_only", False, True),
+    (None, False, True)])
+def test_the_gate_grades_a_negative(monkeypatch, tmp_path, answer, leaks, correct):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    [item] = [i for i in decision.gated() if i.needle == "KEPTNEEDLE15"]
+    with live.offline._home():
+        ctx = decision.plant(item)
+    checks = {c.name: c.ok for c in decision.grade(
+        item, ctx, decision_reply({"access": answer}))}
+    assert checks == {"gate.false_known": not leaks, "gate.gold": correct}
+
+
+def test_the_gate_end_to_end_reports_false_known_apart(monkeypatch, tmp_path):
+    _store(monkeypatch, tmp_path / "real")
+    fake = FakeLLM([[decision_reply({"access": "known"})]])
+    results, records = decision.run(_judge(), client=fake, real_home=tmp_path / "real")
+    assert len(results) == len(GATED) == fake.calls
+    assert all(r.rows is not None and r.rows[0]["task"] == decision.TASK for r in results)
+    line = decision.summary(records)
+    # Every negative answered `known`: each is a false known.
+    assert "false known: 3 of 3 negative answers" in line
+    assert "accuracy (not a leakage measure): 2 of 5 answered" in line
+    assert not decision.gate(records)
+    fake = FakeLLM([[decision_reply({"access": "narrator_only"})]])
+    _results, records = decision.run(_judge(), client=fake, real_home=tmp_path / "real")
+    assert decision.gate(records) and "false known: 0 of 3" in decision.summary(records)
+    assert not decision.gate([])
+
+
+def test_the_judge_and_the_gate_decide_on_the_epistemic_route():
+    from grimoire.store import routing
+    for task in (live.JUDGE_TASK, decision.TASK):
+        route = routing.route(task)
+        assert route is not None and route.key == "epistemic" and route.operation == "decide"
+    assert live.TASK == "chat" and routing.route(live.TASK).operation == "generate"

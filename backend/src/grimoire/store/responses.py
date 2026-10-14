@@ -430,6 +430,7 @@ def prepare(
     *,
     response_id: str = "",
     intent: dict | None = None,
+    epistemic: dict | None = None,
 ) -> dict:
     """A new pending response for `actor_ref` in round `round_id`.
 
@@ -437,7 +438,9 @@ def prepare(
     before this call names the response it shaped; "" mints one here. `intent`
     is the play decision's record (roadmap 02 §6.5), stored only when given:
     a response written without one has no key at all, and every reader uses
-    `.get("intent")`."""
+    `.get("intent")`. `epistemic` is spec 11's Decision record for the step
+    (§5.5), stored the same way: a record of what one contribution was
+    shown, never read as what a character knows."""
     with locks.campaign_lock(cid):
         data = _read(cid)
         scope = _scope(cid, sid, data)
@@ -459,6 +462,8 @@ def prepare(
             record["settings"] = copy.deepcopy(settings)
         if intent is not None:
             record["intent"] = copy.deepcopy(intent)
+        if epistemic is not None:
+            record["epistemic"] = copy.deepcopy(epistemic)
         record["snapshot_ref"] = response_snapshots.write(cid, record["id"], "primary", snapshot)
         scope["responses"][record["id"]] = record
         scope["rounds"][round_id].update(pending_response=record["id"], actor_ref=actor_ref)

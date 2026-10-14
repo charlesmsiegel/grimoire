@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 
 from .. import chronicle, export, knowledge, knowledge_scene, locks, pins, responses
 from ..appearances import cast as appearances_cast
@@ -50,6 +50,17 @@ log = logging.getLogger(__name__)
 
 ACCESS = ("witnessed", "known", "suspected", "narrator_only", "unknown")
 VISIBLE = ("witnessed", "known", "suspected")
+#: The bases an `unknown` part may carry and still be asked about (spec 11
+#: §5.1 rule 2): nothing proven either way. An override's `narrator_only`, an
+#: unverifiable or moved post, a keyless post under a post-listed override
+#: and a group nobody can expand are never asked about.
+ELIGIBLE_BASES = frozenset({"not_recorded_present", "scene_cast", "no_record",
+                            "summary_needs_grant"})
+#: What a Decision answer may set (§5.3): a model never produces `witnessed`
+#: or `narrator_only`, and an answer that withholds stays `unknown`.
+DECIDED_ACCESS = ("known", "suspected", "unknown")
+DECIDED_BASES = frozenset({"decision", "decision_abstained", "decision_failed",
+                           "decision_skipped"})
 STATES = ("attributed", "withheld", "unattributed")
 #: The closed set of §3.5, plus `unkeyed` (a keyless post in a scene with a
 #: post-listed override) and `narrator` (the narrator's own slices).
@@ -118,9 +129,11 @@ class Slice:
     access: str
     basis: tuple[str, ...]
     text: str
-    #: The excerpt posts the text was rendered from, for a section to mark
-    #: and fit (`context/history.section`); empty on an invisible slice.
-    #: Never in `detail()`.
+    #: The excerpt posts the text was (or, withheld, would be) rendered
+    #: from: for a section to mark and fit (`context/history.section`), and
+    #: for the Decision stage to excerpt a withheld part (11-S6). Empty for
+    #: moved posts and the summary. Never in `detail()`, and never rendered
+    #: from an invisible slice: every renderer reads `visible()`.
     source: tuple[model.EvidencePost, ...] = ()
     #: Each post's fingerprint as classified (`knowledge.shown_fingerprint`),
     #: for the capture's accept to send as `expect` (11-S3); empty for a
@@ -147,13 +160,19 @@ class Classified:
     #: The source scene's id when classified. An actor's `item` blanks it;
     #: the inspector and an accept still need to name the scene.
     sid: str = ""
+    #: For an actor, whether it stood in the item's scene: the appearance
+    #: record's scene list, the chronicle cast, or any presence interval
+    #: there (spec 11 §5.1 (a)). The Decision stage's first channel.
+    stood: bool = False
 
 
 @dataclass(frozen=True)
 class EpistemicView:
     perspective: Perspective
     items: tuple[Classified, ...]
-    #: The Decision stage's (11-S6); 0 and () until it lands.
+    #: Parts the Decision stage (11-S6) made visible, and every part it was
+    #: eligible to ask about, as `(scene key, part, posts)`; 0 and () when
+    #: it did not run.
     decided: int = 0
     pending: tuple[tuple[str, str, tuple[int, ...]], ...] = ()
     #: The retrieval the items came from: its ceiling and depth size the
@@ -189,10 +208,13 @@ class EpistemicView:
         return {
             "perspective": self.perspective.to_string(),
             "decided": self.decided,
+            **({"pending": [[k, p, list(posts)] for k, p, posts in self.pending]}
+               if self.pending else {}),
             **({"round": dict(self.round_cost)} if self.round_cost else {}),
             "items": [{
                 "key": c.item.scene.key, "scene": c.sid or c.item.scene.sid,
                 "admitted": c.admitted, "state": c.state, "header": dict(c.header),
+                **({"stood": True} if c.stood else {}),
                 "known_to": list(c.known_to), "suspected_by": list(c.suspected_by),
                 "slices": [{"part": s.part, "posts": list(s.posts), "access": s.access,
                             "basis": list(s.basis), "keys": [dict(k) for k in s.keys]}
@@ -478,6 +500,20 @@ def _presence(env: _Env, ref: str, i: int) -> tuple[str, str]:
     return "unknown", "no_record"
 
 
+def _stood(env: _Env, ref: str) -> bool:
+    """Whether `ref` stood in the scene at all (§5.1 (a)): in its appearance
+    record's scene list, the chronicle cast, or with any interval there. An
+    unreadable record is False, which only closes a channel."""
+    entry = env.src.presence.get(ref.replace(":", "/", 1)) if env.src.presence else None
+    if not isinstance(entry, dict):
+        return False
+    ok, found = _intervals(entry, env.sc.sid)
+    scenes = entry.get("scenes")
+    cast = (env.sc.record or {}).get("cast")
+    return bool((ok and found) or (isinstance(scenes, list) and env.sc.sid in scenes)
+                or (isinstance(cast, list) and ref.replace(":", "/", 1) in cast))
+
+
 def _pc_spoke(env: _Env, ref: str, m: dict) -> bool:
     """R2': a user post stamped with a name that resolves, among everyone
     present, to this PC's."""
@@ -524,8 +560,12 @@ def _scene_class(env: _Env, ref: str) -> tuple[str, str]:
         return "narrator_only", match.basis
     if env.ov.blind_all and not (match is not None and match.basis == "override"):
         return "unknown", "override_group"
-    if match is None or _withheld_within(entries, audiences, env.sc.identity, ref):
+    if match is None:
         return "unknown", "summary_needs_grant"
+    if _withheld_within(entries, audiences, env.sc.identity, ref):
+        # The summary may paraphrase a post the user withheld from `ref`: an
+        # override's doing, so never put to the Decision stage (11-S6).
+        return "unknown", "override"
     return _STATUS[match.status], match.basis
 
 
@@ -563,8 +603,11 @@ def _runs(excerpt: model.Excerpt, posts: Sequence[tuple[model.EvidencePost, int 
         if shown:
             text = (excerpt.text if source == excerpt.posts
                     else history_budget._excerpt(source).text)
+        # Every re-matched run keeps its posts, shown or not: the Decision
+        # stage (11-S6) excerpts a withheld part from them. A renderer reads
+        # `visible()`, so an invisible slice's posts reach no prompt.
         out.append(Slice("posts", tuple(i for _p, i, _b in run), access, basis, text,
-                         source if shown else ()))
+                         () if "moved" in basis else source))
         run.clear()
 
     for post, i in posts:
@@ -655,8 +698,48 @@ def _unclassified(item: model.EvidenceItem, perspective: Perspective,
                       "unattributed", (), ())
 
 
+def eligible(s: Slice) -> bool:
+    """Whether the Decision stage may ask about `s` by its class alone (§5.1
+    rule 2): `unknown`, on bases that prove nothing either way. The channel
+    (rule 3) is the caller's to read."""
+    return s.access == "unknown" and bool(s.basis) and set(s.basis) <= ELIGIBLE_BASES
+
+
+def _slices(item: model.EvidenceItem, sc: _Scene, excerpts, own: _Classes | None) -> list:
+    slices = [_keyed(sc, s) for e, posts in zip(item.excerpts, excerpts, strict=True)
+              for s in _runs(e, posts, own)]
+    summary = _summary_slice(item, sc, own.scene if own else None)
+    if summary:
+        slices.append(summary)
+    return slices
+
+
+def _answered(key: str, own: _Classes, slices: Sequence[Slice],
+              decided: Mapping[tuple[str, str, tuple[int, ...]], tuple[str, str]]) -> _Classes:
+    """`own` with the Decision stage's answers (§5.3) set on the parts they
+    were asked about, as this read cuts them: a part whose posts moved since
+    it was asked matches no key and keeps its class. Only an eligible part is
+    ever changed, and only to `known`, `suspected` or `unknown`."""
+    posts = dict(own.posts)
+    scene = own.scene
+    for s in slices:
+        found = decided.get((key, s.part, s.posts))
+        if found is None or not eligible(s):
+            continue
+        access, basis = found
+        if access not in DECIDED_ACCESS or basis not in DECIDED_BASES:
+            raise ValueError(f"not a Decision answer: {found!r}")
+        if s.part == "summary":
+            scene = (access, basis)
+        else:
+            posts.update((i, (access, basis)) for i in s.posts)
+    return _Classes(posts, scene)
+
+
 def _classify_item(item: model.EvidenceItem, perspective: Perspective,
-                   roster: Sequence[str], env: _Env) -> Classified:
+                   roster: Sequence[str], env: _Env,
+                   decided: Mapping[tuple[str, str, tuple[int, ...]], tuple[str, str]]
+                   | None = None) -> Classified:
     sc = env.sc
     excerpts = [[(p, _rematch(sc, p)) for p in e.posts] for e in item.excerpts]
     indices = sorted({i for e in excerpts for _p, i in e if i is not None})
@@ -665,17 +748,17 @@ def _classify_item(item: model.EvidenceItem, perspective: Perspective,
     own = per_ref.get(perspective.actor) if perspective.actor else None
     if perspective.actor is not None and own is None:
         own = _classes(env, perspective.actor, indices)
-    slices = [_keyed(sc, s) for e, posts in zip(item.excerpts, excerpts, strict=True)
-              for s in _runs(e, posts, own)]
-    summary = _summary_slice(item, sc, own.scene if own else None)
-    if summary:
-        slices.append(summary)
+    slices = _slices(item, sc, excerpts, own)
+    if own is not None and decided:
+        own = _answered(item.scene.key, own, slices, decided)
+        slices = _slices(item, sc, excerpts, own)
     by_ref = {ref: {**{str(i): cls for i, cls in c.posts.items()}, "summary": c.scene}
               for ref, c in per_ref.items()}
     if own is None:
         header = {"title": item.title, "date": item.date, "location": item.location}
         return Classified(item, tuple(slices), header, state, known_to, suspected_by,
                           by_ref=by_ref, sid=sc.sid)
+    stood = _stood(env, perspective.actor) if perspective.actor else False
     # 09's date is the scene's first moment and its location the scene's
     # last: neither belongs to a post, so presence for part of the scene
     # vouches for neither. Like the title, they ride a whole-scene grant.
@@ -685,7 +768,7 @@ def _classify_item(item: model.EvidenceItem, perspective: Perspective,
         if item.title == sc.title:
             header["title"] = item.title
     return Classified(_redacted(item, header), tuple(slices), header, state, known_to,
-                      suspected_by, by_ref=by_ref, sid=sc.sid)
+                      suspected_by, by_ref=by_ref, sid=sc.sid, stood=stood)
 
 
 # ---------------------------------------------------------------- entry point
@@ -726,10 +809,15 @@ def _local(item: model.EvidenceItem, cid: str) -> bool:
 
 
 def classify(perspective: Perspective, items: Sequence[model.EvidenceItem], *,
-             roster: Sequence[str] = ()) -> EpistemicView:
+             roster: Sequence[str] = (),
+             decided: Mapping[tuple[str, str, tuple[int, ...]], tuple[str, str]]
+             | None = None) -> EpistemicView:
     """Each item's slices for `perspective`, in 09's order. `roster` is who
     the narrator aggregate is computed over: by default the actor, or for the
-    narrator everyone present."""
+    narrator everyone present. `decided` is the Decision stage's answers
+    (11-S6), `(scene key, part, posts) -> (access, basis)`, applied to the
+    actor's own eligible parts as this read cuts them; the narrator ignores
+    it."""
     roster = tuple(roster) or ((perspective.actor,) if perspective.actor
                                else perspective.present)
     cid = perspective.cid
@@ -751,13 +839,155 @@ def classify(perspective: Perspective, items: Sequence[model.EvidenceItem], *,
         ov = (_overrides(src.entries, src.audiences, sc.identity)
               if src.entries is not None and src.audiences is not None else None)
         try:
-            out.append(_classify_item(item, perspective, roster, _Env(src, sc, ov)))
+            out.append(_classify_item(item, perspective, roster, _Env(src, sc, ov), decided))
         except Exception:  # noqa: BLE001 -- an item that cannot be classified narrows to nothing
             log.warning("Could not classify history item %s", item.scene.key)
             out.append(_unclassified(item, perspective, admitted=True))
-    return EpistemicView(perspective, tuple(out))
+    shown = sum(1 for c in out for s in c.slices
+                if "decision" in s.basis and s.access in VISIBLE)
+    return EpistemicView(perspective, tuple(out), decided=shown if decided else 0)
 
 
 def classify_evidence(perspective: Perspective, evidence: model.Evidence) -> EpistemicView:
     """`classify` over a retrieval, the view carrying it (11-S3's turn path)."""
     return replace(classify(perspective, evidence.items), evidence=evidence)
+
+
+# ---------------------------------------------------------------- the record
+
+#: `to_record`'s format. A record of another version reads as nothing.
+RECORD_VERSION = 1
+
+
+def _post_record(p: model.EvidencePost) -> list:
+    return [p.index, p.key, p.part, p.speaker, p.text]
+
+
+def _post_of(r) -> model.EvidencePost:
+    index, key, part, speaker, text = r
+    if not (type(index) is int and isinstance(key, str) and (part is None or type(part) is int)
+            and isinstance(speaker, str) and isinstance(text, str)):
+        raise ValueError("not a post")
+    return model.EvidencePost(index, key, part, speaker, text)
+
+
+def _strings(value) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ValueError("not a list of strings")
+    return tuple(value)
+
+
+def _ints(value) -> tuple[int, ...]:
+    if not isinstance(value, list) or not all(type(v) is int for v in value):
+        raise ValueError("not a list of integers")
+    return tuple(value)
+
+
+def to_record(view: EpistemicView) -> dict:
+    """`view` as JSON, everything a compose renders from it: what a roll
+    resume in a later request composes with (spec 11 §5.5), stored in the
+    response's frozen snapshot. The retrieval keeps its sizing and coverage;
+    its items and candidates are left out, since every section renders from
+    the classified items alone."""
+    p = view.perspective
+    ev = view.evidence
+    return {
+        "version": RECORD_VERSION,
+        "perspective": {"cid": p.cid, "sid": p.sid, "identity": p.identity,
+                        "actor": p.actor, "present": list(p.present)},
+        "decided": view.decided,
+        "pending": [[k, part, list(posts)] for k, part, posts in view.pending],
+        "round": dict(view.round_cost),
+        "evidence": {"ceiling": ev.ceiling, "depth": ev.depth, "digest": ev.query_digest,
+                     "coverage": {**asdict(ev.coverage), "tiers": list(ev.coverage.tiers)}},
+        "items": [{
+            "scene": [c.item.scene.sid, c.item.scene.identity, c.item.scene.campaign],
+            "title": c.item.title, "date": c.item.date, "location": c.item.location,
+            "summary": c.item.summary,
+            "excerpts": [{"posts": [_post_record(q) for q in e.posts], "text": e.text}
+                         for e in c.item.excerpts],
+            "evidence_ids": list(c.item.evidence_ids), "tokens": c.item.tokens,
+            "summary_omission": c.item.summary_omission,
+            # A withheld part keeps its class and keys, never its text: the
+            # record is what the contribution was shown.
+            "slices": [{"part": s.part, "posts": list(s.posts), "access": s.access,
+                        "basis": list(s.basis),
+                        "text": s.text if s.access in VISIBLE else "",
+                        "source": [_post_record(q) for q in s.source]
+                        if s.access in VISIBLE else [],
+                        "keys": [dict(k) for k in s.keys]} for s in c.slices],
+            "header": dict(c.header), "state": c.state, "known_to": list(c.known_to),
+            "suspected_by": list(c.suspected_by), "admitted": c.admitted,
+            "by_ref": {ref: {part: list(cls) for part, cls in parts.items()}
+                       for ref, parts in c.by_ref.items()},
+            "sid": c.sid, "stood": c.stood,
+        } for c in view.items],
+    }
+
+
+def _slice_of(r: dict) -> Slice:
+    if r["access"] not in ACCESS or r["part"] not in ("posts", "summary"):
+        raise ValueError("not a slice")
+    keys = r["keys"]
+    if not isinstance(keys, list) or not all(
+            isinstance(k, dict) and all(isinstance(v, str) for v in k.values()) for k in keys):
+        raise ValueError("not a slice's keys")
+    if not isinstance(r["text"], str):
+        raise ValueError("not a slice's text")
+    return Slice(r["part"], _ints(r["posts"]), r["access"], _strings(r["basis"]), r["text"],
+                 tuple(_post_of(q) for q in r["source"]), tuple(dict(k) for k in keys))
+
+
+def _item_of(r: dict) -> Classified:
+    sid, identity, campaign = r["scene"]
+    if not (isinstance(sid, str) and (identity is None or isinstance(identity, str))
+            and isinstance(campaign, str)):
+        raise ValueError("not a scene ref")
+    for name in ("title", "date", "location", "summary", "summary_omission", "state", "sid"):
+        if not isinstance(r[name], str):
+            raise ValueError(f"not an item's {name}")
+    item = model.EvidenceItem(
+        model.SceneRef(sid, identity, campaign), r["title"], date=r["date"],
+        location=r["location"], summary=r["summary"],
+        excerpts=tuple(model.Excerpt(tuple(_post_of(q) for q in e["posts"]), e["text"])
+                       for e in r["excerpts"]),
+        evidence_ids=_strings(r["evidence_ids"]), tokens=int(r["tokens"]),
+        summary_omission=r["summary_omission"])
+    header = r["header"]
+    if not isinstance(header, dict) or not all(isinstance(v, str) for v in header.values()):
+        raise ValueError("not a header")
+    by_ref = {str(ref): {str(part): (str(cls[0]), str(cls[1])) for part, cls in parts.items()}
+              for ref, parts in r["by_ref"].items()}
+    return Classified(item, tuple(_slice_of(s) for s in r["slices"]), dict(header),
+                      r["state"], _strings(r["known_to"]), _strings(r["suspected_by"]),
+                      admitted=r["admitted"] is True, by_ref=by_ref, sid=r["sid"],
+                      stood=r["stood"] is True)
+
+
+def from_record(record) -> EpistemicView | None:
+    """`to_record`'s view again, or None for anything that is not one (an
+    older format, a hand edit): a resume then composes with no history, which
+    narrows. Compose still checks the view against its own scene and speaker."""
+    try:
+        if not isinstance(record, dict) or record.get("version") != RECORD_VERSION:
+            return None
+        p = record["perspective"]
+        actor = p["actor"]
+        if actor is not None and not isinstance(actor, str):
+            return None
+        perspective = Perspective(str(p["cid"]), str(p["sid"]),
+                                  p["identity"] if isinstance(p["identity"], str) else None,
+                                  actor, _strings(p["present"]))
+        ev = record["evidence"]
+        coverage = dict(ev["coverage"])
+        coverage["tiers"] = _ints(coverage.get("tiers", [1]))
+        evidence = model.Evidence(coverage=model.Coverage(**coverage), ceiling=int(ev["ceiling"]),
+                                  depth=int(ev["depth"]), query_digest=str(ev["digest"]))
+        pending = tuple((str(k), str(part), _ints(posts)) for k, part, posts in record["pending"])
+        round_cost = {str(k): int(v) for k, v in record["round"].items()}
+        return EpistemicView(perspective, tuple(_item_of(c) for c in record["items"]),
+                             decided=int(record["decided"]), pending=pending,
+                             evidence=evidence, round_cost=round_cost)
+    except Exception:  # noqa: BLE001 -- a record that does not read is no history, never a failed resume
+        log.warning("A stored history view could not be read")
+        return None

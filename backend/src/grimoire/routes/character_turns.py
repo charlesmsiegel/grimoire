@@ -30,6 +30,7 @@ from ..model_guidance import PreparedMessages
 from ..store.inference import providers as inference_providers
 from ..store.inference import resolve as inference_resolve
 from . import decision_capture, history_recall, runs, streaming, tool_decision
+from . import epistemic as epistemic_stage
 from . import tracker as tracker_routes
 from .common import (
     _dump,
@@ -513,8 +514,27 @@ def _selector_inputs(cid, sid, round_record):
     return item, conversation[-1]["content"], author
 
 
+def _stored_view(cid, sid, run, stored):
+    """The history view a pending response was composed with (spec 11
+    §5.5), for its roll resume, or None. Bound to the scene's sid now: a
+    rename between the pause and the resume moves the sid, never the
+    identity, and a view for another identity is no view at all (compose
+    would refuse it)."""
+    view = store.context.epistemic.from_record(
+        (stored.get("snapshot") or {}).get("history_view"))
+    if view is None:
+        return None
+    identity = getattr(run, "scene_identity", None) or store.scenes.identity.scene_identity(
+        cid, sid)
+    if not identity or view.perspective.identity != identity \
+            or view.perspective.cid != cid:
+        return None
+    return dataclasses.replace(
+        view, perspective=dataclasses.replace(view.perspective, sid=sid))
+
+
 def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, plan=None,
-             response_id="", history_view=None):
+             response_id="", history_view=None, epistemic=None):
     """Compose (or resume) the contribution and record it.
 
     `plan` is the turn decision's record asked for THIS contribution
@@ -523,7 +543,12 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, p
     resume asks nothing: it recomposes with the record the pending response
     already holds (roadmap 02 §3.1 rule 5), so the resume snapshot -- and Keep
     writing after it -- carries the same block. A retry replays its snapshot,
-    which already carries it."""
+    which already carries it.
+
+    `history_view` rides the snapshot (spec 11 §5.5), so a roll resume in a
+    later request -- which holds no view of its own -- recomposes with the
+    one the response was composed with, and asks nothing again; `epistemic`
+    is the Decision stage's record, stored beside `intent`."""
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         pending = round_record.get("pending_response")
@@ -545,7 +570,10 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, p
                     return record, messages, "resume", record.get("resume_settings")
                 return record, messages, "primary", None
         if pending and appended:
-            plan = store.responses.get(cid, sid, pending, private=True).get("intent")
+            stored = store.responses.get(cid, sid, pending, private=True)
+            plan = stored.get("intent")
+            if history_view is None:
+                history_view = _stored_view(cid, sid, run, stored)
         messages, _breakdown = _compose(cid, sid, round_record, actor, resolved, appended,
                                         plan=plan, history_view=history_view)
         # The round's eligible first, then the whole present cast: an explicit
@@ -562,11 +590,15 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, p
             )
             # The original pre-response snapshot remains the reroll boundary.
         else:
+            snapshot = messages.snapshot()
+            if history_view is not None:
+                snapshot["history_view"] = store.context.epistemic.to_record(history_view)
             record = store.responses.prepare(
-                cid, sid, round_record["id"], actor, speaker, messages.snapshot(),
+                cid, sid, round_record["id"], actor, speaker, snapshot,
                 getattr(messages, "settings", None),
                 **({"response_id": response_id} if response_id else {}),
                 **({"intent": plan} if plan is not None else {}),
+                **({"epistemic": epistemic} if epistemic is not None else {}),
             )
         _capture(cid, sid, "continuation" if appended else "chat", messages, resolved.chain)
         if pending and appended:
@@ -1477,6 +1509,9 @@ class _Progress:
         self.history_by_round = {}
         #: round id -> [history retrievals, query embeddings] so far.
         self.history_cost: dict[str, list[int]] = {}
+        #: (round id, speaker) -> the Decision stage's record for that step
+        #: (spec 11 §5.5); a key here was refined, and is never asked again.
+        self.refined: dict[tuple, dict | None] = {}
 
 
 async def _frames(
@@ -1640,6 +1675,34 @@ async def _round_history(app, cid, sid, client, embed_client, resolved, turn, ac
     return turn.history_by_round[key]
 
 
+async def _refine_step(cid, sid, client, turn, actor, view, response_id, run=None):
+    """`(view, record, response_id)`: one actor step's history with spec
+    11's Decision stage folded in (`routes/epistemic.refine`, §5), asked once
+    per (round, speaker) and never by the narrator, a roll continuation or a
+    replay (`_round_history` hands a replay no view). Off, the view comes back
+    as it went in and nothing past the switch is read. A call that sent parts
+    charges the round's budget on its record, so a resumed round keeps it."""
+    if view is None or actor in (None, "grimoire") or turn.appended or turn.continuation:
+        return view, None, response_id
+    key = (turn.round_record["id"], actor)
+    if key in turn.refined:
+        return view, turn.refined[key], response_id
+    refined = await epistemic_stage.refine(
+        view, cid=cid, sid=sid, client=client, post=turn.round_record.get("post"),
+        round_id=turn.round_record["id"],
+        asked=epistemic_stage.asked_in(turn.round_record), response_id=response_id)
+    if refined.sent:
+        turn.round_record = await run_in_threadpool(
+            store.responses.update_round, cid, sid, turn.round_record["id"],
+            **{epistemic_stage.ROUND_FIELD:
+               epistemic_stage.asked_in(turn.round_record) + refined.sent})
+    turn.history_by_round[key] = refined.view
+    turn.refined[key] = refined.record
+    if run is not None and run.cancel_requested:
+        raise anyio.get_cancelled_exc_class()()
+    return refined.view, refined.record, refined.response_id
+
+
 async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, outcome,
                         tracked, *, app=None, embed_client=None, history_enabled=False):
     """One round's contributions, from `actor` until nobody is next. Every
@@ -1689,9 +1752,12 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         history = await _round_history(
             app, cid, sid, client, embed_client, resolved, turn, actor,
             enabled=history_enabled, run=run)
+        history, epistemic_record, response_id = await _refine_step(
+            cid, sid, client, turn, actor, history, response_id, run=run)
         turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
             _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended,
-            plan=plan, response_id=response_id, history_view=history)
+            plan=plan, response_id=response_id, history_view=history,
+            epistemic=epistemic_record)
         record = turn.record
         turn.appended = ()
         turn.watcher = watcher = store.response_protocol.ResponseWatcher(

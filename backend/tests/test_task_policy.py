@@ -27,6 +27,7 @@ import pytest
 
 from grimoire import adapters, decisions
 from grimoire.store import (
+    epistemic_access,
     history_rerank,
     response_protocol,
     routing,
@@ -54,6 +55,7 @@ _QUESTION: dict[str, str] = {
     "turn-intent": turn_plan.STANCE_ID,
     "turn-plan": turn_plan.STANCE_ID,
     "turn-tool-decision": "choice",
+    "epistemic-access": epistemic_access.ACCESS_ID,
 }
 
 #: The tasks whose caller maps `abstained`/`refused` on the deciding question
@@ -146,6 +148,9 @@ def _answers() -> dict[str, _Vocab]:
         # The decide tool's options are the asking model's, per call: none
         # can be listed in advance.
         "turn-tool-decision": _Vocab(frozenset()),
+        "epistemic-access": _Vocab(_keys(epistemic_access.build_items([
+            epistemic_access.AccessQuestion("characters:mara", "Mara", "scene-1", "")])[0],
+            _QUESTION["epistemic-access"])),
     }
 
 
@@ -384,7 +389,8 @@ def test_every_task_is_off_at_landing():
     # Roadmap 02-S3 lists the two sampling tasks -- sampling is the caller's,
     # and runs only where a campaign switches it on -- with escalation off.
     assert set(routing.TASK_POLICY) == {"response-selector", "turn-intent", "turn-plan",
-                                        "turn-tool-decision", "history-rerank"}
+                                        "turn-tool-decision", "history-rerank",
+                                        "epistemic-access"}
     for task, p in routing.TASK_POLICY.items():
         assert p.escalate_to == "", task
         assert p.fallback == "role", task
@@ -399,7 +405,7 @@ def test_every_decide_task_is_pinned():
                          "continuity-reconcile": "decision", "scene-break": "over",
                          "voice-drift": "verdict", "turn-intent": "stance",
                          "turn-plan": "stance", "turn-tool-decision": "choice",
-                         "history-rerank": "relevance"}
+                         "history-rerank": "relevance", "epistemic-access": "access"}
     assert not _answers()["continuity-reconcile"].exact & {
         "duplicate", "continuation", "subthread", "pays_off"}
     # The builders' vocabularies, as each call site offers them.

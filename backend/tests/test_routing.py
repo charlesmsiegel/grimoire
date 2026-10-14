@@ -161,7 +161,7 @@ def test_a_route_born_at_format_two_has_no_legacy_key():
     legacy key, names no legacy key to read, and lists its tasks in
     `NO_LEGACY_TASKS` -- which the frozen inference baselines leave out."""
     born = [r for r in routing.ROUTES if r.legacy == routing.NO_LEGACY]
-    assert [r.key for r in born] == ["turn_plan", "history_check"]
+    assert [r.key for r in born] == ["turn_plan", "history_check", "epistemic"]
     for r in born:
         assert r not in routing.LEGACY_ROUTES
         assert r.key not in {x.key for x in routing.LEGACY_ROUTES}
@@ -180,7 +180,7 @@ def test_every_route_declares_operation_and_default_role():
     the history rerank (09-S5)."""
     primary = {"scene", "opener", "suggestions", "voice"}
     decide = {"scene_break", "voice_drift", "speaker", "continuity", "turn_plan",
-              "history_check"}
+              "history_check", "epistemic"}
     for r in routing.ROUTES:
         assert r.operation in routing.OPERATIONS
         assert r.default_role in routing.DEFAULT_ROLES

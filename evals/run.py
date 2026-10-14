@@ -47,6 +47,7 @@ from evals import costs, escalation, gate, play, runfile, runner  # noqa: E402
 from evals.embed import corpus as embed_corpus  # noqa: E402
 from evals.embed import harness as embed_harness  # noqa: E402
 from evals.embed import metrics as embed_metrics  # noqa: E402
+from evals.epistemic import decision as epistemic_decision  # noqa: E402
 from evals.epistemic import live as epistemic_live  # noqa: E402
 from evals.epistemic import runner as epistemic_runner  # noqa: E402
 from evals.history import runner as history_runner  # noqa: E402
@@ -534,13 +535,59 @@ def run_history(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0 if all(r.passed for r in results) and history_runner.gate(metrics) else 1
 
 
+def _probe(task: str, *, decide: bool = False) -> case_mod.Case:
+    """A case that only names `task` (and, `decide`, its decide operation),
+    for `resolve_connections` to resolve before any home moves."""
+    return case_mod.Case(id=f"epistemic-{task}", hypothesis="spec 11 leakage", build=dict,
+                         prompt=lambda ctx: [], grade=lambda ctx, out: [], recordings=(),
+                         task=task, schema=(lambda ctx: {}) if decide else None)
+
+
+def _epistemic_live(args: argparse.Namespace):
+    """`--epistemic --live`'s model work: `(results, records, gate_records)`,
+    or None when a resolution was refused (said on stderr)."""
+    # Everything read from the real store is read before any home moves:
+    # `chat` for the replies, and `epistemic-access`'s decide resolution
+    # for the judge and the Decision gate.
+    probes = (_probe(epistemic_live.TASK), _probe(epistemic_decision.TASK, decide=True))
+    try:
+        conns = runner.resolve_connections(probes, provider=args.provider,
+                                           model=args.model)
+    except RuntimeError as exc:
+        print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
+        return None
+    resolved = [(runner.conn_key(p), conns[runner.conn_key(p)]) for p in probes]
+    for key, found in resolved:
+        if found.chain is None:   # the seam refuses a resolution of nothing; never sent
+            print(runner.ascii_safe(f"live: {key} resolved to no connection"),
+                  file=sys.stderr)
+            return None
+        print(runner.ascii_safe(f"live: {key} -> {found.chain.primary.kind} / "
+                                f"{found.chain.primary.model or '(default)'}"))
+    target, judge = resolved[0][1], resolved[1][1]
+    real_home = paths.home()
+    rates = usage.Rates.current()
+    run_day = usage._today()
+    results, records = epistemic_live.run(
+        target, real_home=real_home, rates=rates, run_id=args.run_id,
+        run_day=run_day, repeat=args.repeat or 1, judge=judge)
+    gate_results, gate_records = epistemic_decision.run(
+        judge, real_home=real_home, rates=rates, run_id=args.run_id, run_day=run_day,
+        repeat=args.repeat or 1)
+    return [*results, *gate_results], records, gate_records
+
+
 def run_epistemic(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     """`--epistemic`: spec 11's leakage suite. Offline (the default) composes
     every case's reader prompts and grades them; never a call, never a
     client. `--live` also asks each asked NPC its question on the model the
     app routes `chat` to (`--provider`/`--model` override it, as for any
     live run), each in its own throwaway home, and reports the reply-leak
-    line apart from recall (`evals/epistemic/live.py`)."""
+    line apart from recall (`evals/epistemic/live.py`) -- each exposed reply
+    judged by a decide call on `epistemic-access` -- and runs the Decision
+    gate on the same task (`evals/epistemic/decision.py`), whose false-known
+    line is reported apart from its accuracy. `--provider`/`--model` move
+    both resolutions."""
     others = [flag for flag, on in (("--history", args.history), ("--play", bool(args.play)),
                                     ("--embed", args.embed or bool(args.embed_options)),
                                     ("--gate", args.gate), ("--compare", bool(args.compare)),
@@ -563,33 +610,19 @@ def run_epistemic(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         ap.error(f"--repeat must be between 1 and {runner.MAX_REPEAT}")
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     offline_records = epistemic_runner.run_all()
-    results, records = [], []
+    results, records, gate_records = [], [], []
     if args.live:
-        # Everything read from the real store is read before any home moves.
-        try:
-            target = runner.resolve_connections((case_mod.Case(
-                id="epistemic-live", hypothesis="spec 11 leakage", build=dict,
-                prompt=lambda ctx: [], grade=lambda ctx, out: [], recordings=(),
-                task=epistemic_live.TASK),),
-                provider=args.provider, model=args.model)[epistemic_live.TASK]
-        except RuntimeError as exc:
-            print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
+        ran = _epistemic_live(args)
+        if ran is None:
             return 1
-        if target.chain is None:   # the seam refuses a resolution of nothing; never sent
-            print(runner.ascii_safe(f"live: {epistemic_live.TASK} resolved to no connection"),
-                  file=sys.stderr)
-            return 1
-        print(runner.ascii_safe(
-            f"live: {epistemic_live.TASK} -> {target.chain.primary.kind} / "
-            f"{target.chain.primary.model or '(default)'}"))
-        real_home = paths.home()
-        rates = usage.Rates.current()
-        results, records = epistemic_live.run(
-            target, real_home=real_home, rates=rates, run_id=args.run_id,
-            run_day=usage._today(), repeat=args.repeat or 1)
+        results, records, gate_records = ran
         print(runner.report(results))
     print(runner.ascii_safe(epistemic_live.summary(records, offline_records)))
+    if gate_records:
+        print(runner.ascii_safe(epistemic_decision.summary(gate_records)))
     passed = epistemic_live.gate(records, offline_records, live=args.live, results=results)
+    if args.live:
+        passed = passed and epistemic_decision.gate(gate_records)
     if args.out:
         configs = [runfile.config("c1", "live" if args.live else "offline",
                                   {"mode": "live" if args.live else "offline"})]
@@ -597,7 +630,7 @@ def run_epistemic(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         doc["epistemic"] = {"offline": [{k: r[k] for k in ("case", "label", "reader", "leaks",
                                                             "missing", "misplaced")}
                                         for r in offline_records],
-                            "live": records, "gate": passed}
+                            "live": records, "decision": gate_records, "gate": passed}
         runfile.write(Path(args.out), doc)
         print(runner.ascii_safe(f"wrote {args.out}"))
     return 0 if passed else 1

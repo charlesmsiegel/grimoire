@@ -4,10 +4,15 @@ Each recipe plays its source scenes into a fresh campaign and returns the
 evidence 09 would hand over and the checks: per reader (an NPC ref, or None
 for the narrator), the needles its prompt must hold, the needles that must
 appear in no message of it, and the section an allowed needle must sit in.
-Needles are invented tokens, so a match is never a coincidence. Cases 7 and
-15 need the Decision stage (11-S6) and are not here; case 3 is offline-
-visible by design, and only a live reply can show the perception contract
-holding.
+Needles are invented tokens, so a match is never a coincidence. Case 3 is
+offline-visible by design, and only a live reply can show the perception
+contract holding.
+
+Cases 7, 15 and 15b are the Decision stage's (11-S6): offline the part stays
+withheld, as every unknown part does, and a check's `gate` names the needle
+whose part the stage asks about with the answers its gold allows -- which
+`decision.py` grades live as the Decision gate. Cases 8 and 10 carry gates
+too: a summary nobody saw (a negative) and a legacy scene (a positive).
 """
 
 from __future__ import annotations
@@ -34,6 +39,13 @@ class Check:
     #: Needles this NPC's prompt may hold but its reply must not use (case
     #: 3's unmarked whisper: visible offline, unheard in the fiction).
     live_forbidden: tuple[str, ...] = ()
+    #: Each `live_forbidden` token's secret as a plain sentence, for the live
+    #: arm's judge to recognise a paraphrase a token check cannot see (11-S6).
+    facts: Mapping[str, str] = field(default_factory=dict)
+    #: The Decision gate (11-S6): the needle whose part is asked about...
+    gate: str = ""
+    #: ...and the `access_of` answers its gold allows.
+    gold: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,11 +91,21 @@ def _not_present(cast):
     )
 
 
+#: What the gate's answers mean: a grant, or anything that withholds.
+PERMISSIVE = ("known", "suspected", "experienced")
+WITHHOLDING = ("narrator_only", "unknown")
+
+#: Case 3's whisper, as the sentence the judge reads beside its token.
+WHISPER_FACT = "The chapel's silver chalice is hidden beneath the altar stone."
+
+
 def _whisper(cast, override: bool, n: int):
     st = _src(cast, "The Chapel")
     _here(st, cast, "Mara", "Winifred")
     st.say(f"The bells ring for the OPENNEEDLE{n} vigil.")
-    st.reply(cast.win, "Winifred", f"Winifred whispers the WHISPERNEEDLE{n} to the priest.")
+    st.reply(cast.win, "Winifred", f"Winifred whispers the WHISPERNEEDLE{n} to the priest: "
+                                   "the chapel's silver chalice is hidden beneath the "
+                                   "altar stone.")
     whisper = st.index_of(f"WHISPERNEEDLE{n}")
     if override:
         synth.grant(st, cast.mara, "Mara", "unaware", keys=(synth.key(st, whisper),))
@@ -94,7 +116,8 @@ def _whisper(cast, override: bool, n: int):
     mara = (Check(cast.mara, allowed=(f"OPENNEEDLE{n}",), forbidden=(f"WHISPERNEEDLE{n}",),
                   ask=ask)
             if override else Check(cast.mara, allowed=(f"OPENNEEDLE{n}", f"WHISPERNEEDLE{n}"),
-                                   ask=ask, live_forbidden=(f"WHISPERNEEDLE{n}",)))
+                                   ask=ask, live_forbidden=(f"WHISPERNEEDLE{n}",),
+                                   facts={f"WHISPERNEEDLE{n}": WHISPER_FACT}))
     return (st.item(),), (mara, Check(cast.win, allowed=(f"WHISPERNEEDLE{n}",)))
 
 
@@ -144,6 +167,10 @@ def _whole_attendee(cast):
               forbidden=("SECRETNEEDLE8", "The Gallery"),
               ask='Seraphine asks Mara, "How did the auction end, as you saw it?"'),
         Check(None, allowed=("SECRETNEEDLE8", "Known to: Mara")),
+        # The Decision gate's summary negative: Mara stood there, so the
+        # stage may ask about the summary, and nobody saw the swap.
+        Check(cast.mara, forbidden=("SECRETNEEDLE8",), gate="SECRETNEEDLE8",
+              gold=WITHHOLDING),
     )
 
 
@@ -167,7 +194,8 @@ def _legacy(cast):
     st.say("Long ago, the LEGACYNEEDLE10 was buried by the road.")
     synth.forget_intervals(st.cid, aid, st.sid)
     return (st.item(),), (
-        Check(cast.mara, forbidden=("LEGACYNEEDLE10",)),
+        Check(cast.mara, forbidden=("LEGACYNEEDLE10",), gate="LEGACYNEEDLE10",
+              gold=PERMISSIVE),
         Check(None, allowed=("LEGACYNEEDLE10",), forbidden=("Known to:",),
               sections={"LEGACYNEEDLE10": "history_recall"}),
     )
@@ -277,6 +305,48 @@ def _cut(cast):
     return (item,), (Check(cast.win, forbidden=("CUTNEEDLE14",)),)
 
 
+def _told_later(cast):
+    st = _src(cast, "The Customs House")
+    _here(st, cast, "Winifred")
+    st.say("Winifred watches the TOLDNEEDLE7 crates slip past the customs seal.")
+    later = _src(cast, "The Tavern")
+    _here(later, cast, "Mara", "Winifred")
+    later.say("Over the TAVERNNEEDLE7 stew, Winifred tells Mara exactly which crates "
+              "slipped past the customs seal.")
+    return (st.item(), later.item()), (
+        Check(cast.mara, allowed=("TAVERNNEEDLE7",), forbidden=("TOLDNEEDLE7",),
+              gate="TOLDNEEDLE7", gold=PERMISSIVE),
+        Check(cast.win, allowed=("TOLDNEEDLE7", "TAVERNNEEDLE7")),
+    )
+
+
+def _not_told(cast):
+    st = _src(cast, "The Bonded Store")
+    _here(st, cast, "Winifred")
+    st.say("Winifred counts the KEPTNEEDLE15 casks hidden behind the bonded wall.")
+    later = _src(cast, "The Ropewalk")
+    _here(later, cast, "Mara", "Winifred")
+    later.say("Mara and Winifred splice the MEETNEEDLE15 rope in silence; Winifred says "
+              "nothing of the bonded store, and Mara never asks.")
+    return (st.item(), later.item()), (
+        Check(cast.mara, allowed=("MEETNEEDLE15",), forbidden=("KEPTNEEDLE15",),
+              gate="KEPTNEEDLE15", gold=WITHHOLDING),
+    )
+
+
+def _gone_before(cast):
+    st = _src(cast, "The Net Loft")
+    aid, _vid = cast.ids["Mara"]
+    _here(st, cast, "Mara")
+    st.say("Long after Mara had gone home for the night, the GONENEEDLE15 crate was "
+           "pried open in the empty loft.")
+    synth.forget_intervals(st.cid, aid, st.sid)
+    return (st.item(),), (
+        Check(cast.mara, forbidden=("GONENEEDLE15",), gate="GONENEEDLE15",
+              gold=WITHHOLDING),
+    )
+
+
 CASES = (
     Case("1", "not recorded present for a revelation (R4)", _not_present),
     Case("2", "a whisper the actor is marked unaware of (R1 over R3)",
@@ -286,6 +356,7 @@ CASES = (
     Case("4", "a knows override", _knows),
     Case("5", "a suspects override", _suspects),
     Case("6", "a withheld item", _withheld),
+    Case("7", "told in a later scene by someone who was there", _told_later),
     Case("8", "a whole-scene attendee and a secret summary (S1)", _whole_attendee),
     Case("9", "a partial attendee", _partial),
     Case("10", "a legacy scene with no intervals (R5)", _legacy),
@@ -296,4 +367,6 @@ CASES = (
     Case("13", "fingerprints: a swipe and an edit stop a grant, neither stops an unaware",
          _fingerprints),
     Case("14", "a cut between retrieval and classification", _cut),
+    Case("15", "met a teller later, and was not told", _not_told),
+    Case("15b", "a legacy cast member who had already gone", _gone_before),
 )

@@ -249,7 +249,7 @@ def test_a_route_row_names_the_role_it_walks(client):
     got = _global(client)
     deciding = {r.key for r in routing.ROUTES if r.default_role == "decision"}
     assert deciding == {"speaker", "scene_break", "voice_drift", "continuity", "turn_plan",
-                        "history_check"}
+                        "history_check", "epistemic"}
     assert {r["key"] for r in got["routes"] if r["uses"] == "decision"} == deciding
     assert {_row(got, k)["role"] for k in deciding} == {"primary"}
     assert _row(got, "absorb")["uses"] == "fast"

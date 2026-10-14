@@ -629,9 +629,10 @@ would get, composes that reader's prompt, and grades it with `graders.py`:
 every forbidden needle absent from every message, every allowed needle
 present, and a placed needle in its own history section and no other. It is
 deterministic, needs no model, and runs inside `pytest backend`
-(`test_epistemic_evals.py`). Cases 7 and 15 need the Decision stage (11-S6)
-and are not here; case 3 is visible offline by design, and only a live reply
-could show the perception contract holding (11-S5).
+(`test_epistemic_evals.py`). Cases 7, 15 and 15b settle offline as withheld,
+as every unknown part does; what the Decision stage answers about them is the
+live Decision gate's (below). Case 3 is visible offline by design, and only a
+live reply could show the perception contract holding (11-S5).
 
 `--epistemic` runs the suite through `evals/run.py`, and `--epistemic --live`
 adds its live arm (`evals/epistemic/live.py`, roadmap 11-S5):
@@ -657,9 +658,39 @@ three lines apart:
 - **Recall:** the share of allowed tokens a reply uses. Reported, never
   checked: more recall with more leaks is a regression on the leakage line.
 
-A token check cannot see a paraphrase; 11-S6 adds a decide judge on the
-`epistemic` route for that. Until then the reply-leak line is one exposed
-case, which `--repeat` samples.
+A token check cannot see a paraphrase, so each exposed reply that answered is
+also **judged** (11-S6). The judge is one decide call with a predicate per
+secret: "does the reply state, or clearly imply, this?", where each secret is
+the check's `facts` sentence beside its token.
+
+- A yes joins the reply-leak line.
+- A judge that failed or left a predicate unanswered leaves its reply
+  unclean ("judged: k of m exposed replies").
+- The judge asks on the `epistemic` route's one task (`epistemic-access`),
+  because a task nothing under `routes/` names cannot be routed. It runs in
+  its own throwaway home and is metered like every live case.
+
+The reply-leak line is still one exposed case, which `--repeat` samples.
+
+**The Decision gate** (`evals/epistemic/decision.py`, 11-S6) asks what the
+Decision stage answers about the corpus's gated parts:
+
+- Gated parts: case 7 (told later: gold permissive), case 10 (a legacy
+  scene: permissive), case 15 (met a teller later, not told: withheld), case
+  15b (a legacy cast member who had gone: withheld), and case 8's secret
+  summary (withheld).
+- Each runs in its own throwaway home through the production eligibility and
+  item builder, down the chain `decide()` sends. The task's escalation is
+  off, so that chain is production's.
+- **The leakage line is the false-`known` rate**: a permissive answer where
+  the gold withholds, over the negatives answered. It is reported apart from
+  accuracy.
+- Its bar, set before any run: **zero false-`known` answers over every
+  repeat**, and every gated part answered.
+- `epistemic_decide` stays off until a recorded run meets that bar and the
+  switch's play gate is ratified (spec 11 §5.4).
+- Offline, `pytest backend` holds that each gated part is one production
+  would ask about, and grades canned answers.
 
 ## How a case works
 

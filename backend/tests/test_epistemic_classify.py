@@ -252,7 +252,11 @@ def test_s1_a_post_unaware_withholds_the_summary_past_a_whole_scene_grant(pier, 
     _grant(st, win, "Winifred", "knows")
     _grant(st, "*", "", "unaware", keys=(_key(st, st.index_of("silver ledger")),))
     [c] = _view(st, win, [st.item(summary="Mara gave away the silver ledger.")]).items
-    assert next(s for s in c.slices if s.part == "summary").basis == ("summary_needs_grant",)
+    # An override's doing, so never a part the Decision stage may ask about
+    # (11-S6): a `known` answer would show a summary that may paraphrase the
+    # withheld post.
+    summary = next(s for s in c.slices if s.part == "summary")
+    assert summary.basis == ("override",) and not epistemic.eligible(summary)
     assert "title" not in c.header
 
 
@@ -629,7 +633,7 @@ def test_an_unresolvable_group_post_unaware_withholds_the_summary(pier):
     _grant(st, mara, "Mara", "knows")
     _grant(st, "groups:watch", "The Watch", "unaware", keys=(_key(st, 0),))
     [c] = _view(st, mara, [st.item(summary="Mara gave away the silver ledger.")]).items
-    assert next(s for s in c.slices if s.part == "summary").basis == ("summary_needs_grant",)
+    assert next(s for s in c.slices if s.part == "summary").basis == ("override",)
     assert "title" not in c.header
 
 

@@ -225,6 +225,10 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
                                         store.config.DEFAULT_DECIDE_TURN_PLAN),
             "decide_play_tool": cfg.get("decide_play_tool",
                                         store.config.DEFAULT_DECIDE_PLAY_TOOL),
+            # Spec 11's Decision stage (11-S6): reported so a write reads
+            # back, and drawn by no control until its play gate is ratified.
+            "epistemic_decide": cfg.get("epistemic_decide",
+                                        store.config.DEFAULT_EPISTEMIC_DECIDE),
             "send_images": cfg.get("send_images", store.config.DEFAULT_SEND_IMAGES),
             "send_images_limit": cfg.get("send_images_limit",
                                          store.config.DEFAULT_SEND_IMAGES_LIMIT),
@@ -349,7 +353,7 @@ def _recursion_depth_ok(value: str | None) -> bool:
 
 #: Config keys whose only meaningful values are "on" and "off".
 _ON_OFF_KEYS = ("tracker", "perception_rider", "send_images",
-                "decide_speaker_sampling", "decide_play_tool")
+                "decide_speaker_sampling", "decide_play_tool", "epistemic_decide")
 
 
 #: The legacy keys that pick the Embedding role on a store not yet at format 2.

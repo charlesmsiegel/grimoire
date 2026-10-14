@@ -42,6 +42,7 @@ from . import (  # noqa: F401
                cast,
                compare,
                epistemic,
+               epistemic_items,
                layout,
                macros,
                mechanics,

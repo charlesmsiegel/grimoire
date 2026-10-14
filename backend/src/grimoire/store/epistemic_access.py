@@ -2,11 +2,11 @@
 
 Whether a character could know a recalled piece of history, asked only for
 the pairs 11's deterministic rules could not settle. This module is the KIT:
-the item builder, the mapping back, the vocabulary and the policy row 11
-registers. It names no task in a `decide()` call: the route (`epistemic`),
-the `TASK_POLICY` row, the registered eval case and the capture all land
-with 11's call site, because a route may not land before the call site that
-decides it (`test_operation_guard.py`).
+the item builder, the mapping back and the vocabulary. It names no task in a
+`decide()` call: the route (`epistemic`), the `TASK_POLICY` row, the
+registered eval case and the capture landed with 11's call site
+(`routes/epistemic.py`, 11-S6), because a route may not land before the call
+site that decides it (`test_operation_guard.py`).
 
 Three rules the mapping keeps:
 
@@ -54,22 +54,19 @@ WITHHOLDING: tuple[str, ...] = (UNKNOWN, "narrator_only", "suspected", "known", 
 #: The task 11's call site names, on the `epistemic` route it lands.
 TASK = "epistemic-access"
 
-#: The route entry 11 adds to `routing.ROUTES` with its call site (§9.2).
-#: Not registered here: a route may not land before the call site that
-#: decides its task.
-ROUTE = routing.Route(
-    "epistemic", "Character knowledge",
-    "Whether a character could know a recalled piece of history, where the record "
-    "alone cannot say.",
-    (TASK,), True, operation="decide", default_role="decision", legacy=routing.NO_LEGACY)
+#: The route 11's call site decides on (`routes/epistemic.py`), registered in
+#: `routing.ROUTES` with it (11-S6).
+ROUTE = routing.route(TASK)
 
 
 def policy() -> routing.TaskPolicy:
-    """The 01d-C1 row 11 registers with its call site (§9.2, §10): escalate a
-    refusal or a low margin on a PERMISSIVE answer to Primary, at 01d-C3's
-    starting threshold for each native endpoint kind; the role's fallback;
-    never sampled. Not `abstained`: an abstention is `UNKNOWN`, already the
-    safe side."""
+    """02-C5a's CANDIDATE escalation row (§9.2, §10): escalate a refusal or a
+    low margin on a PERMISSIVE answer to Primary, at 01d-C3's starting
+    threshold for each native endpoint kind; the role's fallback; never
+    sampled. Not `abstained`: an abstention is `UNKNOWN`, already the safe
+    side. Not registered: 11-S6 landed the task with escalation off, as every
+    task lands (01d §6.4), and this row is switched on only by the change
+    that carries its evidence (`evals/README.md`, "Decision escalation")."""
     return routing.TaskPolicy(
         escalate_to="primary", escalate_on=("refused", "low_margin"), question=ACCESS_ID,
         margins=(("openai_compatible", routing.DEFAULT_MARGIN),

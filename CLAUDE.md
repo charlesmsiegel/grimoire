@@ -745,6 +745,23 @@ would answer neither question.
   another scene or speaker, and with no view renders no history. A failure
   narrows: the narrator keeps 09's items unannotated, an NPC gets nothing. The
   basis codes are inspector data and never reach a message.
+
+  **The Decision stage only narrows the gap it was asked about** (11-S6,
+  `routes/epistemic.refine`). Behind `epistemic_decide`, an NPC step's
+  `unknown` parts may be put to a `decide` call, but only on a basis that
+  proves nothing either way (`epistemic.ELIGIBLE_BASES`) and only with a
+  structural channel (`store/context/epistemic_items`). The call is capped at
+  8 parts per step and 16 per round, the round's count living on its record.
+  It runs under one `EPISTEMIC_CEILING_S` deadline, never on a replay or a
+  continuation, and once per (round, speaker).
+  - The answers re-enter `classify(..., decided=)`. A model can make a part
+    `known` or `suspected` or leave it `unknown`, never `witnessed` or
+    `narrator_only`, and every failure leaves the part withheld.
+  - The view a step composed with rides its response's snapshot
+    (`epistemic.to_record`, no withheld text), so a roll resume in a later
+    request recomposes with it.
+  - The switch is off by default and drawn by no Settings control until its
+    play gate is ratified. With it off, nothing past the switch is read.
 - **Hand edits to the ledger go through `routes/ledger.py`**, which takes the
   campaign lock the absorb save already holds across its whole sequence and
   wraps every write in `store.undo.journalled` so it lands in the journal as
@@ -1096,8 +1113,9 @@ would answer neither question.
   `unknown`, `no` only when known) on the Decision card and on every decide
   route row -- "No native decision API" is said only of a known `no` -- read off the same resolution the chain
   runs, so the Models page's decide note is the server's sentence and the
-  frontend keeps no capability rule of its own. The six decide routes (`speaker`,
-  `scene_break`, `voice_drift`, `continuity`, `turn_plan` and `history_check`) use the
+  frontend keeps no capability rule of its own. The seven decide routes (`speaker`,
+  `scene_break`, `voice_drift`, `continuity`, `turn_plan`, `history_check` and
+  `epistemic`) use the
   Decision role, which
   inherits Fast, so on them a campaign's own Fast override no longer outranks
   a global pin (spec 5.1) -- the duplicate check and the sweep included, which
@@ -1178,9 +1196,11 @@ would answer neither question.
   relevance kit used by 09-S5's captured `routes/history_recall.py` caller
   on the `history_check` route, with no sampling or escalation and its
   registered replay case. The rerank switch defaults off, and an ungraded
-  candidate keeps its RRF slot. `store/epistemic_access.py` remains a decide
-  kit for 11: its route, policy row and registered eval case land with that
-  call site (`evals/cases.KIT_CASES` holds its case until then).
+  candidate keeps its RRF slot. `store/epistemic_access.py` is the kit 11-S6's
+  `routes/epistemic.py` decides with, on the `epistemic` route. Its task landed
+  with escalation off. The kit's `policy()` is the candidate row, to be
+  switched on only with its "Decision escalation" evidence. Its eval case is
+  registered, and `evals/cases.KIT_CASES` is empty.
 - **Adding an embedding call site?** The doors are in one module,
   `store/inference/embed.py`: `embed_sync(<task>, texts,
   space=embed_space.endpoint(), client=…, campaign=…)` from a worker thread

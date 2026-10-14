@@ -11,7 +11,10 @@ from evals.epistemic import cases, runner
 
 def test_the_corpus_covers_the_offline_cases():
     ids = {c.id.rstrip("bc") for c in cases.CASES}
-    assert ids == {"1", "2", "3", "4", "5", "6", "8", "9", "10", "11", "12", "13", "14"}
+    # Every case of spec 11 §8.1: 7 and 15 (and 15b) settle offline as
+    # withheld, and their Decision answers are the live gate's (11-S6).
+    assert ids == {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13",
+                   "14", "15"}
 
 
 @pytest.mark.parametrize("case", cases.CASES, ids=[c.id for c in cases.CASES])

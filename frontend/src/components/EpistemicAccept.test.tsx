@@ -10,14 +10,15 @@ const create = vi.mocked(api.ledgerCreateKnowledge);
 const KEY = { key: "p-aaaa", part: "", variant: "", digest: "d1", shown: "s1" };
 
 function detail(keys = [KEY], perspective = "actor:characters:winifred",
-                access: "witnessed" | "unknown" = "unknown"): EpistemicDetail {
+                access: "witnessed" | "known" | "suspected" | "unknown" = "unknown",
+                basis = ["not_recorded_present"]): EpistemicDetail {
   return {
     perspective, decided: 0,
     names: { "characters:winifred": "Winifred", "characters:mara": "Mara", "characters:seraphine": "Seraphine" },
     items: [{
       key: "a".repeat(32), scene: "001--pier", admitted: true, state: "unattributed", header: {},
       known_to: [], suspected_by: [],
-      slices: [{ part: "posts", posts: [0], access, basis: ["not_recorded_present"], keys },
+      slices: [{ part: "posts", posts: [0], access, basis, keys },
                { part: "summary", posts: [], access: "unknown", basis: ["summary_needs_grant"], keys: [] }],
     }],
   };
@@ -105,4 +106,50 @@ test("a part the packer shed was never sent, so it can only be withheld", () => 
                            acceptCid="saltmarch" />);
   expect(screen.queryByRole("button", { name: "Mark as known" })).toBeNull();
   expect(screen.getByRole("button", { name: "Mark as unaware" })).toBeInTheDocument();
+});
+
+// 11-S6: a part the Decision stage answered leads with that answer.
+
+test("a Decision's known answer can be accepted as the user's word", async () => {
+  create.mockClear();
+  create.mockResolvedValue({} as never);
+  render(<ContextBreakdown models={[]} ctx={ctx(detail([KEY], undefined, "known", ["decision"]))}
+                           acceptCid="saltmarch" />);
+  expect(screen.getByText("Decision: known")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Accept the Decision" }));
+  expect(create.mock.calls[0][1]).toMatchObject({ status: "knows", expect: [KEY],
+                                                  source: "accepted" });
+  expect(await screen.findByText(/Saved: Winifred knows this/)).toBeInTheDocument();
+  // Accepting is the answer; the other two stay offered, the answer not twice.
+  expect(screen.queryByRole("button", { name: "Mark as known" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Mark as unaware" })).toBeInTheDocument();
+});
+
+test("a Decision that withheld is accepted as unaware", async () => {
+  create.mockClear();
+  create.mockResolvedValue({} as never);
+  render(<ContextBreakdown models={[]} ctx={ctx(detail([KEY], undefined, "unknown", ["decision"]))}
+                           acceptCid="saltmarch" />);
+  expect(screen.getByText("Decision: not known")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Accept the Decision" }));
+  expect(create.mock.calls[0][1]).toMatchObject({ status: "unaware", expect: null });
+  expect(await screen.findByText(/is unaware of this/)).toBeInTheDocument();
+});
+
+test("an abstained or failed Decision is no answer to accept", () => {
+  for (const basis of ["decision_abstained", "decision_failed", "decision_skipped"]) {
+    const { unmount } = render(<ContextBreakdown models={[]}
+      ctx={ctx(detail([KEY], undefined, "unknown", [basis]))} acceptCid="saltmarch" />);
+    expect(screen.queryByText(/^Decision:/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Accept the Decision" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Mark as unaware" })).toBeInTheDocument();
+    unmount();
+  }
+});
+
+test("a known answer the prompt never carried is not a grant to accept", () => {
+  render(<ContextBreakdown models={[]} ctx={ctx(detail([KEY], undefined, "known", ["decision"]), false)}
+                           acceptCid="saltmarch" />);
+  expect(screen.getByText("Decision: known")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Accept the Decision" })).toBeNull();
 });

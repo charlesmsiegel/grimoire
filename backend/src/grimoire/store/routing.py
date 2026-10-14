@@ -175,6 +175,12 @@ TASK_POLICY: dict[str, TaskPolicy] = {
     # Roadmap 02-C4: the decide tool's selection is drawn where a report
     # allows (§8.1, as §6.5); never escalated (the tool takes no escalator).
     "turn-tool-decision": TaskPolicy(question="choice", samples=True),
+    # Roadmap 11-S6: the Decision stage's call site. Escalation off at
+    # landing, as every task's (01d §6.4): 02-C5a's candidate row is
+    # `epistemic_access.policy()`, switched on only by the change that carries
+    # its evidence (`evals/README.md`, "Decision escalation"). Never sampled:
+    # what a character knows is not behaviour.
+    "epistemic-access": TaskPolicy(),
 }
 
 _DEFAULT = TaskPolicy()
@@ -225,6 +231,14 @@ ROUTES: tuple[Route, ...] = (
     Route("history_check", "History checks",
           "Whether a recalled scene bears on the current turn, after retrieval has found it.",
           ("history-rerank",), True, operation="decide", default_role="decision",
+          legacy=NO_LEGACY),
+    # Roadmap 11-S6: the Decision stage's call site (`routes/epistemic.py`).
+    # Spelled here, not imported from `store/epistemic_access.py`, which
+    # imports this module; `test_epistemic_refine` holds the two to agree.
+    Route("epistemic", "Character knowledge",
+          "Whether a character could know a recalled piece of history, where the record "
+          "alone cannot say. Off unless switched on by hand.",
+          ("epistemic-access",), True, operation="decide", default_role="decision",
           legacy=NO_LEGACY),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),
