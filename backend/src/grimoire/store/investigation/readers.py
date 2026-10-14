@@ -251,6 +251,9 @@ def record_history(cid: str, ref: object) -> list[dict]:
         if not sep:
             raise NotFound(ref)
         sides = [split(a, ACTOR_KINDS), split(b, ACTOR_KINDS)]
+        if not all(_exists(cid, k, i) for k, i in sides):
+            # A side no roster holds is no pair, not one with nothing recorded.
+            raise NotFound(ref)
         a_ref, b_ref = (f"{k}:{i}" for k, i in sides)
         rows = relationship_history.for_pair(cid, a_ref, b_ref)
         return [{"scene": _text(r.get("scene")), "kind": _text(r.get("kind")),

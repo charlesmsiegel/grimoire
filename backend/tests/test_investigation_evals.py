@@ -49,6 +49,24 @@ def test_the_gate_reads_per_entry_point_and_e1_is_absent(records):
     assert "absent until 12-S6" in runner.summary(records, live=False)
 
 
+def test_an_incumbent_that_errored_is_no_baseline(records):
+    broken = [{**r, "error": "LLMError", "grade": graders.ABSTAINED}
+              if r["arm"] != "investigation" else r for r in records]
+    assert runner.gate(broken) == {"rp": False, "continuity": False, "question": False}
+
+
+def test_an_arms_wall_time_is_its_own(records, monkeypatch):
+    """The hidden-route probes run after the arm and are not its latency."""
+    slow = runner._hidden_route
+
+    async def probe(planted):
+        await runner.asyncio.sleep(0.3)
+        return await slow(planted)
+    monkeypatch.setattr(runner, "_hidden_route", probe)
+    _results, timed = runner.run_all(selected=("question",))
+    assert all(r["wall_ms"] < 300 for r in timed)
+
+
 def test_the_gate_fails_without_the_margin(records):
     worse = [{**r, "grade": graders.ABSTAINED} if r["arm"] == "investigation" else r
              for r in records]
@@ -98,6 +116,31 @@ def test_the_investigation_arm_runs_as_the_entry_point_does(monkeypatch):
     assert live["budget"].wall_seconds > 0
 
 
+def test_both_arms_search_with_the_embeddings_client_they_are_handed(monkeypatch):
+    """Live, the run hands both arms an embeddings client (and the real
+    store's space in the planted home's place), as production searches."""
+    handed = []
+    real = runner.inv_tools.toolset
+
+    def toolset(run, *a, **k):
+        handed.append(run.embed_client)
+        return real(run, *a, **k)
+    monkeypatch.setattr(runner.inv_tools, "toolset", toolset)
+    client = object()
+    case = next(c for c in cases.CASES if c.mode == "question")
+    with runner.isolated():
+        planted = runner.synth.RECIPES[case.recipe]()
+        runner.asyncio.run(runner._retrieval(case, planted, client=None, resolved=None,
+                                             run_id="r", live=False, decider=None,
+                                             embed_client=client))
+        fake, resolved = runner._client(case, "investigation", planted, live=False,
+                                        targets={})
+        runner.asyncio.run(runner._investigate(
+            case, planted, client=fake, resolved=resolved, run_id="r", live=False,
+            decider=None, embed_client=client))
+    assert handed and all(h is client for h in handed)
+
+
 # ---- the graders, on planted input ----
 def test_a_directed_proposal_running_the_wrong_way_is_wrong():
     gold, way = {"s2"}, ("thread:b", "thread:a")
@@ -127,15 +170,25 @@ def test_a_proposal_is_graded_with_uncertain_as_an_abstention():
                             {"decision": "fulfilled", "evidence_scenes": ["s1"]}) == graders.WRONG
     assert graders.proposal("fulfilled", gold,
                             {"decision": "broken", "evidence_scenes": ["s3"]}) == graders.WRONG
+    # The right word with nothing cited is a guess, not a reading.
+    assert graders.proposal("fulfilled", gold,
+                            {"decision": "fulfilled", "evidence_scenes": []}) == graders.WRONG
 
 
-def test_an_answer_needs_its_needle_and_valid_citations():
-    gold = {"s3"}
-    assert graders.answer(("compass",), gold, {"text": "The compass came back.",
-                                               "citations": ["scene:s3"]}) == (graders.CORRECT, True)
-    assert graders.answer(("compass",), gold, {"text": "The compass came back.",
-                                               "citations": ["scene:s1"]}) == (graders.WRONG, False)
-    assert graders.answer(("compass",), gold, None) == (graders.ABSTAINED, True)
+def test_an_answer_needs_its_claim_no_denial_and_valid_citations():
+    gold, claim = {"s3"}, (("compass",), ("back",))
+    assert graders.answer(claim, gold, {"text": "The compass came back.",
+                                        "citations": ["scene:s3"]}) == (graders.CORRECT, True)
+    assert graders.answer(claim, gold, {"text": "The compass came back.",
+                                        "citations": ["scene:s1"]}) == (graders.WRONG, False)
+    assert graders.answer(claim, gold, None) == (graders.ABSTAINED, True)
+    # Every group must be met, and a denial turns the claim round.
+    assert graders.answer(claim, gold, {"text": "The compass is lost.",
+                                        "citations": ["scene:s3"]})[0] == graders.WRONG
+    for denied in ("No, Mara never brought the compass back.",
+                   "The compass came back, but that is unrelated."):
+        assert graders.answer(claim, gold, {"text": denied,
+                                            "citations": ["scene:s3"]})[0] == graders.WRONG
 
 
 def _step(query, refs):

@@ -1,8 +1,8 @@
 """The investigation gate's graders (spec 10.3).
 
 Correctness per entry point -- a proposal against its gold decision, with
-`uncertain` scored as an abstention; an answer against its needles and its
-citations against the gold scenes -- and the two leakage lines, kept apart
+`uncertain` scored as an abstention; an answer against the claim it must
+state, the denials it must not, and its citations against the gold scenes -- and the two leakage lines, kept apart
 from it:
 
 - **text leakage**: a forbidden word in what the run wrote (a proposal's
@@ -29,28 +29,44 @@ def _scene(ref: str) -> str:
 def proposal(gold_decision: str, gold_scenes: Iterable[str], found: dict | None,
              direction: tuple[str, str] = ()) -> str:
     """A proposal graded: none, or `uncertain`, is an abstention; the gold
-    word citing only gold scenes -- and, for a directed word, running the
-    gold `(from, to)` way -- is correct; anything else is wrong."""
+    word citing at least one scene and only gold scenes -- and, for a
+    directed word, running the gold `(from, to)` way -- is correct; anything
+    else is wrong."""
     if not found or found.get("decision") in ("", "uncertain", None):
         return ABSTAINED
     cited = {_scene(s) for s in found.get("evidence_scenes") or []}
     turned = bool(direction) and (found.get("from"), found.get("to")) != tuple(direction)
-    if found.get("decision") == gold_decision and cited <= set(gold_scenes) and not turned:
+    # A right word with no scene cited is a guess from the seed, not the
+    # transcript reading every corpus case exists to measure.
+    shown = bool(cited) and cited <= set(gold_scenes)
+    if found.get("decision") == gold_decision and shown and not turned:
         return CORRECT
     return WRONG
 
 
-def answer(needles: Iterable[str], gold_scenes: Iterable[str], found: dict | None
-           ) -> tuple[str, bool]:
+#: Words that turn a claim round: an answer holding one is graded wrong
+#: whatever else it says ("No, Mara never returned the compass"; "the fire
+#: was unrelated"). Lexical, so it can mark a right answer wrong -- the
+#: direction that can only cost an arm correctness, never hand it a margin,
+#: and both arms are graded by it alike.
+DENIALS = ("never", "did not", "didn't", "does not", "doesn't", "not return", "unrelated",
+           "nothing to do with", "no,", "no.", "no evidence", "cannot tell", "unclear")
+
+
+def answer(claim: Iterable[Iterable[str]], gold_scenes: Iterable[str], found: dict | None,
+           denials: Iterable[str] = DENIALS) -> tuple[str, bool]:
     """An answer graded, and whether its citations are valid (every one a
-    gold scene). No answer is an abstention."""
+    gold scene, and at least one). Correct is valid citations, every group
+    of `claim` met (any one of its words), and no word of `denials`. No
+    answer is an abstention."""
     if not found or not found.get("text"):
         return ABSTAINED, True
     cited = {_scene(c) for c in found.get("citations") or []}
     valid = bool(cited) and cited <= set(gold_scenes)
     text = str(found["text"]).casefold()
-    hit = any(n.casefold() in text for n in needles)
-    return (CORRECT if hit and valid else WRONG), valid
+    stated = all(any(w.casefold() in text for w in group) for group in claim)
+    denied = any(w.casefold() in text for w in denials)
+    return (CORRECT if stated and not denied and valid else WRONG), valid
 
 
 def text_leaks(texts: Iterable[str], forbidden: Iterable[str]) -> list[str]:

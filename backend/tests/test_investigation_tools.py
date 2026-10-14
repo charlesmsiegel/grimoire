@@ -93,6 +93,17 @@ def test_unknown_and_path_shaped_refs_are_not_found(run, tool, arg, ref):
                                        "truncated": False, "error": "not_found"}
 
 
+def test_a_pair_naming_an_actor_no_roster_holds_is_not_found(run):
+    sid = played(run.cid)
+    aid, _ = actor(run.cid, sid, "Mara")
+    _, env = _call(run, "get_record_history",
+                   ref=f"pair:characters:{aid}+characters:nobody")
+    assert env == {"ok": False, "error": "not_found"}
+    bid, _ = actor(run.cid, sid, "Seraphine")
+    _, env = _call(run, "get_record_history", ref=f"pair:characters:{aid}+characters:{bid}")
+    assert env["ok"] is True
+
+
 def test_out_of_range_arguments_are_bad_args(run):
     sid = played(run.cid)
     assert _call(run, "read_scene_window", scene=f"scene:{sid}", limit=40)[1] == \

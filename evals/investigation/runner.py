@@ -34,16 +34,17 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from evals import costs
 from evals import runner as reports
 from evals.cases import Case as ReportCase
 from evals.graders import Check
-from grimoire import inference, schemas, tool_calls, wire
+from grimoire import embeddings, inference, schemas, tool_calls, wire
 from grimoire.llm import LLMClient
 from grimoire.routes import investigation
 from grimoire.routes.common import UsableInference
-from grimoire.store import routing, usage
+from grimoire.store import embed_space, routing, usage
 from grimoire.store.continuity import candidates, reconcile
 from grimoire.store.inference.resolved import Attempt
 from grimoire.store.investigation import budget as inv_budget
@@ -101,13 +102,14 @@ def _seed(case: cases.Case, planted: synth.Planted) -> investigation.Seed:
     return investigation.question_seed(planted.cid, case.question)
 
 
-async def _investigate(case, planted, *, client, resolved, run_id, live, decider) -> dict:
+async def _investigate(case, planted, *, client, resolved, run_id, live, decider,
+                       embed_client=None) -> dict:
     """The entry point's own run: its decide tool on `decider` (the real
     store's resolution live, the offline target offline), and its budget as
     the route reads it -- with no wall offline only, where a canned script
     answers at once and the isolated home's call budget means nothing."""
     seed = await asyncio.to_thread(_seed, case, planted)
-    run_state = inv_state.RunState(cid=planted.cid, mode=case.mode)
+    run_state = inv_state.RunState(cid=planted.cid, mode=case.mode, embed_client=embed_client)
     budget = inv_budget.for_entry(case.mode)
     if not live:
         budget = replace(budget, wall_seconds=0)
@@ -117,7 +119,8 @@ async def _investigate(case, planted, *, client, resolved, run_id, live, decider
     return outcome.as_dict()
 
 
-async def _sweep(case, planted, *, client, resolved, run_id, live, decider) -> dict:
+async def _sweep(case, planted, *, client, resolved, run_id, live, decider,
+                 embed_client=None) -> dict:
     """E2's incumbent: the sweep's own answer for the one finding -- offline
     (no model) none, which is an abstention; live, the decide call the sweep
     makes, read back by its own `proposals_of`."""
@@ -156,11 +159,12 @@ def _incumbent_answer(text: str, shown: list[str]) -> dict | None:
     return {"text": found["text"].strip(), "citations": list(dict.fromkeys(cited))}
 
 
-async def _retrieval(case, planted, *, client, resolved, run_id, live, decider) -> dict:
+async def _retrieval(case, planted, *, client, resolved, run_id, live, decider,
+                     embed_client=None) -> dict:
     """E3's incumbent: one search over the question, nothing read further --
     offline its evidence only; live, one generated answer over it, citing
     the shown items it says support it."""
-    run_state = inv_state.RunState(cid=planted.cid, mode="question")
+    run_state = inv_state.RunState(cid=planted.cid, mode="question", embed_client=embed_client)
     spec = inv_tools.toolset(run_state).get("search_history")
     ctx = tool_calls.ToolContext(campaign=planted.cid, scene_identity="", run_id=run_id,
                                  deadline=float("inf"), root="")
@@ -209,7 +213,7 @@ def _grade(case: cases.Case, planted: synth.Planted, arm: str, ran: dict) -> dic
         valid, selected = True, (found or {}).get("evidence_scenes") or []
         written = [(found or {}).get("reason", "")]
     else:
-        grade, valid = graders.answer(case.needles, planted.gold_scenes, found)
+        grade, valid = graders.answer(case.claim, planted.gold_scenes, found)
         selected = (found or {}).get("citations") or []
         written = [(found or {}).get("text", "")]
         if arm == "retrieval" and found is None:
@@ -232,13 +236,31 @@ def _report_case(case: cases.Case) -> ReportCase:
                       lambda ctx, output: [], (), task=TASKS[case.mode])
 
 
+async def _timed(fn, *args, **kwargs) -> tuple[dict, float]:
+    """An arm's result and its own wall time (ms): the arm alone, never the
+    leakage probes or the client teardown around it."""
+    started = time.monotonic()
+    ran = await fn(*args, **kwargs)
+    return ran, (time.monotonic() - started) * 1000
+
+
+async def _close(*clients) -> None:
+    for client in clients:
+        if client is not None:
+            await client.aclose()
+
+
 def run_all(*, live: bool = False, targets: dict | None = None, rates=None, run_id: str = "",
-            real_home: Path | None = None, selected: tuple[str, ...] = ()
-            ) -> tuple[list, list[dict]]:
+            real_home: Path | None = None, selected: tuple[str, ...] = (),
+            space: dict | None = None) -> tuple[list, list[dict]]:
     """Every case through its mode's arms, each in a throwaway home: `(report
     results, metric records)`. `targets` (live) maps each task to the real
     store's resolution, read before any home moved; `selected` narrows to
-    those modes."""
+    those modes. `space` (live) is the real store's embedding endpoint, read
+    before any home moved too (None: the Embedding role is off there): a
+    planted home configures none, so each case reads it in its place and
+    both arms search with a live embeddings client, as production does --
+    hybrid where the user's store is hybrid, lexical where it is not."""
     run_id = run_id or str(uuid.uuid4())
     targets = targets or {}
     results, records = [], []
@@ -254,17 +276,24 @@ def run_all(*, live: bool = False, targets: dict | None = None, rates=None, run_
                 client, resolved = _client(case, arm, planted, live=live, targets=targets)
                 decider = (targets.get(DECIDE_TASK) if live
                            else offline_resolution(DECIDE_TASK, "decide"))
+                embed = embeddings.AsyncEmbeddingsClient() if live and space else None
+                hidden, wall = None, None
                 try:
-                    ran = asyncio.run(ARM_FNS[arm](case, planted, client=client,
-                                                   resolved=resolved, run_id=run_id,
-                                                   live=live, decider=decider))
-                    hidden = asyncio.run(_hidden_route(planted))
+                    with contextlib.ExitStack() as stack:
+                        if live:
+                            stack.enter_context(patch.object(embed_space, "endpoint",
+                                                             return_value=space))
+                        ran, wall = asyncio.run(_timed(
+                            ARM_FNS[arm], case, planted, client=client, resolved=resolved,
+                            run_id=run_id, live=live, decider=decider, embed_client=embed))
+                        hidden = asyncio.run(_hidden_route(planted))
                 except Exception as exc:  # noqa: BLE001 - one failed case is graded as failed
-                    error, ran, hidden = type(exc).__name__, {"state": "failed"}, None
+                    error, ran = type(exc).__name__, {"state": "failed"}
+                    if wall is None:  # the arm itself raised
+                        wall = (time.monotonic() - started) * 1000
                 finally:
-                    if live and client is not None:
-                        asyncio.run(client.aclose())
-                wall = (time.monotonic() - started) * 1000
+                    if live:
+                        asyncio.run(_close(client, embed))
                 rows = reports.harvest(day, run_id, case.id)
                 metric = {**_grade(case, planted, arm, ran), "hidden_route": hidden,
                           "error": error, "wall_ms": wall}
@@ -340,7 +369,7 @@ def uncovered(records: list[dict], mode: str) -> frozenset[str]:
 def gate(records: list[dict]) -> dict[str, bool]:
     """Per entry point (spec 10.4): the investigation arm beats its incumbent
     by `cases.MARGIN` on correctness, with no leakage line worse and no
-    error, over a run that covered every one of spec 10.2's items for it
+    error in either arm, over a run that covered every one of spec 10.2's items for it
     (`cases.COVERAGE`). E1 is absent until 12-S6, and so cannot pass."""
     totals = aggregate(records)
     out: dict[str, bool] = {"rp": False}
@@ -349,9 +378,12 @@ def gate(records: list[dict]) -> dict[str, bool]:
         if b is None or c is None or uncovered(records, mode):
             out[mode] = False
             continue
+        # An incumbent that errored is no baseline: its abstentions would be
+        # the margin. Both arms must have run clean for a comparison to stand.
         out[mode] = (c["correct"] - b["correct"] >= cases.MARGIN
                      and c["text_leaks"] <= b["text_leaks"] and c["steered"] <= b["steered"]
-                     and c["hidden_route_failures"] == 0 and c["errors"] == 0)
+                     and c["hidden_route_failures"] == 0
+                     and c["errors"] == 0 and b["errors"] == 0)
     return out
 
 

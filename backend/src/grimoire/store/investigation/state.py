@@ -29,7 +29,10 @@ class RunState:
     and structural only).
 
     Tools may run on the tool pool's threads, so the shared collections are
-    written under `lock`."""
+    written under `lock`. `freeze` ends the writing: a tool thread the loop
+    stopped waiting on can still finish after the run is checked, and what it
+    would note -- a step, a scene read -- was never delivered to the model,
+    so it is dropped rather than let into the check or the trace."""
     cid: str
     mode: str
     sid: str = ""
@@ -39,6 +42,7 @@ class RunState:
     evidence: dict[str, history_model.EvidenceItem] = field(default_factory=dict)
     steps: list[dict] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    frozen: bool = False
 
     def __post_init__(self) -> None:
         if self.mode not in MODES:
@@ -48,7 +52,14 @@ class RunState:
 
     def inspect(self, sid: str) -> None:
         with self.lock:
-            self.inspected.add(sid)
+            if not self.frozen:
+                self.inspected.add(sid)
+
+    def freeze(self) -> None:
+        """No tool writes after this; the caller's own `note` still lands
+        (`final=True`), for the terminal step it adds after the check."""
+        with self.lock:
+            self.frozen = True
 
     def hold(self, item: history_model.EvidenceItem) -> str:
         """`item` held under a fresh run-local id (`e1`, `e2`...), the id the
@@ -61,6 +72,7 @@ class RunState:
             self.evidence[key] = item
             return key
 
-    def note(self, step: dict) -> None:
+    def note(self, step: dict, *, final: bool = False) -> None:
         with self.lock:
-            self.steps.append(step)
+            if final or not self.frozen:
+                self.steps.append(step)

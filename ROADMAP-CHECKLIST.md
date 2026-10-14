@@ -505,8 +505,15 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
     `retrieve` keeps gathering outside every campaign hold, as on the turn
     path.
   - The gate refuses an entry point whose run did not cover all its spec
-    10.2 items (`evals/investigation/cases.COVERAGE`). The offline arm's model
-    is `tests/llm_fakes.FakeToolTurns`, so that one eval imports the tests.
+    10.2 items (`evals/investigation/cases.COVERAGE`), or in which either arm
+    errored. The offline arm's model is `tests/llm_fakes.FakeToolTurns`, so
+    that one eval imports the tests; live, both arms search with the real
+    store's Embedding role. Answers are graded lexically, by claim groups and
+    a denial list.
+  - Once the loop returns, the run's state is frozen: a tool thread it
+    stopped waiting on adds no read and no step, and steps stand only against
+    calls the loop handed back. A loop that raised reads its own turns' rows
+    back from the ledger for the trace.
 - **Still owed by the implemented slices** (found in review, not built here):
   E2's and E3's per-turn prompt-log captures (spec 8.2, "when capturing is
   on" -- 01g's `TurnCapture` has no prompt-log filer yet; the decide tool's

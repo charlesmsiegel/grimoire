@@ -42,9 +42,11 @@ class Case:
     #: `(from, to)` refs (the proposal's own, after the sweep's rebuild).
     decision: str = ""
     direction: tuple[str, str] = ()
-    #: E3: the reader's question, and words one of which a correct answer holds.
+    #: E3: the reader's question, and the claim a correct answer states:
+    #: groups of words, each group met by any one of them, every group met
+    #: (`graders.answer`, which also refuses an answer that denies it).
     question: str = ""
-    needles: tuple[str, ...] = ()
+    claim: tuple[tuple[str, ...], ...] = ()
     #: The offline arm's script: tool turns as `(text, [(name, args)])`, built
     #: from the planted campaign (the scene ids are only known once planted).
     script: Callable[[synth.Planted], list[tuple[str, list[tuple[str, dict]]]]] | None = None
@@ -94,7 +96,7 @@ CASES: tuple[Case, ...] = (
          "a question about the promise is answered from the scene that kept it",
          covers="nickname_promise",
          question="Did Mara give back what she borrowed from Seraphine?",
-         needles=("compass", "brass", "tidewalker"),
+         claim=(("compass", "brass"), ("return", "back")),
          script=lambda p: [_search("Mara borrowed Seraphine"),
                            _excerpt(p.sids[2], "Tidewalker brass"),
                            _answer("Yes: as the Tidewalker she returned the silver compass "
@@ -132,7 +134,7 @@ CASES: tuple[Case, ...] = (
          "why a thread changed is answered from a transcript two scenes before the beat",
          covers="thread_change",
          question="Why did the hunt for the harbour ledger change course?",
-         needles=("burn", "fire", "ash"),
+         claim=(("burn", "fire", "ash"), ("ledger", "warehouse")),
          script=lambda p: [_search("harbour ledger hunt changes course"),
                            _excerpt(p.sids[1], "ledger burned fire"),
                            _answer("The ledger burned with the warehouse, so Mara now hunts "

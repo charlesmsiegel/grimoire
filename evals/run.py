@@ -59,7 +59,7 @@ from evals.investigation import cases as investigation_cases  # noqa: E402
 from evals.investigation import runner as investigation_runner  # noqa: E402
 from grimoire import wire  # noqa: E402
 from grimoire.llm_errors import LLMError  # noqa: E402
-from grimoire.store import paths, usage  # noqa: E402
+from grimoire.store import embed_space, paths, usage  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -740,7 +740,7 @@ def run_investigate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> in
         return 1
     modes = (tuple(investigation_cases.ARMS) if args.investigate == "all"
              else (args.investigate,))
-    targets, rates, real_home = {}, None, None
+    targets, rates, real_home, space = {}, None, None, None
     if args.live:
         probes = tuple(_probe_task(t) for m in modes for t in (investigation_runner.TASKS[m],))
         if "continuity" in modes:
@@ -754,10 +754,13 @@ def run_investigate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> in
             return 1
         targets = {p.task: conns[runner.conn_key(p)] for p in probes}
         real_home, rates = paths.home(), usage.Rates.current()
+        # The Embedding role as the app would search with it; None runs both
+        # arms lexical and structural, as the app would on this store.
+        space = embed_space.endpoint()
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     results, records = investigation_runner.run_all(
         live=args.live, targets=targets, rates=rates, run_id=args.run_id,
-        real_home=real_home, selected=modes)
+        real_home=real_home, selected=modes, space=space)
     print(runner.report(results))
     print(runner.ascii_safe(investigation_runner.summary(records, live=args.live)))
     verdict = investigation_runner.gate(records)

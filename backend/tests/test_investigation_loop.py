@@ -191,6 +191,36 @@ def test_a_cancel_stops_the_run(cid, scene):
     assert len(fake.requests) == 1
 
 
+def test_a_loop_that_raises_still_reports_the_turns_it_filed(cid, scene):
+    """A turn-1 failure raises out of the loop with no `LoopResult`; the
+    row its meter filed is read back, so the trace says one turn ran."""
+    outcome, _ = _run(cid, FakeToolTurns(LLMError("rate_limit", "slow down")))
+    assert outcome.state == "failed"
+    usage = outcome.trace["usage"]
+    assert usage["model_turns"] == 1 and usage["unpriced_calls"] == 1
+
+
+def test_a_thread_that_finishes_after_the_check_writes_nothing(cid):
+    """A tool thread the loop stopped waiting on can finish late: what it
+    notes was never delivered, before the freeze or after it."""
+    run_state = state.RunState(cid=cid, mode="question")
+    run_state.inspect("001--a")
+    run_state.note(trace.step(1, "get_scene_excerpt", {}, ok=True, refs=("scene:001--a",)))
+    # The timed-out call's thread noted its step before the check...
+    run_state.note(trace.step(2, "read_scene_window", {}, ok=True, refs=("scene:002--b",)))
+    result = tool_calls.LoopResult(status="completed", trace=(
+        tool_calls.TraceEntry(1, "tool", "get_scene_excerpt", ok=True, refs=("scene:001--a",)),
+        tool_calls.TraceEntry(2, "tool", "read_scene_window", ok=False),
+    ))
+    investigation._keep_delivered(run_state, result)
+    assert [s["tool"] for s in run_state.steps] == ["get_scene_excerpt"]
+    # ...and one finishing after it adds nothing at all.
+    run_state.inspect("002--b")
+    run_state.note(trace.step(2, "read_scene_window", {}, ok=True))
+    assert run_state.inspected == {"001--a"}
+    assert [s["tool"] for s in run_state.steps] == ["get_scene_excerpt"]
+
+
 @pytest.mark.parametrize("script", [
     (LLMError("rate_limit", "slow down, says the provider"),),
     (("", [("search_history", {"query": "compass", "max": None})]),

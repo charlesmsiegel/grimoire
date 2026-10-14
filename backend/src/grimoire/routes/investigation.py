@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 
@@ -183,12 +184,28 @@ def _keep_delivered(state: investigation_state.RunState,
     thread the loop stopped waiting on (`timed out`) can still finish and note
     its scene, but the model was told it failed, so that scene was never read.
     The loop's own trace says which reading calls delivered, and their refs
-    name the scenes they returned text of (`tools.READS`)."""
+    name the scenes they returned text of (`tools.READS`). The state is
+    frozen in the same hold, so a thread that finishes later -- during the
+    check of the final call, or after -- adds neither a read nor a step."""
     delivered = {ref.removeprefix("scene:") for e in result.trace
                  if e.kind == "tool" and e.ok and e.name in investigation_tools.READS
                  for ref in e.refs if ref.startswith("scene:")}
+    returned: Counter[tuple[object, object]] = Counter(
+        (e.turn, e.name) for e in result.trace if e.kind == "tool" and e.ok)
     with state.lock:
+        state.frozen = True
         state.inspected &= delivered
+        # A step a timed-out thread noted before the freeze is no delivered
+        # call either: a step stands only against a call the loop handed
+        # back, turn for turn and tool for tool. The decide tool is awaited,
+        # never left behind, and keeps its own steps.
+        kept = []
+        for step in state.steps:
+            key = (step.get("turn"), step.get("tool"))
+            if step.get("tool") == "decide" or returned[key] > 0:
+                returned[key] -= 1
+                kept.append(step)
+        state.steps[:] = kept
 
 
 def _model_of(result: tool_calls.LoopResult | None, resolved: ResolvedInference) -> str:
@@ -200,12 +217,29 @@ def _model_of(result: tool_calls.LoopResult | None, resolved: ResolvedInference)
     return f"{primary.provider_id}/{primary.model}" if primary is not None else ""
 
 
-def _counts(result: tool_calls.LoopResult | None, steps: int) -> tuple[int, int, int]:
-    """(model turns, tool calls, decisions) from the loop's own trace. The
-    calls count the terminal one: the loop hands it back unexecuted, but the
-    model made it, and it is what the run ended on."""
+def _filed(cid: str, task: str, run_id: str) -> tuple[dict, ...]:
+    """The loop's own ledger rows, read back for a run whose loop raised
+    instead of returning them (a turn-1 `LLMError`, or a stop after a
+    request went out): each turn's meter filed its row before the raise, so
+    the ledger is the one place they are. The window is two days, which a
+    run bounded by its wall cannot outlast across midnight. A ledger that
+    cannot be read gives none, as a trace whose money says so."""
+    try:
+        return tuple(r for r in store.usage.calls(days=2, campaign=cid)
+                     if r.get("run_id") == run_id and r.get("task") == task)
+    except OSError:
+        log.warning("Investigation %s could not read back its ledger rows", run_id)
+        return ()
+
+
+def _counts(result: tool_calls.LoopResult | None, steps: int,
+            filed: Sequence[dict] = ()) -> tuple[int, int, int]:
+    """(model turns, tool calls, decisions) from the loop's own trace -- or,
+    when the loop raised, the turns its filed rows show. The calls count the
+    terminal one: the loop hands it back unexecuted, but the model made it,
+    and it is what the run ended on."""
     if result is None:
-        return 0, steps, 0
+        return len(filed), steps, 0
     entries = result.trace
     turns = sum(1 for e in entries if e.kind == "model")
     calls = sum(1 for e in entries if e.kind == "tool" and e.note == "")
@@ -231,7 +265,21 @@ def _final_step(state: investigation_state.RunState, call: tool_calls.ToolCall |
     taken = call.name in investigation_tools.TERMINAL.get(state.mode, frozenset())
     state.note(investigation_trace.step(
         turn, call.name, {k: args[k] for k in FINAL_ARGS if k in args}, ok=taken,
-        error="" if taken else "not_in_mode"))
+        error="" if taken else "not_in_mode"), final=True)
+
+
+async def _settled(state: investigation_state.RunState, result: tool_calls.LoopResult,
+                   seed: Seed) -> tuple[dict, investigation_final.Final | None]:
+    """How a run the loop returned ended, and its final call checked when it
+    ended on one -- with the state held to what the loop delivered first."""
+    _keep_delivered(state, result)
+    if result.status == "failed":
+        return {"state": "failed", "error": getattr(result.error, "kind", "") or "error"}, None
+    if result.status == "budget_exhausted":
+        return {"state": "budget_exhausted", "limit": result.limit}, None
+    checked = await anyio.to_thread.run_sync(
+        lambda: investigation_final.settle(state, result.final_call, candidate=seed.candidate))
+    return {"state": checked.state}, checked
 
 
 async def investigate(app, *, state: investigation_state.RunState, task: str, seed: Seed,
@@ -277,22 +325,18 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
         stopped = {"state": "cancelled"}
     checked: investigation_final.Final | None = None
     if result is not None:
-        _keep_delivered(state, result)
-        if result.status == "failed":
-            stopped = {"state": "failed",
-                       "error": getattr(result.error, "kind", "") or "error"}
-        elif result.status == "budget_exhausted":
-            stopped = {"state": "budget_exhausted", "limit": result.limit}
-        else:
-            checked = await anyio.to_thread.run_sync(
-                lambda: investigation_final.settle(state, result.final_call,
-                                                   candidate=seed.candidate))
-            stopped = {"state": checked.state}
-    turns, calls, decided = _counts(result, len(state.steps))
+        stopped, checked = await _settled(state, result, seed)
+        loop_rows: Sequence[dict] = result.rows
+    else:
+        # Nothing to check against, but a tool thread may still be running.
+        state.freeze()
+        loop_rows = (() if stopped.get("state") == "refused"
+                     else await anyio.to_thread.run_sync(_filed, state.cid, task, run_id))
+    turns, calls, decided = _counts(result, len(state.steps), loop_rows)
     if checked is not None and result is not None:
         _final_step(state, result.final_call, turns)
     elapsed = time.monotonic() - t0
-    rows = (*(result.rows if result is not None else ()), *extra_rows)
+    rows = (*loop_rows, *extra_rows)
 
     def usage_block() -> dict:
         return investigation_trace.usage_of(

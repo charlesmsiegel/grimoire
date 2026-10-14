@@ -719,10 +719,17 @@ graders, never a model's quality. **`--live`** runs the models the app routes
 each task to (`--provider`/`--model` override them), `investigation-decide`
 included, under each entry point's own budget, wall and all, metered in the
 throwaway home as every live run is, with the money in its three columns.
+Both arms search with the real store's Embedding role and a live embeddings
+client (hybrid where the store is, lexical where its role is off), and each
+arm's wall time is its own, apart from the leakage probes. An entry point
+fails if either arm errored: an incumbent that did not run is no baseline.
 
 The lines, per entry point: correctness (a proposal against its gold
-decision, `uncertain` scored as an abstention; an answer against its needles,
-its citations against the gold scenes), **text leakage** (a hidden word in
+decision, direction and cited scenes -- at least one, and only gold ones --
+with `uncertain` scored as an abstention; an answer against the claim it must
+state and the denials it must not, its citations against the gold scenes --
+lexical grading, applied to both arms alike, whose denial list can only mark a
+right answer wrong; live tables are read with that said), **text leakage** (a hidden word in
 what the run wrote), **selection leakage** (a cited scene that only a
 hidden-word query returned, read off the trace) and the **hidden route** (a
 search over a hidden-only word answers exactly as one over a word that appears
