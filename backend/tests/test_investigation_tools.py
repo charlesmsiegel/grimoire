@@ -269,6 +269,40 @@ def test_search_is_pinned_to_this_campaign_and_the_narrator(run, monkeypatch):
     assert old not in run.inspected
 
 
+def test_search_builds_its_query_under_the_best_effort_lock_and_retrieves_outside_it(
+        run, monkeypatch):
+    """The query is built from the store under `best_effort_campaign_lock`, as
+    every reading tool's reads are; 09's `retrieve` gathers outside any hold,
+    as a turn's recall does (its contract), so no hold spans its awaits."""
+    held: list[bool] = []
+    real_hold, real_retrieve = locks.best_effort_campaign_lock, retrieval.retrieve
+    from grimoire.store.history import query as history_query
+    real_for_text = history_query.for_text
+
+    @contextlib.contextmanager
+    def hold(cid, *a, **k):
+        held.append(True)
+        with real_hold(cid, *a, **k) as got:
+            yield got
+        held.pop()
+
+    def for_text(*a, **k):
+        assert held, "the query was built outside the lock"
+        return real_for_text(*a, **k)
+
+    async def retrieve(*a, **k):
+        assert not held, "retrieve ran inside a campaign hold"
+        return await real_retrieve(*a, **k)
+    monkeypatch.setattr(locks, "best_effort_campaign_lock", hold)
+    monkeypatch.setattr(history_query, "for_text", for_text)
+    monkeypatch.setattr(retrieval, "retrieve", retrieve)
+    sid = played(run.cid, text="Mara buries the brass compass.")
+    absorbed(run.cid, sid, "Mara buries the brass compass.")
+    with _no_full_lock(monkeypatch):
+        _, env = _call(run, "search_history", query="brass compass", max=3)
+    assert [i["ref"] for i in env["items"]] == [f"scene:{sid}"]
+
+
 def test_search_works_with_turn_recall_off(run):
     from grimoire.store import config
     config.write_config(history_recall_depth="0")

@@ -36,8 +36,12 @@ class Case:
     recipe: str
     mode: str
     hypothesis: str
-    #: E2: the decision word gold expects.
+    #: Which of spec 10.2's corpus items the case stands for (`COVERAGE`).
+    covers: str = ""
+    #: E2: the decision word gold expects, and for a directed word its
+    #: `(from, to)` refs (the proposal's own, after the sweep's rebuild).
     decision: str = ""
+    direction: tuple[str, str] = ()
     #: E3: the reader's question, and words one of which a correct answer holds.
     question: str = ""
     needles: tuple[str, ...] = ()
@@ -66,15 +70,29 @@ def _answer(text: str, sid: str) -> tuple[str, list[tuple[str, dict]]]:
     return ("", [("answer", {"text": text, "citations": [f"scene:{sid}"]})])
 
 
+#: Spec 10.2's corpus items, per entry point: the gate refuses an entry point
+#: whose run did not cover every one (`runner.gate`), so a case dropped from
+#: `CASES` -- or a `--case`-narrowed run -- can never pass for the whole
+#: corpus. E1's items (a callback, 11-C4's leakage cases, the hidden route
+#: for an actor) wait on 12-S6 with its arm.
+COVERAGE: dict[str, frozenset[str]] = {
+    "continuity": frozenset({"nickname_promise", "duplicate", "continuation", "related",
+                             "untitled_resolution"}),
+    "question": frozenset({"nickname_promise", "thread_change"}),
+}
+
+THREADS = ("thread:deliver-the-harbour-ledger", "thread:find-the-harbour-ledger")
+
 CASES: tuple[Case, ...] = (
     Case("nickname-promise-resolution", "promise_by_nickname", "continuity",
          "a promise kept by someone called only by a nickname is found kept",
-         decision="fulfilled",
+         covers="nickname_promise", decision="fulfilled",
          script=lambda p: [_search("silver compass returned"), _search("Tidewalker"),
                            _excerpt(p.sids[2], "Tidewalker brass Seraphine"),
                            _propose("fulfilled", p.sids[2], reason="The Tidewalker is Mara.")]),
     Case("nickname-promise-question", "promise_by_nickname", "question",
          "a question about the promise is answered from the scene that kept it",
+         covers="nickname_promise",
          question="Did Mara give back what she borrowed from Seraphine?",
          needles=("compass", "brass", "tidewalker"),
          script=lambda p: [_search("Mara borrowed Seraphine"),
@@ -83,18 +101,42 @@ CASES: tuple[Case, ...] = (
                                    "at the quay before the tide.", p.sids[2])]),
     Case("same-errand-duplicate", "same_errand", "continuity",
          "two records whose sameness is said only in a transcript are found one",
-         decision="duplicate",
+         covers="duplicate", decision="duplicate",
          script=lambda p: [_search("harbour ledger one errand"),
                            _excerpt(p.sids[0], "same book errand"),
                            _propose("duplicate", p.sids[0], frm="B", to="A",
                                     reason="Mara says the two hunts are one errand.")]),
     Case("unnamed-debt-resolution", "debt_without_title", "continuity",
          "a debt settled without its title is found settled; a hidden word steers nothing",
-         decision="fulfilled",
+         covers="untitled_resolution", decision="fulfilled",
          script=lambda p: [_search("quittance"), _search("boatman coins"),
                            _excerpt(p.sids[1], "boatman coins palm"),
                            _propose("fulfilled", p.sids[1],
                                     reason="Winifred pays the boatman.")]),
+    Case("errand-continuation", "errand_continues", "continuity",
+         "a thread that is the next leg of another, said only in a transcript, continues it",
+         covers="continuation", decision="continuation", direction=THREADS,
+         script=lambda p: [_search("harbour ledger guild steps"),
+                           _excerpt(p.sids[1], "ledger errand next leg"),
+                           _propose("continuation", p.sids[1], frm="A", to="B",
+                                    reason="Delivering the ledger is the search's next leg.")]),
+    Case("errands-merely-related", "errands_merely_related", "continuity",
+         "two threads sharing a book and a clerk, said in a transcript to be different "
+         "errands, are related and not one",
+         covers="related", decision="related",
+         script=lambda p: [_search("harbour ledger fees lost ledger"),
+                           _excerpt(p.sids[0], "fees another matter clerk"),
+                           _propose("related", p.sids[0], frm="A", to="B",
+                                    reason="The clerk says the fees are another matter.")]),
+    Case("thread-change-question", "thread_changed", "question",
+         "why a thread changed is answered from a transcript two scenes before the beat",
+         covers="thread_change",
+         question="Why did the hunt for the harbour ledger change course?",
+         needles=("burn", "fire", "ash"),
+         script=lambda p: [_search("harbour ledger hunt changes course"),
+                           _excerpt(p.sids[1], "ledger burned fire"),
+                           _answer("The ledger burned with the warehouse, so Mara now hunts "
+                                   "whoever set the fire.", p.sids[1])]),
 )
 
 #: Each case's forbidden steering words: a hidden post's.

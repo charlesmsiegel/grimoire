@@ -23,7 +23,17 @@ const TOOL_PHRASES: Record<string, string> = {
   get_actor: "Looked up a character",
   get_group: "Looked up a group",
   decide: "Asked a closed question",
+  // The call the run ended on: its last step.
+  propose: "Proposed a decision",
+  answer: "Answered",
+  finish_evidence: "Chose its evidence",
+  finish_no_change: "Found nothing to change",
+  finish_insufficient_evidence: "Found too little to say",
 };
+
+/** The calls that end a run rather than read: not reading, for "read nothing". */
+const FINISHES = new Set(["propose", "answer", "finish_evidence", "finish_no_change",
+                          "finish_insufficient_evidence"]);
 
 /** What a budget limit is called. */
 const LIMIT_PHRASES: Record<string, string> = {
@@ -75,7 +85,7 @@ export function InvestigationTrace(
   return (
     <section className="investigation-trace" aria-label="What the investigation read">
       <h4>What the investigation read</h4>
-      {trace.steps.length > 0 ? (
+      {trace.steps.some((s) => !FINISHES.has(s.tool)) ? (
         <ol className="investigation-steps">
           {keyed.map(({ step: s, key }) => (
             <li key={key}>

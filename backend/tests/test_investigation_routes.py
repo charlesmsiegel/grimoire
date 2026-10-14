@@ -185,7 +185,8 @@ def test_e2_persists_one_proposal_with_its_trace(client):
     assert proposal["reason"] == REASON
     trace = proposal["investigation"]
     assert trace["run"] == run["id"] and trace["inspected"] == [f"scene:{sid}"]
-    assert [s["tool"] for s in trace["steps"]] == ["search_history", "get_scene_excerpt"]
+    assert [s["tool"] for s in trace["steps"]] == ["search_history", "get_scene_excerpt",
+                                                   "propose"]
     # Only the one record's proposal moved: the sweep's generation and basis did not.
     assert after["generation"] == before["generation"]
     assert after["basis"] == before["basis"]
@@ -361,6 +362,31 @@ def test_e2_a_finding_gone_before_the_run_reads_it_fails_cleanly(client, monkeyp
     assert run["result"]["outcome"]["error"] == "gone"
     assert run["result"]["persisted"] is False
     assert fake.requests == []
+
+
+def test_e2_a_finding_no_longer_live_when_the_run_begins_sends_nothing(client, monkeypatch):
+    """Live at the start's check, moved by the time the background run
+    begins (an edit, a sweep): the run re-reads it and spends nothing."""
+    cid, _sid = _campaign(client)
+    _found(client, cid)
+    _on(client)
+    fake = _install(client, FakeToolTurns(("", [("finish_no_change", {"reason": "x"})])))
+    verdicts = iter([True, False])
+    monkeypatch.setattr(investigation, "_live", lambda cid, record: next(verdicts))
+    run = _settled(client, cid, _investigate(client, cid))
+    outcome = run["result"]["outcome"]
+    assert (outcome["state"], outcome["error"]) == ("failed", "gone")
+    assert run["result"]["persisted"] is False
+    assert fake.requests == []
+
+
+def test_e2_a_finding_whose_fingerprint_moved_is_not_still_live(client):
+    cid, _sid = _campaign(client)
+    _found(client, cid)
+    record = candidates.read(cid)["records"][PAIR]
+    assert investigation._still_live(cid, PAIR, record)
+    assert not investigation._still_live(cid, PAIR, {**record, "fingerprint": "fp1_old"})
+    assert not investigation._still_live(cid, "no-such-finding", record)
 
 
 def test_e2_a_stopping_investigation_still_holds_the_campaign(client):

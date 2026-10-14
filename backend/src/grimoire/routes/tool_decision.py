@@ -341,6 +341,9 @@ class _Asking:
     #: The transcript index the decision answers, filed on its rows the way
     #: the loop's turns file theirs (02 §3.5), or None.
     post: int | None = None
+    #: Where each answered call's ledger rows are also handed, for a caller
+    #: that reports the run's cost itself (12's trace), or None.
+    rows: list[dict] | None = None
 
 
 def _late_pricing(asking: _Asking) -> tuple[dict, str]:
@@ -483,13 +486,24 @@ async def _asked(asking: _Asking, args: dict, ctx: tool_calls.ToolContext
             _charge(ctx, projection)
         _noted(ctx, "abandoned")
         raise
+    return _answered(asking, ctx, decision, prices, projection)
+
+
+def _answered(asking: _Asking, ctx: tool_calls.ToolContext, decision: decisions.Decision,
+              prices: dict, projection: float | None) -> tool_calls.ToolOutput:
+    """A decide that returned: its rows handed to the caller's sink, its
+    cost charged (what its rows priced at, else the projection), its outcome
+    noted, and what the model is sent."""
+    if asking.rows is not None:
+        asking.rows.extend(decision.usage)
     spent = operations.rows_cost(decision.usage, prices) if projection is not None else None
     _charge(ctx, spent if spent is not None else projection)
     (result,) = decision.items
     answer = result.answers.get(QUESTION_ID)
     chosen = answer.answer if answer is not None and isinstance(answer.answer, str) else None
     _noted(ctx, _status(answer) if answer is not None else "unanswered", chosen)
-    shown = asking.select(result) if asking.select is not None else _result(result, shape)
+    shown = (asking.select(result) if asking.select is not None
+             else _result(result, asking.shape))
     return tool_calls.ToolOutput(json.dumps(shown))
 
 
@@ -501,7 +515,8 @@ def decision_tool(task: str, resolved: ResolvedInference | None, client: LLMClie
                   capture: operations.Capture | None = None,
                   spend: SpendGuard | None = None,
                   ceiling: float | None = None,
-                  max_tokens: int = DECIDE_MAX_TOKENS
+                  max_tokens: int = DECIDE_MAX_TOKENS,
+                  rows: list[dict] | None = None
                   ) -> tuple[tool_calls.ToolSpec | None, str]:
     """The `decide` tool for one loop, metered under `task`, or `(None, why)`
     when it cannot be offered: no resolution (the caller's soft refusal,
@@ -517,7 +532,12 @@ def decision_tool(task: str, resolved: ResolvedInference | None, client: LLMClie
     cannot be, refused as `unpriceable` without taking a decision.
 
     `select` maps the answered `ItemResult` to what the model is sent (02's
-    own sampling rule, through 01c); 01g never samples."""
+    own sampling rule, through 01c); 01g never samples. `rows`, when given,
+    is extended with the ledger rows of every call `decide` returned from
+    (its failed units' included): the loop's `LoopResult.rows` are its own
+    turns only, so a caller that totals a run's cost gathers these beside
+    them. A call that raised out of `decide` hands back none; its rows are
+    in the ledger."""
     shape = shape or ToolShape()
     if spend is not None and ceiling is not None and spend.ceiling_usd != ceiling:
         raise ValueError("decision_tool takes one spend ceiling: spend= or ceiling=")
@@ -529,7 +549,7 @@ def decision_tool(task: str, resolved: ResolvedInference | None, client: LLMClie
         return None, why or refused
     asking = _Asking(resolved, client, cid, scene, round_id, response_id, shape, context,
                      select, capture, prices, max_tokens, guarded=spend is not None,
-                     post=post)
+                     post=post, rows=rows)
 
     async def ask(args: dict, ctx: tool_calls.ToolContext) -> tool_calls.ToolOutput:
         return await _asked(asking, args, ctx)

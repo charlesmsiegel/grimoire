@@ -23,6 +23,8 @@ const TRACE: Trace = {
       result: { ok: true, refs: ["scene:001--docks"], chars: 400, truncated: false } },
     { turn: 2, tool: "get_scene_excerpt", args: { scene: "scene:001--docks", query: "ledger" },
       result: { ok: true, refs: ["scene:001--docks"], chars: 900, truncated: true } },
+    { turn: 3, tool: "answer", args: { citations: ["scene:001--docks"] },
+      result: { ok: true, refs: [], chars: 0, truncated: false } },
   ],
   inspected: ["scene:001--docks"],
   final: null,
@@ -43,11 +45,18 @@ describe("InvestigationTrace", () => {
     expect(screen.getByText("Searched the history")).toBeInTheDocument();
     expect(screen.getByText(/harbour ledger/)).toBeInTheDocument();
     expect(screen.getByText("(cut short)")).toBeInTheDocument();
+    // The call it ended on is the last step.
+    expect(screen.getByText("Answered")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "001--docks" })).toBeInTheDocument();
     const usage = screen.getByText(/model turns/);
     expect(usage.textContent).toContain("not reported");
     expect(usage.textContent).toContain("modelled ≈ $0.0041");
     expect(usage.textContent).not.toContain("$0.00 ");
+  });
+
+  it("says a run that only finished read nothing", () => {
+    renderTrace({ ...TRACE, steps: [TRACE.steps[2]], inspected: [] });
+    expect(screen.getByText("It read nothing before it finished.")).toBeInTheDocument();
   });
 
   it("names the limit a stopped run ran into", () => {

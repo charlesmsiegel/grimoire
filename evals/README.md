@@ -698,22 +698,27 @@ Decision stage answers about the corpus's gated parts:
 roadmap 12's investigation entry points (spec 10). Each case plants a small
 campaign in a throwaway home (`evals/investigation/synth.py`, placeholder names
 only) whose deciding evidence is adaptive -- a promise kept by someone called
-only by a nickname, two records whose sameness is said only in a transcript, a
-debt settled without its title beside a hidden post naming it -- and runs it
-through two arms:
+only by a nickname, two records whose sameness, continuation or mere relation is
+said only in a transcript, a debt settled without its title beside a hidden post
+naming it, a thread whose change is a beat two scenes from its reason -- and
+runs it through two arms. Each case names the spec 10.2 item it stands for
+(`cases.COVERAGE`), and an entry point whose run did not cover every one of its
+items in both arms fails the gate, however it scored:
 
 | Entry point | Incumbent (B) | Challenger (C) |
 |---|---|---|
-| `continuity` (E2) | the reconcile sweep's own answer for the finding | `investigate`, then the proposal it would persist |
-| `question` (E3) | one `search_history` over the question, answered from what it showed | `investigate`, then the answer it would hold |
+| `continuity` (E2) | the reconcile sweep's own answer for the finding | the entry point's run (`investigate_with_decide`: the decide tool included), then the proposal it would persist |
+| `question` (E3) | one `search_history` over the question, answered from what it showed and citing the shown items it names, held to those as C's are to what it read | the entry point's run, then the answer it would hold |
 | `rp` (E1) | absent until 12-S6 (spec 10's `PlanTrace`) | absent |
 
 **Offline** (the default, and what `pytest backend` runs) the challenger's
-model is a canned script and the incumbents make no call: it proves the loop,
-the final-call checks and the graders, never a model's quality. **`--live`**
-runs the models the app routes each task to (`--provider`/`--model` override
-them), metered in the throwaway home as every live run is, with the money in
-its three columns.
+model is a canned script played by the suite's shared fake,
+`backend/tests/llm_fakes.FakeToolTurns`, its budget has no wall, and the
+incumbents make no call: it proves the loop, the final-call checks and the
+graders, never a model's quality. **`--live`** runs the models the app routes
+each task to (`--provider`/`--model` override them), `investigation-decide`
+included, under each entry point's own budget, wall and all, metered in the
+throwaway home as every live run is, with the money in its three columns.
 
 The lines, per entry point: correctness (a proposal against its gold
 decision, `uncertain` scored as an abstention; an answer against its needles,

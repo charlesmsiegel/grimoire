@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 
 import anyio
@@ -47,6 +47,7 @@ from ..store.investigation import tools as investigation_tools
 from ..store.investigation import trace as investigation_trace
 from . import decision_capture, runs, tool_decision
 from .common import (
+    UsableInference,
     _soft_resolved,
     computes_only,
     get_embeddings,
@@ -200,21 +201,45 @@ def _model_of(result: tool_calls.LoopResult | None, resolved: ResolvedInference)
 
 
 def _counts(result: tool_calls.LoopResult | None, steps: int) -> tuple[int, int, int]:
-    """(model turns, tool calls run, decisions) from the loop's own trace."""
+    """(model turns, tool calls, decisions) from the loop's own trace. The
+    calls count the terminal one: the loop hands it back unexecuted, but the
+    model made it, and it is what the run ended on."""
     if result is None:
         return 0, steps, 0
     entries = result.trace
     turns = sum(1 for e in entries if e.kind == "model")
     calls = sum(1 for e in entries if e.kind == "tool" and e.note == "")
     decisions = sum(1 for e in entries if e.kind == "decide")
-    return turns, calls, decisions
+    return turns, calls + (result.final_call is not None), decisions
+
+
+#: A terminal call's arguments a trace step keeps: its structure, never its
+#: prose (an answer's text, a reason, a note are the model's words, and the
+#: validated ones are the trace's `final` already).
+FINAL_ARGS = ("decision", "from", "to", "relation", "status", "evidence_scenes",
+              "citations", "ids")
+
+
+def _final_step(state: investigation_state.RunState, call: tool_calls.ToolCall | None,
+                turn: int) -> None:
+    """The terminal call as the run's last step, so the steps say what the
+    run ended on: `ok` when it was a finish this mode takes. What stood of
+    it after the checks is the trace's `final`, not this step."""
+    if call is None:
+        return
+    args = call.arguments if isinstance(call.arguments, dict) else {}
+    taken = call.name in investigation_tools.TERMINAL.get(state.mode, frozenset())
+    state.note(investigation_trace.step(
+        turn, call.name, {k: args[k] for k in FINAL_ARGS if k in args}, ok=taken,
+        error="" if taken else "not_in_mode"))
 
 
 async def investigate(app, *, state: investigation_state.RunState, task: str, seed: Seed,
                       client: LLMClient, resolved: ResolvedInference,
                       budget: tool_calls.RunBudget, run_id: str, post: int | None = None,
                       cancelled: Callable[[], bool] | None = None,
-                      extra: tuple[tool_calls.ToolSpec, ...] = ()) -> Outcome:
+                      extra: tuple[tool_calls.ToolSpec, ...] = (),
+                      extra_rows: Sequence[dict] = ()) -> Outcome:
     """One bounded investigation (spec 5): `seed` sent with `state.mode`'s
     toolset (and `extra`, the decide tool), each turn metered under `task`
     with `run_id` and its loop turn (01g-C3), stopped by the first terminal
@@ -224,7 +249,11 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
 
     `tool_choice` is `required`: every turn calls, and a run ends on a
     terminal tool. A last turn that ends in prose anyway is an implicit
-    `finish_insufficient_evidence`, its prose dropped."""
+    `finish_insufficient_evidence`, its prose dropped.
+
+    `extra_rows` is the ledger rows `extra`'s own calls file (the decide
+    tool's sink, filled as the loop runs): the trace's usage folds them
+    with the loop's turns, so a decision's cost is part of the run's."""
     started, t0 = store.paths.now_iso(), time.monotonic()
     toolset = investigation_tools.toolset(state, extra=extra)
     tokens = await anyio.to_thread.run_sync(investigation_budget.prompt_tokens, resolved, budget)
@@ -260,8 +289,10 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
                                                    candidate=seed.candidate))
             stopped = {"state": checked.state}
     turns, calls, decided = _counts(result, len(state.steps))
+    if checked is not None and result is not None:
+        _final_step(state, result.final_call, turns)
     elapsed = time.monotonic() - t0
-    rows = result.rows if result is not None else ()
+    rows = (*(result.rows if result is not None else ()), *extra_rows)
 
     def usage_block() -> dict:
         return investigation_trace.usage_of(
@@ -279,24 +310,48 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
 
 
 # ---- the decide tool (12-S4, spec 4.4) ----
+async def investigate_with_decide(
+        app, *, state: investigation_state.RunState, task: str, seed: Seed,
+        client: LLMClient, resolved: ResolvedInference, budget: tool_calls.RunBudget,
+        run_id: str, cancelled: Callable[[], bool] = lambda: False,
+        decide_resolution: Callable[[], UsableInference] | None = None) -> Outcome:
+    """A maintenance-mode run as both entry points start one: `investigate`
+    with the decide tool (`_decide_tool`), its calls captured in one
+    campaign-level decision scope fenced on `cancelled`, and their rows
+    folded into the trace's usage. `decide_resolution` stands in for the
+    seam's own resolution of `investigation-decide` -- the eval resolves it
+    from the real store before it moves the home."""
+    async with decision_capture.capturing(
+            state.cid, decision_capture.NO_SCENE, "investigation-decide",
+            fence=lambda: not cancelled()) as scope:
+        decided: list[dict] = []
+        extra = await _decide_tool(state.cid, client, budget, seed, scope, state, decided,
+                                   resolve=decide_resolution)
+        return await investigate(app, state=state, task=task, seed=seed, client=client,
+                                 resolved=resolved, budget=budget, run_id=run_id,
+                                 cancelled=cancelled, extra=extra, extra_rows=decided)
+
+
 async def _decide_tool(cid: str, client: LLMClient, budget: tool_calls.RunBudget,
                        seed: Seed, scope: decision_capture.Scope,
-                       state: investigation_state.RunState
+                       state: investigation_state.RunState, rows: list[dict], *,
+                       resolve: Callable[[], UsableInference] | None = None
                        ) -> tuple[tool_calls.ToolSpec, ...]:
     """The `decide` tool for a maintenance-mode run, on 12's own
     `investigation_decide` route, or none: a run whose budget allows no
     decision, a resolution that softly refuses, or -- under a spend ceiling
     -- a decision that would answer on a stage the ceiling cannot price
-    (01g 3.9), each leaves the tool out and the run proceeds without it."""
+    (01g 3.9), each leaves the tool out and the run proceeds without it.
+    Each call's ledger rows are handed to `rows`, for the trace's usage."""
     if budget.max_decisions < 1:
         return ()
     resolved, why, _kind = await anyio.to_thread.run_sync(
         _soft_resolved,
-        lambda: require_inference("investigation-decide", cid, operation="decide"))
+        resolve or (lambda: require_inference("investigation-decide", cid, operation="decide")))
     spec, _why = await anyio.to_thread.run_sync(lambda: tool_decision.decision_tool(
         "investigation-decide", resolved, client, cid=cid, why=why,
         context=seed.context[:tool_decision.MAX_DECIDE_CONTEXT // 2],
-        ceiling=budget.spend_ceiling_usd, capture=scope.hook()))
+        ceiling=budget.spend_ceiling_usd, capture=scope.hook(), rows=rows))
     return (_traced(spec, state),) if spec is not None else ()
 
 
@@ -332,16 +387,29 @@ def _live_candidate(cid: str, candidate_id: str) -> dict:
     if record is None:
         raise HTTPException(status_code=404, detail={
             "kind": "not_found", "detail": "no such continuity finding"})
-    current = pending.Current.load(cid)
-    try:
-        verdict = pending.verdict(current, record)
-    except Exception:  # noqa: BLE001 -- a verdict that cannot be read is not live
-        verdict = "unknown"
-    if verdict != "live":
+    if not _live(cid, record):
         raise HTTPException(status_code=409, detail={
             "kind": "not_live",
             "detail": "this finding has moved since it was found; refresh the review"})
     return record
+
+
+def _live(cid: str, record: dict) -> bool:
+    try:
+        return pending.verdict(pending.Current.load(cid), record) == "live"
+    except Exception:  # noqa: BLE001 -- a verdict that cannot be read is not live
+        return False
+
+
+def _still_live(cid: str, candidate_id: str, started: dict) -> bool:
+    """The finding the start refused nothing for, re-read when the run
+    begins: still cached, with the fingerprint the start saw, and live. A
+    background run can begin after an apply, a dismiss, a sweep or an edit
+    of a record it names, and a finding that moved is not worth a model
+    call -- the persist would drop its answer anyway."""
+    record = candidates.read(cid)["records"].get(candidate_id)
+    return (record is not None and record.get("fingerprint") == started.get("fingerprint")
+            and _live(cid, record))
 
 
 def _campaign_or_404(cid: str) -> None:
@@ -360,23 +428,20 @@ async def _continuity_work(app, run: runs.Run, cid: str, candidate_id: str,
                            record: dict) -> dict:
     """The run: investigate, then the one write. Its result is `{"outcome",
     "persisted", "candidate"}`, polled through the campaign run routes. A
-    finding applied or dismissed between the start and the run's first read
-    is a `failed` outcome (`gone`) that sent nothing."""
+    finding that is gone, moved or no longer live when the run begins
+    (`_still_live`) is a `failed` outcome (`gone`) that sent nothing."""
     try:
+        if not await anyio.to_thread.run_sync(_still_live, cid, candidate_id, record):
+            raise KeyError(candidate_id)
         seed = await anyio.to_thread.run_sync(continuity_seed, cid, candidate_id)
     except KeyError:
         gone = Outcome(state="failed", error="gone")
         return {"state": "landed", "result": {"outcome": gone.as_dict(), "persisted": False,
                                               "candidate": candidate_id}}
     state = investigation_state.RunState(cid=cid, mode="continuity", embed_client=embed_client)
-    async with decision_capture.capturing(
-            cid, decision_capture.NO_SCENE, "investigation-decide",
-            fence=lambda: not _stillborn(run)) as scope:
-        extra = await _decide_tool(cid, client, budget, seed, scope, state)
-        outcome = await investigate(app, state=state, task="investigation-continuity",
-                                    seed=seed, client=client, resolved=resolved,
-                                    budget=budget, run_id=run.id,
-                                    cancelled=lambda: _stillborn(run), extra=extra)
+    outcome = await investigate_with_decide(
+        app, state=state, task="investigation-continuity", seed=seed, client=client,
+        resolved=resolved, budget=budget, run_id=run.id, cancelled=lambda: _stillborn(run))
     persisted = False
     if outcome.state == "completed" and outcome.result is not None and not _stillborn(run):
         proposal = {**outcome.result, "investigation": outcome.trace}
@@ -438,14 +503,9 @@ async def _question_work(app, run: runs.Run, cid: str, question: str, client: LL
                          resolved: ResolvedInference, budget: tool_calls.RunBudget) -> dict:
     seed = await anyio.to_thread.run_sync(question_seed, cid, question)
     state = investigation_state.RunState(cid=cid, mode="question", embed_client=embed_client)
-    async with decision_capture.capturing(
-            cid, decision_capture.NO_SCENE, "investigation-decide",
-            fence=lambda: not _stillborn(run)) as scope:
-        extra = await _decide_tool(cid, client, budget, seed, scope, state)
-        outcome = await investigate(app, state=state, task="investigation-question",
-                                    seed=seed, client=client, resolved=resolved,
-                                    budget=budget, run_id=run.id,
-                                    cancelled=lambda: _stillborn(run), extra=extra)
+    outcome = await investigate_with_decide(
+        app, state=state, task="investigation-question", seed=seed, client=client,
+        resolved=resolved, budget=budget, run_id=run.id, cancelled=lambda: _stillborn(run))
     return {"state": "cancelled" if outcome.state == "cancelled" else "landed",
             "result": {"outcome": outcome.as_dict(), "question": question}}
 

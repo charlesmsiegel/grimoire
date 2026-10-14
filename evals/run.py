@@ -41,6 +41,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))                      # for `evals`
 sys.path.insert(0, str(REPO / "backend" / "src"))  # for `grimoire`
+# For `tests.llm_fakes`, the investigation gate's offline model
+# (`evals/investigation/runner.py`): appended, so nothing here shadows a name.
+sys.path.append(str(REPO / "backend"))
 
 from evals import cases as case_mod  # noqa: E402
 from evals import costs, escalation, gate, play, runfile, runner  # noqa: E402
@@ -742,6 +745,8 @@ def run_investigate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> in
         probes = tuple(_probe_task(t) for m in modes for t in (investigation_runner.TASKS[m],))
         if "continuity" in modes:
             probes = (*probes, _probe_task("continuity-reconcile", decide=True))
+        # The investigation arm's decide tool, as the entry points offer it.
+        probes = (*probes, _probe_task(investigation_runner.DECIDE_TASK, decide=True))
         try:
             conns = runner.resolve_connections(probes, provider=args.provider, model=args.model)
         except RuntimeError as exc:

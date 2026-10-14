@@ -26,13 +26,16 @@ def _scene(ref: str) -> str:
     return ref.removeprefix("scene:")
 
 
-def proposal(gold_decision: str, gold_scenes: Iterable[str], found: dict | None) -> str:
+def proposal(gold_decision: str, gold_scenes: Iterable[str], found: dict | None,
+             direction: tuple[str, str] = ()) -> str:
     """A proposal graded: none, or `uncertain`, is an abstention; the gold
-    word citing only gold scenes is correct; anything else is wrong."""
+    word citing only gold scenes -- and, for a directed word, running the
+    gold `(from, to)` way -- is correct; anything else is wrong."""
     if not found or found.get("decision") in ("", "uncertain", None):
         return ABSTAINED
     cited = {_scene(s) for s in found.get("evidence_scenes") or []}
-    if found.get("decision") == gold_decision and cited <= set(gold_scenes):
+    turned = bool(direction) and (found.get("from"), found.get("to")) != tuple(direction)
+    if found.get("decision") == gold_decision and cited <= set(gold_scenes) and not turned:
         return CORRECT
     return WRONG
 

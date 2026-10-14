@@ -11,7 +11,9 @@ over nothing -- a distinct `withheld` would let the model probe for what it
 may not see.
 
 Every reading tool takes `best_effort_campaign_lock` for its own reads
-(never the full lock, and none across a model call), clips its text to
+(never the full lock, and none across a model call) -- `search_history`
+for the query it builds, while 09's `retrieve` gathers its signals outside
+any campaign hold by design, as a turn's recall does -- clips its text to
 `TOOL_RESULT_CHARS` at a post or line boundary saying so in `truncated`, and
 notes a trace step (`trace.step`) on the run's state. A terminal tool is
 never executed by the loop -- the call is handed back for `final` to check --
@@ -228,7 +230,19 @@ def _scene_ref_of(item: history_model.EvidenceItem) -> str:
 def _search(run: state.RunState):
     """`search_history` (spec 4.3): 09's retrieval over the whole campaign,
     for the run's perspective, pinned to this campaign (`tier_limit=2`, rule
-    8). Async: retrieval runs its file stages on history's own threads."""
+    8). Async: retrieval runs its file stages on history's own threads.
+
+    The query is built under `best_effort_campaign_lock`, like every other
+    reading tool's reads. `retrieve` itself is not: it is 09's contract that
+    it gathers outside campaign holds (a turn's recall calls it the same
+    way), each stage reading files the store writes atomically, and a
+    thread lock held across its awaits would be owned by whichever worker
+    took it. Rendering reads no campaign file."""
+
+    def query_for(text: str, most: int) -> history_model.Query:
+        with locks.best_effort_campaign_lock(run.cid):
+            return replace(history_query.for_text(run.cid, text, perspective=run.perspective),
+                           tier_limit=2, max_scenes=most)
 
     async def fn(args: dict, ctx: tool_calls.ToolContext) -> tool_calls.ToolOutput:
         try:
@@ -236,9 +250,7 @@ def _search(run: state.RunState):
         except BadArgs:
             return _settled(run, "search_history", args, ctx, _raise(BadArgs()))
         try:
-            q = await anyio.to_thread.run_sync(lambda: replace(
-                history_query.for_text(run.cid, query, perspective=run.perspective),
-                tier_limit=2, max_scenes=most))
+            q = await anyio.to_thread.run_sync(query_for, query, most)
             evidence = await history_retrieval.retrieve(
                 run.cid, run.sid, q, ceiling=SEARCH_TOKENS, embed_client=run.embed_client,
                 deadline=min(ctx.deadline, time.monotonic() + SEARCH_SECONDS),

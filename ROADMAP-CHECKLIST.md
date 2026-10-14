@@ -497,6 +497,16 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   - A scene a branch closed (`closed_by`) is no history to any tool, as it is
     none to retrieval; a scene counts as read only when the loop delivered
     its text (a timed-out read is not one).
+  - The trace's steps end with the terminal call (its structure, never its
+    prose) and its usage counts it; the decide tool's ledger rows are folded
+    into the trace's money through a sink on `tool_decision.decision_tool`
+    (`LoopResult.rows` holds the loop's own turns only).
+  - `search_history` builds its query under the best-effort lock; 09's
+    `retrieve` keeps gathering outside every campaign hold, as on the turn
+    path.
+  - The gate refuses an entry point whose run did not cover all its spec
+    10.2 items (`evals/investigation/cases.COVERAGE`). The offline arm's model
+    is `tests/llm_fakes.FakeToolTurns`, so that one eval imports the tests.
 - **Still owed by the implemented slices** (found in review, not built here):
   E2's and E3's per-turn prompt-log captures (spec 8.2, "when capturing is
   on" -- 01g's `TurnCapture` has no prompt-log filer yet; the decide tool's

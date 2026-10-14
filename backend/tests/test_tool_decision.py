@@ -135,6 +135,16 @@ def test_a_structured_answer_comes_back_with_no_probability():
     assert "Does Mara tell the truth?" in json.dumps(fake.requests[-1]["messages"])
 
 
+def test_a_sink_is_handed_each_answered_calls_rows():
+    fake = FakeLLM([[decision_reply({"choice": "truth"})]])
+    rows: list[dict] = []
+    spec, _ = decision_tool(TASK, _resolved(), fake, cid="saltmarch", rows=rows)
+    _call(spec, view=_View())
+    (filed,) = [r for r in store.usage.calls(days=1) if r["task"] == TASK]
+    assert [r.get("run_id") for r in rows] == [filed["run_id"]]
+    assert rows[0]["task"] == TASK
+
+
 def test_a_native_answer_returns_its_probability():
     answered = decisions.ItemResult(
         {"choice": decisions.Answer("lie", probability=0.7,

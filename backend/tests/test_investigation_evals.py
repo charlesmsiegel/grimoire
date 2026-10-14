@@ -58,7 +58,65 @@ def test_the_gate_fails_without_the_margin(records):
     assert runner.gate(leaky)["question"] is False
 
 
+def test_the_gate_refuses_a_run_that_did_not_cover_the_corpus(records):
+    """Spec 10.2's items per entry point: a run missing one -- a case dropped,
+    or never run in one arm -- cannot pass, however it scored."""
+    assert all(c.covers in cases.COVERAGE[c.mode] for c in cases.CASES)
+    assert set().union(*cases.COVERAGE.values()) >= {"continuation", "related",
+                                                     "thread_change"}
+    gap = [r for r in records if r["case"] != "errand-continuation"]
+    assert runner.gate(gap)["continuity"] is False
+    assert runner.uncovered(gap, "continuity") == {"continuation"}
+    assert "corpus items not run: continuation" in runner.summary(gap, live=False)
+    one_arm = [r for r in records
+               if not (r["case"] == "thread-change-question" and r["arm"] == "retrieval")]
+    assert runner.gate(one_arm)["question"] is False
+
+
+def test_the_investigation_arm_runs_as_the_entry_point_does(monkeypatch):
+    """The challenger is offered the production decide tool, and keeps the
+    budget's wall when live (offline it has none: a script answers at once)."""
+    seen = []
+    real = runner.investigation.investigate
+
+    async def spy(app, **kw):
+        seen.append(kw)
+        return await real(app, **kw)
+    monkeypatch.setattr(runner.investigation, "investigate", spy)
+    case = next(c for c in cases.CASES if c.mode == "question")
+    with runner.isolated():
+        planted = runner.synth.RECIPES[case.recipe]()
+        client, resolved = runner._client(case, "investigation", planted, live=False,
+                                          targets={})
+        for live in (False, True):
+            runner.asyncio.run(runner._investigate(
+                case, planted, client=client, resolved=resolved, run_id="r", live=live,
+                decider=runner.offline_resolution(runner.DECIDE_TASK, "decide")))
+    offline, live = seen
+    assert [s.name for s in offline["extra"]] == ["decide"]
+    assert offline["budget"].wall_seconds == 0
+    assert live["budget"].wall_seconds > 0
+
+
 # ---- the graders, on planted input ----
+def test_a_directed_proposal_running_the_wrong_way_is_wrong():
+    gold, way = {"s2"}, ("thread:b", "thread:a")
+    right = {"decision": "continuation", "from": "thread:b", "to": "thread:a",
+             "evidence_scenes": ["s2"]}
+    assert graders.proposal("continuation", gold, right, way) == graders.CORRECT
+    turned = {**right, "from": "thread:a", "to": "thread:b"}
+    assert graders.proposal("continuation", gold, turned, way) == graders.WRONG
+    assert graders.proposal("continuation", gold, turned) == graders.CORRECT
+
+
+def test_the_incumbent_cites_only_what_it_was_shown():
+    shown = ["scene:s1", "scene:s2"]
+    reply = 'Here: {"text": "It burned.", "citations": ["scene:s2", "scene:s9", 3]}'
+    assert runner._incumbent_answer(reply, shown) == {"text": "It burned.",
+                                                      "citations": ["scene:s2"]}
+    assert runner._incumbent_answer("It burned.", shown) is None
+    assert graders.answer(("burn",), {"s2"}, runner._incumbent_answer(
+        '{"text": "It burned.", "citations": []}', shown)) == (graders.WRONG, False)
 def test_a_proposal_is_graded_with_uncertain_as_an_abstention():
     gold = {"s3"}
     assert graders.proposal("fulfilled", gold, None) == graders.ABSTAINED

@@ -9,6 +9,13 @@ canned script (`cases.Case.script`), so the arm proves the loop, the checks
 and the graders, never a model's quality; `--live` runs the real models in
 the same isolation (01a-C2's tripwire refuses the real home).
 
+The offline model is the suite's own scripted tool fake,
+`backend/tests/llm_fakes.FakeToolTurns` (AGENTS.md: LLM behaviour comes from
+`llm_fakes`, never an inline fake) -- the one eval that imports it, so
+`evals/run.py` puts `backend/` on the path for it. The investigation arm
+runs as the entry points run it (`investigation.investigate_with_decide`):
+with the decide tool and its capture, and live under the budget's own wall.
+
 The gate (spec 10.4) is per entry point: the investigation arm beats its
 incumbent on correctness by `cases.MARGIN`, and neither leakage line is
 worse. Offline it is reported, never a reason to change a default: turning
@@ -32,8 +39,8 @@ from evals import costs
 from evals import runner as reports
 from evals.cases import Case as ReportCase
 from evals.graders import Check
-from grimoire import inference, llm_usage, tool_calls, wire
-from grimoire.llm import ATTEMPTED, LLMClient
+from grimoire import inference, schemas, tool_calls, wire
+from grimoire.llm import LLMClient
 from grimoire.routes import investigation
 from grimoire.routes.common import UsableInference
 from grimoire.store import routing, usage
@@ -42,11 +49,14 @@ from grimoire.store.inference.resolved import Attempt
 from grimoire.store.investigation import budget as inv_budget
 from grimoire.store.investigation import state as inv_state
 from grimoire.store.investigation import tools as inv_tools
+from tests.llm_fakes import FakeToolTurns
 
 from . import cases, graders, synth
 
 #: The task each mode's loop runs under.
 TASKS = {"continuity": "investigation-continuity", "question": "investigation-question"}
+#: The task the investigation arm's decide tool runs under.
+DECIDE_TASK = "investigation-decide"
 #: A word that appears in no corpus campaign: the hidden route's baseline.
 NOWHERE = "zephyrquill"
 
@@ -74,47 +84,14 @@ OFFLINE_TARGET = wire.Target(provider_id="offline", kind="openrouter", model="sc
                              account=wire.Account(billing="metered"))
 
 
-def offline_resolution(task: str) -> UsableInference:
+def offline_resolution(task: str, operation: str = "generate") -> UsableInference:
     """A resolution of `task` whose one attempt is `OFFLINE_TARGET`."""
     route = routing.route(task)
-    return UsableInference(task=task, operation="generate", route=route.key if route else "",
+    return UsableInference(task=task, operation=operation, route=route.key if route else "",
                            role="", via="", scope="none",
                            attempts=(Attempt(OFFLINE_TARGET.provider_id, OFFLINE_TARGET.model,
                                              "", target=OFFLINE_TARGET),),
                            rides=False)
-
-
-class Scripted:
-    """A tool loop's model played from a canned script: each `complete` the
-    next `(text, [(name, args)])` turn, its calls fed to the turn's collector
-    as an adapter's stream reader feeds them, its attempt stamped as the
-    facade stamps one. The last turn repeats. Nothing is sent anywhere, so
-    there is no connection whose health an outcome could note."""
-
-    def __init__(self, script: list[tuple[str, list[tuple[str, dict]]]]):
-        self.script = script
-        self.calls = 0
-
-    def note_outcome(self, *_args, **_kwargs) -> None:
-        return None
-
-    async def complete(self, messages, conn, usage=None, *, schema=None, retries=None,
-                       tools=None, tool_choice=None) -> str:
-        text, calls = self.script[min(self.calls, len(self.script) - 1)]
-        self.calls += 1
-        target = conn.primary if isinstance(conn, wire.Chain) else conn
-        if usage is not None:
-            usage.update({"model": target.model, "connection": target.label or target.kind,
-                          "provider": target.kind, "attempts": 1, ATTEMPTED: target,
-                          "requested_model": target.model})
-            llm_usage.account(usage, target)
-            found = usage.get(tool_calls.KEY)
-            if isinstance(found, tool_calls.Collector):
-                found.begin(kind=target.kind, provider_id=target.provider_id, model=target.model)
-                for n, (name, args) in enumerate(calls):
-                    found.note(f"call_{self.calls}_{n}", name, json.dumps(args))
-                found.finish("tool_calls" if calls else "stop")
-        return text
 
 
 # ---- the arms ----
@@ -124,17 +101,23 @@ def _seed(case: cases.Case, planted: synth.Planted) -> investigation.Seed:
     return investigation.question_seed(planted.cid, case.question)
 
 
-async def _investigate(case, planted, *, client, resolved, run_id) -> dict:
+async def _investigate(case, planted, *, client, resolved, run_id, live, decider) -> dict:
+    """The entry point's own run: its decide tool on `decider` (the real
+    store's resolution live, the offline target offline), and its budget as
+    the route reads it -- with no wall offline only, where a canned script
+    answers at once and the isolated home's call budget means nothing."""
     seed = await asyncio.to_thread(_seed, case, planted)
     run_state = inv_state.RunState(cid=planted.cid, mode=case.mode)
-    budget = replace(inv_budget.for_entry(case.mode), wall_seconds=0)
-    outcome = await investigation.investigate(
+    budget = inv_budget.for_entry(case.mode)
+    if not live:
+        budget = replace(budget, wall_seconds=0)
+    outcome = await investigation.investigate_with_decide(
         None, state=run_state, task=TASKS[case.mode], seed=seed, client=client,
-        resolved=resolved, budget=budget, run_id=run_id)
+        resolved=resolved, budget=budget, run_id=run_id, decide_resolution=lambda: decider)
     return outcome.as_dict()
 
 
-async def _sweep(case, planted, *, client, resolved, run_id) -> dict:
+async def _sweep(case, planted, *, client, resolved, run_id, live, decider) -> dict:
     """E2's incumbent: the sweep's own answer for the one finding -- offline
     (no model) none, which is an abstention; live, the decide call the sweep
     makes, read back by its own `proposals_of`."""
@@ -151,10 +134,32 @@ async def _sweep(case, planted, *, client, resolved, run_id) -> dict:
     return {"state": "completed", "result": found.get(planted.candidate), "trace": {}}
 
 
-async def _retrieval(case, planted, *, client, resolved, run_id) -> dict:
+#: E3's incumbent answers in this shape, citing from what it was shown.
+INCUMBENT_SYSTEM = (
+    "Answer the reader's question from the history below alone; say so if it does not "
+    "answer it. Each item is headed by its ref in brackets. Reply with one JSON object "
+    'and nothing else: {"text": "<the answer>", "citations": ["<the refs of the items '
+    'that support it>"]}.')
+
+
+def _incumbent_answer(text: str, shown: list[str]) -> dict | None:
+    """The incumbent's reply read as an answer, its citations held to the
+    refs it was shown -- the rule `final.settle` holds the investigation
+    arm's to (what a tool returned), so both arms are graded alike. A reply
+    that is not the object is no answer (an abstention)."""
+    found = schemas.find_value(text, arrays=False)
+    if not isinstance(found, dict) or not isinstance(found.get("text"), str):
+        return None
+    cited = found.get("citations")
+    cited = [c for c in cited if isinstance(c, str) and c in shown] \
+        if isinstance(cited, list) else []
+    return {"text": found["text"].strip(), "citations": list(dict.fromkeys(cited))}
+
+
+async def _retrieval(case, planted, *, client, resolved, run_id, live, decider) -> dict:
     """E3's incumbent: one search over the question, nothing read further --
     offline its evidence only; live, one generated answer over it, citing
-    every scene it was shown."""
+    the shown items it says support it."""
     run_state = inv_state.RunState(cid=planted.cid, mode="question")
     spec = inv_tools.toolset(run_state).get("search_history")
     ctx = tool_calls.ToolContext(campaign=planted.cid, scene_identity="", run_id=run_id,
@@ -164,15 +169,14 @@ async def _retrieval(case, planted, *, client, resolved, run_id) -> dict:
     shown = [i["ref"] for i in found.get("items", [])]
     if client is None or resolved is None:
         return {"state": "completed", "result": None, "trace": {}, "shown": shown}
-    evidence = "\n\n".join(i["text"] for i in found.get("items", []))
-    messages = [{"role": "system", "content": "Answer the reader's question from the history "
-                                              "below alone; say so if it does not answer it."},
+    evidence = "\n\n".join(f"[{i['ref']}]\n{i['text']}" for i in found.get("items", []))
+    messages = [{"role": "system", "content": INCUMBENT_SYSTEM},
                 {"role": "user", "content": f"{evidence}\n\nQuestion: {case.question}"}]
     with usage.meter("investigation-question", campaign=planted.cid, run_id=run_id) as m:
         text = await inference.generate("investigation-question", messages, client=client,
                                         resolved=resolved, usage=m.usage, stream=False)
-    return {"state": "completed", "result": {"text": text, "citations": shown},
-            "trace": {}, "shown": shown}
+    return {"state": "completed", "result": _incumbent_answer(text, shown), "trace": {},
+            "shown": shown}
 
 
 async def _hidden_route(planted: synth.Planted) -> bool | None:
@@ -201,7 +205,7 @@ def _grade(case: cases.Case, planted: synth.Planted, arm: str, ran: dict) -> dic
     trace = ran.get("trace") or {}
     forbidden = cases.forbidden(planted)
     if case.mode == "continuity":
-        grade = graders.proposal(case.decision, planted.gold_scenes, found)
+        grade = graders.proposal(case.decision, planted.gold_scenes, found, case.direction)
         valid, selected = True, (found or {}).get("evidence_scenes") or []
         written = [(found or {}).get("reason", "")]
     else:
@@ -248,9 +252,12 @@ def run_all(*, live: bool = False, targets: dict | None = None, rates=None, run_
                 planted = synth.RECIPES[case.recipe]()
                 day, started, error = usage._today(), time.monotonic(), ""
                 client, resolved = _client(case, arm, planted, live=live, targets=targets)
+                decider = (targets.get(DECIDE_TASK) if live
+                           else offline_resolution(DECIDE_TASK, "decide"))
                 try:
                     ran = asyncio.run(ARM_FNS[arm](case, planted, client=client,
-                                                   resolved=resolved, run_id=run_id))
+                                                   resolved=resolved, run_id=run_id,
+                                                   live=live, decider=decider))
                     hidden = asyncio.run(_hidden_route(planted))
                 except Exception as exc:  # noqa: BLE001 - one failed case is graded as failed
                     error, ran, hidden = type(exc).__name__, {"state": "failed"}, None
@@ -293,7 +300,7 @@ def _client(case, arm, planted, *, live, targets):
         return LLMClient(), targets.get(task)
     if arm != "investigation":
         return None, None
-    return Scripted(case.script(planted)), offline_resolution(TASKS[case.mode])
+    return FakeToolTurns(*case.script(planted)), offline_resolution(TASKS[case.mode])
 
 
 # ---- the gate ----
@@ -320,15 +327,26 @@ def aggregate(records: list[dict]) -> dict:
     return out
 
 
+def uncovered(records: list[dict], mode: str) -> frozenset[str]:
+    """Spec 10.2's corpus items for `mode` that no record's case stands for,
+    in both arms."""
+    by_id = {c.id: c for c in cases.CASES}
+    covered = [{by_id[r["case"]].covers for r in records
+                if r["mode"] == mode and r["arm"] == arm and r["case"] in by_id}
+               for arm in cases.ARMS[mode]]
+    return cases.COVERAGE[mode] - frozenset.intersection(*map(frozenset, covered))
+
+
 def gate(records: list[dict]) -> dict[str, bool]:
     """Per entry point (spec 10.4): the investigation arm beats its incumbent
     by `cases.MARGIN` on correctness, with no leakage line worse and no
-    error. E1 is absent until 12-S6, and so cannot pass."""
+    error, over a run that covered every one of spec 10.2's items for it
+    (`cases.COVERAGE`). E1 is absent until 12-S6, and so cannot pass."""
     totals = aggregate(records)
     out: dict[str, bool] = {"rp": False}
     for mode, (incumbent, challenger) in cases.ARMS.items():
         b, c = totals.get(f"{mode}/{incumbent}"), totals.get(f"{mode}/{challenger}")
-        if b is None or c is None:
+        if b is None or c is None or uncovered(records, mode):
             out[mode] = False
             continue
         out[mode] = (c["correct"] - b["correct"] >= cases.MARGIN
@@ -346,6 +364,9 @@ def summary(records: list[dict], *, live: bool) -> str:
                      f"{row['hidden_route_failures']} | {row['errors']}")
     verdict = gate(records)
     lines.append("rp (E1): absent until 12-S6 -- no arm, no leakage line, cannot pass")
-    lines.extend(f"{mode}: {'PASS' if verdict[mode] else 'FAIL'} "
-                 f"(margin {cases.MARGIN:.2f} over its incumbent)" for mode in cases.ARMS)
+    for mode in cases.ARMS:
+        missing = sorted(uncovered(records, mode))
+        lines.append(f"{mode}: {'PASS' if verdict[mode] else 'FAIL'} "
+                     f"(margin {cases.MARGIN:.2f} over its incumbent)"
+                     + (f"; corpus items not run: {', '.join(missing)}" if missing else ""))
     return "\n".join(lines)

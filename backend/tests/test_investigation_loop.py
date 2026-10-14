@@ -74,11 +74,17 @@ def test_a_run_that_reads_and_answers_completes_with_its_trace(cid, scene):
     assert trace.valid(t)
     assert t["run"] == RUN and t["mode"] == "question" and t["task"] == TASK
     assert t["model"] == "openrouter/vendor/reader"
-    assert [s["tool"] for s in t["steps"]] == ["search_history", "get_scene_excerpt"]
+    assert [s["tool"] for s in t["steps"]] == ["search_history", "get_scene_excerpt", "answer"]
     assert t["steps"][0]["args"] == {"query": "brass compass", "max": 3}
+    # The terminal call is the last step, on the turn that made it, with its
+    # structure and never its prose (the validated answer is `final`).
+    assert t["steps"][-1] == {"turn": 3, "tool": "answer",
+                              "args": {"citations": [f"scene:{scene}"]},
+                              "result": {"ok": True, "refs": [], "chars": 0,
+                                         "truncated": False}}
     assert t["inspected"] == [f"scene:{scene}"]
     assert t["final"] == outcome.result
-    assert t["usage"]["model_turns"] == 3 and t["usage"]["tool_calls"] == 2
+    assert t["usage"]["model_turns"] == 3 and t["usage"]["tool_calls"] == 3
     # No ledger row carried a price, so no column claims one.
     assert t["usage"]["cost"] == {"cost_usd": None, "estimated_usd": None,
                                   "modelled_usd": None}
@@ -94,6 +100,23 @@ def test_a_prose_final_turn_is_insufficient_evidence(cid, scene):
     outcome, _ = _run(cid, fake)
     assert outcome.state == "insufficient_evidence" and outcome.result is None
     assert outcome.trace["final"] is None
+    # No terminal call, so no terminal step and none counted.
+    assert [s["tool"] for s in outcome.trace["steps"]] == ["search_history"]
+    assert outcome.trace["usage"]["tool_calls"] == 1
+
+
+def test_a_tools_own_rows_are_folded_into_the_runs_usage(cid, scene):
+    """The decide tool's calls are metered apart from the loop's turns
+    (`LoopResult.rows` holds the turns only); what its sink gathered is
+    part of the run's cost."""
+    decided = [{"task": "investigation-decide", "operation": "decide", "run_id": RUN,
+                "kind": "llm", "provider": "openrouter", "model": "vendor/judge",
+                "prompt_tokens": 10, "completion_tokens": 2, "cost_usd": 0.25}]
+    run_state = state.RunState(cid=cid, mode="question")
+    outcome = asyncio.run(investigation.investigate(
+        None, state=run_state, task=TASK, seed=SEED, client=_read_then_answer(scene),
+        resolved=_resolved(), budget=_budget(), run_id=RUN, extra_rows=decided))
+    assert outcome.trace["usage"]["cost"]["cost_usd"] == 0.25
 
 
 def test_an_answer_citing_only_unread_scenes_is_insufficient(cid, scene):

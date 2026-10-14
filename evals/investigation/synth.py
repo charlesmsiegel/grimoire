@@ -2,8 +2,9 @@
 
 Theory: each recipe is a small campaign whose answer sits where the obvious
 query does not reach -- a promise later referred to only by a nickname, two
-records whose sameness is said only in a transcript, a debt settled without
-its title -- and whose gold is written down as it is planted. Placeholder
+records whose sameness, continuation or mere relation is said only in a
+transcript, a debt settled without its title, a thread whose change is a
+beat two scenes from its reason -- and whose gold is written down as it is planted. Placeholder
 names only (Seraphine, Mara, Winifred, Realm, Saltmarch).
 
 A continuity finding is filed as the sweep files one: a pair by deterministic
@@ -104,12 +105,7 @@ def same_errand() -> Planted:
                       "Mara starts looking for the harbour ledger.", first)
     plot.set_movement(cid, "recover-the-harbour-ledger", "Recover the harbour ledger", "open",
                       "The guild asks for the harbour ledger back.", first)
-    found = reconcile.discover(cid, stamp=reconcile.generation("synth"), full=True, embed=False)
-    reconcile.persist_found(cid, found)
-    key = canon.candidate_id("possible_duplicate", ["thread:find-the-harbour-ledger",
-                                                    "thread:recover-the-harbour-ledger"])
-    if key not in candidates.read(cid)["records"]:
-        raise RuntimeError("the corpus expected discovery to find the pair")
+    key = _pair(cid, ["thread:find-the-harbour-ledger", "thread:recover-the-harbour-ledger"])
     return Planted(cid, (first,), frozenset({first}), candidate=key)
 
 
@@ -133,5 +129,77 @@ def debt_without_title() -> Planted:
                    hidden_terms=("quittance",))
 
 
+def _pair(cid: str, refs: list[str]) -> str:
+    """Deterministic discovery's own pair finding over `refs`, as `same_errand`
+    files one; the corpus refuses to plant a case discovery would not find."""
+    found = reconcile.discover(cid, stamp=reconcile.generation("synth"), full=True, embed=False)
+    reconcile.persist_found(cid, found)
+    key = canon.candidate_id("possible_duplicate", refs)
+    if key not in candidates.read(cid)["records"]:
+        raise RuntimeError("the corpus expected discovery to find the pair")
+    return key
+
+
+def errand_continues() -> Planted:
+    """Two threads, one the next leg of the other -- said only in a
+    transcript, under a summary that says nothing of it."""
+    cid = _campaign("Saltmarch Errand")
+    first = _scene(cid, "Saltmarch docks", [
+        ("assistant", "Mara searches the warehouses for the harbour ledger.")],
+        "Mara searches the warehouses.")
+    second = _scene(cid, "The guild steps", [
+        ("assistant", ("Mara has the harbour ledger at last. The search is over; what is left "
+                       "is carrying it up the guild steps -- the same errand, its next leg."))],
+        "Mara climbs to the guild hall.")
+    plot.set_movement(cid, "find-the-harbour-ledger", "Find the harbour ledger", "open",
+                      "Mara starts looking for the harbour ledger.", first)
+    plot.set_movement(cid, "deliver-the-harbour-ledger", "Deliver the harbour ledger", "open",
+                      "Mara takes on a new task.", second)
+    key = _pair(cid, ["thread:deliver-the-harbour-ledger", "thread:find-the-harbour-ledger"])
+    return Planted(cid, (first, second), frozenset({second}), candidate=key)
+
+
+def errands_merely_related() -> Planted:
+    """Two threads that share a book and a clerk and are different errands --
+    the transcript says so, and nothing else does."""
+    cid = _campaign("Saltmarch Fees")
+    first = _scene(cid, "The guild counter", [
+        ("user", "Are the harbour ledger fees the same business as the lost ledger?"),
+        ("assistant", ("The clerk shakes his head at Winifred: the fees are another matter "
+                       "entirely from the lost ledger, though the same clerk keeps both."))],
+        "Winifred talks to a guild clerk.")
+    plot.set_movement(cid, "find-the-harbour-ledger", "Find the harbour ledger", "open",
+                      "Winifred hears the harbour ledger is lost.", first)
+    plot.set_movement(cid, "settle-the-harbour-ledger-fees", "Settle the harbour ledger fees",
+                      "open", "Winifred owes the guild its harbour ledger fees.", first)
+    key = _pair(cid, ["thread:find-the-harbour-ledger", "thread:settle-the-harbour-ledger-fees"])
+    return Planted(cid, (first,), frozenset({first}), candidate=key)
+
+
+def thread_changed() -> Planted:
+    """"Why did this thread change?": the change is a beat, the reason a
+    transcript two scenes before it, and neither scene's summary says so."""
+    cid = _campaign("Saltmarch Ash")
+    first = _scene(cid, "Saltmarch docks", [
+        ("assistant", "The guild hires Mara to find the harbour ledger.")],
+        "Mara takes a job from the guild.")
+    second = _scene(cid, "The waterfront", [
+        ("assistant", ("Mara finds only ash where the warehouse stood. The ledger burned "
+                       "with it, and she swears to learn who set the fire."))],
+        "Mara walks the waterfront.")
+    third = _scene(cid, "Market day", [
+        ("assistant", "Seraphine haggles over rope with a net-mender.")],
+        "Seraphine buys rope.")
+    fourth = _scene(cid, "The guild hall", [
+        ("assistant", "Mara reports to the guild and asks for more time.")],
+        "Mara reports to the guild.")
+    plot.set_movement(cid, "find-the-harbour-ledger", "Find the harbour ledger", "open",
+                      "Mara takes the job.", first)
+    plot.set_movement(cid, "find-the-harbour-ledger", "Find the harbour ledger", "open",
+                      "The hunt changes course.", fourth)
+    return Planted(cid, (first, second, third, fourth), frozenset({second}))
+
+
 RECIPES = {"promise_by_nickname": promise_by_nickname, "same_errand": same_errand,
-           "debt_without_title": debt_without_title}
+           "debt_without_title": debt_without_title, "errand_continues": errand_continues,
+           "errands_merely_related": errands_merely_related, "thread_changed": thread_changed}
