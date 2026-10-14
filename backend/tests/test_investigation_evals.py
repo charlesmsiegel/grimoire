@@ -270,6 +270,22 @@ def test_an_answer_needs_its_claim_no_denial_and_valid_citations():
                                             "citations": ["scene:s3"]})[0] == graders.WRONG
 
 
+def test_each_case_refutes_the_inversions_its_claim_would_miss(records):
+    """A case's own `refutes` turn its claim round where no general denial
+    does; the live table also carries every answer's text to be read."""
+    by_id = {c.id: c for c in cases.CASES}
+    for text, case_id in (
+            ("Mara kept the compass instead of giving it back.", "nickname-promise-question"),
+            ("The fire left the warehouse and ledger untouched.", "thread-change-question")):
+        case = by_id[case_id]
+        found = {"text": text, "citations": [f"scene:{s}" for s in ("g",)]}
+        grade, _ = graders.answer(case.claim, {"g"}, found,
+                                  denials=(*graders.DENIALS, *case.refutes))
+        assert grade == graders.WRONG, text
+    answered = [r for r in records if r["mode"] == "question" and r["arm"] == "investigation"]
+    assert answered and all(r["written"] for r in answered)
+
+
 def _step(query, refs):
     return {"turn": 1, "tool": "search_history", "args": {"query": query},
             "result": {"ok": True, "refs": refs, "chars": 1, "truncated": False}}

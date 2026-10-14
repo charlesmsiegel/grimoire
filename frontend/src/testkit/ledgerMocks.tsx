@@ -45,6 +45,7 @@ export async function ledgerApiMock() {
       // Roadmap 12: the switches the review and the column read, and the two
       // investigations they start.
       getConfig: vi.fn(), investigateCandidate: vi.fn(), askHistory: vi.fn(),
+      findHistoryQuestion: vi.fn(),
       staleCurrent: actual.api.staleCurrent,
     },
   };

@@ -232,8 +232,9 @@ export function ContinuityReview(
   openRef.current = { cid, candidate };
   /** Whether Settings switched continuity investigation on (roadmap 12, E2). */
   const [investigable, setInvestigable] = useState(false);
-  /** The finding an investigation is running on, and what the last one said. */
-  const [investigating, setInvestigating] = useState<{ cid: string; id: string } | null>(null);
+  /** The finding each campaign's investigation is running on (the server
+   *  takes one per campaign), and what the last one said. */
+  const [investigating, setInvestigating] = useState<Record<string, string>>({});
   const [investigated, setInvestigated] = useState<{ cid: string; id: string; text: string } | null>(
     null);
 
@@ -248,8 +249,8 @@ export function ContinuityReview(
   /** Investigate the open finding, then re-read: a written proposal is the
    *  review's to show. The sentence stays with the finding it was about. */
   async function investigate(c: ContinuityCandidate) {
-    if (investigating) return;
-    setInvestigating({ cid, id: c.id });
+    if (investigating[cid]) return;
+    setInvestigating((cur) => ({ ...cur, [cid]: c.id }));
     setInvestigated(null);
     let text: string;
     try {
@@ -262,7 +263,11 @@ export function ContinuityReview(
     } catch (err: unknown) {
       text = errorText(err);
     } finally {
-      setInvestigating(null);
+      setInvestigating((cur) => {
+        const rest = { ...cur };
+        delete rest[cid];
+        return rest;
+      });
     }
     if (openRef.current.cid === cid) {
       setInvestigated({ cid, id: c.id, text });
@@ -415,7 +420,8 @@ export function ContinuityReview(
                            section: "continuity", group }))}
                          onRefresh={() => { void review.refresh(); }}
                          onInvestigate={investigable ? () => { void investigate(open); } : undefined}
-                         investigating={investigating?.cid === cid && investigating.id === open.id}
+                         investigating={investigating[cid] === open.id}
+                         investigationBusy={!!investigating[cid] && investigating[cid] !== open.id}
                          investigationNote={investigated?.cid === cid && investigated.id === open.id
                            ? investigated.text : null} />
       ) : (

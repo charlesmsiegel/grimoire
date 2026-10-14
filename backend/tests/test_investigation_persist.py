@@ -160,6 +160,11 @@ def test_a_proposal_citing_a_scene_read_stands_and_one_only_listed_is_uncertain(
                                      relation="", status="", reason="r",
                                      evidence_scenes=["scene:002--quay"]), candidate=_cand())
     assert listed.result["decision"] == "uncertain" and listed.result["evidence_scenes"] == []
+    # Citing nothing is the seed's guess, not a reading: uncertain too.
+    bare = final.settle(run, _call("propose", decision="duplicate", **{"from": "B", "to": "A"},
+                                   relation="", status="", reason="r", evidence_scenes=[]),
+                        candidate=_cand())
+    assert bare.result["decision"] == "uncertain"
 
 
 def test_a_selection_keeps_only_history_evidence_ids():

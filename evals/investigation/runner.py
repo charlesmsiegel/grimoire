@@ -223,7 +223,8 @@ def _grade(case: cases.Case, planted: synth.Planted, arm: str, ran: dict) -> dic
         valid, selected = True, (found or {}).get("evidence_scenes") or []
         written = [(found or {}).get("reason", "")]
     else:
-        grade, valid = graders.answer(case.claim, planted.gold_scenes, found)
+        grade, valid = graders.answer(case.claim, planted.gold_scenes, found,
+                                      denials=(*graders.DENIALS, *case.refutes))
         selected = (found or {}).get("citations") or []
         written = [(found or {}).get("text", "")]
         if arm == "retrieval" and found is None:
@@ -231,6 +232,10 @@ def _grade(case: cases.Case, planted: synth.Planted, arm: str, ran: dict) -> dic
             # one search showed a gold scene, which the report prints apart.
             grade = graders.ABSTAINED
     return {"case": case.id, "mode": case.mode, "arm": arm, "grade": grade,
+            # Lexical grading can be fooled by phrasing it did not foresee;
+            # the written text rides the run file so a live table's grades
+            # can be read against what was actually said (synthetic corpus).
+            "written": written[0] if written else "",
             "citations_valid": valid, "state": ran.get("state", ""),
             "limit": ran.get("limit", ""), "reason": ran.get("reason", ""),
             "text_leaks": graders.text_leaks(written, forbidden),
@@ -271,21 +276,31 @@ def _run_arm(case, arm, planted, *, live, targets, space, run_id
     decider = targets.get(DECIDE_TASK) if live else offline_resolution(DECIDE_TASK, "decide")
     embed = embeddings.AsyncEmbeddingsClient() if live and space else None
     hidden: bool | None = None
-    wall: float | None = None
+    timed: dict = {}
+
+    async def run_case() -> tuple[dict, bool | None]:
+        # One event loop for the arm, the probe and the clients' teardown:
+        # an httpx pool is bound to the loop that first used it, so a client
+        # used under one `asyncio.run` cannot be reused or closed under the
+        # next.
+        try:
+            ran, timed["wall"] = await _timed(
+                ARM_FNS[arm], case, planted, client=client, resolved=resolved, run_id=run_id,
+                live=live, decider=decider, embed_client=embed)
+            probed = await _hidden_route(planted, embed_client=embed, run_id=probe_run(run_id))
+            return ran, probed
+        finally:
+            if live:
+                await _close(client, embed)
+
     try:
         with contextlib.ExitStack() as stack:
             if live:
                 stack.enter_context(patch.object(embed_space, "endpoint", return_value=space))
-            ran, wall = asyncio.run(_timed(
-                ARM_FNS[arm], case, planted, client=client, resolved=resolved, run_id=run_id,
-                live=live, decider=decider, embed_client=embed))
-            hidden = asyncio.run(_hidden_route(planted, embed_client=embed,
-                                               run_id=probe_run(run_id)))
+            ran, hidden = asyncio.run(run_case())
     except Exception as exc:  # noqa: BLE001 - one failed case is graded as failed
         error, ran = type(exc).__name__, {"state": "failed"}
     finally:
-        if live:
-            asyncio.run(_close(client, embed))
         # A tool the loop stopped waiting on still runs in its thread, and
         # reads through `GRIMOIRE_HOME`: the throwaway home stays pinned and
         # in place until none is left, or a late read would resolve against
@@ -298,6 +313,7 @@ def _run_arm(case, arm, planted, *, live, targets, space, run_id
         # it is no more a clean comparison than a raise.
         error = ran.get("error") or ran.get("reason") or ran["state"]
     # An arm that raised is timed to the raise.
+    wall = timed.get("wall")
     return ran, hidden, error, wall if wall is not None else (time.monotonic() - started) * 1000
 
 

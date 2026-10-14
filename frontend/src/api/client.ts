@@ -1703,6 +1703,11 @@ export const api = {
         undefined, { attempt, signal }), { signal }).then(notifyShell),
   /** Ask the campaign's history a question (roadmap 12, E3): a draft whose
    *  answer is held on the run and never stored. */
+  /** The run a history question's attempt id named, or null once the server
+   *  holds it no longer (reaped, or a restart): what a re-attach checks
+   *  before repeating the POST, which would otherwise ask again. */
+  findHistoryQuestion: (cid: string, attempt: string, signal?: AbortSignal) =>
+    findDraftRun({ at: "campaign", id: cid }, attempt, signal),
   /** `attempt`, when given, re-attaches: the server adopts a repeat of a
    *  live question's attempt id rather than asking again. */
   askHistory: (cid: string, question: string, signal?: AbortSignal, attempt?: string) =>

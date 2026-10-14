@@ -47,6 +47,10 @@ class Case:
     #: (`graders.answer`, which also refuses an answer that denies it).
     question: str = ""
     claim: tuple[tuple[str, ...], ...] = ()
+    #: E3: phrases that state this case's claim the wrong way round without
+    #: a general denial ("kept it instead of giving it back"), graded wrong
+    #: beside `graders.DENIALS`.
+    refutes: tuple[str, ...] = ()
     #: The offline arm's script: tool turns as `(text, [(name, args)])`, built
     #: from the planted campaign (the scene ids are only known once planted).
     script: Callable[[synth.Planted], list[tuple[str, list[tuple[str, dict]]]]] | None = None
@@ -102,6 +106,7 @@ CASES: tuple[Case, ...] = (
          covers="nickname_promise",
          question="Did Mara give back what she borrowed from Seraphine?",
          claim=(("compass", "brass"), ("return", "back")),
+         refutes=("kept", "instead of", "still has", "lost", "broke", "not yet"),
          script=lambda p: [_search("Mara borrowed Seraphine"),
                            _excerpt(p.sids[2], "Tidewalker brass"),
                            _answer("Yes: as the Tidewalker she returned the silver compass "
@@ -140,6 +145,7 @@ CASES: tuple[Case, ...] = (
          covers="thread_change",
          question="Why did the hunt for the harbour ledger change course?",
          claim=(("burn", "fire", "ash"), ("ledger", "warehouse")),
+         refutes=("untouched", "intact", "survived", "spared", "unharmed", "safe"),
          script=lambda p: [_search("harbour ledger hunt changes course"),
                            _excerpt(p.sids[1], "ledger burned fire"),
                            _answer("The ledger burned with the warehouse, so Mara now hunts "

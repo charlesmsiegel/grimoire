@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../../api/client", async () => {
   const actual = await vi.importActual<typeof import("../../api/client")>("../../api/client");
-  return { ...actual, api: { askHistory: vi.fn() } };
+  return { ...actual, api: { askHistory: vi.fn(), findHistoryQuestion: vi.fn() } };
 });
 import { api } from "../../api/client";
 import type { HistoryAnswer, InvestigationTrace as Trace } from "../../api/types";
@@ -47,7 +47,8 @@ describe("InvestigationTrace", () => {
     expect(screen.getByText("(cut short)")).toBeInTheDocument();
     // The call it ended on is the last step.
     expect(screen.getByText("Answered")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "001--docks" })).toBeInTheDocument();
+    // The excerpt's scene is its link, and the scenes-read line names it too.
+    expect(screen.getAllByRole("link", { name: "001--docks" })).toHaveLength(2);
     const usage = screen.getByText(/model turns/);
     expect(usage.textContent).toContain("not reported");
     expect(usage.textContent).toContain("modelled ≈ $0.0041");
@@ -57,6 +58,17 @@ describe("InvestigationTrace", () => {
   it("says a run that only finished read nothing", () => {
     renderTrace({ ...TRACE, steps: [TRACE.steps[2]], inspected: [] });
     expect(screen.getByText("It read nothing before it finished.")).toBeInTheDocument();
+  });
+
+  it("never shows a record's raw ref", () => {
+    renderTrace({ ...TRACE, steps: [
+      { turn: 1, tool: "get_record", args: { ref: "thread:find-the-harbour-ledger" },
+        result: { ok: true, refs: ["thread:find-the-harbour-ledger"], chars: 300,
+                  truncated: false } },
+      ...TRACE.steps] });
+    expect(screen.getByText("Looked up a record")).toBeInTheDocument();
+    expect(screen.queryByText(/thread:find-the-harbour-ledger/)).toBeNull();
+    expect(screen.queryByText(/scene:001--docks/)).toBeNull();
   });
 
   it("names the limit a stopped run ran into", () => {
@@ -123,15 +135,28 @@ describe("AskHistory", () => {
     expect(typeof attempt).toBe("string");
     first.unmount();
 
+    mocked(api.findHistoryQuestion).mockResolvedValue({ id: "r1", state: "running" });
     mocked(api.askHistory).mockResolvedValue({
       question: "Who keeps the harbour ledger?",
       outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
                  result: null, trace: TRACE } });
     render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
+    expect(api.findHistoryQuestion).toHaveBeenCalledWith("run", attempt, expect.any(AbortSignal));
     // The same run, followed by the same attempt id -- never a second question.
     expect(mocked(api.askHistory).mock.calls[1][3]).toBe(attempt);
     expect(screen.getByLabelText("Your question")).toHaveValue("Who keeps the harbour ledger?");
-    expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
+    expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
+  });
+
+  it("never asks again for a question the server no longer holds", async () => {
+    localStorage.setItem("grimoire.askHistory.run",
+                         JSON.stringify({ attempt: "a-old", question: "Who keeps the ledger?" }));
+    mocked(api.findHistoryQuestion).mockResolvedValue(null);
+    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    expect(await screen.findByText(/no longer held/)).toBeInTheDocument();
+    expect(api.askHistory).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Your question")).toHaveValue("Who keeps the ledger?");
     expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
   });
 

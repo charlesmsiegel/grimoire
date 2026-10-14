@@ -1999,6 +1999,27 @@ describe("investigating a finding", () => {
     expect(api.applyCandidate).not.toHaveBeenCalled();
   });
 
+  test("another finding's Investigate waits while one runs in this campaign", async () => {
+    (api.getConfig as any).mockResolvedValue(
+      { investigation_continuity: "on", investigation_question: "off" });
+    (api.investigateCandidate as any).mockReturnValue(new Promise(() => {}));
+    render(
+      <MemoryRouter initialEntries={[at(PAIR)]}>
+        <SwitchTo to={at(OATHS)} />
+        <Routes>
+          <Route path="/campaigns/:cid/ledger/*" element={<LedgerView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await (await sidebar()).findByRole("button",
+      { name: /investigate|second opinion/i }));
+    await waitFor(() => expect(api.investigateCandidate).toHaveBeenCalledWith("run", PAIR.id));
+    fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
+    expect(await aside().findByText(/Another finding is being investigated/))
+      .toBeInTheDocument();
+    expect(aside().getByRole("button", { name: /investigate|second opinion/i })).toBeDisabled();
+  });
+
   test("a proposal's investigation trace is shown with it", async () => {
     (api.continuityCandidates as any).mockResolvedValue({
       ...DETAIL,

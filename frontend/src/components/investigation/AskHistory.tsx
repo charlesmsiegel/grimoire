@@ -73,10 +73,32 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
     }
   }
 
-  // A question left running by an earlier mount is followed, not re-asked.
+  /** A question left running by an earlier mount is followed, never asked
+   *  again: the server must still hold its run. A run it has reaped (its
+   *  answer was produced and nobody collected it in time) or lost to a
+   *  restart is reported, and the question handed back to ask anew. */
+  async function resume(p: Pending) {
+    const ctl = new AbortController();
+    live.current = ctl;
+    setAsking(true);
+    try {
+      const held = await api.findHistoryQuestion(cid, p.attempt, ctl.signal);
+      if (held) {
+        void follow(p);
+        return;
+      }
+      writePending(cid, null);
+      setError("The earlier question's answer is no longer held. Ask it again to rerun it.");
+    } catch (err: unknown) {
+      if (isAbortError(err)) return;
+      setError(errorText(err));
+    }
+    if (!ctl.signal.aborted) setAsking(false);
+  }
+
   useEffect(() => {
     const p = readPending(cid);
-    if (p) void follow(p);
+    if (p) void resume(p);
     return () => live.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per campaign
   }, [cid]);

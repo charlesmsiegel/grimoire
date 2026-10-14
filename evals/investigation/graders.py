@@ -46,9 +46,10 @@ def proposal(gold_decision: str, gold_scenes: Iterable[str], found: dict | None,
 
 #: Words that turn a claim round: an answer holding one is graded wrong
 #: whatever else it says ("No, Mara never returned the compass"; "the fire
-#: was unrelated"). Lexical, so it can mark a right answer wrong -- the
-#: direction that can only cost an arm correctness, never hand it a margin,
-#: and both arms are graded by it alike.
+#: was unrelated"), as is one holding a case's own `refutes`. Lexical: it can
+#: mark a right answer wrong -- costing an arm, never handing it a margin --
+#: and a wrong one phrased past both lists right, which is why the run file
+#: carries every answer's text and a live table is read against it.
 DENIALS = ("never", "did not", "didn't", "does not", "doesn't", "not return", "unrelated",
            "nothing to do with", "no,", "no.", "no evidence", "cannot tell", "unclear")
 

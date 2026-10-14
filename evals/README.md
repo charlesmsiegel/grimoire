@@ -734,8 +734,10 @@ The lines, per entry point: correctness (a proposal against its gold
 decision, direction and cited scenes -- at least one, and only gold ones --
 with `uncertain` scored as an abstention; an answer against the claim it must
 state and the denials it must not, its citations against the gold scenes --
-lexical grading, applied to both arms alike, whose denial list can only mark a
-right answer wrong; live tables are read with that said), **text leakage** (a hidden word in
+lexical grading, applied to both arms alike: a denial list and each case's
+own refutations mark an inverted answer wrong, but a phrasing past both can
+still read right, so the run file carries every answer's text and a live
+table is read against it before it is relied on), **text leakage** (a hidden word in
 what the run wrote), **selection leakage** (a cited scene that only a
 hidden-word query returned, read off the trace) and the **hidden route** (a
 search over a hidden-only word answers exactly as one over a word that appears

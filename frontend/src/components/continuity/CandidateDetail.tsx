@@ -105,6 +105,9 @@ type Props = {
   onInvestigate?: () => void;
   /** An investigation of this finding is running. */
   investigating?: boolean;
+  /** One of ANOTHER finding in this campaign is running: the server takes
+   *  one at a time per campaign, so this one's button waits. */
+  investigationBusy?: boolean;
   /** How the last investigation of it ended, in a sentence. */
   investigationNote?: string | null;
 };
@@ -377,15 +380,18 @@ export function CandidateDetail(props: Props) {
         {props.onInvestigate && (
           <div className="side-section continuity-investigate">
             <h4>Investigate</h4>
-            <button type="button" className="subtle" disabled={off || props.investigating}
+            <button type="button" className="subtle"
+                    disabled={off || props.investigating || props.investigationBusy}
                     onClick={props.onInvestigate}>
               {candidate.proposal ? "Ask for a second opinion" : "Investigate"}
             </button>
             <p className="field-hint">
               {props.investigating
                 ? "Reading the history…"
-                : "A model reads the campaign's history to suggest a decision. "
-                  + "Experimental; nothing is applied until you apply it."}
+                : props.investigationBusy
+                  ? "Another finding is being investigated; one runs at a time."
+                  : "A model reads the campaign's history to suggest a decision. "
+                    + "Experimental; nothing is applied until you apply it."}
             </p>
             {props.investigationNote && !props.investigating && (
               <p className="field-hint" role="status">{props.investigationNote}</p>

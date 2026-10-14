@@ -6,7 +6,8 @@ taken on its word.
 - **`propose`** (E2) is rebuilt by the sweep's own rule
   (`reconcile.rebuild`) against the scenes this run READ (`inspected`), and a
   proposal citing a scene outside that set is `uncertain`, mechanically: a
-  scene that only appeared in a search list was not read (6.2).
+  scene that only appeared in a search list was not read (6.2), and one
+  citing no scene at all is `uncertain` too.
 - **`answer`** (E3) keeps only citations of scenes whose text a tool
   returned, and with none left is `insufficient_evidence` (6.3).
 - **`finish_evidence`** (E1) keeps only history evidence ids this run was
@@ -85,9 +86,11 @@ def _proposal(run: state.RunState, args: dict, candidate: dict) -> Final:
     item = {"decision": args.get("decision"), "from": args.get("from"), "to": args.get("to"),
             "reason": args.get("reason"), "evidence_scenes": cited}
     proposal = reconcile.rebuild(item, candidate, known)
-    if any(sid not in known for sid in cited):
+    if not cited or any(sid not in known for sid in cited):
         # The positive-evidence floor (capstone §11.4): a scene the run never
-        # read cannot stand behind a decision, whatever else it cited.
+        # read cannot stand behind a decision, whatever else it cited -- and
+        # a decision citing nothing stands on the seed alone, which is what
+        # the sweep already had and the investigation exists to go past.
         proposal = {**proposal, "decision": "uncertain", "from": "", "to": "",
                     "relation": "", "status": ""}
     return Final("completed", proposal, dict(proposal))

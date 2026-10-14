@@ -61,10 +61,18 @@ export function outcomeSentence(outcome: Pick<InvestigationOutcome, "state" | "l
   }
 }
 
+/** What a step asked, in the reader's words: its query or question. A
+ *  record's raw ref is never shown -- the tool's phrase says what kind of
+ *  thing it looked up -- and a scene is shown as its link (`sceneOf`). */
 function asked(args: Record<string, unknown>): string {
-  const words = ["query", "question", "scene", "ref"]
+  const words = ["query", "question"]
     .map((k) => args[k]).filter((v): v is string => typeof v === "string" && v !== "");
   return words.join(" · ");
+}
+
+function sceneOf(args: Record<string, unknown>): string | null {
+  const scene = args.scene;
+  return typeof scene === "string" && scene.startsWith("scene:") ? scene.slice(6) : null;
 }
 
 export function InvestigationTrace(
@@ -87,14 +95,18 @@ export function InvestigationTrace(
       <h4>What the investigation read</h4>
       {trace.steps.some((s) => !FINISHES.has(s.tool)) ? (
         <ol className="investigation-steps">
-          {keyed.map(({ step: s, key }) => (
-            <li key={key}>
-              <span>{TOOL_PHRASES[s.tool] ?? s.tool}</span>
-              {asked(s.args) && <span className="field-hint"> — {asked(s.args)}</span>}
-              {!s.result.ok && <span className="field-hint"> (nothing it could use)</span>}
-              {s.result.truncated && <span className="field-hint"> (cut short)</span>}
-            </li>
-          ))}
+          {keyed.map(({ step: s, key }) => {
+            const scene = sceneOf(s.args);
+            return (
+              <li key={key}>
+                <span>{TOOL_PHRASES[s.tool] ?? s.tool}</span>
+                {scene && <span className="field-hint"> — {sceneLink(scene)}</span>}
+                {asked(s.args) && <span className="field-hint"> — {asked(s.args)}</span>}
+                {!s.result.ok && <span className="field-hint"> (nothing it could use)</span>}
+                {s.result.truncated && <span className="field-hint"> (cut short)</span>}
+              </li>
+            );
+          })}
         </ol>
       ) : <p className="field-hint">It read nothing before it finished.</p>}
       {read.length > 0 && (
