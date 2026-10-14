@@ -72,7 +72,12 @@ def test_offline_arms_report_recall_gain_and_quiet_controls():
     assert all(row.get("scope") == "eval" for result in results for row in (result.rows or ()))
     assert totals["plan+repair"]["tokens_per_turn"] is None
     assert totals["plan+repair"]["rows_per_turn"] > totals["plan"]["rows_per_turn"] > 0
-    assert planning.default_gate(records)
+    # Recall improves on the recorded replies, but the default gate also
+    # needs an agreed cost bound and fully priced planning calls: the
+    # recorded provider prices nothing, so the gate is not met even with one.
+    assert planning.recall_gain(records)
+    assert not planning.default_gate(records)
+    assert not planning.default_gate(records, max_usd_per_planned_turn=1.0)
     # Money per arm, three columns apart; the recorded provider prices
     # nothing, so each column is unreported, never $0.
     assert totals["plan+repair"]["money"] == {"cost_usd": None, "estimated_usd": None,
@@ -87,3 +92,38 @@ def test_the_money_columns_aggregate_apart():
     assert planning._column(rows, "cost_usd") == 0.25
     assert planning._column(rows, "estimated_usd") is None
     assert planning._column(rows, "modelled_usd") == 0.75
+
+
+
+def _gate_records(plan_money, recall=(1.0, 0.0)):
+    base = {"control": "", "triggered": True, "false_trigger": False, "valid_plans": 1,
+            "plan_calls": 1, "drops": 0, "steps": 1, "terminal": "planned",
+            "cheap_retrieval_failed": False, "wall_ms": 1.0, "unpriced_calls": 0,
+            "planner": {"rows": 1, "prompt_tokens": 10, "completion_tokens": 5},
+            "check": {"rows": 0, "prompt_tokens": None, "completion_tokens": None},
+            "money": {"cost_usd": None, "estimated_usd": None, "modelled_usd": None},
+            "recall1": 0.0, "recall5": 0.0, "excerpt_recall": 0.0, "gain": 1}
+    return [{**base, "arm": "plan+repair", "recall3": recall[0], "planned_round": True,
+             "plan_money": plan_money},
+            {**base, "arm": "hybrid", "recall3": recall[1], "planned_round": False,
+             "plan_money": {"cost_usd": None, "estimated_usd": None, "modelled_usd": None,
+                            "unpriced_calls": 0}}]
+
+
+def test_the_default_gate_holds_each_money_column_to_the_bound():
+    from evals.history import planning
+    cheap = {"cost_usd": 0.001, "estimated_usd": None, "modelled_usd": 0.002,
+             "unpriced_calls": 0}
+    assert planning.default_gate(_gate_records(cheap), max_usd_per_planned_turn=0.005)
+    assert not planning.default_gate(_gate_records(cheap))            # no bound agreed
+    assert not planning.default_gate(_gate_records(cheap), max_usd_per_planned_turn=0.0015)
+    unpriced = {**cheap, "unpriced_calls": 1}
+    assert not planning.default_gate(_gate_records(unpriced), max_usd_per_planned_turn=1.0)
+    assert not planning.default_gate(_gate_records(cheap, recall=(0.5, 0.5)),
+                                     max_usd_per_planned_turn=1.0)
+
+
+def test_the_cost_bound_flag_needs_the_planning_mode():
+    from evals import run
+    with pytest.raises(SystemExit):
+        run.main(["--history", "--plan-cost-bound", "0.01"])

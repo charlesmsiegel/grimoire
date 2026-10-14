@@ -119,6 +119,16 @@ class _Gathering:
     turn: Turn
 
 
+def _plan_auto() -> bool:
+    """Whether `history_plan` is on, read alone and guarded: the failure
+    path's question when `_prepare` raised before it could answer it."""
+    try:
+        history_settings = settings.read(store.config.read_config())
+    except Exception:  # noqa: BLE001 -- unreadable settings: report what is known, nothing planned
+        return False
+    return history_settings is not None and history_settings.plan == "auto"
+
+
 def _prepare(cid, sid, seed, resolved, actor_ref=None):
     cfg = store.config.read_config()
     history_settings = _on(cfg)
@@ -337,6 +347,11 @@ async def _planned_round(cid, sid, turn, evidence, got, *, ceiling, embed_client
     expand = retrieval.expander(cid, sid, anchor, ceiling, summary_omissions=turn.omissions)
     merged = await history_threads.run(lambda: store.history.merge(
         evidence, found, ceiling=ceiling, expand=expand, rerank=_reapplied))
+    if evidence.candidates and not merged.candidates:
+        # Recall was switched off mid-phase (`merge` reads the live settings
+        # and answers empty): the round adds nothing, and never costs the
+        # evidence already found.
+        merged = evidence
     # The merge builds a fresh coverage; the first retrieval's rerank -- the
     # one opinion `_reapplied` carries -- keeps its status on the result.
     merged = replace(merged, coverage=replace(merged.coverage, rerank=evidence.coverage.rerank))
@@ -573,6 +588,10 @@ async def _gather(cid, sid, *, seed, resolved, llm_client, embed_client, deadlin
         )
     except Exception:  # noqa: BLE001 -- optional history cannot strand an appended player post
         failed = _error(cid, sid)
+        if not planning and not _actor(actor_ref):
+            # Preparation itself failed before it could say: ask the plan
+            # setting alone, so a planned phase is never mistaken for off.
+            planning = force or await history_threads.run(_plan_auto)
         # A planned phase still says why it never planned: retrieval failed.
         return replace(failed, plan=_trace("not_run:error", failed)) if planning else failed
     if not planning:

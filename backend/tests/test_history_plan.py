@@ -263,3 +263,12 @@ def test_threads_involving_the_cast_come_first_under_the_cap():
     got = hp.build_input("w", cat, tuple(sorted(names)), ev, depth=3, involved=involved)
     refs = [r.ref for r in got.threads]
     assert len(refs) == hp.MAX_THREADS and refs[:2] == ["thread:t12", "thread:t13"]
+
+
+
+def test_an_unnamed_record_is_never_offered_by_its_id():
+    cat = query.Catalog({"thread:secret-id": ()}, frozenset(), (), frozenset(), "", None,
+                        {"thread:secret-id": {"title": ""}})
+    got = hp.build_input("w", cat, ("thread:secret-id",), model.Evidence(), depth=3)
+    assert got.threads == ()
+    assert "secret-id" not in hp.build_messages(got)[1]["content"]

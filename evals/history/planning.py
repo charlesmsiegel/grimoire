@@ -273,6 +273,20 @@ async def _arm(case, planted, arm, *, live, targets, run_id, provider, space=Non
             await embed_client.aclose()
 
 
+#: The tasks planning adds to a turn.
+PLAN_TASKS = ("history-query-plan", "history-sufficiency")
+
+
+def _money_of(bucket):
+    """A folded bucket's three columns, each None when nothing reported it,
+    and its unpriced calls."""
+    return {"cost_usd": bucket.get("cost_usd") if costs.billed_calls(bucket) else None,
+            "estimated_usd": bucket.get("estimated_usd")
+            if bucket.get("subscription_calls") else None,
+            "modelled_usd": bucket.get("modelled_usd") if bucket.get("modelled_calls") else None,
+            "unpriced_calls": int(bucket.get("unpriced_calls") or 0)}
+
+
 def _row_tokens(rows, task):
     """A task's rows and the tokens they reported. A count nobody reported is
     None, never 0 (the recorded provider reports none)."""
@@ -366,13 +380,12 @@ def run_all(*, live=False, targets=None, space=None, rates=None, run_id="", real
                 metric["error"] = error
                 metric["requests"] = dict(Counter(provider.requests))
                 bucket = costs.fold(rows, rates)
-                metric["money"] = {
-                    "cost_usd": bucket.get("cost_usd") if costs.billed_calls(bucket) else None,
-                    "estimated_usd": bucket.get("estimated_usd")
-                    if bucket.get("subscription_calls") else None,
-                    "modelled_usd": bucket.get("modelled_usd")
-                    if bucket.get("modelled_calls") else None}
+                metric["money"] = _money_of(bucket)
                 metric["unpriced_calls"] = int(bucket.get("unpriced_calls") or 0)
+                # The planner's and the check's own spend, apart from the live
+                # arm's downstream reply: what the default's cost bound reads.
+                metric["plan_money"] = _money_of(costs.fold(
+                    [r for r in rows if r.get("task") in PLAN_TASKS], rates))
                 checks = _checks(case, arm, metric, live, output, planted.fact)
                 results.append(reports.Result(
                     _report_case(case), arm, checks, output, error=error, error_kind=error,
@@ -505,15 +518,42 @@ def gate(records, validation):
                         if r["arm"] in ("plan", "plan+repair")))
 
 
-def default_gate(records):
+def default_gate(records, max_usd_per_planned_turn=None):
+    """Spec 11's gate for making `auto` a default: `plan+repair` beats
+    `hybrid` at recall@3 on the targets, no control false-triggers, AND the
+    planning calls added per planned turn cost no more than a bound agreed in
+    conversation. Each money column is held to the bound on its own -- the
+    three are never added -- and the gate is not met without a bound, or
+    while any planning call went unpriced: an unknown cost never passes."""
     totals = aggregate(records)
     if "hybrid" not in totals or "plan+repair" not in totals:
         return False
-    return (totals["plan+repair"]["recall3"] > totals["hybrid"]["recall3"]
+    if not (totals["plan+repair"]["recall3"] > totals["hybrid"]["recall3"]
+            and totals["plan+repair"]["false_trigger_rate"] == 0):
+        return False
+    if max_usd_per_planned_turn is None:
+        return False
+    planned = [r for r in records if r["arm"] == "plan+repair" and r["planned_round"]]
+    if not planned or any(r["plan_money"]["unpriced_calls"] for r in planned):
+        return False
+    for column in ("cost_usd", "estimated_usd", "modelled_usd"):
+        spent = [r["plan_money"][column] for r in planned
+                 if r["plan_money"][column] is not None]
+        if spent and sum(spent) / len(planned) > max_usd_per_planned_turn:
+            return False
+    return True
+
+
+def recall_gain(records):
+    """The default gate's recall half alone: `plan+repair` beats `hybrid` at
+    recall@3 on the targets with no control false-triggering."""
+    totals = aggregate(records)
+    return ("hybrid" in totals and "plan+repair" in totals
+            and totals["plan+repair"]["recall3"] > totals["hybrid"]["recall3"]
             and totals["plan+repair"]["false_trigger_rate"] == 0)
 
 
-def summary(records, validation):
+def summary(records, validation, max_usd_per_planned_turn=None):
     lines = [("history planning (SYNTHETIC recipes, recorded planner replies offline; "
               "no live quality claim):"),
              ("arm | recall@1 | recall@3 | recall@5 | gain | trigger | false trigger | "
@@ -530,5 +570,7 @@ def summary(records, validation):
                  "as documented")
     lines.append(f"offline gate: {'PASS' if gate(records, validation) else 'FAIL'}; "
                  f"default gate (reported only): "
-                 f"{'met' if default_gate(records) else 'not met'}")
+                 f"{'met' if default_gate(records, max_usd_per_planned_turn) else 'not met'}"
+                 f" (recall gain {'yes' if recall_gain(records) else 'no'}; cost bound "
+                 f"{'none given' if max_usd_per_planned_turn is None else max_usd_per_planned_turn})")
     return "\n".join(lines)

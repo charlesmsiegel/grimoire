@@ -522,6 +522,8 @@ def _check_history_flags(ap: argparse.ArgumentParser, args: argparse.Namespace) 
         ap.error("--plan requires --history")
     if args.plan and args.long:
         ap.error("--plan runs its own recipes; --long is 09's")
+    if args.plan_cost_bound is not None and not args.plan:
+        ap.error("--plan-cost-bound requires --history --plan")
 
 
 def run_history_plan(args: argparse.Namespace) -> int:
@@ -538,7 +540,8 @@ def run_history_plan(args: argparse.Namespace) -> int:
                                                 rates=rates, real_home=real_home,
                                                 run_id=args.run_id)
     validation = history_planning.run_validation()
-    print(history_planning.summary(metrics, validation))
+    bound = args.plan_cost_bound
+    print(history_planning.summary(metrics, validation, bound))
     print(runner.report(results))
     configs = [runfile.config(f"c{n}", arm, {"history_arm": arm,
         "mode": "live" if args.live else "offline"})
@@ -550,7 +553,9 @@ def run_history_plan(args: argparse.Namespace) -> int:
                            "aggregate": history_planning.aggregate(metrics),
                            "validation": [vars(v) for v in validation],
                            "gate": history_planning.gate(metrics, validation),
-                           "default_gate": history_planning.default_gate(metrics)}
+                           "recall_gain": history_planning.recall_gain(metrics),
+                           "cost_bound_usd_per_planned_turn": bound,
+                           "default_gate": history_planning.default_gate(metrics, bound)}
     if args.out:
         runfile.write(Path(args.out), doc)
     passed = all(r.passed for r in results) and history_planning.gate(metrics, validation)
@@ -773,6 +778,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--long", action="store_true", help="with --history, long archive recipes exercising 64/1000 bounds")
     ap.add_argument("--plan", action="store_true",
                     help="with --history, the retrieval-planning arms (roadmap 10) beside 09's hybrid")
+    ap.add_argument("--plan-cost-bound", type=float, default=None, metavar="USD",
+                    help="with --history --plan, the added USD per planned turn the default "
+                         "gate allows (agreed in conversation); without it the gate is not met")
     args = ap.parse_args(argv)
     args.run_id = str(uuid.uuid4())
     _check_history_flags(ap, args)

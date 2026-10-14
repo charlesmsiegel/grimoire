@@ -454,3 +454,33 @@ def test_a_retrieval_that_raises_still_traces_a_planned_phase(cid, monkeypatch):
     assert fake.calls == 0
     store.config.write_config(history_plan="off")
     assert gather(cid, sid, fake).plan is None
+
+
+
+def test_a_preparation_that_raises_still_traces_a_planned_phase(cid, monkeypatch):
+    sid, *_ = setup_thin(cid)
+
+    def broken(*a, **k):
+        raise OSError("unreadable scene")
+    monkeypatch.setattr(history_recall, "_prepare", broken)
+    fake = FakeLLM([[plan_reply()]])
+    ev = gather(cid, sid, fake)
+    assert ev.plan.terminal == "not_run:error" and fake.calls == 0
+    store.config.write_config(history_plan="off")
+    assert gather(cid, sid, fake).plan is None
+
+
+def test_recall_switched_off_mid_phase_keeps_the_first_evidence(cid, monkeypatch):
+    """`merge` reads the live settings: with recall turned off between the
+    first retrieval and a planned round, the round adds nothing and the
+    evidence already found stands."""
+    sid, *_ = setup_thin(cid)
+    real = history_recall._plan_step
+
+    async def then_off(*a, **k):
+        got = await real(*a, **k)
+        store.config.write_config(history_recall_depth="0")
+        return got
+    monkeypatch.setattr(history_recall, "_plan_step", then_off)
+    ev = gather(cid, sid, FakeLLM([[plan_reply()]]))
+    assert ev.items and [i.scene.key for i in ev.items] == list(ev.plan.e0.scene_keys)

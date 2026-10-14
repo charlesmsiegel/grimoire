@@ -182,7 +182,6 @@ def build_input(window: str, catalog: query.Catalog, subjects: Sequence[str],
     `involved` names the threads and commitments that involve a present
     actor; they come first, before `MAX_THREADS` cuts the rest (spec 5.1)."""
     _check_perspective(perspective)
-    allowed = [ref for ref in subjects if catalog.allowed(ref)]
 
     def name(ref: str) -> str:
         if ref in catalog.threads:
@@ -190,11 +189,14 @@ def build_input(window: str, catalog: query.Catalog, subjects: Sequence[str],
             if title:
                 return title
         names = catalog.names.get(ref) or ()
-        return names[0] if names else ref.partition(":")[2]
+        # Never the ref's id as a name: an unnamed record is not offered,
+        # since a handle exists to keep store ids server-side.
+        return names[0] if names else ""
 
     def kind(ref: str) -> str:
         return ref.partition(":")[0]
 
+    allowed = [ref for ref in subjects if catalog.allowed(ref) and name(ref)]
     cast = [r for r in allowed if r in catalog.present and kind(r) in _ACTOR_KINDS]
     threads = [r for r in allowed if kind(r) in _THREAD_KINDS]
     threads.sort(key=lambda r: r not in involved)   # stable: cast-related first
