@@ -54,6 +54,18 @@ def test_the_hidden_route_probe_sees_hidden_text_that_reached_the_index(monkeypa
         assert asyncio.run(runner._hidden_route(planted)) is False
 
 
+def test_the_hidden_route_ignores_run_local_evidence_ids():
+    """The probe's rewrite gives the scene a new identity, so the same scene
+    found again is held under a new id: that is not a different answer."""
+    item = {"ref": "scene:s2", "title": "Market day", "text": "Winifred pays.",
+            "truncated": False}
+    assert graders.hidden_route_clean({"ok": True, "items": [{"id": "e1", **item}]},
+                                      {"ok": True, "items": [{"id": "e2", **item}]})
+    assert not graders.hidden_route_clean(
+        {"ok": True, "items": [{"id": "e1", **item}]},
+        {"ok": True, "items": [{"id": "e1", **item, "text": "Winifred pays. vexillqorn"}]})
+
+
 def test_the_gate_reads_per_entry_point_and_e1_is_absent(records):
     verdict = runner.gate(records)
     assert verdict == {"rp": False, "continuity": True, "question": True}

@@ -39,7 +39,7 @@ import {
   proposalLabel, RELATION_PHRASES, STALE_TEXT,
 } from "./labels";
 import { ReviewedGroup } from "./ReviewedGroup";
-import { SweepCaptures } from "./SweepCaptures";
+import { INVESTIGATION_TASKS, SweepCaptures } from "./SweepCaptures";
 import { outcomeSentence } from "../investigation/InvestigationTrace";
 import { readPending, settles, writePending } from "../investigation/pending";
 import { isAbortError, newAttemptId } from "../../api/stream";
@@ -462,6 +462,10 @@ export function ContinuityReview(
       </div>
       {/* Under Refresh, which is what starts a sweep: what it asked. */}
       <SweepCaptures key={cid} cid={cid} />
+      {investigable && (
+        <SweepCaptures key={`${cid}-investigations`} cid={cid} tasks={INVESTIGATION_TASKS}
+                       label="What the investigations asked" what="investigation" />
+      )}
       {error && error.cid === cid
         && <p className="continuity-error" role="alert">{error.text}</p>}
       {group === "reviewed" ? (

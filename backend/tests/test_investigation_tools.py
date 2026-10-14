@@ -420,3 +420,16 @@ def test_one_post_longer_than_the_result_is_cut_not_skipped(run):
     assert found["truncated"] is True and "[post cut short]" in found["text"]
     assert "Mara speaks." in found["text"]
     assert sid in run.inspected
+
+
+def test_a_scene_renamed_or_deleted_after_its_read_is_no_longer_read(cid, run):
+    """The run holds the campaign, not its scenes: one moved after a tool
+    read it cannot stand behind a citation (`tools.revalidate`)."""
+    kept, renamed, gone = played(cid, "The docks"), played(cid, "The guild"), played(cid, "The ferry")
+    for sid in (kept, renamed, gone):
+        _call(run, "get_scene_excerpt", scene=f"scene:{sid}", query="ledger", max_posts=2)
+    assert run.inspected == {kept, renamed, gone}
+    scenes.rename_scene(cid, renamed, "The guild hall")
+    scenes.delete_scene(cid, gone)
+    tools.revalidate(run)
+    assert run.inspected == {kept}

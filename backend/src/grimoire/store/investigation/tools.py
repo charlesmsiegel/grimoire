@@ -199,7 +199,7 @@ def _settled(run: state.RunState, name: str, args: dict, ctx: tool_calls.ToolCon
     if found is not None:
         for sid in found.read:
             if not dropped or f"scene:{sid}" in sent:
-                run.inspect(sid)
+                run.inspect(sid, scenes_identity.scene_identity(run.cid, sid))
     ok = found is not None
     truncated = ok and any(i.get("truncated") for i in delivered)
     refs = (tuple(r for r in found.refs if not dropped or r in sent)
@@ -208,6 +208,22 @@ def _settled(run: state.RunState, name: str, args: dict, ctx: tool_calls.ToolCon
                         chars=len(text), truncated=truncated,
                         error="" if ok else json.loads(text)["error"]), call_id=ctx.call_id)
     return tool_calls.ToolOutput(text, refs=refs)
+
+
+def revalidate(run: state.RunState) -> None:
+    """Hold `inspected` to the scenes still as they were read, for the check
+    of the final call. The run holds the campaign, not its scenes: a scene
+    renamed, deleted or replaced under the same id after a tool read it is
+    not one a citation can name, so it is dropped -- and a proposal or answer
+    that stood on it falls back as one citing a scene never read."""
+    with locks.best_effort_campaign_lock(run.cid):
+        held = readers.scene_ids(run.cid)
+        with run.lock:
+            read = dict(run.read_as)
+        moved = {sid for sid in read
+                 if sid not in held or scenes_identity.scene_identity(run.cid, sid) != read[sid]}
+    with run.lock:
+        run.inspected -= moved
 
 
 def _sync(run: state.RunState, name: str, body: Callable[[dict], Answer]):

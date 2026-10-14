@@ -764,5 +764,9 @@ def test_idle_waits_out_a_tool_thread_the_loop_abandoned():
         task.cancel()
     asyncio.run(abandon())
     assert tool_calls.idle(timeout=0) is False
+    # The executor's own drain says the same of its threads alone: what a run
+    # waits on before it gives up holding the store root.
+    assert execute.drain(timeout=0) is False
     release.set()
+    assert execute.drain(timeout=10) is True
     assert tool_calls.idle(timeout=10) is True

@@ -97,7 +97,17 @@ def steered(trace: dict, selected: Iterable[str], forbidden: Iterable[str]) -> l
     return out
 
 
+def _observable(envelope: dict) -> dict:
+    """What a search answer shows, without its run-local evidence ids
+    (`e1`, `e2`...): an id is minted per run and per scene identity, and the
+    probe's own rewrite changes the scene's, so it says nothing about what
+    the search found."""
+    items = [{k: v for k, v in i.items() if k != "id"} if isinstance(i, dict) else i
+             for i in envelope.get("items") or []]
+    return {**envelope, "items": items}
+
+
 def hidden_route_clean(with_hidden: dict, without: dict) -> bool:
     """One search answers the same with the hidden text in the store as
-    without it: the same envelope, item for item."""
-    return with_hidden == without
+    without it: the same refs, titles and text, item for item."""
+    return _observable(with_hidden) == _observable(without)

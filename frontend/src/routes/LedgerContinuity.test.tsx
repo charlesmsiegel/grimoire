@@ -231,6 +231,20 @@ test("what the sweep asked says so when nothing was captured", async () => {
   expect(await main().findByText("No sweep has been captured yet.")).toBeInTheDocument();
 });
 
+test("an investigation's captures are listed apart from the sweep's", async () => {
+  (api.getConfig as any).mockResolvedValue(
+    { investigation_continuity: "on", investigation_question: "off" });
+  const QUESTION = { ...SWEEP_ENTRY, id: "000008", task: "investigation-question",
+                     operation: "tools" };
+  (api.listCampaignPrompts as any).mockResolvedValue({ entries: [SWEEP_ENTRY, QUESTION] });
+  renderLedger("/campaigns/run/ledger/continuity/overlaps");
+  fireEvent.click(await main().findByRole("button", { name: "What the sweep asked" }));
+  expect(await main().findByRole("button", { name: /^Continuity sweep/ })).toBeInTheDocument();
+  expect(main().queryByRole("button", { name: /^History question/ })).toBeNull();
+  fireEvent.click(await main().findByRole("button", { name: "What the investigations asked" }));
+  expect(await main().findByRole("button", { name: /^History question/ })).toBeInTheDocument();
+});
+
 // ---- Refresh ---------------------------------------------------------------
 
 test("a refresh shows progress and re-reads when it lands", async () => {

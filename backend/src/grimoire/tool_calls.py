@@ -1020,6 +1020,7 @@ class _Workers:
         self._size = size
         self._busy = 0
         self._lock = threading.Lock()
+        self._idle = threading.Condition(self._lock)
 
     def submit(self, fn: Callable, *args: object) -> Future | None:
         with self._lock:
@@ -1035,30 +1036,51 @@ class _Workers:
     def _release(self, _future: Future) -> None:
         with self._lock:
             self._busy -= 1
+            self._idle.notify_all()
+
+    def drain(self, timeout: float | None = None) -> bool:
+        """True once none of this pool's threads is running -- one a
+        timed-out wait abandoned included -- or False at `timeout`."""
+        with self._idle:
+            return self._idle.wait_for(lambda: self._busy == 0, timeout)
 
 
-def registered(toolset: Toolset, *, workers: int = TOOL_WORKERS) -> Execute:
-    """The default executor (spec 3.6): each call dispatched by name to its
-    `ToolSpec.fn`. An async tool is awaited; a sync one runs on this
-    executor's own bounded pool, and once every worker is held -- by threads
-    the loop stopped waiting on -- a call is refused with `CAPACITY` rather
-    than queued. The loop bounds the wait; nothing here kills a thread."""
-    pool = _Workers(workers)
+class Registered:
+    """The default executor (`registered`): an `Execute`, plus `drain`, which
+    waits out the threads its pool still runs."""
 
-    async def execute(call: ToolCall, ctx: ToolContext) -> ToolOutput:
-        spec = toolset.get(call.name)
+    def __init__(self, toolset: Toolset, workers: int):
+        self._toolset = toolset
+        self._pool = _Workers(workers)
+
+    async def __call__(self, call: ToolCall, ctx: ToolContext) -> ToolOutput:
+        spec = self._toolset.get(call.name)
         if spec is None:
             raise ToolError(f"there is no tool named {call.name!r}")
         args = call.arguments or {}
         if inspect.iscoroutinefunction(spec.fn):
             return await spec.fn(args, ctx)
-        future = pool.submit(spec.fn, args, ctx)
+        future = self._pool.submit(spec.fn, args, ctx)
         if future is None:
             raise ToolError(CAPACITY)
         result = await asyncio.wrap_future(future)
         return await result if inspect.isawaitable(result) else result
 
-    return execute
+    def drain(self, timeout: float | None = None) -> bool:
+        """True once no thread this executor started is running, or False at
+        `timeout`. Blocks: call it off the loop. For a run that holds what a
+        late thread could still read -- the store root -- until it returns."""
+        return self._pool.drain(timeout)
+
+
+def registered(toolset: Toolset, *, workers: int = TOOL_WORKERS) -> Registered:
+    """The default executor (spec 3.6): each call dispatched by name to its
+    `ToolSpec.fn`. An async tool is awaited; a sync one runs on this
+    executor's own bounded pool, and once every worker is held -- by threads
+    the loop stopped waiting on -- a call is refused with `CAPACITY` rather
+    than queued. The loop bounds the wait; nothing here kills a thread, and
+    `Registered.drain` waits out the ones it left."""
+    return Registered(toolset, workers)
 
 
 async def text_deltas(events: AsyncIterator[LoopEvent],

@@ -43,6 +43,10 @@ class RunState:
     perspective: str = history_model.NARRATOR
     embed_client: object | None = None
     inspected: set[str] = field(default_factory=set)
+    #: Each inspected scene's identity when it was first read (None for a
+    #: scene that predates identities): what `tools.revalidate` holds a
+    #: citation to at settlement.
+    read_as: dict[str, str | None] = field(default_factory=dict)
     evidence: dict[str, history_model.EvidenceItem] = field(default_factory=dict)
     steps: list[dict] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -54,10 +58,11 @@ class RunState:
         if not self.cid:
             raise ValueError("an investigation runs in a campaign")
 
-    def inspect(self, sid: str) -> None:
+    def inspect(self, sid: str, identity: str | None = None) -> None:
         with self.lock:
             if not self.frozen:
                 self.inspected.add(sid)
+                self.read_as.setdefault(sid, identity)
 
     def freeze(self) -> None:
         """No tool writes after this; the caller's own `note` still lands

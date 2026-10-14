@@ -105,6 +105,11 @@ def _scene_rows(cid: str) -> list[dict]:
                   key=lambda row: row["id"])
 
 
+def scene_ids(cid: str) -> set[str]:
+    """Every scene id the campaign holds now."""
+    return {r["id"] for r in _scene_rows(cid)}
+
+
 def scene(cid: str, ref: object) -> dict:
     """The scene `ref` (`scene:<sid>`) names, as its `list_scenes` row."""
     _, sid = split(ref, ("scene",))

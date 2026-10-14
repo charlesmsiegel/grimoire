@@ -296,8 +296,10 @@ async def _settled(state: investigation_state.RunState, result: tool_calls.LoopR
         return {"state": "failed", "error": getattr(result.error, "kind", "") or "error"}, None
     if result.status == "budget_exhausted":
         return {"state": "budget_exhausted", "limit": result.limit}, None
-    checked = await anyio.to_thread.run_sync(
-        lambda: investigation_final.settle(state, result.final_call, candidate=seed.candidate))
+    def check() -> investigation_final.Final:
+        investigation_tools.revalidate(state)
+        return investigation_final.settle(state, result.final_call, candidate=seed.candidate)
+    checked = await anyio.to_thread.run_sync(check)
     return {"state": checked.state}, checked
 
 
@@ -326,6 +328,7 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
     budget = investigation_budget.with_context(budget, tokens)
     result: tool_calls.LoopResult | None = None
     stopped: dict = {}
+    execute = tool_calls.registered(toolset)
     try:
         # Each model turn, into one campaign-level prompt-log entry of its own
         # pool, fenced on the run (a cancelled or forgotten one files nothing).
@@ -333,7 +336,7 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
                 state.cid, decision_capture.NO_SCENE, task, operation=decision_capture.TOOLS,
                 fence=lambda: cancelled is None or not cancelled()) as scope:
             result = await _loop(task, seed.messages, toolset=toolset,
-                                 execute=tool_calls.registered(toolset), client=client,
+                                 execute=execute, client=client,
                                  resolved=resolved, budget=budget, run_id=run_id,
                                  campaign=state.cid, scene=state.sid, post=post,
                                  cancelled=cancelled, tool_choice="required",
@@ -353,6 +356,12 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
     else:
         # Nothing to check against, but a tool thread may still be running.
         state.freeze()
+    # A tool thread the loop stopped waiting on still reads the store through
+    # `store.home()`. The run holds the root still until it returns (a move
+    # is refused while a run is live), as a maintenance run holds it until
+    # its thread does: frozen, it records nothing, but it must not read
+    # another library.
+    await anyio.to_thread.run_sync(execute.drain)
     filed = await anyio.to_thread.run_sync(_filed, state.cid, run_id)
     # An unreadable ledger leaves the loop's own turns, which it handed back.
     rows: Sequence[dict] = filed if filed is not None else (
