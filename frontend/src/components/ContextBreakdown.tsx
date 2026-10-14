@@ -248,7 +248,7 @@ function HistoryPlan({ plan }: { plan: HistoryPlanTrace }) {
     <div className="field-hint">Planning: {plan.terminal}{plan.trigger && `; trigger ${plan.trigger}`};
       {" "}added {plan.gain.length} scene{plan.gain.length === 1 ? "" : "s"}
       {plan.sufficiency !== "not_asked" && `; check ${plan.sufficiency}`}</div>
-    {plan.rounds.map((round, n) => <div className="field-hint" key={round.questions.join("|") + round.terms.join("|")}>
+    {plan.rounds.map((round, n) => <div className="field-hint" key={[round.questions, round.terms, round.subjects].map((part) => part.join("|")).join("\u0000")}>
       Planned round {n + 1}: {round.questions.join(" / ") || "no questions"}
       {round.terms.length > 0 && `; terms ${round.terms.join(", ")}`}
     </div>)}

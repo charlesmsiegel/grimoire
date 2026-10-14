@@ -436,3 +436,21 @@ def test_the_trace_rides_a_frozen_history_view(cid):
     record = epistemic.to_record(view)
     del record["evidence"]["plan"]
     assert epistemic.from_record(record).evidence.plan is None
+
+
+
+def test_a_retrieval_that_raises_still_traces_a_planned_phase(cid, monkeypatch):
+    """With planning on, a first retrieval that raises is `not_run:error`,
+    never a missing trace that reads as planning switched off -- and no
+    planner call is made."""
+    sid, *_ = setup_thin(cid)
+
+    async def broken(*a, **k):
+        raise OSError("unreadable archive")
+    monkeypatch.setattr(store.history, "retrieve", broken)
+    fake = FakeLLM([[plan_reply()]])
+    ev = gather(cid, sid, fake)
+    assert ev.coverage.verdict == "error" and ev.plan.terminal == "not_run:error"
+    assert fake.calls == 0
+    store.config.write_config(history_plan="off")
+    assert gather(cid, sid, fake).plan is None

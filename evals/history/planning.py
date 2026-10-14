@@ -65,7 +65,9 @@ PLANNER_MARK = "You decide what earlier events of a role-play campaign the next 
 REPAIR_MARK = "A previous search already ran"
 CHECK_MARK = "Recalled earlier scenes:"
 FILLER = ("The room is quiet.", "The ferryman waits.")
-DEPTH = 3
+#: Five, so recall@5 measures positions four and five rather than repeating
+#: recall@3 over a selection capped at three.
+DEPTH = 5
 
 
 @dataclass(frozen=True)
@@ -172,7 +174,10 @@ def build(case, *, seed=10):
         if case.gold and n == case.at:
             sid = _scene(cid, case.gold, cast=cast)
             gold.append(synth.Gold(sid, identity.scene_identity(cid, sid), 0, 0))
-        _scene(cid, rng.choice(FILLER), cast=cast if case.control == "found" and n < 2 else ())
+        # "Already found" needs a full selection with agreement: the gold scene
+        # and enough shared-cast fillers to fill the depth.
+        _scene(cid, rng.choice(FILLER),
+               cast=cast if case.control == "found" and n < DEPTH - 1 else ())
     for text in case.distractors:
         forbidden.add(_scene(cid, text))
     current = scenes.create_scene(cid, "Saltmarch")

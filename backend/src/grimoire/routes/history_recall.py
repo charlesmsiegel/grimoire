@@ -553,6 +553,7 @@ async def _gather(cid, sid, *, seed, resolved, llm_client, embed_client, deadlin
     `plan_and_repair` (10). An actor's step never plans: the planner is
     shown the narrator's seeds, and 10 plans for the narrator only."""
     started = time.monotonic()
+    planning = False
     try:
         prepared = await history_threads.run(_prepare, cid, sid, seed, resolved, actor_ref)
         if prepared is None:
@@ -571,7 +572,9 @@ async def _gather(cid, sid, *, seed, resolved, llm_client, embed_client, deadlin
                            run_id=run_id) if prepared.rerank and not _actor(actor_ref) else None,
         )
     except Exception:  # noqa: BLE001 -- optional history cannot strand an appended player post
-        return _error(cid, sid)
+        failed = _error(cid, sid)
+        # A planned phase still says why it never planned: retrieval failed.
+        return replace(failed, plan=_trace("not_run:error", failed)) if planning else failed
     if not planning:
         return first
     try:
