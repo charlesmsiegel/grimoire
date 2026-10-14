@@ -339,6 +339,27 @@ def test_e3_a_repeated_attempt_is_not_run_again(client):
     assert len(fake.requests) == sent
 
 
+def test_e3_an_answer_is_not_found_again_from_another_library(client, tmp_path,
+                                                              monkeypatch):
+    # The env var pins the root; name it through the pointer instead, so the
+    # move below really moves it.
+    store.set_data_dir(store.home())
+    monkeypatch.delenv("GRIMOIRE_HOME")
+    cid, _sid = _campaign(client)
+    _on(client)
+    _install(client, FakeToolTurns(("", [("finish_insufficient_evidence",
+                                         {"reason": "nothing"})])))
+    first = _ask(client, cid, attempt="q-moved")
+    _settled(client, cid, first)
+    runs_at = f"/api/campaigns/{cid}/runs"
+    assert client.get(runs_at, params={"attempt": "q-moved"}).json()["runs"]
+    moved = client.put("/api/config/data-dir", json={"data_dir": str(tmp_path / "other")})
+    assert moved.status_code == 200, moved.text
+    # a campaign of the same slug in the new library finds nothing to re-attach
+    assert client.get(runs_at, params={"attempt": "q-moved"}).json()["runs"] == []
+    assert client.get(f"{runs_at}/{first.json()['run']['id']}").status_code == 404
+
+
 def test_e3_refuses_an_unpriced_model_under_a_ceiling(client, monkeypatch):
     cid, _sid = _campaign(client)
     _on(client, investigation_spend_ceiling="1")
@@ -387,6 +408,9 @@ def test_e2_a_finding_whose_fingerprint_moved_is_not_still_live(client):
     assert investigation._still_live(cid, PAIR, record)
     assert not investigation._still_live(cid, PAIR, {**record, "fingerprint": "fp1_old"})
     assert not investigation._still_live(cid, "no-such-finding", record)
+    # a sweep that adjudicated it between the start and the run moved its proposal
+    assert not investigation._still_live(
+        cid, PAIR, {**record, "proposal": {"status": "contradiction", "rationale": "x"}})
 
 
 def test_e2_a_stopping_investigation_still_holds_the_campaign(client):

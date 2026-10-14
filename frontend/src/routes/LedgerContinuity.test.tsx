@@ -1968,6 +1968,7 @@ describe("the finding detail", () => {
 
 describe("investigating a finding", () => {
   beforeEach(() => {
+    localStorage.clear();
     (api.continuityCandidates as any).mockResolvedValue(DETAIL);
   });
 
@@ -1991,7 +1992,8 @@ describe("investigating a finding", () => {
       { name: /investigate|second opinion/i });
     const reads = (api.continuityCandidates as any).mock.calls.length;
     fireEvent.click(button);
-    await waitFor(() => expect(api.investigateCandidate).toHaveBeenCalledWith("run", PAIR.id));
+    await waitFor(() => expect(api.investigateCandidate).toHaveBeenCalledWith(
+      "run", PAIR.id, expect.any(AbortSignal), expect.any(String)));
     expect(await aside().findByText(/The investigation finished\. Its suggestion is shown above\./))
       .toBeInTheDocument();
     await waitFor(() => expect((api.continuityCandidates as any).mock.calls.length)
@@ -2013,11 +2015,59 @@ describe("investigating a finding", () => {
     );
     fireEvent.click(await (await sidebar()).findByRole("button",
       { name: /investigate|second opinion/i }));
-    await waitFor(() => expect(api.investigateCandidate).toHaveBeenCalledWith("run", PAIR.id));
+    await waitFor(() => expect(api.investigateCandidate).toHaveBeenCalledWith(
+      "run", PAIR.id, expect.any(AbortSignal), expect.any(String)));
     fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
     expect(await aside().findByText(/Another finding is being investigated/))
       .toBeInTheDocument();
     expect(aside().getByRole("button", { name: /investigate|second opinion/i })).toBeDisabled();
+  });
+
+  test("an investigation left running is followed on return, never started again", async () => {
+    (api.getConfig as any).mockResolvedValue(
+      { investigation_continuity: "on", investigation_question: "off" });
+    localStorage.setItem("grimoire.investigation.run",
+                         JSON.stringify({ attempt: "a-earlier", candidate: PAIR.id }));
+    const handle = { id: "r1", state: "running" };
+    (api.findCandidateInvestigation as any).mockResolvedValue(handle);
+    (api.followCandidateInvestigation as any).mockResolvedValue({
+      candidate: PAIR.id, persisted: false,
+      outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
+                 result: null, trace: {} },
+    });
+    renderLedger(at(PAIR));
+    expect(await (await sidebar()).findByText(/could not find enough/)).toBeInTheDocument();
+    expect(api.findCandidateInvestigation)
+      .toHaveBeenCalledWith("run", "a-earlier", expect.any(AbortSignal));
+    expect(api.followCandidateInvestigation)
+      .toHaveBeenCalledWith("run", handle, "a-earlier", expect.any(AbortSignal));
+    expect(api.investigateCandidate).not.toHaveBeenCalled();
+    expect(localStorage.getItem("grimoire.investigation.run")).toBeNull();
+  });
+
+  test("a retry after a failure with no reply follows the first run", async () => {
+    (api.getConfig as any).mockResolvedValue(
+      { investigation_continuity: "on", investigation_question: "off" });
+    (api.investigateCandidate as any).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button",
+      { name: /investigate|second opinion/i }));
+    expect(await aside().findByText(/Failed to fetch|reach/)).toBeInTheDocument();
+    const [, , , attempt] = (api.investigateCandidate as any).mock.calls[0];
+    expect(JSON.parse(localStorage.getItem("grimoire.investigation.run") ?? "null"))
+      .toEqual({ attempt, candidate: PAIR.id });
+    const handle = { id: "r1", state: "landed" };
+    (api.findCandidateInvestigation as any).mockResolvedValue(handle);
+    (api.followCandidateInvestigation as any).mockResolvedValue({
+      candidate: PAIR.id, persisted: false,
+      outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
+                 result: null, trace: {} },
+    });
+    fireEvent.click(aside().getByRole("button", { name: /investigate|second opinion/i }));
+    expect(await aside().findByText(/could not find enough/)).toBeInTheDocument();
+    expect(api.findCandidateInvestigation)
+      .toHaveBeenCalledWith("run", attempt, expect.any(AbortSignal));
+    expect(api.investigateCandidate).toHaveBeenCalledTimes(1);
   });
 
   test("a proposal's investigation trace is shown with it", async () => {

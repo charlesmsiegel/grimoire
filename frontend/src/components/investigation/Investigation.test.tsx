@@ -9,7 +9,7 @@ vi.mock("../../api/client", async () => {
            api: { askHistory: vi.fn(), findHistoryQuestion: vi.fn(),
                   followHistoryQuestion: vi.fn(), listScenes: vi.fn() } };
 });
-import { api } from "../../api/client";
+import { api, ApiError } from "../../api/client";
 import type { HistoryAnswer, InvestigationTrace as Trace } from "../../api/types";
 import { AskHistory } from "./AskHistory";
 import { InvestigationTrace, outcomeSentence } from "./InvestigationTrace";
@@ -169,6 +169,40 @@ describe("AskHistory", () => {
     expect(await screen.findByText(/no longer held/)).toBeInTheDocument();
     expect(api.askHistory).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Your question")).toHaveValue("Who keeps the ledger?");
+    expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
+  });
+
+  it("keeps a question whose failure carried no reply, and re-asks it as the same run", async () => {
+    mocked(api.askHistory).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Your question"),
+                     { target: { value: "Who keeps the harbour ledger?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(await screen.findByText(/Failed to fetch|reach/)).toBeInTheDocument();
+    const [, , , attempt] = mocked(api.askHistory).mock.calls[0];
+    // Nothing proved the run absent, so it is still remembered...
+    expect(JSON.parse(localStorage.getItem("grimoire.askHistory.run") ?? "null"))
+      .toEqual({ attempt, question: "Who keeps the harbour ledger?" });
+    // ...and asking it again goes out under the same attempt, which the
+    // server adopts rather than starting (and paying for) a second run.
+    mocked(api.askHistory).mockResolvedValueOnce({
+      question: "Who keeps the harbour ledger?",
+      outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
+                 result: null, trace: TRACE } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
+    expect(mocked(api.askHistory).mock.calls[1][3]).toBe(attempt);
+    expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
+  });
+
+  it("forgets a question the server answered with a refusal", async () => {
+    mocked(api.askHistory).mockRejectedValueOnce(
+      new ApiError(409, "the question switch is off", "off"));
+    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Your question"),
+                     { target: { value: "Who keeps the harbour ledger?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(await screen.findByText(/switch is off/)).toBeInTheDocument();
     expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
   });
 

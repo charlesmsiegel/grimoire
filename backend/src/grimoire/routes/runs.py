@@ -722,6 +722,28 @@ class RunRegistry:
         with self._lock:
             self._pending_touched.clear()
 
+    def forget_root(self) -> int:
+        """Make every run unreachable, after the store root moved. Returns how
+        many went.
+
+        `forget_subject` for a whole library: every subject's ids are slugs of
+        the OLD tree, and the new one can hold a campaign of the same slug, so
+        inside the retention window a reader there could otherwise rediscover
+        a draft by its attempt id -- a history answer or an investigation of
+        the other library's campaign -- and show it as this one's. The move is
+        refused while anything is live (`hold_still`), so every run this
+        reaches is terminal; the flag rather than `_runs` for the same reason
+        `forget_subject` gives, and the reaper collects them as ever."""
+        with self._lock:
+            for run in self._runs.values():
+                run.forgotten = True
+            count = len(self._runs)
+            self._by_subject.clear()
+            self._by_attempt.clear()
+            self._precancelled.clear()
+            self._pending_touched.clear()
+            return count
+
     @staticmethod
     def _now() -> float:
         """The clock retention is measured on. Monotonic, never wall."""
@@ -2115,6 +2137,12 @@ def reserve_campaign_background(app, cid: str, kind: str,
 def drop_pending_touched(app) -> None:
     """Forget every ref a trigger left pending, after the store root moved."""
     app.state.runs.drop_pending_touched()
+
+
+def forget_root(app) -> int:
+    """Drop every run from discovery after the store root moved -- see
+    `RunRegistry.forget_root`."""
+    return app.state.runs.forget_root()
 
 
 def _reserve(app, cid: str, sid: str, cls: RunClass, kind: str,

@@ -13,39 +13,21 @@ import { isAbortError, newAttemptId } from "../../api/stream";
 import type { HistoryAnswer } from "../../api/types";
 import { encodeSegment } from "../../urlSegment";
 import { InvestigationTrace, outcomeSentence } from "./InvestigationTrace";
+import { readPending, settles, writePending } from "./pending";
 
 /** The longest question the server takes. */
 export const QUESTION_CHARS = 500;
 
-/** A question still being answered, kept past this panel: the run is
- *  detached on the server and spends whether or not anyone is watching, so
- *  leaving the page must not lose its answer or let a second one start. A
- *  remount re-attaches by the same attempt id, which the server adopts. */
+/** A question still being answered, kept past this panel (`pending.ts`). */
 type Pending = { attempt: string; question: string };
 
 const pendingKey = (cid: string) => `grimoire.askHistory.${cid}`;
-
-/** Every storage touch is wrapped: storage can throw (a private window,
- *  blocked site data), and a panel that cannot remember still asks. */
-function readPending(cid: string): Pending | null {
-  try {
-    const raw = localStorage.getItem(pendingKey(cid));
-    const v: unknown = raw ? JSON.parse(raw) : null;
-    if (v && typeof v === "object" && typeof (v as Pending).attempt === "string"
-        && typeof (v as Pending).question === "string") return v as Pending;
-  } catch { /* nothing remembered */ }
-  return null;
-}
-
-function writePending(cid: string, p: Pending | null): void {
-  try {
-    if (p) localStorage.setItem(pendingKey(cid), JSON.stringify(p));
-    else localStorage.removeItem(pendingKey(cid));
-  } catch { /* in memory only */ }
-}
+const readQuestion = (cid: string) =>
+  readPending<Pending>(pendingKey(cid), (v) => typeof v.question === "string");
+const writeQuestion = (cid: string, p: Pending | null) => writePending(pendingKey(cid), p);
 
 export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void }) {
-  const [question, setQuestion] = useState(() => readPending(cid)?.question ?? "");
+  const [question, setQuestion] = useState(() => readQuestion(cid)?.question ?? "");
   const [asking, setAsking] = useState(false);
   const [answer, setAnswer] = useState<HistoryAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,13 +53,13 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
     setAnswer(null);
     try {
       const got = await api.askHistory(cid, p.question, ctl.signal, p.attempt);
-      writePending(cid, null);
+      writeQuestion(cid, null);
       setAnswer(got);
     } catch (err: unknown) {
       // An unmount stops only the watching; the run, and its record here,
       // stay for the next mount to pick up.
       if (isAbortError(err)) return;
-      writePending(cid, null);
+      if (settles(err)) writeQuestion(cid, null);
       setError(errorText(err));
     } finally {
       if (!ctl.signal.aborted) setAsking(false);
@@ -99,22 +81,22 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
         // start's checks (the switch, the model) over an answer the run
         // already holds, and lose it if either had changed meanwhile.
         const got = await api.followHistoryQuestion(cid, held, p.attempt, ctl.signal);
-        writePending(cid, null);
+        writeQuestion(cid, null);
         setAnswer(got);
       } else {
-        writePending(cid, null);
+        writeQuestion(cid, null);
         setError("The earlier question's answer is no longer held. Ask it again to rerun it.");
       }
     } catch (err: unknown) {
       if (isAbortError(err)) return;
-      writePending(cid, null);
+      if (settles(err)) writeQuestion(cid, null);
       setError(errorText(err));
     }
     if (!ctl.signal.aborted) setAsking(false);
   }
 
   useEffect(() => {
-    const p = readPending(cid);
+    const p = readQuestion(cid);
     if (p) void resume(p);
     return () => live.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per campaign
@@ -123,8 +105,12 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
   function ask() {
     const q = question.trim();
     if (!q || asking) return;
-    const p = { attempt: newAttemptId(), question: q };
-    writePending(cid, p);
+    // The same question as one still remembered re-asks under its attempt
+    // id, which the server adopts: a failure that proved nothing must not
+    // let a second run start and spend again.
+    const held = readQuestion(cid);
+    const p = held?.question === q ? held : { attempt: newAttemptId(), question: q };
+    writeQuestion(cid, p);
     void follow(p);
   }
 

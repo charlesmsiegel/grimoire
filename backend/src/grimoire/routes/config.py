@@ -563,9 +563,14 @@ def put_data_dir(update: DataDirUpdate, request: Request):
             with compiled.root_change(), library_paths.library_guard():
                 previous = library_paths.home()
                 prospective = library_paths.prepare_data_dir(update.data_dir)
-                if str(previous.resolve()) != str(prospective.resolve()):
+                moved = str(previous.resolve()) != str(prospective.resolve())
+                if moved:
                     absorb_membership.retire_library_inherited(previous)
                 store.set_data_dir(update.data_dir)
+                if moved:
+                    # Inside the hold, so no run reserves between the move and
+                    # this: every retained run names the OLD tree's slugs.
+                    runs.forget_root(request.app)
         except group_refs.GroupIdentityConflict as exc:
             raise HTTPException(status_code=409,
                                 detail={"detail": str(exc), "kind": "group_identity"}) from exc

@@ -503,13 +503,14 @@ def _live(cid: str, record: dict) -> bool:
 
 def _still_live(cid: str, candidate_id: str, started: dict) -> bool:
     """The finding the start refused nothing for, re-read when the run
-    begins: still cached, with the fingerprint the start saw, and live. A
-    background run can begin after an apply, a dismiss, a sweep or an edit
-    of a record it names, and a finding that moved is not worth a model
-    call -- the persist would drop its answer anyway."""
+    begins: still cached, with the fingerprint and the proposal the start
+    saw, and live. A background run can begin after an apply, a dismiss, a
+    sweep that adjudicated it or an edit of a record it names, and a finding
+    that moved is not worth a model call -- the persist, fenced on the same
+    two, would drop its answer anyway."""
     record = candidates.read(cid)["records"].get(candidate_id)
     return (record is not None and record.get("fingerprint") == started.get("fingerprint")
-            and _live(cid, record))
+            and record.get("proposal") == started.get("proposal") and _live(cid, record))
 
 
 def _campaign_or_404(cid: str) -> None:

@@ -735,6 +735,16 @@ async function draftRun<T>(scope: DraftScope,
   return (run.result ?? {}) as T;
 }
 
+/** `draftRun`'s second half alone: follow a run already found by its attempt
+ *  id to what it produced, for a remount that must not repeat the start. */
+async function followDraft<T>(scope: DraftScope, handle: RunHandle, attempt: string,
+                              signal?: AbortSignal): Promise<T> {
+  const run = await awaitRunAt(draftBase(scope), handle,
+                               () => findDraftRun(scope, attempt, signal).catch(() => null),
+                               signal, noteRunSettled);
+  return (run.result ?? {}) as T;
+}
+
 /** How many times a lost streaming draft is picked back up before its failure
  *  is reported. Small, because each attempt makes two requests and a run that
  *  is really gone answers the same way every time; more than one because the
@@ -1695,14 +1705,25 @@ export const api = {
   /** Investigate one finding (roadmap 12, E2) and wait for it: a background
    *  run, one live per campaign, whose one write is the finding's proposal.
    *  `notifyShell`, since a written proposal moves what the review shows. */
-  investigateCandidate: (cid: string, id: string, signal?: AbortSignal) =>
-    draftRun<CandidateInvestigated>({ at: "campaign", id: cid }, (attempt) =>
+  /** `attempt`, when given, re-attaches: the server adopts a repeat of the
+   *  attempt that started a campaign's investigation rather than running
+   *  another. */
+  investigateCandidate: (cid: string, id: string, signal?: AbortSignal, attempt?: string) =>
+    draftRun<CandidateInvestigated>({ at: "campaign", id: cid }, (a) =>
       request<{ run: RunHandle }>(
         "POST",
         `/api/campaigns/${encodeSegment(cid)}/continuity/candidates/${encodeSegment(id)}/investigate`,
-        undefined, { attempt, signal }), { signal }).then(notifyShell),
-  /** Ask the campaign's history a question (roadmap 12, E3): a draft whose
-   *  answer is held on the run and never stored. */
+        undefined, { attempt: a, signal }), { signal, attempt }).then(notifyShell),
+  /** The run an investigation's attempt id named, or null once the server
+   *  holds it no longer: what a remount checks before following it. */
+  findCandidateInvestigation: (cid: string, attempt: string, signal?: AbortSignal) =>
+    findDraftRun({ at: "campaign", id: cid }, attempt, signal),
+  /** Follow a held investigation to its outcome WITHOUT the POST, which would
+   *  face the start's checks again over an outcome the run already holds. */
+  followCandidateInvestigation: (cid: string, handle: RunHandle, attempt: string,
+                                 signal?: AbortSignal) =>
+    followDraft<CandidateInvestigated>({ at: "campaign", id: cid }, handle, attempt, signal)
+      .then(notifyShell),
   /** The run a history question's attempt id named, or null once the server
    *  holds it no longer (reaped, or a restart): what a re-attach checks
    *  before repeating the POST, which would otherwise ask again. */
@@ -1711,16 +1732,13 @@ export const api = {
   /** Follow a held history question's run to its answer WITHOUT the POST: a
    *  re-attach must not pass the start's own checks again (the switch, the
    *  model) to collect an answer the run already holds. */
-  followHistoryQuestion: async (cid: string, handle: RunHandle, attempt: string,
-                                signal?: AbortSignal): Promise<HistoryAnswer> => {
-    const scope: DraftScope = { at: "campaign", id: cid };
-    const run = await awaitRunAt(draftBase(scope), handle,
-                                 () => findDraftRun(scope, attempt, signal).catch(() => null),
-                                 signal, noteRunSettled);
-    return (run.result ?? {}) as HistoryAnswer;
-  },
-  /** `attempt`, when given, re-attaches: the server adopts a repeat of a
-   *  live question's attempt id rather than asking again. */
+  followHistoryQuestion: (cid: string, handle: RunHandle, attempt: string,
+                          signal?: AbortSignal) =>
+    followDraft<HistoryAnswer>({ at: "campaign", id: cid }, handle, attempt, signal),
+  /** Ask the campaign's history a question (roadmap 12, E3): a draft whose
+   *  answer is held on the run and never stored. `attempt`, when given,
+   *  re-attaches: the server adopts a repeat of a question's attempt id
+   *  rather than asking again. */
   askHistory: (cid: string, question: string, signal?: AbortSignal, attempt?: string) =>
     draftRun<HistoryAnswer>({ at: "campaign", id: cid }, (a) =>
       request<{ run: RunHandle }>(

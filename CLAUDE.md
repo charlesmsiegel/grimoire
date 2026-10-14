@@ -435,7 +435,9 @@ subscriber. **Thirty-five handlers** start detached runs, in five classes:
   be detached and unreachable. **Deleting a campaign or a world forgets its
   runs** (`runs.forget_subject`), because those ids are slugs and a slug is
   reusable: a replacement of the same name created inside the retention window
-  would otherwise be handed the dead record's drafts. A forgotten run keeps
+  would otherwise be handed the dead record's drafts. A move of the store
+  root forgets every run (`runs.forget_root`), the same rule one library
+  over: the new tree can hold a campaign of the same slug. A forgotten run keeps
   running and stays visible to the internal sweeps — it is only unreachable.
 - Every terminal write is **fenced** on that identity under the campaign lock,
   and every route that changes a scene's *shape* is refused with `scene_busy`
