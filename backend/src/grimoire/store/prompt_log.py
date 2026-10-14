@@ -48,9 +48,11 @@ What a snapshot is, and is not (both raised in review, both deliberate):
 Retention is `prompt_log_depth` in config.md (default 50, 0 = off), counted per
 CAMPAIGN rather than per scene, and per POOL (roadmap 01b §3.5): generations
 (rows with no `operation`), scene decisions (`operation == "decide"` with a
-scene) and campaign decisions (`operation == "decide"` filed with no scene)
-each keep that many, so a run of speaker picks or a reconcile sweep can evict
-only older decisions and never a turn a reader came to inspect. Per-scene
+scene), campaign decisions (`operation == "decide"` filed with no scene) and
+investigation tool loops (`operation == "tools"`, roadmap 12) each keep that
+many, so a run of speaker picks, a reconcile sweep or an investigation can
+evict only older entries of its own kind and never a turn a reader came to
+inspect. Per-scene
 reads better but is unbounded across a library -- 100 scenes at 20 entries each is 2000 payloads of tens of KB, in a
 store whose whole premise is that a human can read it. The cost of the campaign
 window, stated rather than hidden: playing one scene long enough evicts
@@ -72,6 +74,11 @@ from .paths import safe_id
 #: no `operation` is a generation, every row written before decisions were
 #: captured included.
 DECIDE = "decide"
+
+#: The `operation` an investigation's tool loop is filed under (roadmap 12):
+#: one entry per run, its own retention pool, so a run of investigations
+#: never evicts a turn or a decision.
+TOOLS = "tools"
 
 #: The `scene` a campaign-level capture is filed under: a decision asked with
 #: no scene (the continuity reconcile sweep). No scene id is empty, so no

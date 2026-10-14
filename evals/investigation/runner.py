@@ -58,8 +58,6 @@ from . import cases, graders, synth
 TASKS = {"continuity": "investigation-continuity", "question": "investigation-question"}
 #: The task the investigation arm's decide tool runs under.
 DECIDE_TASK = "investigation-decide"
-#: A word that appears in no corpus campaign: the hidden route's baseline.
-NOWHERE = "zephyrquill"
 
 
 @contextlib.contextmanager
@@ -191,24 +189,42 @@ def probe_run(run_id: str) -> str:
 
 async def _hidden_route(planted: synth.Planted, *, embed_client=None,
                         run_id: str = "hidden") -> bool | None:
-    """Spec 10.2's hidden route, for the narrator: a search over a word that
-    appears only in a hidden post answers exactly as one over a word that
-    appears nowhere. None when the case plants no hidden word. Live, it
-    searches as the arms do -- semantic too, with `embed_client` -- since
-    semantic ranking is exactly what could tell the two apart."""
-    if not planted.hidden_terms:
+    """Spec 10.2's hidden route, for the narrator: no hidden post's text
+    reaches the search. Asked as a counterfactual -- each hidden word,
+    searched beside a visible one (`synth.Planted.probe_anchor`), answers the
+    same before and after the hidden posts are rewritten without it
+    (`synth.unplant`). The query is identical both times, so a ranking can
+    differ for no reason but the documents: a semantic match between a
+    meaningful hidden word and the visible text beside it is the same both
+    times, and is not mistaken for a leak. Live, it searches as the arms do,
+    semantic too, with `embed_client`.
+
+    A search document of an absorbed scene is its summary, so the search
+    alone can be clean without proving much: the posts themselves are what
+    `get_scene_excerpt` reads, and no excerpt of a hidden post's scene,
+    asked for each hidden word, may carry one. None when the case hides
+    nothing."""
+    if not planted.hidden_terms or not planted.hidden_posts:
         return None
     run_state = inv_state.RunState(cid=planted.cid, mode="continuity",
                                    embed_client=embed_client)
     spec = inv_tools.toolset(run_state).get("search_history")
     ctx = tool_calls.ToolContext(campaign=planted.cid, scene_identity="", run_id=run_id,
                                  deadline=float("inf"), root="")
-    nowhere = json.loads((await spec.fn({"query": NOWHERE, "max": 4}, ctx)).text)
-    clean = True
-    for term in planted.hidden_terms:
-        hidden = json.loads((await spec.fn({"query": term, "max": 4}, ctx)).text)
-        clean = clean and graders.hidden_route_clean(hidden, nowhere)
-    return clean
+    queries = [f"{planted.probe_anchor} {term}".strip() for term in planted.hidden_terms]
+
+    async def answers() -> list[dict]:
+        return [json.loads((await spec.fn({"query": q, "max": 4}, ctx)).text) for q in queries]
+
+    excerpt = inv_tools.toolset(run_state).get("get_scene_excerpt")
+    read = [(await asyncio.to_thread(
+                excerpt.fn, {"scene": f"scene:{sid}", "query": term, "max_posts": 6}, ctx)).text
+            for sid, _ in planted.hidden_posts for term in planted.hidden_terms]
+    before = await answers()
+    await asyncio.to_thread(synth.unplant, planted)
+    after = await answers()
+    return (not graders.text_leaks(read, planted.hidden_terms)
+            and all(graders.hidden_route_clean(b, a) for b, a in zip(before, after, strict=True)))
 
 
 ARM_FNS = {"investigation": _investigate, "sweep": _sweep, "retrieval": _retrieval}

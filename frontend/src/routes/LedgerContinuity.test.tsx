@@ -2045,6 +2045,31 @@ describe("investigating a finding", () => {
     expect(localStorage.getItem("grimoire.investigation.run")).toBeNull();
   });
 
+  test("an investigation left running is still followed once the switch is off", async () => {
+    localStorage.setItem("grimoire.investigation.run",
+                         JSON.stringify({ attempt: "a-earlier", candidate: PAIR.id }));
+    (api.findCandidateInvestigation as any).mockResolvedValue({ id: "r1", state: "running" });
+    (api.followCandidateInvestigation as any).mockResolvedValue({
+      candidate: PAIR.id, persisted: false,
+      outcome: { state: "no_change", limit: "", reason: "", error: "", result: null,
+                 trace: {} },
+    });
+    renderLedger(at(PAIR));
+    expect(await (await sidebar()).findByText(/found nothing to change/)).toBeInTheDocument();
+    expect(aside().queryByRole("button", { name: /investigate|second opinion/i })).toBeNull();
+  });
+
+  test("Investigate shows the campaign's budget level beside it", async () => {
+    (api.getConfig as any).mockResolvedValue(
+      { investigation_continuity: "on", investigation_question: "off" });
+    (api.getCampaignBudget as any).mockResolvedValue(
+      { limit_usd: 5, period: "total", level: "warn", warn_fraction: 0.8, spent_usd: 4.5 });
+    renderLedger(at(PAIR));
+    expect(await (await sidebar()).findByText(
+      "Campaign budget: $4.50 of $5.00 spent in total. Approaching the budget."))
+      .toBeInTheDocument();
+  });
+
   test("a retry after a failure with no reply follows the first run", async () => {
     (api.getConfig as any).mockResolvedValue(
       { investigation_continuity: "on", investigation_question: "off" });
@@ -2103,5 +2128,17 @@ describe("asking the history", () => {
     fireEvent.click(ask[ask.length - 1]);
     expect(await screen.findByRole("region", { name: "Ask the history" })).toBeInTheDocument();
     expect(screen.getByLabelText("Your question")).toBeInTheDocument();
+  });
+
+  test("a question still running stays reachable with the switch off", async () => {
+    localStorage.setItem("grimoire.askHistory.run",
+                         JSON.stringify({ attempt: "a-earlier", question: "Who keeps it?" }));
+    (api.findHistoryQuestion as any).mockResolvedValue(null);
+    renderLedger();
+    fireEvent.click(await column().findByRole("button", { name: "Ask a question" }));
+    expect(await screen.findByRole("region", { name: "Ask the history" })).toBeInTheDocument();
+    expect(await screen.findByText(/no longer held/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
+    localStorage.clear();
   });
 });

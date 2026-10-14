@@ -739,9 +739,11 @@ own refutations mark an inverted answer wrong, but a phrasing past both can
 still read right, so the run file carries every answer's text and a live
 table is read against it before it is relied on), **text leakage** (a hidden word in
 what the run wrote), **selection leakage** (a cited scene that only a
-hidden-word query returned, read off the trace) and the **hidden route** (a
-search over a hidden-only word answers exactly as one over a word that appears
-nowhere).
+hidden-word query returned, read off the trace) and the **hidden route** (no
+excerpt of a hidden post's scene carries a hidden word, and a search for each
+hidden word beside a visible one answers the same before and after the hidden
+posts are rewritten without it -- the same query both times, so a semantic
+match with the visible text is never read as a leak).
 
 ### The adoption rule (spec 10.4)
 

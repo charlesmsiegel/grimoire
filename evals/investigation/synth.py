@@ -42,9 +42,31 @@ class Planted:
     gold_scenes: frozenset[str]
     #: E2: the finding's id; "" for a question case.
     candidate: str = ""
-    #: Words that appear only in hidden posts: a search over one must answer
-    #: exactly as a search over a word that appears nowhere.
+    #: Words that appear only in hidden posts, meaningful ones a model might
+    #: search for: none may steer a selection or reach written text.
     hidden_terms: tuple[str, ...] = ()
+    #: Where each hidden post is, as (scene id, post index): what the
+    #: hidden-route probe rewrites to ask the same search again without it.
+    hidden_posts: tuple[tuple[str, int], ...] = ()
+    #: A word visible in the scene that holds the hidden post, which the probe
+    #: searches beside each hidden word: a lexical match needs more than one
+    #: term to admit a scene, so a hidden word searched alone proves nothing.
+    probe_anchor: str = ""
+
+
+#: An opaque word a hidden post carries beside its meaningful one, so the
+#: probe has a term nothing visible shares with it, lexically or in meaning.
+HIDDEN_NONCE = "vexillqorn"
+
+#: What the probe rewrites a hidden post to: neither hidden word survives.
+UNPLANTED = "Behind the stall a note."
+
+
+def unplant(planted: Planted) -> None:
+    """Rewrite every hidden post to `UNPLANTED`, still hidden: the store as
+    it would be had the hidden text never been written."""
+    for sid, index in planted.hidden_posts:
+        scenes.edit_message(planted.cid, sid, index, UNPLANTED)
 
 
 #: Spec 10.2's "long history": every case's answer sits in an archive, not a
@@ -173,14 +195,15 @@ def debt_without_title() -> Planted:
     second = _scene(cid, "Market day", [
         ("assistant", ("Winifred presses three coins into the old boatman's palm and he "
                        "nods, satisfied at last.")),
-        ("assistant", "Behind the stall a note reads: quittance.")],
+        ("assistant", f"Behind the stall a note reads: quittance, stamped {HIDDEN_NONCE}.")],
         "Winifred spends the morning at the market.")
     scenes.set_excluded(cid, second, 1, True)
     commitments.set_movement(cid, "ferry-debt", "Pay the ferryman", "debt", "open", None,
                              "Winifred owes the boatman for the crossing.", first)
     key = _file_lifecycle(cid, "possible_commitment_resolution", "commitment:ferry-debt")
     return Planted(cid, (first, second), frozenset({second}), candidate=key,
-                   hidden_terms=("quittance",))
+                   hidden_terms=("quittance", HIDDEN_NONCE), hidden_posts=((second, 1),),
+                   probe_anchor="Winifred")
 
 
 def _pair(cid: str, refs: list[str]) -> str:

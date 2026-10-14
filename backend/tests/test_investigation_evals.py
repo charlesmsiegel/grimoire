@@ -8,10 +8,12 @@ quality. The live arms are `evals/run.py --investigate MODE --live`.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from evals import run as eval_run
-from evals.investigation import cases, graders, runner
+from evals.investigation import cases, graders, runner, synth
 
 
 @pytest.fixture(scope="module")
@@ -41,6 +43,15 @@ def test_no_leakage_line_fires_and_the_hidden_route_is_clean(records):
     assert all(not r["text_leaks"] and not r["steered"] for r in records)
     hidden = [r for r in records if r["case"] == "unnamed-debt-resolution"]
     assert hidden and all(r["hidden_route"] is True for r in hidden)
+
+
+def test_the_hidden_route_probe_sees_hidden_text_that_reached_the_index(monkeypatch):
+    """The probe is not vacuous: had the hidden post been searchable, a search
+    for its words would answer differently once they are gone."""
+    with runner.isolated():
+        monkeypatch.setattr(synth.scenes, "set_excluded", lambda *a, **k: None)
+        planted = synth.debt_without_title()
+        assert asyncio.run(runner._hidden_route(planted)) is False
 
 
 def test_the_gate_reads_per_entry_point_and_e1_is_absent(records):

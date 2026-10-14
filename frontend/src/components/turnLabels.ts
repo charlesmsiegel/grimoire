@@ -17,6 +17,8 @@ const LABELS: Record<PromptEntry["task"], string> = {
   "response-selector": "Speaker pick", "scene-break": "Scene-break check",
   "voice-drift": "Voice check", "continuity-identity": "Duplicate check",
   "continuity-reconcile": "Continuity sweep",
+  "investigation-continuity": "Investigation", "investigation-question": "History question",
+  "investigation-decide": "Investigation decision",
 };
 
 /** Typed against the union above so a new task cannot be forgotten here, read

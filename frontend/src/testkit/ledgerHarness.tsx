@@ -48,6 +48,9 @@ export function installLedgerMocks() {
   // Both investigation switches off, as a fresh store ships (roadmap 12).
   mocked(api.getConfig).mockResolvedValue(
     { investigation_continuity: "off", investigation_question: "off" });
+  // What an investigation's start shows beside its button (roadmap 12 §7.1).
+  mocked(api.getCampaignBudget).mockResolvedValue(
+    { limit_usd: 0, period: "monthly", level: "off", warn_fraction: 0.8 });
   mocked(api.campaignLedger).mockResolvedValue(EMPTY_LEDGER);
   mocked(api.campaignChanges).mockResolvedValue([]);
   mocked(api.campaignRelationshipHistory).mockResolvedValue([]);

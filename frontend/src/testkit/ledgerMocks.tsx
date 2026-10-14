@@ -46,6 +46,7 @@ export async function ledgerApiMock() {
       // investigations they start.
       getConfig: vi.fn(), investigateCandidate: vi.fn(), askHistory: vi.fn(),
       findCandidateInvestigation: vi.fn(), followCandidateInvestigation: vi.fn(),
+      getCampaignBudget: vi.fn(),
       findHistoryQuestion: vi.fn(), followHistoryQuestion: vi.fn(),
       staleCurrent: actual.api.staleCurrent,
     },

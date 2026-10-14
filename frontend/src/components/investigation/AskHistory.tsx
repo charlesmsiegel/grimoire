@@ -13,6 +13,7 @@ import { isAbortError, newAttemptId } from "../../api/stream";
 import type { HistoryAnswer } from "../../api/types";
 import { encodeSegment } from "../../urlSegment";
 import { InvestigationTrace, outcomeSentence } from "./InvestigationTrace";
+import { BudgetLevel } from "./BudgetLevel";
 import { readPending, settles, writePending } from "./pending";
 
 /** The longest question the server takes. */
@@ -26,7 +27,14 @@ const readQuestion = (cid: string) =>
   readPending<Pending>(pendingKey(cid), (v) => typeof v.question === "string");
 const writeQuestion = (cid: string, p: Pending | null) => writePending(pendingKey(cid), p);
 
-export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void }) {
+/** Whether a question asked here is still remembered for `cid`: its panel
+ *  stays reachable to collect the answer, whatever the switch now says. */
+export const hasPendingQuestion = (cid: string) => readQuestion(cid) !== null;
+
+/** `canAsk` is false once Settings switched the question off: a question
+ *  already running is still followed to its answer, but none is started. */
+export function AskHistory({ cid, onClose, canAsk = true }:
+  { cid: string; onClose: () => void; canAsk?: boolean }) {
   const [question, setQuestion] = useState(() => readQuestion(cid)?.question ?? "");
   const [asking, setAsking] = useState(false);
   const [answer, setAnswer] = useState<HistoryAnswer | null>(null);
@@ -104,7 +112,7 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
 
   function ask() {
     const q = question.trim();
-    if (!q || asking) return;
+    if (!q || asking || !canAsk) return;
     // The same question as one still remembered re-asks under its attempt
     // id, which the server adopts: a failure that proved nothing must not
     // let a second run start and spend again.
@@ -141,10 +149,12 @@ export function AskHistory({ cid, onClose }: { cid: string; onClose: () => void 
       <textarea aria-label="Your question" rows={3} value={question} disabled={asking}
                 maxLength={QUESTION_CHARS} onChange={(e) => setQuestion(e.target.value)} />
       <div className="form-actions">
-        <button type="button" disabled={asking || !question.trim()} onClick={ask}>
+        <button type="button" disabled={asking || !question.trim() || !canAsk} onClick={ask}>
           {asking ? "Reading the history…" : "Ask"}
         </button>
       </div>
+      {canAsk ? <BudgetLevel cid={cid} />
+        : <p className="field-hint">Asking is switched off in Settings.</p>}
       {error && <p className="continuity-error" role="alert">{error}</p>}
       {outcome && (
         <div className="ask-history-answer" role="status">

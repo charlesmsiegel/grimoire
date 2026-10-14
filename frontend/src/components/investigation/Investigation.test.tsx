@@ -7,7 +7,8 @@ vi.mock("../../api/client", async () => {
   const actual = await vi.importActual<typeof import("../../api/client")>("../../api/client");
   return { ...actual,
            api: { askHistory: vi.fn(), findHistoryQuestion: vi.fn(),
-                  followHistoryQuestion: vi.fn(), listScenes: vi.fn() } };
+                  followHistoryQuestion: vi.fn(), listScenes: vi.fn(),
+                  getCampaignBudget: vi.fn() } };
 });
 import { api, ApiError } from "../../api/client";
 import type { HistoryAnswer, InvestigationTrace as Trace } from "../../api/types";
@@ -87,6 +88,8 @@ describe("AskHistory", () => {
     localStorage.clear();
     mocked(api.listScenes).mockResolvedValue([{ id: "001--docks", title: "The docks", model: "",
                                                  created: "", updated: "", date: "" }]);
+    mocked(api.getCampaignBudget).mockResolvedValue(
+      { limit_usd: 0, period: "monthly", level: "off", warn_fraction: 0.8 });
   });
 
   function ask(answer: HistoryAnswer) {
@@ -204,6 +207,30 @@ describe("AskHistory", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
     expect(await screen.findByText(/switch is off/)).toBeInTheDocument();
     expect(localStorage.getItem("grimoire.askHistory.run")).toBeNull();
+  });
+
+  it("shows the campaign's budget level where a question is asked", async () => {
+    mocked(api.getCampaignBudget).mockResolvedValue(
+      { limit_usd: 5, period: "monthly", level: "over", warn_fraction: 0.8, spent_usd: 6,
+        unpriced_calls: 2 });
+    render(<MemoryRouter><AskHistory cid="run" onClose={() => {}} /></MemoryRouter>);
+    expect(await screen.findByText(
+      "Campaign budget: $6.00 of $5.00 spent this month, not counting 2 unpriced calls. "
+      + "Over budget: an investigation still runs, and adds to it.")).toBeInTheDocument();
+  });
+
+  it("follows a running question with the switch off, and starts none", async () => {
+    localStorage.setItem("grimoire.askHistory.run",
+                         JSON.stringify({ attempt: "a-old", question: "Who keeps the ledger?" }));
+    mocked(api.findHistoryQuestion).mockResolvedValue({ id: "r1", state: "running" });
+    mocked(api.followHistoryQuestion).mockResolvedValue({
+      question: "Who keeps the ledger?",
+      outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
+                 result: null, trace: TRACE } });
+    render(<MemoryRouter><AskHistory cid="run" canAsk={false} onClose={() => {}} /></MemoryRouter>);
+    expect(await screen.findByText(/could not find enough/)).toBeInTheDocument();
+    expect(screen.getByText("Asking is switched off in Settings.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
   });
 
   it("asks nothing for an empty question", () => {

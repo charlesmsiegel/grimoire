@@ -10,6 +10,7 @@ store is synthetic and placeholder-named.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 
 import grimoire.store as store
@@ -300,9 +301,12 @@ def test_e3_is_off_by_default_and_checks_its_question(client):
     assert _ask(client, "nowhere").status_code == 404
 
 
-def test_e3_answers_with_read_citations_and_stores_nothing(client):
+def test_e3_answers_with_read_citations_and_stores_nothing(client, monkeypatch):
     cid, sid = _campaign(client)
     _on(client)
+    # The prompt log is a write of its own (the next test): off here, so the
+    # token says whether the answer itself was stored anywhere.
+    monkeypatch.setattr(store.prompt_log, "depth", lambda: 0)
     token = store.revision.current(cid)
     _install(client, FakeToolTurns(
         ("", [("get_scene_excerpt", {"scene": f"scene:{sid}", "query": "ledger",
@@ -315,6 +319,26 @@ def test_e3_answers_with_read_citations_and_stores_nothing(client):
     assert outcome["result"]["citations"] == [f"scene:{sid}"]
     assert outcome["trace"]["inspected"] == [f"scene:{sid}"]
     assert store.revision.current(cid) == token
+
+
+def test_e3_files_its_turns_as_one_tool_loop_prompt_entry(client):
+    cid, sid = _campaign(client)
+    _on(client)
+    _install(client, FakeToolTurns(
+        ("", [("get_scene_excerpt", {"scene": f"scene:{sid}", "query": "ledger",
+                                     "max_posts": 4})]),
+        ("", [("answer", {"text": "Mara keeps it.", "citations": [f"scene:{sid}"]})])))
+    _settled(client, cid, _ask(client, cid))
+    rows = [e for e in store.prompt_log.list_entries(cid, store.prompt_log.NO_SCENE)
+            if e["task"] == "investigation-question"]
+    assert [e.get("operation") for e in rows] == ["tools"]
+    entry = store.prompt_log.read_entry(cid, rows[0]["id"], store.prompt_log.NO_SCENE)
+    assert entry is not None
+    outcome = json.loads(next(s["text"] for s in entry["sections"] if s["id"] == "decision"))
+    assert [c["calls"][0]["name"] for c in outcome["calls"]] == ["get_scene_excerpt", "answer"]
+    # The last turn's messages are kept whole: they carry the tool result.
+    assert outcome["elided_calls"] == 1
+    assert any(s["label"].endswith("tool") for s in entry["sections"])
 
 
 def test_e3_with_no_read_citation_is_insufficient_evidence(client):

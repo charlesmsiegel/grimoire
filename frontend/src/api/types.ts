@@ -2249,11 +2249,15 @@ export type PromptEntry = {
       | "replay" | "extend"
       // Decision captures (roadmap 01b): one entry per decision, not per turn.
       | "response-selector" | "scene-break" | "voice-drift"
-      | "continuity-identity" | "continuity-reconcile";
-  /** `"decide"` on a decision capture, which is kept in a retention pool of
-   *  its own; absent on a generation, and on a speaker pick filed before
-   *  decisions had an operation (`isDecision` covers both). */
-  operation?: "decide";
+      | "continuity-identity" | "continuity-reconcile"
+      // Roadmap 12's investigations, filed at campaign level: a run's tool
+      // loop (one entry per run) and its decide tool's calls.
+      | "investigation-continuity" | "investigation-question" | "investigation-decide";
+  /** `"decide"` on a decision capture and `"tools"` on an investigation's
+   *  tool loop, each kept in a retention pool of its own; absent on a
+   *  generation, and on a speaker pick filed before decisions had an
+   *  operation (`isDecision` covers both). */
+  operation?: "decide" | "tools";
   total_tokens: number; dropped_tokens: number; budget_tokens: number;
 };
 /** A frozen breakdown: the same shape `getSceneContext` returns, plus which

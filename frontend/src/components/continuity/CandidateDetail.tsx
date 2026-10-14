@@ -30,6 +30,7 @@ import type {
 } from "../../api/types";
 import { ledgerHref } from "../../ledgerPaths";
 import { encodeSegment } from "../../urlSegment";
+import { BudgetLevel } from "../investigation/BudgetLevel";
 import { InvestigationTrace } from "../investigation/InvestigationTrace";
 import { KIND_PHRASES, proposalLabel, STALE_SENTENCES } from "./labels";
 
@@ -377,14 +378,18 @@ export function CandidateDetail(props: Props) {
             )}
           </div>
         )}
-        {props.onInvestigate && (
+        {/* Shown while one runs or has said something even with the switch
+            now off: an investigation already paid for is still followed. */}
+        {(props.onInvestigate || props.investigating || props.investigationNote) && (
           <div className="side-section continuity-investigate">
             <h4>Investigate</h4>
-            <button type="button" className="subtle"
-                    disabled={off || props.investigating || props.investigationBusy}
-                    onClick={props.onInvestigate}>
-              {candidate.proposal ? "Ask for a second opinion" : "Investigate"}
-            </button>
+            {props.onInvestigate && (
+              <button type="button" className="subtle"
+                      disabled={off || props.investigating || props.investigationBusy}
+                      onClick={props.onInvestigate}>
+                {candidate.proposal ? "Ask for a second opinion" : "Investigate"}
+              </button>
+            )}
             <p className="field-hint">
               {props.investigating
                 ? "Reading the history…"
@@ -393,6 +398,7 @@ export function CandidateDetail(props: Props) {
                   : "A model reads the campaign's history to suggest a decision. "
                     + "Experimental; nothing is applied until you apply it."}
             </p>
+            {props.onInvestigate && !props.investigating && <BudgetLevel cid={cid} />}
             {props.investigationNote && !props.investigating && (
               <p className="field-hint" role="status">{props.investigationNote}</p>
             )}

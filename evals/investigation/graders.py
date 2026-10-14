@@ -97,7 +97,7 @@ def steered(trace: dict, selected: Iterable[str], forbidden: Iterable[str]) -> l
     return out
 
 
-def hidden_route_clean(hidden: dict, nowhere: dict) -> bool:
-    """A search over a hidden-only word answers exactly as a search over a
-    word that appears nowhere: the same envelope, item for item."""
-    return hidden == nowhere
+def hidden_route_clean(with_hidden: dict, without: dict) -> bool:
+    """One search answers the same with the hidden text in the store as
+    without it: the same envelope, item for item."""
+    return with_hidden == without

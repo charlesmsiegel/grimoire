@@ -23,7 +23,7 @@ import {
   KnowledgePane, KnowledgeRows, useKnowledge,
 } from "../components/ledger/Knowledge";
 import { ColumnSection, PageShell } from "../components/PageShell";
-import { AskHistory } from "../components/investigation/AskHistory";
+import { AskHistory, hasPendingQuestion } from "../components/investigation/AskHistory";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { usePublishShellContext } from "../components/ShellStatus";
 
@@ -340,6 +340,9 @@ export default function LedgerView() {
    *  whether its panel is open, for the campaign it was opened on. */
   const [askable, setAskable] = useState(false);
   const [askingIn, setAskingIn] = useState<string | null>(null);
+  // A question still running is reachable even with the switch now off: its
+  // answer was paid for, and only its panel collects it.
+  const offerAsk = askable || hasPendingQuestion(cid);
   useEffect(() => {
     let live = true;
     api.getConfig()
@@ -730,7 +733,7 @@ export default function LedgerView() {
         {matching && <p className="field-hint continuity-matching">{matching}</p>}
         <RefreshControl review={review} />
       </ColumnSection>
-      {askable && (
+      {offerAsk && (
         <ColumnSection label="Ask the history">
           <button className={"column-row" + (askingIn === cid ? " active" : "")}
                   onClick={() => setAskingIn(askingIn === cid ? null : cid)}>
@@ -773,8 +776,8 @@ export default function LedgerView() {
   return (
     <PageShell column={column} footer={footer} columnLabel="Ledger sections">
       <div className="page-wide view-anim">
-        {askable && askingIn === cid && (
-          <AskHistory key={cid} cid={cid} onClose={() => setAskingIn(null)} />
+        {offerAsk && askingIn === cid && (
+          <AskHistory key={cid} cid={cid} canAsk={askable} onClose={() => setAskingIn(null)} />
         )}
         {section === "knowledge" && (
           <KnowledgeSection cid={cid} list={knowledge} row={addressedRow}

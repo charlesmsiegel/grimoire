@@ -327,11 +327,17 @@ async def investigate(app, *, state: investigation_state.RunState, task: str, se
     result: tool_calls.LoopResult | None = None
     stopped: dict = {}
     try:
-        result = await _loop(task, seed.messages, toolset=toolset,
-                             execute=tool_calls.registered(toolset), client=client,
-                             resolved=resolved, budget=budget, run_id=run_id,
-                             campaign=state.cid, scene=state.sid, post=post,
-                             cancelled=cancelled, tool_choice="required")
+        # Each model turn, into one campaign-level prompt-log entry of its own
+        # pool, fenced on the run (a cancelled or forgotten one files nothing).
+        async with decision_capture.capturing(
+                state.cid, decision_capture.NO_SCENE, task, operation=decision_capture.TOOLS,
+                fence=lambda: cancelled is None or not cancelled()) as scope:
+            result = await _loop(task, seed.messages, toolset=toolset,
+                                 execute=tool_calls.registered(toolset), client=client,
+                                 resolved=resolved, budget=budget, run_id=run_id,
+                                 campaign=state.cid, scene=state.sid, post=post,
+                                 cancelled=cancelled, tool_choice="required",
+                                 capture=scope.hook())
     except tool_calls.RunRefused as exc:
         stopped = {"state": "refused", "reason": exc.kind}
     except LLMError as exc:
