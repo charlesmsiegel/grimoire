@@ -100,7 +100,8 @@ def observable_conversation(messages: list[dict], view: View) -> list[dict]:
 
 
 def selector_item(roster: list[dict], conversation: list[dict],
-                  note: str = "", player: str = "") -> decisions.Item:
+                  note: str = "", player: str = "", *, follow_on: bool = False,
+                  include_grimoire: bool = True) -> decisions.Item:
     """The speaker pick as a decision item: the observable transcript (and the
     round's user direction, when there is one) as its context, and one choice
     over the eligible refs -- each described by its name -- and `grimoire`,
@@ -116,11 +117,14 @@ def selector_item(roster: list[dict], conversation: list[dict],
     scene's player character names -- is given."""
     context = prompts.render("scene/response_selector_context.j2",
                              conversation=conversation, note=note)
-    options = (*(decisions.Option(entry["ref"], entry["name"]) for entry in roster),
-               decisions.Option(GRIMOIRE_REF,
-                                prompts.render("scene/response_selector_grimoire.j2")))
+    options = [decisions.Option(entry["ref"], entry["name"]) for entry in roster]
+    if include_grimoire:
+        options.append(decisions.Option(
+            GRIMOIRE_REF, prompts.render("scene/response_selector_grimoire.j2")))
+    question = ("scene/response_selector_follow_on_question.j2" if follow_on
+                else "scene/response_selector_question.j2")
     return decisions.Item(context, (decisions.Choice(
-        SELECTOR_QUESTION, prompts.render("scene/response_selector_question.j2"),
+        SELECTOR_QUESTION, prompts.render(question),
         options, allow_none=True,
         none_text=prompts.render("scene/response_selector_none.j2", player=player).strip()),))
 
@@ -306,8 +310,9 @@ def strip_preparation(text: str) -> tuple[str, str]:
 class ResponseWatcher:
     """Rolls interrupt first; state precedes the final handoff and stays hidden."""
 
-    def __init__(self, *, perception=False):
+    def __init__(self, *, perception=False, require_handoff=True):
         self._perception = perception
+        self._require_handoff = require_handoff
         self.preparation = _PreparationPrefix(perception)
         self.roll = fence.FenceWatcher()
         self.redactor = state_fence.StreamRedactor()
@@ -376,7 +381,7 @@ class ResponseWatcher:
                 self.handoff = json.loads(closed.group(1)) if closed else None
             except (ValueError, TypeError):
                 self.handoff = None
-        self.issue = None if self.handoff is not None else INVALID_HANDOFF
+        self.issue = None if self.handoff is not None or not self._require_handoff else INVALID_HANDOFF
         if match is None and _PREFIX.search(self.raw) is None:
             out += self.redactor.feed(self.raw[self.visible :])
         out += self.redactor.finish()
