@@ -40,7 +40,7 @@ import {
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
   type DataDirInfo, type ImageMaintenanceReport, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
   type EntityScope, type GroupRefBinding,
-  type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingDetail, type GreetingDraft,
+  type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingAvailabilityPreview, type GreetingDetail, type GreetingDraft,
   type GroupState, type MembershipResponse, type HealthCheckResult,
   type CommitmentSave, type CompositionRow,
   type CandidateInvestigated, type CandidateRecord, type ContinuityApply, type ContinuityCandidates,
@@ -2556,6 +2556,9 @@ export const api = {
       { focus, ...(expectedV === undefined ? {} : { expected_v: expectedV }) }).then(notifyArt),
 
   // greetings & plot maps
+  previewGreetings: (wid: string, tags: string[]) =>
+    request<GreetingAvailabilityPreview[]>("GET",
+      `/api/worlds/${encodeSegment(wid)}/greeting-availability?tags=${encodeURIComponent(tags.join(","))}`),
   /** Each row carries its greeting's plot-map `edges` (see `Greeting.edges`).
    *  `fresh` for a caller reading to find out whether a write landed: identical
    *  in-flight GETs are shared, and a shared promise started before that write

@@ -207,6 +207,22 @@ def _with_edges(rows: list[dict], read_plotmap: Callable[[], dict]) -> list[dict
 
 
 # ---- world greetings ----
+@router.get("/worlds/{wid}/greeting-availability")
+def get_world_greeting_availability(wid: str, tags: str = ""):
+    """Preview a proposed PC with no play history, without saving it (#68).
+
+    Outside `/greetings/{gid}` so an old greeting named Availability stays
+    readable. CSV normalization mirrors PC persistence: draft tags are joined
+    on write and split/stripped on read, including a free tag containing commas.
+    The matching rules themselves stay in the one pure availability engine.
+    """
+    root = _world_root_or_404(wid)
+    player_tags = {tag.strip() for tag in tags.split(",") if tag.strip()}
+    return store.greetings.availability(
+        store.greetings.list_greetings(root), store.greetings.read_plotmap(root),
+        played=(), player_tags=player_tags)
+
+
 @router.get("/worlds/{wid}/greetings")
 def get_world_greetings(wid: str):
     root = _world_root_or_404(wid)

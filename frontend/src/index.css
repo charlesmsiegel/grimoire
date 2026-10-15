@@ -1880,6 +1880,8 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 .wizard .field { margin: 14px 0; }
 .wizard .field .role { margin-bottom: 6px; }
 .wizard .chips { margin-bottom: 8px; }
+/* The draft's opening preview shows labels; only step 4 starts a scene (#68). */
+.greeting-preview .chip { cursor: default; }
 
 /* repeatable starting-location cards */
 .wizard-location {

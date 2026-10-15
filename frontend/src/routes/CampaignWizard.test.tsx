@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import CampaignWizard from "./CampaignWizard";
 
@@ -19,6 +19,7 @@ vi.mock("../api/client", () => ({
     addToCast: vi.fn(),
     createEntity: vi.fn(),
     availableGreetings: vi.fn(),
+    previewGreetings: vi.fn(),
     startFromGreeting: vi.fn(),
     opener: vi.fn(),
     getCalendarProviders: vi.fn(),
@@ -50,6 +51,7 @@ beforeEach(() => {
   (api.addToCast as any).mockResolvedValue({ ok: true });
   (api.createEntity as any).mockResolvedValue({ id: "tavern" });
   (api.availableGreetings as any).mockResolvedValue([]);
+  vi.mocked(api.previewGreetings).mockResolvedValue([]);
   (api.startFromGreeting as any).mockResolvedValue({ ok: true });
   (api.listModules as any).mockResolvedValue([
     { id: "pool-basic", name: "Basic Pool", description: "", version: "1", source: "builtin", valid: true },
@@ -390,4 +392,88 @@ test("a tag the world does not declare is committed verbatim", async () => {
   await waitFor(() => expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
     tags: ["stowaway"],
   })));
+});
+
+test("step 2 previews draft tag IDs without saving any records", async () => {
+  vi.mocked(api.previewGreetings).mockImplementation(async (_world, tags) => [{
+    id: "open", name: "Open", available: tags.includes("t1"),
+    reasons: tags.includes("t1") ? [] : ["missing required tags"], pcless: false, location: "",
+  }]);
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  await screen.findByText(/missing required tags/);
+  fireEvent.change(screen.getByLabelText("Add tag"), { target: { value: "rebel" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w1", ["t1"]));
+  await screen.findByText("Open");
+  expect(screen.queryByText(/missing required tags/)).toBeNull();
+  expect(api.createCampaign).not.toHaveBeenCalled();
+  expect(api.createCampaignPC).not.toHaveBeenCalled();
+  expect(api.createScene).not.toHaveBeenCalled();
+  expect(api.addToCast).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /rebel ✕/ }));
+  await screen.findByText(/missing required tags/);
+  expect(api.previewGreetings).toHaveBeenLastCalledWith("w1", []);
+});
+
+test("picking an existing PC previews its tags and deselecting restores the draft", async () => {
+  vi.mocked(api.listPCs).mockResolvedValue([
+    { id: "mara", name: "Mara", tags: ["t1"], default_version: "default", versions: [] },
+  ]);
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText("Add tag"), { target: { value: "scholar" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w1", ["t2"]));
+  fireEvent.click(screen.getByRole("button", { name: /Mara/ }));
+  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w1", ["t1"]));
+  fireEvent.click(screen.getByRole("button", { name: /Mara/ }));
+  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w1", ["t2"]));
+  expect(screen.getByRole("button", { name: /scholar ✕/ })).toBeInTheDocument();
+  expect(api.createCampaign).not.toHaveBeenCalled();
+});
+
+test.each(["success", "failure"])("ignores the old world's late PC and tag %s", async (outcome) => {
+  vi.mocked(api.listWorlds).mockResolvedValue([
+    { id: "w1", name: "Realm", created: "", updated: "", counts: {} },
+    { id: "w2", name: "Saltmarch", created: "", updated: "", counts: {} },
+  ]);
+  let resolvePCs: (rows: Awaited<ReturnType<typeof api.listPCs>>) => void = () => {};
+  let rejectPCs: (err: Error) => void = () => {};
+  let resolveTags: (rows: Record<string, string>) => void = () => {};
+  let rejectTags: (err: Error) => void = () => {};
+  const oldPCs = new Promise<Awaited<ReturnType<typeof api.listPCs>>>((resolve, reject) => {
+    resolvePCs = resolve; rejectPCs = reject;
+  });
+  const oldTags = new Promise<Record<string, string>>((resolve, reject) => {
+    resolveTags = resolve; rejectTags = reject;
+  });
+  vi.mocked(api.listPCs).mockImplementation((scope) => scope.id === "w1" ? oldPCs : Promise.resolve([
+    { id: "winifred", name: "Winifred", tags: ["t2"], default_version: "default", versions: [] },
+  ]));
+  vi.mocked(api.listTags).mockImplementation((wid) => wid === "w1" ? oldTags : Promise.resolve({ t2: "scholar" }));
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText("World"), { target: { value: "w2" } });
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  await screen.findByRole("button", { name: /Winifred/ });
+  await act(async () => {
+    if (outcome === "success") {
+      resolvePCs([{ id: "mara", name: "Mara", tags: ["t1"], default_version: "default", versions: [] }]);
+      resolveTags({ t1: "rebel" });
+    } else {
+      rejectPCs(new Error("old PCs failed")); rejectTags(new Error("old tags failed"));
+    }
+    await Promise.allSettled([oldPCs, oldTags]);
+  });
+  expect(screen.queryByRole("button", { name: /Mara/ })).toBeNull();
+  expect(screen.getAllByRole("option", { hidden: true }).map((o) => (o as HTMLOptionElement).value))
+    .toEqual(["scholar"]);
+  fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
+  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w2", ["t2"]));
 });
