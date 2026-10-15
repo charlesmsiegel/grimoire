@@ -122,17 +122,17 @@ def object_path(image_id: str, *, root: Path | None = None) -> Path:
     return store_root(root) / "objects" / image_id[4:6] / f"{image_id}.json"
 
 
-def iter_ids() -> Iterator[str]:
+def iter_ids(*, root: Path | None = None) -> Iterator[str]:
     """Every object id with a sidecar under ``objects/``, sorted.
 
     Decided from the directory listing alone: a name counts when it is a
     well-formed id and sits in the shard `object_path` would put it in. No
     sidecar is opened, so a garbled one is still listed (and a reader of it
     gets None, as `read` answers); a stray name, a temp or a misplaced file
-    is skipped. For whole-store sweeps (`image_scopes`), which read each
-    object with `read_fresh`.
+    is skipped. `root` pins an inventory to the same tree its caller reads
+    (`image_scopes`' scope candidates, #477).
     """
-    objects = store_root() / "objects"
+    objects = store_root(root) / "objects"
     found: list[str] = []
     try:
         shards = [d for d in objects.iterdir() if d.is_dir()]
@@ -661,7 +661,8 @@ def update(image_id: str, change: Callable[[dict], dict | None]) -> bool:
 
     False means nothing was written -- an absent object, or a callback that
     returned None -- so a caller moving text off another file onto the object
-    drops the old copy only on True (`image_descriptions.set_in`).
+    drops the old copy only on True, or when the callback confirmed the same
+    text was already stored (`image_descriptions.set_in`, #477).
 
     **The callback contract.** `change` runs under this object's stripe lock,
     so it must be a pure edit of the dict it is given. It must not call

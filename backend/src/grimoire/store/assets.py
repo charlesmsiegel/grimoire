@@ -375,7 +375,13 @@ def resolve(d: Path, name: str) -> image_refs.ResolvedImage | None:
 
 
 def path_in(d: Path, name: str, *, supported_only: bool = False) -> Path | None:
-    """The current file for logical image `name` in directory `d`, or None.
+    """The current image file; `file_in` also carries its placement identity."""
+    found = file_in(d, name, supported_only=supported_only)
+    return found[0] if found is not None else None
+
+
+def file_in(d: Path, name: str, *, supported_only: bool = False) -> tuple[Path, str | None] | None:
+    """`(path, image id or None)` for logical image `name`, or None if absent.
 
     A placement that resolves answers with its blob path. Otherwise -- no
     placement, an image-less one, or one whose object or blob has not arrived
@@ -395,8 +401,9 @@ def path_in(d: Path, name: str, *, supported_only: bool = False) -> Path | None:
         return None
     resolved = image_refs.resolve(d, name)
     if resolved is not None:
-        return resolved.blob_path
-    return _legacy_path(d, name, supported_only)
+        return resolved.blob_path, resolved.image_id
+    legacy = _legacy_path(d, name, supported_only)
+    return (legacy, None) if legacy is not None else None
 
 
 def _snapshot_siblings(d: Path, name: str,
@@ -709,18 +716,29 @@ def _copy_slot(src: Path, dst: Path, name: str, ref: image_refs.Ref | None,
 
 
 def image_path(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> Path | None:
+    found = image_file(root, cid, vid, name, base)
+    return found[0] if found is not None else None
+
+
+def image_file(root: Path, cid: str, vid: str, name: str,
+               base: str = "characters") -> tuple[Path, str | None] | None:
+    """`image_path` with identity from the same resolution (#477).
+
+    Recovery and legacy fallback stay here, so a URL's immutable token and its
+    image id cannot describe two different reads of a changing placement.
+    """
     if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         return None
     d = _dir(root, cid, vid, base)
     if not d.exists():
         return None
     _recover_promotion(d)
-    p = path_in(d, name)
+    p = file_in(d, name)
     if p is None and name == AVATAR:
         # A promotion interrupted before #253 may have stranded the avatar under
         # `promote-tmp`; adopt it rather than serve a 404 over a file we have.
         _heal_stranded_promotion(d)
-        p = path_in(d, name)
+        p = file_in(d, name)
     return p
 
 

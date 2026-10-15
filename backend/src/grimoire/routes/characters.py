@@ -885,9 +885,8 @@ def list_world_gallery(wid: str):
                 if item["id"] not in subjects:
                     if known_cids is None:
                         known_cids = set(store.characters.character_refs(root))
-                    subjects[item["id"]] = store.image_subjects.read_subjects(
+                    subjects[item["id"]], answered[item["id"]] = store.image_subjects.read_answered(
                         root, item["id"], known_cids=known_cids)
-                    answered[item["id"]] = store.image_subjects.reviewed_names(root, item["id"])
                 row["subjects"] = (subjects[item["id"]].get(item["name"], [])
                                    if item["name"] in answered[item["id"]] else None)
             out.append(row)
@@ -1052,9 +1051,8 @@ class _GreetingSubjects:
                 # Once for the whole sweep: `read_subjects` otherwise rescans
                 # the character directory per greeting.
                 self._known = set(store.characters.character_refs(self._wroot))
-            self._subjects[gid] = store.image_subjects.read_subjects(
+            self._subjects[gid], self._answered[gid] = store.image_subjects.read_answered(
                 self._wroot, gid, known_cids=self._known)
-            self._answered[gid] = store.image_subjects.reviewed_names(self._wroot, gid)
         if name not in self._answered[gid]:
             return None
         return self._subjects[gid].get(name, [])

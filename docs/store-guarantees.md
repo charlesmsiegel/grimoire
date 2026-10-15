@@ -810,9 +810,10 @@ about a story, so it stays scoped.
   answering for a subject re-reads no placement. An unarrived placement beside
   a legacy file answers its subjects from the greeting's sidecar.
 - **A write goes to the object behind the visible placement (R2).** The object
-  is written first. Only when `image_store.update` has returned `True` (R8) are
-  the name's legacy keys deleted, in the directory being edited and in the
-  visible placement's directory when that is another one. A write that is not
+  is written first. Only when `image_store.update` has returned `True` (R8), or
+  its callback confirmed identical text already stored under the object stripe
+  (#477), are the name's legacy keys deleted, in the directory being edited and
+  in the visible placement's directory when that is another one. A write that is not
   confirmed, a placement that has not arrived, or a name with no placement
   writes the legacy key exactly as before, so a failure between the two steps
   leaves text showing twice and never none. Other directories' keys keep

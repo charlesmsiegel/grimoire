@@ -102,20 +102,21 @@ def _manifests(wid: str) -> list[tuple[str, dict]]:
     return out
 
 
-def _collections_of(wid: str, name: str) -> list[dict]:
+def _collections_of(wid: str, name: str, manifests: list[tuple[str, dict]]) -> list[dict]:
     """The format-1 manifests that list the library image `name` as a member."""
     folded = name.casefold()
     return [{"wid": wid, "collection": collection}
-            for collection, manifest in _manifests(wid)
+            for collection, manifest in manifests
             if manifest["format"] == 1
             and folded in {m.casefold() for m in manifest["members"]}]
 
 
-def _collections_naming(wid: str, image_id: str) -> list[dict]:
+def _collections_naming(wid: str, image_id: str,
+                        manifests: list[tuple[str, dict]]) -> list[dict]:
     """The format-2 manifests that list `image_id` as a member: a format-2
     member is its object, with no library placement for the walk to find."""
     return [{"wid": wid, "collection": collection}
-            for collection, manifest in _manifests(wid)
+            for collection, manifest in manifests
             if manifest["format"] == 2 and image_id in manifest["members"]]
 
 
@@ -145,14 +146,18 @@ def _scan_root(out: dict[str, list[dict]], is_world: bool, root: Path, image_id:
         ident = root.name
         scope = image_scopes.campaign_scope(root.name)
         library = root / "assets" / campaign_images.DIRNAME
+    # #477: no manifest reader for an absent directory, and one snapshot
+    # shared by format-2 ids and every format-1 library placement below.
+    manifests = (_manifests(ident) if is_world
+                 and (root / "assets" / "image-collections").is_dir() else [])
     if is_world:
-        out["collections"].extend(_collections_naming(ident, image_id))
+        out["collections"].extend(_collections_naming(ident, image_id, manifests))
     for d, ref in image_refs.walk(root):
         if ref.image != image_id:
             continue
         if d == library and is_world:
             out["world_images"].append({"wid": ident, "name": ref.name})
-            out["collections"].extend(_collections_of(ident, ref.name))
+            out["collections"].extend(_collections_of(ident, ref.name, manifests))
         elif d == library:
             out["campaign_images"].append({"cid": ident, "name": ref.name})
         elif d == root / "assets":

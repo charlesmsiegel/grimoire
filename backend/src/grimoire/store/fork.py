@@ -303,6 +303,7 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
                 campaigns_paths.campaign_root(new_cid).mkdir(parents=True)
             except FileExistsError:
                 continue
+            scope_copy_started = False
             try:
                 _copy(cid, new_cid, name, from_scene)
                 # The source's subject tags on the shared image objects, which
@@ -310,6 +311,7 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
                 # failure from here on takes the copied scope away with the
                 # tree (`_discard`): a later campaign reusing the slug must not
                 # inherit it. Reentrant inside this hold of the same two locks.
+                scope_copy_started = True
                 image_scopes.copy_campaign(cid, new_cid)
             except BaseException:
                 # Everything past the claim is ours to undo. `copytree` publishes
@@ -325,7 +327,7 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
                 # leaves exactly the debris there would have been anyway, and
                 # replacing a full disk with "could not remove directory" would hide
                 # the reason the fork failed.
-                _discard(new_cid)
+                _discard(new_cid, scope_copy_started=scope_copy_started)
                 raise
             report = _cut_after(new_cid, from_scene) if from_scene else _nothing_cut()
             if from_scene and through is not None:
@@ -390,7 +392,7 @@ def _check_source(cid: str, from_scene: str | None, expect_revision: str,
     return branch.snap(messages, from_index)
 
 
-def _discard(new_cid: str) -> None:
+def _discard(new_cid: str, *, scope_copy_started: bool) -> None:
     """Remove a fork that never finished being made. Never raises.
 
     Only ever called for a directory THIS call created, in the `mkdir` above,
@@ -408,7 +410,10 @@ def _discard(new_cid: str) -> None:
         # The scope `image_scopes.copy_campaign` may already have written onto
         # the shared image objects, which the `rmtree` cannot reach. Best
         # effort like the rest: a scope left behind is logged, never raised.
-        image_scopes.strip(image_scopes.campaign_scope(new_cid))
+        # #477: directory copying cannot publish shared tags; mark entry
+        # before scope copying, since that operation may fail partway.
+        if scope_copy_started:
+            image_scopes.strip(image_scopes.campaign_scope(new_cid))
     except Exception:
         log.warning("fork: could not strip the partial copy's image scope at %s",
                     new_cid, exc_info=True)

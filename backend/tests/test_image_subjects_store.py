@@ -192,7 +192,7 @@ def test_appearances_tolerates_a_reference_restored_during_the_read(tmp_path, mo
         return images
 
     monkeypatch.setattr(image_subjects.greeting_images, "catalog_with_slots", restore_after_inventory)
-    assert image_subjects.appearances(tmp_path, owner) == []
+    assert image_subjects.appearances(tmp_path, owner)[0]["name"] == old
     assert image_subjects.appearances(tmp_path, owner)[0]["name"] == restored
 
 

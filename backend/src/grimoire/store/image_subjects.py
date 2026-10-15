@@ -170,8 +170,10 @@ def _answers(root: Path, gid: str, items: dict[str, _Item],
 
 
 def _subjects(root: Path, gid: str, known_cids: set[str] | None,
-              scope: _Scope) -> dict[str, list[str]]:
-    items = greeting_images.catalog_with_slots(root, gid)
+              scope: _Scope, items: dict[str, _Item] | None = None
+              ) -> tuple[dict[str, list[str]], set[str]]:
+    if items is None:
+        items = greeting_images.catalog_with_slots(root, gid)
     raw, objects = _answers(root, gid, items, scope)
     lists: dict[str, list] = {}
     for name in items:
@@ -180,8 +182,9 @@ def _subjects(root: Path, gid: str, known_cids: set[str] | None,
             lists[name] = legacy
         elif name in objects:
             lists[name] = objects[name]
+    reviewed = set(raw) | set(objects)
     if not lists:
-        return {}
+        return {}, reviewed
     cids = set(characters.character_refs(root)) if known_cids is None else known_cids
     # `isinstance(c, str)` FIRST, and not for tidiness: `c in cids` against a
     # set raises TypeError for an unhashable member, so a hand-edited or
@@ -190,7 +193,17 @@ def _subjects(root: Path, gid: str, known_cids: set[str] | None,
     # world gallery reads them all, so one malformed member 500'd the whole
     # Images view. Same tolerance the rest of this module reads with.
     return {name: [c for c in subs if isinstance(c, str) and c in cids]
-            for name, subs in lists.items()}
+            for name, subs in lists.items()}, reviewed
+
+
+def read_answered(root: Path, gid: str, known_cids: set[str] | None = None
+                  ) -> tuple[dict[str, list[str]], set[str]]:
+    """Subjects and reviewed keys from one catalog/answer snapshot (#477).
+
+    A malformed legacy value is reviewed even though it supplies no subjects.
+    Keeping both facts together avoids a second inventory and a mixed snapshot.
+    """
+    return _subjects(root, gid, known_cids, _Scope(root))
 
 
 def read_subjects(root: Path, gid: str, known_cids: set[str] | None = None) -> dict[str, list[str]]:
@@ -203,7 +216,7 @@ def read_subjects(root: Path, gid: str, known_cids: set[str] | None = None) -> d
     `reviewed_names`). An entry that empties out stays as [] — it still means
     'reviewed'. Sweeps over many greetings pass `known_cids` so character ids
     are enumerated once, not per greeting."""
-    return _subjects(root, gid, known_cids, _Scope(root))
+    return read_answered(root, gid, known_cids)[0]
 
 
 def write_subjects(root: Path, gid: str, subjects: dict[str, list[str]]) -> None:
@@ -335,10 +348,11 @@ def appearances(root: Path, cid: str) -> list[dict]:
     scope = _Scope(root)
     for gid in _gids(gdir):
         images = greeting_images.catalog_with_slots(root, gid)
-        for name, subs in sorted(_subjects(root, gid, known, scope).items()):
-            # The body can change between the two reads. A newly restored
-            # reference belongs to the next inventory, not this snapshot.
-            if cid in subs and name in images:
+        subjects, _reviewed = _subjects(root, gid, known, scope, images)
+        for name, subs in sorted(subjects.items()):
+            # Subjects and rows share this catalog snapshot (#477). A body
+            # edit after inventory belongs to the next read.
+            if cid in subs:
                 out.append({"gid": gid, "name": name, **images[name][0]})
     return out
 

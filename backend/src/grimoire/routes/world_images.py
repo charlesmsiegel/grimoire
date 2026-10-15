@@ -62,8 +62,12 @@ def _collection_or_404(wid: str, collection_id: str, call):
         raise HTTPException(status_code=500, detail=str(exc)) from None
 
 
-def _collection_members_or_404(wid: str, collection_id: str) -> list[dict]:
-    members = _collection_or_404(wid, collection_id, store.image_collections.available)
+def _collection_members_or_404(wid: str, collection_id: str,
+                               *, manifest: dict | None = None) -> list[dict]:
+    members = _collection_or_404(
+        wid, collection_id,
+        lambda world, collection: store.image_collections.available(
+            world, collection, manifest=manifest))
     if not members:
         raise HTTPException(status_code=404, detail="image collection has no available images")
     return members
@@ -75,9 +79,9 @@ def get_world_image_collection(wid: str, collection_id: str):
     collection keeps the world library's URLs (so every subject key, to-do
     entry and export rule built on them holds), a format-2 one lists its
     member-by-index URLs."""
-    fmt = _collection_or_404(wid, collection_id, store.image_collections.read)["format"]
-    members = _collection_members_or_404(wid, collection_id)
-    return JSONResponse({"format": fmt, "id": collection_id,
+    manifest = _collection_or_404(wid, collection_id, store.image_collections.read)
+    members = _collection_members_or_404(wid, collection_id, manifest=manifest)
+    return JSONResponse({"format": manifest["format"], "id": collection_id,
                          "members": [m["url"] for m in members]},
                         headers={"Cache-Control": "no-cache"})
 
