@@ -207,3 +207,16 @@ def test_settings_abandoned_temp_cleanup(settings):
     os.utime(abandoned, (0, 0))
     backups.create_backup(AT, backups.SAFETY_PREFIX)
     assert not abandoned.exists()
+
+
+def test_settings_output_alias_cannot_bypass_protected_overlap(settings, monkeypatch):
+    root, _ = settings
+    alias = root.parent / (root.name + "-alias")
+    try:
+        alias.symlink_to(root / "llm_connections", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+    monkeypatch.setattr(backups, "backup_dir", lambda: alias)
+    with pytest.raises(OSError):
+        backups.create_backup(AT, backups.SAFETY_PREFIX)
+    assert not list(alias.glob("*.zip"))

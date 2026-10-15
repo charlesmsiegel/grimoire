@@ -3,11 +3,17 @@
 The entire app state is plain files under one root (`paths.home()`), so a zip
 of that tree *is* a complete, restorable backup — nothing else has to be
 consulted and nothing else has to be running. That is the whole design: no
-format, no manifest, no incremental chain. An archive is the store, and
-restoring is unzipping it into an empty directory and pointing the
+format, no manifest, no incremental chain. A full archive is the store, and
+restoring one is unzipping it into an empty directory and pointing the
 Configuration page's Storage location at it.
 
-Three things are deliberately not in the archive:
+Safety families are deliberately smaller (#496): they carry only records
+inference can rewrite, with exact bytes and paths. `_settings_files` starts at
+those records, so library image/transcript size cannot delay its inventory.
+These partial archives need an existing library for recovery and never satisfy
+the full-backup schedule; older full safety names retain their full scope.
+
+Three things are deliberately not in a full archive:
 
 - **The backup directory itself.** Left in, each archive would swallow every
   archive before it and the series would grow geometrically.
@@ -55,8 +61,8 @@ from __future__ import annotations
 import logging
 import mimetypes
 import os
-import stat
 import re
+import stat
 import time
 import zipfile
 from collections.abc import Callable
@@ -350,63 +356,96 @@ def _walk_error(exc: OSError) -> None:
     raise exc
 
 
+def _settings_kind(path: Path) -> int:
+    """Strict stat: only a vanished selection is optional (#496)."""
+    try:
+        return path.stat().st_mode
+    except FileNotFoundError:
+        return 0
+
+
+def _settings_directory(path: Path, skip: tuple[Path, ...]) -> bool:
+    if path.is_symlink():
+        raise OSError("protected settings directory is a symlink")
+    if _is_skipped(path, skip):
+        raise OSError("backup directory overlaps protected settings")
+    return stat.S_ISDIR(_settings_kind(path))
+
+
+def _settings_tree(base: Path, skip: tuple[Path, ...]) -> list[Path]:
+    """Walk one selected subtree, never the surrounding library."""
+    selected: list[Path] = []
+    if not _settings_directory(base, skip):
+        return selected
+    for dirpath, dirnames, filenames in os.walk(base, onerror=_walk_error, followlinks=False):
+        here = Path(dirpath)
+        # os.walk silently drops directory links. Settings read through those
+        # links would then have no recovery material, so fail closed instead.
+        dirnames[:] = sorted(d for d in dirnames if _settings_directory(here / d, skip))
+        selected.extend(here / name for name in sorted(filenames))
+    return selected
+
+
+def _settings_output(root: Path, directory: Path) -> None:
+    """An alias cannot disguise output inside protected settings (#496).
+
+    Keep the ordinary walk's lexical skip policy, but validate settings output
+    against physical paths too: a symlink outside the library can point into
+    its connections or campaign directory just as a direct setting can.
+    """
+    try:
+        parts = directory.resolve().relative_to(root.resolve()).parts
+    except ValueError:
+        return
+    if parts and (parts[0] in {"llm_connections", "sampler_presets"}
+                  or (parts[0] == "campaigns" and len(parts) <= 2)):
+        raise OSError("backup directory overlaps protected settings")
+
+
 def _settings_files(root: Path, skip: tuple[Path, ...], directory: Path) -> list[Path]:
     """Inventory only records inference can rewrite (#496).
 
-    Selection starts at the protected roots: walking the library and filtering
-    afterwards would still make a large image/transcript library delay migration.
-    Fail closed on directory links and output exclusions; either could hide a
-    whole protected subtree behind a seemingly successful settings archive.
+    Walking the library then filtering would still make image/transcript size
+    delay migration. Start at protected roots, and fail before an output-folder
+    exclusion can turn a settings archive into incomplete recovery material.
     """
-    selected: list[Path] = []
-
-    def kind(path: Path) -> int:
-        try:
-            return path.stat().st_mode
-        except FileNotFoundError:
-            return 0
-
-    def record(path: Path) -> None:
-        if _is_skipped(path, skip):
-            raise OSError("backup directory overlaps protected settings")
-        if stat.S_ISREG(kind(path)):
-            selected.append(path)
-
-    def folder(path: Path) -> bool:
-        if path.is_symlink():
-            raise OSError("protected settings directory is a symlink")
-        if _is_skipped(path, skip):
-            raise OSError("backup directory overlaps protected settings")
-        return stat.S_ISDIR(kind(path))
-
-    for name in ("config.md", "inference-retired.json"):
-        record(root / name)
+    _settings_output(root, directory)
+    candidates = [root / name for name in ("config.md", "inference-retired.json")]
     for name in ("llm_connections", "sampler_presets"):
         base = root / name
         target = _norm(directory)
         if _norm(base) == target or _norm(base) in target.parents:
             raise OSError("backup directory overlaps protected settings")
-        if not folder(base):
-            continue
-        for dirpath, dirnames, filenames in os.walk(base, onerror=_walk_error,
-                                                    followlinks=False):
-            here = Path(dirpath)
-            # os.walk does not follow links, but silently dropping one would
-            # claim to protect settings the app reads through that directory.
-            dirnames[:] = sorted(d for d in dirnames if folder(here / d))
-            for filename in sorted(filenames):
-                record(here / filename)
+        candidates.extend(_settings_tree(base, skip))
     base = root / "campaigns"
-    if folder(base):
+    if _settings_directory(base, skip):
         try:
             children = sorted(base.iterdir())
         except FileNotFoundError:
             children = []
         for child in children:
-            if folder(child):
-                record(child / "campaign.md")
-                record(child / "revision.txt")
-    return selected
+            if _settings_directory(child, skip):
+                candidates.extend(child / name for name in ("campaign.md", "revision.txt"))
+    for path in candidates:
+        if _is_skipped(path, skip):
+            raise OSError("backup directory overlaps protected settings")
+    return [path for path in candidates if stat.S_ISREG(_settings_kind(path))]
+
+
+def _archive_settings(z: zipfile.ZipFile, root: Path, files: list[Path],
+                      on_progress: Callable[[int, int | None], None] | None) -> None:
+    """Copy inventory slots, counting vanished members as processed (#496)."""
+    total = len(files)
+    if on_progress:
+        on_progress(0, total)
+    for done, path in enumerate(files, 1):
+        try:
+            if stat.S_ISREG(path.stat().st_mode):
+                _store_file(z, path, path.relative_to(root).as_posix())
+        except FileNotFoundError:
+            pass  # A vanished inventory member still completes its slot.
+        if on_progress:
+            on_progress(done, total)
 
 
 def _archive_into(fh, root: Path, skip: tuple[Path, ...], directory: Path,
@@ -444,17 +483,7 @@ def _archive_into(fh, root: Path, skip: tuple[Path, ...], directory: Path,
     backups_here = _norm(directory)
     with zipfile.ZipFile(fh, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as z:
         if files is not None:
-            total = len(files)
-            if on_progress:
-                on_progress(0, total)
-            for done, path in enumerate(files, 1):
-                try:
-                    if stat.S_ISREG(path.stat().st_mode):
-                        _store_file(z, path, path.relative_to(root).as_posix())
-                except FileNotFoundError:
-                    pass  # A vanished inventory member still completes its slot.
-                if on_progress:
-                    on_progress(done, total)
+            _archive_settings(z, root, files, on_progress)
             return
         for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error,
                                                     followlinks=False):
@@ -516,6 +545,8 @@ def create_backup(when: datetime | None = None, prefix: str = "", *,
     inference migration's safety backup (`pre-inference-settings-grimoire-<stamp>.zip`)
     and `RETIRE_PREFIX` for retirement's (`pre-retirement-settings-grimoire-<stamp>.zip`),
     neither of which `sweep` ever prunes. Any other prefix is a `ValueError`.
+    Safety families inventory protected settings and report `(done, total)` to
+    `on_progress`, starting with `(0, None)`. Ordinary full archives are unchanged.
 
     Raises whatever the filesystem raises; on any failure the target name is
     still free and the listing is unchanged.
@@ -691,7 +722,7 @@ def _taken_at(name: str) -> datetime:
 
 
 def due(now: datetime | None = None) -> bool:
-    """Whether the interval has elapsed since the newest archive.
+    """Whether the interval has elapsed since the newest full archive.
 
     Derived from the archives themselves rather than a recorded "last run", so
     it survives a restart, a moved store, and two machines sharing one library

@@ -8,7 +8,7 @@ write), then
    retention never prunes. If it fails nothing is written, the status says
    why, and the next start retries. Taken once per root: a run resuming after
    a later step failed reuses the archive the status note names while it is
-   still there, so retries do not pile up never-pruned copies of the library;
+   still there, so retries do not pile up never-pruned copies of the settings;
 2. **providers** -- each connection gains `preset` and `billing`, both
    rev-neutral, so catalogs, verified tests and vector caches survive. A
    connection that already has a preset is skipped: a no-op update would
@@ -118,8 +118,10 @@ import json
 import logging
 import os
 import threading
+import time
+import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from .. import (
@@ -130,6 +132,7 @@ from .. import (
     llm_connections,
     locks,
     paths,
+    proclock,
     revision,
     sampler_presets,
 )
@@ -171,29 +174,36 @@ class Status:
     #: migration is done reads `done` whatever retirement has left.
     retirement: dict = dataclasses.field(default_factory=_no_retirement)
 
+    active: bool = False
+    progress: dict | None = None
+
     def as_dict(self) -> dict:
         """The JSON shape (`not_migrated`'s `status`, Settings)."""
-        return {"state": self.state, "reason": self.reason, "skipped": list(self.skipped),
+        body = {"state": self.state, "reason": self.reason, "skipped": list(self.skipped),
                 "retirement": {"left": list(self.retirement.get("left") or ()),
-                               "failed": str(self.retirement.get("failed") or "")}}
+                               "failed": str(self.retirement.get("failed") or "")},
+                "active": self.active}
+        if self.active and self.progress is not None:
+            body["progress"] = dict(self.progress)
+        return body
 
 
 # ---- what is remembered ----
 _active_guard = threading.Lock()
 #: Roots a migration is running on in THIS process -- `running` for a caller
 #: on the migrating thread itself, which the reentrant lock would let through.
-_active: set[str] = set()
+_active: dict[str, dict | None] = {}
 
 
 @contextmanager
 def _running_on(root: Path) -> Iterator[None]:
     with _active_guard:
-        _active.add(str(root))
+        _active[str(root)] = None
     try:
         yield
     finally:
         with _active_guard:
-            _active.discard(str(root))
+            _active.pop(str(root), None)
 
 
 def _status_path(root: Path) -> Path:
@@ -214,14 +224,16 @@ def _recall(root: Path) -> dict:
 
 def _remember(root: Path, *, running: bool, failed: str = "",
               skipped: list[str] | tuple[str, ...] = (), safety: str = "",
-              retire_safety: str = "", retire_failed: str = "") -> None:
+              retire_safety: str = "", retire_failed: str = "",
+              progress: dict | None = None, progress_owner: str = "") -> None:
     """Record the run's state for `root`. Best effort: derived data, and a
     status that cannot be written must not stop the migration it describes.
     `retire_safety` is the `pre-retirement-` archive the pass took or reused,
     and `retire_failed` why the last retirement pass stopped short."""
     note = {"root": str(root), "running": running, "pid": os.getpid(),
             "failed": failed, "skipped": list(skipped), "safety": safety,
-            "retire_safety": retire_safety, "retire_failed": retire_failed}
+            "retire_safety": retire_safety, "retire_failed": retire_failed,
+            "progress": progress, "progress_owner": progress_owner}
     path = _status_path(root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -240,6 +252,114 @@ def _is_running(root: Path, note: dict) -> bool:
         if str(root) in _active:
             return True
     return bool(note.get("running")) and note.get("pid") != os.getpid()
+
+
+def _activity(root: Path) -> bool:
+    """Activity spans planning and retirement, independently of format (#496).
+
+    Readers only try the existing outer lock, then release it immediately. A
+    local run on another root must not be attributed to this resolved root.
+    """
+    with _active_guard:
+        if str(root) in _active:
+            return True
+        if _active:
+            return False
+    lock = locks.inference_migration_lock()
+    got = False
+    try:
+        if paths.home() != root:
+            return False
+        got = lock.acquire(blocking=False)
+        return not got and paths.home() == root
+    except OSError:
+        return False
+    finally:
+        if got:
+            with suppress(OSError):
+                lock.release()
+
+
+@contextmanager
+def _progress_lease(root: Path) -> Iterator[str]:
+    """Optional archive ownership, outside the synced library (#496).
+
+    A fresh nonce per archive prevents a crashed run's note resurfacing when
+    the next run holds the main lock but has not started archiving yet.
+    Failure only hides foreign progress; it cannot fail a valid backup.
+    """
+    nonce = uuid.uuid4().hex
+    fd = None
+    with suppress(OSError):
+        fd = proclock.acquire(proclock.lock_path(root, "inference-progress", nonce),
+                              proclock.NO_WAIT)
+    try:
+        yield nonce if fd is not None else ""
+    finally:
+        if fd is not None:
+            with suppress(OSError):
+                proclock.release(fd)
+
+
+def _owns_progress(root: Path, nonce: object) -> bool:
+    """Verify a foreign archive lease, excluding simultaneous probe readers.
+
+    Without the observer mutex, reader B's successful probe of an old free
+    lease impersonates a writer to reader C. All readers try the observer
+    first; the writer never does, so this cannot delay the archive (#496).
+    """
+    if (not isinstance(nonce, str) or len(nonce) != 32
+            or any(c not in "0123456789abcdef" for c in nonce)):
+        return False
+    observer = lease = None
+    try:
+        path = proclock.lock_path(root, "inference-progress", nonce)
+        if not path.is_file():
+            return False
+        observer = proclock.acquire(
+            proclock.lock_path(root, "inference-progress-reader", "probe"), proclock.NO_WAIT)
+        if observer is None:
+            return False
+        lease = proclock.acquire(path, proclock.NO_WAIT)
+        owned = lease is None
+    except OSError:
+        return False
+    finally:
+        # Release a successful lease probe BEFORE allowing another reader in.
+        # Cleanup errors make ownership unverifiable as well.
+        try:
+            if lease is not None:
+                proclock.release(lease)
+        finally:
+            if observer is not None:
+                proclock.release(observer)
+    return owned
+
+
+def _progress(root: Path, note: dict, active: bool) -> dict | None:
+    if not active or paths.home() != root:
+        return None
+    with _active_guard:
+        if str(root) in _active:
+            live = _active[str(root)]
+            return dict(live) if live is not None else None
+    progress = note.get("progress")
+    if not isinstance(progress, dict) or progress.get("phase") not in {
+            "safety_backup", "retirement_backup"}:
+        return None
+    done, total = progress.get("done"), progress.get("total")
+    if type(done) is not int or done < 0:
+        return None
+    if total is None:
+        if done != 0:
+            return None
+    elif type(total) is not int or total < done:
+        return None
+    try:
+        owned = _owns_progress(root, note.get("progress_owner"))
+    except OSError:
+        owned = False
+    return {"phase": progress["phase"], "done": done, "total": total} if owned else None
 
 
 def _kept_safety(note: dict, key: str = "safety",
@@ -340,6 +460,8 @@ def status() -> Status:
     if keys.is_newer(cfg):
         return Status("newer")
     note = _recall(root)
+    active = _activity(root)
+    progress = _progress(root, note, active)
     marks, unreadable = _campaign_marks()
     remembered = [str(s) for s in note.get("skipped") or () if isinstance(s, str)]
     skipped = _merged(remembered, _unreadable_skips(unreadable))
@@ -347,11 +469,11 @@ def status() -> Status:
     retirement = _retirement(_note_text(note, "retire_failed"))
     # Done first: what the store says outranks a note that can outlive a crash.
     if keys.is_current(cfg) and False not in marks.values():
-        return Status("done", "", skipped, retirement)
+        return Status("done", "", skipped, retirement, active, progress)
     if _is_running(root, note):
-        return Status("running", "", skipped, retirement)
+        return Status("running", "", skipped, retirement, active, progress)
     failed = _note_text(note, "failed")
-    return Status("failed" if failed else "pending", failed, skipped, retirement)
+    return Status("failed" if failed else "pending", failed, skipped, retirement, active, progress)
 
 
 # ---- the translation, persisted ----
@@ -469,12 +591,28 @@ def ensure(stop: threading.Event | None = None) -> Status:
     the status it leaves. Returns the current status at once, without waiting,
     when the migration lock is held. `stop`, once set, ends the run at the next
     item boundary, leaving it `pending`."""
+    attempted = try_ensure(stop=stop)
+    return attempted if attempted is not None else status()
+
+
+def try_ensure(stop: threading.Event | None = None, *,
+               expected_root: Path | None = None) -> Status | None:
+    """One immediate acquisition attempt; None means contention only (#496).
+
+    `ensure` keeps its status-returning no-wait contract. The background
+    starter needs to distinguish a lost acquisition from an actual pass that
+    deliberately leaves busy campaigns pending: a brief status probe must not
+    consume the sole startup attempt. The caller may pin its requested root;
+    check it inside the acquired hold before any initialization or write.
+    """
     with held_still() as free:
         if not free:
-            return status()
+            return None
         # Inside the hold: a data-dir switch holds this lock across its move,
         # so the root read here is the one the run's first writes land in.
         root = paths.home()
+        if expected_root is not None and root != expected_root:
+            return Status("pending", MOVED)
         # `running` from the moment the lock is ours, so a second caller that
         # lost the lock never reads `pending` off a run that has begun.
         with _running_on(root):
@@ -496,6 +634,10 @@ class _Run:
         self.created_safety = False
         self.retire_safety = retire_safety
         self.retire_failed = ""
+        self.progress: dict | None = None
+        self.progress_owner = ""
+        self._progress_at = 0.0
+        self._saved_progress: dict | None = None
 
     def halted(self) -> str:
         """Why the run must stop before its next item; "" to go on."""
@@ -508,7 +650,39 @@ class _Run:
     def remember(self, *, running: bool, failed: str = "") -> None:
         _remember(self.root, running=running, failed=failed, skipped=self.skipped,
                   safety=self.safety, retire_safety=self.retire_safety,
-                  retire_failed=self.retire_failed)
+                  retire_failed=self.retire_failed, progress=self.progress,
+                  progress_owner=self.progress_owner)
+
+
+    def archive_progress(self, phase: str, done: int, total: int | None) -> None:
+        """Local counters are exact; notes persist transitions and <=4 ticks/s."""
+        self.progress = {"phase": phase, "done": done, "total": total}
+        with _active_guard:
+            if str(self.root) in _active:
+                _active[str(self.root)] = self.progress
+        now = time.monotonic()
+        previous = self._saved_progress
+        transition = previous is None or (previous["phase"], previous["total"]) != (phase, total)
+        if transition or (total is not None and done == total) or now - self._progress_at >= 0.25:
+            self.remember(running=True)
+            self._progress_at = now
+            self._saved_progress = self.progress
+
+
+def _archive(run: _Run, prefix: str, phase: str) -> Path:
+    """Both safety phases share publication/progress teardown (#496)."""
+    with _progress_lease(run.root) as owner:
+        run.progress_owner = owner
+        try:
+            return backups.create_backup(
+                prefix=prefix, on_progress=lambda done, total: run.archive_progress(phase, done, total))
+        finally:
+            run.progress = None
+            run.progress_owner = ""
+            with _active_guard:
+                if str(run.root) in _active:
+                    _active[str(run.root)] = None
+            run.remember(running=True)
 
 
 def _run(root: Path, stop: threading.Event | None) -> Status | None:
@@ -625,7 +799,7 @@ def _before_campaigns(run: _Run) -> Status | None:
         return Status("pending", why)
     if not run.safety:
         try:
-            made = backups.create_backup(prefix=backups.SAFETY_PREFIX)
+            made = _archive(run, backups.SAFETY_PREFIX, "safety_backup")
         except (OSError, locks.StoreBusy) as exc:
             return Status("failed", f"the safety backup failed: {exc}")
         run.safety = made.name
@@ -771,7 +945,7 @@ def _retire(run: _Run, planned: retire.PassPlan | None = None) -> None:
 
     0. The pass is planned whole first (`retire.pass_plan`). When any unit
        deletes or replaces a stored value (`retire.needs_archive`), a
-       `pre-retirement-grimoire-` archive is taken before the pass's first
+       `pre-retirement-settings-grimoire-` archive is taken before the pass's first
        write of any kind, marker-only writes included -- unless this same run
        CREATED the `pre-inference-` one, or an earlier pass on this root took
        one that is still there (reused, R2-3). If it fails, nothing is
@@ -814,7 +988,7 @@ def _retire_archive(run: _Run, plan: retire.PassPlan) -> bool | None:
     if not retire.needs_archive(plan) or archived:
         return archived
     try:
-        made = backups.create_backup(prefix=backups.RETIRE_PREFIX)
+        made = _archive(run, backups.RETIRE_PREFIX, "retirement_backup")
     except (OSError, locks.StoreBusy) as exc:
         run.retire_failed = f"the retirement archive failed: {exc}"
         return None

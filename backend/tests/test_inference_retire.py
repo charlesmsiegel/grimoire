@@ -550,7 +550,7 @@ def test_sweep_never_prunes_a_pre_retirement_archive(home):
         backups.create_backup(when=start + timedelta(hours=n + 1))
     backups.sweep(keep=1)
     assert kept.exists()
-    assert kept.name.startswith("pre-retirement-grimoire-")
+    assert kept.name.startswith("pre-retirement-settings-grimoire-")
     assert [r["name"] for r in backups.list_backups()].count(kept.name) == 1
 
 
@@ -558,8 +558,9 @@ def test_backups_lists_a_pre_retirement_archive(client):
     made = backups.create_backup(prefix=backups.RETIRE_PREFIX)
     body = client.get("/api/backups").json()
     assert made.name in [r["name"] for r in body["backups"]]
-    # A restore point, so the schedule counts it.
-    assert not backups.due()
+    # Partial settings recovery does not satisfy the full-backup schedule (#496).
+    assert next(r for r in body["backups"] if r["name"] == made.name)["scope"] == "settings"
+    assert backups.due()
 
 
 def test_an_abandoned_pre_retirement_temp_is_swept(home):
