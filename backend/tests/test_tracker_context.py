@@ -34,7 +34,7 @@ from grimoire.store.tracker import records, walk
 
 from .llm_fakes import FakeLLM, from_entries
 
-pytestmark = (pytest.mark.tracker, pytest.mark.usefixtures("single_contribution_decision"))
+pytestmark = [pytest.mark.tracker, pytest.mark.usefixtures("single_contribution_decision")]
 
 MARA, WINIFRED, SERAPHINE = "characters:mara", "characters:winifred", "pcs:seraphine"
 NARRATED = " (private: never state or imply in narration)"
