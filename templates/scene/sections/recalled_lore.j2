@@ -9,6 +9,17 @@
     recall is a way of REACHING an entry, not a licence to publish it.
     Vars: recalled_lore_bodies ([str]), secret_recalled_lore_bodies ([str]). -#}
 {%- from "scene/_secrecy.j2" import secret_block -%}
-{%- set public = recalled_lore_bodies | select | list -%}
-{%- set secret = secret_recalled_lore_bodies | select | list -%}
+{%- from "scene/_sources.j2" import source_text with context -%}
+{%- set public = [] -%}
+{%- set secret = [] -%}
+{%- for bodies, entries, target in [
+    (recalled_lore_bodies, recalled_lore_sources | default([]), public),
+    (secret_recalled_lore_bodies, secret_recalled_lore_sources | default([]), secret)] -%}
+{%- for body in bodies -%}
+{%- if body -%}
+{%- set entry = entries[loop.index0] if loop.index0 < entries | length else {} -%}
+{%- set _ = target.append(source_text(entry.label | default("Recalled lore"), body, entry.ref | default(""))) -%}
+{%- endif -%}
+{%- endfor -%}
+{%- endfor -%}
 {{ [public | join("\n\n"), secret_block(secret) if secret else ""] | select | join("\n\n") }}

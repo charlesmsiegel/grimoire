@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { ContextBreakdown } from "./ContextBreakdown";
 import { type SceneContext } from "../api/client";
 
@@ -276,3 +276,47 @@ test("two planned rounds asking the same questions both render", () => {
   expect(screen.getByText(/Planned round 1: Who hid it\?/)).toBeInTheDocument();
   expect(screen.getByText(/Planned round 2: Who hid it\?/)).toBeInTheDocument();
 });
+
+test("each source expands to its own exact text inside the section", () => {
+  const { container } = render(<ContextBreakdown models={models} ctx={ctx({ sections: [{
+    id: "character_descriptions", label: "Character descriptions", text: "## Mara\nKeeps the map.\n\n## Seraphine\nCarries the key.",
+    tokens: 100, tier: "lock-in", dropped: false, trimmed: 0,
+    sources: [{ id: "mara", label: "Mara", text: "## Mara\nKeeps the map." },
+              { id: "seraphine", label: "Seraphine", text: "## Seraphine\nCarries the key." }],
+  }] })} />);
+  fireEvent.click(screen.getByText("Character descriptions"));
+  const source = screen.getByText("Mara", { selector: "summary" }).closest("details")!;
+  expect(source.querySelector("pre")).not.toBeVisible();
+  fireEvent.click(within(source).getByText("Mara", { selector: "summary" }));
+  const text = source.querySelector("pre")!;
+  expect(text).toBeVisible();
+  expect(text.textContent).toBe("## Mara\nKeeps the map.");
+  expect(text).not.toHaveTextContent("Seraphine");
+  expect(container.querySelectorAll("details.ctx-section")).toHaveLength(1);
+  expect(screen.getByText("≈ 100 / 200 tok")).toBeInTheDocument();
+});
+
+test("shed sources remain inspectable and say they were cut", () => {
+  render(<ContextBreakdown models={models} ctx={ctx({ sections: [{
+    id: "world_info", label: "World info", text: "The tide rises.", tokens: 100,
+    tier: "spotlight", dropped: false, trimmed: 0,
+    sources: [{ id: "realm", label: "Realm", text: "The tide rises.", shed: false },
+              { id: "saltmarch", label: "Saltmarch", text: "The gate opens.", shed: true }],
+  }] })} />);
+  fireEvent.click(screen.getByText("World info"));
+  const source = screen.getByText("Saltmarch", { selector: "summary" }).closest("details")!;
+  expect(source.querySelector("summary")).toHaveTextContent("shed: budget");
+  fireEvent.click(within(source).getByText("Saltmarch", { selector: "summary" }));
+  expect(within(source).getByText("The gate opens.")).toBeVisible();
+});
+test.each(["bad", [null], [{ label: {}, text: "bad" }]])(
+  "malformed optional sources cannot crash a frozen section: %j", (sources) => {
+    render(<ContextBreakdown models={models} ctx={ctx({ sections: [{
+      id: "world_info", label: "World info", text: "The tide rises.", tokens: 100,
+      tier: "spotlight", dropped: false, trimmed: 0,
+      sources: sources as unknown as import("../api/types").ContextSource[],
+    }] })} />);
+    fireEvent.click(screen.getByText("World info"));
+    expect(screen.getByText("The tide rises.")).toBeVisible();
+  },
+);

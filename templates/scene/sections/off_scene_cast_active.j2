@@ -7,8 +7,9 @@
     of. The block's shared heading is in neither file: it is declared as this
     section's `Section.heading` and emitted by the render path — see
     scene/off_scene_cast_heading.j2. -#}
+{%- from "scene/_sources.j2" import source_text with context -%}
 {%- set lines = [] -%}
-{%- for a in offscene_active -%}{%- set _ = lines.append(a.name ~ ": " ~ a.dossier) -%}{%- endfor -%}
+{%- for a in offscene_active -%}{%- set _ = lines.append(source_text(a.name, a.name ~ ": " ~ a.dossier, a.ref | default(""))) -%}{%- endfor -%}
 {%- if lines -%}
 {{ "## Active in this campaign, elsewhere\n" ~ (lines | join("\n")) }}
 {%- endif -%}

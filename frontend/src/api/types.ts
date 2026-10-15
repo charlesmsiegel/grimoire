@@ -2026,12 +2026,22 @@ export type EpistemicDetail = {
   round?: { retrievals: number; embeds: number };
   items: EpistemicItem[];
 };
+/** #131: one source's exact rendered contribution, frozen with its section. */
+export type ContextSource = {
+  id: string;
+  label: string; text: string;
+  ref?: string;
+  /** A lore entry removed by packing; its text remains available to inspect. */
+  shed?: boolean;
+};
 export type ContextSection = {
   /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen
    *  before ids existed does not carry one — those predate editable labels
    *  too, so their labels are still unique and are a safe fallback key. */
   id?: string;
   label: string; text: string; tokens: number;
+  /** Optional for older snapshots and sections with no source boundaries. */
+  sources?: ContextSource[];
   tier: "lock-in" | "spotlight" | "background" | "archive" | "recalled" | "history-recall" | "history-aside" | "history";
   dropped: boolean; trimmed: number;
   /** The section carries content the reader pinned, so the packer left it alone

@@ -83,12 +83,35 @@ export function ContextBreakdown({ ctx, models, acceptCid }: {
           )}
           {/* A World info row with nothing sent still lists what it held back. */}
           {s.text && <pre className="ctx-text">{s.text}</pre>}
+          <SourceEntries section={s} />
           <LoreEntries section={s} />
           <HistoryEntries section={s} acceptCid={acceptCid} carried={carried} />
         </details>
       ))}
     </>
   );
+}
+
+/** #131: snapshots are hand-editable JSON. Ignore damaged optional source
+ *  metadata while keeping the section itself readable. Source ids distinguish
+ *  repeated names and survive a refresh or a reordered template. */
+function SourceEntries({ section }: { section: ContextSection }) {
+  const sources = Array.isArray(section.sources) ? section.sources.filter((source) =>
+    source && typeof source.id === "string"
+      && typeof source.label === "string" && typeof source.text === "string") : [];
+  if (!sources.length) return null;
+  return <div className="ctx-sources">
+    <div className="ctx-caption">Sources · expand to inspect</div>
+    {sources.map((source) => (
+      <details className={"ctx-source" + (source.shed === true ? " shed" : "")} key={source.id}>
+        <summary>
+          {source.label}
+          {source.shed === true && <span className="ctx-shed"> shed: budget</span>}
+        </summary>
+        <pre className="ctx-text">{source.text}</pre>
+      </details>
+    ))}
+  </div>;
 }
 
 /** "≈ " when these counts are not the model's own tokenizer's, "" when they

@@ -76,6 +76,7 @@ from . import (
     macros,
     mechanics,
     pack,
+    source_text,
     speaker,
     story,
     world_state,
@@ -352,7 +353,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
                  _str(card, "scenario")]
         anchor = overlay.voice_anchor_record(cid, char_id)["text"]
         cast_blocks.append({
-            "name": shown,
+            "name": shown, "ref": f"characters:{char_id}",
             "description": "\n".join(p for p in parts if p),
             "anchor": voice_anchors.effective(_expanded(anchor)),
             "example": actor.select_examples(_expanded(_str(card, "mes_example")),
@@ -1179,6 +1180,12 @@ def _entry_name(entry: dict) -> str:
     return str(entry.get("name") or entry.get("id") or "")
 
 
+def _lore_source(hit: activation.Hit, body: str,
+                 capture: source_text.Capture | None) -> str:
+    """Frame an already-expanded lore body, in the first render or a shed."""
+    return capture.mark(_entry_name(hit.entry), body, hit.ref) if capture else body
+
+
 def _lore_detail(hits: list[activation.Hit], catalog: dict[str, str]) -> dict:
     """What an inspector row says about the entries in its section (spec §10),
     JSON-safe and never part of a prompt: `_breakdown` copies it onto the row
@@ -1235,7 +1242,7 @@ def _held_back_only(section: Section, pinned, extra: dict) -> dict | None:
 
 
 def _world_info_section(section: Section, data: dict, lore: dict, head: str,
-                        expand) -> tuple[str, dict]:
+                        expand, capture: source_text.Capture | None = None) -> tuple[str, dict]:
     """World info's text, plus what the packer needs to shed it an entry at a
     time and what its inspector row reports.
 
@@ -1319,22 +1326,33 @@ def _world_info_section(section: Section, data: dict, lore: dict, head: str,
     for n, piece in enumerate(pieces):
         if n % 2:
             hit = hits[int(piece)]
-            out.append(bodies.setdefault(hit.ref, expand(hit.entry["body"])))
+            got = bodies.setdefault(hit.ref, expand(hit.entry["body"]))
+            out.append(_lore_source(hit, got, capture))
         else:
             core = piece.strip()
             runs[(core, *neighbours(pieces, n))] = got = expand(core)
             out.append(run(piece, got))
-    text = finish("".join(out))
+    body, sources = capture.extract("".join(out)) if capture else ("".join(out), [])
+    text = finish(body)
     # Text that ends the full render but does not start it: each body's suffix.
     suffixes = {pieces[-1].strip()} - {pieces[0].strip()}
 
-    def render(kept: frozenset) -> str:
+    def describe(kept: frozenset) -> tuple[str, list[dict]]:
+        # A surviving body may now touch the section's outer strip. Capture
+        # its new slice DURING this re-render, never by rendering again later:
+        # the packer and inspector must describe the same frozen string.
+        current = source_text.Capture() if capture else None
         pieces = skeleton(kept)
-        return finish("".join(
-            bodies[hits[int(piece)].ref] if n % 2
+        joined = "".join(
+            _lore_source(hits[int(piece)], bodies[hits[int(piece)].ref], current) if n % 2
             else run(piece, _recall_run(runs, suffixes, (piece.strip(), *neighbours(pieces, n)),
-                                        expand))
-            for n, piece in enumerate(pieces)))
+                                       expand))
+            for n, piece in enumerate(pieces))
+        text, sources = current.extract(joined) if current else (joined, [])
+        return finish(text), sources
+
+    def render(kept: frozenset) -> str:
+        return describe(kept)[0]
 
     units = []
     for pos, h in enumerate(hits):
@@ -1345,12 +1363,15 @@ def _world_info_section(section: Section, data: dict, lore: dict, head: str,
     detail = _lore_detail(hits, lore["names"])
     detail["held_back"] = [{"ref": h.ref, "name": _entry_name(h.entry),
                             "reason": deepcopy(h.reason)} for h in lore["held_back"]]
-    return text, {"shed": {"units": units, "render": render}, "lore": detail}
+    return text, {"shed": {"units": units, "render": render,
+                           **({"describe": describe} if capture else {})}, "lore": detail,
+                  **({"sources": sources} if sources else {})}
 
 
 def _expanded_section(section: Section, data: dict, body: str, head: str, lore: dict | None,
                       expand, history_view=None, history_parts=None,
-                      history_omissions=None, cfg=None) -> tuple[str, dict]:
+                      history_omissions=None, cfg=None,
+                      capture: source_text.Capture | None = None) -> tuple[str, dict]:
     """One rendered section's text after macro expansion, with `head` (already
     expanded) on the front, and any keys it adds to its section dict.
 
@@ -1377,16 +1398,43 @@ def _expanded_section(section: Section, data: dict, body: str, head: str, lore: 
     if section.id in history_section.FRAMES:
         return "", {}
     if lore is not None and section.id == _WORLD_INFO_SECTION:
-        return _world_info_section(section, data, lore, head, expand)
-    body = expand(body).strip()
+        return _world_info_section(section, data, lore, head, expand, capture)
+    if capture:
+        expanded = expand(body, capture)
+        body, sources = capture.finish(expanded)
+    else:
+        body, sources = expand(body).strip(), []
     text = head + "\n\n" + body if (head and body) else body
+    extra: dict = {"sources": sources} if sources else {}
     if lore is not None and section.id == _RECALLED_SECTION:
-        return text, {"lore": _lore_detail(_template_order(lore["recalled"]), lore["names"])}
-    return text, {}
+        extra["lore"] = _lore_detail(_template_order(lore["recalled"]), lore["names"])
+    return text, extra
+
+
+def _source_data(section: Section, data: dict, lore: dict | None,
+                 capture: source_text.Capture | None) -> dict:
+    """Annotate this section's render inputs without changing its selection.
+
+    Recall receives source identities BESIDE its bodies: a custom template
+    may slice or filter those strings, and replacing them with annotations
+    would change its prompt. Templates opt into capture after formatting.
+    World info already expands bodies once for its shedding hook.
+    """
+    if capture is None:
+        return data
+    annotated = {**data, "capture_source": capture.mark}
+    if lore is not None and section.id == _RECALLED_SECTION:
+        hits = _template_order(lore["recalled"])
+        for key, secret in (("recalled_lore_sources", False),
+                            ("secret_recalled_lore_sources", True)):
+            annotated[key] = [{"label": _entry_name(h.entry), "ref": h.ref}
+                              for h in hits if _is_secret(h) == secret]
+    return annotated
 
 
 def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
-                     keep_guidance_slot: bool = False) -> list[dict]:
+                     keep_guidance_slot: bool = False, describe_sources: bool = False
+                     ) -> list[dict]:
     """Every applicable section, rendered and macro-expanded once, in order.
 
     THE render path: `build_messages` joins what survives packing into the
@@ -1420,8 +1468,9 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
     # which then renders World info whole, as every section renders.
     lore = a.get("lore")
 
-    def expand(text: str) -> str:
-        return macros.expand_macros(text, a["subs"], cid, sid, datetime_subs=dt_subs)
+    def expand(text: str, capture: source_text.Capture | None = None) -> str:
+        return macros.expand_macros(text, a["subs"], cid, sid, datetime_subs=dt_subs,
+                                    **({"capture": capture} if capture else {}))
 
     out = []
     #: The heading of the last section actually EMITTED, which is what makes
@@ -1442,7 +1491,13 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
                         "tier": section.tier, "pinned": False,
                         "heading": "", "heading_text": ""})
             continue
-        body = prompts.render(_section_template(section, data), **data).strip()
+        capture = source_text.Capture() if describe_sources else None
+        section_data = _source_data(section, data, lore, capture)
+        body = prompts.render(_section_template(section, section_data), **section_data).strip()
+        # Heading eligibility sees the original body, even if an annotated
+        # custom template emitted only whitespace. A phantom heading could
+        # otherwise consume a macro draw that belongs to the next section.
+        body = capture.unmark(body) if capture else body
         # A shared heading (`Section.heading`) opens each contiguous RUN of the
         # sections that name it, and this is the only place that can tell: it
         # holds the reader's merged layout and the rendered text at once, so
@@ -1476,9 +1531,9 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
         head = ""
         if body and section.heading and section.heading != last_heading:
             head = expand(prompts.render(section.heading, **data)).strip()
-        text, extra = _expanded_section(section, data, body, head, lore, expand,
+        text, extra = _expanded_section(section, section_data, body, head, lore, expand,
                                         a.get("history_view"), a.get("history_parts"),
-                                        a.get("history_omissions"), a.get("config"))
+                                        a.get("history_omissions"), a.get("config"), capture)
         if not text:
             # `last_heading` stays put: an empty section breaks no run.
             out.extend(r for r in (_held_back_only(section, pinned, extra),) if r)
@@ -1610,7 +1665,8 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
     costs one packing pass per distinct profile text plus the empty profile;
     the unbounded, undescribed path still does no token counting.
     """
-    base = _render_sections(a, cid, sid, opener=opener, keep_guidance_slot=True)
+    base = _render_sections(a, cid, sid, opener=opener, keep_guidance_slot=True,
+                            describe_sources=describe)
     profiles = {}
     if any(s["id"] == "model_guidance" for s in base):
         data = {**a["data"], "opener": opener}
@@ -1966,6 +2022,19 @@ def _history_rows(p: dict, count, notes: frozenset[int] = frozenset(),
     return rows
 
 
+def _source_row(section: dict) -> dict:
+    """#131: only frozen text and labels reach JSON; cuts stay inspectable."""
+    sources = section.get("sources")
+    if not sources:
+        return {}
+    shed = set(section.get("shed_refs") or ())
+    current = sources if section.get("dropped") else section.get("source_slices", sources)
+    kept = {s["id"]: s for s in current}
+    return {"sources": [{**(s if s.get("ref") in shed else kept[s["id"]]),
+                         "shed": s.get("ref") in shed}
+                        for s in sources if s.get("ref") in shed or s["id"] in kept]}
+
+
 def _lore_row(section: dict) -> dict:
     """The entry-level keys of a World info or Recalled lore row: each entry
     with whether the packer shed it, the names its reasons need, and (World
@@ -2110,7 +2179,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
         count = tokens.count_tokens
     rows = [{"id": s["id"], "label": s["label"], "text": s["text"], "tier": s["tier"],
              "dropped": s["dropped"], "trimmed": 0, "pinned": bool(s.get("pinned")),
-             "tokens": count(s["text"]), **_lore_row(s), **_history_row(s)}
+             "tokens": count(s["text"]), **_source_row(s), **_lore_row(s), **_history_row(s)}
             for s in p["sections"]]
 
     # Every history message, notes included: they are sent, so they cost.

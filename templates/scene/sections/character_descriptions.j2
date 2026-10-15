@@ -12,11 +12,13 @@
     as if it were a name.
 
     Vars: cast_blocks. -#}
+{%- from "scene/_sources.j2" import source_text with context -%}
 {%- set blocks = [] -%}
 {%- for b in cast_blocks -%}
 {%- if b.description -%}
-{%- set _ = blocks.append(("## " ~ b.name ~ "
-" ~ b.description) if b.name else b.description) -%}
+{%- set block = ("## " ~ b.name ~ "
+" ~ b.description) if b.name else b.description -%}
+{%- set _ = blocks.append(source_text(b.name, block, b.ref | default(""))) -%}
 {%- endif -%}
 {%- endfor -%}
 {{ blocks | join("

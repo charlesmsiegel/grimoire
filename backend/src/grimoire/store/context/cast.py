@@ -158,7 +158,8 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
             continue
         body = dossiers.read(croot, a["id"])
         if body:
-            active.append({"name": _char_name(croot, a["id"]), "dossier": body})
+            active.append({"name": _char_name(croot, a["id"]), "dossier": body,
+                           "ref": f"characters:{a['id']}"})
 
     known: list[dict] = []
     # Ids off directory listings (`character_refs` no longer builds the full
