@@ -91,11 +91,10 @@ def get_world_characters(wid: str):
 @router.post("/worlds/{wid}/characters")
 def post_world_character(wid: str, body: CharacterCreate):
     # The folder is named from the slug, and folding can grow a name past what
-    # a filesystem allows (`İ` lowercases to two code points): refuse it here
-    # rather than as a 500 from mkdir (#136).
-    if not _plaintext.folder_fits(body.name):
-        raise HTTPException(422, detail=f"A character name must be at most {_plaintext.MAX_NAME_CHARS} "
-                                        "characters once it is folded for a folder name.")
+    # a filesystem allows (`İ` lowercases to two code points); a name is also
+    # one line. Refuse either here rather than as a 500 from mkdir (#136).
+    if problem := _plaintext.name_problem(body.name):
+        raise HTTPException(422, detail=problem)
     with store.locks.world_actor_lock(wid):
         try:
             store.actor_names.require_unique(body.name, scope="world", scope_id=wid)

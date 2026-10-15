@@ -106,6 +106,10 @@ def test_inline_markdown_is_prose_not_a_label_delimiter(client, world):
     ("*Name:* Mara\n", "Mara", "description", ""),
     # One run closing the value's emphasis and the label's gives up only the label's width.
     ("Name: Mara\n**Greeting: *{{char}} waves.***\n", "Mara", "first_mes", "*{{char}} waves.*"),
+    # CommonMark pairs the delimiters: a code span's stars are literal, and a
+    # nested pair of the label's own width keeps its delimiters.
+    ("Name: Mara\n**Description: use `**` literally**\n", "Mara", "description", "use `**` literally"),
+    ("Name: Mara\n**Greeting: **Hello****\n", "Mara", "first_mes", "**Hello**"),
     # A pair the value opened itself is the author's, not the label's.
     ("Name: Mara\n*Greeting: *{{char}} waves.*\n", "Mara", "first_mes", "*{{char}} waves.*"),
     # Labels may come in any order: a name below another field still counts.
@@ -130,6 +134,13 @@ def test_an_explicit_name_over_the_folder_limit_is_refused_not_saved_as_a_500(cl
                           json={"text": "# " + "x" * 300 + "\nKeeps a ledger."}).json()["card"]["data"]
     assert len(guessed["name"]) == 200
     assert guessed["description"].startswith("# " + "x" * 300)
+
+
+def test_the_create_route_refuses_a_name_on_more_than_one_line(client, world):
+    response = client.post(f"/api/worlds/{world}/characters", json={"name": "Mara\nWinifred"})
+    assert response.status_code == 422
+    assert "single line" in response.json()["detail"]
+    assert client.get(f"/api/worlds/{world}/characters").json() == []
 
 
 def test_the_create_route_refuses_a_name_whose_folder_would_be_too_long(client, world):
@@ -318,7 +329,9 @@ def test_optional_ai_is_detached_metered_and_never_creates_a_character(client, w
 
 
 @pytest.mark.parametrize("reply", ["not JSON", "[]", '{"name": "Mara"}',
-    '{"name": "Mara", "description": [], "personality": "", "scenario": "", "first_mes": "", "mes_example": ""}'])
+    '{"name": "Mara", "description": [], "personality": "", "scenario": "", "first_mes": "", "mes_example": ""}',
+    # A break the single-line review input would hide but Save would still send.
+    '{"name": "Mara\\nWinifred", "description": "", "personality": "", "scenario": "", "first_mes": "", "mes_example": ""}'])
 def test_bad_ai_output_fails_without_writing_a_card(client, world, reply):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-test"})
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(reply)

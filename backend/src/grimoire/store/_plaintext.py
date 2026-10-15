@@ -9,12 +9,13 @@ another heading spelling belongs in ALIASES; neither parser needs a new flow.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from functools import partial
 from pathlib import PurePosixPath
 
 from markdown_it import MarkdownIt
-from markdown_it.rules_inline import StateInline, backtick, html_inline, image, link
+from markdown_it.rules_inline import StateInline, backtick, emphasis, html_inline, image, link
 
 from .. import prompts, schemas
 from . import cards, paths
@@ -46,7 +47,6 @@ _HEADING = re.compile(r"^#{1,6}\s+(.+?)(?:\s+#+)?$")
 # A bullet marker in front of a label: `- **Name:** Mara`. Requires the space,
 # so a bold label's own `**` is never mistaken for a bullet.
 _LIST_MARKER = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
-_STARS = re.compile(r"\*+")
 
 
 def validate_text(text: str) -> None:
@@ -66,41 +66,57 @@ def _label(text: str) -> str:
     return text.strip().strip("* ").replace("_", " ").casefold()
 
 
-def _inline_value(label: str, value: str) -> str:
+def _record_delimiters(state: StateInline, silent: bool) -> bool:
+    """CommonMark's own emphasis rule, noting where each delimiter sits.
+
+    It pushes one delimiter per star, in source order from `state.pos`; once
+    the line is parsed, pairing has set each matched opener's `end` to its
+    closer. Recording the positions lets `_inline_value` remove exactly the
+    stars CommonMark pairs with the label's, and nothing else (#136).
+    """
+    start, before = state.pos, len(state.delimiters)
+    matched = emphasis.tokenize(state, silent)
+    if matched and not silent:
+        state.env["state"] = state
+        positions = state.env.setdefault("positions", {})
+        for index in range(before, len(state.delimiters)):
+            positions[(id(state.delimiters), index)] = start + index - before
+    return matched
+
+
+_EMPHASIS = MarkdownIt("commonmark")
+_EMPHASIS.inline.ruler.at("emphasis", _record_delimiters)
+
+
+def _inline_value(content: str, label: str, value: str) -> str:
     """Only a label's emphasis delimiters belong to the parser.
 
     Stripping arbitrary stars from a value corrupts authored Markdown such
     as `Greeting: *{{char}} waves.*`, including a value made only of stars.
-    A label that opens emphasis (`**Name`, `*Name`) and does not close it
-    before the colon closes it somewhere in the value: `**Name:** Mara`,
-    `**Name: Mara**`, `**Personality: stern** but *kind*`. That closer is the
-    first run of the label's width that can close (it follows a non-space)
-    while no run of that width opened inside the value is still open -- the
-    CommonMark flanking rule, counting runs at least that wide. So an authored
-    `*Greeting: *{{char}} waves.*` keeps its own pair, later emphasis never
-    hides the label's closer, and a run that closes both at once gives up
-    only the label's width (#136).
+    A label that opens emphasis (`**Name`, `*Name`) closes it wherever
+    CommonMark says it does: `**Name:** Mara`, `**Name: Mara**`,
+    `**Personality: stern** but *kind*`, or inside a run that closes a
+    nested span too (`**Greeting: *{{char}} waves.***`). CommonMark decides
+    because every hand-written approximation of it here missed a case: a
+    code span's literal stars, a nested pair of the same width, a combined
+    closing run. Only the stars paired with the line's leading run are
+    removed, and an opener nothing closes is left alone.
     """
-    if not label.startswith("*") or label.rstrip().endswith("*"):
+    if not label.startswith("*"):
         return value.lstrip()
-    width = 2 if label.startswith("**") else 1
-    depth = 0
-    for run in _STARS.finditer(value):
-        if len(run.group()) < width:
-            continue
-        # The value starts right after the label's colon, which is no space.
-        before = value[run.start() - 1] if run.start() else ":"
-        after = value[run.end():run.end() + 1]
-        if not before.isspace():
-            if not depth:
-                # A longer run closes the inner emphasis first and the label's
-                # last (`**Greeting: *{{char}} waves.***`), so the label's
-                # width comes off its end.
-                return (value[:run.end() - width] + value[run.end():]).lstrip()
-            depth -= 1
-        elif after and not after.isspace():
-            depth += 1
-    return value.lstrip()
+    lead = len(content) - len(content.lstrip("*"))
+    env: dict = {}
+    _EMPHASIS.parseInline(content, env)
+    removed: set[int] = set()
+    if "state" in env:
+        delimiters = env["state"].delimiters
+        positions = env["positions"]
+        for index, delimiter in enumerate(delimiters):
+            at = positions.get((id(delimiters), index))
+            if at is not None and at < lead and delimiter.end != -1:
+                removed |= {at, positions[(id(delimiters), delimiter.end)]}
+    begin = len(label) + 1
+    return "".join(ch for at, ch in enumerate(content[begin:], begin) if at not in removed).lstrip()
 
 
 def _literal_span(rule: Callable[[StateInline, bool], bool], state: StateInline, silent: bool) -> bool:
@@ -155,7 +171,7 @@ def _label_of(line: str, stripped: str, heading: re.Match[str] | None,
     """
     content = heading[1] if heading else _LIST_MARKER.sub("", line.lstrip(), count=1)
     label, colon, value = content.partition(":")
-    value = _inline_value(label, value)
+    value = _inline_value(content, label, value)
     field = ALIASES.get(_label(label))
     if field == "name" and not name_free:
         field = None
@@ -169,6 +185,20 @@ def folder_fits(name: str) -> bool:
     folding can grow a name (`İ` lowercases to two code points), so the limit
     is on the slug, not on the name's length (#136)."""
     return len(paths.slugify(name)) <= MAX_NAME_CHARS
+
+
+def name_problem(name: str) -> str | None:
+    """Why a character name cannot be saved, or None when it can.
+
+    A name is one line: the review form's single-line input would hide a
+    break that Save still sends, and the stored card and any baked `{{char}}`
+    would keep it while the folder's front matter flattened it (#136).
+    """
+    if not folder_fits(name):
+        return f"A character name must be at most {MAX_NAME_CHARS} characters once it is folded for a folder name."
+    if any(unicodedata.category(ch) in ("Cc", "Zl", "Zp") for ch in name):
+        return "A character name must be a single line of text."
+    return None
 
 
 def _clip(text: str) -> str:
@@ -190,9 +220,8 @@ def _resolve_name(explicit: str, title: str, filename: str, lines: list[str]) ->
     """An explicit name wins, then a document title, then a filename, then the
     first line. Only an explicit name is refused past the folder limit: a guess
     is clipped, and the reviewer still has the full text in the description."""
-    if not folder_fits(explicit):
-        raise cards.CardParseError(
-            f"A character name must be at most {MAX_NAME_CHARS} characters once it is folded for a folder name.")
+    if problem := name_problem(explicit):
+        raise cards.CardParseError(problem)
     fallback = _clip(PurePosixPath(filename.replace("\\", "/")).stem.strip())
     first = next(line.strip() for line in lines if line.strip())
     return explicit or title or fallback or _clip(first)
@@ -259,9 +288,8 @@ def draft_data(card: dict) -> dict[str, str]:
     result = {key: data[key] for key in FIELDS}
     if not result["name"].strip():
         raise cards.CardParseError("Give the draft a character name.")
-    if not folder_fits(result["name"]):
-        raise cards.CardParseError(
-            f"A character name must be at most {MAX_NAME_CHARS} characters once it is folded for a folder name.")
+    if problem := name_problem(result["name"]):
+        raise cards.CardParseError(problem)
     if sum(map(len, result.values())) > MAX_DRAFT_CHARS:
         raise cards.CardParseError(f"The draft must be at most {MAX_DRAFT_CHARS} characters.")
     return result
