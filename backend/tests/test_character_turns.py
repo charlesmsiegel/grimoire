@@ -19,7 +19,6 @@ from tests.inference_fixtures import (
 )
 from tests.llm_fakes import FakeLLM, decision_reply
 
-
 pytestmark = pytest.mark.usefixtures("single_contribution_decision")
 
 
