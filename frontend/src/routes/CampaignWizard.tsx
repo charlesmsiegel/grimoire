@@ -90,6 +90,9 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     setWorldTags({});
     setWorldPCs([]);
     setPickedPC(null); // a pick belongs to one world
+    // Draft tags are vocabulary IDs of the world they were picked in: the same
+    // ID names another tag in another world, so they cannot carry across (#68).
+    setTags([]);
     api.listTags(world)
       .then((rows) => { if (live) setWorldTags(rows); })
       .catch(() => { if (live) setWorldTags({}); });

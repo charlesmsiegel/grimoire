@@ -477,3 +477,26 @@ test.each(["success", "failure"])("ignores the old world's late PC and tag %s", 
   fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
   await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w2", ["t2"]));
 });
+
+test("switching worlds drops the draft's tags, which name the old world's vocabulary", async () => {
+  vi.mocked(api.listWorlds).mockResolvedValue([
+    { id: "w1", name: "Realm", created: "", updated: "", counts: {} },
+    { id: "w2", name: "Saltmarch", created: "", updated: "", counts: {} },
+  ]);
+  vi.mocked(api.listTags).mockImplementation(async (wid) =>
+    wid === "w1" ? { t1: "rebel" } : { t1: "sailor" });
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText("Add tag"), { target: { value: "rebel" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  await screen.findByRole("button", { name: /rebel ✕/ });
+  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w1", ["t1"]));
+  fireEvent.click(screen.getByRole("button", { name: /back/i }));
+  fireEvent.change(screen.getByLabelText("World"), { target: { value: "w2" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w2", []));
+  expect(screen.queryByRole("button", { name: /sailor ✕/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /t1 ✕/ })).toBeNull();
+});
