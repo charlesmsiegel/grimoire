@@ -130,7 +130,7 @@ export function BackupsPanel({ dir }: { dir: string }) {
           {msg.text}
         </p>
       )}
-      {rows !== null && rows.length === 0 && (
+      {rows !== null && !rows.some((b) => b.scope !== "settings") && (
         <p className="field-hint">No full backups yet.</p>
       )}
       {rows !== null && rows.length > 0 && (
@@ -138,6 +138,7 @@ export function BackupsPanel({ dir }: { dir: string }) {
           {rows.map((b) => (
             <li key={b.name} className="backup-row">
               <span className="backup-name">{b.name}</span>
+              {b.scope === "settings" && <span>Model settings safety archive (partial)</span>}
               <span className="backup-meta">
                 {new Date(b.created).toLocaleString()} · {formatSize(b.size)}
               </span>
@@ -164,7 +165,13 @@ export function BackupsPanel({ dir }: { dir: string }) {
         </ul>
       )}
       <p className="field-hint">
-        Restoring a full backup is manual: unzip it into an empty folder and point the
+        Settings safety archives contain only model settings. Recovery needs the
+        original library or a full backup; a partial archive cannot restore a library into an empty folder.
+        With the app stopped, copy the archived settings back into that library. Files
+        created after the archive may also need manual cleanup; extracting does not remove them.
+      </p>
+      <p className="field-hint">
+        Restoring a full backup is manual: with the app stopped, unzip it into an empty folder and point the
         storage location above at it. Nothing is restored in place while the app
         is running — that would be a race against whatever it is serving.
       </p>

@@ -26,13 +26,13 @@ export function upgradeStalled(reads: number): boolean {
   return reads >= UPGRADE_POLL_QUICK;
 }
 
-/** Whether `s` is a library whose global switch has not landed yet but is on
- *  its way: pending or running, at the old layout, and not a newer build's.
- *  A failed move is retried on the next start, not by asking again, and a
- *  store at format "2" is writable whatever its status still says. */
+/** Keep watching the global switch and any live archive work (#496).
+ *  Activity includes the format-2/done planning gap before retirement's
+ *  archive. This only controls reads; editability still follows the format. */
 export function upgrading(s: InferenceSettings | null | undefined): boolean {
-  if (!s || s.newer || s.format === "2") return false;
-  return s.migration.state === "pending" || s.migration.state === "running";
+  if (!s || s.newer || s.migration.state === "newer") return false;
+  if (s.migration.active || s.migration.progress) return true;
+  return s.format !== "2" && (s.migration.state === "pending" || s.migration.state === "running");
 }
 
 /** The settings view, kept current for a page that locks on it.
@@ -63,6 +63,7 @@ export function useInferenceSettings(enabled = true): {
   const [settings, setSettings] = useState<InferenceSettings | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [reads, setReads] = useState(0);
+  const [installs, setInstalls] = useState(0);
   const latest = useRef(0);
   const started = useRef(false);
   const live = useRef(true);
@@ -97,10 +98,13 @@ export function useInferenceSettings(enabled = true): {
     if (!polling) return;
     const timer = setTimeout(read, upgradePollDelay(reads));
     return () => clearTimeout(timer);
-  }, [polling, reads, read]);
+  }, [polling, reads, read, installs]);
 
   const install = useCallback((s: InferenceSettings) => {
     latest.current += 1;
+    // A superseded poll cannot settle reads. Rearm even when the saved
+    // response is still active, without changing the quick/slow read count.
+    setInstalls((n) => n + 1);
     setSettings(s);
     setError(null);
   }, []);

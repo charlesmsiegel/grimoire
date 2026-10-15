@@ -178,3 +178,16 @@ test("sizes read the way a file manager shows them", () => {
   expect(formatSize(1_572_864)).toBe("1.5 MB");
   expect(formatSize(3 * 1024 ** 3)).toBe("3.0 GB");
 });
+
+
+test("partial settings archives never imply a full restore point", async () => {
+  vi.mocked(api.listBackups).mockResolvedValue({ ...listing, backups: [
+    { name: "pre-inference-settings-grimoire-20260815T210000Z.zip", scope: "settings",
+      size: 1024, created: "2026-08-15T21:00:00Z" },
+  ] });
+  render(<BackupsPanel dir="" />);
+  expect(await screen.findByText("Model settings safety archive (partial)")).toBeInTheDocument();
+  expect(screen.getByText("No full backups yet.")).toBeInTheDocument();
+  expect(screen.getByText(/original library or a full backup/)).toBeInTheDocument();
+  expect(screen.getByText(/cannot restore a library into an empty folder/)).toBeInTheDocument();
+});

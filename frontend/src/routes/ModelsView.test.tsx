@@ -1,9 +1,10 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { api, PRESET_CLEAR, type CapabilityNeed } from "../api/client";
+import { api, PRESET_CLEAR, type CapabilityNeed, type InferenceSettings } from "../api/client";
 import { NO_FALLBACK_POLICY } from "../components/inference/selection";
 import { forgetModelTests } from "../components/inference/TestCallDialog";
 import ModelsView from "./ModelsView";
+import { useInferenceSettings } from "../components/inference/useInferenceSettings";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -1094,4 +1095,84 @@ test("a pin on a route that sends images asks the provider for generate and visi
     expect(api.readConnectionCapabilities).toHaveBeenCalledWith("realm", "generate");
     expect(api.readConnectionCapabilities).toHaveBeenCalledWith("realm", "vision");
   });
+});
+
+
+// A format-2/done response can precede retirement's archive (#496).
+test.each(["1", "2"])("retirement beginning after a done response stays visible from format %s", async (initial) => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ format: initial,
+      migration: { state: initial === "2" ? "done" : "running", active: true,
+        reason: "", skipped: [] } }) as unknown as InferenceSettings);
+    await openSummary();
+    if (initial === "2") expect(main().getByRole("button", { name: "Edit models" })).toBeEnabled();
+    const migration = { state: "done", active: true, reason: "", skipped: [],
+      progress: { phase: "retirement_backup", done: 0, total: null } };
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ migration }) as unknown as InferenceSettings);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(main().getByText(/Preparing/)).toBeInTheDocument();
+    expect(main().getByRole("button", { name: "Edit models" })).toBeEnabled();
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ migration: { ...migration,
+      progress: { ...migration.progress, done: 3, total: 8 } } }) as unknown as InferenceSettings);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(main().getByText(/3 of 8 files/)).toBeInTheDocument();
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings() as unknown as InferenceSettings);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(main().queryByText(/3 of 8 files/)).toBeNull();
+    const reads = vi.mocked(api.getInferenceSettings).mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(api.getInferenceSettings).toHaveBeenCalledTimes(reads);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+
+test("an archive poll arriving after a saved view cannot revive progress", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const active = settings({ migration: { state: "done", active: true, reason: "", skipped: [],
+      progress: { phase: "retirement_backup", done: 3, total: 8 } } });
+    let resolvePoll!: (value: InferenceSettings) => void;
+    vi.mocked(api.getInferenceSettings).mockResolvedValueOnce(active as unknown as InferenceSettings)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
+    const { result } = renderHook(() => useInferenceSettings());
+    await waitFor(() => expect(result.current.settings?.migration.active).toBe(true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(api.getInferenceSettings).toHaveBeenCalledTimes(2);
+    const saved = settings();
+    act(() => result.current.install(saved as unknown as InferenceSettings));
+    await act(async () => { resolvePoll(active as unknown as InferenceSettings); });
+    expect(result.current.settings).toEqual(saved);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(api.getInferenceSettings).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+
+test("a saved active view rearms an archive poll that it superseded", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const active = settings({ migration: { state: "done", active: true, reason: "", skipped: [],
+      progress: { phase: "retirement_backup", done: 3, total: 8 } } });
+    let resolvePoll!: (value: InferenceSettings) => void;
+    vi.mocked(api.getInferenceSettings).mockResolvedValueOnce(active as unknown as InferenceSettings)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
+    const { result } = renderHook(() => useInferenceSettings());
+    await waitFor(() => expect(result.current.settings?.migration.active).toBe(true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(api.getInferenceSettings).toHaveBeenCalledTimes(2);
+    const saved = settings({ ...active, presets: [...active.presets, { id: "warm", name: "Warm" }] });
+    act(() => result.current.install(saved as unknown as InferenceSettings));
+    await act(async () => { resolvePoll(active as unknown as InferenceSettings); });
+    expect(result.current.settings).toEqual(saved);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(api.getInferenceSettings).toHaveBeenCalledTimes(3);
+    expect(result.current.settings?.migration.active).not.toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -37,3 +37,15 @@ test("the line says what is left, and a reason and a skip are both kept", () => 
   expect(migrationLine(view("2", { state: "done", skipped: [BUSY, "provider local: refused"] })))
     .toBe(`The upgrade left 2 things for later (${BUSY}; provider local: refused).`);
 });
+
+
+test("archive counts stay visible after the global layout switches", () => {
+  const migration = { state: "done" as const, active: true, reason: "", skipped: [BUSY],
+    progress: { phase: "retirement_backup" as const, done: 3, total: 8 } };
+  expect(migrationLine(view("2", migration))).toMatch(/3 of 8 files/);
+  expect(migrationLine(view("2", migration))).toContain(BUSY);
+  expect(migrationLine(view("2", { ...migration,
+    progress: { ...migration.progress, done: 0, total: null } }))).toMatch(/Preparing/);
+  expect(migrationLine(view("2", { ...migration,
+    progress: { ...migration.progress, done: 0, total: 0 } }))).toMatch(/0 of 0 files/);
+});
