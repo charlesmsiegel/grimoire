@@ -603,8 +603,8 @@ def _round(cid, sid):
 
 
 def _speakers(cid, sid):
-    return [m["speaker"] for m in store.scenes.read_scene(cid, sid)["messages"]
-            if m.get("response_id")]
+    return [m.get("speaker") or "Grimoire"
+            for m in store.scenes.read_scene(cid, sid)["messages"] if m.get("response_id")]
 
 
 def _chat(client, cid, sid, content="Hello"):
