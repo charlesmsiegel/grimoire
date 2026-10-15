@@ -82,6 +82,16 @@ def _settings(cid, sid):
     return store.group_play.settings_of(store.scenes.read_scene(cid, sid)["meta"])
 
 
+def _decision_successor(round_record):
+    """A Directed automatic contribution delegates its follow-on to decide().
+
+    Continue, reply-as without text, reroll and the other order modes retain
+    their existing one-response or planned semantics.
+    """
+    return (round_record["automatic"]
+            and round_record.get("mode", "directed") == "directed")
+
+
 def _handoff_pool(cid, sid, round_record):
     """The round's eligible actors a Directed handoff may still name: whoever
     has started sitting out since the round opened is no longer one of them."""
@@ -114,6 +124,7 @@ def _compose(cid, sid, round_record, actor, resolved, appended=(), plan=None,
         "turn": round_record.get("turn"),
         "actor_ref": actor,
         "eligible_speakers": candidates,
+        "successor_by_decision": _decision_successor(round_record),
         "describe": store.prompt_log.capturing(),
         "model": resolved.chain.primary.model,
         "images": store.post_images.images_for(resolved.chain.primary),
@@ -1770,7 +1781,8 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         record = turn.record
         turn.appended = ()
         turn.watcher = watcher = store.response_protocol.ResponseWatcher(
-            perception=actor != "grimoire")
+            perception=actor != "grimoire",
+            require_handoff=not _decision_successor(turn.round_record))
         yield streaming._sse(
             {
                 "response_start": {
