@@ -256,7 +256,7 @@ def write_bundle(wid: str, dest: Path) -> None:
     # out of the avatar slot is named only by its journal, which is not packed.
     assets.recover_promotions_in(root)
     world = _world_entries(root)
-    collections = _packed_manifests(root, world)
+    collections, pinned = _packed_manifests(root, world)
     _check_blob_sizes(root, collections)
     member_ids = _manifest_ids(collections)
     manifest = {"format": COLLECTIONS_FORMAT if member_ids else FORMAT, "kind": "world",
@@ -264,7 +264,8 @@ def write_bundle(wid: str, dest: Path) -> None:
                 "app_version": app_version(), "exported": now_iso()}
     entries = [_Entry(MANIFEST_NAME, compress=zipfile.ZIP_DEFLATED,
                       data=(json.dumps(manifest, indent=2) + "\n").encode("utf-8")),
-               *world, *_image_entries(root, wid, member_ids)]
+               *(pinned.get(e.src, e) if e.src is not None else e for e in world),
+               *_image_entries(root, wid, member_ids)]
     _check_whole(entries)
     try:
         with zipfile.ZipFile(dest, "w") as z:
@@ -403,9 +404,14 @@ def _strict_manifest(data: bytes) -> dict:
     return image_collections.validate(json.loads(data.decode("utf-8")))
 
 
-def _packed_manifests(root: Path, world: list[_Entry]) -> list[tuple[str, dict]]:
+def _packed_manifests(root: Path, world: list[_Entry]
+                      ) -> tuple[list[tuple[str, dict]], dict[Path, _Entry]]:
     """Every format-2 collection manifest among the packed world files,
-    validated by the store's own rule, as `(path relative to root, manifest)`.
+    validated by the store's own rule, as `(path relative to root, manifest)`,
+    and the validated bytes of each one as a replacement entry keyed by its
+    source. The archive writes those bytes, not the file again: a sync that
+    replaces a manifest after this read must not pack a member map other than
+    the one the blobs were chosen by (#478).
 
     Validated exactly where the import would refuse (`_check_collections`): a
     file that does not parse as a JSON object, or that says format 1, is
@@ -413,7 +419,8 @@ def _packed_manifests(root: Path, world: list[_Entry]) -> list[tuple[str, dict]]
     read, or `BundleError` names it before anything is written -- so an export
     never packs a manifest its own import refuses. A manifest that vanished
     since the walk is not part of the world any more."""
-    out = []
+    out: list[tuple[str, dict]] = []
+    pinned: dict[Path, _Entry] = {}
     for e in world:
         rel = e.arc.split("/")[1:]
         if e.src is None or not _is_manifest(rel):
@@ -432,7 +439,8 @@ def _packed_manifests(root: Path, world: list[_Entry]) -> list[tuple[str, dict]]
         except (ValueError, RecursionError) as exc:
             raise BundleError(f"invalid collection manifest: {where}: {exc}") from exc
         out.append((where, manifest))
-    return out
+        pinned[e.src] = _Entry(e.arc, compress=e.compress, data=data)
+    return out, pinned
 
 
 def _checked_by_import(data: bytes) -> bool:

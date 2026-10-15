@@ -676,15 +676,16 @@ def failed_report(error: str, *, dry_run: bool) -> dict:
 
 def _linked_slot(root: Path, d: Path, name: str | None = None) -> bool:
     """Whether a write in `d` could land outside `root`: `d` reached through
-    a symlink (`image_surfaces.linked`), its ``image-refs/`` folder a symlink,
-    or -- for `name` -- that placement file itself one. `linked` checks the
-    components from the root down to `d` only; a placement is written one
-    and two levels below it, and a link there would put the placement the
-    legacy file is then deleted behind somewhere else entirely."""
-    if image_surfaces.linked(root, d) or (d / image_refs.REFS_DIR).is_symlink():
+    a symlink or junction, its ``image-refs/`` folder one too, or -- for `name`
+    -- that placement file itself one. `linked` checks the components from the
+    root down to the path it is given, so each of those is asked separately: a
+    placement is written one and two levels below `d`, and a link there would
+    put the placement the legacy file is then deleted behind somewhere else
+    entirely. `is_symlink()` alone misses a Windows junction (#478)."""
+    if image_surfaces.linked(root, d) or image_surfaces.linked(root, d / image_refs.REFS_DIR):
         return True
     try:
-        return name is not None and image_refs.ref_path(d, name).is_symlink()
+        return name is not None and image_surfaces.linked(root, image_refs.ref_path(d, name))
     except ValueError:
         return True
 

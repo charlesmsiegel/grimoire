@@ -2002,3 +2002,22 @@ def test_a_format_3_bundle_round_trips_through_its_own_export(monkeypatch, tmp_p
     assert _imported_members(new) == ids
     assert all(image_collections.member_path(new, COLL, i) is not None for i in (0, 1))
     assert image_collections.read(new, "f" * 32)["format"] == 1
+
+
+def test_export_packs_the_manifest_it_validated(monkeypatch, tmp_path):
+    """A sync that replaces a collection manifest after the export validated it
+    must not reach the archive: the member map of the blobs packed beside it is
+    the validated one, so the packed manifest has to be those same bytes (#478)."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62), _pixels(63))
+    real = world_bundle._check_whole
+
+    def replace_after_validation(entries):
+        real(entries)
+        image_collections.manifest_path(wid, COLL).write_text(_format2(ids[1], ids[0]) + "\n")
+
+    monkeypatch.setattr(world_bundle, "_check_whole", replace_after_validation)
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        packed = json.loads(z.read(COLL_MEMBER))
+    assert packed["members"] == ids

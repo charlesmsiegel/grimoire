@@ -33,3 +33,30 @@ def test_linked_still_answers_false_for_a_missing_component(tmp_path):
     d = root / "worlds" / "not-yet"
     root.mkdir()
     assert image_surfaces.linked(root, d) is False
+
+
+def test_linked_slot_asks_about_the_placement_folder_and_file(tmp_path, monkeypatch):
+    """A junctioned `image-refs/` folder is a link the migration must refuse,
+    and `linked` is the one check that knows about junctions, so the placement
+    folder and file go through it rather than through `is_symlink()` (#478)."""
+    from grimoire.store import image_migration, image_refs
+
+    root = tmp_path / "root"
+    d = root / "worlds" / "w" / "images"
+    d.mkdir(parents=True)
+    asked: list[Path] = []
+    real = image_surfaces.linked
+
+    def recording(r, p):
+        asked.append(p)
+        return real(r, p)
+
+    monkeypatch.setattr(image_surfaces, "linked", recording)
+    image_migration._linked_slot(root, d, "portrait")
+    assert d / image_refs.REFS_DIR in asked
+    assert image_refs.ref_path(d, "portrait") in asked
+
+    junctioned = d / image_refs.REFS_DIR
+    monkeypatch.setattr(image_surfaces, "linked",
+                        lambda r, p: p == junctioned or real(r, p))
+    assert image_migration._linked_slot(root, d, "portrait") is True
