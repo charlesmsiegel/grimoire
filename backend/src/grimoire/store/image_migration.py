@@ -1140,6 +1140,33 @@ def _still_target(ex: _Exec, side: Path, key: str, still: Callable[[], bool] | N
     return False
 
 
+def _settled_delete(ex: _Exec, side: Path, key: str, value: object,
+                    still: Callable[[], bool] | None) -> bool | None:
+    """`_delete_key_if`, then the target checked once more. The check before
+    the delete leaves a window a sync client can still replace the placement
+    in; one after it does not, because a target still unchanged then was
+    unchanged when the key went. A delete that lost that race puts the key
+    back for a later run (#478)."""
+    done = _delete_key_if(ex, side, key, value)
+    if done and not _still_target(ex, side, key, still):
+        _restore_key(ex, side, key, value)
+        return None
+    return done
+
+
+def _restore_key(ex: _Exec, side: Path, key: str, value: object) -> None:
+    """Put a folded key back unless something wrote it again meanwhile."""
+    if not ex.guard_dir("before-key-restore", side.parent):
+        ex.keep(side, key, image_surfaces.SYMLINKED)
+        return
+    cur = _sidecar_now(ex, side)
+    if cur is None or key in cur:
+        return
+    cur[key] = value
+    atomic.write_text(side, json.dumps(cur, indent=2, sort_keys=True) + "\n")
+    ex.wrote = True
+
+
 def _delete_key_if(ex: _Exec, side: Path, key: str, value: object) -> bool | None:
     """Compare-and-delete: drop `key` only while it still holds `value`; an
     emptied sidecar goes with it. True when deleted, None when the key is
@@ -1217,7 +1244,7 @@ def _fold_text_once(ex: _Exec, side: Path, key: str, image_id: str, label: str,
         return None
     if not _still_target(ex, side, key, still):
         return None
-    done = _delete_key_if(ex, side, key, value)
+    done = _settled_delete(ex, side, key, value, still)
     if done:
         ex.out["descriptions_folded"] += 1
     return done
@@ -1288,7 +1315,7 @@ def _fold_subjects_once(ex: _Exec, side: Path, key: str, image_id: str, scope: s
              "sets": sorted([sorted(before), sorted(set(value))])})
     if not _still_target(ex, side, key, still):
         return None
-    done = _delete_key_if(ex, side, key, value)
+    done = _settled_delete(ex, side, key, value, still)
     if done:
         ex.out["subjects_folded"] += 1
     return done

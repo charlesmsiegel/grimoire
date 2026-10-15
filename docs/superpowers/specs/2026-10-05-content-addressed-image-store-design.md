@@ -1925,13 +1925,16 @@ or journal formats:
   format-2-only world: another device's cached format-1 journal cannot be seen.
 - Metadata-only (c) occurrences remain eligible when all legacy files of their
   name are untouched. Same-world library and record URL subject keys use that
-  same fold, with separate source-key and target-slot names.
+  same fold, with separate source-key and target-slot names, and only while
+  the greeting still references the URL: a stale key stays where nothing
+  reads it.
 - Lone linked legacy files are reported; regular siblings keep their own reason.
   Verification checks links before reusing a verified pair, and promotion
   recovery checks both journal slots and the `descriptions.json` and
   `focus.json` it rewrites before it can write any of them. A metadata-only
-  fold re-checks its target before deleting the key, so a placement a sync
-  client replaced mid-fold keeps its key for a later run.
+  fold re-checks its target before and after deleting the key, so a
+  placement a sync client replaced mid-fold keeps, or gets back, its key for a
+  later run.
 - Journal conversion and work-map writes guard the pinned root. Legacy thumbnail
   cleanup precedes unlinking its source, so a crash leaves a key for the rerun.
 - Export refuses an unavailable format-2 collection member, including one lost

@@ -1145,7 +1145,9 @@ def test_same_world_url_alias_uses_filesystem_identity(monkeypatch, alias):
     url = f"/api/worlds/{spelling}/images/quay"
     gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
     gdir = assets.version_dir(wroot, gid, "default", base="greetings")
-    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    # Keyed as the app keys it (`image_key`, what `write_subjects` accepts and
+    # `read_subjects` answers): the alias is the body's URL spelling.
+    side = _sidecar(gdir, "subjects.json", {greeting_images.image_key(wroot, gid, url): [char]})
 
     def live_root_forbidden(*_a, **_kw):
         raise AssertionError("inventory must resolve aliases under its pinned root")
@@ -1283,6 +1285,55 @@ def test_url_target_synced_during_fold_keeps_its_subject_key(monkeypatch):
     _run()
     assert not side.exists()
     assert _subjects_of(replacement, f"world:{wid}") == {char}
+
+
+def test_url_target_synced_right_after_the_key_delete_restores_it(monkeypatch):
+    """The re-check before the delete leaves a window; the one after it closes
+    it, putting back a key whose placement a sync client moved meanwhile."""
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    assets.put_in(wchar, "gallery_9", _png(2), "png")
+    replacement = image_refs.read(wchar, "gallery_9").image
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    real = image_migration._delete_key_if
+    synced: list[bool] = []
+
+    def delete_then_sync(ex, side_, key, value):
+        done = real(ex, side_, key, value)
+        if done and key == url and not synced:
+            synced.append(True)
+            image_refs.write(wchar, "avatar", replacement)
+        return done
+
+    with monkeypatch.context() as concurrent:
+        concurrent.setattr(image_migration, "_delete_key_if", delete_then_sync)
+        rep = _run()
+
+    assert synced and _json(side) == {url: [char]}
+    assert any(k["reason"] == "target-changed-during-fold" for k in rep["keys_kept"])
+    _run()
+    assert not side.exists()
+    assert _subjects_of(replacement, f"world:{wid}") == {char}
+
+
+def test_url_subject_key_the_greeting_no_longer_shows_is_left_alone():
+    """`read_subjects` answers only keys the greeting references, so a stale
+    one is invisible; folding it would surface its tags through every other
+    placement of the picture (#478)."""
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body="No art here.")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+
+    _run()
+
+    assert _json(side) == {url: [char]}
+    assert _subjects_of(_id(_png(1)), f"world:{wid}") == set()
 
 
 def test_url_subject_fold_holds_its_target_name_lock(monkeypatch):
