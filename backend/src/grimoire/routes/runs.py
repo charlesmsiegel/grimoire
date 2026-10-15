@@ -423,6 +423,14 @@ class RunRegistry:
         # are holding the store against maintenance. A count for the same reason
         # `_store_moves` is one: they overlap. See `exclude_maintenance`.
         self._maintenance_holds = 0
+        # The same process lock maintenance takes, retained until the last tree
+        # operation on that root exits (#479). A lock PATH is the key, because
+        # proclock identifies root aliases by their directory identity. Counts
+        # permit nesting and overlapping operations without reacquiring our own
+        # OS lock; separate registries/processes must acquire it for themselves.
+        # Like its existing thread locks and live runs, this ownership belongs
+        # to the app process; inheriting a registry across os.fork is unsupported.
+        self._maintenance_locks: dict[Path, tuple[int, int]] = {}
         # How many cache-sync batches are running (spec 05 section 4.2): a
         # write-through warm-up or an API sync, pinned to the root it started
         # on. A count, for `_store_moves`' reason. Held only for the length of
@@ -985,17 +993,36 @@ class RunRegistry:
         other's check and act. Raises `MaintenanceRunningError` when a
         maintenance run is live -- including one asked to stop whose thread has
         not yet returned, which is still walking the tree.
+
+        The same OS lock a maintenance run holds also fences other processes
+        on this machine (#479). Pin its path at entry: the storage pointer may
+        change during an operation, and exit must release the original root's
+        descriptor. Each root keeps one descriptor until its LAST hold exits;
+        overlapping tree operations within this app therefore still coexist.
         """
         with self._lock:
             for run in self._runs.values():
                 if run.state == "running" and run.cls == "maintenance":
                     raise MaintenanceRunningError(run.id)
+            lock_path = _maintenance_lock_path(paths.home().resolve())
+            held = self._maintenance_locks.get(lock_path)
+            if held is None:
+                fd, depth = _acquire_maintenance_lock(lock_path), 0
+            else:
+                fd, depth = held
+            self._maintenance_locks[lock_path] = fd, depth + 1
             self._maintenance_holds += 1
         try:
             yield
         finally:
             with self._lock:
                 self._maintenance_holds -= 1
+                fd, depth = self._maintenance_locks[lock_path]
+                if depth == 1:
+                    del self._maintenance_locks[lock_path]
+                    proclock.release(fd)
+                else:
+                    self._maintenance_locks[lock_path] = fd, depth - 1
 
     def live_of_class(self, cls: RunClass) -> list[Run]:
         """Every running run of this class, on any subject."""
@@ -2352,7 +2379,9 @@ def maintenance_excluded(app):
     is live, this is refused with `maintenance_running` naming it -- the run's
     id is what lets the client offer to stop it. Lives in the ROUTES and the
     backup ticker, never in store modules: it is a fact about this process's
-    registry, which the store does not know about.
+    registry, which the store does not know about. The hold also takes the same
+    machine-local process lock as maintenance, so a second backend cannot run
+    one concurrently; contention there answers `maintenance_elsewhere`.
 
     A context manager rather than a check, for `store_held_still`'s reason: a
     check made first and acted on afterwards leaves room for a migration to
@@ -2454,6 +2483,30 @@ def run_maintenance(app, kind: str, attempt_id: str | None,
         return {"run": run_payload(run)}
 
 
+def _maintenance_lock_path(root: Path) -> Path:
+    """The lock shared by maintenance and whole-tree operations (#479)."""
+    # Stabilize the directory identity BEFORE deriving the lock path: a hold
+    # acquired for a missing root would otherwise use proclock's path fallback,
+    # then stop excluding peers as soon as the operation creates the directory.
+    root.mkdir(parents=True, exist_ok=True)
+    return proclock.lock_path(root, "image-maintenance", "run")
+
+
+def _acquire_maintenance_lock(lock_path: Path) -> int:
+    """Take the shared process lock once, or describe its uncertain owner."""
+    lock_fd = proclock.acquire(lock_path, proclock.NO_WAIT)
+    if lock_fd is None:
+        # An advisory lock carries no owner metadata. A tree operation may hold
+        # it just as maintenance does; claiming to know which would mislead the
+        # reader into looking for a maintenance run that does not exist (#479).
+        raise HTTPException(status_code=409, detail={
+            "kind": "maintenance_elsewhere",
+            "detail": "another grimoire process is using this store for "
+                      "image-store maintenance or a tree operation; wait for "
+                      "it to finish"})
+    return lock_fd
+
+
 def _claim_maintenance(root: Path, run_id: str) -> tuple[int, str]:
     """Take the process lock and the marker for a maintenance run, or answer 409.
 
@@ -2464,13 +2517,7 @@ def _claim_maintenance(root: Path, run_id: str) -> tuple[int, str]:
     key is this process's memory and the marker refuses only another DEVICE, so
     a second backend on this machine over the same store is stopped here.
     """
-    lock_fd = proclock.acquire(
-        proclock.lock_path(root, "image-maintenance", "run"), proclock.NO_WAIT)
-    if lock_fd is None:
-        raise HTTPException(status_code=409, detail={
-            "kind": "maintenance_elsewhere",
-            "detail": "another grimoire process is running image-store "
-                      "maintenance on this store; wait for it to finish"})
+    lock_fd = _acquire_maintenance_lock(_maintenance_lock_path(root))
     try:
         device = maintenance_reports.device_key(root)
         maintenance_reports.claim_marker(root, run_id, device)

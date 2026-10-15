@@ -20,8 +20,11 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -301,6 +304,154 @@ def test_an_explicit_hold_refuses_maintenance_and_a_live_run_refuses_a_hold(clie
     assert exc.value.detail["kind"] == "maintenance_running"
     work.release.set()
     _wait_terminal(run)
+
+
+# Separate registries cannot prove OS exclusion: this probe runs the real
+# maintenance claim or tree hold in a fresh interpreter, sharing only this
+# test's temporary store and machine-local lock directory (#479).
+_PROCESS_PROBE = """
+import json, sys
+from pathlib import Path
+from types import SimpleNamespace
+from fastapi import HTTPException
+from grimoire.routes import runs
+from grimoire.store import maintenance_reports, proclock
+root, machine, operation = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+proclock.lock_dir = lambda: machine
+app = SimpleNamespace(state=SimpleNamespace(runs=runs.RunRegistry()))
+try:
+    if operation == 'maintenance':
+        fd, device = runs._claim_maintenance(root, 'f' * 32)
+        try:
+            print(json.dumps({'allowed': True}))
+        finally:
+            maintenance_reports.release_marker(root, 'f' * 32, device)
+            proclock.release(fd)
+    else:
+        with runs.maintenance_excluded(app):
+            print(json.dumps({'allowed': True}))
+except HTTPException as exc:
+    print(json.dumps({'status': exc.status_code, **exc.detail}))
+"""
+
+
+def _process_probe(root, machine, operation):
+    # Allow cold interpreter/bootstrap work under coverage and host load (#479).
+    # The lock decision itself remains immediate: both paths use NO_WAIT.
+    result = subprocess.run(
+        [sys.executable, "-c", _PROCESS_PROBE, str(root), str(machine), operation],
+        env={**os.environ, "GRIMOIRE_HOME": str(root),
+             "PYTHONPATH": os.pathsep.join(sys.path)},
+        capture_output=True, text=True, timeout=120.0, check=True)
+    return json.loads(result.stdout)
+
+
+def _bare_app():
+    return SimpleNamespace(state=SimpleNamespace(runs=runs.RunRegistry()))
+
+
+def _maintenance_lock_is_free(root):
+    """A separate descriptor tests whether the hold still owns the OS lock."""
+    fd = proclock.acquire(proclock.lock_path(root, "image-maintenance", "run"),
+                          proclock.NO_WAIT)
+    if fd is None:
+        return False
+    proclock.release(fd)
+    return True
+
+
+def test_a_tree_hold_refuses_maintenance_in_another_process(monkeypatch, tmp_path,
+                                                          _machine):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    with runs.maintenance_excluded(_bare_app()):
+        detail = _process_probe(tmp_path, _machine, "maintenance")
+        assert detail["status"] == 409 and detail["kind"] == "maintenance_elsewhere"
+        # A process lock cannot say which operation owns it. The refusal must
+        # not claim that a tree operation is an image-maintenance run.
+        assert "tree operation" in detail["detail"]
+    assert _process_probe(tmp_path, _machine, "maintenance") == {"allowed": True}
+
+
+def test_maintenance_refuses_a_tree_hold_in_another_process(monkeypatch, tmp_path,
+                                                          _machine):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    fd, device = runs._claim_maintenance(tmp_path, "a" * 32)
+    try:
+        detail = _process_probe(tmp_path, _machine, "tree")
+        assert detail["status"] == 409 and detail["kind"] == "maintenance_elsewhere"
+    finally:
+        maintenance_reports.release_marker(tmp_path, "a" * 32, device)
+        proclock.release(fd)
+    assert _process_probe(tmp_path, _machine, "tree") == {"allowed": True}
+
+
+def test_overlapping_tree_holds_keep_the_process_lock_until_the_last_exit(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    app = _bare_app()
+    first, second = runs.maintenance_excluded(app), runs.maintenance_excluded(app)
+    with first:
+        second.__enter__()
+    try:
+        assert not _maintenance_lock_is_free(tmp_path)
+    finally:
+        second.__exit__(None, None, None)
+    assert _maintenance_lock_is_free(tmp_path)
+
+
+def test_a_raised_tree_operation_releases_its_process_lock(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    with pytest.raises(RuntimeError, match="interrupted"), runs.maintenance_excluded(_bare_app()):
+        raise RuntimeError("interrupted")
+    assert _maintenance_lock_is_free(tmp_path)
+
+
+def test_tree_holds_pin_each_roots_process_lock(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    other = tmp_path / "other"
+    other.mkdir()
+    app = _bare_app()
+    with runs.maintenance_excluded(app):
+        monkeypatch.setenv("GRIMOIRE_HOME", str(other))
+        with runs.maintenance_excluded(app):
+            assert not _maintenance_lock_is_free(tmp_path)
+            assert not _maintenance_lock_is_free(other)
+        assert _maintenance_lock_is_free(other)
+        assert not _maintenance_lock_is_free(tmp_path)
+    assert _maintenance_lock_is_free(tmp_path)
+
+
+def test_another_registry_cannot_bypass_a_tree_holds_process_lock(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    with runs.maintenance_excluded(_bare_app()):
+        def hold():
+            with runs.maintenance_excluded(_bare_app()):
+                pytest.fail("a separate registry bypassed the held process lock")
+
+        _refused(hold, "maintenance_elsewhere")
+
+
+def test_a_tree_hold_keeps_excluding_after_the_first_store_write(monkeypatch, tmp_path):
+    root = tmp_path / "library"
+    monkeypatch.setenv("GRIMOIRE_HOME", str(root))
+    with runs.maintenance_excluded(_bare_app()):
+        store.config.write_config(backup_enabled="off")
+        assert not _maintenance_lock_is_free(root)
+
+
+def test_a_failed_tree_lock_acquisition_does_not_leave_a_hold(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    app = _bare_app()
+    with monkeypatch.context() as fault:
+        def unavailable(*_args):
+            raise OSError("lock unavailable")
+
+        fault.setattr(proclock, "acquire", unavailable)
+        with pytest.raises(OSError, match="lock unavailable"), runs.maintenance_excluded(app):
+            pytest.fail("tree operation entered without a process lock")
+    with runs.maintenance_excluded(app):
+        pass
+    assert _maintenance_lock_is_free(tmp_path)
 
 
 # ---- the device and the marker -------------------------------------------------

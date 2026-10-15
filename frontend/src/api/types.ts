@@ -834,6 +834,8 @@ export type ImageGcReport = {
   protected: ImageGcProtected[];
   reclaimable_bytes: number;
   blocking: ImageGcBlocker[];
+  /** Staging trees still count as image roots, including old leftovers (#479). */
+  staging?: { path: string; reason: string }[];
   unreadable_sidecars: string[];
   clock_skew: { id: string | null; blob: string | null; what: string }[];
   token: string | null;

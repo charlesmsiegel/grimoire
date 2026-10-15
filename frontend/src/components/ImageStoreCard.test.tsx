@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ImageStoreCard } from "./ImageStoreCard";
 
 vi.mock("../api/client", () => ({
@@ -208,6 +208,168 @@ test("a rediscovered run that finishes shows its report", async () => {
 
   expect(await screen.findByText(/3 unused images can be sent to the recycle bin now/)).toBeInTheDocument();
   expect(api.getImageMaintenanceReport).toHaveBeenCalledWith("l".repeat(32));
+});
+
+function held<T>() {
+  let resolve!: (value: T) => void;
+  return { promise: new Promise<T>((r) => { resolve = r; }), resolve };
+}
+
+test("a retained scan restores its report and unspent collection token on mount", async () => {
+  (api.listGlobalRuns as any).mockResolvedValue({ runs: [run({ kind: "gc" })] });
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  render(<ImageStoreCard />);
+
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Send 3 unused images to the recycle bin",
+  }));
+  await waitFor(() => expect(api.startImageGc).toHaveBeenCalledWith(
+    { dry_run: false, token: "tok-123" }, expect.any(String)));
+});
+
+test("the newest retained GC result wins over an older scan and unrelated runs", async () => {
+  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+    run({ id: "s".repeat(32), kind: "gc" }),
+    run({ id: "c".repeat(32), kind: "gc" }),
+    run({ id: "m".repeat(32), kind: "migrate" }),
+    run({ id: "f".repeat(32), kind: "migrate", state: "failed" }),
+  ] });
+  (api.getImageMaintenanceReport as any).mockImplementation((id: string) => Promise.resolve(
+    id === "c".repeat(32) ? scan({ mode: "collect", token: null, recycled: binned(2) }) : scan()));
+  render(<ImageStoreCard />);
+
+  expect(await screen.findByText(/Sent 2 images to the recycle bin/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
+});
+
+test.each(["failed", "cancelled"])("a newer %s collection supersedes an older scan token", async (state) => {
+  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+    run({ id: "s".repeat(32), kind: "gc" }),
+    run({ id: "c".repeat(32), kind: "gc", state }),
+  ] });
+  (api.getImageMaintenanceReport as any).mockImplementation((id: string) => Promise.resolve(
+    id === "c".repeat(32)
+      ? scan({ mode: "collect", state, token: null, token_expires_at: null, recycled: binned(1) })
+      : scan()));
+  render(<ImageStoreCard />);
+
+  expect(await screen.findByText(/Sent 1 image to the recycle bin/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
+  expect(api.getImageMaintenanceReport).toHaveBeenCalledWith("c".repeat(32));
+});
+
+test("a newer failed GC with no report shows its failure rather than an older token", async () => {
+  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+    run({ id: "s".repeat(32), kind: "gc" }),
+    run({ id: "c".repeat(32), kind: "gc", state: "failed",
+      error: { detail: "maintenance is running elsewhere", kind: "maintenance_elsewhere" } }),
+  ] });
+  (api.getImageMaintenanceReport as any).mockImplementation((id: string) =>
+    id === "c".repeat(32) ? Promise.reject(new ApiError(404, "no such report"))
+      : Promise.resolve(scan()));
+  render(<ImageStoreCard />);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("maintenance is running elsewhere");
+  expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
+});
+
+test("a delayed mount listing cannot replace a run started and finished on this visit", async () => {
+  const listing = held<{ runs: ReturnType<typeof run>[] }>();
+  (api.listGlobalRuns as any).mockReturnValue(listing.promise);
+  render(<ImageStoreCard />);
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  expect(await screen.findByText(/12 legacy files/)).toBeInTheDocument();
+
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  await act(async () => { listing.resolve({ runs: [run({ kind: "gc" })] }); });
+  expect(screen.getByText(/12 legacy files/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
+});
+
+test("a start owns the card before its reservation answers", async () => {
+  const listing = held<{ runs: ReturnType<typeof run>[] }>();
+  const start = held<{ run: ReturnType<typeof run> }>();
+  (api.listGlobalRuns as any).mockReturnValue(listing.promise);
+  (api.startImageMigration as any).mockReturnValue(start.promise);
+  (api.getGlobalRun as any).mockResolvedValue({ run: run({ state: "running" }) });
+  render(<ImageStoreCard />);
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  await act(async () => { listing.resolve({ runs: [run({ state: "running", kind: "gc" })] }); });
+
+  expect(screen.getByRole("button", { name: "Check" })).toBeDisabled();
+  expect(screen.queryByText(/An image-store run is in progress/)).toBeNull();
+  await act(async () => { start.resolve({ run: run() }); });
+  expect(await screen.findByText(/12 legacy files/)).toBeInTheDocument();
+});
+
+test("a delayed rediscovered report cannot replace a newer result", async () => {
+  const stored = held<ReturnType<typeof scan>>();
+  (api.listGlobalRuns as any).mockResolvedValue({ runs: [run({ kind: "gc" })] });
+  (api.getImageMaintenanceReport as any).mockReturnValueOnce(stored.promise)
+    .mockResolvedValue(migration());
+  render(<ImageStoreCard />);
+  await waitFor(() => expect(api.getImageMaintenanceReport).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  expect(await screen.findByText(/12 legacy files/)).toBeInTheDocument();
+
+  await act(async () => { stored.resolve(scan()); });
+  expect(screen.getByText(/12 legacy files/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
+});
+
+test("a finished run's late report cannot paint over a newer active run", async () => {
+  const stored = held<ReturnType<typeof scan>>();
+  (api.getImageMaintenanceReport as any).mockReturnValue(stored.promise);
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+  await waitFor(() => expect(api.getImageMaintenanceReport).toHaveBeenCalled());
+  (api.startImageMigration as any).mockResolvedValue({ run: run({ state: "running" }) });
+  (api.getGlobalRun as any).mockResolvedValue({ run: run({ state: "running" }) });
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  expect(await screen.findByText(/Checking legacy images/)).toBeInTheDocument();
+
+  await act(async () => { stored.resolve(scan()); });
+  expect(screen.queryByText(/3 unused images can be sent/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
+});
+
+test("an old cancel response cannot finish a newer run", async () => {
+  const poll = held<{ run: ReturnType<typeof run> }>();
+  const cancelled = held<{ run: ReturnType<typeof run> }>();
+  (api.listGlobalRuns as any).mockResolvedValue({ runs: [run({ state: "running", kind: "gc" })] });
+  (api.getGlobalRun as any).mockReturnValueOnce(poll.promise);
+  (api.cancelGlobalRun as any).mockReturnValue(cancelled.promise);
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+  await act(async () => { poll.resolve({ run: run({ kind: "gc" }) }); });
+  expect(await screen.findByText(/3 unused images can be sent/)).toBeInTheDocument();
+
+  (api.startImageMigration as any).mockResolvedValue({ run: run({ state: "running" }) });
+  (api.getGlobalRun as any).mockResolvedValue({ run: run({ state: "running" }) });
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  expect(await screen.findByText(/Checking legacy images/)).toBeInTheDocument();
+  await act(async () => { cancelled.resolve({ run: run({ state: "cancelled", kind: "gc" }) }); });
+  expect(screen.getByText(/Checking legacy images/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Check" })).toBeDisabled();
+});
+
+test.each(["scan", "collect"])("%s reports show staging paths that still protect images", async (mode) => {
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+    mode, staging: [
+      { path: ".world-staging/saltmarch", reason: "staging-leftover" },
+      { path: ".world-staging/realm", reason: "staging-in-progress" },
+    ],
+  }));
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+
+  const staging = await screen.findByRole("list", { name: "Staging trees" });
+  expect(staging).toHaveTextContent(".world-staging/saltmarch");
+  expect(staging).toHaveTextContent("staging-leftover");
+  expect(staging).toHaveTextContent(".world-staging/realm");
+  expect(staging).toHaveTextContent("staging-in-progress");
+  expect(screen.getByText(/still protect images.*review/i)).toBeInTheDocument();
 });
 
 /** A finished collection rediscovered on mount, with the report's fields as given. */

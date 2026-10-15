@@ -67,7 +67,8 @@ system's recycle bin, through this device's **outbox**
 (`outbox_dir`, ``.cache/image-store/recycle/<device key>/``), under a readable
 name (`bin_name`). Its sidecar, index entry and thumbnails are deleted.
 
-Each batch -- up to `BATCH_OBJECTS` objects or `BATCH_SECONDS` -- holds
+Each batch -- up to `BATCH_OBJECTS` objects or `BATCH_SECONDS` of candidate
+processing, after rebuilding the sidecar listing -- holds
 `locks.image_ingest_gc_lock` and then, per object, its stripe, the order
 ingest takes them in. Under them every candidate is re-checked (mtime, root,
 reachability by the fresh walk, the blob refcount), and then:
@@ -178,8 +179,9 @@ BATCH_OBJECTS = 100
 """The most objects one hold of the ingest/GC lock deletes."""
 
 BATCH_SECONDS = 2.0
-"""The longest one hold of the ingest/GC lock lasts, give or take an object:
-an upload waits on it."""
+"""The candidate-processing budget per ingest/GC hold, give or take an object.
+The sidecar listing and refcount rebuild happen first under that same hold
+and are not bounded by this clock (#479); an upload waits for both."""
 
 STAGING_MIN_AGE_SECONDS = 3600
 """A staged work directory touched more recently than this blocks deletion."""
@@ -577,9 +579,14 @@ class _Roots:
     reachable: set[str] = field(default_factory=set)
     placements: set[Path] = field(default_factory=set)
     blocking: list[dict] = field(default_factory=list)
+    staging: list[dict] = field(default_factory=list)
 
     def block(self, root: Path, path: Path, reason: str) -> None:
-        self.blocking.append({"path": _rel(root, path), "reason": reason})
+        # One row per (path, reason): the same link is reached from several
+        # reserved paths' checks, and the report should say it once.
+        row = {"path": _rel(root, path), "reason": reason}
+        if row not in self.blocking:
+            self.blocking.append(row)
 
 
 def _lstat_dir(root: Path, d: Path, r: _Roots) -> bool:
@@ -633,7 +640,7 @@ def _manifest(root: Path, path: Path, r: _Roots) -> None:
 def _manifest_entries(root: Path, entries: list[os.DirEntry], r: _Roots) -> None:
     for e in entries:
         path = Path(e.path)
-        if not e.name.endswith(".json") or atomic.is_write_temp(path):
+        if not _json_root(root, path, r):
             continue
         try:
             regular = e.is_file(follow_symlinks=False)
@@ -646,6 +653,22 @@ def _manifest_entries(root: Path, entries: list[os.DirEntry], r: _Roots) -> None
         _manifest(root, path, r)
 
 
+
+def _json_root(root: Path, path: Path, r: _Roots) -> bool:
+    """A persisted manifest or journal, refusing extension aliases (#479).
+
+    Bundles may preserve `.JSON`, which an insensitive device reads as a
+    manifest. A sensitive device must block rather than hide its members.
+    """
+    if atomic.is_write_temp(path):
+        return False
+    if path.name.endswith(".json"):
+        return True
+    if image_refs._fold(path.name).endswith(".json"):
+        r.block(root, path, image_refs.CASE_VARIANT)
+    return False
+
+
 def _strict_listing(root: Path, d: Path, r: _Roots) -> list[os.DirEntry] | None:
     """`d`'s entries, or None (and `d` blocking) when it does not list or
     holds a link."""
@@ -656,21 +679,67 @@ def _strict_listing(root: Path, d: Path, r: _Roots) -> list[os.DirEntry] | None:
         r.block(root, d, image_refs.UNREADABLE)
         return None
     for e in entries:
-        if e.is_symlink():
+        if image_refs._linkish(e):
             r.block(root, Path(e.path), image_refs.SYMLINK)
             return None
     return entries
 
 
+def _spelling_variants(root: Path, parent: Path, name: str,
+                       r: _Roots) -> list[os.DirEntry] | None:
+    """Entries of `parent` that fold to `name` without being spelled as it,
+    or None (and `parent` blocking) when `parent` does not list. Unlike
+    `_strict_listing`, a link among the other names is not a block here."""
+    try:
+        with os.scandir(parent) as it:
+            entries = list(it)
+    except OSError:
+        r.block(root, parent, image_refs.UNREADABLE)
+        return None
+    folded = image_refs._fold(name)
+    return [e for e in entries
+            if e.name != name and image_refs._fold(e.name) == folded]
+
+
+def _strict_path(root: Path, path: Path, r: _Roots, *, base: Path | None = None,
+                 directory: bool = True) -> bool:
+    """A reserved root path, with its spelling checked from directory entries.
+
+    #479: asking for the canonical path alone either silently aliases a case
+    variant (Windows) or misses its roots (a case-sensitive device). Check each
+    reserved component before reading it, reusing the placement walk's fold
+    and link rules. Callers supply only structural paths, never record slugs
+    whose case is the user's choice.
+    """
+    parent = root if base is None else base
+    for name in path.relative_to(parent).parts:
+        if not _lstat_dir(root, parent, r):
+            return False
+        # Only the names that this component could alias are read. A link beside
+        # the reserved path (a user's own folder shortcut at the store root) is
+        # not on any path this walk follows, so it must not stop collection.
+        variants = _spelling_variants(root, parent, name, r)
+        if variants is None:
+            return False
+        for entry in variants:
+            r.block(root, Path(entry.path), image_refs.CASE_VARIANT)
+        if variants:
+            return False
+        parent = parent / name
+    # A file's parser owns its type/absence checks; its spelling needs the
+    # same comparison as the directories on the way to it (map.json).
+    return _lstat_dir(root, path, r) if directory else True
+
+
 def _manifests(root: Path, r: _Roots) -> None:
     worlds = root / "worlds"
-    if not _lstat_dir(root, worlds, r):
+    if not _strict_path(root, worlds, r):
         return
     for w in _strict_listing(root, worlds, r) or []:
         if not w.is_dir(follow_symlinks=False):
             continue
         d = Path(w.path).joinpath(*image_surfaces.COLLECTIONS_DIR)
-        if _lstat_dir(root, d, r):
+        if _strict_path(root, d, r, base=Path(w.path)):
             entries = _strict_listing(root, d, r)
             if entries is not None:
                 _manifest_entries(root, entries, r)
@@ -704,7 +773,7 @@ def _journals(root: Path, r: _Roots) -> None:
     """Every world's journals, from the raw directory (M10): a world deleted
     with a harvest unaccepted still has members nobody has published."""
     base = image_collections.raw_journals_root(root)
-    if not _lstat_dir(root, base, r):
+    if not _strict_path(root, base, r):
         return
     for w in _strict_listing(root, base, r) or []:
         if not w.is_dir(follow_symlinks=False):
@@ -716,7 +785,7 @@ def _journals(root: Path, r: _Roots) -> None:
             continue
         for e in _strict_listing(root, folder, r) or []:
             path = Path(e.path)
-            if not e.name.endswith(".json") or atomic.is_write_temp(path):
+            if not _json_root(root, path, r):
                 continue                # `.json.retired`, a temp mid-write
             if not e.is_file(follow_symlinks=False):
                 r.block(root, path, image_refs.NOT_A_FILE)
@@ -731,6 +800,10 @@ def _work_map(root: Path, r: _Roots) -> None:
     one, OSError for one that does not open -- blocks: an ingested picture not
     yet verified into its placement is reachable from nowhere else."""
     path = image_migration.work_map_path(root)
+    before = len(r.blocking)
+    _strict_path(root, path, r, directory=False)
+    if len(r.blocking) != before:
+        return
     try:
         # Task 4's reader; ignore kept valid whether or not this tree has it yet.
         pending = image_migration.pending_ids(root)
@@ -743,14 +816,20 @@ def _work_map(root: Path, r: _Roots) -> None:
 def _staged(root: Path, work: Path, now: float, r: _Roots) -> None:
     """One staged work directory: its placements and manifests are roots,
     and one touched within `STAGING_MIN_AGE_SECONDS` blocks."""
+    row = {"path": _rel(root, work), "reason": "staging-leftover"}
+    r.staging.append(row)
     try:
         newest = os.lstat(work).st_mtime
         for d, entries in image_refs.strict_dirs(work):
             for e in entries:
                 newest = max(newest, e.stat(follow_symlinks=False).st_mtime)
-            if d.name == image_surfaces.COLLECTIONS_DIR[-1] \
-                    and d.parent.name == image_surfaces.COLLECTIONS_DIR[0]:
-                _manifest_entries(root, entries, r)
+            assets, collections = image_surfaces.COLLECTIONS_DIR
+            if image_refs._fold(d.name) == image_refs._fold(collections) \
+                    and image_refs._fold(d.parent.name) == image_refs._fold(assets):
+                if d.name != collections or d.parent.name != assets:
+                    r.block(root, d, image_refs.CASE_VARIANT)
+                else:
+                    _manifest_entries(root, entries, r)
     except image_refs.ImageRefParseError as exc:
         r.block(root, exc.path, exc.reason)
         return
@@ -759,13 +838,14 @@ def _staged(root: Path, work: Path, now: float, r: _Roots) -> None:
         return
     _refs(root, work, r, count=False)
     if newest > now - STAGING_MIN_AGE_SECONDS:
+        row["reason"] = "staging-in-progress"
         r.block(root, work, "staging-in-progress")
 
 
 def _staging(root: Path, now: float, r: _Roots) -> None:
     for name in STAGING_DIRS:
         base = root / name
-        if not _lstat_dir(root, base, r):
+        if not _strict_path(root, base, r):
             continue
         for e in _strict_listing(root, base, r) or []:
             if e.is_dir(follow_symlinks=False):
@@ -777,7 +857,9 @@ def _walk_roots(root: Path, now: float, cancel: Callable[[], bool]) -> _Roots | 
     """Every root, strictly; None when cancelled part-way."""
     r = _Roots()
     for top in ("worlds", "campaigns"):
-        _refs(root, root / top, r, count=True)
+        tree = root / top
+        if _strict_path(root, tree, r):
+            _refs(root, tree, r, count=True)
         if cancel():
             return None
     for step in (_manifests, _journals, _work_map):
@@ -1005,7 +1087,7 @@ def _new_report(mode: str | None, run_id: str, now: float,
         "counts": {"placements": 0, "objects": 0, "blobs": 0, "unreferenced": 0,
                    "collectable": 0, "collectable_blobs": 0, "protected": 0},
         "collectable": [], "collectable_blobs": [], "protected": [],
-        "reclaimable_bytes": 0, "blocking": [], "unreadable_sidecars": [],
+        "reclaimable_bytes": 0, "blocking": [], "staging": [], "unreadable_sidecars": [],
         "clock_skew": [], "token": None, "token_expires_at": None,
         "deleted": {"objects": [], "bytes": 0},
         "recycled": [], "released": [], "outbox": [], "foreign_outboxes": 0,
@@ -1239,6 +1321,7 @@ def _scan(root: Path, report: dict, cancel: Callable[[], bool], at: float) -> st
     roots = _walk_roots(root, at, cancel)
     if roots is None:
         return CANCELLED
+    report["staging"] = roots.staging
     side = _list_objects(root)
     blobs = _list_blobs(root, side)
     if cancel():
@@ -1360,6 +1443,7 @@ def _walk_and_collect(root: Path, report: dict, rec: dict, cancel: Callable[[], 
     roots = _walk_roots(root, at, cancel)
     if roots is None:
         return CANCELLED
+    report["staging"] = roots.staging
     side = _list_objects(root)
     for path, why in [*_store_blocks(root), *((p, image_refs.SYMLINK) for p in side.links)]:
         roots.block(root, path, why)
