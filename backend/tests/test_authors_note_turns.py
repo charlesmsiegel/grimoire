@@ -4,10 +4,12 @@ and the inspector row."""
 
 import io
 
+import pytest
 from PIL import Image
 
 from grimoire import content_parts as cp
 from grimoire import prompts, routes, store
+from grimoire.routes import character_turns
 from grimoire.store import (
     appearances,
     authors_notes,
@@ -144,7 +146,13 @@ def test_macros_in_a_note_are_expanded(monkeypatch, tmp_path):
 # --- per-character calls, the snapshot, the director turn and the opener ----
 
 
-def test_character_note_only_in_its_own_call(client):
+def test_character_note_only_in_its_own_call(client, monkeypatch):
+    planned = iter(("characters:winifred", None))
+
+    async def next_speaker(cid, sid, client, round_record, used, actor, response_id=""):
+        return character_turns._successor_answer(round_record, used, actor, next(planned))
+
+    monkeypatch.setattr(character_turns, "_select_successor", next_speaker)
     cid, sid = seed(client)
     store.authors_notes.set_character(cid, "characters:winifred",
                                       {"text": "Winifred whispers.", "depth": 0, "every": 1})
@@ -326,3 +334,5 @@ def test_a_note_row_without_history_goes_before_post_history(monkeypatch, tmp_pa
     ids = [r["id"] for r in context.context_sections(cid, sid)]
     assert "authors_note" in ids and "history" not in ids and "post_history" in ids
     assert ids.index("authors_note") == ids.index("post_history") - 1
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")

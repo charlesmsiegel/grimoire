@@ -6,6 +6,28 @@ from grimoire import store
 from grimoire.store.response_protocol import ResponseWatcher, validate_handoff
 
 
+def test_decision_owned_prose_needs_no_generated_handoff():
+    watcher = ResponseWatcher(require_handoff=False)
+    shown = watcher.feed("Mara answers in her own words.") + watcher.finish()
+    assert shown.strip() == "Mara answers in her own words."
+    assert watcher.handoff is None and watcher.issue is None
+
+
+def test_follow_on_selector_has_only_supplied_npcs_and_optional_narrator():
+    from grimoire.store import response_protocol as rp
+
+    roster = [{"ref": "characters:winifred", "name": "Winifred"}]
+    item = rp.selector_item(roster, [{"speaker": "Mara", "content": "It's time."}],
+                            follow_on=True, include_grimoire=False)
+    (question,) = item.questions
+    assert [o.id for o in question.options] == ["characters:winifred"]
+    assert question.allow_none is True
+    assert "NEXT speaker" in question.instructions
+    assert "independent scene event" in question.instructions
+    assert "grimoire" in [o.id for o in rp.selector_item(
+        roster, [], follow_on=True).questions[0].options]
+
+
 @pytest.mark.parametrize("cut", range(1, 40))
 def test_split_handoff_never_leaks(cut):
     text = 'Hello.\n```state\n{}\n```\n```handoff\n{"next":"characters:winifred"}\n```'

@@ -16,17 +16,20 @@ a second automatic turn through the narrator. This is prompt guidance; the engin
 checks speaker references and turn eligibility, not the semantics of arbitrary prose.
 
 A player post can receive a short sequence of responses. Within one round each
-NPC can respond once automatically; Grimoire also has one narration slot. By
-default the response proposes the next speaker, and the application checks
-eligibility before starting another call. Missing or invalid routing metadata
-ends the sequence. A scene can instead fix the order itself, and can opt in to
-further rounds after the first; see [Speaker order](#speaker-order).
+NPC can respond once automatically; Grimoire also has one narration slot.
+By default the Decision model selects the first speaker and each successor,
+after the previous response is saved. The writer supplies prose, not routing
+metadata. The backend excludes the current and already-used NPCs; an invalid
+or missing decision ends the chain without discarding completed prose.
+A scene can fix the order itself or opt into additional rounds;
+see [Speaker order](#speaker-order).
 
-Addressing one NPC determines who starts, not who alone may speak. Their handoff
-can nominate another NPC with a relevant response, without writing that person's
-contribution. The prompt lists only unused slots, including the narrator when
-available. An explicit Continue or reply-as request with an empty composer lists no
-successor slots.
+Addressing one NPC determines who starts, not who alone may speak. The next
+Decision selection can nominate another available NPC with a distinct response,
+rather than returning to the player immediately. Grimoire is a rare narrator
+option for independent events, not a closing recap or a replacement for an NPC.
+An explicit Continue or reply-as request with an empty composer generates exactly
+one contribution without starting a new automatic chain.
 An unanswered question need not prevent another NPC from reacting, provided their
 reaction does not decide or act for the player.
 
@@ -67,7 +70,7 @@ a conservative observation boundary. Characters retain what they witness from
 that point across later player rounds, including when they remain silent.
 
 Dice pauses keep the current character's contribution. Resolving or declining the
-proposal resumes that character, then checks any new handoff. Deleting or rerolling
+proposal resumes that character, then selects any eligible follow-on speaker. Deleting or rerolling
 prose at or before an applied roll is refused: changing words cannot undo the
 recorded dice or mechanical effects.
 
@@ -81,9 +84,11 @@ these settings behaves as it did before they existed.
 
 ### Modes
 
-- **Directed** (default) keeps the model-directed flow described above: the
-  selector picks the first speaker and each contribution's handoff picks the next.
-  Continue asks the selector.
+- **Directed** (default) selects both the initial and subsequent speakers
+  through the Decision role. Every subsequent pick is made after the previous
+  response has been saved, and sees only unused, available NPCs other than the
+  current speaker. Grimoire is exceptional, never a narrator-only closing turn.
+  Continue asks the selector for exactly one contribution.
 - **Manual** generates no reply to a player post. Choose who answers with a
   reply-as chip. Manual never continues automatically. Continue asks the
   selector, as in Directed.
@@ -154,9 +159,9 @@ before each follow-on round: lowering it mid-chain stops the chain once it has r
 that many rounds (setting it to 0 starts no further round), while raising it never
 extends a chain past the rounds its post started with.
 
-In Directed, a handoff to a character who already spoke this round ends the round
-and starts the next one with that character leading. With no rounds remaining
-that handoff is rejected, as it is without automatic rounds.
+In Directed, an explicitly authorised additional round may be led by an NPC
+who has already spoken in the current round, but never by the current speaker.
+Without additional rounds, used actors are removed from Decision choices.
 
 A chain ends early when:
 
@@ -169,14 +174,13 @@ A chain ends early when:
   generated nothing.
 - A contribution speaks for another actor (writes another character's or the
   player's lines). That ends the chain in every mode.
-- In Directed, a contribution's handoff is missing, invalid or names an
-  ineligible character. A handoff to the current speaker is never offered and
-  never accepted, even with rounds remaining. List and Natural ignore the handoff,
-  so a missing one does not end their chain; the issue is still recorded on the
-  reply.
+- In Directed, a subsequent Decision is unreadable or names an ineligible
+  actor. The current speaker is never offered, and already-used NPCs are
+  excluded except when authorised to lead an extra round. List and Natural
+  continue according to their stored plans; their generated handoffs are ignored.
 - The scene is in Manual mode.
-- In Directed, a contribution or the selector explicitly hands control back
-  (`next: null`).
+- In Directed, the initial or subsequent Decision returns control to the
+  player (`null`), or no unused eligible NPC remains.
 - A speaker leaves the scene mid-round.
 
 ### Where the settings live

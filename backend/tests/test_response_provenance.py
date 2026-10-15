@@ -1,6 +1,8 @@
 """What produced a response is recorded on it: the response settings its prompt
 rendered (on the record) and the call that wrote each variant (`made_by`)."""
 
+import pytest
+
 from grimoire import llm, llm_sampling, routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
@@ -376,3 +378,5 @@ def test_each_resume_composed_variant_keeps_the_settings_it_ran_on(client):
     assert third["composed"] == "resume" and third["settings"]["words"] == 60
     assert record["settings"]["words"] == 300
     assert record["resume_settings"]["words"] == 60
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")

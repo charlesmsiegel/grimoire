@@ -317,3 +317,5 @@ def test_a_format_one_store_resolves_the_intent_through_its_role(legacy_client):
     selector = routes.common.require_inference("response-selector", cid, operation="decide")
     assert resolved.task == "turn-intent" and resolved.operation == "decide"
     assert resolved.chain.primary.model == selector.chain.primary.model
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")

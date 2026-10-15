@@ -158,3 +158,5 @@ def test_swipe_route_404_for_a_deleted_response(client):
     assert client.delete(base + f"/responses/{rid}").status_code == 200
     # `responses.delete` keeps the ledger record; the transcript no longer has it.
     assert client.get(base + f"/responses/{rid}/swipe").status_code == 404
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")

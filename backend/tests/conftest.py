@@ -429,3 +429,21 @@ def live_server(monkeypatch, tmp_path):
         live.release_all()
         server.should_exit = True
         thread.join(timeout=10)
+
+
+@pytest.fixture
+def single_contribution_decision(monkeypatch):
+    """Isolate a test's own feature from independent NPC succession.
+
+    Turn-intent, tool, snapshot and transcript tests choose one contribution
+    and examine its model requests. The production Directed successor is
+    exercised separately in test_directed_successor_decisions; these tests
+    model a legitimate follow-on Decision abstention without spending another
+    fake LLM call or depending on provider-script order.
+    """
+    from grimoire.routes import character_turns
+
+    async def hand_back(cid, sid, client, round_record, used, actor, response_id=""):
+        return character_turns._successor_answer(round_record, used, actor, None)
+
+    monkeypatch.setattr(character_turns, "_select_successor", hand_back)

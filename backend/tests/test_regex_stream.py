@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from grimoire import routes, store
 from grimoire.routes import character_turns, streaming
 from grimoire.store.regex import rules, stream
@@ -220,7 +222,13 @@ def parts_of(frames: list[dict]) -> list[str]:
     return buffers
 
 
-def test_multi_part_keep_relative_to_part(client):
+def test_multi_part_keep_relative_to_part(client, monkeypatch):
+    planned = iter(("characters:winifred", None))
+
+    async def next_speaker(cid, sid, client, round_record, used, actor, response_id=""):
+        return character_turns._successor_answer(round_record, used, actor, next(planned))
+
+    monkeypatch.setattr(character_turns, "_select_successor", next_speaker)
     cid, sid = seed(client, ("Mara", "Winifred"))
     put_rules(client, f"/api/campaigns/{cid}/regex", THINK)
     frames = send(client, cid, sid, [
@@ -358,3 +366,5 @@ def test_a_hidden_stretch_of_text_still_earns_a_heartbeat_legacy(client, monkeyp
     assert beats(client.post(url, json={"content": "Hello"})) == 0
     put_rules(client, f"/api/campaigns/{cid}/regex", OPEN_THINK)
     assert beats(client.post(url, json={"content": "Hello"})) == 1
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")

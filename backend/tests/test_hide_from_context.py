@@ -115,7 +115,13 @@ def _two_part_response(client):
     return cid, sid
 
 
-def test_toggling_one_part_sets_every_part(client):
+def test_toggling_one_part_sets_every_part(client, monkeypatch):
+    planned = iter((WINIFRED, None))
+
+    async def next_speaker(cid, sid, client, round_record, used, actor, response_id=""):
+        return character_turns._successor_answer(round_record, used, actor, next(planned))
+
+    monkeypatch.setattr(character_turns, "_select_successor", next_speaker)
     cid, sid = _two_part_response(client)
     messages = _messages(cid, sid)
     first = next(i for i, m in enumerate(messages) if m["content"] == "Wait.")
@@ -425,3 +431,5 @@ def test_an_excluded_post_takes_no_image_slot(monkeypatch):
     ms = [{"role": "assistant", "speaker": "Mara", "content": "![the gate](/a.png)"},
           {"role": "user", "content": "ooc: ![my cat](/b.png)", "excluded": STAMP}]
     assert story._chosen_images(ms, 1, "c") == {(0, 0)}
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")

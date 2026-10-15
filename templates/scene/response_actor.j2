@@ -60,14 +60,20 @@ In unknown, list relevant gaps, including unsupported premises for questions.
 Then write the character's natural response using that evidence and their own
 voice. Grounded inference is welcome, but reader-only context is not evidence.
 The application hides the perception block; it is preparation, not dialogue
-or narration, and does not count toward the prose word budget. Keep the
-ordinary handoff last. Do not emit a perception block for another actor.
+or narration, and does not count toward the prose word budget.{% if not response_successor_by_decision|default(false) %} Keep the
+ordinary handoff last.{% endif %} Do not emit a perception block for another actor.
 {% endif %}{% endif %}Never invent the player's speech, thoughts, decisions or actions. Stop at a player decision.
 Do not complete another actor's contribution. These assigned-speaker rules take precedence over general ensemble instructions.
 
 Present people:
 {% for actor in response_roster %}- {{ actor.name }}: {{ actor.ref }}
-{% endfor %}
+{% endfor %}{% if response_successor_by_decision|default(false) %}
+# Continuation
+Write only this actor's natural contribution. The application asks a separate
+Decision model whether another eligible character should respond after your
+prose is complete. Do not propose or emit a handoff or other next-speaker
+control block; just finish the prose.
+{% else %}
 # Handoff after this contribution
 
 Writing only your assigned actor applies to the prose. Separately decide whether
@@ -111,3 +117,4 @@ block; it is required output, not spoken dialogue, narration, or reasoning.
 Any state metadata fence must precede it. Write nothing after the handoff fence.
 If a roll is needed, emit the roll request and stop immediately before any state
 or handoff block; the handoff waits until the roll has been resolved.
+{% endif %}

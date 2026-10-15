@@ -82,6 +82,16 @@ def _settings(cid, sid):
     return store.group_play.settings_of(store.scenes.read_scene(cid, sid)["meta"])
 
 
+def _decision_successor(round_record):
+    """A Directed automatic contribution delegates its follow-on to decide().
+
+    Continue, reply-as without text, reroll and the other order modes retain
+    their existing one-response or planned semantics.
+    """
+    return (round_record["automatic"]
+            and round_record.get("mode", "directed") == "directed")
+
+
 def _handoff_pool(cid, sid, round_record):
     """The round's eligible actors a Directed handoff may still name: whoever
     has started sitting out since the round opened is no longer one of them."""
@@ -114,6 +124,7 @@ def _compose(cid, sid, round_record, actor, resolved, appended=(), plan=None,
         "turn": round_record.get("turn"),
         "actor_ref": actor,
         "eligible_speakers": candidates,
+        "successor_by_decision": _decision_successor(round_record),
         "describe": store.prompt_log.capturing(),
         "model": resolved.chain.primary.model,
         "images": store.post_images.images_for(resolved.chain.primary),
@@ -310,6 +321,11 @@ def _follow_on(cid, sid, run, token, round_record, lead):
         last = _last_contribution(cid, sid, history) or {"ref": None, "text": ""}
         planned = _plan_round(settings, roster(cid, sid), trigger=last["text"],
                               history=history, lead=lead, author=last["ref"])
+        if planned["mode"] == "directed" and not lead and last["ref"]:
+            # A newly authorised round resets used, not the ban on two
+            # consecutive contributions by the same actor.
+            planned["eligible"] = [e for e in planned["eligible"]
+                                   if e["ref"] != last["ref"]]
         following = store.responses.new_round(
             cid,
             sid,
@@ -858,6 +874,132 @@ async def _select(cid, sid, client, round_record):
                    cid, sid, type(exc).__name__)
         return (*selection, None)
     return store.response_protocol.next_of(selection, drawn), selection[1], drawn.record
+
+
+
+def _successor_candidates(cid, sid, round_record, used, actor):
+    """The actual legal NEXT-speaker pool, rebuilt after prose is saved.
+
+    Default Directed play never repeats an NPC within one player round; the
+    current actor is excluded even if the player enabled automatic extra
+    rounds. A scene's explicitly enabled extra rounds allow earlier (non-
+    current) speakers to lead the following round. The narrator has its own
+    single-use slot and is never a replacement for an established NPC.
+    """
+    extended = round_record.get("auto_remaining", 0) > 0
+    choices = [entry for entry in _handoff_pool(cid, sid, round_record)
+               if entry["ref"] != actor and (extended or entry["ref"] not in used)]
+    narrator = actor != "grimoire" and (extended or "grimoire" not in used)
+    return choices, narrator
+
+
+def _successor_inputs(cid, sid, round_record, choices, narrator):
+    """Decide from the just-saved observable conversation, not a writer hint."""
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    # A follow-on is one player's response round. Earlier (possibly private)
+    # transcript entries are unnecessary for choosing who reacts NOW.
+    # Keep original transcript indices when applying prompt-phase regex rules.
+    start = next((i for i in range(len(messages) - 1, -1, -1)
+                  if messages[i]["role"] == "user"
+                  and not store.scenes.is_excluded(messages[i])), 0)
+    conversation = store.response_protocol.observable_conversation(
+        messages[start:], lambda posts, offset, total: store.regex.view.view(
+            posts, cid=cid, phase="prompt", offset=start + offset,
+            total=start + total))
+    player = store.context.macros.scene_substitutions(cid, sid).get("{{user}}", "")
+    item = store.response_protocol.selector_item(
+        choices, conversation, round_record.get("note", ""), player,
+        follow_on=True, include_grimoire=narrator)
+    trigger = conversation[-1]["content"] if conversation else ""
+    return item, trigger
+
+
+def _successor_answer(round_record, used, actor, selected, issue=None, *, exhausted=False):
+    """The Decision answer as the engine's existing successor state shape.
+
+    Only explicit extra rounds can repeat an already used NPC. A repeated
+    handoff leads the FOLLOWING round, never another contribution this round.
+    A pool exhausted without a model hand-back can start an authorized extra
+    round; a deliberate null always returns control to the player.
+    """
+    lead = None
+    if selected == actor:
+        selected, issue = None, store.response_protocol.INELIGIBLE
+    elif selected in used and selected is not None:
+        if round_record.get("auto_remaining", 0) > 0:
+            lead, selected = selected, None
+        else:
+            selected, issue = None, store.response_protocol.INELIGIBLE
+    return {"next": selected, "issue": issue, "plan": [], "lead": lead,
+            "handed_back": selected is None and lead is None and issue is None
+                           and not exhausted}
+
+
+async def _select_successor(cid, sid, client, round_record, used, actor, response_id=""):
+    """Select EACH subsequent Directed speaker with the Decision operation.
+
+    No scene-writing model handoff is consulted. Unlike the round opener,
+    even one remaining NPC is a real choice against handing control back.
+    Failures stop a successor safely, without failing prose already saved.
+    """
+    choices, narrator = await run_in_threadpool(
+        _successor_candidates, cid, sid, round_record, used, actor)
+    if not choices:
+        # Never buy a narrator-only tail, even though its slot is present.
+        # An explicitly enabled extra round may start by itself; an ordinary
+        # round hands back rather than manufacturing a narrator contribution.
+        return _successor_answer(
+            round_record, used, actor, None,
+            exhausted=round_record.get("auto_remaining", 0) > 0)
+    try:
+        resolved = await run_in_threadpool(
+            lambda: require_inference("response-selector", cid, operation="decide"))
+        sampling = await run_in_threadpool(_samples_pick, cid)
+        item, trigger = await run_in_threadpool(
+            _successor_inputs, cid, sid, round_record, choices, narrator)
+        async with decision_capture.capturing(cid, sid, "response-selector") as scope:
+            scope.note("", "phase", "successor")
+            scope.note("", "previous", actor)
+            decision = await operations.decide(
+                "response-selector", [item], client=client, resolved=resolved,
+                campaign=cid, scene=sid, post=round_record["post"],
+                round_id=round_record["id"], response_id=response_id,
+                capture=scope.hook())
+            selection = store.response_protocol.selection_of(decision.items[0])
+            if sampling and selection[0] is not None and selection[1] is None:
+                try:
+                    offered = [entry["ref"] for entry in choices]
+                    if narrator:
+                        offered.append("grimoire")
+                    drawn = store.response_protocol.sampled_pick(
+                        item, decision.items[0], offered,
+                        store.response_protocol.addressed(trigger, choices, actor),
+                        draws.new_seed())
+                    selection = (store.response_protocol.next_of(selection, drawn),
+                                 selection[1])
+                    scope.note("", "draw", drawn.record)
+                except ValueError as exc:
+                    _log.error("successor draw failed: %s", type(exc).__name__)
+            scope.note("", "selected", selection[0])
+            scope.note("", "issue", selection[1])
+    except (decisions.DecideRequestError, LLMError, HTTPException) as exc:
+        _log.warning("Directed successor selection failed; keeping completed response: %s",
+                     type(exc).__name__)
+        return _successor_answer(round_record, used, actor, None,
+                                 store.response_protocol.INVALID_HANDOFF)
+    selected, issue = selection
+    # The cast and sit-outs can change while a Decision request is running.
+    # Never turn a now-ineligible answer into a new actor's call.
+    if selected is not None:
+        fresh, fresh_narrator = await run_in_threadpool(
+            _successor_candidates, cid, sid, round_record, used, actor)
+        legal = {entry["ref"] for entry in fresh}
+        if fresh_narrator:
+            legal.add("grimoire")
+        if selected not in legal:
+            return _successor_answer(round_record, used, actor, None,
+                                     store.response_protocol.INELIGIBLE)
+    return _successor_answer(round_record, used, actor, selected, issue)
 
 
 def _samples_pick(cid):
@@ -1712,6 +1854,48 @@ async def _refine_step(cid, sid, client, turn, actor, view, response_id, run=Non
     return refined.view, refined.record, refined.response_id
 
 
+
+
+async def _settle_recovered_successor(cid, sid, client, round_record, after, cancelled):
+    """A persisted reply may still owe its Decision pick after a crash."""
+    if not after.get("needs_decision"):
+        return round_record, after
+    used, actor = after["used"], after["actor"]
+    if after["content_issue"] or cancelled:
+        choice = _successor_answer(round_record, used, actor, None, after["content_issue"])
+    else:
+        choice = await _select_successor(
+            cid, sid, client, round_record, used, actor, after["response_id"])
+    if cancelled:
+        choice = _successor_answer(round_record, used, actor, None)
+    ending = {**choice, "issue": _ending_issue(
+        round_record, choice["issue"], after["content_issue"])}
+    settled = await run_in_threadpool(
+        _round_state, cid, sid, round_record, used=used,
+        pending_response=None, actor_ref=choice["next"], plan=choice["plan"],
+        status="pending" if choice["next"] else "complete", issue=choice["issue"],
+        continuation=None, completed_response=after["response_id"],
+        control_issue=choice["issue"])
+    return settled, ending
+
+
+async def _after_saved_contribution(cid, sid, client, round_record, watcher, used, actor,
+                                    response_id, cancelled):
+    """Choose the successor without making the streaming loop itself a router."""
+    if round_record.get("stopped") or cancelled:
+        return _successor_answer(round_record, used, actor, None)
+    if not _decision_successor(round_record):
+        return await run_in_threadpool(
+            _successor, cid, sid, {**round_record, "used": used}, watcher.handoff,
+            cancelled, actor)
+    if cancelled or watcher.issue:
+        return _successor_answer(round_record, used, actor, None, watcher.issue)
+    result = await _select_successor(
+        cid, sid, client, round_record, used, actor, response_id)
+    if cancelled:
+        return _successor_answer(round_record, used, actor, None)
+    return result
+
 async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, outcome,
                         tracked, *, app=None, embed_client=None, history_enabled=False):
     """One round's contributions, from `actor` until nobody is next. Every
@@ -1736,7 +1920,8 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
             _recover_completed, cid, sid, run, token, turn.round_record
         )
         if recovered is not None:
-            turn.round_record, after = recovered
+            turn.round_record, after = await _settle_recovered_successor(
+                cid, sid, client, *recovered, run.cancel_requested)
             turn.ending = {**after, "status": "complete"}
             actor = turn.round_record.get("actor_ref")
             continue
@@ -1770,7 +1955,8 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         record = turn.record
         turn.appended = ()
         turn.watcher = watcher = store.response_protocol.ResponseWatcher(
-            perception=actor != "grimoire")
+            perception=actor != "grimoire",
+            require_handoff=not _decision_successor(turn.round_record))
         yield streaming._sse(
             {
                 "response_start": {
@@ -1863,10 +2049,9 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         # The end frame goes out first, so a Stop or a sit-out the player
         # gives on seeing it is what the successor choice reads.
         yield streaming._sse({"response_end": {"id": record["id"], "status": status}})
-        after = await run_in_threadpool(
-            _successor, cid, sid, {**turn.round_record, "used": used}, watcher.handoff,
-            run.cancel_requested, actor,
-        )
+        after = await _after_saved_contribution(
+            cid, sid, client, turn.round_record, watcher, used, actor,
+            record["id"], run.cancel_requested)
         # The contribution's own issue (it spoke for another actor) stops a
         # chain as surely as a bad handoff does -- a handoff-shaped one only
         # where the handoff is read (`_ending_issue`).
@@ -2155,6 +2340,13 @@ def _recover_completed(cid, sid, run, token, round_record):
             store.responses.publish_saved(cid, sid, pending)
         variant = next(v for v in record["variants"] if v["id"] == record["active_variant"])
         used = list(dict.fromkeys([*round_record["used"], record["actor_ref"]]))
+        if _decision_successor(round_record):
+            # The prose made it to disk, but the subsequent Decision may not
+            # have run yet. Leave pending_response set until selection settles,
+            # so a crash/retry resumes the choice, never generates prose twice.
+            return round_record, {"needs_decision": True, "used": used,
+                                  "actor": record["actor_ref"], "response_id": pending,
+                                  "content_issue": variant.get("issue")}
         after = _successor(cid, sid, {**round_record, "used": used}, variant.get("handoff"),
                            run.cancel_requested, record["actor_ref"])
         return _round_state(

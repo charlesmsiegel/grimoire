@@ -471,8 +471,8 @@ SELECTOR_CARRIED = (
      "scene/response_selector_question.j2"),
     (("A character already established in the cast or transcript is not new just because "
       "they are missing from the options."), "scene/response_selector_question.j2"),
-    (("Choose null when there is no distinct contribution or the player's decision is "
-      "needed."), "scene/response_selector_question.j2"),
+    (("Choose null only when nobody has a distinct contribution"),
+     "scene/response_selector_question.j2"),
     ("Never invent private knowledge or script reactions.",
      "scene/response_selector_question.j2"),
     ("Observable transcript:", "scene/response_selector_context.j2"),
@@ -483,8 +483,9 @@ SELECTOR_CARRIED = (
 #: and it must be the `grimoire` option's. The listed NPCs' options are the
 #: roster's own, each described by its name.
 SELECTOR_OPTIONS = {
-    response_protocol.GRIMOIRE_REF: ("general scene information, an independent scene event "
-                                     "or a genuinely new character's entrance"),
+    response_protocol.GRIMOIRE_REF: ("RARE narrator intervention: an independent scene event "
+                                     "or a genuinely new character's entrance that matters now; "
+                                     "never an NPC reaction, atmosphere, or a closing recap"),
 }
 for fragment, target in SELECTOR_CARRIED:
     REPORT.require(f"selector carried ({target}: {fragment[:40]}…)",
@@ -498,6 +499,20 @@ REPORT.require("selector options are the item's",
                    SELECTOR_ROSTER, SELECTOR_CONVERSATION).questions[0].options][
                        len(SELECTOR_ROSTER):],
                f"carried descriptions for {list(SELECTOR_OPTIONS)}")
+
+
+# A follow-on decision sees only the eligible successors that the backend
+# supplied (the current/used speakers are removed before building the item).
+# The narrator can be excluded entirely, and the choice must still allow null.
+follow = response_protocol.selector_item(
+    SELECTOR_ROSTER[1:], SELECTOR_CONVERSATION, follow_on=True, include_grimoire=False)
+(follow_choice,) = follow.questions
+check("follow-on selector question", follow_choice.instructions,
+      render("scene/response_selector_follow_on_question.j2"))
+REPORT.require("follow-on options exactly match eligibility",
+               [o.id for o in follow_choice.options] == ["characters:winifred"]
+               and follow_choice.allow_none,
+               "an ineligible speaker or narrator reached follow-on options")
 
 # --- the turn intent (roadmap 02 §6): its item, and the block it sends -------
 #

@@ -155,3 +155,5 @@ def test_a_contribution_never_pays_for_both(client, mode, task):
     asked = {r["task"] for r in store.usage.calls(campaign=cid)
              if r.get("task") in ("turn-intent", "turn-plan")}
     assert asked == {task}
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")

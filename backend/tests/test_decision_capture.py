@@ -972,3 +972,5 @@ def test_the_capture_guard_flags_planted_cases(src, modname):
 ])
 def test_the_capture_guard_passes_planted_cases(src, modname):
     assert _planted(src, modname) == [], src
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")
