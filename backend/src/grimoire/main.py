@@ -224,7 +224,11 @@ async def _backup_ticker(app: FastAPI | None = None) -> None:
 
 def _migrate_inference(app: FastAPI, stop: threading.Event) -> None:
     """One background pass of the inference-settings migration, holding the
-    store against image-store maintenance for its whole length.
+    store against image-store maintenance for the actual pass.
+
+    Contended acquisition retries outside that exclusion (#496), so a brief
+    status probe cannot consume the sole startup attempt. Stop/root changes
+    end the retry; a pass that deferred a busy campaign is never retried here.
 
     The run exclusion is held HERE and never in `store.inference.migrate`
     (CLAUDE.md: a store module knows nothing of this process's run registry).
@@ -235,11 +239,20 @@ def _migrate_inference(app: FastAPI, stop: threading.Event) -> None:
     """
     log = logging.getLogger(__name__)
     try:
-        with app.state.runs.exclude_maintenance():
-            got = inference_migrate.ensure(stop=stop)
-        if got.state not in ("done", "newer"):
-            log.warning("inference settings migration %s -- %s %s", got.state,
-                        got.reason, "; ".join(got.skipped))
+        root = paths.home()
+        while not stop.is_set() and paths.home() == root:
+            with app.state.runs.exclude_maintenance():
+                got = inference_migrate.try_ensure(stop=stop, expected_root=root)
+            if got is not None:
+                if got.state not in ("done", "newer"):
+                    log.warning("inference settings migration %s -- %s %s", got.state,
+                                got.reason, "; ".join(got.skipped))
+                return
+            # Only contention retries (#496): status probes also briefly own
+            # the main lock. A completed pass with busy campaigns stays done
+            # for this start. Neither maintenance exclusion nor any store lock
+            # is held while waiting, and shutdown interrupts the wait.
+            stop.wait(0.05)
     except runs.MaintenanceRunningError as exc:
         log.info("inference settings migration deferred -- image-store maintenance "
                  "run %s is running", exc.run_id)
@@ -247,11 +260,19 @@ def _migrate_inference(app: FastAPI, stop: threading.Event) -> None:
         log.warning("inference settings migration stopped -- %s", exc)
 
 
+def _queued_migration(app: FastAPI, stop: threading.Event, root: Path) -> None:
+    """`_migrate_inference`, releasing the queued mark when its pass ends (#496)."""
+    try:
+        _migrate_inference(app, stop)
+    finally:
+        inference_migrate.dequeue(root)
+
+
 def start(app: FastAPI) -> threading.Thread | None:
     """Start the inference-settings migration for the store `paths.home()`
     names now, without waiting for it (spec 11.2, ruling 4): startup and a
-    data-dir switch call this, and neither may block on a backup of the whole
-    library. A daemon thread, so a process that exits mid-run is not held open
+    data-dir switch call this, and neither may block on a settings safety
+    archive. A daemon thread, so a process that exits mid-run is not held open
     by it -- every write it makes is atomic, and the next start resumes.
 
     Nothing when `GRIMOIRE_INFERENCE_AUTOMIGRATE` is "0" (the suite sets it; a
@@ -263,7 +284,11 @@ def start(app: FastAPI) -> threading.Thread | None:
     # A flag of its own per run: re-entering a lifespan must never un-stop a
     # straggler an earlier shutdown flagged and could not wait out.
     stop = threading.Event()
-    thread = threading.Thread(target=_migrate_inference, args=(app, stop),
+    root = paths.home()
+    # Queued before the thread exists, so a status read in the gap before the
+    # thread takes the migration lock still reads the pass as active (#496).
+    inference_migrate.queue(root)
+    thread = threading.Thread(target=_queued_migration, args=(app, stop, root),
                               name="inference-migration", daemon=True)
     app.state.inference_migration = thread
     app.state.inference_migrations.append((thread, stop))

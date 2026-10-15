@@ -1291,16 +1291,37 @@ store across, and this is what it promises.
 
 ### The safety archive comes first, and is never pruned
 
-Nothing is written before `ensure` has zipped the whole store into
-`pre-inference-grimoire-<stamp>.zip` in the backup directory
-(`backups.SAFETY_PREFIX`). If that archive cannot be made, nothing else is
-written, the status is `failed` with the reason, and the next start tries
-again. It is a full restore point and `GET /backups` lists it with the others,
-but `backups.sweep` counts and deletes the ordinary series alone: the safety
-archive takes none of the `backup_keep` places and stays until a person
-deletes it. One is taken per root — a run resuming after a later step stopped
-reuses the archive its status note names while that file is still there, so
-retries do not pile up copies nothing will ever prune.
+Before its first protected write, `ensure` archives the settings it can
+rewrite into `pre-inference-settings-grimoire-<stamp>.zip` in the backup
+directory (`backups.SAFETY_PREFIX`, still `pre-inference-`, #496). The exact
+bytes and relative paths are preserved: `config.md`, recursively
+`llm_connections/` and `sampler_presets/`, `inference-retired.json`, and
+immediate campaigns' `campaign.md` (including its full body) and `revision.txt`.
+Connection seeding remains the existing pre-archive initialization exception.
+Images, worlds, transcripts, other campaign children and caches are not walked.
+Missing or vanished records may be skipped; other read errors, selected
+directory symlinks and output exclusions that hide protected settings fail
+closed before publication or protected writes. The store root may itself be
+reached through a symlink.
+
+If the archive cannot be made, the status is `failed` with the reason and the
+next start retries. The shared atomic ZIP writer publishes only a completed
+archive. An interrupted partial ZIP is not resumed; abandoned temps are cleaned
+by the existing age policy. A completed archive named in this root's note is
+reused while its file remains, so retries do not pile up never-pruned copies.
+
+`GET /backups` lists these with `scope: settings`; ordinary archives and older
+full safety names (`pre-inference-grimoire-<stamp>.zip` and
+`pre-retirement-grimoire-<stamp>.zip`) have `scope: full`. `backups.sweep` counts and deletes the
+ordinary series alone. Neither safety family takes a `backup_keep` place;
+only full archives satisfy the schedule, including older full safety names.
+
+Settings archives are partial recovery material, not empty-folder restore
+points. Stop the app and recover their settings into the original library or
+a restored full backup. Extraction does not delete files created afterwards;
+removing such files, when needed, is manual. A full backup can be extracted
+into an empty folder with the app stopped, then selected as the storage
+location. There is no automatic restore operation.
 
 ### The global marker is written before the campaigns
 
@@ -1398,6 +1419,26 @@ is still unmarked. Only `running`, a failure's reason, the last run's skips and
 the safety archive's name are remembered, in `.cache/inference-migration.json`,
 which no backup includes.
 
+Independent `active` covers the live migration lock, including retirement
+planning before an archive begins and retirement after state becomes `done`.
+During each archive, `progress` contains phase `safety_backup` or
+`retirement_backup`, `done` and nullable `total`: `(0, null)` while inventorying,
+then processed-file counts through `(total, total)`, including `(0, 0)` for an
+empty inventory. Local counters update every file; best-effort note writes are
+limited to four intermediate updates per second, with immediate transitions
+and final counts. Failure and archive/run exit clear progress. Foreign reads
+require a fresh per-archive machine-local lease in addition to live migration
+activity; serialized nonblocking observer probes cannot impersonate that lease.
+Old notes therefore never revive counters from a prior archive. Optional lease
+or note failures hide foreign counters without failing a valid backup.
+Status reads never wait on migration. Settings polling follows activity through
+retirement, while format-2 settings stay editable.
+A status probe cannot consume the background starter's only attempt:
+`try_ensure` distinguishes lock contention from a completed pass, and the
+starter retries contention outside maintenance exclusion, with stop/root
+checks. `ensure` itself still returns immediately. An actual pass's pending
+result (such as a busy campaign) is left for the next start as before.
+
 While the global layout is not current, writing the new settings (`PUT
 /inference/settings`, `PUT /campaigns/{cid}/inference`) answers **409
 `not_migrated`** carrying that status (`routes.common.refuse_unmigrated`): a
@@ -1452,13 +1493,13 @@ campaigns, in the same run, and it runs again on any later start that
 
 1. **The archive.** The whole pass is planned before anything is written
    (`retire.pass_plan`). When any part of it deletes or replaces a stored
-   value — a legacy key, a repointed preset key — a full archive,
-   `pre-retirement-grimoire-<stamp>.zip` (`backups.RETIRE_PREFIX`), is taken
-   before the pass's first write of any kind, marker-only writes included.
-   **No archive, no write**: if it fails, nothing below runs, the reason is
-   in the status's `retirement.failed`, and the next start tries again. It
-   is a restore point like the safety archive — `GET /backups` lists it and
-   the schedule counts it — and, like it, `backups.sweep` never prunes it.
+   value (a legacy key or repointed preset), a settings archive,
+   `pre-retirement-settings-grimoire-<stamp>.zip` (`backups.RETIRE_PREFIX`), is
+   taken before the pass's first write of any kind, marker-only writes included.
+   **No archive, no write**: failure leaves the pass untouched, records its
+   reason in `retirement.failed`, and is retried on the next start. Its scope
+   and recovery limits match the settings archive above. The listing labels
+   it partial; scheduling ignores it and retention never deletes it.
    It is taken once per root and reused on resume while the note names it
    and the file is there. It is skipped when this same run *created* the
    `pre-inference-` archive (one reused from an earlier run predates every
@@ -1739,7 +1780,8 @@ Collected, so that nothing here has to be inferred from an absence.
   something reads the file.
 - **No way back that keeps what changed since.** An older build runs on the
   model settings as they stood at the switch, and the `pre-inference-` archive
-  is the whole store as it stood before it; neither carries a change made
+  holds protected settings as they stood before it (older safety archives
+  hold the whole store); neither carries a change made
   afterwards. See [Model settings migration](#model-settings-migration).
 - **The guards do not prove absence.** Each names its own reach in its
   docstring and stops short of aliases, wrappers and cross-call shapes. They

@@ -30,6 +30,15 @@ export function migrationUnfinished(s: InferenceSettings | null | undefined): bo
 
 const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 
+/** Shared wording for both archive phases; an unknown total is inventory. */
+export function migrationProgress(status: MigrationStatus | null | undefined): string | null {
+  const progress = status?.progress;
+  if (!progress) return null;
+  return progress.total === null
+    ? "Preparing model settings safety archive."
+    : `Copying model settings safety archive: ${progress.done} of ${progress.total} files.`;
+}
+
 /** The quiet line, or null where there is nothing to say or the banner is
  *  saying it. A stopped run's reason and what was skipped are two facts, and
  *  the line carries both rather than letting one hide the other; skipped
@@ -39,15 +48,17 @@ export function migrationLine(s: InferenceSettings | null | undefined): string |
   if (!s || migrationBanner(s)) return null;
   const { state, reason, skipped } = s.migration;
   const unfinished = migrationUnfinished(s);
-  if (!unfinished && skipped.length === 0) return null;
+  const progress = migrationProgress(s.migration);
+  if (!unfinished && skipped.length === 0) return progress;
+  const withProgress = (text: string) => progress ? `${progress} ${text}` : text;
   const left = skipped.length > 0
     ? `left ${skipped.length} ${skipped.length === 1 ? "thing" : "things"} for later `
       + `(${skipped.join("; ")}).`
     : "";
   if (state === "failed" && reason) {
     const head = sentence(`The upgrade has not finished: ${reason}`);
-    return left ? `${head} It ${left}` : head;
+    return withProgress(left ? `${head} It ${left}` : head);
   }
-  if (left) return `The upgrade ${left}`;
-  return "Part of this library has not finished upgrading yet.";
+  if (left) return withProgress(`The upgrade ${left}`);
+  return progress ?? "Part of this library has not finished upgrading yet.";
 }

@@ -112,6 +112,9 @@ export function CampaignModels({ cid, onDirtyChange }: {
   // re-arms on, so a failed read does not end the asking.
   const [reads, setReads] = useState(0);
   const shown = useRef<string | null>(null);
+  // Counts the reads and saves that may land. A save bumps it when its answer
+  // is installed, so a poll started before the save cannot land over it (#496).
+  const latest = useRef(0);
   const [formDirty, setFormDirty] = useState(false);
   // A confirmed row switch may retire a pending form. Its completion must not
   // close a newer form opened on the next row.
@@ -136,15 +139,16 @@ export function CampaignModels({ cid, onDirtyChange }: {
       setRefusedStatus(null);
       setNewerHere(null);
     }
+    const n = ++latest.current;
     api.getCampaignInference(cid)
       .then((s) => {
-        if (!live) return;
+        if (!live || n !== latest.current) return;
         setSettings(s);
         // The fresh view is what decides whether a write can be made now.
         setRefusedStatus(null);
       })
-      .catch((err: unknown) => { if (live) setError(err); })
-      .finally(() => { if (live) setReads((n) => n + 1); });
+      .catch((err: unknown) => { if (live && n === latest.current) setError(err); })
+      .finally(() => { if (live) setReads((k) => k + 1); });
     return () => { live = false; };
   }, [cid, rev]);
 
@@ -175,6 +179,9 @@ export function CampaignModels({ cid, onDirtyChange }: {
     try {
       const next = await api.putCampaignInference(cid, body);
       if (seq !== selectionSeq.current) return;
+      // Any read still in flight was asked before this write and may answer
+      // the pre-save view; it must not land over the saved one.
+      latest.current += 1;
       setSettings(next);
       setFormDirty(false);
       setMode("view");

@@ -17,6 +17,8 @@ import importlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -33,6 +35,7 @@ from grimoire.store import (
     inference_keys,
     llm_connections,
     locks,
+    proclock,
     revision,
     worlds,
 )
@@ -962,14 +965,14 @@ def test_startup_does_not_block_on_the_migration(home, monkeypatch):
     _legacy()
     monkeypatch.delenv(inference_keys.AUTOMIGRATE_ENV, raising=False)
     entered, release = threading.Event(), threading.Event()
-    real = migrate.ensure
+    real = migrate.try_ensure
 
-    def slow(stop=None):
+    def slow(stop=None, **kwargs):
         entered.set()
         assert release.wait(WAIT)
-        return real(stop=stop)
+        return real(stop=stop, **kwargs)
 
-    monkeypatch.setattr(migrate, "ensure", slow)
+    monkeypatch.setattr(migrate, "try_ensure", slow)
     client = _app_client(monkeypatch, home)
     with client:
         assert entered.wait(WAIT)
@@ -989,12 +992,12 @@ def test_shutdown_stops_the_migration(home, monkeypatch):
     monkeypatch.delenv(inference_keys.AUTOMIGRATE_ENV, raising=False)
     entered, seen = threading.Event(), []
 
-    def until_stopped(stop=None):
+    def until_stopped(stop=None, **_kwargs):
         entered.set()
         seen.append(stop is not None and stop.wait(WAIT))
         return migrate.Status("pending", migrate.STOPPED)
 
-    monkeypatch.setattr(migrate, "ensure", until_stopped)
+    monkeypatch.setattr(migrate, "try_ensure", until_stopped)
     with _app_client(monkeypatch, home) as client:
         assert entered.wait(WAIT)
         thread = client.app.state.inference_migration
@@ -1010,13 +1013,13 @@ def test_shutdown_stops_every_run_and_a_new_one_never_unstops_an_old(home, monke
     monkeypatch.delenv(inference_keys.AUTOMIGRATE_ENV, raising=False)
     flags, entered = [], threading.Semaphore(0)
 
-    def until_stopped(stop=None):
+    def until_stopped(stop=None, **_kwargs):
         flags.append(stop)
         entered.release()
         stop.wait(WAIT)
         return migrate.Status("pending", migrate.STOPPED)
 
-    monkeypatch.setattr(migrate, "ensure", until_stopped)
+    monkeypatch.setattr(migrate, "try_ensure", until_stopped)
     with _app_client(monkeypatch, home) as client:
         main.start(client.app)
         assert entered.acquire(timeout=WAIT) and entered.acquire(timeout=WAIT)
@@ -1033,7 +1036,7 @@ def test_shutdown_stops_every_run_and_a_new_one_never_unstops_an_old(home, monke
 def test_automigrate_off_in_tests(home, monkeypatch, tmp_path):
     assert os.environ[inference_keys.AUTOMIGRATE_ENV] == "0"
     calls = []
-    monkeypatch.setattr(migrate, "ensure", lambda **_kw: calls.append(1))
+    monkeypatch.setattr(migrate, "try_ensure", lambda **_kw: calls.append(1))
     _legacy()
     with _app_client(monkeypatch, home) as client:
         dest = tmp_path / "moved"
@@ -1067,14 +1070,14 @@ def test_the_migration_holds_image_maintenance_off(home, monkeypatch):
     _legacy()
     monkeypatch.delenv(inference_keys.AUTOMIGRATE_ENV, raising=False)
     entered, release = threading.Event(), threading.Event()
-    real = migrate.ensure
+    real = migrate.try_ensure
 
-    def slow(stop=None):
+    def slow(stop=None, **kwargs):
         entered.set()
         assert release.wait(WAIT)
-        return real(stop=stop)
+        return real(stop=stop, **kwargs)
 
-    monkeypatch.setattr(migrate, "ensure", slow)
+    monkeypatch.setattr(migrate, "try_ensure", slow)
     with _app_client(monkeypatch, home) as client:
         assert entered.wait(WAIT)
         try:
@@ -1589,3 +1592,403 @@ def test_a_newer_marker_seen_by_the_switch_stops_the_run(home, monkeypatch):
     assert got.state == "newer", got
     assert FORMAT not in _meta(cid)
     assert _raw_config(home)[FORMAT] == "3"
+
+
+# ---- live archive progress (#496) ----
+@pytest.mark.parametrize("phase", ["safety_backup", "retirement_backup"])
+def test_archive_progress_is_visible_while_writing(home, monkeypatch, phase):
+    _legacy()
+    if phase == "retirement_backup":
+        _REAL_WRITE(inference_format="2")
+    original = backups.create_backup
+    during = []
+    def archive(*args, **kwargs):
+        callback = kwargs.pop("on_progress", None)
+        def observe(done, total):
+            if callback:
+                callback(done, total)
+            during.append(migrate.status().as_dict())
+        return original(*args, **kwargs, on_progress=observe)
+    monkeypatch.setattr(backups, "create_backup", archive)
+    assert migrate.ensure().state == "done"
+    assert during and all(s["active"] for s in during)
+    assert all(s["progress"]["phase"] == phase for s in during)
+    assert during[0]["progress"] == {"phase": phase, "done": 0, "total": None}
+    last = during[-1]["progress"]
+    assert last["done"] == last["total"] and last["total"] > 0
+    if phase == "retirement_backup":
+        assert all(s["state"] == "done" for s in during)
+    after = migrate.status().as_dict()
+    assert after["active"] is False and "progress" not in after
+
+
+def test_progress_activity_covers_retirement_planning(home, monkeypatch):
+    _legacy()
+    _REAL_WRITE(inference_format="2")
+    entered, finish = threading.Event(), threading.Event()
+    original = migrate.retire.pass_plan
+    failures = []
+    def paused(*args, **kwargs):
+        entered.set()
+        assert finish.wait(WAIT)
+        return original(*args, **kwargs)
+    def run():
+        try:
+            migrate.ensure()
+        except BaseException as exc:
+            failures.append(exc)
+            raise
+    monkeypatch.setattr(migrate.retire, "pass_plan", paused)
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert entered.wait(WAIT)
+        planning = migrate.status().as_dict()
+        assert planning["state"] == "done" and planning["active"] is True
+        assert "progress" not in planning
+    finally:
+        finish.set()
+        worker.join(WAIT)
+    assert not worker.is_alive() and not failures
+    assert migrate.status().as_dict()["active"] is False
+
+
+def test_queued_startup_pass_reads_as_active_until_it_ends(home):
+    # #496: between the thread's start and its first lock acquisition, a status
+    # read must still see the pass, or a page stops polling before it begins.
+    _legacy()
+    migrate.queue(home)
+    try:
+        assert migrate.status().as_dict()["active"] is True
+    finally:
+        migrate.dequeue(home)
+    assert migrate.status().as_dict()["active"] is False
+
+
+def test_progress_persistence_is_throttled_but_local_counts_are_live(home, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(migrate, "time", type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}), raising=False)
+    run = migrate._Run(home, None, "", [])
+    with migrate._running_on(home):
+        run.archive_progress("safety_backup", 0, None)
+        run.archive_progress("safety_backup", 0, 20)
+        initial = migrate._status_path(home).read_bytes()
+        for done in range(1, 5):
+            clock[0] += 0.04
+            run.archive_progress("safety_backup", done, 20)
+            assert migrate.status().as_dict()["progress"]["done"] == done
+        assert migrate._status_path(home).read_bytes() == initial
+        clock[0] = 0.26
+        run.archive_progress("safety_backup", 5, 20)
+        assert migrate._recall(home)["progress"]["done"] == 5
+        run.archive_progress("safety_backup", 20, 20)
+        assert migrate._recall(home)["progress"]["done"] == 20
+
+
+def test_progress_survives_failed_note_writes(home, monkeypatch):
+    _legacy()
+    original, write = backups.create_backup, migrate.atomic.write_text
+    seen = []
+    def denied(path, *args, **kwargs):
+        if path == migrate._status_path(home):
+            raise PermissionError("note unavailable")
+        return write(path, *args, **kwargs)
+    def archive(*args, **kwargs):
+        callback = kwargs["on_progress"]
+        def observe(done, total):
+            callback(done, total)
+            seen.append(migrate.status().as_dict().get("progress"))
+        kwargs["on_progress"] = observe
+        return original(*args, **kwargs)
+    monkeypatch.setattr(migrate.atomic, "write_text", denied)
+    monkeypatch.setattr(backups, "create_backup", archive)
+    assert migrate.ensure().state == "done"
+    assert seen and all(s is not None for s in seen)
+    assert "progress" not in migrate.status().as_dict()
+
+
+@pytest.mark.parametrize("ending", ["error", "exception", "stop", "move"])
+def test_progress_clears_on_archive_exit(home, monkeypatch, ending):
+    _legacy()
+    before = _digest(home)
+    original = backups.create_backup
+    stop = threading.Event()
+    other = home.parent / "other"
+    other.mkdir()
+    def archive(*args, **kwargs):
+        callback = kwargs.get("on_progress")
+        if callback:
+            callback(0, None)
+        if ending == "error":
+            raise OSError("archive denied")
+        if ending == "exception":
+            raise RuntimeError("archive interrupted")
+        made = original(*args, **kwargs)
+        if ending == "stop":
+            stop.set()
+        if ending == "move":
+            monkeypatch.setenv("GRIMOIRE_HOME", str(other))
+        return made
+    monkeypatch.setattr(backups, "create_backup", archive)
+    if ending == "exception":
+        with pytest.raises(RuntimeError):
+            migrate.ensure(stop)
+    else:
+        assert migrate.ensure(stop).state in {"failed", "pending"}
+    assert migrate.status().as_dict()["active"] is False
+    assert "progress" not in migrate.status().as_dict()
+    monkeypatch.setenv("GRIMOIRE_HOME", str(home))
+    assert _digest(home) == before
+    assert "progress" not in migrate.status().as_dict()
+    monkeypatch.setattr(backups, "create_backup", original)
+    assert migrate.ensure().state == "done"
+
+
+def _progress_holder(path):
+    """Handshake and graceful release: killing a Windows venv launcher can
+    leave its interpreter child holding the lock after the launcher exits.
+    Resolve the absolute lock in the parent; Windows children do not inherit
+    the fixture's patched machine lock directory (#496).
+    """
+    source = f"""
+import sys
+sys.path[:0] = {sys.path!r}
+from grimoire.store import proclock
+fd = proclock.acquire({str(path)!r}, None)
+print("HELD", flush=True)
+try:
+    sys.stdin.readline()
+finally:
+    proclock.release(fd)
+"""
+    child = subprocess.Popen([sys.executable, "-c", source], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, text=True)
+    assert child.stdout.readline().strip() == "HELD"
+    return child
+
+
+def _release_progress_holder(child):
+    if child.poll() is None:
+        child.communicate(input="\n", timeout=WAIT)
+    assert child.wait(WAIT) == 0
+
+
+def _progress_note(root, owner, progress=None):
+    note = {"root": str(root), "running": True, "pid": os.getpid() + 1,
+            "progress_owner": owner, "progress": progress or
+            {"phase": "retirement_backup", "done": 1, "total": 3}}
+    path = migrate._status_path(root)
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(note), encoding="utf-8")
+
+
+def test_foreign_progress_requires_the_current_archive_lease(home):
+    _legacy()
+    _REAL_WRITE(inference_format="2")
+    owner = "a" * 32
+    lease_path = proclock.lock_path(home, "inference-progress", owner)
+    fd = proclock.acquire(lease_path, proclock.NO_WAIT)
+    proclock.release(fd)
+    _progress_note(home, owner)
+    main = _progress_holder(proclock.lock_path(home, "domain", "inference-migration"))
+    lease = None
+    try:
+        planning = migrate.status().as_dict()
+        assert planning["active"] is True and "progress" not in planning
+        lease = _progress_holder(lease_path)
+        assert migrate.status().as_dict()["progress"]["done"] == 1
+        # The note can be from the same still-live PID. The lease is authority.
+        note = migrate._recall(home)
+        note["pid"] = os.getpid()
+        migrate._status_path(home).write_text(json.dumps(note), encoding="utf-8")
+        assert migrate.status().as_dict()["progress"]["done"] == 1
+        _release_progress_holder(lease)
+        assert "progress" not in migrate.status().as_dict()
+    finally:
+        if lease is not None and lease.poll() is None:
+            _release_progress_holder(lease)
+        _release_progress_holder(main)
+    assert migrate.status().as_dict()["active"] is False
+    assert "progress" not in migrate.status().as_dict()
+
+
+def test_progress_readers_cannot_impersonate_the_archive(home, monkeypatch):
+    _legacy()
+    owner = "b" * 32
+    lease_path = proclock.lock_path(home, "inference-progress", owner)
+    fd = proclock.acquire(lease_path, proclock.NO_WAIT)
+    proclock.release(fd)
+    _progress_note(home, owner)
+    main = _progress_holder(proclock.lock_path(home, "domain", "inference-migration"))
+    entered, finish = threading.Event(), threading.Event()
+    original = proclock.acquire
+    result, failures = [], []
+    def paused(path, deadline):
+        got = original(path, deadline)
+        if path == lease_path and got is not None and threading.current_thread().name == "reader-B":
+            entered.set()
+            if not finish.wait(WAIT):
+                proclock.release(got)
+                raise AssertionError("reader probe was not released")
+        return got
+    def read():
+        try:
+            result.append(migrate.status().as_dict())
+        except BaseException as exc:
+            failures.append(exc)
+            raise
+    monkeypatch.setattr(proclock, "acquire", paused)
+    worker = threading.Thread(target=read, name="reader-B")
+    worker.start()
+    try:
+        assert entered.wait(WAIT)
+        assert "progress" not in migrate.status().as_dict()
+        finish.set()
+        worker.join(WAIT)
+        assert "progress" not in migrate.status().as_dict()
+        lease = _progress_holder(lease_path)
+        try:
+            assert migrate.status().as_dict()["progress"]["done"] == 1
+        finally:
+            _release_progress_holder(lease)
+    finally:
+        finish.set()
+        worker.join(WAIT)
+        _release_progress_holder(main)
+    assert not worker.is_alive() and not failures
+    assert "progress" not in result[0]
+
+
+@pytest.mark.parametrize("progress", [
+    {"phase": "other", "done": 0, "total": 3},
+    {"phase": "safety_backup", "done": True, "total": 3},
+    {"phase": "safety_backup", "done": -1, "total": 3},
+    {"phase": "safety_backup", "done": 4, "total": 3},
+    {"phase": "safety_backup", "done": 0, "total": False},
+    {"phase": "safety_backup", "done": 1, "total": None},
+])
+def test_progress_rejects_malformed_foreign_counts(home, progress):
+    owner = "c" * 32
+    _progress_note(home, owner, progress)
+    main = _progress_holder(proclock.lock_path(home, "domain", "inference-migration"))
+    lease = _progress_holder(proclock.lock_path(home, "inference-progress", owner))
+    try:
+        assert migrate.status().as_dict()["active"] is True
+        assert "progress" not in migrate.status().as_dict()
+    finally:
+        _release_progress_holder(lease)
+        _release_progress_holder(main)
+
+
+def test_progress_activity_probe_io_failure_is_read_only(home, monkeypatch):
+    before = _digest(home)
+    lock = locks.inference_migration_lock()
+    release = lock.release
+    def failed_release():
+        release()
+        raise OSError("probe cleanup failed")
+    monkeypatch.setattr(lock, "release", failed_release)
+    assert migrate.status().as_dict()["active"] is False
+    assert _digest(home) == before
+
+
+@pytest.mark.parametrize("failure", ["acquire", "release"])
+def test_progress_optional_lease_failure_keeps_local_archive(home, monkeypatch, failure):
+    _legacy()
+    original_acquire, original_release = proclock.acquire, proclock.release
+    lease_fds = set()
+    path_for = proclock.lock_path
+    optional_paths = set()
+    def path(root, domain, name):
+        result = path_for(root, domain, name)
+        if domain == "inference-progress":
+            optional_paths.add(result)
+        return result
+    def maybe_acquire(path, deadline):
+        if path in optional_paths and failure == "acquire":
+            raise OSError("optional lease unavailable")
+        fd = original_acquire(path, deadline)
+        if path in optional_paths and fd is not None:
+            lease_fds.add(fd)
+        return fd
+    def maybe_release(fd):
+        original_release(fd)
+        if fd in lease_fds and failure == "release":
+            lease_fds.remove(fd)
+            raise OSError("optional lease cleanup unavailable")
+    monkeypatch.setattr(proclock, "lock_path", path)
+    monkeypatch.setattr(proclock, "acquire", maybe_acquire)
+    monkeypatch.setattr(proclock, "release", maybe_release)
+    assert migrate.ensure().state == "done"
+    assert migrate.status().as_dict()["active"] is False
+
+
+def test_progress_startup_probe_cannot_consume_background_start(home, monkeypatch):
+    _legacy()
+    app = main.create_app()
+    stop = threading.Event()
+    entered, finish, contended = threading.Event(), threading.Event(), threading.Event()
+    lock = locks.inference_migration_lock()
+    acquire, release = lock.acquire, lock.release
+    def probing_release():
+        try:
+            if threading.current_thread().name == "status-reader":
+                entered.set()
+                assert finish.wait(WAIT)
+        finally:
+            release()
+    def observed_acquire(*args, **kwargs):
+        got = acquire(*args, **kwargs)
+        if threading.current_thread().name == "startup-migration" and not got:
+            contended.set()
+        return got
+    monkeypatch.setattr(lock, "release", probing_release)
+    monkeypatch.setattr(lock, "acquire", observed_acquire)
+    reader = threading.Thread(target=migrate.status, name="status-reader")
+    worker = threading.Thread(target=main._migrate_inference, args=(app, stop),
+                              name="startup-migration")
+    reader.start()
+    try:
+        assert entered.wait(WAIT)
+        worker.start()
+        assert contended.wait(WAIT)
+        finish.set()
+        reader.join(WAIT)
+        worker.join(WAIT)
+        assert not reader.is_alive() and not worker.is_alive()
+        assert migrate.status().state == "done"
+        assert _safety_archives(home)
+    finally:
+        stop.set()
+        finish.set()
+        reader.join(WAIT)
+        if worker.ident is not None:
+            worker.join(WAIT)
+
+
+@pytest.mark.parametrize("ending", ["stop", "move", "pending"])
+def test_progress_startup_retry_ends_at_the_right_boundary(home, monkeypatch, ending):
+    app = main.create_app()
+    stop = threading.Event()
+    other = home.parent / "other"
+    other.mkdir()
+    calls = []
+    def attempt(**kwargs):
+        calls.append(kwargs)
+        if ending == "pending":
+            return migrate.Status("pending", skipped=("campaign saltmarch: busy",))
+        if ending == "stop":
+            stop.set()
+        else:
+            monkeypatch.setenv("GRIMOIRE_HOME", str(other))
+        return None
+    monkeypatch.setattr(migrate, "try_ensure", attempt, raising=False)
+    main._migrate_inference(app, stop)
+    assert len(calls) == 1
+
+
+def test_progress_startup_rechecks_pinned_root_inside_acquisition(home):
+    before = _digest(home)
+    got = migrate.try_ensure(expected_root=home.parent / "other")
+    assert got is not None and got.reason == migrate.MOVED
+    assert _digest(home) == before

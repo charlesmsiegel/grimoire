@@ -1226,7 +1226,8 @@ def inference_migration_lock() -> _ProcessScopedLock:
     it cannot sit in a wait cycle. It is the outermost lock its holder takes:
     under it the migration takes the backup lock, `config_lock`, the facts
     module's lock and -- one at a time, never waiting -- a campaign lock; and
-    nothing that holds any of those takes this.
+    nothing that holds any of those waits for this. Status may try it and
+    immediately release it under a settings read (#496); it never waits.
     """
     return _inference_migration
 

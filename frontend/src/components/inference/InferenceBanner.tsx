@@ -1,4 +1,5 @@
 import type { MigrationStatus } from "../../api/client";
+import { migrationProgress } from "./migration";
 
 /** What every model-settings surface says while its settings cannot be saved
  *  (spec 10, 11.3).
@@ -30,6 +31,7 @@ export function InferenceBanner({ status }: { status: MigrationStatus | null | u
       {status.state === "failed" && status.reason
         ? <>Upgrade pending: {status.reason}</>
         : <>Upgrade pending: model settings are being moved to the new layout.</>}
+      {migrationProgress(status) && <> {migrationProgress(status)}</>}
       {" "}They can be changed once that has finished; play continues meanwhile.
     </div>
   );

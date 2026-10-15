@@ -28,3 +28,14 @@ test("InferenceBanner shows each state", () => {
   rerender(<InferenceBanner status={null} />);
   expect(screen.queryByRole("status")).toBeNull();
 });
+
+
+test("the pending banner reports archive preparation and copy counts", () => {
+  const status = { state: "running" as const, reason: "", skipped: [], active: true,
+    progress: { phase: "safety_backup" as const, done: 0, total: null as number | null } };
+  const { rerender } = render(<InferenceBanner status={status} />);
+  expect(screen.getByRole("status")).toHaveTextContent(/Preparing/);
+  rerender(<InferenceBanner status={{ ...status,
+    progress: { ...status.progress, done: 3, total: 8 } }} />);
+  expect(screen.getByRole("status")).toHaveTextContent(/3 of 8 files/);
+});

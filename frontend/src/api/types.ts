@@ -275,6 +275,9 @@ export type MigrationStatus = {
   /** Retirement's own account (inference slice I): what it has still to do,
    *  and why its last pass stopped short. Never moves `state`; not rendered. */
   retirement?: { left: string[]; failed: string };
+  /** Live migration hold, including retirement after the layout switches. */
+  active?: boolean;
+  progress?: { phase: "safety_backup" | "retirement_backup"; done: number; total: number | null };
 };
 /** One thing the old model settings could not carry over, shown on `/models`
  *  until dismissed (`GET /api/inference/settings`'s `retirement_notes`). Its
@@ -738,6 +741,8 @@ export type ConfigUpdate = Partial<Pick<Config,
 /** One archive written by `store/backups.py`. */
 export type BackupEntry = {
   name: string;
+  /** Older servers omit scope for full archives. */
+  scope?: "full" | "settings";
   /** Bytes on disk. */
   size: number;
   /** When it was taken, read from its own filename. */
