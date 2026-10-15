@@ -1905,7 +1905,12 @@ every call, even a failed or cancelled one.
 World exports use the actual attachment request in a same-origin frame, keeping
 the browser's download stream for a large bundle while displaying a JSON
 refusal on the Worlds page. No preflight can race a later download request.
-The Android native download handoff retains its existing behavior.
+Each export leaves its hidden frame in the page until the page is left, since a
+browser fires no load event for a download to mark its end (a known limit,
+one small DOM node per export). The Android native download handoff is changed
+by this design and is not verified on a device: its DownloadListener receives
+the attachment from the frame rather than from the anchor, so it needs a device
+check before it is relied on.
 
 A heartbeat write blocked longer than the 35-second join may recreate the
 marker after release. This delays another device until the marker's five-minute
