@@ -173,6 +173,19 @@ def test_settings_links(settings, monkeypatch, linked):
         assert contents(backups.create_backup(AT, backups.SAFETY_PREFIX)) == protected
 
 
+def test_linked_settings_refusal_names_the_link(settings):
+    # #496: the migration's failure reason is the only place a user learns
+    # which folder to fix, so the refusal carries its library-relative path.
+    root, _ = settings
+    try:
+        (root / "campaigns" / "linked").symlink_to(root / "campaigns" / "saltmarch",
+                                                   target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+    with pytest.raises(OSError, match=r"symlink: campaigns/linked$"):
+        backups.create_backup(AT, backups.SAFETY_PREFIX)
+
+
 def test_settings_old_timestamps(settings):
     root, protected = settings
     os.utime(root / "config.md", (0, 0))

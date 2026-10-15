@@ -1396,9 +1396,11 @@ planning before an archive begins and retirement after state becomes `done`.
 During each archive, `progress` contains phase `safety_backup` or
 `retirement_backup`, `done` and nullable `total`: `(0, null)` while inventorying,
 then processed-file counts through `(total, total)`, including `(0, 0)` for an
-empty inventory. Local counters update every file; best-effort note writes are
-limited to four intermediate updates per second, with immediate transitions
-and final counts. Failure and archive/run exit clear progress. Foreign reads
+empty inventory. Local counters update every file. Best-effort note writes happen
+only at phase transitions and final counts, never per file, because the note
+lives in the library and may sit in a synced folder; a foreign reader therefore
+sees a phase's start and end rather than its intermediate counts. Failure and
+archive/run exit clear progress. Foreign reads
 require a fresh per-archive machine-local lease in addition to live migration
 activity; serialized nonblocking observer probes cannot impersonate that lease.
 Old notes therefore never revive counters from a prior archive. Optional lease

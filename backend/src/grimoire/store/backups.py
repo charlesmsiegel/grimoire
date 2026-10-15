@@ -364,24 +364,33 @@ def _settings_kind(path: Path) -> int:
         return 0
 
 
-def _settings_directory(path: Path, skip: tuple[Path, ...]) -> bool:
+def _linked_settings(path: Path, root: Path) -> OSError:
+    """Refuse a symlinked settings folder by name, so its owner can find it (#496)."""
+    try:
+        shown = path.relative_to(root).as_posix()
+    except ValueError:
+        shown = path.name
+    return OSError(f"protected settings folder is a symlink: {shown}")
+
+
+def _settings_directory(path: Path, skip: tuple[Path, ...], root: Path) -> bool:
     if path.is_symlink():
-        raise OSError("protected settings directory is a symlink")
+        raise _linked_settings(path, root)
     if _is_skipped(path, skip):
         raise OSError("backup directory overlaps protected settings")
     return stat.S_ISDIR(_settings_kind(path))
 
 
-def _settings_tree(base: Path, skip: tuple[Path, ...]) -> list[Path]:
+def _settings_tree(base: Path, skip: tuple[Path, ...], root: Path) -> list[Path]:
     """Walk one selected subtree, never the surrounding library."""
     selected: list[Path] = []
-    if not _settings_directory(base, skip):
+    if not _settings_directory(base, skip, root):
         return selected
     for dirpath, dirnames, filenames in os.walk(base, onerror=_walk_error, followlinks=False):
         here = Path(dirpath)
         # os.walk silently drops directory links. Settings read through those
         # links would then have no recovery material, so fail closed instead.
-        dirnames[:] = sorted(d for d in dirnames if _settings_directory(here / d, skip))
+        dirnames[:] = sorted(d for d in dirnames if _settings_directory(here / d, skip, root))
         selected.extend(here / name for name in sorted(filenames))
     return selected
 
@@ -416,15 +425,15 @@ def _settings_files(root: Path, skip: tuple[Path, ...], directory: Path) -> list
         target = _norm(directory)
         if _norm(base) == target or _norm(base) in target.parents:
             raise OSError("backup directory overlaps protected settings")
-        candidates.extend(_settings_tree(base, skip))
+        candidates.extend(_settings_tree(base, skip, root))
     base = root / "campaigns"
-    if _settings_directory(base, skip):
+    if _settings_directory(base, skip, root):
         try:
             children = sorted(base.iterdir())
         except FileNotFoundError:
             children = []
         for child in children:
-            if _settings_directory(child, skip):
+            if _settings_directory(child, skip, root):
                 candidates.extend(child / name for name in ("campaign.md", "revision.txt"))
     for path in candidates:
         if _is_skipped(path, skip):

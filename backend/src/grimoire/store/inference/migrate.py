@@ -118,7 +118,6 @@ import json
 import logging
 import os
 import threading
-import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -636,7 +635,6 @@ class _Run:
         self.retire_failed = ""
         self.progress: dict | None = None
         self.progress_owner = ""
-        self._progress_at = 0.0
         self._saved_progress: dict | None = None
 
     def halted(self) -> str:
@@ -655,17 +653,18 @@ class _Run:
 
 
     def archive_progress(self, phase: str, done: int, total: int | None) -> None:
-        """Local counters are exact; notes persist transitions and <=4 ticks/s."""
+        """Every tick is live in memory; the note takes only phase transitions
+        and the final count. The note lives in the library, which may sit in a
+        synced folder, and a per-file rewrite there is sync churn for a reader
+        that only ever sees it on this machine (#496)."""
         self.progress = {"phase": phase, "done": done, "total": total}
         with _active_guard:
             if str(self.root) in _active:
                 _active[str(self.root)] = self.progress
-        now = time.monotonic()
         previous = self._saved_progress
         transition = previous is None or (previous["phase"], previous["total"]) != (phase, total)
-        if transition or (total is not None and done == total) or now - self._progress_at >= 0.25:
+        if transition or (total is not None and done == total):
             self.remember(running=True)
-            self._progress_at = now
             self._saved_progress = self.progress
 
 
