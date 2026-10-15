@@ -1336,6 +1336,32 @@ def test_url_subject_key_the_greeting_no_longer_shows_is_left_alone():
     assert _subjects_of(_id(_png(1)), f"world:{wid}") == set()
 
 
+def test_url_key_unreferenced_after_the_inventory_is_left_alone(monkeypatch):
+    """The inventory admits a URL key the greeting references; an edit before
+    the fold drops the reference, so the fold asks again and keeps it (#478)."""
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    real = image_migration._metadata_one
+    edited: list[bool] = []
+
+    def edit_then_fold(ex, occ, image_id):
+        if occ.target_name is not None and not edited:
+            edited.append(True)
+            greetings.update_greeting(wroot, gid, body="No art any more.")
+        return real(ex, occ, image_id)
+
+    monkeypatch.setattr(image_migration, "_metadata_one", edit_then_fold)
+    rep = _run()
+
+    assert edited and _json(side) == {url: [char]}
+    assert _subjects_of(_id(_png(1)), f"world:{wid}") == set()
+    assert any(k["reason"] == "url-no-longer-shown" for k in rep["keys_kept"])
+
+
 def test_url_subject_fold_holds_its_target_name_lock(monkeypatch):
     wid, wroot, char, wchar = _world()
     assets.put_in(wchar, "avatar", _png(1), "png")

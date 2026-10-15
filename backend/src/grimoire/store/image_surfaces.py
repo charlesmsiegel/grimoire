@@ -470,11 +470,13 @@ def _canonical_record_slot(wroot: Path, slot: greeting_images._Slot
     return (base, canonical_owner, canonical_vid, name) if canonical_vid is not None else None
 
 
-def _shown_keys(wroot: Path, d: Path) -> set[str]:
+def shown_keys(wroot: Path, d: Path) -> set[str]:
     """The image keys greeting `d`'s body references now, read under the
     pinned world root. `image_subjects.read_subjects` answers only these, so a
     sidecar key the greeting no longer shows is stale and never folded: an
-    object association could surface it through another placement (#478)."""
+    object association could surface it through another placement (#478).
+    The migration asks again right before it folds such a key, since a
+    greeting can be edited between the inventory and the fold."""
     try:
         rel = d.relative_to(wroot).parts
     except ValueError:
@@ -493,10 +495,10 @@ def _url_subjects(root: Path, scope: str, d: Path) -> Iterator[Occurrence]:
     """World greeting URL keys use the same verified-target fold as (c).
     Resolve route shape only: the catalog can recover promotions, whereas
     this inventory must remain read-only and pinned to `root` (#478). Only a
-    key the greeting still references is a candidate (`_shown_keys`)."""
+    key the greeting still references is a candidate (`shown_keys`)."""
     wid = scope.partition(":")[2]
     wroot = root / "worlds" / wid
-    shown = _shown_keys(wroot, d)
+    shown = shown_keys(wroot, d)
     for key in sorted(_json_dict(d / image_subjects.SUBJECTS_FILE)):
         if key not in shown:
             continue

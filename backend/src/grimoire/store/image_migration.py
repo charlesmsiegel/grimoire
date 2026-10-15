@@ -1412,6 +1412,17 @@ def _dropped_focus(ex: _Exec, occ: Occurrence) -> bool:
         return _drop_focus_file(ex, occ.dir, False)
 
 
+def _still_shown(ex: _Exec, occ: Occurrence) -> bool:
+    """Whether a URL subject key is still one its greeting references. The
+    inventory admitted it on that ground, but the greeting may have been
+    edited since; folding a key nothing reads any more would surface its
+    tags through the picture's other placements (#478)."""
+    if occ.target_name is None:
+        return True
+    wroot = ex.root / "worlds" / occ.scope.partition(":")[2]
+    return occ.name in image_surfaces.shown_keys(wroot, occ.dir)
+
+
 def _metadata_one(ex: _Exec, occ: Occurrence, image_id: str | None) -> None:
     side = occ.dir / (occ.sidecar or "")
     # A verified pair can have been replaced since planning. Hold the target
@@ -1427,13 +1438,17 @@ def _metadata_one(ex: _Exec, occ: Occurrence, image_id: str | None) -> None:
         if image_id is None or not _target_verified(ex, occ, image_id):
             ex.keep(side, occ.name, "target-not-verified")
             return
+        if not _still_shown(ex, occ):
+            ex.keep(side, occ.name, "url-no-longer-shown")
+            return
         if occ.metadata_only == "b":
             changed = _override(ex, occ)
         elif occ.metadata_only == "d":
             changed = _dropped_focus(ex, occ)
         elif occ.sidecar == _SUBJECTS:
             changed = _fold_subjects(ex, occ.dir, occ.name, image_id, occ.scope,
-                                     lambda: _target_verified(ex, occ, image_id))
+                                     lambda: (_target_verified(ex, occ, image_id)
+                                              and _still_shown(ex, occ)))
         else:
             changed = _fold_description(ex, occ.dir, occ.name, image_id, _label(ex.plan, occ),
                                         lambda: _target_verified(ex, occ, image_id))
