@@ -635,8 +635,8 @@ def _build_row(root: Path, cid: str) -> tuple[dict | None, tuple | None]:
         # Every picture that is neither the avatar nor a localized embed: the
         # Chub gallery's `gallery_<i>` and a CHARX import's named art alike.
         "gallery_count": sum(1 for n in names
-                             if n != assets.AVATAR and not n.startswith("embed-")),
-        "localized_count": sum(1 for n in names if n.startswith("embed-")),
+                             if n != assets.AVATAR and not n.startswith(_LOCALIZED_PREFIX)),
+        "localized_count": sum(1 for n in names if n.startswith(_LOCALIZED_PREFIX)),
         "greeting_count": greeting_count,
         "tagline": facts["tagline"],
         # A BOOLEAN, not the body: the listing has no use for the text.
@@ -978,6 +978,7 @@ _AVATAR_TYPES = ("icon", "avatar")
 _SIDECAR_STEMS = frozenset(
     image_refs.fold(Path(f).stem)
     for f in (assets.FOCUS_FILE, assets.DESCRIPTIONS_FILE, "subjects.json"))
+_LOCALIZED_PREFIX = "embed-"  # localize.py names what it writes this way
 
 
 class _BundledImages:
@@ -1037,6 +1038,8 @@ def _bundled_image_name(name: str) -> bool:
         return False
     if image_refs.fold(name) in _SIDECAR_STEMS:
         return False  # `<name>.*` cleanup would treat the sidecar as this image's
+    if image_refs.fold(name).startswith(_LOCALIZED_PREFIX):
+        return False  # the grid counts these names as localized, not gallery art
     try:
         ziputil.member_parts(name)
         placement = image_refs.ref_path(Path("."), name)  # only the file name matters

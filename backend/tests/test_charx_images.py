@@ -542,6 +542,16 @@ def test_charx_import_skips_names_reserved_for_sidecars(tmp_path, name):
     assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["happy"]
 
 
+@pytest.mark.parametrize("name", ["embed-0123456789ab", "Embed-x"])
+def test_charx_import_skips_names_reserved_for_localized_images(tmp_path, name):
+    blob = _bundle([_entry(name, "assets/happy.png"), _entry("happy", "assets/happy.png")],
+                   {"assets/happy.png": _picture()})
+
+    cid, _vid = ch.import_card(tmp_path, blob, "charx")
+
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["happy"]
+
+
 def test_a_case_variant_of_an_existing_picture_counts_as_taken(tmp_path):
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     png, other = _picture(), _picture("png_onepixel.png")
