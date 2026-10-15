@@ -583,3 +583,27 @@ def test_gallery_walk_stops_at_the_candidate_cap(tmp_path, monkeypatch):
     cid, _vid = ch.import_card(tmp_path, _bundle(entries, {"assets/happy.png": png}), "charx")
 
     assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == []
+
+
+def test_archive_parses_do_not_grow_with_gallery_entries(tmp_path, monkeypatch):
+    real = zipfile.ZipFile
+    parses = []
+
+    class Counting(real):
+        def __init__(self, *args, **kwargs):
+            parses.append(1)
+            super().__init__(*args, **kwargs)
+
+    def parses_for(n):
+        png = _picture()
+        entries = [_entry(f"e{i}", f"assets/{i}.png") for i in range(n)]
+        blob = _bundle(entries, {f"assets/{i}.png": png for i in range(n)})
+        parses.clear()
+        monkeypatch.setattr(zipfile, "ZipFile", Counting)
+        try:
+            ch.import_card(tmp_path / f"w{n}", blob, "charx")
+        finally:
+            monkeypatch.setattr(zipfile, "ZipFile", real)
+        return len(parses)
+
+    assert parses_for(3) == parses_for(20)

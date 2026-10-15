@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shutil
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -990,13 +991,29 @@ class _BundledImages:
         self.data = data
         self.remaining = cards.MAX_ASSET_BYTES
         self.images: dict[str, tuple[bytes, str] | None] = {}
+        # Parsed once on first use: every member read shares it, so an archive
+        # with a huge entry table costs one central-directory scan, not one per
+        # lookup (#26).
+        self._archive: zipfile.ZipFile | None = None
+        self._opened = False
+
+    def _zip(self) -> zipfile.ZipFile | None:
+        if not self._opened:
+            self._opened = True
+            self._archive = cards.open_charx(self.data)
+        return self._archive
 
     def read(self, path: str) -> tuple[bytes, str] | None:
         if path in self.images:
             return self.images[path]
         if self.remaining <= 0 or len(self.images) >= _MAX_BUNDLED_IMAGES:
             return None
-        blob = cards.read_charx_asset(self.data, path, max_bytes=self.remaining, spend=self._spend)
+        archive = self._zip()
+        if archive is None:
+            self.images[path] = None
+            return None
+        blob = cards.read_charx_asset(self.data, path, max_bytes=self.remaining,
+                                      spend=self._spend, archive=archive)
         image = None
         if blob is not None:
             ext = fetch.sniff_ext(blob)
