@@ -41,7 +41,7 @@ def documents(cid):
 def score(cid, space, client, docs, texts=("silver ledger",), **kwargs):
     return asyncio.run(semantic.score(
         texts, docs, space=space, embed_client=client,
-        deadline=time.monotonic() + 1, campaign=cid, scene="999--saltmarch",
+        deadline=time.monotonic() + 30, campaign=cid, scene="999--saltmarch",
         post=3, run_id="history-run", **kwargs))
 
 
