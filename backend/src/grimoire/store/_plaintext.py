@@ -17,7 +17,7 @@ from markdown_it import MarkdownIt
 from markdown_it.rules_inline import StateInline, backtick, html_inline, image, link
 
 from .. import prompts, schemas
-from . import cards
+from . import cards, paths
 
 FIELDS = ("name", "description", "personality", "scenario", "first_mes", "mes_example")
 # Bound both parsing and the optional prompt, without silently clipping a
@@ -149,15 +149,32 @@ def _label_of(line: str, stripped: str, heading: re.Match[str] | None,
     return None, value, colon
 
 
+def _folder_fits(name: str) -> bool:
+    """The folder a character is saved under is named from the SLUG, and case
+    folding can grow a name (`İ` lowercases to two code points), so the limit
+    is on the slug, not on the name's length (#136)."""
+    return len(paths.slugify(name)) <= MAX_NAME_CHARS
+
+
+def _clip(text: str) -> str:
+    """Shorten a guessed name until its folder fits. The reviewer still has the
+    whole text in the description, so a guess may be clipped; an explicit name
+    may not."""
+    while text and not _folder_fits(text):
+        text = text[:-1]
+    return text
+
+
 def _resolve_name(explicit: str, title: str, filename: str, lines: list[str]) -> str:
     """An explicit name wins, then a document title, then a filename, then the
     first line. Only an explicit name is refused past the folder limit: a guess
     is clipped, and the reviewer still has the full text in the description."""
-    if len(explicit) > MAX_NAME_CHARS:
-        raise cards.CardParseError(f"A character name must be at most {MAX_NAME_CHARS} characters.")
-    fallback = PurePosixPath(filename.replace("\\", "/")).stem.strip()[:MAX_NAME_CHARS]
+    if not _folder_fits(explicit):
+        raise cards.CardParseError(
+            f"A character name must be at most {MAX_NAME_CHARS} characters once it is folded for a folder name.")
+    fallback = _clip(PurePosixPath(filename.replace("\\", "/")).stem.strip())
     first = next(line.strip() for line in lines if line.strip())
-    return explicit or title or fallback or first[:MAX_NAME_CHARS]
+    return explicit or title or fallback or _clip(first)
 
 
 def parse(text: str, filename: str = "") -> dict:
@@ -198,7 +215,7 @@ def parse(text: str, filename: str = "") -> dict:
         if heading:
             current = "description"
             if not title and not any("".join(value).strip() for value in parts.values()):
-                title = heading[1].strip()[:MAX_NAME_CHARS]
+                title = _clip(heading[1].strip())
         parts[current].append(line)
         if current == "name" and stripped:
             current = "description"
@@ -221,8 +238,9 @@ def draft_data(card: dict) -> dict[str, str]:
     result = {key: data[key] for key in FIELDS}
     if not result["name"].strip():
         raise cards.CardParseError("Give the draft a character name.")
-    if len(result["name"]) > MAX_NAME_CHARS:
-        raise cards.CardParseError(f"A character name must be at most {MAX_NAME_CHARS} characters.")
+    if not _folder_fits(result["name"]):
+        raise cards.CardParseError(
+            f"A character name must be at most {MAX_NAME_CHARS} characters once it is folded for a folder name.")
     if sum(map(len, result.values())) > MAX_DRAFT_CHARS:
         raise cards.CardParseError(f"The draft must be at most {MAX_DRAFT_CHARS} characters.")
     return result

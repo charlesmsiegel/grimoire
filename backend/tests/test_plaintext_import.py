@@ -123,6 +123,18 @@ def test_an_explicit_name_over_the_folder_limit_is_refused_not_saved_as_a_500(cl
     assert guessed["description"].startswith("# " + "x" * 300)
 
 
+def test_the_folder_limit_is_on_the_slug_not_the_name(client, world):
+    # Lowercasing `İ` makes two code points, so 200 of them name a 399-byte folder.
+    response = client.post(f"/api/worlds/{world}/characters/parse-text", json={"text": "Name: " + "İ" * 200})
+    assert response.status_code == 422
+    # A guessed title is clipped until its folder fits, and the draft then saves.
+    card = client.post(f"/api/worlds/{world}/characters/parse-text",
+                       json={"text": "# " + "İ" * 200 + "\nKeeps a ledger."}).json()["card"]
+    assert len(card["data"]["name"]) < 200
+    saved = client.post(f"/api/worlds/{world}/characters", json={"name": card["data"]["name"], "card": card})
+    assert saved.status_code == 200, saved.text
+
+
 @pytest.mark.parametrize("text", ["﻿ ﻿", "﻿\n\t﻿"], ids=["bom-space", "bom-lines"])
 def test_a_byte_order_mark_alone_is_blank_not_a_name(client, world, text):
     response = client.post(f"/api/worlds/{world}/characters/parse-text", json={"text": text})
