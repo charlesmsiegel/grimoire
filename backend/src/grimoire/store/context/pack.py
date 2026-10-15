@@ -276,7 +276,10 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     """
     packed = [{**s, "dropped": False} for s in sections]
     if budget is None:
-        budget = budget_tokens()
+        # Not `budget_tokens()`: with no campaign id it reads the global default,
+        # which would silently ignore a campaign's own context_budget. Callers
+        # pass the budget they resolved for their campaign.
+        raise TypeError("pack() needs the campaign's budget; resolve it with budget_tokens(cid)")
     if budget <= 0:  # unbounded: skip counting entirely, it is not free
         return {"sections": packed, "history": list(history), "history_trimmed": 0,
                 "history_trimmed_tokens": 0, "images_dropped_tokens": 0,

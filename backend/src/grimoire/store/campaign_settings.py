@@ -48,6 +48,19 @@ def _valid(key: str, value: object) -> bool:
     return key in KEYS and bool(value.strip()) and not frontmatter.breaks_line(value)
 
 
+def _refusal(key: str) -> str:
+    """What a refused value must look like, said where the field is named.
+
+    The page clears a numeric field to retype it, so an empty count is the
+    common refusal; "invalid campaign setting" alone reads as a bug.
+    """
+    if key in COUNT_DEFAULTS:
+        return f"{key} must be a whole number, zero or more"
+    if key == "system_prompt":
+        return "system_prompt must be text"
+    return f"{key} must be a single non-blank line"
+
+
 def _record(cid: str) -> tuple[dict[str, str], str]:
     try:
         return frontmatter.read_record(campaigns_paths.campaign_meta_path(cid), "campaign.md")
@@ -103,10 +116,12 @@ def write(cid: str, fields: dict) -> None:
     if not isinstance(fields, dict):
         raise ValueError("settings must be an object")
     for key, value in fields.items():
-        if key not in KEYS or (value is not None and not _valid(key, value)):
+        if key not in KEYS:
             # Keys come from JSON too: an escaped surrogate must not poison
             # the UTF-8 error response while we refuse an unknown field.
             raise ValueError(f"invalid campaign setting: {key!a}")
+        if value is not None and not _valid(key, value):
+            raise ValueError(_refusal(key))
     with locks.campaign_lock(cid):
         meta, body = _record(cid)
         updated = dict(meta)

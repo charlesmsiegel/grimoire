@@ -139,6 +139,20 @@ test("failed saves retain the draft and pending saves cannot be duplicated", asy
   expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
 });
 
+test("a failed save stays visible through a config change that re-reads the page", async () => {
+  vi.mocked(api.putCampaignSettings).mockRejectedValueOnce(new Error("offline"));
+  open();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Override Recap depth" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Recap depth" }), { target: { value: "0" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText(/offline/)).toBeInTheDocument();
+  act(() => { configChanged(); });
+  await waitFor(() => expect(api.getCampaignSettings).toHaveBeenCalledTimes(2));
+  expect(screen.getByText(/offline/)).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Recap depth" })).toHaveValue("0");
+});
+
 test("read failure is visible and can be retried without inventing inherited values", async () => {
   vi.mocked(api.getCampaignSettings).mockRejectedValueOnce(new Error("offline"));
   open();

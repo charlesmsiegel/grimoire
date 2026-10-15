@@ -51,7 +51,11 @@ function CampaignSettingsBody({ cid }: { cid: string }) {
   const [saving, setSaving] = useState(false);
   const [calendarDirty, setCalendarDirty] = useState(false);
   const [modelsDirty, setModelsDirty] = useState(false);
+  // A read's failure and a save's failure are separate: a config event
+  // re-reads this page, and that re-read must not dismiss a save the player
+  // has not yet fixed.
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const live = useRef(true);
   const pending = useRef(false);
@@ -95,7 +99,7 @@ function CampaignSettingsBody({ cid }: { cid: string }) {
   function cancel() {
     setDraft({});
     setEditing(false);
-    setError(null);
+    setSaveError(null);
   }
   async function save() {
     if (!dirty || pending.current) return;
@@ -105,7 +109,7 @@ function CampaignSettingsBody({ cid }: { cid: string }) {
     // so a config-event refresh cannot install an older answer over it.
     readSeq.current += 1;
     setSaving(true);
-    setError(null);
+    setSaveError(null);
     try {
       const value = await api.putCampaignSettings(cid, patch);
       if (!live.current) return;
@@ -114,7 +118,7 @@ function CampaignSettingsBody({ cid }: { cid: string }) {
       setDraft({});
       setEditing(false);
     } catch (err: unknown) {
-      if (live.current) setError(errorText(err));
+      if (live.current) setSaveError(errorText(err));
     } finally {
       pending.current = false;
       if (live.current) setSaving(false);
@@ -139,7 +143,7 @@ function CampaignSettingsBody({ cid }: { cid: string }) {
     <div className="page-wide view-anim config-page">
       <div className="eyebrow">Campaign settings</div>
       <h1 className="screen-title">{SECTIONS.find((s) => s.id === section)?.label}</h1>
-      {error && <div className="banner error-banner" role="alert">{error}{!settings && <>
+      {(saveError ?? error) && <div className="banner error-banner" role="alert">{saveError ?? error}{!settings && <>
         {" "}<button className="subtle" onClick={() => setRevision((n) => n + 1)}>Try again</button>
       </>}</div>}
       {visited.has("models") && <div hidden={section !== "models"}><CampaignModels cid={cid} onDirtyChange={setModelsDirty} /></div>}

@@ -329,3 +329,25 @@ def test_plain_prompt_captures_report_the_campaign_budget(client, kind):
     entry, = store.prompt_log.list_entries(cid, sid)
     payload = store.prompt_log.read_entry(cid, entry["id"], scene=sid)
     assert payload["budget_tokens"] == 2000
+
+
+@pytest.mark.parametrize("key,value,message", [
+    ("context_budget", "", "context_budget must be a whole number, zero or more"),
+    ("recap_depth", "-1", "recap_depth must be a whole number, zero or more"),
+    ("user_label", "  ", "user_label must be a single non-blank line"),
+    ("assistant_label", "Two\nLines", "assistant_label must be a single non-blank line"),
+    ("system_prompt", chr(0xD800), "system_prompt must be text"),
+])
+def test_refusals_name_the_field_and_the_rule_it_broke(client, key, value, message):
+    cid = _campaign()
+    response = client.put(_url(cid), content=json.dumps({key: value}),
+                          headers={"Content-Type": "application/json"})
+    assert response.status_code == 400
+    assert response.json()["detail"] == message
+
+
+def test_packing_refuses_to_guess_a_campaign_budget():
+    # The global default is not a campaign's budget: a caller that omits one
+    # must say which campaign it resolved for, not get the global value.
+    with pytest.raises(TypeError, match="budget_tokens"):
+        pack.pack([], [])
