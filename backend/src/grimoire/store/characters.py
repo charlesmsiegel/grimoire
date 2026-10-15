@@ -27,11 +27,13 @@ from . import (
     fetch,
     image_descriptions,
     image_hash,
+    image_refs,
     image_store,
     lorebook,
     statcache,
     taglines,
     voice_anchors,
+    ziputil,
 )
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
@@ -952,8 +954,91 @@ def find_unlinked_versions(root: Path) -> list[dict]:
 # needs one; each lookup re-parses the archive, so the cap is what keeps a
 # hostile CHARX from buying thousands of those (Codex review).
 _MAX_BUNDLED_READS = 4
+# Galleries need more than the avatar's four candidate attempts, but neither
+# unreadable members nor aliases of one picture may buy unbounded archive
+# reparses or placement writes. One import opens at most this many distinct
+# members and places at most this many non-avatar images (#26).
+_MAX_BUNDLED_IMAGES = 128
 # The V3 asset types that mean "this is the character's picture".
 _AVATAR_TYPES = ("icon", "avatar")
+
+
+class _BundledImages:
+    """One CHARX's image reads, shared by its avatar and named gallery (#26).
+
+    Reserve each member's advertised bytes before reading, including failures.
+    Memoizing by member lets one picture serve several placements without
+    spending the budget again; misses count too, so empty or unreadable members
+    cannot buy unlimited ZIP reparses. Card text remains the source metadata;
+    placements, as for avatars, belong to the existing image store.
+    """
+
+    def __init__(self, data: bytes):
+        self.data = data
+        self.remaining = cards.MAX_ASSET_BYTES
+        self.images: dict[str, tuple[bytes, str] | None] = {}
+
+    def read(self, path: str) -> tuple[bytes, str] | None:
+        if path in self.images:
+            return self.images[path]
+        if self.remaining <= 0 or len(self.images) >= _MAX_BUNDLED_IMAGES:
+            return None
+        blob = cards.read_charx_asset(self.data, path, max_bytes=self.remaining, spend=self._spend)
+        image = None
+        if blob is not None:
+            ext = fetch.sniff_ext(blob)
+            if ext:
+                image = (blob, ext)
+        self.images[path] = image
+        return image
+
+    def _spend(self, size: int) -> None:
+        self.remaining -= size
+
+
+def _bundled_image_name(directory: Path, name: str) -> bool:
+    # assets.storable predates placements and admits NUL and Win32 device/
+    # invalid names. Imported names must work on every synced platform,
+    # including the placement's .json suffix (#26).
+    if not assets.storable(name) or any(ord(c) < 32 or c in '<>"|' for c in name):
+        return False
+    try:
+        ziputil.member_parts(name)
+        placement = image_refs.ref_path(directory, name)
+        return len(placement.name.encode("utf-8")) <= 255
+    except (ValueError, ziputil.ArchiveError):
+        return False
+
+def _import_bundled_images(root: Path, cid: str, vid: str, card: dict,
+                           bundled: _BundledImages) -> None:
+    data = cards.card_data(card)
+    extensions = data.get("extensions")
+    holders = (data, extensions) if isinstance(extensions, dict) else (data,)
+    used: set[str] = set()
+    directory = assets.version_dir(root, cid, vid)
+    for holder in holders:
+        entries = holder.get("assets")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if len(used) >= _MAX_BUNDLED_IMAGES:
+                return
+            if not isinstance(entry, dict) or entry.get("type") in _AVATAR_TYPES:
+                continue
+            name, uri = entry.get("name"), entry.get("uri")
+            if not (isinstance(name, str) and isinstance(uri, str)
+                    and _bundled_image_name(directory, name)):
+                continue
+            # Case-fold on every platform: a store may sync to Windows. The
+            # first valid entry owns its name, and only avatar resolution may
+            # claim the avatar slot, even when this card has no avatar.
+            if name.casefold() == assets.AVATAR or name.casefold() in used:
+                continue
+            path = cards.embedded_path(uri)
+            image = bundled.read(path) if path is not None else None
+            if image is not None:
+                assets.put_image(root, cid, vid, name, image[0], image[1])
+                used.add(name.casefold())
 
 
 def _avatar_candidates(card: dict) -> list[str]:
@@ -1024,7 +1109,7 @@ def _plane_is_the_carried_avatar(png: bytes, carried: bytes) -> bool:
 
 
 def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
-                    network: bool) -> tuple[bytes, str, str] | None:
+                    network: bool, bundled: _BundledImages | None = None) -> tuple[bytes, str, str] | None:
     """Best-effort avatar bytes from a card: (bytes, ext, the URI they came from).
 
     Scans every avatar location (assets/avatar, and their extensions-relocated
@@ -1046,7 +1131,8 @@ def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
     that reads as empty or refuses to open costs nothing in bytes and would
     otherwise buy an unlimited number of those parses.
     """
-    budget = cards.MAX_ASSET_BYTES
+    if bundled is None:
+        bundled = _BundledImages(data)
     lookups = _MAX_BUNDLED_READS
     for uri in dict.fromkeys(_avatar_candidates(card)):
         embedded = fetch.decode_data_uri(uri)
@@ -1054,16 +1140,12 @@ def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
             return embedded[0], embedded[1], uri
         path = cards.embedded_path(uri)
         if path is not None:
-            if fmt != "charx" or budget <= 0 or lookups <= 0:
+            if fmt != "charx" or lookups <= 0:
                 continue  # nothing to open it against, or a budget is spent
             lookups -= 1
-            blob = cards.read_charx_asset(data, path, max_bytes=budget)
-            if blob is None:
-                continue
-            budget -= len(blob)
-            ext = fetch.sniff_ext(blob)
-            if ext:
-                return blob, ext, uri
+            image = bundled.read(path)
+            if image is not None:
+                return image[0], image[1], uri
         elif network and uri.startswith(("http://", "https://")):
             got = fetch.download_url(uri)
             if got:
@@ -1128,7 +1210,8 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     cards.bake_char_name(card)
     # Resolve (and unhook) a carried avatar BEFORE the card is written: the
     # writes below persist whatever `card` holds at that moment.
-    avatar = _resolve_avatar(card, data, fmt, network=(fmt != "png"))
+    bundled = _BundledImages(data) if fmt == "charx" else None
+    avatar = _resolve_avatar(card, data, fmt, network=(fmt != "png"), bundled=bundled)
     if fmt == "png" and avatar and not _plane_is_the_carried_avatar(data, avatar[0]):
         # A PNG's own pixels are the character's picture -- as they have always
         # been on import. The card's copy only wins when those pixels are the
@@ -1169,6 +1252,8 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     if avatar:
         source = avatar[2] if avatar[2].startswith(("http://", "https://")) else None
         assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1], source_url=source)
+    if bundled is not None:
+        _import_bundled_images(root, cid, vid, card, bundled)
     return cid, vid
 
 
