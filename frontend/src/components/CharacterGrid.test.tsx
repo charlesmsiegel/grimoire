@@ -211,6 +211,20 @@ test("a failed post-import roster refresh cannot put the old world's error on th
   expect(screen.getByRole("link", { name: /Winifred/ })).toHaveAttribute("href", "/worlds/saltmarch/characters/winifred");
 });
 
+test("a parent rebuilding an equal scope object mid-refresh is the same visit, so the save still navigates", async () => {
+  const view = render(<MemoryRouter><Spy /><CharacterGrid scope={{ kind: "world", id: "realm" }} wid="realm" /></MemoryRouter>);
+  await openTextDraft();
+  let finish!: (rows: ReturnType<typeof row>[]) => void;
+  vi.mocked(api.listCharacters).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  fireEvent.click(screen.getByRole("button", { name: "Save character" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import character text" })).toBeNull());
+  // The page rerenders (a header or module read landing) with a new object
+  // naming the same world: the fence keys on the scope's value, not identity.
+  view.rerender(<MemoryRouter><Spy /><CharacterGrid scope={{ kind: "world", id: "realm" }} wid="realm" /></MemoryRouter>);
+  await act(async () => { finish([row("rook", "Rook")]); });
+  await waitFor(() => expect(lastLocation).toBe("/worlds/realm/characters/rook"));
+});
+
 test.each(["success", "failure"])("a post-import refresh cannot act after a round trip between worlds (%s)", async (outcome) => {
   const view = render(<MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
   await openTextDraft();

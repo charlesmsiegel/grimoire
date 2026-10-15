@@ -239,15 +239,21 @@ export function CharacterGrid(
     setTextImportOpen(false);
   }
 
-  // Identity denotes this visit, so leaving and returning to the same world
-  // cannot revive an older import's refresh/navigation. Cleanup fences a
-  // roster that unmounts while that refresh is still pending (#136).
-  const liveScope = useRef<EntityScope | null>(scope);
-  liveScope.current = scope;
+  // A visit is one stay on one scope. Its token changes only when the scope's
+  // KEY does, so leaving and returning to the same world cannot revive an
+  // older import's refresh or navigation, while a parent rebuilding its scope
+  // object per render is still the same visit -- the fence never rests on an
+  // object's identity, or on useMemo keeping its cache. Cleanup fences a
+  // roster that unmounts while a refresh is still pending (#136).
+  const visitRef = useRef<{ key: string } | null>(null);
+  if (visitRef.current?.key !== scopeKey) visitRef.current = { key: scopeKey };
+  const visit = visitRef.current;
+  const liveVisit = useRef<{ key: string } | null>(visit);
+  liveVisit.current = visit;
   useEffect(() => {
-    liveScope.current = scope;
-    return () => { liveScope.current = null; };
-  }, [scope]);
+    liveVisit.current = visit;
+    return () => { liveVisit.current = null; };
+  }, [visit]);
   const onListedRef = useRef(onListed);
   onListedRef.current = onListed;
 
@@ -260,33 +266,35 @@ export function CharacterGrid(
   // other.
   const reload = useCallback(() => {
     const from = scope;
+    const at = visit;
     return api.listCharacters(from).then((rows) => {
-      if (liveScope.current === from) {
+      if (liveVisit.current === at) {
         setChars((prev) => reuseRows(prev, rows));
         setCharsKnown(true);
       }
     });
-  }, [scope]);
+  }, [scope, visit]);
 
   const recountUndescribed = useCallback(() => {
     const from = scope;
-    const current = () => liveScope.current === from;
+    const at = visit;
+    const current = () => liveVisit.current === at;
     Promise.resolve()
       .then(() => api.countUndescribedImages(from))
       .then((n) => { if (current()) setUndescribedCount(n); })
       .catch(() => { if (current()) setUndescribedCount(null); });
-  }, [scope]);
+  }, [scope, visit]);
 
   useEffect(() => { recountUndescribed(); }, [recountUndescribed]);
 
   useEffect(() => {
-    const from = scope;
+    const at = visit;
     // `alive` as well as the scope test: a reader who leaves the roster while
     // its read is in flight has left for a section that may take no module,
     // and `onListed` landing then would start the page's module reads for it.
     let alive = true;
     const current = () => alive
-      && liveScope.current === from;
+      && liveVisit.current === at;
     // The revalidation, when this scope painted from remembered rows, and the
     // read, when it did not -- the same call either way.
     reload()
@@ -309,7 +317,7 @@ export function CharacterGrid(
     // standing it becomes a claim about whichever library is showing now.
     setTaglineBatchMsg(null);
     return () => { alive = false; };
-  }, [reload, scope]);
+  }, [reload, visit]);
 
   // A derive dies with the view that started it — nothing here is a detached
   // run, so leaving takes the progress line and the Stop button with it, and a
@@ -370,7 +378,8 @@ export function CharacterGrid(
    *  is corrected from the list while it is at hand. */
   function openDescribe() {
     const from = scope;
-    const current = () => liveScope.current === from;
+    const at = visit;
+    const current = () => liveVisit.current === at;
     setDescribeLoading(true);
     api.listUndescribedImages(from)
       .then((q) => {
@@ -527,8 +536,8 @@ export function CharacterGrid(
     setTaglineBatch({ done: 0, total: untagged.length, name: "" });
     const ctl = new AbortController();
     taglineAbort.current = ctl;
-    const from = scope;
-    const here = () => liveScope.current === from;
+    const at = visit;
+    const here = () => liveVisit.current === at;
     // Counted from the frames rather than the summary alone: a run the user
     // stops never sends one, and "you spent forty calls, here is nothing" is
     // not an acceptable answer to Stop.
@@ -647,11 +656,11 @@ export function CharacterGrid(
           onSaved={(result) => {
             setTextImportOpen(false);
             void reload().then(() => {
-              if (liveScope.current === scope) {
+              if (liveVisit.current === visit) {
                 navigate(characterHref(scope, result.character));
               }
             }).catch((err: unknown) => {
-              if (liveScope.current === scope) setError(err);
+              if (liveVisit.current === visit) setError(err);
             });
           }} />
       )}

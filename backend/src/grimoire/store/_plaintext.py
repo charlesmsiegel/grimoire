@@ -159,7 +159,13 @@ def _folder_fits(name: str) -> bool:
 def _clip(text: str) -> str:
     """Shorten a guessed name until its folder fits. The reviewer still has the
     whole text in the description, so a guess may be clipped; an explicit name
-    may not."""
+    may not.
+
+    Capping to MAX_NAME_CHARS first bounds the shrink loop to at most that many
+    slugifications of a short string, however long the heading or first line
+    is; re-slugifying every prefix of the whole line was quadratic (#136).
+    """
+    text = text[:MAX_NAME_CHARS]
     while text and not _folder_fits(text):
         text = text[:-1]
     return text

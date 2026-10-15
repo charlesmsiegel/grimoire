@@ -5,6 +5,7 @@ import json
 import pytest
 
 from grimoire import routes
+from grimoire.store import _plaintext, paths
 from tests import draft_runs
 from tests.llm_fakes import FakeOpenRouterComplete
 
@@ -133,6 +134,18 @@ def test_the_folder_limit_is_on_the_slug_not_the_name(client, world):
     assert len(card["data"]["name"]) < 200
     saved = client.post(f"/api/worlds/{world}/characters", json={"name": card["data"]["name"], "card": card})
     assert saved.status_code == 200, saved.text
+
+
+def test_clipping_a_long_guess_is_bounded_not_quadratic(monkeypatch):
+    # Counted rather than timed: a near-limit heading used to be re-slugified
+    # once per dropped code point, over the whole remaining line.
+    calls = []
+    real = paths.slugify
+    monkeypatch.setattr(paths, "slugify", lambda text: calls.append(len(text)) or real(text))
+    data = _plaintext.parse("# " + "İ" * 60000 + "\nKeeps a ledger.")["data"]
+    assert _plaintext._folder_fits(data["name"])
+    assert len(calls) <= _plaintext.MAX_NAME_CHARS + 2
+    assert max(calls) <= _plaintext.MAX_NAME_CHARS
 
 
 @pytest.mark.parametrize("text", ["﻿ ﻿", "﻿\n\t﻿"], ids=["bom-space", "bom-lines"])
