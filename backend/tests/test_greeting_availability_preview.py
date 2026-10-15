@@ -82,7 +82,7 @@ def test_preview_normalizes_tags_like_the_eventual_campaign_pc(client, world):
     assert response.status_code == 200
     assert response.json()[0]["available"] is True
 
-    cid = campaigns.create_campaign("Run", wid)
+    cid = campaigns.create_campaign("Saltmarch", wid)
     pid, vid = pcs.create_pc(campaigns.campaign_root(cid), "Mara", draft_tags)
     sid = scenes.create_scene(cid, "Open")
     appearances.appear(cid, sid, "pcs", pid, vid, "player")
