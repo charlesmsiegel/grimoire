@@ -16,8 +16,9 @@ reused: a member whose picture is missing is skipped, and its own URL answers
 
 `guard_write` protects published format-1 names while the world holds format-1
 state (`has_format1`), failing closed on a manifest or harvest journal that
-does not read. `check_member_name` always reserves the hash-named spelling:
-another device's format-1 journal is invisible in this device's cache (#478).
+does not read. `check_member_name` and the upload guard `guard_put` always
+reserve the hash-named spelling: another device's format-1 journal is
+invisible in this device's cache (#478).
 
 The member index in a URL is canonical ASCII decimal, parsed only by
 `member_index`, so one picture has one URL. `validate(raw)` is the public,
@@ -328,8 +329,12 @@ def guard_put(wid: str, name: str, data: bytes) -> None:
 
     Called under the collection lock. Standalone delete/name guards retain
     their own checks; only this upload knows both answers belong to one write.
+    With no local format-1 state nothing here references `name`, but the
+    hash spelling stays reserved, as `check_member_name` keeps it: another
+    device's format-1 journal is invisible in this device's cache (#478).
     """
     if not has_format1(wid):
+        _check_member_hash(name, data)
         return
     if referenced(wid, name):
         _guard_member_bytes(wid, name, data)
