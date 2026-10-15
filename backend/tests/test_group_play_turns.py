@@ -414,8 +414,8 @@ def test_repeat_handoff_leads_next_round(client, monkeypatch):
     assert all("Do not propose or emit a handoff" in p for p in prompts)
 
 
-def test_repeat_handoff_without_rounds_is_rejected(client, monkeypatch):
-    _follow_on(monkeypatch, WINIFRED, MARA)
+def test_repeat_without_extra_rounds_is_not_a_selection_option(client, monkeypatch):
+    _follow_on(monkeypatch, WINIFRED)
     cid, sid, base = seed(client)
     group(client, base, order="directed", auto_rounds=0)
     fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", MARA)])
@@ -424,7 +424,14 @@ def test_repeat_handoff_without_rounds_is_rejected(client, monkeypatch):
     assert "error" not in response.text, response.text
     assert fake.calls == 2
     assert speakers(cid, sid) == ["Mara", "Winifred"]
-    assert latest_round(cid, sid)["issue"] == store.response_protocol.INELIGIBLE
+    record = latest_round(cid, sid)
+    assert record["issue"] is None  # no remaining NPC: no unnecessary Decision call
+    candidates, _narrator = character_turns._successor_candidates(
+        cid, sid, record, [MARA, WINIFRED], WINIFRED)
+    assert not candidates
+    assert character_turns._successor_answer(
+        record, [MARA, WINIFRED], WINIFRED, MARA)["issue"] == (
+            store.response_protocol.INELIGIBLE)
 
 
 def test_stop_zeroes_remaining_rounds_and_retry_starts_none(client):
