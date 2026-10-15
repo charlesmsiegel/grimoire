@@ -55,9 +55,11 @@ from __future__ import annotations
 import logging
 import mimetypes
 import os
+import stat
 import re
 import time
 import zipfile
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -76,21 +78,22 @@ _IMAGE_PREFIX = "grimoire-images-"
 _NAME_RE = re.compile(r"^grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
 _IMAGE_NAME_RE = re.compile(r"^grimoire-images-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
 #: The prefix of the safety backup the inference-settings migration takes
-#: before its first write (`store.inference.migrate`, spec 11.2 step 1). A full
-#: archive like any other, listed as a restore point -- but **retention never
+#: before its first write (`store.inference.migrate`, spec 11.2 step 1). New
+#: archives contain protected settings only (#496); older full names remain
+#: recognized. Both are listed with their scope, and **retention never
 #: prunes it**: "the user can go back" depends on it existing, and a sweep
 #: keeping the newest N would have deleted it N backups after the upgrade.
 #: `sweep` lists `_NAME_RE` alone, which this never matches.
 SAFETY_PREFIX = "pre-inference-"
-_SAFETY_NAME_RE = re.compile(r"^pre-inference-grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
+_SAFETY_NAME_RE = re.compile(r"^pre-inference-(?:settings-)?grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
 #: The prefix of the archive retirement takes before it deletes the legacy
 #: settings (`store.inference.retire`, slice I ruling 6):
-#: `pre-retirement-grimoire-<stamp>.zip`. The safety archive's rules exactly:
-#: a full archive, listed as a restore point (so `due` counts it), and never
+#: `pre-retirement-settings-grimoire-<stamp>.zip`. The safety archive's rules:
+#: partial settings scope, ignored by full-backup scheduling, and never
 #: pruned -- `sweep` lists `_NAME_RE` alone, which this never matches.
 RETIRE_PREFIX = "pre-retirement-"
-_RETIRE_NAME_RE = re.compile(r"^pre-retirement-grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
-#: The never-pruned full-archive series, beside the ordinary one: every place
+_RETIRE_NAME_RE = re.compile(r"^pre-retirement-(?:settings-)?grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
+#: The never-pruned safety-archive families, beside the ordinary one: every place
 #: that recognizes an archive of ours reads them from here.
 _KEPT_NAME_RES = (_SAFETY_NAME_RE, _RETIRE_NAME_RE)
 #: The prefixes `create_backup` takes. Closed, because an archive under any
@@ -347,8 +350,68 @@ def _walk_error(exc: OSError) -> None:
     raise exc
 
 
+def _settings_files(root: Path, skip: tuple[Path, ...], directory: Path) -> list[Path]:
+    """Inventory only records inference can rewrite (#496).
+
+    Selection starts at the protected roots: walking the library and filtering
+    afterwards would still make a large image/transcript library delay migration.
+    Fail closed on directory links and output exclusions; either could hide a
+    whole protected subtree behind a seemingly successful settings archive.
+    """
+    selected: list[Path] = []
+
+    def kind(path: Path) -> int:
+        try:
+            return path.stat().st_mode
+        except FileNotFoundError:
+            return 0
+
+    def record(path: Path) -> None:
+        if _is_skipped(path, skip):
+            raise OSError("backup directory overlaps protected settings")
+        if stat.S_ISREG(kind(path)):
+            selected.append(path)
+
+    def folder(path: Path) -> bool:
+        if path.is_symlink():
+            raise OSError("protected settings directory is a symlink")
+        if _is_skipped(path, skip):
+            raise OSError("backup directory overlaps protected settings")
+        return stat.S_ISDIR(kind(path))
+
+    for name in ("config.md", "inference-retired.json"):
+        record(root / name)
+    for name in ("llm_connections", "sampler_presets"):
+        base = root / name
+        target = _norm(directory)
+        if _norm(base) == target or _norm(base) in target.parents:
+            raise OSError("backup directory overlaps protected settings")
+        if not folder(base):
+            continue
+        for dirpath, dirnames, filenames in os.walk(base, onerror=_walk_error,
+                                                    followlinks=False):
+            here = Path(dirpath)
+            # os.walk does not follow links, but silently dropping one would
+            # claim to protect settings the app reads through that directory.
+            dirnames[:] = sorted(d for d in dirnames if folder(here / d))
+            for filename in sorted(filenames):
+                record(here / filename)
+    base = root / "campaigns"
+    if folder(base):
+        try:
+            children = sorted(base.iterdir())
+        except FileNotFoundError:
+            children = []
+        for child in children:
+            if folder(child):
+                record(child / "campaign.md")
+                record(child / "revision.txt")
+    return selected
+
+
 def _archive_into(fh, root: Path, skip: tuple[Path, ...], directory: Path,
-                  *, images_only: bool = False) -> None:
+                  *, images_only: bool = False, files: list[Path] | None = None,
+                  on_progress: Callable[[int, int | None], None] | None = None) -> None:
     """Write the store at `root` into the open binary file `fh`.
 
     ``os.walk(followlinks=False)``, not ``rglob``: a directory symlink pointing
@@ -380,6 +443,19 @@ def _archive_into(fh, root: Path, skip: tuple[Path, ...], directory: Path,
     """
     backups_here = _norm(directory)
     with zipfile.ZipFile(fh, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as z:
+        if files is not None:
+            total = len(files)
+            if on_progress:
+                on_progress(0, total)
+            for done, path in enumerate(files, 1):
+                try:
+                    if stat.S_ISREG(path.stat().st_mode):
+                        _store_file(z, path, path.relative_to(root).as_posix())
+                except FileNotFoundError:
+                    pass  # A vanished inventory member still completes its slot.
+                if on_progress:
+                    on_progress(done, total)
+            return
         for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error,
                                                     followlinks=False):
             here = Path(dirpath)
@@ -432,12 +508,13 @@ def _allocate(directory: Path, when: datetime, prefix: str = _PREFIX) -> Path:
         n += 1
 
 
-def create_backup(when: datetime | None = None, prefix: str = "") -> Path:
-    """Zip the whole store into a new archive and return its path.
+def create_backup(when: datetime | None = None, prefix: str = "", *,
+                  on_progress: Callable[[int, int | None], None] | None = None) -> Path:
+    """Zip the store, or protected settings for a safety family (#496).
 
     `prefix` names the series: "" for the ordinary one, `SAFETY_PREFIX` for the
-    inference migration's safety backup (`pre-inference-grimoire-<stamp>.zip`)
-    and `RETIRE_PREFIX` for retirement's (`pre-retirement-grimoire-<stamp>.zip`),
+    inference migration's safety backup (`pre-inference-settings-grimoire-<stamp>.zip`)
+    and `RETIRE_PREFIX` for retirement's (`pre-retirement-settings-grimoire-<stamp>.zip`),
     neither of which `sweep` ever prunes. Any other prefix is a `ValueError`.
 
     Raises whatever the filesystem raises; on any failure the target name is
@@ -458,10 +535,17 @@ def create_backup(when: datetime | None = None, prefix: str = "") -> Path:
         # Before allocating, under the lock: no backup this machine runs can be
         # mid-build while it is held, and the age test covers another's.
         _sweep_abandoned_temps(directory)
-        target = _allocate(directory, _utc(when), prefix + _PREFIX)
+        skip = _skips(root, directory)
+        files = None
+        if prefix:
+            if on_progress:
+                on_progress(0, None)
+            files = _settings_files(root, skip, directory)
+        series = prefix + ("settings-" if prefix else "") + _PREFIX
+        target = _allocate(directory, _utc(when), series)
         target.parent.mkdir(parents=True, exist_ok=True)
         with atomic.streaming_write(target) as fh:
-            _archive_into(fh, root, _skips(root, directory), directory)
+            _archive_into(fh, root, skip, directory, files=files, on_progress=on_progress)
         return target
 
 
@@ -512,10 +596,10 @@ def _parsed(name: str, pattern: re.Pattern[str] = _NAME_RE) -> tuple[datetime, i
 
 
 def list_backups() -> list[dict]:
-    """Every full archive this module wrote, newest first -- the ordinary
-    series, the migration's safety backups (`SAFETY_PREFIX`) and retirement's
-    archives (`RETIRE_PREFIX`) together, since each is a whole store to
-    restore from.
+    """Ordinary and safety archives, newest first, with explicit scope (#496).
+
+    New safety names are partial settings archives; older safety names remain
+    full restore points. Retention keeps both safety families indefinitely.
 
     A missing backup directory is an empty list, not an error: a store that has
     never been backed up has nothing to report, and asking must not create the
@@ -528,6 +612,9 @@ def list_backups() -> list[dict]:
         rows += _list_in(directory, kept)
     # Newest first across every series: `created` is the stamp each name
     # carries, to the second, in a format that sorts as text.
+    for row in rows:
+        row["scope"] = "settings" if row["name"].startswith(
+            (SAFETY_PREFIX + "settings-", RETIRE_PREFIX + "settings-")) else "full"
     rows.sort(key=lambda row: row["created"], reverse=True)
     return rows
 
@@ -620,7 +707,7 @@ def due(now: datetime | None = None) -> bool:
     """
     rows = list_backups()
     at = _utc(now)
-    past = [r for r in rows if _taken_at(r["name"]) <= at]
+    past = [r for r in rows if r["scope"] == "full" and _taken_at(r["name"]) <= at]
     if not past:
         return True
     return at - _taken_at(past[0]["name"]) >= timedelta(

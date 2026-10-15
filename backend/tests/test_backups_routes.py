@@ -251,3 +251,10 @@ def test_the_app_starts_and_stops_with_the_ticker_running(monkeypatch, tmp_path)
     worker.join(30)
 
     assert done.is_set(), "the app did not shut down with the ticker running"
+
+
+def test_settings_archives_are_labeled_by_the_api(client):
+    backups.create_backup(AT, backups.SAFETY_PREFIX)
+    rows = client.get("/api/backups").json()["backups"]
+    assert rows[0]["scope"] == "settings"
+    assert client.post("/api/backups").json()["backups"][0]["scope"] == "full"
