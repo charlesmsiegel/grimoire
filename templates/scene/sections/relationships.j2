@@ -3,7 +3,9 @@
 {%- from "scene/_sources.j2" import source_text with context -%}
 {%- set lines = [] -%}
 {%- for line in relationship_lines -%}
-{%- set _ = lines.append(source_text(line.split(": ", 1)[0], line)) -%}
+{#- The whole line is its own label: a name may contain ": ", so the line is
+    never split to recover one. Each line names one pair, so no two collide. -#}
+{%- set _ = lines.append(source_text(line, line)) -%}
 {%- endfor -%}
 {%- if lines %}# Relationships
 {{ lines | join("\n") }}{% endif -%}

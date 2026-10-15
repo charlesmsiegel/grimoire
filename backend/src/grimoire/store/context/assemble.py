@@ -20,6 +20,7 @@ what it is handed.
 from __future__ import annotations
 
 import logging
+import random
 import re
 from copy import deepcopy
 from typing import NamedTuple
@@ -343,6 +344,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 
     raw_names = [_str(d, "name") for d in npc_cards]
     cast_blocks = []
+    #: Parallel to cast_blocks: each block's identity for source capture. Kept out
+    #: of the rows, which custom templates may serialise whole (#131).
+    cast_block_refs = []
     # strict=True is doing real work: `npc_ids` is appended only after its card
     # read succeeds, so the two lists staying aligned is an invariant rather
     # than an assumption, and a silent truncation here would attach one
@@ -352,8 +356,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         parts = [_str(card, "description"), _str(card, "personality"),
                  _str(card, "scenario")]
         anchor = overlay.voice_anchor_record(cid, char_id)["text"]
+        cast_block_refs.append(f"characters:{char_id}")
         cast_blocks.append({
-            "name": shown, "ref": f"characters:{char_id}",
+            "name": shown,
             "description": "\n".join(p for p in parts if p),
             "anchor": voice_anchors.effective(_expanded(anchor)),
             "example": actor.select_examples(_expanded(_str(card, "mes_example")),
@@ -498,6 +503,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "budget": targets[phase],
         "npc_cards": npc_cards,
         "cast_blocks": cast_blocks,
+        "cast_block_refs": cast_block_refs,
         "named_npc_count": named_npc_count,
         # The POV filter (#116) resolves the present cast's names itself, from
         # the cast record: `npc_names`/`player_names` here are one name each and
@@ -772,15 +778,18 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
     producers remain byte-for-byte equivalent under `test_actor_scoped_skip.py`.
     """
     if actor_scoped:
-        return {"offscene_active": [], "offscene_known": [], "available_art": [],
+        return {"offscene_active": [], "offscene_active_refs": [], "offscene_known": [], "available_art": [],
                 "story_entries": [], "archive_entries": [], "history_evidence": [],
                 "history_withheld": [], "history_known": [], "history_suspected": [], "plot_lines": [],
                 "commitment_lines": [], "group_states": [], "secret_group_states": [],
                 "relationship_lines": [], "today": None,
                 "birthdates": birthdays.relevant(cid, birthday_text, excluded_refs)}
     offscene_active, offscene_known = cast_data._cast_directory_data(croot, cid, sid)
+    # Identities ride beside the rows, which custom templates may serialise whole.
+    offscene_active_refs = [a.pop("ref", "") for a in offscene_active]
     return {
-        "offscene_active": offscene_active, "offscene_known": offscene_known,
+        "offscene_active": offscene_active, "offscene_active_refs": offscene_active_refs,
+        "offscene_known": offscene_known,
         # Ranked against the same scan window world info activates on, over a
         # pool built from what this turn already resolved -- see art.catalogue.
         # `[]` on any failure, so a store being synced under us costs the
@@ -1436,19 +1445,25 @@ def _section_body(section: Section, data: dict, capture: source_text.Capture | N
                   section_data: dict) -> tuple[str, source_text.Capture | None, dict]:
     """One section's rendered body, with its capture and the data it rendered with.
 
-    An annotated render unmarks its body; when that body is not what the plain
-    render produces (a template formatted a marked contribution after the macro:
-    `| upper`, a slice), the marks no longer parse or a marker was lost, and the
-    prompt would drift. Such a section renders unannotated, exactly as the plain
-    path does. Rendering draws no macro, so nothing downstream shifts.
+    An annotated render must send exactly what the plain render sends. A template
+    may format a marked contribution (`| upper`, a slice), which breaks its marks;
+    and a template may draw from the global `random` (Jinja's `random` filter
+    does), so rendering it again later would consume different draws. So the
+    annotated body is taken from one render made from the state the plain render
+    starts from, and the plain render then runs LAST, from that same state. On a
+    mismatch the section renders unannotated (its plain body), and in either case
+    `random` is left exactly where `describe=False` leaves it.
     """
-    body = prompts.render(_section_template(section, section_data), **section_data).strip()
     if capture is None:
-        return body, None, data
-    body = capture.unmark(body)
-    if body == prompts.render(_section_template(section, data), **data).strip():
+        return prompts.render(_section_template(section, data), **data).strip(), None, data
+    state = random.getstate()
+    body = capture.unmark(prompts.render(_section_template(section, section_data),
+                                         **section_data).strip())
+    random.setstate(state)
+    plain = prompts.render(_section_template(section, data), **data).strip()
+    if body == plain:
         return body, capture, section_data
-    return prompts.render(_section_template(section, data), **data).strip(), None, data
+    return plain, None, data
 
 
 def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,

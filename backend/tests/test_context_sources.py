@@ -20,7 +20,7 @@ from grimoire.store import (
     taglines,
     worlds,
 )
-from grimoire.store.context import assemble, layout, macros, semantic
+from grimoire.store.context import assemble, layout, macros, semantic, source_text
 
 
 @pytest.fixture
@@ -59,8 +59,8 @@ def _rows(cid, sid):
                                ("Seraphine", "## Seraphine\nSeraphine keeps the map.")]),
     ("world_info", [("Realm", "The tide rises at dusk."),
                     ("Saltmarch", "The gate opens at dawn.")]),
-    ("relationships", [("Mara → Seraphine", "Mara → Seraphine: trust 4, affection 3, tension 1 (warm)"),
-                       ("Seraphine → Mara", "Seraphine → Mara: trust 2, affection 1, tension 3 (wary)")]),
+    ("relationships", [("Mara → Seraphine: trust 4, affection 3, tension 1 (warm)", "Mara → Seraphine: trust 4, affection 3, tension 1 (warm)"),
+                       ("Seraphine → Mara: trust 2, affection 1, tension 3 (wary)", "Seraphine → Mara: trust 2, affection 1, tension 3 (wary)")]),
     ("off_scene_cast_active", [("Winifred", "Winifred: Watches the gate.")]),
     ("off_scene_cast_known", [("Realm", "Realm: Carries the key. (available as: main)")]),
 ])
@@ -258,3 +258,48 @@ def test_a_template_that_transforms_a_source_renders_the_plain_prompt(scene, tem
     assert all("\x00" not in m["content"] for m in described)
     row = next(r for r in detail["sections"] if r["id"] == "character_descriptions")
     assert "sources" not in row
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_a_template_drawing_from_random_renders_the_plain_prompt(scene, templates, seed):
+    """Jinja's `random` filter draws from the global `random` module. A second
+    render for comparison would consume different draws than describe=False, so
+    the later macro draws would change. Both paths must leave `random` identical."""
+    cid, sid, _ = scene
+    (templates / "scene/sections/character_descriptions.j2").write_text(
+        '{%- from "scene/_sources.j2" import source_text with context -%}'
+        '{{ source_text("Mara", "keeps " ~ ["the", "a", "some"] | random ~ " map") }}'
+        ' {{ ["x", "y", "z"] | random }}',
+        encoding="utf-8")
+    state = random.getstate()
+    try:
+        random.seed(seed)
+        described, _ = context.compose_turn(cid, sid)
+        after_described = random.getstate()
+        random.seed(seed)
+        plain, _ = context.compose_turn(cid, sid, describe=False)
+        after_plain = random.getstate()
+    finally:
+        random.setstate(state)
+    assert described == plain
+    assert after_described == after_plain
+
+
+def test_a_custom_template_serialising_cast_rows_sees_no_source_refs(scene, templates):
+    """#131: a template that dumps whole cast rows must render what it did before."""
+    cid, sid, _ = scene
+    (templates / "scene/sections/character_descriptions.j2").write_text(
+        "{% for b in cast_blocks %}{{ b }}{% endfor %}", encoding="utf-8")
+    described, _ = context.compose_turn(cid, sid)
+    plain, _ = context.compose_turn(cid, sid, describe=False)
+    assert described == plain
+    assert "characters:" not in next(m["content"] for m in described if "Mara" in m["content"])
+
+
+def test_relationship_labels_keep_names_that_contain_the_separator():
+    """A name with ': ' must not truncate the label: the line is its own label."""
+    capture = source_text.Capture()
+    text = prompts.render("scene/sections/relationships.j2", relationship_lines=[
+        "Captain: Mara → Seraphine: trust 4"], capture_source=capture.mark)
+    _, sources = capture.finish(capture.unmark(text))
+    assert [s["label"] for s in sources] == ["Captain: Mara → Seraphine: trust 4"]

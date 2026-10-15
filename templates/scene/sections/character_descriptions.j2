@@ -18,7 +18,8 @@
 {%- if b.description -%}
 {%- set block = ("## " ~ b.name ~ "
 " ~ b.description) if b.name else b.description -%}
-{%- set _ = blocks.append(source_text(b.name, block, b.ref | default(""))) -%}
+{%- set ref = (cast_block_refs | default([]))[loop.index0] | default("") -%}
+{%- set _ = blocks.append(source_text(b.name, block, ref)) -%}
 {%- endif -%}
 {%- endfor -%}
 {{ blocks | join("
