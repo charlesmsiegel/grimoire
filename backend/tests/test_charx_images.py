@@ -340,37 +340,80 @@ def test_failed_charx_import_leaves_an_existing_character_as_it_was(tmp_path, mo
     assert ch.read_character(tmp_path, cid) == before
 
 
-def test_failed_charx_update_restores_the_card_and_its_placements(tmp_path, monkeypatch):
+def test_charx_update_fills_empty_slots_and_keeps_existing_pictures(tmp_path):
     cid, vid = ch.create_character(tmp_path, "Seraphine")
-    original = ch.read_card(tmp_path, cid, vid)
-    png = _picture()
+    png, other = _picture(), _picture("png_onepixel.png")
     first = _bundle([_entry("happy", "assets/a.png")], {"assets/a.png": png})
     ch.import_card(tmp_path, first, "charx", into_cid=cid, update_vid=vid)
-    before_card = ch.read_card(tmp_path, cid, vid)
-    before_images = ch.read_character(tmp_path, cid)["versions"][0]["images"]
-    assert before_card != original and before_images == ["happy"]
-    # The update replaces `happy` with a new picture and adds `sad`; the second
-    # placement then fails, so `happy` must come back as it was.
-    other = _picture("png_onepixel.png")
     second = _bundle([_entry("happy", "assets/a.png"), _entry("sad", "assets/b.png")],
                      {"assets/a.png": other, "assets/b.png": other})
+
+    ch.import_card(tmp_path, second, "charx", into_cid=cid, update_vid=vid)
+
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["happy", "sad"]
+    assert assets.image_path(tmp_path, cid, vid, "happy").read_bytes() == png
+    assert assets.image_path(tmp_path, cid, vid, "sad").read_bytes() == other
+
+
+def test_failed_charx_update_removes_only_what_it_added(tmp_path, monkeypatch):
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    png, other = _picture(), _picture("png_onepixel.png")
+    ch.import_card(tmp_path, _bundle([_entry("happy", "assets/a.png")], {"assets/a.png": png}),
+                   "charx", into_cid=cid, update_vid=vid)
+    before_card = ch.read_card(tmp_path, cid, vid)
+    update = _bundle([_entry("happy", "assets/a.png"), _entry("sad", "assets/b.png"),
+                      _entry("angry", "assets/c.png")],
+                     {"assets/a.png": other, "assets/b.png": other, "assets/c.png": other})
     _broken_placement(monkeypatch, after=1)
 
     with pytest.raises(OSError):
-        ch.import_card(tmp_path, second, "charx", into_cid=cid, update_vid=vid)
+        ch.import_card(tmp_path, update, "charx", into_cid=cid, update_vid=vid)
 
     assert ch.read_card(tmp_path, cid, vid) == before_card
-    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == before_images
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["happy"]
     assert assets.image_path(tmp_path, cid, vid, "happy").read_bytes() == png
 
 
-def test_a_picture_that_cannot_be_stored_leaves_no_record(tmp_path, monkeypatch):
-    def refuse(*args, **kwargs):
-        raise OSError("image store unavailable")
-
-    monkeypatch.setattr(image_store, "ingest", refuse)
+def test_failed_charx_update_keeps_a_legacy_file_it_did_not_replace(tmp_path, monkeypatch):
+    # A picture stored before placement records existed: a legacy file, no placement.
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    png = _picture()
+    directory = assets.version_dir(tmp_path, cid, vid)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "happy.png").write_bytes(png)
+    update = _bundle([_entry("happy", "assets/a.png"), _entry("sad", "assets/b.png")],
+                     {"assets/a.png": _picture("png_onepixel.png"), "assets/b.png": png})
+    _broken_placement(monkeypatch, after=0)
 
     with pytest.raises(OSError):
-        ch.import_card(tmp_path, _two_picture_card(), "charx", name="Seraphine")
+        ch.import_card(tmp_path, update, "charx", into_cid=cid, update_vid=vid)
 
-    assert ch.list_characters(tmp_path) == []
+    assert (directory / "happy.png").read_bytes() == png
+    assert assets.image_path(tmp_path, cid, vid, "happy").read_bytes() == png
+
+
+def test_rollback_leaves_a_picture_uploaded_during_the_import(tmp_path, monkeypatch):
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    png, upload = _picture(), _picture("png_onepixel.png")
+    real = assets.link_in
+    calls = []
+
+    def upload_then_fail(d, name, image_id, **kwargs):
+        calls.append(name)
+        if len(calls) == 1:
+            real(d, name, image_id, **kwargs)
+            # A user uploads a picture into the slot this import has just filled ...
+            assets.put_image(tmp_path, cid, vid, name, upload, "png")
+        else:
+            raise OSError("disk full")
+
+    monkeypatch.setattr(assets, "link_in", upload_then_fail)
+    blob = _bundle([_entry("happy", "assets/a.png"), _entry("sad", "assets/b.png")],
+                   {"assets/a.png": png, "assets/b.png": png})
+
+    with pytest.raises(OSError):
+        ch.import_card(tmp_path, blob, "charx", into_cid=cid, update_vid=vid)
+
+    # ... and the rollback must not delete it: `happy` still holds the upload.
+    assert assets.image_path(tmp_path, cid, vid, "happy").read_bytes() == upload
+    assert "sad" not in ch.read_character(tmp_path, cid)["versions"][0]["images"]

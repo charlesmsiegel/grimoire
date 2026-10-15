@@ -14,7 +14,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 
@@ -1062,18 +1062,6 @@ def _stage_entry(entry: object, bundled: _BundledImages, ingested: dict[str, str
     return name, image_id
 
 
-def _snapshot_placements(directory: Path, names: list[str]) -> dict[str, image_refs.Ref | None]:
-    return {name: image_refs.read(directory, name) for name in names}
-
-
-def _restore_placements(directory: Path, snapshot: dict[str, image_refs.Ref | None]) -> None:
-    for name, ref in snapshot.items():
-        if ref is None:
-            image_refs.delete(directory, name)
-        else:
-            image_refs.write(directory, name, ref.image, focus=ref.focus)
-
-
 @dataclass
 class _Written:
     """What one import has written to the record so far, so a failure can undo it."""
@@ -1081,16 +1069,19 @@ class _Written:
     new_version: tuple[str, str] | None = None
     #: An update's card as it stood before the write.
     prior_text: str | None = None
+    #: Gallery placements this import added, as (name, image id).
+    placed: list[tuple[str, str]] = field(default_factory=list)
 
 
-def _unwind_import(root: Path, written: _Written, cid: str, vid: str,
-                   snapshot: dict[str, image_refs.Ref | None]) -> None:
+def _unwind_import(root: Path, written: _Written, cid: str, vid: str) -> None:
     """Undo a failed import's record writes; the caller re-raises its error.
 
-    A new character is removed whole. A new version is removed with its art. An
-    updated version gets its card text and its touched placements back. Legacy
-    image files that `put_in` deletes while placing are not restored (rare, and
-    only on the update path).
+    A new character is removed whole, a new version with its art. An updated
+    version gets its card text back, and each gallery placement this import
+    added is removed -- but only while it still holds the image this import
+    put there, so a picture uploaded in the meantime is left alone. An update
+    never overwrites an image the version already had, so nothing else needs
+    restoring (#26).
     """
     if written.new_character is not None:
         shutil.rmtree(_char_dir(root, written.new_character), ignore_errors=True)
@@ -1101,7 +1092,12 @@ def _unwind_import(root: Path, written: _Written, cid: str, vid: str,
         assets.delete_version_images(root, new_cid, new_vid)
     if written.prior_text is not None:
         atomic.write_text(_card_path(root, cid, vid), written.prior_text)
-        _restore_placements(assets.version_dir(root, cid, vid), snapshot)
+    if written.placed:  # only then do the ids name a version
+        directory = assets.version_dir(root, cid, vid)
+        for name, image_id in written.placed:
+            ref = image_refs.read(directory, name)
+            if ref is not None and ref.image == image_id:
+                image_refs.delete(directory, name)
 
 
 def _write_record(root: Path, card: dict, written: _Written, *, into_cid: str | None,
@@ -1137,13 +1133,23 @@ def _write_record(root: Path, card: dict, written: _Written, *, into_cid: str | 
 
 
 def _place_import(root: Path, cid: str, vid: str, avatar: tuple[bytes, str, str] | None,
-                  staged: list[tuple[str, str]]) -> None:
+                  staged: list[tuple[str, str]], written: _Written) -> None:
+    """Place the gallery, then the avatar, and record what was added.
+
+    A name the version already has an image for keeps it: an update fills
+    empty slots and never replaces a picture, so no legacy file is dropped
+    and rollback has nothing to put back. The avatar goes last, so every other
+    write has landed before the one step that replaces an existing image.
+    """
+    directory = assets.version_dir(root, cid, vid)
+    for placed, image_id in staged:
+        if assets.path_in(directory, placed) is not None:
+            continue
+        assets.link_in(directory, placed, image_id)
+        written.placed.append((placed, image_id))
     if avatar:
         source = avatar[2] if avatar[2].startswith(("http://", "https://")) else None
         assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1], source_url=source)
-    directory = assets.version_dir(root, cid, vid)
-    for placed, image_id in staged:
-        assets.link_in(directory, placed, image_id)
 
 
 def _avatar_candidates(card: dict) -> list[str]:
@@ -1334,17 +1340,12 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     staged = _stage_bundled(card, bundled) if bundled is not None else []
     written = _Written()
     cid = vid = ""
-    snapshot: dict[str, image_refs.Ref | None] = {}
     try:
         cid, vid = _write_record(root, card, written, into_cid=into_cid, update_vid=update_vid,
                                  name=name, version_name=version_name)
-        # Snapshot before the first placement write, so an update can put back
-        # what it overwrites. For a new record every read is None, harmlessly.
-        snapshot = _snapshot_placements(assets.version_dir(root, cid, vid),
-                                        [assets.AVATAR, *(n for n, _ in staged)])
-        _place_import(root, cid, vid, avatar, staged)
+        _place_import(root, cid, vid, avatar, staged, written)
     except BaseException:
-        _unwind_import(root, written, cid, vid, snapshot)
+        _unwind_import(root, written, cid, vid)
         raise
     return cid, vid
 
