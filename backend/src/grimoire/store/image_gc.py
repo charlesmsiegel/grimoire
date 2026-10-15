@@ -582,7 +582,11 @@ class _Roots:
     staging: list[dict] = field(default_factory=list)
 
     def block(self, root: Path, path: Path, reason: str) -> None:
-        self.blocking.append({"path": _rel(root, path), "reason": reason})
+        # One row per (path, reason): the same link is reached from several
+        # reserved paths' checks, and the report should say it once.
+        row = {"path": _rel(root, path), "reason": reason}
+        if row not in self.blocking:
+            self.blocking.append(row)
 
 
 def _lstat_dir(root: Path, d: Path, r: _Roots) -> bool:
@@ -681,6 +685,22 @@ def _strict_listing(root: Path, d: Path, r: _Roots) -> list[os.DirEntry] | None:
     return entries
 
 
+def _spelling_variants(root: Path, parent: Path, name: str,
+                       r: _Roots) -> list[os.DirEntry] | None:
+    """Entries of `parent` that fold to `name` without being spelled as it,
+    or None (and `parent` blocking) when `parent` does not list. Unlike
+    `_strict_listing`, a link among the other names is not a block here."""
+    try:
+        with os.scandir(parent) as it:
+            entries = list(it)
+    except OSError:
+        r.block(root, parent, image_refs.UNREADABLE)
+        return None
+    folded = image_refs._fold(name)
+    return [e for e in entries
+            if e.name != name and image_refs._fold(e.name) == folded]
+
+
 def _strict_path(root: Path, path: Path, r: _Roots, *, base: Path | None = None,
                  directory: bool = True) -> bool:
     """A reserved root path, with its spelling checked from directory entries.
@@ -695,14 +715,15 @@ def _strict_path(root: Path, path: Path, r: _Roots, *, base: Path | None = None,
     for name in path.relative_to(parent).parts:
         if not _lstat_dir(root, parent, r):
             return False
-        entries = _strict_listing(root, parent, r)
-        if entries is None:
+        # Only the names that this component could alias are read. A link beside
+        # the reserved path (a user's own folder shortcut at the store root) is
+        # not on any path this walk follows, so it must not stop collection.
+        variants = _spelling_variants(root, parent, name, r)
+        if variants is None:
             return False
-        variants = [e for e in entries if e.name != name
-                    and image_refs._fold(e.name) == image_refs._fold(name)]
+        for entry in variants:
+            r.block(root, Path(entry.path), image_refs.CASE_VARIANT)
         if variants:
-            for entry in variants:
-                r.block(root, Path(entry.path), image_refs.CASE_VARIANT)
             return False
         parent = parent / name
     # A file's parser owns its type/absence checks; its spelling needs the

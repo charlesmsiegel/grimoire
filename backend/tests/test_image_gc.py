@@ -925,6 +925,33 @@ def test_case_variant_root_directories_block_gc(root, relative):
     assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
 
 
+def test_a_link_beside_the_reserved_paths_does_not_block_gc(root, tmp_path):
+    """#479: a user's own shortcut at the store root is on no path the walk
+    follows, so it must not stop collection. The spelling check reads only the
+    names a reserved component could alias, not every sibling."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / "extra-link").symlink_to(elsewhere, target_is_directory=True)
+    orphan = _obj(1)
+    report = _scan(root)
+    assert report["state"] == "complete" and report["blocking"] == []
+    assert _ids(report) == {orphan.id}
+
+
+def test_a_blocking_link_is_reported_once(root, tmp_path):
+    """The same link is reached by several reserved-path checks; the report
+    names it once."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / "worlds" / "realm").mkdir(parents=True)
+    (root / "worlds" / "realm" / "shared-link").symlink_to(elsewhere, target_is_directory=True)
+    _obj(1)
+    report = _scan(root)
+    assert report["state"] == "blocked"
+    rows = [(row["path"], row["reason"]) for row in report["blocking"]]
+    assert rows and len(rows) == len(set(rows))
+
+
 @pytest.mark.parametrize("relative", [
     "worlds/realm/assets/image-collections/saltmarch.JSON",
     ".world-staging/" + "c" * 32 + "/world/assets/image-collections/saltmarch.JSON",
