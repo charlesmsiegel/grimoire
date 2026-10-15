@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.store import assets, cards
+from grimoire.store import assets, cards, image_store
 from grimoire.store import characters as ch
 
 
@@ -276,3 +276,25 @@ def test_charx_without_bundled_images_keeps_the_card(tmp_path):
 
     assert ch.read_card(tmp_path, cid, vid) == card
     assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == []
+
+
+def test_charx_gallery_names_over_one_member_ingest_it_once(tmp_path, monkeypatch):
+    # Regression: each put re-sanitized the picture, so 128 names over one large
+    # member cost 128 full decodes inside a request (#26).
+    png = _picture()
+    entries = [_entry(f"emotion_{i}", "assets/shared.png") for i in range(8)]
+    real_ingest = image_store.ingest
+    ingests = []
+
+    def counting(data, ext, **kwargs):
+        ingests.append(len(data))
+        return real_ingest(data, ext, **kwargs)
+
+    monkeypatch.setattr(image_store, "ingest", counting)
+
+    cid, vid = ch.import_card(tmp_path, _bundle(entries, {"assets/shared.png": png}), "charx")
+
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == [f"emotion_{i}" for i in range(8)]
+    assert ingests == [len(png)]
+    for i in range(8):
+        assert assets.image_path(tmp_path, cid, vid, f"emotion_{i}").read_bytes() == png

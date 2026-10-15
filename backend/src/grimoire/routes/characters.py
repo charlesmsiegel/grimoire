@@ -606,9 +606,10 @@ async def post_character_import(wid: str, file: UploadFile = File(...),
     root = _world_root_or_404(wid)
     data = await file.read()
     try:
-        cid, vid = store.characters.import_card(root, data, format, into_cid=into, name=name,
-                                                version_name=version_name,
-                                                validate_name=_import_name_check(wid, into))
+        # import_card decodes and writes synchronously; keep that off the loop.
+        cid, vid = await run_in_threadpool(
+            store.characters.import_card, root, data, format, into_cid=into, name=name,
+            version_name=version_name, validate_name=_import_name_check(wid, into))
     except store.cards.CardParseError as exc:
         raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
     except store.characters.CharacterNotFound:

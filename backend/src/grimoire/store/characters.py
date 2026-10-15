@@ -1015,6 +1015,10 @@ def _import_bundled_images(root: Path, cid: str, vid: str, card: dict,
     extensions = data.get("extensions")
     holders = (data, extensions) if isinstance(extensions, dict) else (data,)
     used: set[str] = set()
+    # One ingest per distinct member: `put_image` re-runs the sanitizer on every
+    # call, so 128 names over one large picture would cost 128 full decodes.
+    # Later names only place the object the first one stored (#26).
+    ingested: dict[str, str] = {}
     directory = assets.version_dir(root, cid, vid)
     for holder in holders:
         entries = holder.get("assets")
@@ -1035,10 +1039,20 @@ def _import_bundled_images(root: Path, cid: str, vid: str, card: dict,
             if name.casefold() == assets.AVATAR or name.casefold() in used:
                 continue
             path = cards.embedded_path(uri)
-            image = bundled.read(path) if path is not None else None
-            if image is not None:
-                assets.put_image(root, cid, vid, name, image[0], image[1])
+            if path is not None and _place_bundled(directory, name, path, bundled, ingested):
                 used.add(name.casefold())
+
+
+def _place_bundled(directory: Path, name: str, path: str, bundled: _BundledImages,
+                   ingested: dict[str, str]) -> bool:
+    image = bundled.read(path)
+    if image is None:
+        return False
+    image_id = ingested.get(path)
+    if image_id is None:
+        image_id = ingested[path] = image_store.ingest(image[0], image[1]).id
+    assets.link_in(directory, name, image_id)
+    return True
 
 
 def _avatar_candidates(card: dict) -> list[str]:
