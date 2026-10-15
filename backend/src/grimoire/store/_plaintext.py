@@ -14,7 +14,7 @@ from functools import partial
 from pathlib import PurePosixPath
 
 from markdown_it import MarkdownIt
-from markdown_it.rules_inline import StateInline, backtick, image, link
+from markdown_it.rules_inline import StateInline, backtick, html_inline, image, link
 
 from .. import prompts, schemas
 from . import cards
@@ -85,18 +85,18 @@ def _literal_span(rule: Callable[[StateInline, bool], bool], state: StateInline,
 def _literal_lines(text: str) -> set[int]:
     """CommonMark owns literal scope, fence length and closing rules (#136).
 
-    Block line maps preserve indentation; inline tokens need the rule above
+    Block line maps preserve code and raw HTML; inline tokens need the rule above
     because their rendered content has lost its source line breaks/positions.
     """
     parser = MarkdownIt("commonmark")
-    for name, rule in (("backticks", backtick), ("image", image), ("link", link)):
+    for name, rule in (("backticks", backtick), ("html_inline", html_inline), ("image", image), ("link", link)):
         parser.inline.ruler.at(name, partial(_literal_span, rule))
     lines: set[int] = set()
     for token in parser.parse(text):
         if token.map is None:
             continue
         start, end = token.map
-        if token.type in ("fence", "code_block"):
+        if token.type in ("fence", "code_block", "html_block"):
             lines.update(range(start, end))
         elif token.type == "inline":
             for child in token.children or []:

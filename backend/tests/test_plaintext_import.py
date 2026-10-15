@@ -124,6 +124,21 @@ def test_markdown_fence_contents_are_never_card_headings(client, world, body):
     assert data["personality"] == "Patient."
 
 
+@pytest.mark.parametrize("body", [
+    "<pre>\nGreeting: literal text\nName: Winifred\n</pre>",
+    "<!--\nGreeting: literal text\nName: Winifred\n-->",
+], ids=["preformatted", "comment"])
+def test_html_blocks_are_literal_source(client, world, body):
+    response = client.post(f"/api/worlds/{world}/characters/parse-text", json={
+        "text": "Name: Mara\nDescription:\n" + body + "\nPersonality: Patient."})
+    assert response.status_code == 200
+    data = response.json()["card"]["data"]
+    assert data["name"] == "Mara"
+    assert data["description"] == body
+    assert data["first_mes"] == ""
+    assert data["personality"] == "Patient."
+
+
 def test_indented_markdown_code_retains_its_text_and_indentation(client, world):
     body = "    Greeting: quoted metadata\n    Name: Winifred"
     response = client.post(f"/api/worlds/{world}/characters/parse-text", json={
@@ -149,7 +164,8 @@ def test_a_guessed_title_stays_in_description_for_name_corrections(client, world
     "``A `quoted` example:\nGreeting: literal text\nName: Winifred``",
     "![`A quoted example:\nGreeting: literal text\nName: Winifred`](https://example.invalid/image.png)",
     "[A quoted example:\nGreeting: literal text\nName: Winifred](https://example.invalid/)",
-], ids=["single-backtick", "double-backtick", "image-alt-code", "multiline-link"])
+    "Keeps notes. <!--\nGreeting: literal text\nName: Winifred\n-->",
+], ids=["single-backtick", "double-backtick", "image-alt-code", "multiline-link", "inline-comment"])
 def test_multiline_markup_stays_in_its_original_field(client, world, body):
     response = client.post(f"/api/worlds/{world}/characters/parse-text", json={
         "text": "Name: Mara\nDescription: " + body + "\nPersonality: Patient."})
