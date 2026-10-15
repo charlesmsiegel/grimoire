@@ -547,11 +547,43 @@ def link_if_vacant(d: Path, name: str, image_id: str) -> bool:
         # Recover first, so an interrupted promotion's slot is judged as it
         # will stand, not as the half-swap left it.
         _recover_before_write(d, name)
-        ref = image_refs.read(d, name)
-        if (ref is not None and ref.image is not None) or _legacy_path(d, name, False) is not None:
+        if slot_taken(d, name):
             return False
         _place(d, name, image_id, keep_focus=False, supported_only=False)
         return True
+
+
+def slot_taken(d: Path, name: str) -> bool:
+    """Whether `name`, or a case variant of it, already holds a picture in `d`:
+    a placement with an image, or a legacy file.
+
+    Case-folded because a store syncs to case-insensitive filesystems, where
+    `Happy` and `happy` are one slot -- `_image_lock` folds the same way. A
+    caller that must act on the answer holds that lock, as `link_if_vacant`
+    does; unlocked it is a hint, not a guarantee.
+    """
+    folded = image_refs.fold(name)
+    if any(image_refs.fold(other) == folded for other in image_refs.image_names(d)):
+        return True
+    if not d.is_dir():
+        return False
+    return any(p.is_file() and image_refs.fold(p.name.split(".", 1)[0]) == folded
+               for p in d.iterdir())
+
+
+def unlink_if_holds(d: Path, name: str, image_id: str) -> bool:
+    """Remove placement `name` only while it still holds `image_id`.
+
+    The check and the delete run under the name's image lock, so an upload
+    that replaced the picture in the meantime is left as it is.
+    """
+    if not _safe_name(name):
+        raise ValueError("unsafe image id")
+    with _image_lock(d, name):
+        ref = image_refs.read(d, name)
+        if ref is None or ref.image != image_id:
+            return False
+        return image_refs.delete(d, name)
 
 
 def link_in(d: Path, name: str, image_id: str, *, keep_focus: bool = False) -> None:

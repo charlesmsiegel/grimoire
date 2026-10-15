@@ -595,14 +595,6 @@ def _import_name_check(wid: str, into: str | None):
     return check
 
 
-def _locked_import(wid: str, root, data: bytes, fmt: str, into: str | None,
-                   name: str | None, version_name: str | None) -> tuple[str, str]:
-    with store.locks.world_actor_lock(wid):
-        return store.characters.import_card(root, data, fmt, into_cid=into, name=name,
-                                            version_name=version_name,
-                                            validate_name=_import_name_check(wid, into))
-
-
 @router.post("/worlds/{wid}/characters/import")
 async def post_character_import(wid: str, file: UploadFile = File(...),
                                 format: str = Form(...), into: str | None = Form(None),
@@ -614,11 +606,9 @@ async def post_character_import(wid: str, file: UploadFile = File(...),
     root = _world_root_or_404(wid)
     data = await file.read()
     try:
-        # import_card decodes and writes synchronously; keep that off the loop.
-        # The name check and the write share one world actor hold, as character
-        # creation does, so two imports cannot both pass the check (#26).
-        cid, vid = await run_in_threadpool(
-            _locked_import, wid, root, data, format, into, name, version_name)
+        cid, vid = store.characters.import_card(root, data, format, into_cid=into, name=name,
+                                                version_name=version_name,
+                                                validate_name=_import_name_check(wid, into))
     except store.cards.CardParseError as exc:
         raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
     except store.characters.CharacterNotFound:

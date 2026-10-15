@@ -523,3 +523,32 @@ def test_failed_new_version_import_leaves_a_version_saved_meanwhile(tmp_path, mo
         ch.import_card(tmp_path, blob, "charx", into_cid=cid, version_name="later")
 
     assert ch.read_card(tmp_path, cid, new["vid"])["data"]["description"] == "saved meanwhile"
+
+
+def test_sidecar_stems_match_the_sidecar_files():
+    from grimoire.store import image_refs, image_subjects
+    expected = {image_refs.fold(Path(f).stem)
+                for f in (assets.FOCUS_FILE, assets.DESCRIPTIONS_FILE, image_subjects.SUBJECTS_FILE)}
+    assert expected == ch._SIDECAR_STEMS
+
+
+@pytest.mark.parametrize("name", ["focus", "descriptions", "subjects", "Focus"])
+def test_charx_import_skips_names_reserved_for_sidecars(tmp_path, name):
+    blob = _bundle([_entry(name, "assets/happy.png"), _entry("happy", "assets/happy.png")],
+                   {"assets/happy.png": _picture()})
+
+    cid, _vid = ch.import_card(tmp_path, blob, "charx")
+
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["happy"]
+
+
+def test_a_case_variant_of_an_existing_picture_counts_as_taken(tmp_path):
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    png, other = _picture(), _picture("png_onepixel.png")
+    assets.put_image(tmp_path, cid, vid, "Happy", png, "png")
+    blob = _bundle([_entry("happy", "assets/a.png")], {"assets/a.png": other})
+
+    ch.import_card(tmp_path, blob, "charx", into_cid=cid, update_vid=vid)
+
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["Happy"]
+    assert assets.slot_taken(assets.version_dir(tmp_path, cid, vid), "HAPPY")

@@ -962,6 +962,14 @@ _MAX_BUNDLED_READS = 4
 _MAX_BUNDLED_IMAGES = 128
 # The V3 asset types that mean "this is the character's picture".
 _AVATAR_TYPES = ("icon", "avatar")
+# Stems a version directory's sidecars already use. An image named after one
+# would share its `<name>.*` glob, and deleting or replacing the image would
+# remove the sidecar as though it were a legacy copy (#26). `subjects.json` is
+# spelled here because `image_subjects` imports this module; a test holds the
+# literal to `image_subjects.SUBJECTS_FILE`.
+_SIDECAR_STEMS = frozenset(
+    image_refs.fold(Path(f).stem)
+    for f in (assets.FOCUS_FILE, assets.DESCRIPTIONS_FILE, "subjects.json"))
 
 
 class _BundledImages:
@@ -1003,6 +1011,8 @@ def _bundled_image_name(name: str) -> bool:
     # including the placement's .json suffix (#26).
     if not assets.storable(name) or any(ord(c) < 32 or c in '<>"|' for c in name):
         return False
+    if image_refs.fold(name) in _SIDECAR_STEMS:
+        return False  # `<name>.*` cleanup would treat the sidecar as this image's
     try:
         ziputil.member_parts(name)
         placement = image_refs.ref_path(Path("."), name)  # only the file name matters
@@ -1109,9 +1119,7 @@ def _unwind_import(root: Path, written: _Written, cid: str, vid: str) -> None:
     if written.placed:  # only then do the ids name a version
         directory = assets.version_dir(root, cid, vid)
         for name, image_id in written.placed:
-            ref = image_refs.read(directory, name)
-            if ref is not None and ref.image == image_id:
-                image_refs.delete(directory, name)
+            assets.unlink_if_holds(directory, name, image_id)
 
 
 def _write_record(root: Path, card: dict, written: _Written, *, into_cid: str | None,
@@ -1339,8 +1347,7 @@ def _occupied_in(root: Path, cid: str | None, vid: str | None) -> Callable[[str]
     directory = assets.version_dir(root, cid, vid)
 
     def occupied(name: str) -> bool:
-        ref = image_refs.read(directory, name)
-        return (ref is not None and ref.image is not None) or assets.has_legacy(directory, name)
+        return assets.slot_taken(directory, name)
     return occupied
 
 
