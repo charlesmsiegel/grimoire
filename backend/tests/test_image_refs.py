@@ -305,7 +305,6 @@ def test_nul_name_is_unsafe(tmp_path):
     "é-name", "promote-tmp", "Promote-Tmp", "a/b", "../x", "a\0b",
 ])
 def test_valid_name_parity_with_assets(name):
-    from grimoire.store import assets
     mine = image_refs._valid_name(name)
     if "\0" in name:
         # assets' `safe_id` admits NUL (a latent gap there, out of scope here);

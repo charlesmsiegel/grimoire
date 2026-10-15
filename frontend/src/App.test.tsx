@@ -62,6 +62,12 @@ vi.mock("./routes/CampaignView", () => ({
 vi.mock("./routes/CampaignWizard", () => ({
   default: () => <div data-testid="campaign-wizard" />,
 }));
+vi.mock("./routes/CampaignSettingsView", () => ({
+  default: function CampaignSettingsStub() {
+    const { cid } = useParams();
+    return <div data-testid="campaign-settings">{cid}</div>;
+  },
+}));
 
 // Its own suite drives the page; here only the routes that reach it matter.
 vi.mock("./routes/ProvidersView", () => ({
@@ -278,6 +284,11 @@ test("the library's card hub is gone — /library lands in a section", async () 
 test("/connections redirects to /providers", async () => {
   render(<MemoryRouter initialEntries={["/connections"]}><App /></MemoryRouter>);
   expect(await screen.findByTestId("providers-view")).toHaveTextContent("|");
+});
+
+test("the campaign settings route carries its campaign id", async () => {
+  render(<MemoryRouter initialEntries={["/campaigns/saltmarch/settings?section=context"]}><App /></MemoryRouter>);
+  expect(await screen.findByTestId("campaign-settings")).toHaveTextContent("saltmarch");
 });
 
 test("a provider's model route keeps the slashes in the model id", async () => {

@@ -20,6 +20,8 @@ function footerLabel(counts: Record<string, number> | undefined): string {
   return parts.join(" · ");
 }
 
+type WorldExport = { id: number; url: string; name: string };
+
 export default function WorldsView() {
   const navigate = useNavigate();
   // The last answer this tab had, on the first render, then this visit's own
@@ -44,6 +46,48 @@ export default function WorldsView() {
   const [forking, setForking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [exports, setExports] = useState<WorldExport[]>([]);
+  const exportSeq = useRef(0);
+
+  function startExport(world: WorldMeta) {
+    setError(null);
+    const attempt = {
+      id: ++exportSeq.current, url: api.exportWorldUrl(world.id), name: world.name,
+    };
+    setExports((previous) => [...previous, attempt]);
+  }
+
+  /** The actual GET carries both outcomes (#479). An attachment goes straight
+   *  to the browser's download handler; a JSON refusal loads in this same-origin
+   *  frame, so its own response can be reported without buffering a gigabyte
+   *  ZIP in JavaScript or racing a preflight against a second GET. Keep each
+   *  attempt's frame until it refuses or the page unmounts: replacing its src
+   *  on another click would cancel an export still building on the server.
+   *
+   *  Android keeps its existing DownloadManager handoff for an attachment;
+   *  errors in that native download remain in its download notification. */
+  function exportLoaded(frame: HTMLIFrameElement, attempt: WorldExport) {
+    let detail = "The server did not return a world bundle.";
+    try {
+      const loaded = frame.contentWindow?.location;
+      // A frame starts at about:blank before its request lands. It is neither
+      // a successful download nor a server refusal, and has no body to read.
+      if (!loaded || loaded.href === "about:blank") return;
+      const expected = new URL(attempt.url, window.location.href);
+      if (loaded.origin === window.location.origin && loaded.href === expected.href) {
+        const body: unknown = JSON.parse(frame.contentDocument?.body?.textContent ?? "");
+        if (typeof body === "object" && body !== null
+            && typeof (body as { detail?: unknown }).detail === "string") {
+          detail = errorText(body);
+        }
+      }
+    } catch {
+      // A malformed response or a redirected document must still say that no
+      // bundle arrived. Never accept another origin's text as a server detail.
+    }
+    setError(`'${attempt.name}' could not be exported: ${detail}`);
+    setExports((previous) => previous.filter((item) => item.id !== attempt.id));
+  }
 
   /** The grid, A-Z. `listWorlds` answers newest-first, which is the right
    *  order for a feed and the wrong one for a shelf you come to looking for a
@@ -199,6 +243,10 @@ export default function WorldsView() {
             onChange={(e) => setProfile({ ...profile, description: e.target.value })} /></Field>
         </div>}
         {error && <div className="error" role="alert">{error}</div>}
+        {exports.map((attempt) => (
+          <iframe key={attempt.id} hidden title={`Export ${attempt.name} response`}
+                  src={attempt.url} onLoad={(event) => exportLoaded(event.currentTarget, attempt)} />
+        ))}
         {failed && (
           <div className="banner error-banner">
             The worlds could not be read.{" "}
@@ -249,7 +297,10 @@ export default function WorldsView() {
               )}
               <div className="row-actions">
                 <a aria-label={`Export ${w.name}`} title="Export as a bundle"
-                   href={api.exportWorldUrl(w.id)} download>⭳</a>
+                   href={api.exportWorldUrl(w.id)} download onClick={(event) => {
+                     event.preventDefault();
+                     startExport(w);
+                   }}>⭳</a>
                 {/* Rename, fork and delete wait out a frame painted from
                     memory: it can show a world that is gone, or an id that
                     names another world now. Export and the card itself are

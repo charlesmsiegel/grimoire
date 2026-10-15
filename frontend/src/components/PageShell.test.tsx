@@ -69,6 +69,21 @@ test("PlainShell is main with no column — the wizards' shape", () => {
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
 });
 
+test("an explicit scrollKey opens a new section at the top without resetting on ordinary renders", () => {
+  const page = (scrollKey: string) => <MemoryRouter><PageShell column={<span>rows</span>} scrollKey={scrollKey}>
+    <span>main</span>
+  </PageShell></MemoryRouter>;
+  const { rerender } = render(page("context"));
+  const main = screen.getByRole("main");
+  const scrollTo = vi.fn();
+  main.scrollTo = scrollTo;
+  rerender(page("context"));
+  expect(scrollTo).not.toHaveBeenCalled();
+  rerender(page("advanced"));
+  expect(screen.getByRole("main")).toBe(main);
+  expect(scrollTo).toHaveBeenCalledWith(0, 0);
+});
+
 // ---- 375px: the column is the page, main is a push (4h) ----
 
 test("at desktop width there is no index control at all", () => {

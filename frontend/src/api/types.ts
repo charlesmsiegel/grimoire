@@ -839,6 +839,8 @@ export type ImageGcReport = {
   protected: ImageGcProtected[];
   reclaimable_bytes: number;
   blocking: ImageGcBlocker[];
+  /** Staging trees still count as image roots, including old leftovers (#479). */
+  staging?: { path: string; reason: string }[];
   unreadable_sidecars: string[];
   clock_skew: { id: string | null; blob: string | null; what: string }[];
   token: string | null;
@@ -916,6 +918,17 @@ export type WorldDetail = {
   counts: Record<string, number>;
   campaigns?: number | null;
 };
+export type CampaignSettingKey =
+  | "context_scan_depth" | "context_budget" | "recap_depth" | "archive_depth"
+  | "rolling_summary_every" | "scene_break_every"
+  | "system_prompt" | "user_label" | "assistant_label";
+
+export type CampaignSettings = {
+  overrides: Partial<Record<CampaignSettingKey, string>>;
+  inherited: Record<CampaignSettingKey, string>;
+  effective: Record<CampaignSettingKey, string>;
+};
+
 export type CampaignMeta = {
   id: string;
   name: string;

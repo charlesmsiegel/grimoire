@@ -433,7 +433,6 @@ def test_description_put_over_the_cap_is_422_on_the_campaign_side(client, world)
 
 
 def _conflict_image(image_id):
-    import grimoire.store as store
     conflicts = [{"text": "A grey quay at dusk.", "from": "characters/mara/assets/main"},
                  {"text": "Mara at the gate.", "from": "worlds/realm"}]
     assert store.image_store.update(
@@ -444,7 +443,6 @@ def _conflict_image(image_id):
 def test_a_conflicted_object_is_queued_with_its_texts_in_every_queue(client, world):
     """The world queue (a record's art and its library) and the campaign queue
     (its own library and diverged art) all offer the texts to choose between."""
-    import grimoire.store as store
     cid, vid = _char(client, world)
     client.put(f"/api/worlds/{world}/images/coastline",
                files={"file": ("a.png", b"\x89PNG\r\n\x1a\n-w", "image/png")})

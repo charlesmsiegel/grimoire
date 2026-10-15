@@ -3,10 +3,9 @@ every checked reader's prompt with the view built for it, and grade."""
 
 from __future__ import annotations
 
-import os
-import tempfile
 from contextlib import contextmanager
 
+from evals import runner as reports
 from grimoire.store import campaigns, config, overlay, worlds
 from grimoire.store.context import assemble
 from grimoire.store.context import history as history_section
@@ -18,16 +17,8 @@ NAMES = ("Mara", "Winifred", "Ilse", "Seraphine")
 
 @contextmanager
 def _home():
-    previous = os.environ.get("GRIMOIRE_HOME")
-    with tempfile.TemporaryDirectory() as tmp:
-        os.environ["GRIMOIRE_HOME"] = tmp
-        try:
-            yield
-        finally:
-            if previous is None:
-                os.environ.pop("GRIMOIRE_HOME", None)
-            else:
-                os.environ["GRIMOIRE_HOME"] = previous
+    with reports.isolated_home(prefix="tmp"):
+        yield
 
 
 def _cast() -> cases.Cast:

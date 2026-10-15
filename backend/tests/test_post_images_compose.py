@@ -15,6 +15,7 @@ from grimoire import content_parts as cp
 from grimoire import model_guidance
 from grimoire.model_guidance import PreparedMessages
 from grimoire.store import campaign_images, campaigns, context, scenes, worlds
+from grimoire.store.context import assemble
 from grimoire.store.scenes import serialize
 
 
@@ -176,7 +177,6 @@ def test_a_play_decision_block_never_keeps_a_carrier_from_its_note():
     note; a trailing carrier is still folded into that note (#377), with the
     block before it, so a provider that lifts system messages out of the
     list never leaves the carrier beside another user message."""
-    from grimoire.store.context import assemble
 
     carrier = {"role": "user", "content": [{"type": "text", "text": "art"}], cp.CARRIER: True}
     block = ({"role": "system", "content": "Turn intent"},)

@@ -5,6 +5,9 @@ import io
 import pytest
 from PIL import Image
 
+from grimoire import store
+from grimoire.store import image_hash, world_images, worlds
+
 
 def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
     buf = io.BytesIO()
@@ -94,7 +97,6 @@ def test_an_oversized_upload_is_refused_before_it_is_read(client, wid, monkeypat
     OOMs the Android build. So the read is made to fail the test if it happens
     at all, the way the campaign sibling does it in `test_routes.py`.
     """
-    from grimoire import store
 
     async def _no(self, *a, **k):
         raise AssertionError("the body was read before the size was checked")
@@ -116,7 +118,6 @@ def test_bytes_in_no_format_we_can_name_are_refused(client, wid):
 def test_a_stray_the_picker_would_not_offer_can_still_be_deleted(client, wid):
     """The DELETE is deliberately ungated: a file a sync client dropped under an
     unofferable name must have a way out of the app."""
-    from grimoire.store import world_images, worlds
     _put(client, wid, "coastline")
     (worlds.world_root(wid) / "assets" / "images" / "holiday snap.png").write_bytes(_png())
 
@@ -174,7 +175,6 @@ def test_an_unknown_world_cannot_be_written_into(client, tmp_path):
 def test_library_and_cover_puts_carry_the_image_id(client, wid):
     """The library and cover answers name the picture's identity beside `v`,
     and the listing row says the same thing."""
-    from grimoire.store import image_hash
     put = _put(client, wid, "coastline").json()
     assert image_hash.is_image_id(put["image_id"])
     listed = client.get(f"/api/worlds/{wid}/images").json()

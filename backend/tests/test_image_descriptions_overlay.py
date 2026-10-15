@@ -6,7 +6,17 @@ import threading
 
 import pytest
 
-from grimoire.store import assets, campaigns, characters, image_descriptions, overlay, worlds
+from grimoire.store import (
+    assets,
+    campaigns,
+    characters,
+    image_descriptions,
+    image_refs,
+    image_store,
+    overlay,
+    sync,
+    worlds,
+)
 from grimoire.store.campaigns import lifecycle
 
 
@@ -122,7 +132,6 @@ def test_describing_art_never_makes_a_record_look_edited_to_sync(pair):
     its own art would materialize the whole card. Nothing else enforces this,
     so it is pinned here.
     """
-    from grimoire.store import sync
     wroot, camp, cid, vid = pair
     overlay.materialize_actor(camp, "characters", cid)
     assert sync.incoming(camp) == []
@@ -227,7 +236,6 @@ def _vdir(root, cid, vid):
 
 
 def _object_text(root, cid, vid, name):
-    from grimoire.store import image_refs, image_store
     ref = image_refs.read(_vdir(root, cid, vid), name)
     return image_store.read(ref.image).raw.get("description")
 
@@ -347,7 +355,6 @@ def test_shadowed_rows_read_the_shared_description(pair, monkeypatch):
     """A shadowed world copy carries the world's text -- here, the shared
     object's -- read off the world listing's own ids: no placement is scanned
     beyond what the listings themselves scan."""
-    from grimoire.store import image_refs
     _wroot, camp, cid, vid = pair
     assets.put_image(overlay.croot_of(camp), cid, vid, "gallery_1", b"png-other", "png")
 
@@ -366,7 +373,6 @@ def test_shadowed_rows_read_the_shared_description(pair, monkeypatch):
 def test_read_descriptions_scans_only_what_the_listing_scans(pair, monkeypatch):
     """The per-turn sweep takes its names and ids from the overlay listing it
     builds, so it reads no placement that listing did not."""
-    from grimoire.store import image_refs
     _wroot, camp, cid, vid = pair
     assets.put_image(overlay.croot_of(camp), cid, vid, "gallery_3", b"png-3", "png")
     image_descriptions.set_description(overlay.croot_of(camp), cid, vid, "gallery_3", "Mine.")
@@ -384,7 +390,6 @@ def test_an_unconfirmed_campaign_edit_lands_on_the_campaigns_own_key(pair, monke
     """R2/R8: when `image_store.update` does not confirm, the fallback is the
     legacy key of the EDITED directory -- the campaign's -- never the world's,
     so the campaign shows its edit and the world is left as it was."""
-    from grimoire.store import image_store
     wroot, camp, cid, vid = pair
     wdir = _vdir(wroot, cid, vid)
     image_descriptions.carry_legacy(wdir, "gallery_1", "W")

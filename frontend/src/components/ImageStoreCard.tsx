@@ -75,26 +75,24 @@ export function ImageStoreCard() {
   const [report, setReport] = useState<ImageMaintenanceReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  // Which follow is current. Bumped to retire a follow loop -- on unmount, and
-  // when something else has already seen the run end -- without an effect
-  // dependency, so a settled run cannot restart its own poll.
+  const [starting, setStarting] = useState(false);
+  // One activity owns the card, including the start request and the stored
+  // report read after a run ends (#479). A live-only flag cannot fence a late
+  // mount listing or report after newer work has already finished. Advance
+  // this BEFORE starting work and check it after every asynchronous read.
   const seq = useRef(0);
   const mounted = useRef(true);
-  // Whether a run is being followed, so the mount-time listing never takes over
-  // from one the reader started while it was still answering.
-  const active = useRef(false);
 
   const finish = useCallback(async (run: RunHandle, mine: number) => {
     if (mine !== seq.current || !mounted.current) return;
-    seq.current += 1;
-    active.current = false;
+    const reading = ++seq.current;
     setLive(null);
     setCancelling(false);
     try {
       const stored = await api.getImageMaintenanceReport(run.id);
-      if (mounted.current) setReport(stored);
+      if (mounted.current && reading === seq.current) setReport(stored);
     } catch (err) {
-      if (!mounted.current) return;
+      if (!mounted.current || reading !== seq.current) return;
       const fallback = run.result as ImageMaintenanceReport | null | undefined;
       if (fallback && typeof fallback === "object" && "kind" in fallback) {
         setReport(fallback);
@@ -107,7 +105,7 @@ export function ImageStoreCard() {
 
   const follow = useCallback(async (start: RunHandle, what: What) => {
     const mine = ++seq.current;
-    active.current = true;
+    setReport(null);
     setLive({ run: start, what });
     let run = start;
     let missed = 0;
@@ -123,7 +121,6 @@ export function ImageStoreCard() {
         if (++missed > POLL_MISSES) {
           if (mine === seq.current && mounted.current) {
             seq.current += 1;
-            active.current = false;
             setLive(null);
             setError("Lost contact with the server. The run may still be going; "
                      + "reopen this page to pick it up again.");
@@ -137,30 +134,48 @@ export function ImageStoreCard() {
 
   useEffect(() => {
     mounted.current = true;
+    const mine = ++seq.current;
     api.listGlobalRuns().then(({ runs }) => {
+      if (!mounted.current || mine !== seq.current) return;
       const found = runs.find((r) => r.cls === "maintenance" && r.state === "running");
-      if (found && mounted.current && !active.current) void follow(found, whatOf(found));
+      if (found) {
+        void follow(found, whatOf(found));
+        return;
+      }
+      // Retention lists are oldest first. Restore the newest terminal GC,
+      // including a failed or cancelled collection: it may already have spent
+      // an older scan's token. If its report is missing, show that failure;
+      // walking back to an older scan would present a possibly spent token.
+      // Expiry and single use remain the server's decision.
+      const latest = [...runs].reverse().find((r) =>
+        r.cls === "maintenance" && r.kind === "gc" && r.state !== "running");
+      if (latest) void finish(latest, mine);
     }, () => { /* no listing is no run to show; starting one reports for itself */ });
-    return () => { mounted.current = false; active.current = false; seq.current += 1; };
-  }, [follow]);
+    return () => { mounted.current = false; seq.current += 1; };
+  }, [finish, follow]);
 
   async function begin(what: What, start: (attempt: string) => Promise<{ run: RunHandle }>) {
+    const mine = ++seq.current;
+    setStarting(true);
     setError(null);
     try {
       const { run } = await start(newAttemptId());
+      if (!mounted.current || mine !== seq.current) return;
+      setStarting(false);
       // Only now: a start the server refused (busy, elsewhere) leaves the last
       // report on screen, and with it a scan's unspent token.
       setReport(null);
       await follow(run, what);
     } catch (err) {
-      if (!mounted.current) return;
+      if (!mounted.current || mine !== seq.current) return;
+      setStarting(false);
       setError(err instanceof ApiError ? err.detail : "Could not start the run");
       if (err instanceof ApiError && err.kind === "run_in_flight") {
         // Somebody (another tab) already started one: show it rather than only
         // saying so.
         const { runs } = await api.listGlobalRuns().catch(() => ({ runs: [] as RunHandle[] }));
         const found = runs.find((r) => r.cls === "maintenance" && r.state === "running");
-        if (found && mounted.current) {
+        if (found && mounted.current && mine === seq.current) {
           setError(null);
           void follow(found, whatOf(found));
         }
@@ -197,19 +212,20 @@ export function ImageStoreCard() {
     if (!live || cancelling) return;
     setCancelling(true);
     const { run } = live;
+    const mine = seq.current;
     try {
       const { run: after } = await api.cancelGlobalRun(run.id);
       // The cancel route waits for the pass to stop; its answer is the ending.
-      if (after.state !== "running") await finish(after, seq.current);
+      if (after.state !== "running") await finish(after, mine);
     } catch (err) {
-      if (mounted.current) {
+      if (mounted.current && mine === seq.current) {
         setCancelling(false);
         setError(err instanceof ApiError ? err.detail : "Could not cancel the run");
       }
     }
   }
 
-  const busy = live !== null;
+  const busy = starting || live !== null;
   const offer = report && report.kind === "image-gc" ? deletable(report) : null;
 
   return (
@@ -343,7 +359,23 @@ function MigrationReport({ report }: { report: ImageMigrationReport }) {
 
 /** Read as possibly partial, for `MigrationReport`'s reason. */
 function GcReport({ report }: { report: ImageGcReport }) {
-  if (report.mode === "collect") return <CollectReport report={report} />;
+  return (
+    <>
+      {report.mode === "collect" ? <CollectReport report={report} /> : <ScanReport report={report} />}
+      {(report.staging ?? []).length > 0 && (
+        <div className="image-store-report">
+          <p className="field-hint">
+            These staging trees still protect images. Review them before removing any
+            leftover tree by hand; an import or fork may still be using it.
+          </p>
+          <Rows rows={report.staging ?? []} label="Staging trees" />
+        </div>
+      )}
+    </>
+  );
+}
+
+function ScanReport({ report }: { report: ImageGcReport }) {
   const r: Partial<ImageGcReport> = report;
   const now = (r.counts?.collectable ?? 0) + (r.counts?.collectable_blobs ?? 0);
   const skew = r.clock_skew ?? [];

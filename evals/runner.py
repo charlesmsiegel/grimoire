@@ -36,6 +36,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import tempfile
 import time
 import uuid
 from collections import Counter
@@ -46,7 +48,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from grimoire import adapters, decisions, inference, openai_compatible, openrouter, wire
-from grimoire.store import paths, routing, usage
+from grimoire.store import compiled, paths, routing, usage
 from grimoire.store.inference import providers
 from grimoire.store.inference import resolve as inference_resolve
 
@@ -85,6 +87,30 @@ NOT_RUN = "not run: an earlier case's follow-ups are still running"
 #: run is paid, so an unbounded flag is a typo away from a large bill.
 #: Structural; to be tuned later.
 MAX_REPEAT = 10
+
+
+@contextlib.contextmanager
+def isolated_home(*, prefix: str = "grimoire-eval-") -> Iterator[Path]:
+    """Own a serial eval's temporary library and its process-local resources.
+
+    The caller settles its tool threads before leaving. Cached SQLite handles
+    outlive a retrieval call, so release them before restoring the previous
+    root and removing the home; Windows refuses to unlink an open database.
+    Every eval family uses this same lifetime for its temporary store.
+    """
+    previous = os.environ.get("GRIMOIRE_HOME")
+    with tempfile.TemporaryDirectory(prefix=prefix) as home:
+        os.environ["GRIMOIRE_HOME"] = home
+        try:
+            yield Path(home)
+        finally:
+            try:
+                compiled.close()
+            finally:
+                if previous is None:
+                    os.environ.pop("GRIMOIRE_HOME", None)
+                else:
+                    os.environ["GRIMOIRE_HOME"] = previous
 
 
 @dataclass

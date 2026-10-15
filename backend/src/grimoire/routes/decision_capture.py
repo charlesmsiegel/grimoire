@@ -260,7 +260,7 @@ def _envelope(scope: Scope) -> str:
     return text
 
 
-def _breakdown(scope: Scope) -> dict:
+def _breakdown(scope: Scope, cid: str = "") -> dict:
     """The entry: a `context_breakdown`-shaped payload, each call's messages
     in settle order (ids `message_{i}` for a one-call scope, else
     `c{k}_message_{i}`), then the outcome section, zero tokens and last.
@@ -276,7 +276,7 @@ def _breakdown(scope: Scope) -> dict:
                  "tier": "lock-in", "dropped": False, "pinned": False, "trimmed": 0,
                  "tokens": 0})
     return {"sections": rows, "total_tokens": total, "dropped_tokens": 0,
-            "budget_tokens": store.context.budget_tokens()}
+            "budget_tokens": store.context.budget_tokens(cid)}
 
 
 def _file(scope: Scope, cid: str, sid: str, still: Callable[[], bool]) -> None:
@@ -290,7 +290,7 @@ def _file(scope: Scope, cid: str, sid: str, still: Callable[[], bool]) -> None:
             and out.record.get("mode") != decisions.NATIVE_BACKEND else None)
     model = named.target.model if named else ""
     kind = named.target.kind if named else ""
-    breakdown = _breakdown(scope)
+    breakdown = _breakdown(scope, cid)
     if named is not None:
         # The window of the model the row names (01i), stamped here because a
         # native call is filed with no `conn` to read it from.

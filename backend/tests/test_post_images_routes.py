@@ -1,6 +1,7 @@
 """Scene routes compose with post images where the route reads them (#377)."""
 
 import io
+import json
 
 from PIL import Image
 
@@ -91,7 +92,6 @@ def test_a_character_reroll_replays_its_snapshot_in_this_campaign(client):
     """A character reroll replays the prompt frozen for the response it
     replaces (`from_snapshot`); the references in it resolve against the
     campaign running the reroll, and the stored snapshot holds no bytes."""
-    import json
 
     cid, sid = _setup(client)
     _chat(client, cid, sid)

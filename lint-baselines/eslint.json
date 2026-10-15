@@ -15,7 +15,6 @@
   },
   "frontend/src/components/CalendarConfig.tsx": {
     "@typescript-eslint/no-explicit-any": 1,
-    "@typescript-eslint/no-misused-promises": 1,
     "@typescript-eslint/no-unnecessary-type-assertion": 2,
     "@typescript-eslint/no-unsafe-argument": 1,
     "@typescript-eslint/no-unsafe-member-access": 1

@@ -160,6 +160,79 @@ test("every card offers a download link to its own export bundle", async () => {
   }
 });
 
+test.each([
+  [409, "image-store maintenance is running; try again when it finishes"],
+  [404, "world not found"],
+  [422, "image exceeds the bundle limit: worlds/realm/avatar.png"],
+])("a refused export (%i) displays the actual GET's server detail", async (_status, detail) => {
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Export Saltmarch"));
+
+  const frame = screen.getByTitle("Export Saltmarch response");
+  expect(frame).toHaveAttribute("src", "/api/worlds/w1/export.zip");
+  const response = document.implementation.createHTMLDocument();
+  response.body.textContent = JSON.stringify({ detail, kind: "maintenance_running" });
+  Object.defineProperty(frame, "contentDocument", { value: response });
+  fireEvent.load(frame);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    `'Saltmarch' could not be exported: ${detail}`);
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+test("an export's initial blank frame is ignored and a malformed response is visible", async () => {
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Export Saltmarch"));
+  const frame = screen.getByTitle("Export Saltmarch response");
+  Object.defineProperty(frame, "contentWindow", {
+    configurable: true, value: { location: new URL("about:blank") },
+  });
+  fireEvent.load(frame);
+  expect(screen.queryByRole("alert")).toBeNull();
+
+  Object.defineProperty(frame, "contentWindow", {
+    value: { location: new URL("/api/worlds/w1/export.zip", window.location.href) },
+  });
+  const response = document.implementation.createHTMLDocument();
+  response.body.textContent = "Bad Gateway";
+  Object.defineProperty(frame, "contentDocument", { value: response });
+  fireEvent.load(frame);
+  expect(await screen.findByRole("alert")).toHaveTextContent(/could not be exported/);
+});
+
+test("an export never accepts refusal text from a different document", async () => {
+  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Export Saltmarch"));
+  const frame = screen.getByTitle("Export Saltmarch response");
+  const response = document.implementation.createHTMLDocument();
+  response.body.textContent = JSON.stringify({ detail: "untrusted refusal" });
+  Object.defineProperty(frame, "contentDocument", { value: response });
+  Object.defineProperty(frame, "contentWindow", {
+    value: { location: new URL("https://example.org/api/worlds/w1/export.zip") },
+  });
+  fireEvent.load(frame);
+  expect(screen.queryByText(/untrusted refusal/)).toBeNull();
+});
+
+test("repeating an export issues another streamed GET without cancelling a different world", async () => {
+  (api.listWorlds as any).mockResolvedValue([
+    ...ONE_WORLD, { id: "w2", name: "Realm", created: "", updated: "", counts: {} },
+  ]);
+  renderView();
+  const saltmarch = await screen.findByLabelText("Export Saltmarch");
+  fireEvent.click(saltmarch);
+  const first = screen.getByTitle("Export Saltmarch response");
+  fireEvent.click(screen.getByLabelText("Export Realm"));
+  fireEvent.click(saltmarch);
+
+  expect(screen.getAllByTitle("Export Saltmarch response")).toHaveLength(2);
+  expect(first).toBeInTheDocument();
+  expect(screen.getByTitle("Export Realm response")).toHaveAttribute("src", "/api/worlds/w2/export.zip");
+});
+
 test("importing a bundle posts the file, refreshes, and opens the new world", async () => {
   renderView();
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());

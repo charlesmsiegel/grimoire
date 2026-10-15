@@ -758,7 +758,7 @@ def _capture(cid, sid, task, messages, sent: wire.Chain | wire.Target,
             "sections": rows,
             "total_tokens": total,
             "dropped_tokens": 0,
-            "budget_tokens": store.context.budget_tokens(),
+            "budget_tokens": store.context.budget_tokens(cid),
         }
     # The window of the attempt this names (01i), here as well as in
     # `_record_prompt`, which is handed no `conn` for a native decision or an

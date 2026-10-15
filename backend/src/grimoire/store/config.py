@@ -586,7 +586,7 @@ def scene_break_every() -> int:
     return _every("scene_break_every", DEFAULT_SCENE_BREAK_EVERY)
 
 
-def _every(key: str, default: str) -> int:
+def _every(key: str, default: str, cfg: Mapping[str, str] | None = None) -> int:
     """The two per-post cadences, parsed the one way (#84 joined #85 here).
 
     Deliberately not folded into `_seconds`: what differs from a duration is
@@ -601,7 +601,7 @@ def _every(key: str, default: str) -> int:
     it would land in neither branch below on merit.
     """
     try:
-        value = float(read_config().get(key, default))
+        value = float((read_config() if cfg is None else cfg).get(key, default))
     except (TypeError, ValueError):
         return int(default)
     if not math.isfinite(value):

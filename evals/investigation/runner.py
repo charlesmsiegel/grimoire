@@ -28,8 +28,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
-import tempfile
 import time
 import uuid
 from dataclasses import replace
@@ -62,16 +60,8 @@ DECIDE_TASK = "investigation-decide"
 
 @contextlib.contextmanager
 def isolated():
-    previous = os.environ.get("GRIMOIRE_HOME")
-    with tempfile.TemporaryDirectory(prefix="grimoire-investigation-eval-") as home:
-        os.environ["GRIMOIRE_HOME"] = home
-        try:
-            yield Path(home)
-        finally:
-            if previous is None:
-                os.environ.pop("GRIMOIRE_HOME", None)
-            else:
-                os.environ["GRIMOIRE_HOME"] = previous
+    with reports.isolated_home(prefix="grimoire-investigation-eval-") as home:
+        yield home
 
 
 # ---- the offline model ----

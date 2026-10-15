@@ -836,7 +836,9 @@ about a story, so it stays scoped.
   strip that fails moves the tree back, with its tags intact, and the delete
   can be run again. A removal that fails after both is logged rather than
   raised: the record is gone and its tags are stripped, and the leftover stays
-  under `.world-staging`, which nothing sweeps. A campaign delete holds the
+  under `.world-staging`, which nothing sweeps. Image-store scans report these
+  trees and keep their image references until someone reviews the leftovers
+  (#479). A campaign delete holds the
   campaign lock across all three, so it can be refused with 409 behind a long
   hold before anything moves. A world
   fork copies the source's scope onto the fork after it is published, best
@@ -973,6 +975,15 @@ operating system's; on Windows that is the residual stated below.
   folder and stops nothing
   (`test_a_record_named_image_refs_is_not_a_placement_folder`). A staged
   tree younger than an hour, or a `.cache` that is a link, stops it too.
+  Case variants of reserved collection and root paths also block, including
+  staged manifests, journal folders and the migration work-map directory
+  (`test_case_variant_collection_paths_block_scan_and_collection`,
+  `test_case_variant_root_directories_block_gc`, #479). The same refusal covers
+  manifest and journal `.JSON` extension aliases, which a bundle can preserve,
+  and a case variant of the reserved `map.json` filename
+  (`test_case_variant_root_files_block_gc`). Old staging trees remain
+  roots and their relative paths appear in the report for review
+  (`test_gc_reports_staging_trees_without_removing_them`).
 - **A candidate is an hour old.** It must be unreachable, with sidecar and
   blob both at least **one hour** old (`GRACE_HOURS`), so a picture ingested
   moments ago by an import that has not placed it yet is not taken
@@ -1007,7 +1018,10 @@ operating system's; on Windows that is the residual stated below.
   (`test_an_older_format_token_is_refused`).
 - **Disposal commits to the outbox, under the lock.** Batches run under the
   ingest lock and then each object's stripe, re-checking mtime, root,
-  reachability and refcount. A recycled object's blob is moved into
+  reachability and refcount. `BATCH_SECONDS` bounds candidate processing after
+  each batch's sidecar listing and refcount rebuild, plus at most one object's
+  work; it does not bound that initial listing or the whole lock hold (#479).
+  A recycled object's blob is moved into
   `.cache/image-store/recycle/<device key>/`, under a readable
   name (`grimoire - <description> - <sha8>.<ext>`, the description cut to
   60 characters, or `grimoire - <sha8>.<ext>` when the object has none), and
@@ -1074,7 +1088,9 @@ operating system's; on Windows that is the residual stated below.
   outbox. What a collection does unlink is bookkeeping: the collected objects'
   sidecars under `image-store/objects/`, their blob-index entries and
   thumbnails under `.cache`, and its own spent tokens; nothing else in the
-  store or outside it (`test_nothing_outside_image_store_is_deleted`).
+  store or outside it (`test_nothing_outside_image_store_is_deleted`). Every
+  destructive GC test also asserts unchanged outside sentinels and guards
+  unlink, move and replace paths before they can leave its `tmp_path` (#479).
   `_delete_file` refuses any path outside its few trees and any path reached
   through a link, and the outbox is deliberately not among those trees, so it
   can never unlink a waiting picture. The move and the bin call have their own
@@ -1160,9 +1176,8 @@ guards above are checks made beforehand, and *unverified* is what remains when
 they miss. The refcount is rebuilt per batch, so a sidecar a sync client
 delivers mid-batch is a residual risk. A stray non-JSON file inside an
 `objects/` shard keeps every blob until it is removed, which is safe and can be
-noisy. A case variant is checked only for `image-refs`: a folder spelled
-`Image-Collections` stops nothing, and the manifests in it are not counted as
-references.
+noisy. Reserved root-path case variants now block collection rather than hiding
+references (#479).
 
 ### Maintenance runs
 
@@ -1192,10 +1207,16 @@ exclude.
   (`test_another_devices_live_marker_refuses_a_start`); both answer
   `maintenance_elsewhere`. The marker is refreshed every 30 seconds by its own
   thread. The device id is machine-local, outside the store, so a copied
-  `.cache` never shares one. The proclock excludes maintenance from
-  maintenance only: the hold on tree operations is `runs.maintenance_excluded`,
-  which lives in one process, so a second grimoire process on the same machine
-  can still fork or delete a world or campaign while a run goes on in the first.
+  `.cache` never shares one. Tree-operation holds share the same proclock
+  (#479), so maintenance and those operations exclude each other across
+  processes too. Nested and overlapping holds within one app retain one
+  descriptor per pinned root until the last exits. Tree operations in separate
+  processes also exclude each other, answering `maintenance_elsewhere` with a
+  message naming either possible holder. The synced marker still governs
+  maintenance starts on other devices; tree operations do not acquire it.
+  A heartbeat write blocked beyond the 35-second shutdown join may finish
+  after release and recreate the marker; that stale marker can keep another
+  device out until its five-minute expiry.
 - **Cancel and shutdown wait.** The work runs in a thread whose await is
   shielded; cancellation is a flag the work reads between items, and the run
   stays live, with its exclusions held, until the thread returns. Shutdown sets
@@ -1205,7 +1226,14 @@ exclude.
 - **Reports.** `.cache/image-store/reports/<run id>.json`, 30 days, one shape
   for a dry and a real run. A report holds counts and relative paths, and a
   path can carry a name; it is a file under `.cache`, never committed.
-  Maintenance never runs on its own.
+  Maintenance never runs on its own. Settings first rediscovers live work;
+  otherwise it loads the newest finished GC run while it remains in `/api/runs`,
+  including a scan's token. A newer collection report, including a failed or
+  cancelled collection, supersedes an older scan;
+  token expiry and single-use checks still apply. Reports list staging-tree
+  paths without removing those trees. World exports keep their native browser
+  download stream while reporting a JSON refusal from the actual request on
+  the Worlds page (#479).
 
 ### What it does not promise
 

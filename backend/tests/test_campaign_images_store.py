@@ -2,6 +2,7 @@
 
 import io
 import os
+import shutil
 
 import pytest
 from PIL import Image
@@ -14,6 +15,7 @@ from grimoire.store import (
     image_library,
     image_refs,
     image_store,
+    locks,
     overlay,
     world_images,
     worlds,
@@ -396,7 +398,6 @@ def test_a_campaign_describes_an_inherited_placement_on_the_shared_image(cid, wi
 def test_an_unconfirmed_library_edit_lands_on_the_campaigns_own_key(cid, wid, monkeypatch):
     """R2/R8: an unconfirmed object write falls back to the campaign
     library's own legacy key, never the world library's."""
-    from grimoire.store import image_store
     world_images.put_image(wid, "coastline", _png(), "png")
     wdir = world_images.images_dir(wid)
     image_descriptions.carry_legacy(wdir, "coastline", "the world's words")
@@ -447,7 +448,6 @@ def test_a_campaign_whose_world_is_gone_reads_as_an_empty_world_half(cid, wid):
     this state is actually reached is a store that is half-synced or hand-edited
     -- which is exactly why `overlay.wroot_of` documents never raising for it.
     """
-    import shutil
 
     world_images.put_image(wid, "coastline", _png(), "png")
     campaign_images.put_image(cid, "handout", _png(), "png")
@@ -485,7 +485,6 @@ def test_a_name_the_campaign_owns_is_not_also_listed_as_hidden(cid, wid):
     `coastline`, the world drops it while this campaign is busy, the campaign
     uploads its own under that name, and the world adds one again. The tile and
     a Restore chip that does nothing would otherwise both be on screen."""
-    from grimoire.store import locks
 
     world_images.put_image(wid, "coastline", _png(), "png")
     campaign_images.delete_image(cid, "coastline")           # hidden here

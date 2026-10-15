@@ -330,6 +330,7 @@ export default function CampaignHub() {
         </Link>
       </ColumnSection>
       <ColumnSection label="Settings">
+        <Link className="column-row" to={`/campaigns/${cid}/settings`}>Campaign settings</Link>
         {([["mechanics", "Mechanics"], ["calendar", "Calendar"],
            ["cover", "Cover"], ["tracker", "Tracker"], ["decisions", "Play decisions"],
            ["default-prompts", "Default prompts"],
