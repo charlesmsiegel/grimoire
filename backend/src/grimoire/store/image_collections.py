@@ -31,6 +31,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import (
@@ -112,15 +113,35 @@ def read(wid: str, collection_id: str) -> dict:
         raise CollectionInvalidError("image collection manifest is unreadable") from exc
 
 
-def _resolve_member(wid: str, fmt: int, member: str) -> tuple[Path, str, str | None] | None:
-    """(path, version token, image id or None) for one member, or None when
-    its picture is not there. A format-1 member keeps the library's version
-    token and URL; a format-2 member is its object's blob."""
+@dataclass(frozen=True)
+class Member:
+    """One served member snapshot; a legacy name exists only in format 1."""
+
+    path: Path
+    version: str
+    image_id: str | None
+    name: str | None
+
+
+def _resolve_member(wid: str, fmt: int, member: str) -> Member | None:
     if fmt == 1:
-        path = assets.path_in(image_directory(wid), member, supported_only=True)
-        return None if path is None else (path, assets.image_version(path), None)
-    found = image_refs.resolve_ref(image_refs.Ref(name="", image=member, focus=None))
-    return None if found is None else (found.blob_path, found.blob_sha256, found.image_id)
+        found = assets.file_in(image_directory(wid), member, supported_only=True)
+        if found is None:
+            return None
+        path, image_id = found
+        return Member(path, assets.image_version(path), image_id, member)
+    placed = image_refs.resolve_ref(image_refs.Ref(name="", image=member, focus=None))
+    return (Member(placed.blob_path, placed.blob_sha256, placed.image_id, None)
+            if placed is not None else None)
+
+
+def resolve_member(wid: str, collection_id: str, index: int) -> Member | None:
+    """The member at its original index, resolved once, or None (#477/#480)."""
+    manifest = read(wid, collection_id)
+    members = manifest["members"]
+    if type(index) is not int or not 0 <= index < len(members):
+        return None
+    return _resolve_member(wid, manifest["format"], members[index])
 
 
 def member_index(n: str) -> int | None:
@@ -144,19 +165,20 @@ def _member_url(wid: str, collection_id: str, index: int, v: str) -> str:
     return f"/api/worlds/{wid}/image-collections/{collection_id}/members/{index}?v={v}"
 
 
-def available(wid: str, collection_id: str) -> list[dict]:
+def available(wid: str, collection_id: str, *, manifest: dict | None = None) -> list[dict]:
     """The members whose pictures are there, in order, as rows
     `{index, path, url}` (plus `image_id` for format 2). `index` is the
     member's place in the manifest, so a missing member leaves a gap rather
     than renumbering the rest."""
-    manifest = read(wid, collection_id)
+    if manifest is None:
+        manifest = read(wid, collection_id)
     fmt = manifest["format"]
     out = []
     for index, member in enumerate(manifest["members"]):
         found = _resolve_member(wid, fmt, member)
         if found is None:
             continue
-        path, v, image_id = found
+        path, v, image_id = found.path, found.version, found.image_id
         if fmt == 1:
             out.append({"index": index, "path": path,
                         "url": f"/api/worlds/{wid}/images/{member}?v={v}"})
@@ -172,12 +194,8 @@ def member_path(wid: str, collection_id: str, index: int) -> Path | None:
     """The file serving member `index`, in either format; None when the index
     is out of range or that member's picture is missing -- never another
     member's."""
-    manifest = read(wid, collection_id)
-    members = manifest["members"]
-    if type(index) is not int or not 0 <= index < len(members):
-        return None
-    found = _resolve_member(wid, manifest["format"], members[index])
-    return None if found is None else found[0]
+    found = resolve_member(wid, collection_id, index)
+    return found.path if found is not None else None
 
 
 def journal_directory(wid: str) -> Path:
@@ -261,6 +279,11 @@ def guard_write(wid: str, name: str, data: bytes | None = None) -> None:
     """
     if not has_format1(wid) or not referenced(wid, name):
         return
+    _guard_member_bytes(wid, name, data)
+
+
+def _guard_member_bytes(wid: str, name: str, data: bytes | None) -> None:
+    """The immutable bytes/pixels rule for a known format-1 member."""
     if data is not None:
         placed = _placed_image(wid, name)
         if placed is not None:
@@ -290,8 +313,28 @@ def check_member_name(wid: str, name: str, data: bytes) -> None:
     if not has_format1(wid):
         return
     lowered = name.casefold()
-    if _MEMBER.fullmatch(lowered) and not referenced(wid, name) and lowered != MEMBER_PREFIX + hashlib.sha256(data).hexdigest():
+    if _MEMBER.fullmatch(lowered) and not referenced(wid, name):
+        _check_member_hash(name, data)
+
+
+def _check_member_hash(name: str, data: bytes) -> None:
+    lowered = name.casefold()
+    if _MEMBER.fullmatch(lowered) and lowered != MEMBER_PREFIX + hashlib.sha256(data).hexdigest():
         raise CollectionInvalidError("collection member names are reserved for their own bytes")
+
+
+def guard_put(wid: str, name: str, data: bytes) -> None:
+    """Both library upload rules from one legacy-state/reference scan (#477).
+
+    Called under the collection lock. Standalone delete/name guards retain
+    their own checks; only this upload knows both answers belong to one write.
+    """
+    if not has_format1(wid):
+        return
+    if referenced(wid, name):
+        _guard_member_bytes(wid, name, data)
+    else:
+        _check_member_hash(name, data)
 
 
 def put_member(wid: str, data: bytes) -> str:

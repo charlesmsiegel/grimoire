@@ -661,7 +661,8 @@ def update(image_id: str, change: Callable[[dict], dict | None]) -> bool:
 
     False means nothing was written -- an absent object, or a callback that
     returned None -- so a caller moving text off another file onto the object
-    drops the old copy only on True (`image_descriptions.set_in`).
+    drops the old copy only on True, or when the callback confirmed the same
+    text was already stored (`image_descriptions.set_in`, #477).
 
     **The callback contract.** `change` runs under this object's stripe lock,
     so it must be a pure edit of the dict it is given. It must not call

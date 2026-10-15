@@ -15,8 +15,9 @@ So the scope follows its record's lifecycle here:
   `worlds.fork_world`, `copy_campaign` from `fork.fork_campaign`), a union, so
   the fork shows what its source showed and the two then diverge.
 
-`strip` and `copy` are whole-store sweeps: `image_store.iter_ids` lists the
-sidecars, `read_fresh` reads each without cycling the object cache, and
+`strip` and `copy` inventory the sidecars, but #477's compact scope cache
+selects candidates before `read_fresh`: a warm sweep parses no unchanged,
+unrelated object within the bounded cache. Membership is stat-validated, and
 `update` is called only for an object with something to change -- with a
 callback that re-decides on the copy it is handed, so a concurrent edit is not
 overwritten with what the sweep read. Neither takes a campaign lock: the
@@ -24,14 +25,14 @@ overwritten with what the sweep read. Neither takes a campaign lock: the
 to take (worlds have none). Nothing here calls `update` from inside another
 `update`.
 
-Imports `image_store`, `locks` and `worlds.paths`, and nothing else.
+Imports `image_store`, `locks`, `statcache` and `worlds.paths`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from . import image_store, locks
+from . import image_store, locks, statcache
 from .worlds import paths as worlds_paths
 
 
@@ -106,10 +107,48 @@ def _copied(raw: dict, src: str, dst: str) -> dict | None:
     return raw if dirty else None
 
 
-def _sweep(edit: Callable[[dict], dict | None]) -> int:
+# A separate, bounded pool of scope sets, never raw objects: a lifecycle
+# sweep must not evict the object/card caches every gallery depends on (#477).
+_SCOPE_POOL: dict = {}
+
+
+def _scopes(raw: dict) -> frozenset[str]:
+    assoc = _assoc_list(raw) or []
+    reviews = _review_list(raw) or []
+    return frozenset([a["scope"] for a in assoc
+                      if isinstance(a, dict) and isinstance(a.get("scope"), str)]
+                     + [s for s in reviews if isinstance(s, str)])
+
+
+def _memberships(image_id: str) -> frozenset[str]:
+    # One root for the key, the stamp and the read: a data-dir move between
+    # them would otherwise remember one library's scopes under the other's
+    # stamp, and that entry would hide a needed strip until the file changes.
+    root = image_store.store_root().parent.parent
+    path = image_store.object_path(image_id, root=root)
+
+    def compute() -> tuple[frozenset[str], tuple[statcache.Stamp, ...] | None]:
+        # Stamp BEFORE reading: an external replacement during the read must
+        # invalidate on the next sweep.
+        stamp = statcache.stamp(path)
+        obj = image_store.read_fresh(image_id, root=root)
+        return (_scopes(obj.raw) if obj is not None else frozenset(),
+                (stamp,) if stamp is not None else None)
+
+    return statcache.memo_stamped(("image_scopes", str(path)), compute,
+                                  pool=_SCOPE_POOL, max_entries=statcache.MAX_ENTRIES)
+
+
+def _sweep(scope: str, edit: Callable[[dict], dict | None]) -> int:
     """Apply `edit` to every object it changes; the number written."""
+    # Every call below resolves the live store, as `update` does. Pinning the
+    # inventory and reads to one root while `update` writes to the live one
+    # would let a data-dir move mid-sweep apply one tree's membership to the
+    # other tree's object (the store's move is not held off by a fork).
     changed = 0
     for image_id in image_store.iter_ids():
+        if scope not in _memberships(image_id):
+            continue
         obj = image_store.read_fresh(image_id)
         # Decided on what was read first, so an object with nothing to change
         # is never rewritten (nor its stripe taken); `update` then decides
@@ -125,13 +164,13 @@ def _sweep(edit: Callable[[dict], dict | None]) -> int:
 def strip(scope: str) -> int:
     """Remove `scope`'s associations and its ``reviews.subjects`` entry from
     every object. Returns how many objects changed; idempotent."""
-    return _sweep(lambda raw: _stripped(raw, scope))
+    return _sweep(scope, lambda raw: _stripped(raw, scope))
 
 
 def copy(src: str, dst: str) -> int:
     """Add `src`'s associations and review under `dst`, as a union, on every
     object that has them. Returns how many objects changed; idempotent."""
-    return _sweep(lambda raw: _copied(raw, src, dst))
+    return _sweep(src, lambda raw: _copied(raw, src, dst))
 
 
 def strip_world(wid: str) -> int:

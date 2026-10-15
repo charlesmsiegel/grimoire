@@ -74,14 +74,21 @@ _MISSING = (OSError, characters.CharacterNotFound, characters.VersionNotFound,
 def local_path(root: Path, url: str) -> Path | None:
     """Resolve only supported world image routes, never an arbitrary pathname.
     A collection member's URL is served by `image_collections.member_path`."""
+    found = local_image(root, url)
+    return found[0] if found is not None else None
+
+
+def local_image(root: Path, url: str) -> tuple[Path, str | None] | None:
+    """A supported local URL's path and identity from one resolution (#477)."""
     member = _member_route(url)
     if member is not None:
         try:
-            return image_collections.member_path(*member)
+            found = image_collections.resolve_member(*member)
+            return (found.path, found.image_id) if found is not None else None
         except _MEMBER_MISSING:
             return None
     record = _record(root, url)
-    return _record_path(*record) if record is not None else None
+    return _record_image(*record) if record is not None else None
 
 
 def local_target(root: Path, url: str) -> Target:
@@ -137,12 +144,12 @@ def _record_dir(root: Path, slot: _Slot) -> tuple[Path, str]:
     return assets.version_dir(root, owner, vid, base), name
 
 
-def _record_path(root: Path, slot: _Slot) -> Path | None:
+def _record_image(root: Path, slot: _Slot) -> tuple[Path, str | None] | None:
     base, owner, vid, name = slot
     try:
         if base == "images":
-            return assets.path_in(_library_dir(root), name, supported_only=True)
-        return assets.image_path(root, owner, vid, name, base=base)
+            return assets.file_in(_library_dir(root), name, supported_only=True)
+        return assets.image_file(root, owner, vid, name, base=base)
     except _MISSING:
         return None
 
@@ -153,18 +160,13 @@ def _record_file(root: Path, slot: _Slot) -> tuple[tuple[Path, str], str | None]
 
     The placement is resolved ONCE, here: a resolving one answers with its own
     id; only one that does not falls back to the legacy file rule
-    (`_record_path`), so a catalog never asks the same placement twice.
+    (`assets.file_in`), so a catalog never asks the same placement twice.
 
     A record's directory first finishes any interrupted promotion, as
     `image_path` would have: resolving mid-swap would hand back the picture
     the slot is about to stop holding. The world library has no promotions."""
-    d, name = _record_dir(root, slot)
-    if slot[0] != "images":
-        assets.recover_promotion(d)
-    placed = assets.resolve(d, name)
-    if placed is not None:
-        return (d, name), placed.image_id
-    return ((d, name), None) if _record_path(root, slot) is not None else None
+    found = _record_image(root, slot)
+    return (_record_dir(root, slot), found[1]) if found is not None else None
 
 
 def _library_dir(root: Path) -> Path:
@@ -235,15 +237,12 @@ def _member_target(wid: str, collection_id: str, index: int) -> Target:
     """`local_target` for member `index`: a format-2 member is its object
     (resolved, as `image_collections.available` resolves one), a format-1
     member the world-library slot its name places."""
-    manifest = image_collections.read(wid, collection_id)
-    members = manifest["members"]
-    if not 0 <= index < len(members):
+    found = image_collections.resolve_member(wid, collection_id, index)
+    if found is None:
         return None
-    if manifest["format"] == 2:
-        found = image_refs.resolve_ref(image_refs.Ref(name="", image=members[index], focus=None))
-        return ("object", found.image_id) if found is not None else None
-    filed = _record_file(worlds_paths.world_root(wid), ("images", "", "", members[index]))
-    return ("slot", filed[0], filed[1]) if filed is not None else None
+    if found.name is None:
+        return ("object", found.image_id) if found.image_id is not None else None
+    return ("slot", (image_collections.image_directory(wid), found.name), found.image_id)
 
 
 def _collection_members(url: str) -> list[tuple[str, Target]]:

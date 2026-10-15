@@ -446,7 +446,8 @@ def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
     """Describe one image of `d` (R2).
 
     A name whose placement resolves is described on its image object, and
-    once `image_store.update` confirms the write, the name's legacy key is
+    once `image_store.update` confirms the write (or its callback confirms
+    identical stored text, #477), the name's legacy key is
     dropped here and in `also_clear` (the visible placement's directory, when a
     caller edits through another one). Anything else -- the write not
     confirmed, a placement whose object has not arrived, a name with no
@@ -532,9 +533,20 @@ def _save_locked(d: Path, name: str, text: str, image_id: str | None,
     # A pure dict edit, including conflict resolution, under the SAME object
     # stripe as the authoritative comparison. update reads fresh too, so an
     # unrelated metadata edit cannot be overwritten by a cached projection.
-    if image_id is not None and image_store.update(
-            image_id, lambda raw: {**{k: v for k, v in raw.items()
-                                      if k != "description_conflicts"}, "description": text}):
+    unchanged = False
+
+    def describe(raw: dict) -> dict | None:
+        nonlocal unchanged
+        # #477: confirmation is distinct from update's False for a missing
+        # object. This callback saw fresh data under the stripe; equality can
+        # safely clear legacy keys without churning the object's mtime.
+        unchanged = raw.get("description") == text and "description_conflicts" not in raw
+        if unchanged:
+            return None
+        return {**{k: v for k, v in raw.items() if k != "description_conflicts"},
+                "description": text}
+
+    if image_id is not None and (image_store.update(image_id, describe) or unchanged):
         _finish_legacy(d, name, text, also_clear, state_args)
         return
     _write_legacy(d if fallback_dir is None else fallback_dir, name, text)

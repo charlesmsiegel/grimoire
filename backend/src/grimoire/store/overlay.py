@@ -2788,7 +2788,7 @@ def read_character(cid: str, char_id: str, *, v: View | None = None) -> dict:
     detail = characters.read_character(char_root(cid, char_id, v=v), char_id)
     croot = v.croot
     for ver in detail["versions"]:
-        images = list_images(cid, char_id, ver["id"], v=v)
+        descriptions, images = read_descriptions_listed(cid, char_id, ver["id"], v=v)
         ver["images"] = [i["name"] for i in images]
         ver["image_v"] = {i["name"]: i["v"] for i in images}
         ver["image_ids"] = {i["name"]: i["image_id"] for i in images if i.get("image_id")}
@@ -2801,7 +2801,7 @@ def read_character(cid: str, char_id: str, *, v: View | None = None) -> dict:
         # Re-derived per image, not per folder: `read_descriptions` refuses to
         # caption a campaign-side picture with the world's sentence about a
         # different one. See its docstring.
-        ver["image_descriptions"] = read_descriptions(cid, char_id, ver["id"], v=v)
+        ver["image_descriptions"] = descriptions
         # The world's copies this version's own files hide -- shown beside
         # them, never instead of them. See `shadowed_images`.
         ver["world_shadowed"] = shadowed_images(cid, char_id, ver["id"], v=v)
@@ -2833,9 +2833,10 @@ def read_pc(cid: str, pid: str, *, v: View | None = None) -> dict:
     v = _view(cid, v)
     detail = pcs.read_pc(pc_root(cid, pid, v=v), pid)
     for ver in detail["versions"]:
-        ver["images"] = [i["name"] for i in list_images(cid, pid, ver["id"], pcs.ASSET_BASE, v=v)]
+        descriptions, images = read_descriptions_listed(cid, pid, ver["id"], pcs.ASSET_BASE, v=v)
+        ver["images"] = [i["name"] for i in images]
         ver["avatar_focus"] = read_focus(cid, pid, ver["id"], pcs.ASSET_BASE, v=v)
-        ver["image_descriptions"] = read_descriptions(cid, pid, ver["id"], pcs.ASSET_BASE, v=v)
+        ver["image_descriptions"] = descriptions
     return detail
 
 
