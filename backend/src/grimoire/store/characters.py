@@ -1069,6 +1069,9 @@ class _Written:
     new_version: tuple[str, str] | None = None
     #: An update's card as it stood before the write.
     prior_text: str | None = None
+    #: The card text this import wrote over it, so rollback restores the card
+    #: only while it still holds that text.
+    written_text: str | None = None
     #: Gallery placements this import added, as (name, image id).
     placed: list[tuple[str, str]] = field(default_factory=list)
 
@@ -1091,7 +1094,11 @@ def _unwind_import(root: Path, written: _Written, cid: str, vid: str) -> None:
         _card_path(root, new_cid, new_vid).unlink(missing_ok=True)
         assets.delete_version_images(root, new_cid, new_vid)
     if written.prior_text is not None:
-        atomic.write_text(_card_path(root, cid, vid), written.prior_text)
+        # Restore the card only while it still holds this import's text: a
+        # version save that landed meanwhile must not be written back over.
+        path = _card_path(root, cid, vid)
+        if path.read_text(encoding="utf-8") == written.written_text:
+            atomic.write_text(path, written.prior_text)
     if written.placed:  # only then do the ids name a version
         directory = assets.version_dir(root, cid, vid)
         for name, image_id in written.placed:
@@ -1114,6 +1121,7 @@ def _write_record(root: Path, card: dict, written: _Written, *, into_cid: str | 
         written.prior_text = require_version(root, into_cid, update_vid).read_text(encoding="utf-8")
         _carry_label(read_card(root, into_cid, update_vid), card)
         update_version(root, into_cid, update_vid, card)
+        written.written_text = _dumps(card)  # what update_version just wrote
         return into_cid, update_vid
     cname = name or card["data"].get("name", "Imported")
     if into_cid is None:
@@ -1143,10 +1151,10 @@ def _place_import(root: Path, cid: str, vid: str, avatar: tuple[bytes, str, str]
     """
     directory = assets.version_dir(root, cid, vid)
     for placed, image_id in staged:
-        if assets.path_in(directory, placed) is not None:
-            continue
-        assets.link_in(directory, placed, image_id)
-        written.placed.append((placed, image_id))
+        # Vacancy is checked under the name's lock, so an upload landing
+        # between the check and the placement cannot be overwritten (#26).
+        if assets.link_if_vacant(directory, placed, image_id):
+            written.placed.append((placed, image_id))
     if avatar:
         source = avatar[2] if avatar[2].startswith(("http://", "https://")) else None
         assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1], source_url=source)
@@ -1310,6 +1318,21 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
             return
 
 
+def _check_destination(root: Path, into_cid: str | None, update_vid: str | None) -> None:
+    """Refuse a missing destination before any picture is stored.
+
+    Staging ingests objects into the shared image store, which an unwind cannot
+    reach; a refusal raised after that would leave them behind until a manual
+    collection (#26).
+    """
+    if update_vid is not None:
+        if into_cid is None:
+            raise ValueError("update_vid names a version of a character, so into_cid is required")
+        require_version(root, into_cid, update_vid)
+    elif into_cid is not None:
+        _require_char(root, into_cid)
+
+
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
                 name: str | None = None, update_vid: str | None = None,
                 version_name: str | None = None,
@@ -1337,6 +1360,7 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
         avatar = (data, "png", "")  # the PNG file itself is the avatar
     # Every fallible byte write happens before the first record write, so a
     # failure there leaves nothing behind (#26).
+    _check_destination(root, into_cid, update_vid)
     staged = _stage_bundled(card, bundled) if bundled is not None else []
     written = _Written()
     cid = vid = ""

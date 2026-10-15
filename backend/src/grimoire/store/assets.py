@@ -532,6 +532,26 @@ def put_in(d: Path, name: str, data: bytes, ext: str, *,
     return obj.ext
 
 
+def link_if_vacant(d: Path, name: str, image_id: str) -> bool:
+    """`link_in`, but only when `name` holds no picture: a placement with an
+    image, or a legacy file, is left as it is and the answer is False.
+
+    The check and the placement run under the name's image lock, so an upload
+    to the same name cannot land between them and be overwritten. An upload
+    that comes after is an ordinary replacement, as `link_in` always allowed.
+    `ValueError` for an unsafe name or an invalid id, as `link_in`.
+    """
+    if not _safe_name(name):
+        raise ValueError("unsafe image id")
+    with _image_lock(d, name):
+        ref = image_refs.read(d, name)
+        if (ref is not None and ref.image is not None) or _legacy_path(d, name, False) is not None:
+            return False
+        _recover_before_write(d, name)
+        _place(d, name, image_id, keep_focus=False, supported_only=False)
+        return True
+
+
 def link_in(d: Path, name: str, image_id: str, *, keep_focus: bool = False) -> None:
     """Place an image already in the store as `name` in `d` -- a reference
     operation, no bytes moved -- and drop the name's legacy siblings.
