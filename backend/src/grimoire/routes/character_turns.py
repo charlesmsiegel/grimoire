@@ -1882,6 +1882,8 @@ async def _settle_recovered_successor(cid, sid, client, round_record, after, can
 async def _after_saved_contribution(cid, sid, client, round_record, watcher, used, actor,
                                     response_id, cancelled):
     """Choose the successor without making the streaming loop itself a router."""
+    if round_record.get("stopped") or cancelled:
+        return _successor_answer(round_record, used, actor, None)
     if not _decision_successor(round_record):
         return await run_in_threadpool(
             _successor, cid, sid, {**round_record, "used": used}, watcher.handoff,
