@@ -6,6 +6,8 @@ import io
 
 from PIL import Image
 
+import pytest
+
 from grimoire import content_parts as cp
 from grimoire import prompts, routes, store
 from grimoire.store import (
@@ -326,3 +328,5 @@ def test_a_note_row_without_history_goes_before_post_history(monkeypatch, tmp_pa
     ids = [r["id"] for r in context.context_sections(cid, sid)]
     assert "authors_note" in ids and "history" not in ids and "post_history" in ids
     assert ids.index("authors_note") == ids.index("post_history") - 1
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")
