@@ -155,6 +155,7 @@ def build_opener_messages(cid: str, sid: str, prompt: str, model: str = "") -> l
 def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
               turn: dict | None = None, actor_ref: str | None = None,
               eligible_speakers: list[dict] | None = None,
+              successor_by_decision: bool = False,
               opening_narrator: bool = False, opener: bool = False,
               images: int = 0, history_view: epistemic.EpistemicView | None = None) -> dict:
     """One pass gathering the template data + projected history + post-history.
@@ -473,6 +474,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
         "response_actor": response_actor,
+        "response_successor_by_decision": successor_by_decision,
         "perception_rider": config.perception_rider(),
         "response_roster": roster,
         "response_candidates": [{"ref": e["ref"], "name": e["name"]}
@@ -1744,6 +1746,7 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
                  appended: tuple[Appended, ...] = (),
                  describe: bool = True, model: str = "", actor_ref: str | None = None,
                  eligible_speakers: list[dict] | None = None,
+                 successor_by_decision: bool = False,
                  images: int = 0,
                  plan: dict | None = None,
                  history_view: epistemic.EpistemicView | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
@@ -1794,6 +1797,7 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
     prompt is byte-identical to one composed without it.
     """
     a = _assemble(cid, sid, turn=turn, actor_ref=actor_ref, eligible_speakers=eligible_speakers,
+                  successor_by_decision=successor_by_decision,
                   images=images, history_view=history_view)
     intent = _plan_block(a, plan)
     return _prepare(a, cid, sid, model=model, describe=describe,
@@ -1866,6 +1870,7 @@ def build_messages(cid: str, sid: str, turn: dict | None = None,
 def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = None,
                           describe: bool = True, model: str = "", actor_ref: str | None = None,
                           eligible_speakers: list[dict] | None = None,
+                          successor_by_decision: bool = False,
                           appended: tuple[Appended, ...] = (),
                           images: int = 0,
                           plan: dict | None = None,
@@ -1891,7 +1896,8 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
     # scene in a director note could not recall it (nothing else in the scan
     # window has said the word yet).
     a = _assemble(cid, sid, wi_seed=note, turn=turn, actor_ref=actor_ref,
-                  eligible_speakers=eligible_speakers, images=images, history_view=history_view)
+                  eligible_speakers=eligible_speakers, successor_by_decision=successor_by_decision,
+                  images=images, history_view=history_view)
     # expanded up front so the note's tokens are reserved before packing: it is
     # a mandatory message, so the budget has to know about it
     note_text = macros.expand_macros(note, a["subs"], cid, sid, datetime_subs=a["datetime_subs"])
