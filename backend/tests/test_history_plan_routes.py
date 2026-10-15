@@ -234,11 +234,15 @@ def test_an_expired_deadline_never_resolves_or_calls(cid, monkeypatch):
 
 
 def test_a_late_step_is_bounded_by_what_is_left(cid, monkeypatch):
+    # The step's own ceiling stops the stalled call. The phase is left generous
+    # so that its off-loop build on a loaded runner cannot spend the budget
+    # first and turn this into `skipped:deadline`, which the spent-phase test covers.
+    monkeypatch.setattr(history_recall, "PLAN_CEILING", 0.25)
     sid, *_ = setup_thin(cid)
     fake = FakeLLM([[plan_reply()]], stall=True)
     started = time.monotonic()
-    ev = gather(cid, sid, fake, deadline=started + 0.6)
-    assert time.monotonic() - started < history_recall.PLAN_CEILING
+    ev = gather(cid, sid, fake, deadline=started + 30)
+    assert time.monotonic() - started < 2
     assert ev.plan.terminal == "unusable" and ev.plan.steps[0].outcome == "timeout"
 
 
