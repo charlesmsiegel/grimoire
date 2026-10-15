@@ -68,6 +68,13 @@ Do not complete another actor's contribution. These assigned-speaker rules take 
 Present people:
 {% for actor in response_roster %}- {{ actor.name }}: {{ actor.ref }}
 {% endfor %}
+{% if response_successor_by_decision|default(false) %}
+# Continuation
+Write only this actor's natural contribution. The application asks a separate
+Decision model whether another eligible character should respond after your
+prose is complete. Do not propose or emit a handoff or other next-speaker
+control block; just finish the prose.
+{% else %}
 # Handoff after this contribution
 
 Writing only your assigned actor applies to the prose. Separately decide whether
@@ -111,3 +118,5 @@ block; it is required output, not spoken dialogue, narration, or reasoning.
 Any state metadata fence must precede it. Write nothing after the handoff fence.
 If a roll is needed, emit the roll request and stop immediately before any state
 or handoff block; the handoff waits until the roll has been resolved.
+
+{% endif %}
