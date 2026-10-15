@@ -20,6 +20,22 @@ from tests.inference_fixtures import (
 from tests.llm_fakes import FakeLLM, decision_reply
 
 
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")
+
+
+def _follow_on(monkeypatch, *next_speakers):
+    """Script the Decision model's successor, not the prose writer's fence."""
+    steps = list(next_speakers)
+
+    async def choose(cid, sid, client, round_record, used, actor, response_id=""):
+        if not steps:
+            raise AssertionError("unexpected subsequent speaker decision")
+        return character_turns._successor_answer(
+            round_record, used, actor, steps.pop(0))
+
+    monkeypatch.setattr(character_turns, "_select_successor", choose)
+
+
 def seed(client, module=None):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     wid = store.worlds.create_world("Realm")
@@ -34,7 +50,8 @@ def seed(client, module=None):
     return cid, sid
 
 
-def test_round_rejects_repeated_actor(client):
+def test_round_rejects_repeated_actor(client, monkeypatch):
+    _follow_on(monkeypatch, "characters:winifred", None)
     cid, sid = seed(client)
     fake = FakeLLM(
         [
@@ -96,9 +113,10 @@ def test_old_combined_setting_cannot_disable_individual_generation(client):
     assert fake.calls == 2
 
 
-def test_failure_second_preserves_first_and_retry_only_unfinished(client):
+def test_failure_second_preserves_first_and_retry_only_unfinished(client, monkeypatch):
     from grimoire.llm_errors import LLMError
 
+    _follow_on(monkeypatch, "characters:winifred", None)
     cid, sid = seed(client)
     fake = FakeLLM(
         [['First.\n```handoff\n{"next":"characters:winifred"}\n```'], ["Partial."]],
@@ -126,7 +144,8 @@ def test_failure_second_preserves_first_and_retry_only_unfinished(client):
     assert retry.calls == 1
 
 
-def test_middle_reroll_frozen_and_later_retained(client):
+def test_middle_reroll_frozen_and_later_retained(client, monkeypatch):
+    _follow_on(monkeypatch, "characters:winifred", None)
     cid, sid = seed(client)
     fake = FakeLLM(
         [
@@ -153,7 +172,8 @@ def test_middle_reroll_frozen_and_later_retained(client):
     assert len(record["variants"]) == 2 and "snapshot" not in record
 
 
-def test_roll_decline_continues_same_actor_then_handoff(client):
+def test_roll_decline_continues_same_actor_then_handoff(client, monkeypatch):
+    _follow_on(monkeypatch, "characters:winifred", None)
     cid, sid = seed(client)
     fake = FakeLLM(
         [
@@ -211,6 +231,7 @@ def test_accepted_roll_is_before_same_response_outcome_and_never_reapplied(clien
 def test_completed_response_crash_retry_never_replays_it(client, monkeypatch):
     from grimoire.routes import character_turns
 
+    _follow_on(monkeypatch, "characters:winifred", "characters:winifred", None)
     cid, sid = seed(client)
     original = character_turns._round_state
     failed = False
@@ -524,7 +545,8 @@ def test_stop_on_final_delta_preserves_pending_response_for_retry(client):
     assert fake.calls == 1
 
 
-def test_handoff_prompt_offers_only_remaining_slots(client):
+def test_handoff_prompt_offers_only_remaining_slots(client, monkeypatch):
+    _follow_on(monkeypatch, "characters:winifred", None)
     cid, sid = seed(client)
     fake = FakeLLM([
         ['"Ready."\n```handoff\n{"next":"characters:winifred"}\n```'],
@@ -556,7 +578,8 @@ def test_explicit_single_response_has_no_successor_candidates(client):
     assert "characters:" not in candidates and "grimoire" not in candidates
 
 
-def test_narrator_scope_reaches_selector_and_writer_after_npc_turn(client):
+def test_narrator_scope_reaches_selector_and_writer_after_npc_turn(client, monkeypatch):
+    _follow_on(monkeypatch, "grimoire", None)
     cid, sid = seed(client)
     fake = FakeLLM([
         [decision_reply({"next": "characters:mara"})],
