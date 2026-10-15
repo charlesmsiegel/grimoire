@@ -8,6 +8,7 @@ another heading spelling belongs in ALIASES; neither parser needs a new flow.
 
 from __future__ import annotations
 
+import bisect
 import re
 import unicodedata
 from collections.abc import Callable
@@ -132,9 +133,25 @@ def _literal_span(rule: Callable[[StateInline, bool], bool], state: StateInline,
     if matched and not silent and state.tokens:
         span = state.src[start:state.pos]
         if "\n" in span:
-            first = state.src[:start].count("\n") + 1
+            first = _newlines_before(state, start) + 1
             state.tokens[-1].meta["literal_lines"] = (first, first + span.count("\n"))
     return matched
+
+
+def _newlines_before(state: StateInline, at: int) -> int:
+    """How many line breaks precede `at` in this inline source.
+
+    Counting `state.src[:at]` per span rescanned an ever longer prefix, so a
+    long source full of multi-line spans was quadratic. The offsets are found
+    once per source and kept on the parse's env, beside the source itself so
+    a reused id can never hand back another source's offsets (#136).
+    """
+    cache = state.env.setdefault("_newlines", {})
+    entry = cache.get(id(state.src))
+    if entry is None or entry[0] is not state.src:
+        entry = (state.src, [at for at, ch in enumerate(state.src) if ch == "\n"])
+        cache[id(state.src)] = entry
+    return bisect.bisect_left(entry[1], at)
 
 
 def _literal_lines(text: str) -> set[int]:

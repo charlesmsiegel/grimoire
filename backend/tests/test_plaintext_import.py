@@ -1,6 +1,7 @@
 """#136: text becomes a proposal; only the existing create route saves it."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -175,7 +176,17 @@ def test_clipping_a_long_guess_is_bounded_not_quadratic(monkeypatch):
     assert max(calls) <= _plaintext.MAX_NAME_CHARS
 
 
-@pytest.mark.parametrize("text", ["﻿ ﻿", "﻿\n\t﻿"], ids=["bom-space", "bom-lines"])
+def test_span_line_numbers_index_their_source_once():
+    # Counting the prefix per span was quadratic in a source full of
+    # multi-line spans; the offsets are now found once per inline source.
+    state = SimpleNamespace(src="a\nb\nc\nd", env={})
+    assert [_plaintext._newlines_before(state, at) for at in (0, 2, 4, 6)] == [0, 1, 2, 3]
+    index = state.env["_newlines"][id(state.src)]
+    _plaintext._newlines_before(state, 5)
+    assert state.env["_newlines"][id(state.src)] is index
+
+
+@pytest.mark.parametrize("text", ["\ufeff \ufeff", "\ufeff\n\t\ufeff"], ids=["bom-space", "bom-lines"])
 def test_a_byte_order_mark_alone_is_blank_not_a_name(client, world, text):
     response = client.post(f"/api/worlds/{world}/characters/parse-text", json={"text": text})
     assert response.status_code == 422
