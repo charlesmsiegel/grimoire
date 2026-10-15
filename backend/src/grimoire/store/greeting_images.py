@@ -15,10 +15,9 @@ rule: a resolving placement shares its object's tags; legacy bytes keep the
 answer in the greeting's sidecar. A per-greeting answer in that greeting's
 sidecar is kept for everything else: a remote URL, a picture placed in another
 world or a member of another world's collection, legacy art with no placement,
-a placement
-whose object or blob has not arrived (the legacy file of the same name beside
-it is the picture shown), and an answer whose object write was not confirmed
-(R8). A sidecar answer, while present, wins over the object's.
+a placement whose object or blob has not arrived (the legacy file of the same
+name beside it is the picture shown), and an answer whose object write was not
+confirmed (R8). A sidecar answer, while present, wins over the object's.
 """
 
 from __future__ import annotations
