@@ -12,6 +12,7 @@ from grimoire.store import (
     image_descriptions,
     image_refs,
     image_store,
+    pcs,
     world_images,
     worlds,
 )
@@ -863,7 +864,6 @@ def test_reading_a_character_resolves_and_scans_nothing_extra_for_descriptions(
     description read takes its names and ids from that listing rather than
     listing (and resolving) the folder a second time and scanning placements
     a third. Measured against the same read with descriptions stubbed out."""
-    from grimoire.store import pcs
 
     cid, vid = _chars(tmp_path)
     d = _dir_of(tmp_path, cid, vid)

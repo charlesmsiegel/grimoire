@@ -7,6 +7,7 @@ picture -- and every URL is under `example.invalid`.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -17,7 +18,7 @@ import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
-from grimoire.store import image_hash, image_store, locks, paths
+from grimoire.store import image_hash, image_store, locks, paths, statcache
 
 
 @pytest.fixture(autouse=True)
@@ -240,7 +241,6 @@ def test_blob_intact_answers_false_for_a_missing_blob_or_a_non_blob(tmp_path):
 
 
 def test_blob_intact_is_cached_by_stat_signature_outside_the_racy_window(monkeypatch):
-    from grimoire.store import statcache
     obj = image_store.ingest(_png(_img()), "png")
     blob = image_store.blob_path(obj.blob_sha256, "png")
     hashed = []
@@ -256,7 +256,6 @@ def test_blob_intact_is_cached_by_stat_signature_outside_the_racy_window(monkeyp
 
 
 def test_a_damaged_blob_is_logged_once_per_signature_and_repair_clears_it(monkeypatch):
-    from grimoire.store import statcache
     monkeypatch.setattr(statcache, "RACY_WINDOW_NS", 0)
     data = _png(_img())
     obj = image_store.ingest(data, "png")
@@ -351,7 +350,6 @@ def test_ingest_touches_sidecar_on_pixel_duplicate():
 def test_ingest_has_no_unsanitized_door():
     # Every way in sanitizes; bundle import does too, so nothing needs a way
     # around it (and a way around it is how metadata reaches a shared blob).
-    import inspect
     assert "sanitize" not in inspect.signature(image_store.ingest).parameters
     with pytest.raises(TypeError):
         image_store.ingest(_png(_img()), "png", sanitize=False)
@@ -479,7 +477,6 @@ def test_update_reports_whether_it_wrote():
 def test_read_memoizes_in_its_own_pool():
     """A backlog walk reads an object per placement; in the shared statcache
     that would evict the card and entity hashes the sync sweeps rely on."""
-    from grimoire.store import statcache
 
     obj = image_store.ingest(_png(_img()), "png")
     os.utime(image_store.object_path(obj.id), ns=(1, 1))     # outside the racy window
@@ -490,7 +487,6 @@ def test_read_memoizes_in_its_own_pool():
 
 
 def test_read_fresh_bypasses_the_cache(monkeypatch):
-    from grimoire.store import statcache
 
     obj = image_store.ingest(_png(_img()), "png")
 

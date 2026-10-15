@@ -13,6 +13,10 @@ import hashlib
 import io
 import json
 import random
+import struct
+import subprocess
+import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -20,6 +24,12 @@ from PIL import Image
 
 from grimoire.store import image_hash, image_sanitize, thumbs
 from tests.fixtures.images import make_fixtures
+from tests.fixtures.images.make_fixtures import (
+    NETSCAPE_LOOP_0,
+    _noise,
+    insert_after_first_image,
+    insert_before_idat,
+)
 
 FIX = Path(__file__).parent / "fixtures" / "images"
 _FIXTURE_FILES = sorted(make_fixtures.NAMES)
@@ -126,7 +136,6 @@ def test_colour_descriptor_is_tagged_with_its_source():
     # A PNG's colour descriptor is its raw colour chunks; a JPEG's is its ICC
     # bytes. Untagged, an ICC profile crafted to equal a PNG's chunk bytes
     # would merge two pictures a browser reads under different colour rules.
-    from tests.fixtures.images.make_fixtures import _noise, insert_before_idat
 
     gama = (45455).to_bytes(4, "big")
     buf = io.BytesIO()
@@ -198,7 +207,6 @@ def test_a_late_gif_loop_extension_is_opaque():
     assert late.identity == "bytes" and late.reason == "gif-late-loop"
     assert late.id != _id("gif_anim_noloop.gif")
     # The probe pair, built here from the committed no-extension fixture.
-    from tests.fixtures.images.make_fixtures import NETSCAPE_LOOP_0, insert_after_first_image
     plain = _read("gif_anim_noloop.gif")
     probe = insert_after_first_image(plain, NETSCAPE_LOOP_0)
     assert _ident(probe).id != _ident(plain).id
@@ -279,8 +287,6 @@ def test_the_decompression_bomb_warning_is_filtered_at_import():
     # budgets bound every decode, so Pillow's warning is noise. Checked in a
     # fresh interpreter, since pytest restores the warning filters around
     # collection and every test, which would discard an import-time one here.
-    import subprocess
-    import sys
 
     probe = (
         "import io, warnings, hashlib\n"
@@ -303,7 +309,6 @@ def test_no_decompression_bomb_warning_escapes(monkeypatch):
     # Between Pillow's warning and error thresholds Image.open (and each
     # band's crop) warns on stderr; under the import-time filter none of it
     # escapes, and the picture is still named by its pixels.
-    import warnings
 
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 24 * 16 - 1)  # warn, not raise
     with warnings.catch_warnings(record=True) as caught:
@@ -317,7 +322,6 @@ def test_no_decompression_bomb_warning_escapes(monkeypatch):
 def _gif_frame_grown_to(w: int, h: int) -> bytes:
     """A two-frame 4x4 GIF whose second frame's descriptor claims `w` x `h` --
     which Pillow answers by growing the canvas when it seeks there."""
-    import struct
 
     frames = [Image.new("P", (4, 4), c) for c in (1, 2)]
     for im in frames:
@@ -335,7 +339,6 @@ def test_a_gif_frame_that_grows_the_canvas_past_the_budget_is_over_budget():
     # The header says 4x4; the budget check on it passes. A later frame grows
     # Pillow's canvas to 100 MP on seek -- past Pillow's warning threshold
     # (silenced) and the static budget, which the frame walk enforces per frame.
-    import warnings
 
     for w, h in ((10000, 10000), (20000, 20000)):   # Pillow's warning, then its error
         data = _gif_frame_grown_to(w, h)

@@ -346,7 +346,7 @@ def text_in(d: Path, name: str, *, known_id: object = UNKNOWN) -> str | None:
 
 def _placed_ids(d: Path) -> dict[str, str]:
     """name -> image id for every image-bearing placement in `d`, off one scan."""
-    return {n: r.image for n, r in image_refs.scan(d).items() if r.image is not None}
+    return image_refs.image_ids(image_refs.scan(d))
 
 
 def read_in(d: Path, names: set[str] | None = None,
@@ -421,6 +421,21 @@ def write_in(d: Path, descriptions: dict[str, str], names: set[str] | None = Non
     with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
         d.mkdir(parents=True, exist_ok=True)
         atomic.write_text(path_in(d), json.dumps(trimmed, indent=2, sort_keys=True) + "\n")
+
+
+def set_inherited(wdir: Path | None, cdir: Path, name: str, text: str,
+                  names: set[str] | None = None, **guards) -> bool:
+    """Describe shared inherited art, or leave legacy handling to the caller.
+
+    A resolving World placement edits its object and clears both legacy keys.
+    An unconfirmed write falls back to the edited campaign's key (R2/R8),
+    never the World it only reads through. Keep record-art guards on the same
+    set_in path as an owned save (#480).
+    """
+    if wdir is None or object_id_in(wdir, name) is None:
+        return False
+    set_in(wdir, name, text, names=names, also_clear=cdir, fallback_dir=cdir, **guards)
+    return True
 
 
 def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
@@ -796,11 +811,7 @@ def _backlog_rows(d: Path) -> tuple[list[dict], dict]:
     `assets.storable`. (A flat library builds its rows with
     `image_library.backlog_rows`, by its own name policy.)"""
     names, has_sidecar, refs = assets.names_in(d, DESCRIPTIONS_FILE, with_refs=True)
-    rows = []
-    for n in names:
-        ref = refs.get(n)
-        image_id = ref.image if ref is not None else None
-        rows.append({"name": n, "image_id": image_id} if image_id else {"name": n})
+    rows = image_refs.name_rows(names, refs)
     return rows, (read_raw(d) if has_sidecar and names else {})
 
 

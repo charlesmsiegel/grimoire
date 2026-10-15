@@ -169,7 +169,7 @@ def world_dir(cid: str) -> Path | None:
         return None
     try:
         return world_images.images_dir(wid)
-    except worlds_paths.WorldNotFound:
+    except (worlds_paths.WorldNotFound, OSError):
         return None
 
 
@@ -406,10 +406,7 @@ def set_description(cid: str, name: str, text: str) -> None:
         inherited = {i["name"] for i in rows if i["inherited"]}
         if name in inherited:
             wdir = world_dir(cid)
-            if wdir is not None and image_descriptions.object_id_in(wdir, name) is not None:
-                # Unconfirmed, it falls back to the campaign's own key (R2/R8).
-                image_descriptions.set_in(wdir, name, text, names=inherited,
-                                          also_clear=d, fallback_dir=d)
+            if image_descriptions.set_inherited(wdir, d, name, text, names=inherited):
                 return
         image_descriptions.set_in(d, name, text,
                                   names={i["name"] for i in rows if not i["inherited"]})

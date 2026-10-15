@@ -2489,17 +2489,12 @@ def set_description(cid: str, aid: str, vid: str, name: str, text: str,
         union = {i["name"] for i in mine} | {i["name"] for i in inherited}
         if any(i["name"] == name for i in inherited):
             wdir = assets.version_dir(v.wroot, aid, vid, base)
-            if image_descriptions.object_id_in(wdir, name) is not None:
-                # Unconfirmed, the text falls back to the CAMPAIGN's key: the
-                # directory edited, not the world's (R2/R8).
-                cdir = assets.version_dir(v.croot, aid, vid, base)
-                image_descriptions.set_in(wdir, name, text, names=union,
-                                          also_clear=cdir, fallback_dir=cdir, **guards)
+            cdir = assets.version_dir(v.croot, aid, vid, base)
+            if image_descriptions.set_inherited(wdir, cdir, name, text, names=union, **guards):
                 return
             # Legacy inherited art has no shared object to update. Its binding
             # still participates in the guard, and campaign/world key order
             # must match what this editor displayed before Save.
-            cdir = assets.version_dir(v.croot, aid, vid, base)
             guards = {**guards, "source_dir": wdir, "effective_dirs": (cdir, wdir)}
         image_descriptions.set_description(v.croot, aid, vid, name, text, base,
                                            names=union, **guards)
