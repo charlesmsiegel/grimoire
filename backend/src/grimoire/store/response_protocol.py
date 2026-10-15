@@ -125,7 +125,7 @@ def selector_item(roster: list[dict], conversation: list[dict],
                 else "scene/response_selector_question.j2")
     return decisions.Item(context, (decisions.Choice(
         SELECTOR_QUESTION, prompts.render(question),
-        options, allow_none=True,
+        tuple(options), allow_none=True,
         none_text=prompts.render("scene/response_selector_none.j2", player=player).strip()),))
 
 
