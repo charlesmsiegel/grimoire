@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   api, type Availability, type ModuleSummary, type PCSummary, type Persona, type WorldMeta,
 } from "../api/client";
 import type { ChatEvent, OpenerContribution, OpenerSpeaker } from "../api/stream";
 import { ErrorNote } from "../components/ErrorNote";
+import { GreetingAvailabilityPreview } from "../components/GreetingAvailabilityPreview";
 import { PlainShell } from "../components/PageShell";
 import { byName } from "../sortByName";
 import { NeedsModel } from "../components/inference/NeedsModel";
@@ -80,12 +81,31 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
    *  unsorted response instead. */
   const worldOptions = useMemo(() => byName(worlds), [worlds]);
 
+  // The vocabulary as last rendered, read by the world-change effect before
+  // that effect clears it (#68).
+  const vocabRef = useRef(worldTags);
+  useEffect(() => { vocabRef.current = worldTags; }, [worldTags]);
+
   useEffect(() => {
     if (!world) return;
     let live = true;
-    api.listTags(world).then(setWorldTags).catch(() => setWorldTags({}));
+    // These lists belong to the chosen world as much as its calendar does.
+    // A late PC or vocabulary answer must not supply another world's tags to
+    // the opening preview (or seat that world's PC on commit) (#68).
+    const previousIds = new Set(Object.keys(vocabRef.current));
+    setWorldTags({});
+    setWorldPCs([]);
     setPickedPC(null); // a pick belongs to one world
-    api.listPCs({ kind: "world", id: world }).then(setWorldPCs).catch(() => setWorldPCs([]));
+    // A draft tag that is one of the previous world's vocabulary IDs names
+    // another tag here, so it cannot carry across. Free-form tags are not IDs
+    // and stay (#68).
+    setTags((prev) => prev.filter((t) => !previousIds.has(t)));
+    api.listTags(world)
+      .then((rows) => { if (live) setWorldTags(rows); })
+      .catch(() => { if (live) setWorldTags({}); });
+    api.listPCs({ kind: "world", id: world })
+      .then((rows) => { if (live) setWorldPCs(rows); })
+      .catch(() => { if (live) setWorldPCs([]); });
     // Seeded from the world, not left on this component's own default (#223).
     // `commit` ALWAYS passes `calendar`, and `create_campaign` reads any value
     // it is given as an explicit choice that overwrites what the world says —
@@ -94,7 +114,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     // noticed and re-picked. Still a picker: the world is the default here, not
     // a constraint. A world whose calendar cannot be read leaves the current
     // selection alone rather than resetting it to something nobody chose.
-    // Guarded, unlike the list fills above it: this one writes a control the
+    // Guarded, like the list fills above it: this one writes a control the
     // reader will commit, so a slower answer for a world they have already left
     // would silently change what the new campaign is created with.
     api.getCalendarConfig({ kind: "world", id: world })
@@ -218,6 +238,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
 
   const canNext1 = name.trim() !== "" && world !== "";
   const canNext2 = pickedPC !== null || persona.name.trim() !== "";
+  const previewTags = pickedPC ? worldPCs.find((p) => p.id === pickedPC)?.tags ?? [] : tags;
   const who = (pickedPC && worldPCs.find((p) => p.id === pickedPC)?.name)
     || persona.name.trim() || "your character";
 
@@ -388,6 +409,8 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
               </div>
             </div>
             </>}
+            <GreetingAvailabilityPreview key={JSON.stringify([world, previewTags])}
+                                         world={world} tags={previewTags} />
             <div className="wizard-footer">
               <button className="subtle" onClick={() => setStep(1)}>Back</button>
               <button className="btn-accent" disabled={!canNext2} onClick={() => setStep(3)}>Next ▸</button>

@@ -96,6 +96,20 @@ def test_timeout_obeys_remaining_phase_and_preserves_file_evidence(cid, monkeypa
     assert len(rows) == 1 and rows[0]["error"] == "timeout"
 
 
+def test_a_phase_with_less_left_than_the_ceiling_bounds_the_call(cid, monkeypatch):
+    # The ceiling is far away here, so the phase's remaining budget must bound
+    # the stalled call. Either stop it can reach is bounded; a regression that
+    # ignored the phase would wait out the whole ceiling.
+    monkeypatch.setattr(history_recall, "RERANK_CEILING", 30)
+    sid, order = setup_history(cid)
+    fake = FakeLLM([[score_reply([3, 0, 0])]], stall=True)
+    started = time.monotonic()
+    ev = gather(cid, sid, fake, deadline=started + 0.5)
+    assert time.monotonic() - started < 5
+    assert [c.scene.sid for c in ev.candidates] == order and ev.items
+    assert ev.detail()["coverage"]["rerank"] in {"skipped:timeout", "skipped:deadline"}
+
+
 def test_expired_phase_never_resolves_or_calls(cid, monkeypatch):
     sid, order = setup_history(cid)
     monkeypatch.setattr(common, "require_inference", lambda *a, **k: pytest.fail("spent resolved"))

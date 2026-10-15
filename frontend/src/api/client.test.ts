@@ -58,6 +58,18 @@ test("campaign settings saves notify only after success and preserve null, zero 
   } finally { stop(); }
 });
 
+test.each<{ tags: string[]; query: string }>([
+  { tags: ["sailor", "free & curious"], query: "sailor%2Cfree%20%26%20curious" },
+  { tags: [], query: "" },
+])("greeting preview encodes proposed tags in a read-only world GET: $tags", async ({ tags, query }) => {
+  const rows = [{ id: "open", name: "Open", available: true, reasons: [], pcless: false, location: "" }];
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(rows));
+  globalThis.fetch = fetchMock;
+  expect(await api.previewGreetings("realm", tags)).toEqual(rows);
+  expect(fetchMock).toHaveBeenCalledWith(`/api/worlds/realm/greeting-availability?tags=${query}`,
+    expect.objectContaining({ method: "GET", body: undefined }));
+});
+
 test("scene creation carries reviewed initial focus in the same request", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "mara" }));
   globalThis.fetch = fetchMock;

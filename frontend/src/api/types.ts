@@ -1627,12 +1627,16 @@ export type GroupSettings = {
   sitting_out: string[];
   auto_rounds: number;
 };
-export type Availability = {
-  id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
+/** World preview: the gating verdict without campaign history (#68). */
+export type GreetingAvailabilityPreview = {
+  id: string; name: string; available: boolean; reasons: string[];
   pcless?: boolean;
   /** The greeting's location id, "" for none — what `greetingDraft` pre-fills
    *  the confirm form's location picker from (#218). */
   location?: string;
+};
+export type Availability = GreetingAvailabilityPreview & {
+  unlocked: boolean;
   mark?: GreetingMark;
   recommendation?: "successor" | "phase_optional" | null;
 };
