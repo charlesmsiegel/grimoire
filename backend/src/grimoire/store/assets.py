@@ -544,10 +544,12 @@ def link_if_vacant(d: Path, name: str, image_id: str) -> bool:
     if not _safe_name(name):
         raise ValueError("unsafe image id")
     with _image_lock(d, name):
+        # Recover first, so an interrupted promotion's slot is judged as it
+        # will stand, not as the half-swap left it.
+        _recover_before_write(d, name)
         ref = image_refs.read(d, name)
         if (ref is not None and ref.image is not None) or _legacy_path(d, name, False) is not None:
             return False
-        _recover_before_write(d, name)
         _place(d, name, image_id, keep_focus=False, supported_only=False)
         return True
 

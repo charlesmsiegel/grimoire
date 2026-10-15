@@ -473,3 +473,53 @@ def test_failed_update_leaves_a_card_saved_meanwhile(tmp_path, monkeypatch):
         ch.import_card(tmp_path, blob, "charx", into_cid=cid, update_vid=vid)
 
     assert ch.read_card(tmp_path, cid, vid)["data"]["description"] == "saved meanwhile"
+
+
+def test_update_ingests_nothing_for_names_the_version_already_has(tmp_path, monkeypatch):
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    png, other = _picture(), _picture("png_onepixel.png")
+    assets.put_image(tmp_path, cid, vid, "happy", png, "png")
+    blob = _bundle([_entry("happy", "assets/a.png"), _entry("sad", "assets/b.png")],
+                   {"assets/a.png": other, "assets/b.png": png})
+    ingested = []
+    real = image_store.ingest
+
+    def counting(data, ext, **kwargs):
+        ingested.append(data)
+        return real(data, ext, **kwargs)
+
+    monkeypatch.setattr(image_store, "ingest", counting)
+
+    ch.import_card(tmp_path, blob, "charx", into_cid=cid, update_vid=vid)
+
+    assert ingested == [png]  # only `sad`; the taken `happy` slot ingested nothing
+    assert assets.image_path(tmp_path, cid, vid, "happy").read_bytes() == png
+
+
+def test_failed_new_version_import_leaves_a_version_saved_meanwhile(tmp_path, monkeypatch):
+    cid, _vid = ch.create_character(tmp_path, "Seraphine")
+    png = _picture()
+    blob = _bundle([_entry("happy", "assets/a.png"), _entry("sad", "assets/b.png")],
+                   {"assets/a.png": png, "assets/b.png": png})
+    real = assets.link_if_vacant
+    calls, new = [], {}
+
+    def save_then_fail(d, name, image_id, **kwargs):
+        calls.append(name)
+        if len(calls) == 1:
+            placed = real(d, name, image_id, **kwargs)
+            # Another request saves the version this import has just created.
+            nvid = d.name
+            card = ch.read_card(tmp_path, cid, nvid)
+            card["data"]["description"] = "saved meanwhile"
+            ch.update_version(tmp_path, cid, nvid, card)
+            new["vid"] = nvid
+            return placed
+        raise OSError("disk full")
+
+    monkeypatch.setattr(assets, "link_if_vacant", save_then_fail)
+
+    with pytest.raises(OSError):
+        ch.import_card(tmp_path, blob, "charx", into_cid=cid, version_name="later")
+
+    assert ch.read_card(tmp_path, cid, new["vid"])["data"]["description"] == "saved meanwhile"

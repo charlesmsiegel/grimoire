@@ -1010,7 +1010,8 @@ def _bundled_image_name(name: str) -> bool:
     except (ValueError, ziputil.ArchiveError):
         return False
 
-def _stage_bundled(card: dict, bundled: _BundledImages) -> list[tuple[str, str]]:
+def _stage_bundled(card: dict, bundled: _BundledImages,
+                   occupied: Callable[[str], bool] = lambda name: False) -> list[tuple[str, str]]:
     """Ingest every named gallery picture the card places: (name, image id) pairs.
 
     Runs BEFORE any record is written. Ingest is the one fallible byte write an
@@ -1031,7 +1032,7 @@ def _stage_bundled(card: dict, bundled: _BundledImages) -> list[tuple[str, str]]
         for entry in entries:
             if len(used) >= _MAX_BUNDLED_IMAGES:
                 return staged
-            placed = _stage_entry(entry, bundled, ingested, used)
+            placed = _stage_entry(entry, bundled, ingested, used, occupied)
             if placed is not None:
                 staged.append(placed)
                 used.add(placed[0].casefold())
@@ -1039,7 +1040,7 @@ def _stage_bundled(card: dict, bundled: _BundledImages) -> list[tuple[str, str]]
 
 
 def _stage_entry(entry: object, bundled: _BundledImages, ingested: dict[str, str],
-                 used: set[str]) -> tuple[str, str] | None:
+                 used: set[str], occupied: Callable[[str], bool]) -> tuple[str, str] | None:
     if not isinstance(entry, dict) or entry.get("type") in _AVATAR_TYPES:
         return None
     name, uri = entry.get("name"), entry.get("uri")
@@ -1048,8 +1049,8 @@ def _stage_entry(entry: object, bundled: _BundledImages, ingested: dict[str, str
     # Case-fold on every platform: a store may sync to Windows. The first valid
     # entry owns its name, and only avatar resolution may claim the avatar slot,
     # even when this card has no avatar.
-    if name.casefold() == assets.AVATAR or name.casefold() in used:
-        return None
+    if name.casefold() == assets.AVATAR or name.casefold() in used or occupied(name):
+        return None  # an update fills empty slots only, so never ingest for a taken one
     path = cards.embedded_path(uri)
     if path is None:
         return None
@@ -1069,11 +1070,18 @@ class _Written:
     new_version: tuple[str, str] | None = None
     #: An update's card as it stood before the write.
     prior_text: str | None = None
-    #: The card text this import wrote over it, so rollback restores the card
-    #: only while it still holds that text.
+    #: The card text this import wrote, so rollback touches the card (restores
+    #: an update's, removes a new record) only while it still holds that text.
     written_text: str | None = None
     #: Gallery placements this import added, as (name, image id).
     placed: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _card_text(root: Path, cid: str, vid: str) -> str | None:
+    try:
+        return _card_path(root, cid, vid).read_text(encoding="utf-8")
+    except (OSError, CharacterNotFound):
+        return None
 
 
 def _unwind_import(root: Path, written: _Written, cid: str, vid: str) -> None:
@@ -1086,19 +1094,18 @@ def _unwind_import(root: Path, written: _Written, cid: str, vid: str) -> None:
     never overwrites an image the version already had, so nothing else needs
     restoring (#26).
     """
-    if written.new_character is not None:
+    ours = written.written_text is not None and _card_text(root, cid, vid) == written.written_text
+    if written.new_character is not None and ours:
         shutil.rmtree(_char_dir(root, written.new_character), ignore_errors=True)
         return
-    if written.new_version is not None:
+    if written.new_version is not None and ours:
         new_cid, new_vid = written.new_version
         _card_path(root, new_cid, new_vid).unlink(missing_ok=True)
         assets.delete_version_images(root, new_cid, new_vid)
-    if written.prior_text is not None:
-        # Restore the card only while it still holds this import's text: a
-        # version save that landed meanwhile must not be written back over.
-        path = _card_path(root, cid, vid)
-        if path.read_text(encoding="utf-8") == written.written_text:
-            atomic.write_text(path, written.prior_text)
+        return
+    if written.prior_text is not None and ours:
+        # A version save that landed meanwhile must not be written back over.
+        atomic.write_text(_card_path(root, cid, vid), written.prior_text)
     if written.placed:  # only then do the ids name a version
         directory = assets.version_dir(root, cid, vid)
         for name, image_id in written.placed:
@@ -1127,6 +1134,7 @@ def _write_record(root: Path, card: dict, written: _Written, *, into_cid: str | 
     if into_cid is None:
         cid, vid = create_character(root, cname, version_name or "default", card)
         written.new_character = cid
+        written.written_text = _dumps(card)  # what create_character just wrote
         return cid, vid
     # What the importer asked this version be called, else the card spec's own
     # answer, else the character's name -- which is a poor label but has always
@@ -1137,6 +1145,7 @@ def _write_record(root: Path, card: dict, written: _Written, *, into_cid: str | 
                          or cards.card_data(card).get("character_version")
                          or cname, card)
     written.new_version = (into_cid, vid)
+    written.written_text = _dumps(card)  # what create_version just wrote
     return into_cid, vid
 
 
@@ -1318,6 +1327,23 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
             return
 
 
+def _occupied_in(root: Path, cid: str | None, vid: str | None) -> Callable[[str], bool]:
+    """Which gallery names an update target already holds a picture under.
+
+    Read before staging, so an update ingests nothing it will not place (#26).
+    A picture arriving after this read is caught by `assets.link_if_vacant`;
+    only that race can leave an unplaced object, which collection reclaims.
+    """
+    if cid is None or vid is None:
+        return lambda name: False
+    directory = assets.version_dir(root, cid, vid)
+
+    def occupied(name: str) -> bool:
+        ref = image_refs.read(directory, name)
+        return (ref is not None and ref.image is not None) or assets.has_legacy(directory, name)
+    return occupied
+
+
 def _check_destination(root: Path, into_cid: str | None, update_vid: str | None) -> None:
     """Refuse a missing destination before any picture is stored.
 
@@ -1361,7 +1387,8 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     # Every fallible byte write happens before the first record write, so a
     # failure there leaves nothing behind (#26).
     _check_destination(root, into_cid, update_vid)
-    staged = _stage_bundled(card, bundled) if bundled is not None else []
+    occupied = _occupied_in(root, into_cid, update_vid)
+    staged = _stage_bundled(card, bundled, occupied) if bundled is not None else []
     written = _Written()
     cid = vid = ""
     try:
