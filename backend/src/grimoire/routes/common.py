@@ -1917,6 +1917,17 @@ def computes_only(fn):
     return fn
 
 
+def stamps_campaign_write(fn):
+    """A route whose writer owns activity and revision stamping.
+
+    Campaign settings (#73) may accept a save that changes nothing. The store
+    stamps after its durable change under the campaign lock; middleware must
+    stamp neither a successful no-op nor an exception before publication.
+    """
+    fn.grimoire_stamps_campaign_write = True
+    return fn
+
+
 def leaves_campaign_unchanged(fn):
     """Mark a campaign-scoped write that does not write to the campaign it names.
 

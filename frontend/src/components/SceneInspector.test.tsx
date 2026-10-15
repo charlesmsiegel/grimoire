@@ -904,6 +904,12 @@ describe("the Models section", () => {
     (api.previewControls as any).mockResolvedValue({ controls: {} });
   });
 
+  test("links to this campaign's full settings while preserving Models", async () => {
+    const section = await openModels();
+    expect(section.getByRole("link", { name: "Campaign settings" })).toHaveAttribute("href", "/campaigns/c/settings");
+    expect(section.getByRole("button", { name: /^Primary/ })).toBeInTheDocument();
+  });
+
   test("the inspector's Models section overrides a role for this campaign", async () => {
     const saved = campaignInference({ roles: {
       ...campaignInference().roles,

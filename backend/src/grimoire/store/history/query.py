@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 
 from .. import (
     actor_names,
-    config,
+    campaign_settings,
     entities,
     export,
     membership,
@@ -389,7 +389,7 @@ def prepare(cid: str, sid: str, *, seed: str = "", actor_ref: str | None = None)
         for m in window
         if not scenes_serialize.is_excluded(m) and not scenes_serialize.is_director_note(m)
     ]
-    depth = config.scan_depth()
+    depth = campaign_settings.count(cid, "context_scan_depth")
     scan = "\n".join(export.drop_images(m["content"]) for m in visible[-depth:]) if depth else ""
     scan = (scan + "\n" + seed).strip() if seed else scan
     archive_visible = scenes_serialize.without_excluded(window)

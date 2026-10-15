@@ -100,9 +100,16 @@ threads, and character state — so the next scene starts from an up-to-date wor
   it is set on the
   **Models** page (Settings → Inference → Models, `/models`; `/models/edit` to change it), the providers it names on
   **Settings → Inference → Providers**, and a campaign overrides Primary, Fast, Decision and
-  its routes from the scene inspector's Models section. An upgraded install has
+  its routes from Campaign settings → Models or the scene inspector's Models
+  section. An upgraded install has
   its old connections and routing moved into these once, so it keeps the models
   it had.
+- **Campaign settings** — open Settings from a campaign's hub or scene inspector
+  to choose its models, context and summary settings, calendar, system prompt,
+  and transcript labels. Fields follow global defaults until overridden;
+  removing an override restores inheritance. An explicitly empty system prompt
+  suppresses the global prompt for that campaign. Campaign default prompts stay
+  separate and additive. Storage and provider credentials remain global.
 - **Continuity review and the Story Graph** — after each wrap-up Grimoire looks
   over the campaign's plot threads and commitments for ones that may be the
   same business, belong together, or be finished, and lists what it finds in

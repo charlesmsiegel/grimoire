@@ -12,8 +12,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
-import tempfile
 import time
 import uuid
 from collections import Counter
@@ -43,16 +41,8 @@ RECORDING = Path(__file__).resolve().parents[1]/"recordings"/"history"/"vectors-
 
 @contextlib.contextmanager
 def isolated():
-    previous = os.environ.get("GRIMOIRE_HOME")
-    with tempfile.TemporaryDirectory(prefix="grimoire-history-eval-") as home:
-        os.environ["GRIMOIRE_HOME"] = home
-        try:
-            yield Path(home)
-        finally:
-            if previous is None:
-                os.environ.pop("GRIMOIRE_HOME", None)
-            else:
-                os.environ["GRIMOIRE_HOME"] = previous
+    with reports.isolated_home(prefix="grimoire-history-eval-") as home:
+        yield home
 
 
 def recording():

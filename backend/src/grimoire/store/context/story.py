@@ -11,7 +11,7 @@ from __future__ import annotations
 import secrets
 
 from ... import prompts
-from .. import chronicle, config, export, post_images, relationships
+from .. import campaign_settings, chronicle, export, post_images, relationships
 from ..scenes import serialize as scenes_serialize
 
 
@@ -129,14 +129,14 @@ def _relationship_lines(cid: str, cast) -> list[str]:
         return []
 
 
-def _recap_depth(depth: int | None = None) -> int:
+def _recap_depth(depth: int | None = None, cid: str = "") -> int:
     """The recap window actually rendered: an explicit depth (the opener's full
     recap) or the configured `recap_depth`. Archive retrieval subtracts this
     window from its candidates, so both have to agree on how wide it is."""
     try:
         if depth is not None:
             return max(depth, 0)
-        return max(int(config.read_config().get("recap_depth", "5")), 0)
+        return campaign_settings.count(cid, "recap_depth")
     except (TypeError, ValueError):
         return 5
 
@@ -147,7 +147,7 @@ def _recap_ids(cid: str, depth: int | None = None) -> frozenset[str]:
     summary."""
     try:
         return frozenset(str(r.get("id") or "")
-                         for r in chronicle.recent(cid, _recap_depth(depth))) - {""}
+                         for r in chronicle.recent(cid, _recap_depth(depth, cid))) - {""}
     except Exception:  # noqa: BLE001 — corrupt chronicle.json: exclude nothing, don't crash
         return frozenset()
 
@@ -158,7 +158,7 @@ def _story_entries(cid: str, depth: int | None = None, full: bool = False) -> li
     # reads the configured recap_depth (compact one-liners); the opener passes an
     # explicit depth with full=True so the template renders full summaries.
     try:
-        depth = _recap_depth(depth)
+        depth = _recap_depth(depth, cid)
         if depth <= 0:
             return []
         first, second = ("summary", "one_line") if full else ("one_line", "summary")

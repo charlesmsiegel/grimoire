@@ -25,6 +25,7 @@ import CampaignWizard from "./routes/CampaignWizard";
 import OpenScene from "./routes/OpenScene";
 import CampaignView from "./routes/CampaignView";
 import CampaignHub from "./routes/CampaignHub";
+import CampaignSettingsView from "./routes/CampaignSettingsView";
 import ScenesView from "./routes/ScenesView";
 import TodoView from "./routes/TodoView";
 import CostsView from "./routes/CostsView";
@@ -296,6 +297,7 @@ const AppRoutes = memo(function AppRoutes(
           the complaint the hub answers -- so play now lives one segment
           deeper and the reader arrives somewhere that says what is waiting. */}
       <Route path="/campaigns/:cid" element={<CampaignHub />} />
+      <Route path="/campaigns/:cid/settings" element={<CampaignSettingsView />} />
       {/* The list is the route; play is one scene inside it. They are
           separate elements rather than one component branching on `:sid`,
           because a list read top to bottom and a transcript being written

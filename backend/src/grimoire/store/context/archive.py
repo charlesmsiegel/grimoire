@@ -29,17 +29,13 @@ thing dropped when the context does not fit.
 
 from __future__ import annotations
 
-from .. import chronicle, config
+from .. import campaign_settings, chronicle
 from . import world_state
 
 
-def archive_depth() -> int:
+def archive_depth(cid: str = "") -> int:
     """How many archived scenes may be recalled at once. 0 disables retrieval."""
-    try:
-        return max(int(config.read_config().get("archive_depth",
-                                                config.DEFAULT_ARCHIVE_DEPTH)), 0)
-    except (TypeError, ValueError):
-        return int(config.DEFAULT_ARCHIVE_DEPTH)
+    return campaign_settings.count(cid, "archive_depth")
 
 
 def _archive_entries(cid: str, recent_text: str, exclude: frozenset[str] = frozenset(),
@@ -56,7 +52,7 @@ def _archive_entries(cid: str, recent_text: str, exclude: frozenset[str] = froze
     """
     try:
         if depth is None:
-            depth = archive_depth()
+            depth = archive_depth(cid)
         if depth <= 0 or not recent_text.strip():
             return []
         hits = []

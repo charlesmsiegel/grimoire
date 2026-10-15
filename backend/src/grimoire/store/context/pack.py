@@ -92,7 +92,7 @@ decision (the 01i spec's Open question 1).
 from __future__ import annotations
 
 from ... import content_parts
-from .. import config, tokens
+from .. import campaign_settings, tokens
 
 LOCK_IN = "lock-in"
 SPOTLIGHT = "spotlight"
@@ -143,15 +143,11 @@ MESSAGE_OVERHEAD = 5
 #: provider-reported prompt tokens.
 IMAGE_TOKENS = 1600
 
-def budget_tokens() -> int:
+def budget_tokens(cid: str = "") -> int:
     """The configured context budget in tokens; 0 = unbounded. A hand-edited
     config.md holding nonsense falls back to unbounded rather than raising: a
     malformed budget must not take scene generation down with it."""
-    try:
-        return max(int(config.read_config().get("context_budget",
-                                                config.DEFAULT_CONTEXT_BUDGET)), 0)
-    except (TypeError, ValueError):
-        return 0
+    return campaign_settings.count(cid, "context_budget")
 
 
 #: How system.j2 joins the sections. `pack` only uses it as the fallback for

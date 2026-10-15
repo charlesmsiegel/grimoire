@@ -34,6 +34,30 @@ function jsonOk(value: unknown) {
   return { ok: true, json: async () => value };
 }
 
+test("campaign settings reads are fresh even when requests overlap", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ overrides: {}, inherited: {}, effective: {} }));
+  globalThis.fetch = fetchMock;
+  await Promise.all([api.getCampaignSettings("saltmarch"), api.getCampaignSettings("saltmarch")]);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock).toHaveBeenCalledWith("/api/campaigns/saltmarch/settings", expect.objectContaining({ method: "GET" }));
+});
+
+test("campaign settings saves notify only after success and preserve null, zero and empty prompt", async () => {
+  const changed = vi.fn();
+  const stop = onConfigChanged(changed);
+  const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({ detail: "invalid" }) })
+    .mockResolvedValueOnce(jsonOk({ overrides: {}, inherited: {}, effective: {} }));
+  globalThis.fetch = fetchMock;
+  try {
+    await expect(api.putCampaignSettings("saltmarch", { context_budget: "-1" })).rejects.toThrow("invalid");
+    expect(changed).not.toHaveBeenCalled();
+    const patch = { context_budget: "0", recap_depth: null, system_prompt: "" };
+    await api.putCampaignSettings("saltmarch", patch);
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/saltmarch/settings", expect.objectContaining({ method: "PUT", body: JSON.stringify(patch) }));
+    expect(changed).toHaveBeenCalledTimes(1);
+  } finally { stop(); }
+});
+
 test("scene creation carries reviewed initial focus in the same request", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "mara" }));
   globalThis.fetch = fetchMock;

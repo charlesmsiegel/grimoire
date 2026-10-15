@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import time
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -77,11 +78,16 @@ def test_unresolvable_route_keeps_order_and_reports_fixed_kind(cid):
     assert fake.calls == 0 and ev.coverage.verdict != "error"
 
 
-def test_timeout_obeys_remaining_phase_and_preserves_file_evidence(cid):
+def test_timeout_obeys_remaining_phase_and_preserves_file_evidence(cid, monkeypatch):
     sid, order = setup_history(cid)
     fake = FakeLLM([[score_reply([3, 0, 0])]], stall=True)
+    # Freeze only the adapter's phase accounting so file reads cannot spend
+    # the 250 ms intended for the stalled provider. plan_deadline keeps its
+    # real clock: ignoring the remaining budget still exceeds the 2 s bound.
+    phase_now = time.monotonic()
+    monkeypatch.setattr(history_recall, "time", SimpleNamespace(monotonic=lambda: phase_now))
     started = time.monotonic()
-    ev = gather(cid, sid, fake, deadline=started + 0.25)
+    ev = gather(cid, sid, fake, deadline=phase_now + 0.25)
     assert time.monotonic() - started < 2
     assert [c.scene.sid for c in ev.candidates] == order and ev.items
     assert ev.detail()["coverage"]["rerank"] == "skipped:timeout"

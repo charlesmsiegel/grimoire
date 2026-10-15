@@ -23,7 +23,7 @@ const DEFAULT_WARN_DAYS = 7;
  *  control of its own — campaign-side the scene inspector already owns that
  *  flag, world-side nothing else can set it.
  */
-export function CalendarConfig({ scope, onConfig }: {
+export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
   scope: CalendarScope;
   /** Every config this panel comes to hold — the one it loads, and each one it
    *  saves. The world Overview's checklist row is derived from it rather than
@@ -32,12 +32,17 @@ export function CalendarConfig({ scope, onConfig }: {
    *  this one. Not called when the load fails, which is what leaves that row
    *  off the list entirely — unknown is not unconfirmed. */
   onConfig?: (cfg: Cfg) => void;
+  /** Opt-in for a page that protects all of its retained editors together. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const isWorld = scope.kind === "world";
   const [cfg, setCfg] = useState<Cfg | null>(null);
   const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [stored, setStored] = useState<Cfg | null>(null);
+  const [saving, setSaving] = useState(false);
+  const pending = useRef<object | null>(null);
   // The window the SERVER currently holds. `save` resolves a cleared input
   // against it so the request always carries a number -- see `save`.
   const storedWarn = useRef(DEFAULT_WARN_DAYS);
@@ -62,6 +67,9 @@ export function CalendarConfig({ scope, onConfig }: {
     // pressing it in that window would write the record you left into the one
     // you are looking at. "Loading calendar…" has no Save to press.
     setCfg(null);
+    setStored(null);
+    pending.current = null;
+    setSaving(false);
     setSaved(false);
     setError(null);
     setFailed(false);
@@ -69,6 +77,7 @@ export function CalendarConfig({ scope, onConfig }: {
       .then((c) => {
         if (!live) return;
         setCfg(c);
+        setStored(c);
         storedWarn.current = c.warn_days ?? DEFAULT_WARN_DAYS;
         onConfig?.(c);
       })
@@ -87,6 +96,15 @@ export function CalendarConfig({ scope, onConfig }: {
     api.getCalendarProviders().then((r) => setProviders(r.providers)).catch(() => setProviders([]));
   }, []);
 
+  // A blank warning field resolves to the stored window at Save, so compare
+  // that value, not its temporary null input sentinel. A successful save moves
+  // this baseline even when later keystrokes keep the visible draft dirty.
+  const dirty = cfg !== null && stored !== null
+    && JSON.stringify({ ...cfg, warn_days: cfg.warn_days ?? storedWarn.current })
+      !== JSON.stringify({ ...stored, warn_days: stored.warn_days ?? storedWarn.current });
+  useEffect(() => { onDirtyChange?.(dirty || saving); }, [onDirtyChange, dirty, saving]);
+  useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
+
   if (!cfg) {
     return <div className="field-hint">
       {failed ? "Could not load this calendar." : "Loading calendar…"}
@@ -99,6 +117,10 @@ export function CalendarConfig({ scope, onConfig }: {
   }
 
   async function save() {
+    if (pending.current) return;
+    const attempt = {};
+    pending.current = attempt;
+    setSaving(true);
     setError(null);
     // Blank resolves to what is stored BEFORE the request goes out, so this
     // form never sends the `null` sentinel. That sentinel means "this request
@@ -122,6 +144,7 @@ export function CalendarConfig({ scope, onConfig }: {
       await api.setCalendarConfig(scope, outgoing);
       if (current.current !== startedIn) return;
       storedWarn.current = outgoing.warn_days;
+      setStored(outgoing);
       // The saved config, not a re-read: the server normalizes but does not
       // decide any field the form shows, and a second GET would race this
       // component's own scope effect if the reader had already moved on. This
@@ -141,6 +164,11 @@ export function CalendarConfig({ scope, onConfig }: {
       // rejection from the scope the reader has already left would otherwise
       // put its error banner over the record now on screen.
       if (current.current === startedIn) setError(err.detail ?? String(err));
+    } finally {
+      if (pending.current === attempt) {
+        pending.current = null;
+        setSaving(false);
+      }
     }
   }
 
@@ -254,8 +282,13 @@ export function CalendarConfig({ scope, onConfig }: {
           own; "Save" twice in a row is ambiguous to anyone reading the page by
           its controls. The visible text stays "Save" and the name only extends
           it, so "click Save" still resolves (WCAG 2.5.3). */}
-      <button className="primary" onClick={save}
-              aria-label={isWorld ? "Save calendar" : undefined}>Save</button>
+      <button className="primary" onClick={() => { void save(); }} disabled={saving}
+              aria-label={isWorld ? "Save calendar" : undefined}>{saving ? "Saving..." : "Save"}</button>
+      {onDirtyChange && <button className="subtle" disabled={saving} onClick={() => {
+        setCfg(stored);
+        setSaved(false);
+        setError(null);
+      }}>Cancel</button>}
       {saved && <span className="field-hint">Saved.</span>}
     </div>
   );

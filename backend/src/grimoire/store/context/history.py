@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 from ... import prompts
-from .. import config
+from .. import campaign_settings
 from ..appearances import cast as appearances_cast
 from ..history import budget, model, query, retrieval, settings
 from ..scenes import identity as scenes_identity
@@ -181,7 +181,7 @@ def summary_omissions(cid: str, sid: str, archive_scan_text: str, full_recap: in
 
 def preview(cid: str, sid: str, resolved=None) -> model.Evidence | None:
     """The inspector's synchronous, provider-free preview; off reads no history."""
-    cfg = config.read_config()
+    cfg = campaign_settings.effective_config(cid)
     if settings.read(cfg) is None or "history_recall" not in layout.enabled_ids(("history_recall",)):
         return None
     try:

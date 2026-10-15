@@ -28,6 +28,7 @@ from .. import decisions, llm_sampling, prompts, store, wire
 from .. import inference as operations
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from ..store import campaign_settings
 from ..store.absorb import membership as absorb_membership
 from ..store.continuity import identity as continuity_identity
 from ..store.continuity import review as continuity_review
@@ -1992,10 +1993,10 @@ class _Budget:
         `on_timeout` fires for a call that went out and was then cut off here,
         so the connection it was running on can be told (`common._noting`).
 
-        wait_for waits for the cancellation it requests to complete, so the
-        real ceiling is the budget plus however long the call takes to unwind;
-        that unwinding is itself hard-bounded in `llm` (grace-then-abandon),
-        which is what keeps this a bound rather than a hope.
+        The timeout waits for the cancellation it requests to complete, so
+        the real ceiling is the budget plus however long the call takes to
+        unwind; that unwinding is itself hard-bounded in `llm`
+        (grace-then-abandon), which keeps this a bound rather than a hope.
         """
         left = self.remaining()
         if left is None:
@@ -2009,17 +2010,21 @@ class _Budget:
             # await, which would otherwise warn at collection.
             coro.close()
             raise BudgetRefused("timeout", BUDGET_EXHAUSTED)
-        # Past this point wait_for runs the task's first step before its timer
-        # can fire, so the call is issued even if the answer never arrives.
+        # A positive timeout can cancel only after we yield to the call, so
+        # the call is issued even if its answer never arrives.
         if on_start:
             on_start()
+        timer = asyncio.timeout(left)
         try:
-            return await asyncio.wait_for(coro, left)
+            async with timer:
+                return await coro
         except TimeoutError as exc:
-            # asyncio.TimeoutError is the builtin TimeoutError from 3.11 on, so
-            # this also catches one raised *inside* the call. Only blame the
-            # budget when the budget is actually gone.
-            detail = BUDGET_EXHAUSTED if self.spent() else (str(exc) or "the call timed out")
+            # #73's Windows gate exposed the clock-tick gap: our timer can
+            # cancel before _clock() advances past the deadline. Its own
+            # expiration proves ownership; an upstream TimeoutError still
+            # keeps its reason while the budget has time left.
+            expired = timer.expired() or self.spent()
+            detail = BUDGET_EXHAUSTED if expired else (str(exc) or "the call timed out")
             overrun = LLMError("timeout", detail)
             # This ceiling has the same blind spot `routes.common._bounded_call`
             # does, and for the same reason (#146): `wait_for` cancels the call
@@ -3764,7 +3769,7 @@ def get_rolling_summary(cid: str, sid: str):
     scene = _require_scene(cid, sid)
     return _rolling_body(store.rolling_intact.view(cid, sid, scene,
                                        store.chronicle.scene_facts(cid, sid)),
-                         store.config.rolling_summary_every())
+                         campaign_settings.count(cid, "rolling_summary_every"))
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/rolling-summary")
@@ -3864,14 +3869,14 @@ async def _rolling_once(cid: str, sid: str, force: bool, upto: int | None,
         # to protect the STORE and the wrong place to protect the bill.
         ahead = store.rolling_intact.view(cid, sid, scene, store.chronicle.scene_facts(cid, sid))
         if ahead["summary"] and not ahead["stale"] and ahead["at"] >= upto:
-            return {**_rolling_body(ahead, store.config.rolling_summary_every()),
+            return {**_rolling_body(ahead, campaign_settings.count(cid, "rolling_summary_every")),
                     "refreshed": False}
         # Clamped here and nowhere else: every decision below -- due, base,
         # digest, what gets folded, what `covered` records -- then works from the
         # same bounded transcript, rather than each having to remember the bound.
         scene = {**scene, "messages": scene["messages"][:upto]}
     resolved = require_inference("rolling-summary", cid)
-    every = store.config.rolling_summary_every()
+    every = campaign_settings.count(cid, "rolling_summary_every")
     facts = store.chronicle.scene_facts(cid, sid)
     view = store.rolling_intact.view(cid, sid, scene, facts)
     if not _rolling_due(view, every, force):
@@ -4073,7 +4078,7 @@ def get_scene_break(cid: str, sid: str):
     configured must still render the panel.
     """
     scene = _require_scene(cid, sid)
-    every = store.config.scene_break_every()
+    every = campaign_settings.count(cid, "scene_break_every")
     return _break_body(_break_view(scene, every, _break_provider(cid),
                                    store.appearances.player_label(cid, sid)), every)
 
@@ -4130,7 +4135,7 @@ async def _break_once(cid: str, sid: str, force: bool, upto: int | None,
             raise HTTPException(status_code=400, detail="upto must not be negative")
         scene = {**scene, "messages": scene["messages"][:upto]}
     resolved = require_inference("scene-break", cid, operation="decide")
-    every = store.config.scene_break_every()
+    every = campaign_settings.count(cid, "scene_break_every")
     provider = _break_provider(cid)
     view = _break_view(scene, every, provider,
                        store.appearances.player_label(cid, sid))
@@ -4411,7 +4416,7 @@ def post_scene_break_dismiss(cid: str, sid: str):
     _require_scene(cid, sid)
     store.scenes.dismiss_scene_break(cid, sid)
     scene = _require_scene(cid, sid)
-    every = store.config.scene_break_every()
+    every = campaign_settings.count(cid, "scene_break_every")
     return _break_body(_break_view(scene, every, _break_provider(cid),
                                    store.appearances.player_label(cid, sid)), every)
 

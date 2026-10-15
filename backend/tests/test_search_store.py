@@ -11,6 +11,8 @@ from __future__ import annotations
 import gc
 import json
 import os
+import time
+import timeit
 
 import pytest
 
@@ -486,28 +488,24 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     with the parser unchanged. Here either answer is 2x from the bound, so the
     margin against noise and against a quadratic parser both widened.
     """
-    import time
-
-    # CPU time, not wall time: `process_time` stops while the process is
-    # descheduled, which is what a contended runner does to it for whole
-    # milliseconds at a time -- longer than a 20k-word parse takes. And the
-    # collector off while timing: 40k fresh strings trip collections whose cost
-    # is the size of the WHOLE heap, and late in a full-suite run that heap
-    # dwarfs the parse, so the larger sample paid for the session's garbage.
-    # Both are noise in the measure, not the parser, and both reddened CI at
-    # a 3.9x "scaling" with the parser unchanged. The collector is off around
-    # each timed sample rather than the whole measure: `_parse` re-enables it on
-    # the way out, so an outer disable would only cover the first sample.
-    def _parse(n):
+    # CPU time excludes descheduling by neighbouring workers. Timer disables
+    # the collector around each timed batch, keeping the session's heap out of
+    # the parse measurement. Windows process_time can return zero for a single
+    # 20k-word parse: the old 1e-4 floor then turned a 0.046875 s large sample
+    # into a fictitious 468.8x scaling. Calibrate one common repetition count
+    # to at least 0.2 CPU seconds with the standard library's autorange; both
+    # word counts use that same batch size, so the 4x/16x comparison is intact.
+    def timer(n):
         q = " ".join(f"w{i}" for i in range(n))
-        gc.collect()
-        gc.disable()
-        try:
-            started = time.process_time()
+
+        def parse():
             assert len(search.query_terms(q)) == n
-            return time.process_time() - started
-        finally:
-            gc.enable()
+
+        return timeit.Timer(parse, timer=time.process_time)
+
+    small_timer, large_timer = timer(20000), timer(80000)
+    gc.collect()
+    repetitions, _elapsed = small_timer.autorange()
 
     # Best-of-five at each size. A single sample is dominated by whatever the
     # machine was doing at that instant -- the first call alone measured a 0.74x
@@ -515,13 +513,14 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     # least interfered with, which is what the comparison wants. The two sizes'
     # samples alternate, so a burst of load from a neighbouring worker lands on
     # both rather than on whichever size happened to be measured through it.
-    _parse(20000)                      # warm the interpreter, not the measure
     smalls, larges = [], []
     for _ in range(5):
-        smalls.append(_parse(20000))
-        larges.append(_parse(80000))
-    small = max(min(smalls), 1e-4)     # a floor, so a fast machine cannot divide by ~0
-    large = min(larges)
+        gc.collect()
+        smalls.append(small_timer.timeit(repetitions))
+        gc.collect()
+        larges.append(large_timer.timeit(repetitions))
+    small, large = min(smalls), min(larges)
+    assert small > 0, "the calibrated CPU sample must exceed the timer's resolution"
     assert large / small < 8, (
         f"parsing scaled {large / small:.1f}x for 4x the words -- linear is ~4, "
         f"quadratic is ~16")

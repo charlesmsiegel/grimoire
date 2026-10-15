@@ -28,6 +28,7 @@ from ... import content_parts, model_guidance, prompts
 from .. import (
     authors_notes,
     birthdays,
+    campaign_settings,
     characters,
     config,
     default_prompts,
@@ -366,7 +367,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     voiced_ids = frozenset(cid_ for cid_, b in zip(npc_ids, cast_blocks, strict=True)
                            if b["name"] and (b["anchor"] or b["example"]))
 
-    depth = config.scan_depth()
+    cfg = campaign_settings.effective_config(cid)
+    depth = config._whole(cfg.get("context_scan_depth"), config.DEFAULT_SCAN_DEPTH)
     # depth 0 => no scan window (history[-0:] would be the WHOLE list, so guard it)
     recent_text = "\n".join(m["content"] for m in visible[-depth:]) if depth else ""
     if wi_seed:  # opener: the prompt stands in for the (absent) recent history
@@ -427,7 +429,6 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     if current_loc and not loc_excluded:
         present[f"locations:{current_loc}"] = {"type": "current_location", "via": None}
 
-    cfg = config.read_config()
     campaign_meta = campaigns_read.read_campaign(cid)["meta"]
     # One per-field cascade resolves BOTH the prose style and the length budget
     # over turn -> scene -> campaign -> global. It subsumes the old style-only
@@ -625,7 +626,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     notes = positions + [{**n, "index": None, "status": "skipped"} for n in skipped_notes]
     opener_notes = ([(n["level"], _expanded(authors_note.render(n))) for n in applied_notes]
                     if opener else [])
-    return {"data": data, "subs": subs, "datetime_subs": dt_subs, "history": sub_history,
+    return {"data": data, "config": cfg, "subs": subs, "datetime_subs": dt_subs, "history": sub_history,
             "notes": notes, "opener_notes": opener_notes,
             "post_history": post_history, "npc_names": npc_names, "wi_result": wi_result,
             "lore": lore,
@@ -1349,7 +1350,7 @@ def _world_info_section(section: Section, data: dict, lore: dict, head: str,
 
 def _expanded_section(section: Section, data: dict, body: str, head: str, lore: dict | None,
                       expand, history_view=None, history_parts=None,
-                      history_omissions=None) -> tuple[str, dict]:
+                      history_omissions=None, cfg=None) -> tuple[str, dict]:
     """One rendered section's text after macro expansion, with `head` (already
     expanded) on the front, and any keys it adds to its section dict.
 
@@ -1366,7 +1367,8 @@ def _expanded_section(section: Section, data: dict, body: str, head: str, lore: 
             return "", {}
         try:
             return history_section.section(history_view.evidence, expand, tokens.count_tokens,
-                                           history_omissions or {}, config.read_config(), part)
+                                           history_omissions or {},
+                                           config.read_config() if cfg is None else cfg, part)
         except Exception:  # noqa: BLE001 -- recalled history is additive; it never costs the turn
             # Per section: one that cannot render drops alone (spec 11 §6.4).
             log.warning("Recalled history section %s dropped from a compose: it could not "
@@ -1476,7 +1478,7 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
             head = expand(prompts.render(section.heading, **data)).strip()
         text, extra = _expanded_section(section, data, body, head, lore, expand,
                                         a.get("history_view"), a.get("history_parts"),
-                                        a.get("history_omissions"))
+                                        a.get("history_omissions"), a.get("config"))
         if not text:
             # `last_heading` stays put: an empty section breaks no run.
             out.extend(r for r in (_held_back_only(section, pinned, extra),) if r)
@@ -1539,7 +1541,7 @@ def _packed(a: dict, cid: str, sid: str, opener: bool = False,
     which is the provider-side truncation this exists to prevent. post_history
     is always reserved; callers name the rest.
     """
-    budget = pack.budget_tokens()
+    budget = pack.budget_tokens(cid)
     # Only worth the tokeniser calls when there is a budget to charge against.
     reserved = (tokens.count_tokens(a["post_history"])
                 + sum(tokens.count_tokens(t) for t in reserve)) if budget > 0 else 0
@@ -1626,7 +1628,7 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
     post_history = a["post_history"]
     before_post, after_post = deepcopy(before_post), deepcopy(after_post)
     after_history = deepcopy(after_history)
-    budget = pack.budget_tokens()
+    budget = pack.budget_tokens(cid)
     count = _token_memo()
     reserved = (count(post_history)
                 + sum(count(text) for _label, text in extra)) if budget > 0 else 0

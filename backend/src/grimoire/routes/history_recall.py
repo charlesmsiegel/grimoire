@@ -27,6 +27,7 @@ from functools import partial
 from .. import inference as operations
 from .. import store
 from ..llm_errors import LLMError
+from ..store import campaign_settings
 from ..store import history_rerank as kit
 from ..store.context import epistemic, layout
 from ..store.context import history as history_section
@@ -130,7 +131,7 @@ def _plan_auto() -> bool:
 
 
 def _prepare(cid, sid, seed, resolved, actor_ref=None):
-    cfg = store.config.read_config()
+    cfg = campaign_settings.effective_config(cid)
     history_settings = _on(cfg)
     if history_settings is None:
         return None

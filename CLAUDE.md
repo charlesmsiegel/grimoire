@@ -804,7 +804,7 @@ would answer neither question.
   disable, an edit between playing and absorbing, a local template edit). A
   `drift` verdict means "worth looking at". `store/voice_anchors.py`'s
   docstring carries the reasoning, including what was given up to get here.
-- **A campaign carries a write token, and one route opts out of it.**
+- **A campaign carries a write token; a route owning its stamps says so.**
   `store/revision.py` gives each campaign an opaque value that changes whenever
   the app records a write to it — the primitive `POST /advance` compares an
   expected state against and `POST /fork` keys a repeat on (#409). It is
@@ -845,6 +845,11 @@ would answer neither question.
   invalidate the very expectation the caller took it to protect. What the token
   cannot see, and why a mismatch is a re-price rather than an error, is in that
   module's docstring and in `docs/store-guarantees.md`.
+  `PUT /campaigns/{cid}/settings` uses `@stamps_campaign_write` instead: its
+  store writer stamps activity and revision inside the campaign lock only after
+  publishing a changed setting, so an unchanged save moves neither. The marker
+  delegates both success and exception stamping to that writer; it does not
+  mean that the route only computes or writes to a different campaign.
 - **Images live in the content-addressed store, never in a record's folder.**
   Every image write goes through the `store.assets` primitives: `put_in` /
   `put_image` ingest the bytes into `<home>/assets/image-store/`, `link_in`

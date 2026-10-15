@@ -9,6 +9,7 @@ quality. The live arms are `evals/run.py --investigate MODE --live`.
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
@@ -178,10 +179,10 @@ def test_an_arm_leaves_its_home_only_once_no_tool_thread_runs(monkeypatch):
     waits for `tool_calls.idle` before its throwaway home is let go."""
     waited = []
     monkeypatch.setattr(runner.tool_calls, "idle", lambda timeout=None: waited.append(
-        runner.os.environ.get("GRIMOIRE_HOME")) or True)
+        os.environ.get("GRIMOIRE_HOME")) or True)
     monkeypatch.setattr(runner.cases, "CASES",
                         tuple(c for c in cases.CASES if c.id == "thread-change-question"))
-    real = runner.os.environ.get("GRIMOIRE_HOME")
+    real = os.environ.get("GRIMOIRE_HOME")
     runner.run_all(selected=("question",))
     assert len(waited) == 2 and all(h and h != real for h in waited)
 

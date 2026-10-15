@@ -135,10 +135,15 @@ def _named(attempt) -> list:
     return [repr(attempt)]
 
 
-def _drive(case: str, attempt, failing: frozenset[str]) -> dict:
+def _drive(case: str, attempt, failing: frozenset[str],
+           runner: asyncio.Runner | None = None) -> dict:
     """One call through a real facade over recording clients: its wire calls,
     the holder it stamped (`ATTEMPTED` by name), what it reported, and its
-    error."""
+    error. A single-call consumer may omit the runner; golden matrices pass
+    their shared runner to avoid creating a loop for every wire cell."""
+    if runner is None:
+        with asyncio.Runner() as owned:
+            return _drive(case, attempt, failing, owned)
     wires = {kind: _Wire(failing) for kind in KINDS}
     observed: list = []
     client = llm.LLMClient(**wires, retries=0, timeout=7,  # type: ignore[arg-type]
@@ -148,12 +153,12 @@ def _drive(case: str, attempt, failing: frozenset[str]) -> dict:
     error = None
     try:
         if case == "single":
-            asyncio.run(client.single(MESSAGES, attempt, usage))
+            runner.run(client.single(MESSAGES, attempt, usage))
         elif case == "native":
-            asyncio.run(client.decide_native(ITEM, attempt, usage))
+            runner.run(client.decide_native(ITEM, attempt, usage))
         else:
             schema = SCHEMA if case.startswith("structured") else None
-            asyncio.run(client.complete(MESSAGES, attempt, usage, schema=schema))
+            runner.run(client.complete(MESSAGES, attempt, usage, schema=schema))
     except LLMError as exc:
         error = [type(exc).__name__, exc.kind, exc.detail]
     holder = {k: v for k, v in sorted(usage.items()) if not k.startswith("_")}
@@ -185,21 +190,27 @@ def _observe_state(state: str, stage: str, tmp_path) -> dict[str, list[dict]]:
     """`{where/case: [the record per spelling]}` for one state, in the pass
     `stage` names (`test_adapter_registry.PASSES`)."""
     out: dict[str, list[dict]] = {}
-    for where, resolved in _resolved(state, tmp_path, stage=stage):
-        if resolved.operation == "embed" or resolved.chain is None:
-            continue
-        for case, failing in _cases(resolved.chain):
-            out[f"{where}/{case}"] = [_drive(case, attempt, failing)
-                                      for attempt in _spellings(resolved.chain, case)]
+    # Each Windows event loop opens a TCP socket pair. One loop per wire call
+    # exhausts the ephemeral ports under parallel coverage; one runner per
+    # golden case keeps the same sequential calls without that transport churn.
+    with asyncio.Runner() as runner:
+        for where, resolved in _resolved(state, tmp_path, stage=stage):
+            if resolved.operation == "embed" or resolved.chain is None:
+                continue
+            for case, failing in _cases(resolved.chain):
+                out[f"{where}/{case}"] = [_drive(case, attempt, failing, runner)
+                                          for attempt in _spellings(resolved.chain, case)]
     return out
 
 
 def _observe_edges() -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
-    for name, chain in [*EDGE, *((t.provider_id, wire.Chain(t)) for t in NATIVE)]:
-        for case, failing in _cases(chain):
-            out[f"{name or '<anonymous>'}/{case}"] = [
-                _drive(case, attempt, failing) for attempt in _spellings(chain, case)]
+    with asyncio.Runner() as runner:
+        for name, chain in [*EDGE, *((t.provider_id, wire.Chain(t)) for t in NATIVE)]:
+            for case, failing in _cases(chain):
+                out[f"{name or '<anonymous>'}/{case}"] = [
+                    _drive(case, attempt, failing, runner)
+                    for attempt in _spellings(chain, case)]
     return out
 
 

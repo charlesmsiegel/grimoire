@@ -92,6 +92,14 @@ def client(monkeypatch, tmp_path):
         yield c
 
 
+@pytest.fixture
+def cid(client):
+    # #73 captures read the campaign budget. Exercise inherited defaults on a
+    # real campaign while keeping the frozen stage/call/capture contract intact.
+    wid = store.worlds.create_world("Realm")
+    return store.campaigns.create_campaign("Saltmarch", wid)
+
+
 def _items(count: int) -> list[Item]:
     return [Item(f"Winifred turns page {k}.", (Predicate("over", "Is the scene over?"),))
             for k in range(count)]
@@ -193,7 +201,7 @@ def _named(attempt) -> list:
     return [attempt.get("id"), llm.effective_model(attempt)]
 
 
-def _run(monkeypatch, resolved, scenario: str, count: int) -> dict:
+def _run(monkeypatch, resolved, scenario: str, count: int, cid: str) -> dict:
     log: list = []
     script = _script(scenario, resolved.attempts[0].model)
     wires = {k: _Wire(k, script, log) for k in ("openrouter", "openai_compatible",
@@ -215,7 +223,7 @@ def _run(monkeypatch, resolved, scenario: str, count: int) -> dict:
     monkeypatch.setattr(store.prompt_log, "capturing", lambda: True)
 
     async def capture(messages, outcome, attempt):
-        character_turns._capture("cid", "sid", "scene-break", messages, attempt, outcome)
+        character_turns._capture(cid, "sid", "scene-break", messages, attempt, outcome)
 
     before = len(list(store.usage.calls(days=1)))
     try:
@@ -289,8 +297,8 @@ def _resolutions(client) -> list[tuple[str, object]]:
     return out
 
 
-def _observe(client, monkeypatch) -> dict[str, dict]:
-    return {f"{label}|{scenario}|{count}": _run(monkeypatch, resolved, scenario, count)
+def _observe(client, monkeypatch, cid: str) -> dict[str, dict]:
+    return {f"{label}|{scenario}|{count}": _run(monkeypatch, resolved, scenario, count, cid)
             for label, resolved in _resolutions(client)
             for scenario in SCENARIOS for count in SIZES}
 
@@ -327,21 +335,21 @@ def _check(golden: dict[str, dict], seen: dict[str, dict]) -> None:
         assert run == golden[at], at
 
 
-def test_the_decide_chain_does_what_it_did(client, monkeypatch):
-    _check(_golden(), _observe(client, monkeypatch))
+def test_the_decide_chain_does_what_it_did(client, monkeypatch, cid):
+    _check(_golden(), _observe(client, monkeypatch, cid))
 
 
-def test_the_decide_chain_golden_can_fail(client, monkeypatch):
+def test_the_decide_chain_golden_can_fail(client, monkeypatch, cid):
     """A native stage that sends its sampler preset is caught."""
     golden = _golden()
     monkeypatch.setattr(wire.Target, "without_sampling", lambda self: self)
     with pytest.raises(AssertionError):
-        _check(golden, _observe(client, monkeypatch))
+        _check(golden, _observe(client, monkeypatch, cid))
 
 
 @pytest.mark.skipif(os.environ.get("GRIMOIRE_RECORD_DECIDE_GOLDEN") != "1",
                     reason="records the golden once; it is never regenerated")
-def test_record_the_decide_chain_golden(client, monkeypatch):
+def test_record_the_decide_chain_golden(client, monkeypatch, cid):
     """Write the golden where none exists."""
     assert not GOLDEN.exists(), f"{GOLDEN} exists, and it is never regenerated"
-    GOLDEN.write_text(_encode(_observe(client, monkeypatch)), encoding="utf-8")
+    GOLDEN.write_text(_encode(_observe(client, monkeypatch, cid)), encoding="utf-8")
