@@ -254,6 +254,24 @@ def _is_running(root: Path, note: dict) -> bool:
     return bool(note.get("running")) and note.get("pid") != os.getpid()
 
 
+#: Roots whose startup pass is queued in THIS process and has not yet ended.
+#: A status read can take the migration lock in the gap before the queued
+#: thread takes it, which would otherwise read as no activity (#496).
+_queued: set[str] = set()
+
+
+def queue(root: Path) -> None:
+    """Mark `root`'s startup pass as queued, before its thread starts."""
+    with _active_guard:
+        _queued.add(str(root))
+
+
+def dequeue(root: Path) -> None:
+    """Clear the queued mark once the pass that was queued has ended."""
+    with _active_guard:
+        _queued.discard(str(root))
+
+
 def _activity(root: Path) -> bool:
     """Activity spans planning and retirement, independently of format (#496).
 
@@ -261,7 +279,7 @@ def _activity(root: Path) -> bool:
     local run on another root must not be attributed to this resolved root.
     """
     with _active_guard:
-        if str(root) in _active:
+        if str(root) in _active or str(root) in _queued:
             return True
         if _active:
             return False

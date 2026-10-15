@@ -260,6 +260,14 @@ def _migrate_inference(app: FastAPI, stop: threading.Event) -> None:
         log.warning("inference settings migration stopped -- %s", exc)
 
 
+def _queued_migration(app: FastAPI, stop: threading.Event, root: Path) -> None:
+    """`_migrate_inference`, releasing the queued mark when its pass ends (#496)."""
+    try:
+        _migrate_inference(app, stop)
+    finally:
+        inference_migrate.dequeue(root)
+
+
 def start(app: FastAPI) -> threading.Thread | None:
     """Start the inference-settings migration for the store `paths.home()`
     names now, without waiting for it (spec 11.2, ruling 4): startup and a
@@ -276,7 +284,11 @@ def start(app: FastAPI) -> threading.Thread | None:
     # A flag of its own per run: re-entering a lifespan must never un-stop a
     # straggler an earlier shutdown flagged and could not wait out.
     stop = threading.Event()
-    thread = threading.Thread(target=_migrate_inference, args=(app, stop),
+    root = paths.home()
+    # Queued before the thread exists, so a status read in the gap before the
+    # thread takes the migration lock still reads the pass as active (#496).
+    inference_migrate.queue(root)
+    thread = threading.Thread(target=_queued_migration, args=(app, stop, root),
                               name="inference-migration", daemon=True)
     app.state.inference_migration = thread
     app.state.inference_migrations.append((thread, stop))

@@ -1653,6 +1653,18 @@ def test_progress_activity_covers_retirement_planning(home, monkeypatch):
     assert migrate.status().as_dict()["active"] is False
 
 
+def test_queued_startup_pass_reads_as_active_until_it_ends(home):
+    # #496: between the thread's start and its first lock acquisition, a status
+    # read must still see the pass, or a page stops polling before it begins.
+    _legacy()
+    migrate.queue(home)
+    try:
+        assert migrate.status().as_dict()["active"] is True
+    finally:
+        migrate.dequeue(home)
+    assert migrate.status().as_dict()["active"] is False
+
+
 def test_progress_persistence_is_throttled_but_local_counts_are_live(home, monkeypatch):
     clock = [0.0]
     monkeypatch.setattr(migrate, "time", type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}), raising=False)
