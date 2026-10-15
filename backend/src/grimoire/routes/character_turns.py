@@ -1845,6 +1845,46 @@ async def _refine_step(cid, sid, client, turn, actor, view, response_id, run=Non
     return refined.view, refined.record, refined.response_id
 
 
+
+
+async def _settle_recovered_successor(cid, sid, client, round_record, after, cancelled):
+    """A persisted reply may still owe its Decision pick after a crash."""
+    if not after.get("needs_decision"):
+        return round_record, after
+    used, actor = after["used"], after["actor"]
+    if after["content_issue"] or cancelled:
+        choice = _successor_answer(round_record, used, actor, None, after["content_issue"])
+    else:
+        choice = await _select_successor(
+            cid, sid, client, round_record, used, actor, after["response_id"])
+    if cancelled:
+        choice = _successor_answer(round_record, used, actor, None)
+    ending = {**choice, "issue": _ending_issue(
+        round_record, choice["issue"], after["content_issue"])}
+    settled = await run_in_threadpool(
+        _round_state, cid, sid, round_record, used=used,
+        pending_response=None, actor_ref=choice["next"], plan=choice["plan"],
+        status="pending" if choice["next"] else "complete", issue=choice["issue"],
+        continuation=None, completed_response=after["response_id"],
+        control_issue=choice["issue"])
+    return settled, ending
+
+
+async def _after_saved_contribution(cid, sid, client, round_record, watcher, used, actor,
+                                    response_id, cancelled):
+    """Choose the successor without making the streaming loop itself a router."""
+    if not _decision_successor(round_record):
+        return await run_in_threadpool(
+            _successor, cid, sid, {**round_record, "used": used}, watcher.handoff,
+            cancelled, actor)
+    if cancelled or watcher.issue:
+        return _successor_answer(round_record, used, actor, None, watcher.issue)
+    result = await _select_successor(
+        cid, sid, client, round_record, used, actor, response_id)
+    if cancelled:
+        return _successor_answer(round_record, used, actor, None)
+    return result
+
 async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, outcome,
                         tracked, *, app=None, embed_client=None, history_enabled=False):
     """One round's contributions, from `actor` until nobody is next. Every
@@ -1869,32 +1909,9 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
             _recover_completed, cid, sid, run, token, turn.round_record
         )
         if recovered is not None:
-            turn.round_record, after = recovered
-            if after.get("needs_decision"):
-                used = after["used"]
-                finished_actor = after["actor"]
-                if after["content_issue"] or run.cancel_requested:
-                    choice = _successor_answer(
-                        turn.round_record, used, finished_actor, None,
-                        after["content_issue"])
-                else:
-                    choice = await _select_successor(
-                        cid, sid, client, turn.round_record, used, finished_actor,
-                        after["response_id"])
-                if run.cancel_requested:
-                    choice = _successor_answer(turn.round_record, used, finished_actor, None)
-                turn.ending = {**choice, "status": "complete",
-                               "issue": _ending_issue(turn.round_record, choice["issue"],
-                                                      after["content_issue"])}
-                turn.round_record = await run_in_threadpool(
-                    _round_state, cid, sid, turn.round_record, used=used,
-                    pending_response=None, actor_ref=choice["next"],
-                    plan=choice["plan"], status="pending" if choice["next"] else "complete",
-                    issue=choice["issue"], continuation=None,
-                    completed_response=after["response_id"],
-                    control_issue=choice["issue"])
-            else:
-                turn.ending = {**after, "status": "complete"}
+            turn.round_record, after = await _settle_recovered_successor(
+                cid, sid, client, *recovered, run.cancel_requested)
+            turn.ending = {**after, "status": "complete"}
             actor = turn.round_record.get("actor_ref")
             continue
         turn.made_by = None
@@ -2021,20 +2038,9 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         # The end frame goes out first, so a Stop or a sit-out the player
         # gives on seeing it is what the successor choice reads.
         yield streaming._sse({"response_end": {"id": record["id"], "status": status}})
-        if _decision_successor(turn.round_record):
-            if run.cancel_requested or watcher.issue:
-                after = _successor_answer(
-                    turn.round_record, used, actor, None, watcher.issue)
-            else:
-                after = await _select_successor(
-                    cid, sid, client, turn.round_record, used, actor, record["id"])
-            if run.cancel_requested:
-                after = _successor_answer(turn.round_record, used, actor, None)
-        else:
-            after = await run_in_threadpool(
-                _successor, cid, sid, {**turn.round_record, "used": used}, watcher.handoff,
-                run.cancel_requested, actor,
-            )
+        after = await _after_saved_contribution(
+            cid, sid, client, turn.round_record, watcher, used, actor,
+            record["id"], run.cancel_requested)
         # The contribution's own issue (it spoke for another actor) stops a
         # chain as surely as a bad handoff does -- a handoff-shaped one only
         # where the handoff is read (`_ending_issue`).
