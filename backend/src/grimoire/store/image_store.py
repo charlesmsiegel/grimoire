@@ -122,17 +122,17 @@ def object_path(image_id: str, *, root: Path | None = None) -> Path:
     return store_root(root) / "objects" / image_id[4:6] / f"{image_id}.json"
 
 
-def iter_ids(*, root: Path | None = None) -> Iterator[str]:
+def iter_ids() -> Iterator[str]:
     """Every object id with a sidecar under ``objects/``, sorted.
 
     Decided from the directory listing alone: a name counts when it is a
     well-formed id and sits in the shard `object_path` would put it in. No
     sidecar is opened, so a garbled one is still listed (and a reader of it
     gets None, as `read` answers); a stray name, a temp or a misplaced file
-    is skipped. `root` pins an inventory to the same tree its caller reads
-    (`image_scopes`' scope candidates, #477).
+    is skipped. For whole-store sweeps (`image_scopes`), which read each
+    object with `read_fresh`.
     """
-    objects = store_root(root) / "objects"
+    objects = store_root() / "objects"
     found: list[str] = []
     try:
         shards = [d for d in objects.iterdir() if d.is_dir()]

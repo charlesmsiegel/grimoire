@@ -31,7 +31,6 @@ Imports `image_store`, `locks`, `statcache` and `worlds.paths`.
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 
 from . import image_store, locks, statcache
 from .worlds import paths as worlds_paths
@@ -121,14 +120,14 @@ def _scopes(raw: dict) -> frozenset[str]:
                      + [s for s in reviews if isinstance(s, str)])
 
 
-def _memberships(image_id: str, root: Path) -> frozenset[str]:
-    path = image_store.object_path(image_id, root=root)
+def _memberships(image_id: str) -> frozenset[str]:
+    path = image_store.object_path(image_id)
 
     def compute() -> tuple[frozenset[str], tuple[statcache.Stamp, ...] | None]:
-        # Stamp BEFORE reading, under the same captured root: an external
-        # replacement during the read must invalidate on the next sweep.
+        # Stamp BEFORE reading: an external replacement during the read must
+        # invalidate on the next sweep.
         stamp = statcache.stamp(path)
-        obj = image_store.read_fresh(image_id, root=root)
+        obj = image_store.read_fresh(image_id)
         return (_scopes(obj.raw) if obj is not None else frozenset(),
                 (stamp,) if stamp is not None else None)
 
@@ -138,12 +137,15 @@ def _memberships(image_id: str, root: Path) -> frozenset[str]:
 
 def _sweep(scope: str, edit: Callable[[dict], dict | None]) -> int:
     """Apply `edit` to every object it changes; the number written."""
+    # Every call below resolves the live store, as `update` does. Pinning the
+    # inventory and reads to one root while `update` writes to the live one
+    # would let a data-dir move mid-sweep apply one tree's membership to the
+    # other tree's object (the store's move is not held off by a fork).
     changed = 0
-    root = image_store.store_root().parent.parent.resolve()
-    for image_id in image_store.iter_ids(root=root):
-        if scope not in _memberships(image_id, root):
+    for image_id in image_store.iter_ids():
+        if scope not in _memberships(image_id):
             continue
-        obj = image_store.read_fresh(image_id, root=root)
+        obj = image_store.read_fresh(image_id)
         # Decided on what was read first, so an object with nothing to change
         # is never rewritten (nor its stripe taken); `update` then decides
         # again on what it reads under the stripe. `read_fresh` shares its
