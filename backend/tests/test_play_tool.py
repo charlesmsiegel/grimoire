@@ -317,3 +317,5 @@ def test_a_stop_during_the_turn_decision_sends_no_generation(client, monkeypatch
                                                 "speaker_ref": MARA})
     assert "run_failed" not in result.text, result.text
     assert fake.calls == 0 and _rows(cid, "chat") == []
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")
