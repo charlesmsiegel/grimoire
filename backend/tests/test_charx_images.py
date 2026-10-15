@@ -93,7 +93,7 @@ def test_charx_import_skips_unusable_entries_without_losing_valid_images(tmp_pat
     assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["happy"]
 
 
-@pytest.mark.parametrize("name", ['happy|sad', 'happy<', 'happy>', 'happy"', 'happy\x01',
+@pytest.mark.parametrize("name", ['happy|sad', 'happy<', 'happy>', 'happy"', 'happy\x01', 'art#1', 'art%41', 'art?x',
                                   "CON", "COM1", "NUL", "x" * 256])
 def test_charx_import_skips_names_that_cannot_be_portable_placements(tmp_path, name):
     blob = _bundle([_entry(name, "assets/happy.png"), _entry("happy", "assets/happy.png")],

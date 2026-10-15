@@ -74,8 +74,8 @@ def _reference_list(root: Path) -> list[dict]:
             "has_avatar": assets.AVATAR in names,
             "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
             "avatar_focus": assets.read_focus(root, cid, default),
-            "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
-            "localized_count": sum(1 for n in names if n.startswith("embed-")),
+            "gallery_count": assets.gallery_count(names),
+            "localized_count": assets.localized_count(names),
             "greeting_count": _card_facts(root, cid, default)[1],
             "tagline": taglines.read(root, cid),
             "has_voice_anchor": bool(voice_anchors.read(root, cid)),
@@ -93,8 +93,8 @@ def _reference_patch(v: overlay.View, item: dict) -> dict:
             "has_avatar": assets.AVATAR in names,
             "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
             "avatar_focus": overlay.read_focus(v.cid, item["id"], item["default_version"], v=v),
-            "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
-            "localized_count": sum(1 for n in names if n.startswith("embed-")),
+            "gallery_count": assets.gallery_count(names),
+            "localized_count": assets.localized_count(names),
             "tagline": overlay.tagline(v.cid, item["id"], v=v)}
 
 

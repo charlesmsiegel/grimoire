@@ -240,3 +240,18 @@ def test_views_on_different_threads_do_not_queue_behind_each_other(monkeypatch, 
         release.set()
         held.join(5)
         other.join(5)
+
+
+def test_a_campaign_row_counts_named_gallery_art(monkeypatch, tmp_path):
+    # A CHARX import names its art (`happy`), not `gallery_<i>` (#26).
+    _home(monkeypatch, tmp_path, "named")
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Mara")
+    for name in ("avatar", "happy", "gallery_1", "embed-0123456789ab"):
+        assets.put_image(wroot, aid, vid, name, name.encode(), "png")
+    cid = campaigns.create_campaign("Winifred's Run", wid)
+
+    row = next(r for r in overlay.list_characters(cid) if r["id"] == aid)
+
+    assert (row["gallery_count"], row["localized_count"]) == (2, 1)

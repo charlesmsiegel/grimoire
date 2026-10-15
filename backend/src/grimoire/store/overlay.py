@@ -1910,8 +1910,8 @@ def _patch_char_item(v: View, item: dict) -> dict:
             "has_avatar": assets.AVATAR in names,
             "avatar_v": avatar_v,
             "avatar_focus": focus,
-            "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
-            "localized_count": sum(1 for n in names if n.startswith("embed-")),
+            "gallery_count": assets.gallery_count(names),
+            "localized_count": assets.localized_count(names),
             "tagline": (mine["tagline"] if mine["tagline"] or theirs is None
                         else theirs["tagline"])}
 

@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 from typing import Literal, overload
@@ -31,6 +31,9 @@ from . import atomic, image_hash, image_refs, image_store, locks, statcache
 from .paths import safe_id
 
 AVATAR = "avatar"
+#: What `store.localize` names the images it writes, which the grid counts
+#: apart from gallery art.
+LOCALIZED_PREFIX = "embed-"
 FOCUS_FILE = "focus.json"
 #: The per-image description sidecar (`store.image_descriptions`). Its NAME
 #: lives here, with `FOCUS_FILE`, because this module owns the directories both
@@ -38,6 +41,15 @@ FOCUS_FILE = "focus.json"
 #: an absent key means, what a write will accept -- live in the module named
 #: after it. Spelling the string there instead would be one rule in two places.
 DESCRIPTIONS_FILE = "descriptions.json"
+
+
+def gallery_count(names: Iterable[str]) -> int:
+    """Gallery art among a version's image names: neither avatar nor localized."""
+    return sum(1 for n in names if n != AVATAR and not n.startswith(LOCALIZED_PREFIX))
+
+
+def localized_count(names: Iterable[str]) -> int:
+    return sum(1 for n in names if n.startswith(LOCALIZED_PREFIX))
 _EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _PROMOTE_TMP = "promote-tmp"  # the temp name the pre-#253 three-rename swap used
 

@@ -634,9 +634,8 @@ def _build_row(root: Path, cid: str) -> tuple[dict | None, tuple | None]:
         "avatar_focus": facts["focus"],
         # Every picture that is neither the avatar nor a localized embed: the
         # Chub gallery's `gallery_<i>` and a CHARX import's named art alike.
-        "gallery_count": sum(1 for n in names
-                             if n != assets.AVATAR and not n.startswith(_LOCALIZED_PREFIX)),
-        "localized_count": sum(1 for n in names if n.startswith(_LOCALIZED_PREFIX)),
+        "gallery_count": assets.gallery_count(names),
+        "localized_count": assets.localized_count(names),
         "greeting_count": greeting_count,
         "tagline": facts["tagline"],
         # A BOOLEAN, not the body: the listing has no use for the text.
@@ -978,7 +977,6 @@ _AVATAR_TYPES = ("icon", "avatar")
 _SIDECAR_STEMS = frozenset(
     image_refs.fold(Path(f).stem)
     for f in (assets.FOCUS_FILE, assets.DESCRIPTIONS_FILE, "subjects.json"))
-_LOCALIZED_PREFIX = "embed-"  # localize.py names what it writes this way
 
 
 class _BundledImages:
@@ -1033,12 +1031,13 @@ class _BundledImages:
 def _bundled_image_name(name: str) -> bool:
     # assets.storable predates placements and admits NUL and Win32 device/
     # invalid names. Imported names must work on every synced platform,
-    # including the placement's .json suffix (#26).
-    if not assets.storable(name) or any(ord(c) < 32 or c in '<>"|' for c in name):
+    # including the placement's .json suffix, and in an image URL, whose
+    # builders do not all escape the name (#26).
+    if not assets.storable(name) or any(ord(c) < 32 or c in '<>"|#%?' for c in name):
         return False
     if image_refs.fold(name) in _SIDECAR_STEMS:
         return False  # `<name>.*` cleanup would treat the sidecar as this image's
-    if image_refs.fold(name).startswith(_LOCALIZED_PREFIX):
+    if image_refs.fold(name).startswith(assets.LOCALIZED_PREFIX):
         return False  # the grid counts these names as localized, not gallery art
     try:
         ziputil.member_parts(name)
