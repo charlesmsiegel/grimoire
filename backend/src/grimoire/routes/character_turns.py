@@ -871,6 +871,120 @@ async def _select(cid, sid, client, round_record):
     return store.response_protocol.next_of(selection, drawn), selection[1], drawn.record
 
 
+
+def _successor_candidates(cid, sid, round_record, used, actor):
+    """The actual legal NEXT-speaker pool, rebuilt after prose is saved.
+
+    Default Directed play never repeats an NPC within one player round; the
+    current actor is excluded even if the player enabled automatic extra
+    rounds. A scene's explicitly enabled extra rounds allow earlier (non-
+    current) speakers to lead the following round. The narrator has its own
+    single-use slot and is never a replacement for an established NPC.
+    """
+    extended = round_record.get("auto_remaining", 0) > 0
+    choices = [entry for entry in _handoff_pool(cid, sid, round_record)
+               if entry["ref"] != actor and (extended or entry["ref"] not in used)]
+    narrator = actor != "grimoire" and (extended or "grimoire" not in used)
+    return choices, narrator
+
+
+def _successor_inputs(cid, sid, round_record, choices, narrator):
+    """Decide from the just-saved observable conversation, not a writer hint."""
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    conversation = store.response_protocol.observable_conversation(
+        messages, lambda posts, offset, total: store.regex.view.view(
+            posts, cid=cid, phase="prompt", offset=offset, total=total))
+    player = store.context.macros.scene_substitutions(cid, sid).get("{{user}}", "")
+    item = store.response_protocol.selector_item(
+        choices, conversation, round_record.get("note", ""), player,
+        follow_on=True, include_grimoire=narrator)
+    trigger = conversation[-1]["content"] if conversation else ""
+    return item, trigger
+
+
+def _successor_answer(round_record, used, actor, selected, issue=None, *, exhausted=False):
+    """The Decision answer as the engine's existing successor state shape.
+
+    Only explicit extra rounds can repeat an already used NPC. A repeated
+    handoff leads the FOLLOWING round, never another contribution this round.
+    A pool exhausted without a model hand-back can start an authorized extra
+    round; a deliberate null always returns control to the player.
+    """
+    lead = None
+    if selected == actor:
+        selected, issue = None, store.response_protocol.INELIGIBLE
+    elif selected in used and selected is not None:
+        if round_record.get("auto_remaining", 0) > 0:
+            lead, selected = selected, None
+        else:
+            selected, issue = None, store.response_protocol.INELIGIBLE
+    return {"next": selected, "issue": issue, "plan": [], "lead": lead,
+            "handed_back": selected is None and lead is None and issue is None
+                           and not exhausted}
+
+
+async def _select_successor(cid, sid, client, round_record, used, actor, response_id=""):
+    """Select EACH subsequent Directed speaker with the Decision operation.
+
+    No scene-writing model handoff is consulted. Unlike the round opener,
+    even one remaining NPC is a real choice against handing control back.
+    Failures stop a successor safely, without failing prose already saved.
+    """
+    choices, narrator = await run_in_threadpool(
+        _successor_candidates, cid, sid, round_record, used, actor)
+    if not choices and not narrator:
+        return _successor_answer(round_record, used, actor, None, exhausted=True)
+    try:
+        resolved = await run_in_threadpool(
+            lambda: require_inference("response-selector", cid, operation="decide"))
+        sampling = await run_in_threadpool(_samples_pick, cid)
+        item, trigger = await run_in_threadpool(
+            _successor_inputs, cid, sid, round_record, choices, narrator)
+        async with decision_capture.capturing(cid, sid, "response-selector") as scope:
+            scope.note("", "phase", "successor")
+            scope.note("", "previous", actor)
+            decision = await operations.decide(
+                "response-selector", [item], client=client, resolved=resolved,
+                campaign=cid, scene=sid, post=round_record["post"],
+                round_id=round_record["id"], response_id=response_id,
+                capture=scope.hook())
+            selection = store.response_protocol.selection_of(decision.items[0])
+            if sampling and selection[0] is not None and selection[1] is None:
+                try:
+                    offered = [entry["ref"] for entry in choices]
+                    if narrator:
+                        offered.append("grimoire")
+                    drawn = store.response_protocol.sampled_pick(
+                        item, decision.items[0], offered,
+                        store.response_protocol.addressed(trigger, choices, actor),
+                        draws.new_seed())
+                    selection = (store.response_protocol.next_of(selection, drawn),
+                                 selection[1])
+                    scope.note("", "draw", drawn.record)
+                except ValueError as exc:
+                    _log.error("successor draw failed: %s", type(exc).__name__)
+            scope.note("", "selected", selection[0])
+            scope.note("", "issue", selection[1])
+    except (decisions.DecideRequestError, LLMError, HTTPException) as exc:
+        _log.warning("Directed successor selection failed; keeping completed response: %s",
+                     type(exc).__name__)
+        return _successor_answer(round_record, used, actor, None,
+                                 store.response_protocol.INVALID_HANDOFF)
+    selected, issue = selection
+    # The cast and sit-outs can change while a Decision request is running.
+    # Never turn a now-ineligible answer into a new actor's call.
+    if selected is not None:
+        fresh, fresh_narrator = await run_in_threadpool(
+            _successor_candidates, cid, sid, round_record, used, actor)
+        legal = {entry["ref"] for entry in fresh}
+        if fresh_narrator:
+            legal.add("grimoire")
+        if selected not in legal:
+            return _successor_answer(round_record, used, actor, None,
+                                     store.response_protocol.INELIGIBLE)
+    return _successor_answer(round_record, used, actor, selected, issue)
+
+
 def _samples_pick(cid):
     """Whether this campaign samples the speaker pick; fail-soft, since an
     optional step that cannot read its own switch leaves the pick as it was."""
