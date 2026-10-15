@@ -1653,18 +1653,22 @@ def test_progress_activity_covers_retirement_planning(home, monkeypatch):
     assert migrate.status().as_dict()["active"] is False
 
 
-def test_progress_ticks_stay_in_memory_and_the_note_takes_transitions(home):
-    # #496: the note lives in the synced library, so per-file ticks are never
-    # written there. Local readers still see every count, live.
+def test_progress_persistence_is_throttled_but_local_counts_are_live(home, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(migrate, "time", type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}), raising=False)
     run = migrate._Run(home, None, "", [])
     with migrate._running_on(home):
         run.archive_progress("safety_backup", 0, None)
         run.archive_progress("safety_backup", 0, 20)
         initial = migrate._status_path(home).read_bytes()
-        for done in range(1, 20):
+        for done in range(1, 5):
+            clock[0] += 0.04
             run.archive_progress("safety_backup", done, 20)
             assert migrate.status().as_dict()["progress"]["done"] == done
         assert migrate._status_path(home).read_bytes() == initial
+        clock[0] = 0.26
+        run.archive_progress("safety_backup", 5, 20)
+        assert migrate._recall(home)["progress"]["done"] == 5
         run.archive_progress("safety_backup", 20, 20)
         assert migrate._recall(home)["progress"]["done"] == 20
 
