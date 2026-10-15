@@ -896,9 +896,16 @@ def _successor_candidates(cid, sid, round_record, used, actor):
 def _successor_inputs(cid, sid, round_record, choices, narrator):
     """Decide from the just-saved observable conversation, not a writer hint."""
     messages = store.scenes.read_scene(cid, sid)["messages"]
+    # A follow-on is one player's response round. Earlier (possibly private)
+    # transcript entries are unnecessary for choosing who reacts NOW.
+    # Keep original transcript indices when applying prompt-phase regex rules.
+    start = next((i for i in range(len(messages) - 1, -1, -1)
+                  if messages[i]["role"] == "user"
+                  and not store.scenes.is_excluded(messages[i])), 0)
     conversation = store.response_protocol.observable_conversation(
-        messages, lambda posts, offset, total: store.regex.view.view(
-            posts, cid=cid, phase="prompt", offset=offset, total=total))
+        messages[start:], lambda posts, offset, total: store.regex.view.view(
+            posts, cid=cid, phase="prompt", offset=start + offset,
+            total=start + total))
     player = store.context.macros.scene_substitutions(cid, sid).get("{{user}}", "")
     item = store.response_protocol.selector_item(
         choices, conversation, round_record.get("note", ""), player,
@@ -938,10 +945,12 @@ async def _select_successor(cid, sid, client, round_record, used, actor, respons
     choices, narrator = await run_in_threadpool(
         _successor_candidates, cid, sid, round_record, used, actor)
     if not choices:
-        # Do not buy a narrator-only continuation after the last eligible NPC.
-        # Narration may win a genuine event while other NPCs still have slots,
-        # but is never required just to close an otherwise complete exchange.
-        return _successor_answer(round_record, used, actor, None)
+        # Never buy a narrator-only tail, even though its slot is present.
+        # An explicitly enabled extra round may start by itself; an ordinary
+        # round hands back rather than manufacturing a narrator contribution.
+        return _successor_answer(
+            round_record, used, actor, None,
+            exhausted=round_record.get("auto_remaining", 0) > 0)
     try:
         resolved = await run_in_threadpool(
             lambda: require_inference("response-selector", cid, operation="decide"))
