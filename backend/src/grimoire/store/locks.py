@@ -913,6 +913,13 @@ def image_stripes_held() -> bool:
     return getattr(_stripe_holds, "n", 0) > 0
 
 
+def _fold(key: str) -> str:
+    """Upper-case, then casefold: the rule `image_refs.fold` and the vacancy
+    scan compare names by, so names that are one file on NTFS (a dotless i and
+    an i, which ``casefold`` alone keeps apart) are one lock too."""
+    return key.upper().casefold()
+
+
 def _image_stripe(d: Path, key: str) -> int:
     """The stripe of `key` (an image name or a sidecar filename) in directory
     `d`: the resolved, case-normalised directory and the case-FOLDED key, so a
@@ -931,7 +938,7 @@ def _image_stripe(d: Path, key: str) -> int:
     except ValueError:
         where = "abs:" + os.path.normcase(str(resolved))
     digest = hashlib.sha256(
-        f"{where}\0{key.casefold()}".encode("utf-8", "surrogateescape")).digest()
+        f"{where}\0{_fold(key)}".encode("utf-8", "surrogateescape")).digest()
     return int.from_bytes(digest[:8], "big") % IMAGE_NAME_STRIPES
 
 

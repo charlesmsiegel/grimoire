@@ -255,6 +255,11 @@ NOT_A_DIRECTORY = "not-a-directory"
 CASE_VARIANT = "case-variant"
 
 
+def fold(name: str) -> str:
+    """The public spelling of `_fold`, for a caller comparing slot names."""
+    return _fold(name)
+
+
 def _fold(name: str) -> str:
     """`name` as a case-insensitive filesystem compares it -- `world_bundle`'s
     rule, spelled again because this module sits below it. Upper-casing first

@@ -285,7 +285,7 @@ def test_read_charx_asset_treats_an_unopenable_member_as_a_miss(monkeypatch):
     def encrypted(self, name):
         raise RuntimeError(f"File {name} is encrypted, password required")
 
-    monkeypatch.setattr(zipfile.ZipFile, "read", encrypted)
+    monkeypatch.setattr(zipfile.ZipFile, "open", encrypted)
     assert cards.read_charx_asset(out, "assets/avatar.png") is None
 
 

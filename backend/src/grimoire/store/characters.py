@@ -13,7 +13,9 @@ import hashlib
 import json
 import os
 import shutil
+import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 
@@ -27,11 +29,13 @@ from . import (
     fetch,
     image_descriptions,
     image_hash,
+    image_refs,
     image_store,
     lorebook,
     statcache,
     taglines,
     voice_anchors,
+    ziputil,
 )
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
@@ -628,8 +632,10 @@ def _build_row(root: Path, cid: str) -> tuple[dict | None, tuple | None]:
         # immutable. A token that outlives the bytes pins a stale tile.
         "avatar_v": facts["avatar_v"],
         "avatar_focus": facts["focus"],
-        "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
-        "localized_count": sum(1 for n in names if n.startswith("embed-")),
+        # Every picture that is neither the avatar nor a localized embed: the
+        # Chub gallery's `gallery_<i>` and a CHARX import's named art alike.
+        "gallery_count": assets.gallery_count(names),
+        "localized_count": assets.localized_count(names),
         "greeting_count": greeting_count,
         "tagline": facts["tagline"],
         # A BOOLEAN, not the body: the listing has no use for the text.
@@ -952,8 +958,254 @@ def find_unlinked_versions(root: Path) -> list[dict]:
 # needs one; each lookup re-parses the archive, so the cap is what keeps a
 # hostile CHARX from buying thousands of those (Codex review).
 _MAX_BUNDLED_READS = 4
+# Galleries need more than the avatar's four candidate attempts, but neither
+# unreadable members nor aliases of one picture may buy unbounded archive
+# reparses or placement writes. One import opens at most this many distinct
+# members and places at most this many non-avatar images (#26).
+_MAX_BUNDLED_IMAGES = 128
+# Gallery entries examined at most, whatever they turn out to be: a list of
+# entries that never place (missing members, bad names) would otherwise be
+# walked to its end on the request thread (#26).
+_MAX_BUNDLED_CANDIDATES = 4 * _MAX_BUNDLED_IMAGES
 # The V3 asset types that mean "this is the character's picture".
 _AVATAR_TYPES = ("icon", "avatar")
+# Stems a version directory's sidecars already use. An image named after one
+# would share its `<name>.*` glob, and deleting or replacing the image would
+# remove the sidecar as though it were a legacy copy (#26). `subjects.json` is
+# spelled here because `image_subjects` imports this module; a test holds the
+# literal to `image_subjects.SUBJECTS_FILE`.
+_SIDECAR_STEMS = frozenset(
+    image_refs.fold(Path(f).stem)
+    for f in (assets.FOCUS_FILE, assets.DESCRIPTIONS_FILE, "subjects.json"))
+
+
+class _BundledImages:
+    """One CHARX's image reads, shared by its avatar and named gallery (#26).
+
+    Reserve each member's advertised bytes before reading, including failures.
+    Memoizing by member lets one picture serve several placements without
+    spending the budget again; misses count too, so empty or unreadable members
+    cannot buy unlimited ZIP reparses. Card text remains the source metadata;
+    placements, as for avatars, belong to the existing image store.
+    """
+
+    def __init__(self, data: bytes):
+        self.data = data
+        self.remaining = cards.MAX_ASSET_BYTES
+        self.images: dict[str, tuple[bytes, str] | None] = {}
+        # Parsed once on first use: every member read shares it, so an archive
+        # with a huge entry table costs one central-directory scan, not one per
+        # lookup (#26).
+        self._archive: zipfile.ZipFile | None = None
+        self._opened = False
+
+    def _zip(self) -> zipfile.ZipFile | None:
+        if not self._opened:
+            self._opened = True
+            self._archive = cards.open_charx(self.data)
+        return self._archive
+
+    def read(self, path: str) -> tuple[bytes, str] | None:
+        if path in self.images:
+            return self.images[path]
+        if self.remaining <= 0 or len(self.images) >= _MAX_BUNDLED_IMAGES:
+            return None
+        archive = self._zip()
+        if archive is None:
+            self.images[path] = None
+            return None
+        blob = cards.read_charx_asset(self.data, path, max_bytes=self.remaining,
+                                      spend=self._spend, archive=archive)
+        image = None
+        if blob is not None:
+            ext = fetch.sniff_ext(blob)
+            if ext:
+                image = (blob, ext)
+        self.images[path] = image
+        return image
+
+    def _spend(self, size: int) -> None:
+        self.remaining -= size
+
+
+def _bundled_image_name(name: str) -> bool:
+    # assets.storable predates placements and admits NUL and Win32 device/
+    # invalid names. Imported names must work on every synced platform,
+    # including the placement's .json suffix, and in an image URL, whose
+    # builders do not all escape the name (#26).
+    if not assets.storable(name) or any(ord(c) < 32 or c in '<>"|#%?' for c in name):
+        return False
+    if image_refs.fold(name) in _SIDECAR_STEMS:
+        return False  # `<name>.*` cleanup would treat the sidecar as this image's
+    if image_refs.fold(name).startswith(assets.LOCALIZED_PREFIX):
+        return False  # the grid counts these names as localized, not gallery art
+    try:
+        ziputil.member_parts(name)
+        placement = image_refs.ref_path(Path("."), name)  # only the file name matters
+        return len(placement.name.encode("utf-8")) <= 255
+    except (ValueError, ziputil.ArchiveError):
+        return False
+
+def _stage_bundled(card: dict, bundled: _BundledImages,
+                   occupied: Callable[[str], bool] = lambda name: False) -> list[tuple[str, str]]:
+    """Ingest every named gallery picture the card places: (name, image id) pairs.
+
+    Runs BEFORE any record is written. Ingest is the one fallible byte write an
+    import makes, so a failure here leaves no character behind, only orphaned
+    blobs that collection reclaims. Each distinct member is ingested once however
+    many names share it (#26).
+    """
+    data = cards.card_data(card)
+    extensions = data.get("extensions")
+    holders = (data, extensions) if isinstance(extensions, dict) else (data,)
+    used: set[str] = set()
+    ingested: dict[str, str] = {}
+    staged: list[tuple[str, str]] = []
+    examined = 0
+    for holder in holders:
+        entries = holder.get("assets")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if len(used) >= _MAX_BUNDLED_IMAGES or examined >= _MAX_BUNDLED_CANDIDATES:
+                return staged
+            examined += 1
+            placed = _stage_entry(entry, bundled, ingested, used, occupied)
+            if placed is not None:
+                staged.append(placed)
+                used.add(image_refs.fold(placed[0]))
+    return staged
+
+
+def _stage_entry(entry: object, bundled: _BundledImages, ingested: dict[str, str],
+                 used: set[str], occupied: Callable[[str], bool]) -> tuple[str, str] | None:
+    if not isinstance(entry, dict) or entry.get("type") in _AVATAR_TYPES:
+        return None
+    name, uri = entry.get("name"), entry.get("uri")
+    if not (isinstance(name, str) and isinstance(uri, str) and _bundled_image_name(name)):
+        return None
+    # Fold as the store does (`image_refs.fold`, the image lock's rule): a store
+    # may sync to Windows. The first valid entry owns its name, and only avatar
+    # resolution may claim the avatar slot, even when this card has no avatar.
+    folded = image_refs.fold(name)
+    if folded == image_refs.fold(assets.AVATAR) or folded in used or occupied(name):
+        return None  # an update fills empty slots only, so never ingest for a taken one
+    path = cards.embedded_path(uri)
+    if path is None:
+        return None
+    image = bundled.read(path)
+    if image is None:
+        return None
+    image_id = ingested.get(path)
+    if image_id is None:
+        image_id = ingested[path] = image_store.ingest(image[0], image[1]).id
+    return name, image_id
+
+
+@dataclass
+class _Written:
+    """What one import has written to the record so far, so a failure can undo it."""
+    new_character: str | None = None
+    new_version: tuple[str, str] | None = None
+    #: An update's card as it stood before the write.
+    prior_text: str | None = None
+    #: The card text this import wrote, so rollback touches the card (restores
+    #: an update's, removes a new record) only while it still holds that text.
+    written_text: str | None = None
+    #: Gallery placements this import added, as (name, image id).
+    placed: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _card_text(root: Path, cid: str, vid: str) -> str | None:
+    try:
+        # atomic's reader: it retries the transient Windows sharing error a
+        # just-replaced file can raise, which would otherwise read as "not ours".
+        return atomic.read_text(_card_path(root, cid, vid))
+    except (OSError, CharacterNotFound):
+        return None
+
+
+def _unwind_import(root: Path, written: _Written, cid: str, vid: str) -> None:
+    """Undo a failed import's record writes; the caller re-raises its error.
+
+    A new character is removed whole, a new version with its art. An updated
+    version gets its card text back, and each gallery placement this import
+    added is removed -- but only while it still holds the image this import
+    put there, so a picture uploaded in the meantime is left alone. An update
+    never overwrites an image the version already had, so nothing else needs
+    restoring (#26).
+    """
+    ours = written.written_text is not None and _card_text(root, cid, vid) == written.written_text
+    if written.new_character is not None and ours:
+        shutil.rmtree(_char_dir(root, written.new_character), ignore_errors=True)
+        return
+    if written.new_version is not None and ours:
+        new_cid, new_vid = written.new_version
+        _card_path(root, new_cid, new_vid).unlink(missing_ok=True)
+        assets.delete_version_images(root, new_cid, new_vid)
+        return
+    if written.prior_text is not None and ours:
+        # A version save that landed meanwhile must not be written back over.
+        atomic.write_text(_card_path(root, cid, vid), written.prior_text)
+    if written.placed:  # only then do the ids name a version
+        directory = assets.version_dir(root, cid, vid)
+        for name, image_id in written.placed:
+            assets.unlink_if_holds(directory, name, image_id)
+
+
+def _write_record(root: Path, card: dict, written: _Written, *, into_cid: str | None,
+                  update_vid: str | None, name: str | None, version_name: str | None) -> tuple[str, str]:
+    """Write the card as a new character, a new version, or over an existing version."""
+    if update_vid is not None:
+        if into_cid is None:
+            raise ValueError("update_vid names a version of a character, so into_cid is required")
+        # The incoming card REPLACES the stored one, so anything grimoire owns
+        # rather than the source does has to be carried across or a re-download
+        # silently un-names a version somebody named. `chub_source` is already
+        # re-applied by the caller for the same reason; the label is not
+        # re-derivable from anywhere, so it is carried here.
+        written.prior_text = require_version(root, into_cid, update_vid).read_text(encoding="utf-8")
+        _carry_label(read_card(root, into_cid, update_vid), card)
+        update_version(root, into_cid, update_vid, card)
+        written.written_text = _dumps(card)  # what update_version just wrote
+        return into_cid, update_vid
+    cname = name or card["data"].get("name", "Imported")
+    if into_cid is None:
+        cid, vid = create_character(root, cname, version_name or "default", card)
+        written.new_character = cid
+        written.written_text = _dumps(card)  # what create_character just wrote
+        return cid, vid
+    # What the importer asked this version be called, else the card spec's own
+    # answer, else the character's name -- which is a poor label but has always
+    # been the last resort for the SLUG, and `_version_label` no longer repeats
+    # it on screen.
+    vid = create_version(root, into_cid,
+                         version_name
+                         or cards.card_data(card).get("character_version")
+                         or cname, card)
+    written.new_version = (into_cid, vid)
+    written.written_text = _dumps(card)  # what create_version just wrote
+    return into_cid, vid
+
+
+def _place_import(root: Path, cid: str, vid: str, avatar: tuple[bytes, str, str] | None,
+                  staged: list[tuple[str, str]], written: _Written) -> None:
+    """Place the gallery, then the avatar, and record what was added.
+
+    A name the version already has an image for keeps it: an update fills
+    empty slots and never replaces a picture, so no legacy file is dropped
+    and rollback has nothing to put back. The avatar goes last, so every other
+    write has landed before the one step that replaces an existing image.
+    """
+    directory = assets.version_dir(root, cid, vid)
+    for placed, image_id in staged:
+        # Vacancy is checked under the name's lock, so an upload landing
+        # between the check and the placement cannot be overwritten (#26).
+        if assets.link_if_vacant(directory, placed, image_id):
+            written.placed.append((placed, image_id))
+    if avatar:
+        source = avatar[2] if avatar[2].startswith(("http://", "https://")) else None
+        assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1], source_url=source)
 
 
 def _avatar_candidates(card: dict) -> list[str]:
@@ -1024,7 +1276,7 @@ def _plane_is_the_carried_avatar(png: bytes, carried: bytes) -> bool:
 
 
 def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
-                    network: bool) -> tuple[bytes, str, str] | None:
+                    network: bool, bundled: _BundledImages | None = None) -> tuple[bytes, str, str] | None:
     """Best-effort avatar bytes from a card: (bytes, ext, the URI they came from).
 
     Scans every avatar location (assets/avatar, and their extensions-relocated
@@ -1046,7 +1298,8 @@ def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
     that reads as empty or refuses to open costs nothing in bytes and would
     otherwise buy an unlimited number of those parses.
     """
-    budget = cards.MAX_ASSET_BYTES
+    if bundled is None:
+        bundled = _BundledImages(data)
     lookups = _MAX_BUNDLED_READS
     for uri in dict.fromkeys(_avatar_candidates(card)):
         embedded = fetch.decode_data_uri(uri)
@@ -1054,16 +1307,12 @@ def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
             return embedded[0], embedded[1], uri
         path = cards.embedded_path(uri)
         if path is not None:
-            if fmt != "charx" or budget <= 0 or lookups <= 0:
+            if fmt != "charx" or lookups <= 0:
                 continue  # nothing to open it against, or a budget is spent
             lookups -= 1
-            blob = cards.read_charx_asset(data, path, max_bytes=budget)
-            if blob is None:
-                continue
-            budget -= len(blob)
-            ext = fetch.sniff_ext(blob)
-            if ext:
-                return blob, ext, uri
+            image = bundled.read(path)
+            if image is not None:
+                return image[0], image[1], uri
         elif network and uri.startswith(("http://", "https://")):
             got = fetch.download_url(uri)
             if got:
@@ -1117,6 +1366,37 @@ def _drop_avatar_uri(card: dict, uri: str) -> None:
             return
 
 
+def _occupied_in(root: Path, cid: str | None, vid: str | None) -> Callable[[str], bool]:
+    """Which gallery names an update target already holds a picture under.
+
+    Read before staging, so an update ingests nothing it will not place (#26).
+    A picture arriving after this read is caught by `assets.link_if_vacant`;
+    only that race can leave an unplaced object, which collection reclaims.
+    """
+    if cid is None or vid is None:
+        return lambda name: False
+    taken = assets.taken_slots(assets.version_dir(root, cid, vid))  # read once
+
+    def occupied(name: str) -> bool:
+        return image_refs.fold(name) in taken
+    return occupied
+
+
+def _check_destination(root: Path, into_cid: str | None, update_vid: str | None) -> None:
+    """Refuse a missing destination before any picture is stored.
+
+    Staging ingests objects into the shared image store, which an unwind cannot
+    reach; a refusal raised after that would leave them behind until a manual
+    collection (#26).
+    """
+    if update_vid is not None:
+        if into_cid is None:
+            raise ValueError("update_vid names a version of a character, so into_cid is required")
+        require_version(root, into_cid, update_vid)
+    elif into_cid is not None:
+        _require_char(root, into_cid)
+
+
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
                 name: str | None = None, update_vid: str | None = None,
                 version_name: str | None = None,
@@ -1128,7 +1408,8 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     cards.bake_char_name(card)
     # Resolve (and unhook) a carried avatar BEFORE the card is written: the
     # writes below persist whatever `card` holds at that moment.
-    avatar = _resolve_avatar(card, data, fmt, network=(fmt != "png"))
+    bundled = _BundledImages(data) if fmt == "charx" else None
+    avatar = _resolve_avatar(card, data, fmt, network=(fmt != "png"), bundled=bundled)
     if fmt == "png" and avatar and not _plane_is_the_carried_avatar(data, avatar[0]):
         # A PNG's own pixels are the character's picture -- as they have always
         # been on import. The card's copy only wins when those pixels are the
@@ -1139,36 +1420,22 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
         avatar = None
     if avatar and _carried_uri(avatar[2]):
         _drop_avatar_uri(card, avatar[2])
-    if update_vid is not None:
-        if into_cid is None:
-            raise ValueError("update_vid names a version of a character, so into_cid is required")
-        cid, vid = into_cid, update_vid
-        # The incoming card REPLACES the stored one, so anything grimoire owns
-        # rather than the source does has to be carried across or a re-download
-        # silently un-names a version somebody named. `chub_source` is already
-        # re-applied by the caller for the same reason; the label is not
-        # re-derivable from anywhere, so it is carried here.
-        _carry_label(read_card(root, cid, vid), card)
-        update_version(root, cid, vid, card)
-    else:
-        cname = name or card["data"].get("name", "Imported")
-        if into_cid is None:
-            cid, vid = create_character(root, cname, version_name or "default", card)
-        else:
-            cid = into_cid
-            # What the importer asked this version be called, else the card
-            # spec's own answer, else the character's name -- which is a poor
-            # label but has always been the last resort for the SLUG, and
-            # `_version_label` no longer repeats it on screen.
-            vid = create_version(root, into_cid,
-                                 version_name
-                                 or cards.card_data(card).get("character_version")
-                                 or cname, card)
     if avatar is None and fmt == "png":
         avatar = (data, "png", "")  # the PNG file itself is the avatar
-    if avatar:
-        source = avatar[2] if avatar[2].startswith(("http://", "https://")) else None
-        assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1], source_url=source)
+    # Every fallible byte write happens before the first record write, so a
+    # failure there leaves nothing behind (#26).
+    _check_destination(root, into_cid, update_vid)
+    occupied = _occupied_in(root, into_cid, update_vid)
+    staged = _stage_bundled(card, bundled, occupied) if bundled is not None else []
+    written = _Written()
+    cid = vid = ""
+    try:
+        cid, vid = _write_record(root, card, written, into_cid=into_cid, update_vid=update_vid,
+                                 name=name, version_name=version_name)
+        _place_import(root, cid, vid, avatar, staged, written)
+    except BaseException:
+        _unwind_import(root, written, cid, vid)
+        raise
     return cid, vid
 
 

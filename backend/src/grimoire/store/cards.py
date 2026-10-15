@@ -28,7 +28,10 @@ import re
 import struct
 import zipfile
 import zlib
+from collections.abc import Callable
 from io import BytesIO
+
+from . import ziputil
 
 _V2_KNOWN = {
     "name", "description", "personality", "scenario", "first_mes", "mes_example",
@@ -47,8 +50,10 @@ _CARD_KEYWORDS = (b"ccv3", b"chara")
 # Local, rather than fetch's copy: this module is deliberately stdlib-only.
 _EXT_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
              "gif": "image/gif", "webp": "image/webp"}
-# The most one import may inflate out of a CHARX, in total: `read_charx_asset`
-# defaults to it, and `characters._resolve_avatar` spends it across members.
+# One import's byte reservations for bundled images. The reader accounts for
+# ZipExtFile's minimum output chunk as well as advertised member sizes; this
+# bounds work, not an exact measurement of decoder allocations on corrupt data.
+# `characters._BundledImages` shares the reservations across members (#26).
 MAX_ASSET_BYTES = 100 * 1024 * 1024  # matches fetch.MAX_BYTES
 
 
@@ -223,25 +228,66 @@ def _loads_charx(data: bytes) -> dict:
         raise CardParseError(f"invalid charx: {exc}") from exc
 
 
-def read_charx_asset(data: bytes, path: str, max_bytes: int = MAX_ASSET_BYTES) -> bytes | None:
+def open_charx(data: bytes) -> zipfile.ZipFile | None:
+    """The CHARX archive, parsed once, or None if it is not a readable zip.
+
+    For a caller that reads several members: parsing re-reads the whole
+    central directory, so one parse per member would let an archive with a
+    huge entry table cost that many full scans (#26).
+    """
+    try:
+        return zipfile.ZipFile(BytesIO(data))
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return None
+
+
+def read_charx_asset(data: bytes, path: str, max_bytes: int = MAX_ASSET_BYTES, *,
+                     spend: Callable[[int], None] | None = None,
+                     archive: zipfile.ZipFile | None = None) -> bytes | None:
     """Bytes of a file bundled inside a CHARX, or None if it isn't readable.
 
     `path` comes out of a card's `embeded://` URI, i.e. from an uploaded file:
-    nothing is written to disk from it (a zip member is only *read* by name, so
-    a `../` in there escapes nothing), and a member whose header claims it
-    inflates past `max_bytes` is refused rather than decompressed. Callers that
-    read more than one member pass what is left of their budget, so a handful
-    of over-compressed decoys cannot each cost the full cap (Codex review).
+    nothing is extracted to disk, and unsafe member paths are still refused
+    under the same rules as other imported archives (#26). A member whose
+    header claims it inflates past `max_bytes` is refused rather than
+    decompressed. Callers reading several members pass their remaining budget
+    and `spend`: reserve at least the decoder's minimum chunk BEFORE reading,
+    so a forged tiny header or failed CRC cannot buy unbounded inflation (#26).
+    They also pass `archive` (`open_charx`), so the archive is parsed once.
+    Stored/deflate members are read with a size bound; optional ZIP codecs are
+    skipped because ZipExtFile decodes those without an output bound. Empty,
+    unsupported, missing and over-budget members spend nothing.
     """
     try:
+        ziputil.member_parts(path)
+        if archive is not None:
+            return _read_member(archive, path, max_bytes, spend)
         with zipfile.ZipFile(BytesIO(data)) as z:
-            if z.getinfo(path).file_size > max_bytes:
-                return None
-            return z.read(path)
+            return _read_member(z, path, max_bytes, spend)
     # RuntimeError covers an encrypted member (and NotImplementedError, an
     # unsupported compression method, which subclasses it): a file we cannot
     # open is an unresolved candidate, not a 500 out of the import route.
-    except (KeyError, OSError, RuntimeError, ValueError, zipfile.BadZipFile):
+    except (KeyError, OSError, RuntimeError, ValueError, zipfile.BadZipFile, ziputil.ArchiveError):
+        return None
+
+
+def _read_member(z: zipfile.ZipFile, path: str, max_bytes: int,
+                 spend: Callable[[int], None] | None) -> bytes | None:
+    info = z.getinfo(path)
+    if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) or not info.file_size:
+        return None
+    reserved = max(info.file_size, zipfile.ZipExtFile.MIN_READ_SIZE)
+    if reserved > max_bytes:
+        return None
+    if spend is not None:
+        spend(reserved)
+    try:
+        with z.open(path) as member:
+            return member.read(info.file_size)
+    except Exception:  # noqa: BLE001 -- optional ZIP codecs raise unrelated error types
+        # A corrupt deflate/LZMA/etc. member is one unusable image, never a
+        # failed card import. Keep this boundary around the untrusted decoder
+        # alone, not the caller's budget callback.
         return None
 
 

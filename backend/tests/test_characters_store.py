@@ -1363,10 +1363,10 @@ def test_import_bounds_the_bytes_one_card_can_inflate(tmp_path, monkeypatch):
     inflated, lookups = 0, 0
     real = cards.read_charx_asset
 
-    def counting(data: bytes, path: str, max_bytes: int = cards.MAX_ASSET_BYTES):
+    def counting(data: bytes, path: str, max_bytes: int = cards.MAX_ASSET_BYTES, **kwargs):
         nonlocal inflated, lookups
         lookups += 1
-        blob = real(data, path, max_bytes)
+        blob = real(data, path, max_bytes, **kwargs)
         inflated += len(blob or b"")
         return blob
 
@@ -1400,10 +1400,10 @@ def test_import_bounds_lookups_even_when_no_bytes_are_read(tmp_path):
     lookups = 0
     real = cards.read_charx_asset
 
-    def counting(data: bytes, path: str, max_bytes: int = cards.MAX_ASSET_BYTES):
+    def counting(data: bytes, path: str, max_bytes: int = cards.MAX_ASSET_BYTES, **kwargs):
         nonlocal lookups
         lookups += 1
-        return real(data, path, max_bytes)
+        return real(data, path, max_bytes, **kwargs)
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(cards, "read_charx_asset", counting)
