@@ -64,7 +64,7 @@ from it: it becomes a *proposal* the user reviews and edits, and only
 
 ### `plaintext_import/` — optional character-text refinement (#136)
 
-`store/plaintext.py:build_prompt` supplies `schema` to `system.j2` and `text`
+`store/_plaintext.py:build_prompt` supplies `schema` to `system.j2` and `text`
 (the original source) and `draft` (the six currently edited character fields)
 to `user.j2`. Only the explicit Refine with AI action calls it, through the
 `character_text` route. Both heuristic parsing and refinement return proposals;

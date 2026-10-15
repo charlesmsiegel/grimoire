@@ -1,5 +1,6 @@
 """#136: labelled prose is a draft, not a card import that already wrote files.
 
+This route helper stays private to preserve the frozen store facade.
 Only known headings divide fields; everything else stays prose. AI refines the
 same six-field proposal on explicit request, never a stored character. Adding
 another heading spelling belongs in ALIASES; neither parser needs a new flow.

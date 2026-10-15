@@ -23,7 +23,7 @@ from .. import inference as operations
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from ..store import plaintext
+from ..store import _plaintext
 from ..store.record_art import read as art_read
 from . import runs
 from .common import (
@@ -114,7 +114,7 @@ def post_character_parse_text(wid: str, body: CharacterTextParse):
     """#136: an offline proposal. Cancel has no character write to undo."""
     _world_root_or_404(wid)
     try:
-        return {"card": plaintext.parse(body.text, body.filename)}
+        return {"card": _plaintext.parse(body.text, body.filename)}
     except store.cards.CardParseError as exc:
         raise HTTPException(422, detail=str(exc)) from exc
 
@@ -132,19 +132,19 @@ def post_character_refine_text(
     _world_root_or_404(wid)
     resolved = require_inference("character-text")
     try:
-        messages = plaintext.build_prompt(body.text, body.card)
+        messages = _plaintext.build_prompt(body.text, body.card)
     except store.cards.CardParseError as exc:
         raise HTTPException(422, detail=str(exc)) from exc
 
     def shape(text: str) -> dict:
         try:
-            return {"card": plaintext.parse_output(text)}
+            return {"card": _plaintext.parse_output(text)}
         except store.cards.CardParseError as exc:
             raise HTTPException(422, detail=str(exc)) from exc
 
     async def work():
         return await draft_completion(client, resolved, messages, "character-text", shape,
-                                      schema=plaintext.SCHEMA)
+                                      schema=_plaintext.SCHEMA)
 
     return runs.run_draft(request.app, runs.world_subject(wid), "character-text",
                           x_grimoire_attempt, work)
