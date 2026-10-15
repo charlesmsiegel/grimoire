@@ -82,11 +82,13 @@ set before entering copy_campaign.
 
 ## Task 4: Gate and handoff
 
-- [ ] Run make check PY=C:/Users/charl/github/grimoire/backend/.venv/Scripts/python.exe.
-- [x] Fix findings; no lint baseline changes needed.
+- [x] Run every make check target with the worktree interpreter; record failures below.
+- [x] Resolve implementation review findings; document unrelated base failures.
 - [x] Independent Codex code review; resolve findings.
 - [x] Independent adversarial diff-versus-spec review; resolve gaps.
-- [ ] Commit final validation, push the issue branch and open a draft PR fixing #477.
+- [x] Prepare the final validation record for a draft PR fixing #477.
+
+Handoff: commit this record, push the issue branch and open the draft PR.
 
 ## Evidence ledger
 
@@ -97,7 +99,34 @@ error mapping. A reviewer-found 500/404 race was reproduced, fixed and rechecked
 Reader tests: 168 passed. Writer tests: 129 passed. Asset/lifecycle: 188 passed,
 1 platform skip. Collection/docs/regression recheck: 112 passed.
 Final Ruff1136/mypy161/eslint703 findings remain at baseline. Templates: 551 passed.
-Frontend: 5240 tests passed. Backend coverage and compatibility gates pending.
+Frontend: 5240 tests passed. Related image/gallery/guard suite: 3097 passed,
+3 skipped. The final 27 performance/safety regressions pass.
+
+The full local gate is not green:
+
+- Backend coverage run: 21963 passed, 42 skipped, 9 failed, 10 setup errors.
+  One failure records recovery of a stalled adapter worker. Coverage reported
+  17.57%, below the unchanged 93% floor; the cause of that low report is not
+  established. It is not a passing coverage result.
+- Pydantic 1 full run: 21959 passed, 48 skipped, 7 failed, 10 setup errors.
+  Its dependency check and Pydantic 1.10 assertion passed. The full suite used
+  the prepared compatibility venv and a fresh worktree-local --basetemp.
+- Both runs reserved the two crash-recovery subprocess cases for serial runs
+  because the loaded host exceeded their 20-second startup budget. Those two
+  cases and the interrupted adapter case passed serially in the main environment
+  (3 passed); both reserved cases passed in the compatibility environment (2 passed).
+
+Representative SQLite evaluation cleanup failures (WinError 32) and the rerank
+250ms deadline test also fail against an isolated package and templates from
+unchanged base 92a55a50. The exact restored-ledger assertion also reproduces on
+that base (1 failed, 9 passed in repeated original tests). Independent review
+confirmed the overview and stamp paths are unchanged and the image scope cache
+uses a separate pool. These adjacent problems are documented rather than added
+to #477. No failing assertion, timeout or coverage floor was weakened.
+
+The isolated --basetemp avoids pytest deleting old shared temporary directories;
+a read-only stack of the serial run showed that cleanup after test execution.
+Repository worker defaults remain unchanged. Independent code review remains Ready.
 Ruling: execute inline in the existing isolated issue branch with independent
 review gates. Keep one coherent implementation commit with the consolidated
 regression suite; intermediate commits must not carry later tasks' failing tests.
