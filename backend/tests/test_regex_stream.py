@@ -222,7 +222,13 @@ def parts_of(frames: list[dict]) -> list[str]:
     return buffers
 
 
-def test_multi_part_keep_relative_to_part(client):
+def test_multi_part_keep_relative_to_part(client, monkeypatch):
+    planned = iter(("characters:winifred", None))
+
+    async def next_speaker(cid, sid, client, round_record, used, actor, response_id=""):
+        return character_turns._successor_answer(round_record, used, actor, next(planned))
+
+    monkeypatch.setattr(character_turns, "_select_successor", next_speaker)
     cid, sid = seed(client, ("Mara", "Winifred"))
     put_rules(client, f"/api/campaigns/{cid}/regex", THINK)
     frames = send(client, cid, sid, [
