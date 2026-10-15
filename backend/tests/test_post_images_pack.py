@@ -6,6 +6,8 @@ receives the text lowering gets exactly the packing today's code produces."""
 from copy import deepcopy
 
 from grimoire import content_parts as cp
+from grimoire import store
+from grimoire.routes import character_turns
 from grimoire.store.context import assemble, pack
 from tests import wire_kit
 
@@ -134,8 +136,6 @@ def test_a_steered_capture_counts_text_and_images(monkeypatch):
     """`character_turns._capture` builds rows itself for a variant with no
     breakdown (a steered reroll); a list content must not reach the tokenizer
     or the record as a list."""
-    from grimoire import store
-    from grimoire.routes import character_turns
 
     recorded = {}
     monkeypatch.setattr(store.prompt_log, "capturing", lambda: True)

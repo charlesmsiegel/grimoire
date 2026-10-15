@@ -2,8 +2,10 @@
 (#377) -- plus the settings and the catalog field that answer it."""
 
 import importlib
+import os
 
 import pytest
+from PIL import features
 
 from grimoire import catalog, store, wire
 from grimoire.store import config, llm_connections, post_images
@@ -277,7 +279,6 @@ def test_the_pixel_cap_is_measured_after_the_jpeg_draft(cid, monkeypatch):
 
 
 def test_decodable_gates_webp_on_the_build():
-    from PIL import features
     assert post_images.decodable("png") and post_images.decodable("jpg")
     assert post_images.decodable("webp") == bool(features.check("webp"))
     assert not post_images.decodable("svg")
@@ -307,7 +308,6 @@ def test_load_applies_exif_orientation(cid):
 
 def _age(cid, name, seconds=60):
     """Backdate a picture past the racy window so the encode cache may keep it."""
-    import os
     path = export.resolve_url(cid, _url(cid, name))
     st = path.stat()
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns - seconds * 1_000_000_000))
@@ -375,7 +375,6 @@ def test_a_just_written_picture_is_never_cached(cid, monkeypatch):
 def test_a_rename_replace_with_the_same_stat_misses_the_cache(cid, monkeypatch):
     """The inode rides in the key: a sync client landing a same-size file with
     the old mtime cannot keep the old picture alive."""
-    import os
     campaign_images.put_image(cid, "coastline", _image((8, 8), fmt="PNG"), "png")
     _age(cid, "coastline")
     path = export.resolve_url(cid, _url(cid, "coastline"))

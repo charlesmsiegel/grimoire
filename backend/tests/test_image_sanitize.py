@@ -17,6 +17,7 @@ from PIL.PngImagePlugin import PngInfo
 
 from grimoire.store import image_sanitize
 from grimoire.store.image_sanitize import sanitize
+from tests.fixtures.images.make_fixtures import NETSCAPE_LOOP_0, insert_after_first_image
 
 
 def _img(size=(16, 12)) -> Image.Image:
@@ -594,7 +595,6 @@ def test_a_short_gif_control_extension_is_not_guessed_at():
 def test_the_late_loop_check_reads_what_the_sanitizer_keeps():
     """`gif_loop_after_image` and the sanitizer agree on what is a loop
     extension: one with no loop sub-block is neither kept nor a late loop."""
-    from tests.fixtures.images.make_fixtures import NETSCAPE_LOOP_0, insert_after_first_image
     plain = _anim_gif(loop=None)
     late = insert_after_first_image(plain, NETSCAPE_LOOP_0)
     assert image_sanitize.gif_loop_after_image(late)

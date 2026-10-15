@@ -33,7 +33,7 @@ import contextlib
 import json
 import os
 import stat
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -188,6 +188,25 @@ def scan(d: Path) -> dict[str, Ref]:
         if ref is not None:
             out[stem] = ref
     return out
+
+
+def image_ids(refs: dict[str, Ref]) -> dict[str, str]:
+    """Image-bearing identities from an existing scan, even before objects arrive.
+
+    A focus-only override is not a picture. No object or blob is read (#480).
+    """
+    return {name: ref.image for name, ref in refs.items() if ref.image is not None}
+
+
+def name_rows(names: Iterable[str], refs: dict[str, Ref]) -> list[dict]:
+    """Lightweight rows in the caller's name order and policy, without resolving.
+
+    Legacy names have no id; placement names carry only the scan's identity.
+    Record and library backlogs share this projection, not their name filters.
+    """
+    ids = image_ids(refs)
+    return [{"name": name, "image_id": ids[name]} if name in ids else {"name": name}
+            for name in names]
 
 
 def walk(root: Path) -> Iterator[tuple[Path, Ref]]:

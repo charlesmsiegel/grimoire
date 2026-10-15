@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import assets
+from . import assets, image_refs
 
 #: Ceiling on one stored image, and the same number and the same reason as
 #: ``covers.MAX_BYTES``: the backend is packaged verbatim into the Android app
@@ -137,14 +137,7 @@ def backlog_rows(d: Path) -> list[dict]:
     arrived is a row here before ``listing`` shows it.
     """
     names, _found, refs = assets.names_in(d, with_refs=True)
-    rows = []
-    for name in sorted(names):
-        if not addressable(name):
-            continue
-        ref = refs.get(name)
-        image_id = ref.image if ref is not None else None
-        rows.append({"name": name, "image_id": image_id} if image_id else {"name": name})
-    return rows
+    return image_refs.name_rows((name for name in sorted(names) if addressable(name)), refs)
 
 
 def listing(d: Path) -> list[dict]:

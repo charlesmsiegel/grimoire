@@ -202,14 +202,17 @@ def write_subjects(root: Path, gid: str, subjects: dict[str, list[str]]) -> None
     empty list persists — it means 'reviewed, no subjects' and keeps the image
     out of the untagged queue (key absent = unreviewed). Writes the sidecar
     only: the legacy writer, which R1 reads ahead of any object."""
-    names = _image_names(root, gid)
-    unknown = set(subjects) - names
-    if unknown:
-        raise ValueError(f"unknown image(s): {sorted(unknown)}")
-    trimmed = {n: list(subs) for n, subs in subjects.items()}
     p = subjects_path(root, gid)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(p, json.dumps(trimmed, indent=2, sort_keys=True) + "\n")
+    # The bulk legacy writer shares the single-image writer's sidecar hold
+    # (#480), including validation: neither can publish past the other's save.
+    with assets.sidecar_lock(p.parent, SUBJECTS_FILE):
+        names = _image_names(root, gid)
+        unknown = set(subjects) - names
+        if unknown:
+            raise ValueError(f"unknown image(s): {sorted(unknown)}")
+        trimmed = {n: list(subs) for n, subs in subjects.items()}
+        p.parent.mkdir(parents=True, exist_ok=True)
+        atomic.write_text(p, json.dumps(trimmed, indent=2, sort_keys=True) + "\n")
 
 
 def _tagged(scope: str, cids: list[str]) -> Callable[[dict], dict]:
