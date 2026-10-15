@@ -321,6 +321,11 @@ def _follow_on(cid, sid, run, token, round_record, lead):
         last = _last_contribution(cid, sid, history) or {"ref": None, "text": ""}
         planned = _plan_round(settings, roster(cid, sid), trigger=last["text"],
                               history=history, lead=lead, author=last["ref"])
+        if planned["mode"] == "directed" and not lead and last["ref"]:
+            # A newly authorised round resets used, not the ban on two
+            # consecutive contributions by the same actor.
+            planned["eligible"] = [e for e in planned["eligible"]
+                                   if e["ref"] != last["ref"]]
         following = store.responses.new_round(
             cid,
             sid,
@@ -1862,7 +1867,31 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         )
         if recovered is not None:
             turn.round_record, after = recovered
-            turn.ending = {**after, "status": "complete"}
+            if after.get("needs_decision"):
+                used = after["used"]
+                finished_actor = after["actor"]
+                if after["content_issue"] or run.cancel_requested:
+                    choice = _successor_answer(
+                        turn.round_record, used, finished_actor, None,
+                        after["content_issue"])
+                else:
+                    choice = await _select_successor(
+                        cid, sid, client, turn.round_record, used, finished_actor,
+                        after["response_id"])
+                if run.cancel_requested:
+                    choice = _successor_answer(turn.round_record, used, finished_actor, None)
+                turn.ending = {**choice, "status": "complete",
+                               "issue": _ending_issue(turn.round_record, choice["issue"],
+                                                      after["content_issue"])}
+                turn.round_record = await run_in_threadpool(
+                    _round_state, cid, sid, turn.round_record, used=used,
+                    pending_response=None, actor_ref=choice["next"],
+                    plan=choice["plan"], status="pending" if choice["next"] else "complete",
+                    issue=choice["issue"], continuation=None,
+                    completed_response=after["response_id"],
+                    control_issue=choice["issue"])
+            else:
+                turn.ending = {**after, "status": "complete"}
             actor = turn.round_record.get("actor_ref")
             continue
         turn.made_by = None
@@ -1989,10 +2018,20 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         # The end frame goes out first, so a Stop or a sit-out the player
         # gives on seeing it is what the successor choice reads.
         yield streaming._sse({"response_end": {"id": record["id"], "status": status}})
-        after = await run_in_threadpool(
-            _successor, cid, sid, {**turn.round_record, "used": used}, watcher.handoff,
-            run.cancel_requested, actor,
-        )
+        if _decision_successor(turn.round_record):
+            if run.cancel_requested or watcher.issue:
+                after = _successor_answer(
+                    turn.round_record, used, actor, None, watcher.issue)
+            else:
+                after = await _select_successor(
+                    cid, sid, client, turn.round_record, used, actor, record["id"])
+            if run.cancel_requested:
+                after = _successor_answer(turn.round_record, used, actor, None)
+        else:
+            after = await run_in_threadpool(
+                _successor, cid, sid, {**turn.round_record, "used": used}, watcher.handoff,
+                run.cancel_requested, actor,
+            )
         # The contribution's own issue (it spoke for another actor) stops a
         # chain as surely as a bad handoff does -- a handoff-shaped one only
         # where the handoff is read (`_ending_issue`).
@@ -2281,6 +2320,13 @@ def _recover_completed(cid, sid, run, token, round_record):
             store.responses.publish_saved(cid, sid, pending)
         variant = next(v for v in record["variants"] if v["id"] == record["active_variant"])
         used = list(dict.fromkeys([*round_record["used"], record["actor_ref"]]))
+        if _decision_successor(round_record):
+            # The prose made it to disk, but the subsequent Decision may not
+            # have run yet. Leave pending_response set until selection settles,
+            # so a crash/retry resumes the choice, never generates prose twice.
+            return round_record, {"needs_decision": True, "used": used,
+                                  "actor": record["actor_ref"], "response_id": pending,
+                                  "content_issue": variant.get("issue")}
         after = _successor(cid, sid, {**round_record, "used": used}, variant.get("handoff"),
                            run.cancel_requested, record["actor_ref"])
         return _round_state(
