@@ -4,6 +4,7 @@ These tests intentionally return prose WITHOUT a handoff fence. The writer
 must not control the next speaker, and a completed reply survives an abstention.
 """
 
+import asyncio
 from types import SimpleNamespace
 
 from grimoire import decisions, routes, store
@@ -161,3 +162,29 @@ def test_completed_reply_recovery_keeps_pending_until_successor_is_decided(clien
     assert after["used"] == [MARA]
     assert recovered["pending_response"] == saved["id"]
     assert replies(cid, sid) == ["Mara"]
+
+
+def test_successor_decision_excludes_pre_round_private_history(client):
+    cid, sid, _ = seed(client, count=2)
+    store.scenes.append_message(cid, sid, "assistant", "PRIVATE_BEFORE_THE_PLAYER")
+    store.scenes.append_message(cid, sid, "user", "Winifred, what happened?")
+    store.scenes.append_message(cid, sid, "assistant", "Mara responds.", speaker="Mara")
+    item, _trigger = character_turns._successor_inputs(
+        cid, sid, {"note": ""}, [{"ref": WINIFRED, "name": "Winifred"}], False)
+    assert "PRIVATE_BEFORE_THE_PLAYER" not in item.context
+    assert "Winifred, what happened?" in item.context
+    assert "Mara responds." in item.context
+
+
+def test_a_stopped_round_never_runs_a_successor_decision(client, monkeypatch):
+    cid, sid, _ = seed(client, count=2)
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("Stop must never select a successor")
+
+    monkeypatch.setattr(character_turns, "_select_successor", unexpected)
+    round_ = {"automatic": True, "mode": "directed", "stopped": True}
+    watcher = SimpleNamespace(handoff=None, issue=None)
+    result = asyncio.run(character_turns._after_saved_contribution(
+        cid, sid, None, round_, watcher, [MARA], MARA, "response-id", False))
+    assert result["next"] is None and result["issue"] is None
