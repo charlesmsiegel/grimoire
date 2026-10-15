@@ -12,6 +12,7 @@ import { DescribeQueue } from "./DescribeQueue";
 import { ErrorNote } from "./ErrorNote";
 import { TaglinePrompt } from "./TaglinePrompt";
 import { UrlImportPrompt } from "./UrlImportPrompt";
+import { TextCharacterImport } from "./TextCharacterImport";
 import { ImportVersionDialog, type ImportChoice } from "./character/ImportVersionDialog";
 import { characterHref, focusStyle, formatOf, initialsOf } from "./character/shared";
 
@@ -202,6 +203,7 @@ export function CharacterGrid(
   const [bulkUrl, setBulkUrl] =
     useState<{ current: number; total: number; name: string; step: string } | null>(null);
   const [urlPromptOpen, setUrlPromptOpen] = useState(false);
+  const [textImportOpen, setTextImportOpen] = useState(false);
   const [taglineQueue, setTaglineQueue] = useState<{ cid: string; name: string }[]>([]);
   const [taglineBatch, setTaglineBatch] =
     useState<{ done: number; total: number; name: string } | null>(null);
@@ -234,10 +236,18 @@ export function CharacterGrid(
     // An error is a claim about the scope it happened in.
     setError(null);
     setDrawAll(false);
+    setTextImportOpen(false);
   }
 
-  const liveScope = useRef(scope);
+  // Identity denotes this visit, so leaving and returning to the same world
+  // cannot revive an older import's refresh/navigation. Cleanup fences a
+  // roster that unmounts while that refresh is still pending (#136).
+  const liveScope = useRef<EntityScope | null>(scope);
   liveScope.current = scope;
+  useEffect(() => {
+    liveScope.current = scope;
+    return () => { liveScope.current = null; };
+  }, [scope]);
   const onListedRef = useRef(onListed);
   onListedRef.current = onListed;
 
@@ -251,7 +261,7 @@ export function CharacterGrid(
   const reload = useCallback(() => {
     const from = scope;
     return api.listCharacters(from).then((rows) => {
-      if (liveScope.current.kind === from.kind && liveScope.current.id === from.id) {
+      if (liveScope.current === from) {
         setChars((prev) => reuseRows(prev, rows));
         setCharsKnown(true);
       }
@@ -260,7 +270,7 @@ export function CharacterGrid(
 
   const recountUndescribed = useCallback(() => {
     const from = scope;
-    const current = () => liveScope.current.kind === from.kind && liveScope.current.id === from.id;
+    const current = () => liveScope.current === from;
     Promise.resolve()
       .then(() => api.countUndescribedImages(from))
       .then((n) => { if (current()) setUndescribedCount(n); })
@@ -276,7 +286,7 @@ export function CharacterGrid(
     // and `onListed` landing then would start the page's module reads for it.
     let alive = true;
     const current = () => alive
-      && liveScope.current.kind === from.kind && liveScope.current.id === from.id;
+      && liveScope.current === from;
     // The revalidation, when this scope painted from remembered rows, and the
     // read, when it did not -- the same call either way.
     reload()
@@ -360,7 +370,7 @@ export function CharacterGrid(
    *  is corrected from the list while it is at hand. */
   function openDescribe() {
     const from = scope;
-    const current = () => liveScope.current.kind === from.kind && liveScope.current.id === from.id;
+    const current = () => liveScope.current === from;
     setDescribeLoading(true);
     api.listUndescribedImages(from)
       .then((q) => {
@@ -518,7 +528,7 @@ export function CharacterGrid(
     const ctl = new AbortController();
     taglineAbort.current = ctl;
     const from = scope;
-    const here = () => liveScope.current.kind === from.kind && liveScope.current.id === from.id;
+    const here = () => liveScope.current === from;
     // Counted from the frames rather than the summary alone: a run the user
     // stops never sends one, and "you spent forty calls, here is nothing" is
     // not an acceptable answer to Stop.
@@ -631,6 +641,20 @@ export function CharacterGrid(
                              onCancel={() => setPendingImport(null)}
                              onConfirm={(c) => void confirmImport(c)} />
       )}
+      {textImportOpen && worldScope && (
+        <TextCharacterImport key={scopeKey} wid={scope.id}
+          onCancel={() => setTextImportOpen(false)}
+          onSaved={(result) => {
+            setTextImportOpen(false);
+            void reload().then(() => {
+              if (liveScope.current === scope) {
+                navigate(characterHref(scope, result.character));
+              }
+            }).catch((err: unknown) => {
+              if (liveScope.current === scope) setError(err);
+            });
+          }} />
+      )}
       {describeQueue !== null && (
         <DescribeQueue key={scopeKey} scope={scope} wid={wid} queue={describeQueue}
                        onSaved={recountUndescribed}
@@ -649,6 +673,7 @@ export function CharacterGrid(
             <button className="subtle" onClick={() => setWizardOpen(true)}>+ New character with sheet…</button>
           )}
           <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
+          <button className="subtle" onClick={() => setTextImportOpen(true)}>Import text</button>
           <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden
                  aria-label="Import character card" onChange={onPickFiles} />
           <button className="subtle" onClick={() => setUrlPromptOpen(true)}>Download from URL</button>

@@ -78,6 +78,8 @@ threads, and character state — so the next scene starts from an up-to-date wor
 - **Import character cards** — bring in character cards (including PNG cards with
   embedded lorebooks) and import directly from [chub.ai](https://chub.ai/), with
   galleries, avatars, and multiple versions per character.
+  **Import text** also accepts pasted descriptions and `.txt`/`.md` files:
+  parse offline, optionally refine with AI, then edit and save the draft.
 - **Export character cards** — send any version back out as JSON, PNG, or CHARX
   from the character editor's Export menu, avatar embedded, so the file carries
   the whole character into another app (or back into Grimoire).

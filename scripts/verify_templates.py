@@ -117,6 +117,7 @@ from grimoire.store import (  # noqa: E402
     default_prompts,
     dossiers,
     overlay,
+    plaintext,
     relationships,
     response_protocol,
     rolling_summary,
@@ -130,6 +131,11 @@ from grimoire.store import (  # noqa: E402
 
 card = {"name": "Seraphine Vale", "description": "Tall, sharp-eyed smuggler.",
         "personality": "Wry and wary.", "scenario": "Runs the night dock."}
+text_card = plaintext.parse("Name: Seraphine\nPersonality: Patient.")
+exp = plaintext.build_prompt("Name: Seraphine\nPersonality: Patient.", text_card)
+check("plaintext system", exp[0]["content"], render("plaintext_import/system.j2", schema=plaintext.SCHEMA))
+check("plaintext user", exp[1]["content"], render("plaintext_import/user.j2",
+      text="Name: Seraphine\nPersonality: Patient.", draft=plaintext.draft_data(text_card)))
 exp = taglines.build_prompt(card)
 check("tagline system", exp[0]["content"], render("tagline/system.j2"))
 check("tagline user", exp[1]["content"], render("tagline/user.j2", card=card))

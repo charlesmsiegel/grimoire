@@ -23,6 +23,7 @@ from .. import inference as operations
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from ..store import plaintext
 from ..store.record_art import read as art_read
 from . import runs
 from .common import (
@@ -47,6 +48,8 @@ from .models import (
     AvatarFocus,
     CharacterBirthdate,
     CharacterCreate,
+    CharacterTextParse,
+    CharacterTextRefine,
     ChubImportBody,
     ChubSourceBody,
     DefaultVersion,
@@ -104,6 +107,47 @@ def post_world_character(wid: str, body: CharacterCreate):
 @router.get("/worlds/{wid}/characters/chub-unlinked")
 def get_world_characters_chub_unlinked(wid: str):
     return {"versions": store.characters.find_unlinked_versions(_world_root_or_404(wid))}
+
+
+@router.post("/worlds/{wid}/characters/parse-text")
+def post_character_parse_text(wid: str, body: CharacterTextParse):
+    """#136: an offline proposal. Cancel has no character write to undo."""
+    _world_root_or_404(wid)
+    try:
+        return {"card": plaintext.parse(body.text, body.filename)}
+    except store.cards.CardParseError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+
+@router.post("/worlds/{wid}/characters/refine-text", status_code=202)
+def post_character_refine_text(
+        wid: str, body: CharacterTextRefine, request: Request,
+        client: LLMClient = Depends(get_llm),
+        x_grimoire_attempt: str | None = Header(default=None)):
+    """Optional AI refinement uses the same detached preview contract (#136).
+
+    Only the explicit action resolves a model or sends the text. No character
+    is persisted here: the reviewed card goes through ordinary creation.
+    """
+    _world_root_or_404(wid)
+    resolved = require_inference("character-text")
+    try:
+        messages = plaintext.build_prompt(body.text, body.card)
+    except store.cards.CardParseError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+    def shape(text: str) -> dict:
+        try:
+            return {"card": plaintext.parse_output(text)}
+        except store.cards.CardParseError as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+
+    async def work():
+        return await draft_completion(client, resolved, messages, "character-text", shape,
+                                      schema=plaintext.SCHEMA)
+
+    return runs.run_draft(request.app, runs.world_subject(wid), "character-text",
+                          x_grimoire_attempt, work)
 
 
 @router.get("/worlds/{wid}/characters/{cid}")

@@ -27,6 +27,7 @@ vi.mock("../api/client", async () => {
       generateWorldTaglines: vi.fn(), getCharacterTagline: vi.fn(),
       setCharacterTagline: vi.fn(), generateCharacterTagline: vi.fn(),
       listAppearances: vi.fn(), putSheetCreation: vi.fn(),
+      parseCharacterText: vi.fn(), refineCharacterText: vi.fn(),
     },
   };
 });
@@ -79,6 +80,162 @@ beforeEach(() => {
       return Promise.resolve();
     });
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
+  vi.mocked(api.parseCharacterText).mockReset();
+  vi.mocked(api.refineCharacterText).mockReset();
+});
+
+// #136: no create request until the reviewer accepts an editable draft.
+const textCard = () => ({ spec: "chara_card_v3", spec_version: "3.0", data: {
+  name: "Mara", description: "A patient keeper.", personality: "Reserved.",
+  scenario: "", first_mes: "{{char}} waves.", mes_example: "", extensions: {},
+} });
+
+async function openTextDraft() {
+  vi.mocked(api.parseCharacterText).mockResolvedValue({ card: textCard() });
+  fireEvent.click(await screen.findByRole("button", { name: "Import text" }));
+  fireEvent.change(screen.getByLabelText("Character text"), { target: { value: "Name: Mara\nA patient keeper." } });
+  fireEvent.click(screen.getByRole("button", { name: "Review draft" }));
+  await screen.findByLabelText("Character name");
+}
+
+test("text import reviews the fields and saves the corrected name without calling AI", async () => {
+  renderGrid();
+  await openTextDraft();
+  expect(api.createCharacter).not.toHaveBeenCalled();
+  expect(api.refineCharacterText).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("Character name"), { target: { value: "Winifred" } });
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Keeps the ledger." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save character" }));
+  await waitFor(() => expect(api.createCharacter).toHaveBeenCalledWith(WORLD, {
+    name: "Winifred", card: { ...textCard(), data: { ...textCard().data, name: "Winifred", description: "Keeps the ledger." } },
+  }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import character text" })).toBeNull());
+});
+
+test("AI refinement sends edited fields only on request and leaves a failed draft editable", async () => {
+  vi.mocked(api.refineCharacterText).mockRejectedValue(new Error("Model unavailable"));
+  renderGrid();
+  await openTextDraft();
+  fireEvent.change(screen.getByLabelText("Personality"), { target: { value: "Speaks softly." } });
+  fireEvent.click(screen.getByRole("button", { name: "Refine with AI" }));
+  await screen.findByText(/Model unavailable/);
+  expect(screen.getByLabelText("Personality")).toHaveValue("Speaks softly.");
+  expect(api.refineCharacterText).toHaveBeenCalledWith("realm", expect.objectContaining({
+    text: "Name: Mara\nA patient keeper.", card: expect.objectContaining({
+      data: expect.objectContaining({ personality: "Speaks softly." }),
+    }),
+  }), expect.any(AbortSignal));
+  expect(api.createCharacter).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog", { name: "Import character text" })).toBeNull();
+});
+
+test("successful AI refinement still waits for a reviewed save", async () => {
+  const refined = textCard(); refined.data.description = "Counts the tide.";
+  vi.mocked(api.refineCharacterText).mockResolvedValue({ card: refined });
+  renderGrid();
+  await openTextDraft();
+  fireEvent.click(screen.getByRole("button", { name: "Refine with AI" }));
+  await waitFor(() => expect(screen.getByLabelText("Description")).toHaveValue("Counts the tide."));
+  expect(api.createCharacter).not.toHaveBeenCalled();
+});
+
+test("cancelling an AI refinement cannot reopen or save the dialog", async () => {
+  let finish!: (value: { card: ReturnType<typeof textCard> }) => void;
+  vi.mocked(api.refineCharacterText).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  renderGrid();
+  await openTextDraft();
+  fireEvent.click(screen.getByRole("button", { name: "Refine with AI" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await act(async () => { finish({ card: textCard() }); });
+  expect(screen.queryByRole("dialog", { name: "Import character text" })).toBeNull();
+  expect(api.createCharacter).not.toHaveBeenCalled();
+});
+
+test("a text file supplies its contents and filename to the same draft review", async () => {
+  vi.mocked(api.parseCharacterText).mockResolvedValue({ card: textCard() });
+  renderGrid();
+  fireEvent.click(await screen.findByRole("button", { name: "Import text" }));
+  fireEvent.change(screen.getByLabelText("Text file"), { target: {
+    files: [new File(["A patient keeper."], "Mara.md", { type: "text/markdown" })],
+  } });
+  await waitFor(() => expect(screen.getByLabelText("Character text")).toHaveValue("A patient keeper."));
+  fireEvent.click(screen.getByRole("button", { name: "Review draft" }));
+  await screen.findByLabelText("Character name");
+  expect(api.parseCharacterText).toHaveBeenCalledWith("realm", {
+    text: "A patient keeper.", filename: "Mara.md",
+  }, expect.any(AbortSignal));
+});
+
+test("a rejected save retains the reviewed draft for correction", async () => {
+  vi.mocked(api.createCharacter).mockRejectedValue(new Error("Name already used"));
+  renderGrid();
+  await openTextDraft();
+  fireEvent.click(screen.getByRole("button", { name: "Save character" }));
+  await screen.findByText(/Name already used/);
+  expect(screen.getByLabelText("Character name")).toHaveValue("Mara");
+  expect(screen.getByRole("button", { name: "Save character" })).toBeEnabled();
+});
+
+test("oversized pasted text is refused whole rather than silently clipped", async () => {
+  renderGrid();
+  fireEvent.click(await screen.findByRole("button", { name: "Import text" }));
+  const source = screen.getByLabelText("Character text");
+  expect(source).not.toHaveAttribute("maxlength");
+  fireEvent.change(source, { target: { value: "x".repeat(64001) } });
+  expect(source).toHaveValue("x".repeat(64001));
+  expect(screen.getByRole("button", { name: "Review draft" })).toBeDisabled();
+  expect(api.parseCharacterText).not.toHaveBeenCalled();
+});
+
+test("a failed post-import roster refresh cannot put the old world's error on the new one", async () => {
+  const view = render(<MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
+  await openTextDraft();
+  let rejectReload!: (error: Error) => void;
+  vi.mocked(api.listCharacters).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectReload = reject; }));
+  fireEvent.click(screen.getByRole("button", { name: "Save character" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import character text" })).toBeNull());
+  vi.mocked(api.listCharacters).mockResolvedValue([row("winifred", "Winifred")]);
+  view.rerender(<MemoryRouter><Spy /><CharacterGrid scope={{ kind: "world", id: "saltmarch" }} wid="saltmarch" /></MemoryRouter>);
+  await screen.findByText("Winifred");
+  await act(async () => { rejectReload(new Error("Old world refresh failed")); });
+  expect(screen.queryByText(/Old world refresh failed/)).toBeNull();
+  expect(screen.getByRole("link", { name: /Winifred/ })).toHaveAttribute("href", "/worlds/saltmarch/characters/winifred");
+});
+
+test.each(["success", "failure"])("a post-import refresh cannot act after a round trip between worlds (%s)", async (outcome) => {
+  const view = render(<MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
+  await openTextDraft();
+  let finish!: (rows: ReturnType<typeof row>[]) => void;
+  let fail!: (error: Error) => void;
+  vi.mocked(api.listCharacters).mockImplementationOnce(() => new Promise((resolve, reject) => {
+    finish = resolve; fail = reject;
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Save character" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import character text" })).toBeNull());
+  view.rerender(<MemoryRouter><Spy /><CharacterGrid scope={{ kind: "world", id: "saltmarch" }} wid="saltmarch" /></MemoryRouter>);
+  await screen.findByText("Seraphine");
+  view.rerender(<MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
+  await screen.findByText("Seraphine");
+  await act(async () => {
+    if (outcome === "success") finish([row("mara", "Mara")]);
+    else fail(new Error("Obsolete import refresh failed"));
+  });
+  expect(lastLocation).toBe("/");
+  expect(screen.queryByText("Mara")).toBeNull();
+  expect(screen.queryByText(/Obsolete import refresh failed/)).toBeNull();
+});
+
+test("a post-import refresh cannot navigate after leaving the roster", async () => {
+  const view = render(<MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
+  await openTextDraft();
+  let finish!: (rows: ReturnType<typeof row>[]) => void;
+  vi.mocked(api.listCharacters).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  fireEvent.click(screen.getByRole("button", { name: "Save character" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import character text" })).toBeNull());
+  view.rerender(<MemoryRouter><Spy /></MemoryRouter>);
+  await act(async () => { finish([row("mara", "Mara")]); });
+  expect(lastLocation).toBe("/");
 });
 
 // -------------------------------------------------------------------- cards

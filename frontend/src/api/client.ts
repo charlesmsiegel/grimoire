@@ -2273,6 +2273,12 @@ export const api = {
   // exactly what "emergent" means. `promoteToLibrary` is what ends that.
   createCharacter: (scope: EntityScope, body: { name: string; version_name?: string; card?: Card }) =>
     request<{ character: string; version: string }>("POST", `${entityBase(scope)}/characters`, body),
+  parseCharacterText: (wid: string, body: { text: string; filename?: string }, signal?: AbortSignal) =>
+    request<{ card: Card }>("POST", `/api/worlds/${wid}/characters/parse-text`, body, { signal }),
+  refineCharacterText: (wid: string, body: { text: string; card: Card }, signal?: AbortSignal) =>
+    draftRun<{ card: Card }>({ at: "world", id: wid }, (attempt) =>
+      request<{ run: RunHandle }>("POST", `/api/worlds/${wid}/characters/refine-text`, body,
+                                { attempt, signal }), { signal }),
   readCharacter: (scope: EntityScope, cid: string) =>
     request<CharacterDetail>("GET", `${entityBase(scope)}/characters/${cid}`),
   setDefaultVersion: (scope: EntityScope, cid: string, vid: string) =>

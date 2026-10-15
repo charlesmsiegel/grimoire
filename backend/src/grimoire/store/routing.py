@@ -312,6 +312,9 @@ ROUTES: tuple[Route, ...] = (
     Route("scenario", "Scenario drafts",
           "The scene roster read out of an imported character card.", ("scenario",), False,
           default_role="fast"),
+    Route("character_text", "Character text refinement",
+          "Optional structuring of imported character prose into an editable draft.",
+          ("character-text",), False, default_role="fast", legacy=NO_LEGACY),
 )
 
 

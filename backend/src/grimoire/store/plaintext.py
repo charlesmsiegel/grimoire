@@ -1,0 +1,186 @@
+"""#136: labelled prose is a draft, not a card import that already wrote files.
+
+Only known headings divide fields; everything else stays prose. AI refines the
+same six-field proposal on explicit request, never a stored character. Adding
+another heading spelling belongs in ALIASES; neither parser needs a new flow.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable
+from functools import partial
+from pathlib import PurePosixPath
+
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline import StateInline, backtick, image, link
+
+from .. import prompts, schemas
+from . import cards
+
+FIELDS = ("name", "description", "personality", "scenario", "first_mes", "mes_example")
+# Bound both parsing and the optional prompt, without silently clipping a
+# source and then presenting its partial parse as complete. A character dump
+# has room for all six prose fields; a whole book needs a different importer.
+MAX_TEXT_CHARS = 64000
+# A title/name guess also remains in description. Even an unchanged proposal
+# can therefore contain the whole bounded source twice (#136).
+MAX_DRAFT_CHARS = MAX_TEXT_CHARS * 2
+ALIASES = {
+    "name": "name", "character name": "name",
+    "description": "description", "appearance": "description",
+    "background": "description", "backstory": "description",
+    "personality": "personality", "scenario": "scenario",
+    "first message": "first_mes", "first mes": "first_mes", "greeting": "first_mes",
+    "example dialogue": "mes_example", "example dialog": "mes_example",
+    "example messages": "mes_example", "mes example": "mes_example",
+}
+SCHEMA = {"type": "object", "properties": {key: {"type": "string"} for key in FIELDS},
+          "required": list(FIELDS), "additionalProperties": False}
+_HEADING = re.compile(r"^#{1,6}\s+(.+?)(?:\s+#+)?$")
+
+
+def validate_text(text: str) -> None:
+    if not text.strip().lstrip("\ufeff").strip():
+        raise cards.CardParseError("Enter character text to parse.")
+    if len(text) > MAX_TEXT_CHARS:
+        raise cards.CardParseError(f"Character text must be at most {MAX_TEXT_CHARS} characters.")
+
+
+def _label(text: str) -> str:
+    return text.strip().strip("* ").replace("_", " ").casefold()
+
+
+def _inline_value(label: str, value: str) -> str:
+    """Only a bold *label's* closing delimiter belongs to the parser.
+
+    Stripping arbitrary stars from a value corrupts authored Markdown such
+    as `Greeting: *{{char}} waves.*`, including a value made only of stars.
+    """
+    value = value.lstrip()
+    if label.startswith("**") and not label.rstrip().endswith("**") and value.startswith("**"):
+        value = value[2:].lstrip()
+    return value
+
+
+def _literal_span(rule: Callable[[StateInline, bool], bool], state: StateInline, silent: bool) -> bool:
+    """Record lines before CommonMark normalizes or nests inline content.
+
+    The existing rules own matching and escapes. Recording a whole image/link
+    also covers code nested in alt text, whose child offsets are local to that
+    alt text. Keep only continuation lines literal: the opening line can still
+    carry a real `Description:` label (#136).
+    """
+    start = state.pos
+    matched = rule(state, silent)
+    if matched and not silent and state.tokens:
+        span = state.src[start:state.pos]
+        if "\n" in span:
+            first = state.src[:start].count("\n") + 1
+            state.tokens[-1].meta["literal_lines"] = (first, first + span.count("\n"))
+    return matched
+
+
+def _literal_lines(text: str) -> set[int]:
+    """CommonMark owns literal scope, fence length and closing rules (#136).
+
+    Block line maps preserve indentation; inline tokens need the rule above
+    because their rendered content has lost its source line breaks/positions.
+    """
+    parser = MarkdownIt("commonmark")
+    for name, rule in (("backticks", backtick), ("image", image), ("link", link)):
+        parser.inline.ruler.at(name, partial(_literal_span, rule))
+    lines: set[int] = set()
+    for token in parser.parse(text):
+        if token.map is None:
+            continue
+        start, end = token.map
+        if token.type in ("fence", "code_block"):
+            lines.update(range(start, end))
+        elif token.type == "inline":
+            for child in token.children or []:
+                first, last = child.meta.get("literal_lines", (0, 0))
+                lines.update(range(start + first, start + last))
+    return lines
+
+
+def parse(text: str, filename: str = "") -> dict:
+    """Split headings, not sentences; retain unlabelled input for review.
+
+    An explicit name wins, then a document title, then a filename, then the
+    first line. Guessed titles and first lines stay in description: guessing a name
+    is never permission to delete the only evidence the reviewer has.
+    """
+    validate_text(text)
+    source = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    lines = source.split("\n")
+    literal_lines = _literal_lines(source)
+    parts: dict[str, list[str]] = {key: [] for key in FIELDS}
+    current = "description"
+    title = ""
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if index in literal_lines:
+            parts[current].append(line)
+            continue
+        heading = _HEADING.fullmatch(stripped)
+        content = heading[1] if heading else line.lstrip()
+        label, colon, value = content.partition(":")
+        value = _inline_value(label, value)
+        field = ALIASES.get(_label(label))
+        if field and (colon or heading or stripped.startswith("**")):
+            current = field
+            # Two labelled sections in one field must not run together.
+            if parts[current] and parts[current][-1].strip():
+                parts[current].append("")
+            if colon and value:
+                parts[current].append(value)
+                if current == "name":
+                    current = "description"
+            continue
+        if heading:
+            current = "description"
+            if not title and not any("".join(value).strip() for value in parts.values()):
+                title = content.strip()
+        parts[current].append(line)
+        if current == "name" and stripped:
+            current = "description"
+    # Blank edge lines are separators, but horizontal whitespace can carry
+    # Markdown meaning (indented code, hard breaks). Keep it in prose fields.
+    data = {key: "\n".join(value).strip("\n") for key, value in parts.items()}
+    data["name"] = data["name"].strip()
+    fallback = PurePosixPath(filename.replace("\\", "/")).stem.strip()[:200]
+    first = next(line.strip() for line in lines if line.strip())
+    data["name"] = data["name"] or title or fallback or first[:200]
+    return cards.to_v3(data)
+
+
+def draft_data(card: dict) -> dict[str, str]:
+    """Only editable character fields reach the refinement prompt (#136).
+
+    A caller cannot use this draft to inject system prompts, assets or other
+    card metadata. Those have no source in a plaintext import's review form.
+    """
+    data = card.get("data")
+    if not isinstance(data, dict) or any(not isinstance(data.get(key), str) for key in FIELDS):
+        raise cards.CardParseError("The draft must contain all six character text fields.")
+    result = {key: data[key] for key in FIELDS}
+    if not result["name"].strip():
+        raise cards.CardParseError("Give the draft a character name.")
+    if sum(map(len, result.values())) > MAX_DRAFT_CHARS:
+        raise cards.CardParseError(f"The draft must be at most {MAX_DRAFT_CHARS} characters.")
+    return result
+
+
+def build_prompt(text: str, card: dict) -> list[dict]:
+    validate_text(text)
+    data = draft_data(card)
+    return [{"role": "system", "content": prompts.render("plaintext_import/system.j2", schema=SCHEMA)},
+            {"role": "user", "content": prompts.render("plaintext_import/user.j2", text=text, draft=data)}]
+
+
+def parse_output(text: str) -> dict:
+    value = schemas.find_value(text)
+    if not isinstance(value, dict):
+        raise cards.CardParseError("AI refinement did not return a character object. Your draft is unchanged.")
+    return cards.to_v3(draft_data({"data": value}))
