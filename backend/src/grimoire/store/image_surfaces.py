@@ -213,6 +213,11 @@ def linked(root: Path, d: Path) -> bool:
             info = cur.lstat()
         except (FileNotFoundError, NotADirectoryError):
             continue
+        except OSError:
+            # Cannot prove this component is not a link: fail closed, as the
+            # callers that skip a linked directory expect, rather than raising
+            # into an inventory that only checks for a link (#478).
+            return True
         # Path.is_junction arrived in 3.12; lstat exposes the junction tag on
         # every supported Windows Python without rejecting cloud placeholders.
         if (stat.S_ISLNK(info.st_mode) or (os.name == "nt"
