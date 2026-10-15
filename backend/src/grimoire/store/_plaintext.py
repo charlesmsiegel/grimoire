@@ -27,6 +27,10 @@ MAX_TEXT_CHARS = 64000
 # A title/name guess also remains in description. Even an unchanged proposal
 # can therefore contain the whole bounded source twice (#136).
 MAX_DRAFT_CHARS = MAX_TEXT_CHARS * 2
+# A saved character's folder is named from its name, and a filesystem refuses
+# a component past 255 bytes. Guesses are clipped to this; an explicit name
+# over it is refused, so the reviewer sees why rather than a failed save.
+MAX_NAME_CHARS = 200
 ALIASES = {
     "name": "name", "character name": "name",
     "description": "description", "appearance": "description",
@@ -39,13 +43,22 @@ ALIASES = {
 SCHEMA = {"type": "object", "properties": {key: {"type": "string"} for key in FIELDS},
           "required": list(FIELDS), "additionalProperties": False}
 _HEADING = re.compile(r"^#{1,6}\s+(.+?)(?:\s+#+)?$")
+# A bullet marker in front of a label: `- **Name:** Mara`. Requires the space,
+# so a bold label's own `**` is never mistaken for a bullet.
+_LIST_MARKER = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 
 
 def validate_text(text: str) -> None:
-    if not text.strip().lstrip("\ufeff").strip():
+    if not _clean(text):
         raise cards.CardParseError("Enter character text to parse.")
     if len(text) > MAX_TEXT_CHARS:
         raise cards.CardParseError(f"Character text must be at most {MAX_TEXT_CHARS} characters.")
+
+
+def _clean(text: str) -> str:
+    """A BOM is an encoding artifact, never content: the blank check, the
+    first-line fallback and the saved name must all agree about it (#136)."""
+    return text.replace("\ufeff", "").strip()
 
 
 def _label(text: str) -> str:
@@ -53,14 +66,25 @@ def _label(text: str) -> str:
 
 
 def _inline_value(label: str, value: str) -> str:
-    """Only a bold *label's* closing delimiter belongs to the parser.
+    """Only a label's emphasis delimiters belong to the parser.
 
     Stripping arbitrary stars from a value corrupts authored Markdown such
     as `Greeting: *{{char}} waves.*`, including a value made only of stars.
+    Two cases are the label's own: the bold `**Name:** Mara` opener, and an
+    emphasis that wraps the whole line, `**Name: Mara**`, whose closer lands
+    at the end of the value. The closer counts only when no other star is left
+    in the value, so an authored `*{{char}}*` keeps its own delimiters.
     """
     value = value.lstrip()
-    if label.startswith("**") and not label.rstrip().endswith("**") and value.startswith("**"):
+    if not label.startswith("*") or label.rstrip().endswith("*"):
+        return value
+    opener = "**" if label.startswith("**") else "*"
+    if opener == "**" and value.startswith("**"):
         value = value[2:].lstrip()
+    # The emphasis closes somewhere in the value (`**Name: Mara**`, or with prose
+    # after it). When that run is the only star left, it is the label's own.
+    if opener in value and value.count("*") == len(opener):
+        value = value.replace(opener, "", 1).strip()
     return value
 
 
@@ -107,6 +131,35 @@ def _literal_lines(text: str) -> set[int]:
     return lines
 
 
+def _label_of(line: str, stripped: str, heading: re.Match[str] | None,
+              *, name_free: bool) -> tuple[str | None, str, str]:
+    """The field a line's known label names, its value and its colon, if any.
+
+    `name_free` says whether a `Name:` label may still count. A later one is
+    prose: a second character's, or a speaker's in example dialogue (#136).
+    """
+    content = heading[1] if heading else _LIST_MARKER.sub("", line.lstrip(), count=1)
+    label, colon, value = content.partition(":")
+    value = _inline_value(label, value)
+    field = ALIASES.get(_label(label))
+    if field == "name" and not name_free:
+        field = None
+    if field and (colon or heading or stripped.startswith("**")):
+        return field, value, colon
+    return None, value, colon
+
+
+def _resolve_name(explicit: str, title: str, filename: str, lines: list[str]) -> str:
+    """An explicit name wins, then a document title, then a filename, then the
+    first line. Only an explicit name is refused past the folder limit: a guess
+    is clipped, and the reviewer still has the full text in the description."""
+    if len(explicit) > MAX_NAME_CHARS:
+        raise cards.CardParseError(f"A character name must be at most {MAX_NAME_CHARS} characters.")
+    fallback = PurePosixPath(filename.replace("\\", "/")).stem.strip()[:MAX_NAME_CHARS]
+    first = next(line.strip() for line in lines if line.strip())
+    return explicit or title or fallback or first[:MAX_NAME_CHARS]
+
+
 def parse(text: str, filename: str = "") -> dict:
     """Split headings, not sentences; retain unlabelled input for review.
 
@@ -115,24 +168,25 @@ def parse(text: str, filename: str = "") -> dict:
     is never permission to delete the only evidence the reviewer has.
     """
     validate_text(text)
-    source = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    source = text.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
     lines = source.split("\n")
     literal_lines = _literal_lines(source)
     parts: dict[str, list[str]] = {key: [] for key in FIELDS}
     current = "description"
     title = ""
+    name_seen = False
     for index, line in enumerate(lines):
         stripped = line.strip()
         if index in literal_lines:
             parts[current].append(line)
             continue
         heading = _HEADING.fullmatch(stripped)
-        content = heading[1] if heading else line.lstrip()
-        label, colon, value = content.partition(":")
-        value = _inline_value(label, value)
-        field = ALIASES.get(_label(label))
-        if field and (colon or heading or stripped.startswith("**")):
+        # A name label counts once, and never inside example dialogue (#136).
+        field, value, colon = _label_of(line, stripped, heading,
+                                        name_free=not name_seen and current != "mes_example")
+        if field:
             current = field
+            name_seen = name_seen or field == "name"
             # Two labelled sections in one field must not run together.
             if parts[current] and parts[current][-1].strip():
                 parts[current].append("")
@@ -144,17 +198,14 @@ def parse(text: str, filename: str = "") -> dict:
         if heading:
             current = "description"
             if not title and not any("".join(value).strip() for value in parts.values()):
-                title = content.strip()
+                title = heading[1].strip()[:MAX_NAME_CHARS]
         parts[current].append(line)
         if current == "name" and stripped:
             current = "description"
     # Blank edge lines are separators, but horizontal whitespace can carry
     # Markdown meaning (indented code, hard breaks). Keep it in prose fields.
     data = {key: "\n".join(value).strip("\n") for key, value in parts.items()}
-    data["name"] = data["name"].strip()
-    fallback = PurePosixPath(filename.replace("\\", "/")).stem.strip()[:200]
-    first = next(line.strip() for line in lines if line.strip())
-    data["name"] = data["name"] or title or fallback or first[:200]
+    data["name"] = _resolve_name(data["name"].strip(), title, filename, lines)
     return cards.to_v3(data)
 
 
@@ -170,6 +221,8 @@ def draft_data(card: dict) -> dict[str, str]:
     result = {key: data[key] for key in FIELDS}
     if not result["name"].strip():
         raise cards.CardParseError("Give the draft a character name.")
+    if len(result["name"]) > MAX_NAME_CHARS:
+        raise cards.CardParseError(f"A character name must be at most {MAX_NAME_CHARS} characters.")
     if sum(map(len, result.values())) > MAX_DRAFT_CHARS:
         raise cards.CardParseError(f"The draft must be at most {MAX_DRAFT_CHARS} characters.")
     return result

@@ -9,6 +9,11 @@ const FIELDS = [
   ["scenario", "Scenario"], ["first_mes", "First message"], ["mes_example", "Example dialogue"],
 ] as const;
 const MAX_TEXT_CHARS = 64000;
+// The server counts code points (Python len), so count the same way: a UTF-16
+// `.length` would refuse emoji-heavy text the server accepts.
+const codePoints = (value: string) => [...value].length;
+// A saved character's folder is named from its name; the server refuses longer.
+const MAX_NAME_CHARS = 200;
 
 /** #136: parsing and refinement replace an in-memory proposal. Only Save
  * creates a character, through the ordinary creation API. A late answer may
@@ -37,6 +42,7 @@ export function TextCharacterImport({ wid, onCancel, onSaved }: {
     if (!file) return;
     setError(null);
     if (!/\.(txt|md)$/i.test(file.name) || file.size > MAX_TEXT_CHARS * 4) {
+      // Bytes, not characters: UTF-8 is at most four bytes per code point.
       setError(new Error("Choose a .txt or .md file with at most 64,000 characters.")); return;
     }
     setBusy("file");
@@ -45,7 +51,7 @@ export function TextCharacterImport({ wid, onCancel, onSaved }: {
     load.onload = () => {
       if (controller.signal.aborted) return;
       const value = typeof load.result === "string" ? load.result : "";
-      if (value.length > MAX_TEXT_CHARS) {
+      if (codePoints(value) > MAX_TEXT_CHARS) {
         setError(new Error("Character text must be at most 64,000 characters."));
       } else {
         setText(value); setFilename(file.name);
@@ -89,7 +95,7 @@ export function TextCharacterImport({ wid, onCancel, onSaved }: {
       {card ? <>
         <p>Review the fields before saving the character.</p>
         <Field key="review-name" label="Character name"><input value={card.data.name} disabled={busy !== null}
-          onChange={(e) => edit("name", e.target.value)} /></Field>
+          maxLength={MAX_NAME_CHARS} onChange={(e) => edit("name", e.target.value)} /></Field>
         {FIELDS.map(([key, label]) => <Field key={key} label={label}>
           <textarea rows={3} value={card.data[key] ?? ""} disabled={busy !== null}
             onChange={(e) => edit(key, e.target.value)} />
@@ -108,7 +114,7 @@ export function TextCharacterImport({ wid, onCancel, onSaved }: {
           onChange={(e) => loadFile(e.target.files?.[0])} /></Field>
         <Field key="source-text" label="Character text"><textarea rows={12} value={text} disabled={busy !== null}
           onChange={(e) => setText(e.target.value)} /></Field>
-        {text.length > MAX_TEXT_CHARS && <p role="alert">Character text must be at most 64,000 characters.</p>}
+        {codePoints(text) > MAX_TEXT_CHARS && <p role="alert">Character text must be at most 64,000 characters.</p>}
       </>}
       {error !== null && <div role="alert"><ErrorNote err={error} /></div>}
       <div className="form-actions">
@@ -116,7 +122,7 @@ export function TextCharacterImport({ wid, onCancel, onSaved }: {
         {card
           ? <button type="button" className="primary" disabled={busy !== null || !card.data.name.trim()}
               onClick={() => void run("save")}>{busy === "save" ? "Saving…" : "Save character"}</button>
-          : <button type="button" className="primary" disabled={busy !== null || !text.trim() || text.length > MAX_TEXT_CHARS}
+          : <button type="button" className="primary" disabled={busy !== null || !text.trim() || codePoints(text) > MAX_TEXT_CHARS}
               onClick={() => void run("parse")}>{busy === "parse" ? "Parsing…" : "Review draft"}</button>}
       </div>
     </div>

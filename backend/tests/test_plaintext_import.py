@@ -89,6 +89,46 @@ def test_inline_markdown_is_prose_not_a_label_delimiter(client, world):
     assert data["mes_example"] == "***"
 
 
+@pytest.mark.parametrize(("text", "name", "field", "value"), [
+    # A second `Name:` is prose, not a second name joined to the first (#136).
+    ("Name: Mara\n\nSome prose.\n\nName: Morgan\n", "Mara", "description", "Some prose.\n\nName: Morgan"),
+    # A speaker line in example dialogue keeps its text in that dialogue.
+    ("Name: Mara\nExample dialogue:\n<START>\n{{user}}: hi\nName: Oh, hello there\n",
+     "Mara", "mes_example", "<START>\n{{user}}: hi\nName: Oh, hello there"),
+    # A label wrapped in emphasis across the whole line loses only its closer.
+    ("**Name: Mara**\n**Personality: warm and kind**\n", "Mara", "personality", "warm and kind"),
+    ("*Name: Mara*\n", "Mara", "description", ""),
+    ("**Name: Mara** (the witch)\n", "Mara (the witch)", "description", ""),
+    # Labels may come in any order: a name below another field still counts.
+    ("Personality: warm\nName: Mara\n", "Mara", "personality", "warm"),
+    # Bulleted labels split like any other label.
+    ("- **Name:** Mara\n- **Personality:** warm\n", "Mara", "personality", "warm"),
+])
+def test_repeated_wrapped_and_bulleted_labels_keep_field_values_exact(client, world, text, name, field, value):
+    response = client.post(f"/api/worlds/{world}/characters/parse-text", json={"text": text})
+    assert response.status_code == 200, response.text
+    data = response.json()["card"]["data"]
+    assert data["name"] == name
+    assert data[field] == value
+
+
+def test_an_explicit_name_over_the_folder_limit_is_refused_not_saved_as_a_500(client, world):
+    response = client.post(f"/api/worlds/{world}/characters/parse-text", json={"text": "Name: " + "x" * 201})
+    assert response.status_code == 422
+    assert "200 characters" in response.json()["detail"]
+    # A guessed title is clipped instead, and the full heading stays in the prose.
+    guessed = client.post(f"/api/worlds/{world}/characters/parse-text",
+                          json={"text": "# " + "x" * 300 + "\nKeeps a ledger."}).json()["card"]["data"]
+    assert len(guessed["name"]) == 200
+    assert guessed["description"].startswith("# " + "x" * 300)
+
+
+@pytest.mark.parametrize("text", ["﻿ ﻿", "﻿\n\t﻿"], ids=["bom-space", "bom-lines"])
+def test_a_byte_order_mark_alone_is_blank_not_a_name(client, world, text):
+    response = client.post(f"/api/worlds/{world}/characters/parse-text", json={"text": text})
+    assert response.status_code == 422
+
+
 def test_bold_labels_with_an_external_colon_preserve_markdown_values(client, world):
     text = "**Name**: Mara\n**Description**: **Never** speaks aloud.\n**Greeting**: ***"
     response = client.post(f"/api/worlds/{world}/characters/parse-text", json={"text": text})

@@ -188,6 +188,14 @@ test("oversized pasted text is refused whole rather than silently clipped", asyn
   expect(api.parseCharacterText).not.toHaveBeenCalled();
 });
 
+test("the text limit counts code points, as the server does, not UTF-16 units", async () => {
+  renderGrid();
+  fireEvent.click(await screen.findByRole("button", { name: "Import text" }));
+  // 40,000 emoji are 40,000 code points (accepted) but 80,000 UTF-16 units.
+  fireEvent.change(screen.getByLabelText("Character text"), { target: { value: "😀".repeat(40000) } });
+  expect(screen.getByRole("button", { name: "Review draft" })).toBeEnabled();
+});
+
 test("a failed post-import roster refresh cannot put the old world's error on the new one", async () => {
   const view = render(<MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
   await openTextDraft();
