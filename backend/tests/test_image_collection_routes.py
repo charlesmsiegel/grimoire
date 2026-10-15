@@ -123,6 +123,17 @@ def test_export_resolves_a_direct_format_1_member_url_with_the_campaign_rule(cli
     assert export.resolve_url(campaign, f'{base}/members/1') == campaign_images.image_path(campaign, names[1])
 
 
+@pytest.mark.parametrize('fmt', [1, 2])
+def test_export_decodes_member_indices_before_validating(client, fmt):
+    wid = worlds.create_world('Realm')
+    (format1 if fmt == 1 else format2)(wid, CID, png('red'), png('blue'))
+    campaign = campaigns.create_campaign('Saltmarch', wid)
+    base = f'/api/worlds/{wid}/image-collections/{CID}/members'
+    assert _export(campaign, f'{base}/%31') == png('blue')
+    for index in ('%30%31', '%2D1', '%2F1'):
+        assert _export(campaign, f'{base}/{index}') is None
+
+
 def test_export_keeps_campaign_tombstones_for_format_1(client, collection):
     wid, cid, names = collection
     campaign = campaigns.create_campaign('Saltmarch', wid)
@@ -350,12 +361,14 @@ def _unparseable_journal(wid):
     _corrupt_manifest,
     _unparseable_journal,
 ], ids=['format-1-manifest', 'format-1-journal', 'corrupt-manifest', 'unparseable-journal'])
-def test_guard_is_inert_only_without_format_1_state(client, state):
+def test_member_hash_names_are_reserved_without_local_format_1_state(client, state):
     wid = worlds.create_world('Realm')
     format2(wid, CID, png('green'))
     forged = member_name(png('red'))
     assert not collections.has_format1(wid)
-    assert _put(client, wid, forged, png('blue')).status_code == 200
+    # Another device may still hold a format-1 journal under its own cache.
+    assert _put(client, wid, forged, png('blue')).status_code == 400
+    assert world_images.image_path(wid, forged) is None
     state(wid)
     assert collections.has_format1(wid)
     other = member_name(png('black'))

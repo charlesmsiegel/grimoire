@@ -25,7 +25,9 @@ surface end to end, so a surface added there and forgotten here fails.
   - ``b``: a campaign's bare `focus.json` (no avatar of its own, no avatar
     placement) over an inherited avatar the overlay would show;
   - ``c``: a `descriptions.json` or `subjects.json` key whose name has an
-    image-bearing placement, and no legacy file, in the same directory;
+    image-bearing placement in the same directory, or a same-world URL key
+    pointing at another record's placement. The planner omits keys already
+    folded through a file it can migrate (#478);
   - ``d``: a `focus.json` beside an avatar placement.
 
   ``target`` names the directory whose placement the key or crop describes:
@@ -48,15 +50,18 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from . import (
     assets,
     campaign_images,
     covers,
     entities,
+    greeting_images,
     image_refs,
     image_scopes,
     image_subjects,
@@ -136,6 +141,8 @@ class Occurrence:
     sidecar: str | None = None
     #: Metadata-only: the directory whose placement of `name` it describes.
     target: Path | None = None
+    #: A URL key describes another slot name; ordinary keys use `name`.
+    target_name: str | None = None
     #: A legacy file the inventory will not place, and why.
     untouched: str | None = None
     #: How the directory's own module reads it (`Surface.supported_only`).
@@ -193,7 +200,7 @@ def _subdirs(d: Path) -> tuple[list[Path], list[_Bad]]:
 
 def linked(root: Path, d: Path) -> bool:
     """Whether any component between `root` and `d` (inclusive) is a
-    symlink -- or `d` is not under `root` at all. Such a directory may hold
+    symlink or Windows junction -- or `d` is not under `root` at all. Such a directory may hold
     files outside the pinned root, and a run would unlink them there (M4)."""
     try:
         parts = d.relative_to(root).parts
@@ -202,7 +209,15 @@ def linked(root: Path, d: Path) -> bool:
     cur = root
     for part in parts:
         cur = cur / part
-        if cur.is_symlink():
+        try:
+            info = cur.lstat()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        # Path.is_junction arrived in 3.12; lstat exposes the junction tag on
+        # every supported Windows Python without rejecting cloud placeholders.
+        if (stat.S_ISLNK(info.st_mode) or (os.name == "nt"
+                and getattr(info, "st_reparse_tag", 0)
+                == getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None))):
             return True
     return False
 
@@ -293,11 +308,13 @@ def directories(root: Path) -> Iterator[tuple[Surface, str, Path]]:
 
 # ---- legacy files -------------------------------------------------------
 
-def _files(d: Path) -> list[Path]:
-    """Regular files directly in `d` (not symlinks), sorted."""
+def _files(d: Path, *, links: bool = False) -> list[Path]:
+    """Files directly in `d`, sorted; include links only to report legacy
+    files the migration must leave alone (#478)."""
     try:
         with os.scandir(d) as it:
-            names = [e.name for e in it if e.is_file(follow_symlinks=False)]
+            names = [e.name for e in it if e.is_file(follow_symlinks=False)
+                     or (links and e.is_symlink())]
     except OSError:
         return []
     return [d / n for n in sorted(names)]
@@ -325,22 +342,20 @@ def _name_files(surface: Surface, scope: str, d: Path, name: str
 
     if chosen is None or not _accepted(chosen):
         return [occ(p, "unsupported-extension") for p in sorted(sibs)], sibs
-    if chosen.is_symlink() or not chosen.is_file():
-        # Served today, but not a file the inventory may read and later
-        # unlink as though it were the picture's only copy.
-        return [occ(p, "not-a-regular-file") for p in sorted(sibs)], sibs
-    others = [occ(p, "extra-sibling" if _accepted(p) else "unsupported-extension")
+    others = [occ(p, "not-a-regular-file" if p.is_symlink() or not p.is_file()
+                  else "extra-sibling" if _accepted(p) else "unsupported-extension")
               for p in sorted(sibs - {chosen})]
-    return [occ(chosen, None), *others], sibs
+    why = "not-a-regular-file" if chosen.is_symlink() or not chosen.is_file() else None
+    return [occ(chosen, why), *others], sibs
 
 
 def _stems(files: list[Path]) -> list[str]:
     return sorted({p.name.rpartition(".")[0] for p in files} - {""})
 
 
-def _legacy(surface: Surface, scope: str, d: Path) -> tuple[list[Occurrence], set[str]]:
-    """Every legacy file in `d` as an occurrence, and the names that have one."""
-    files = [p for p in _files(d) if p.name not in SIDECARS]
+def _legacy(surface: Surface, scope: str, d: Path) -> list[Occurrence]:
+    """Every legacy file in `d` as an occurrence."""
+    files = [p for p in _files(d, links=True) if p.name not in SIDECARS]
     if surface.kind == COVER:
         names = [covers.NAME]
         files = [p for p in files if p.name.rpartition(".")[0] == covers.NAME]
@@ -348,11 +363,8 @@ def _legacy(surface: Surface, scope: str, d: Path) -> tuple[list[Occurrence], se
         names = [n for n in _stems(files) if assets.storable(n)]
     out: list[Occurrence] = []
     covered: set[Path] = set()
-    held: set[str] = set()
     for name in names:
         found, sibs = _name_files(surface, scope, d, name)
-        if found:
-            held.add(name)
         out.extend(found)
         covered |= sibs
     for p in files:
@@ -361,7 +373,7 @@ def _legacy(surface: Surface, scope: str, d: Path) -> tuple[list[Occurrence], se
             why = "unsupported-extension" if assets.storable(stem) else "unstorable-name"
             out.append(Occurrence(surface.kind, scope, d, stem or p.name, p, untouched=why,
                                   supported_only=surface.supported_only))
-    return out, held
+    return out
 
 
 # ---- metadata ---------------------------------------------------------------
@@ -384,13 +396,13 @@ def _keyed_sidecars(surface: Surface, scope: str) -> tuple[str, ...]:
     return (assets.DESCRIPTIONS_FILE,)
 
 
-def _same_dir(surface: Surface, scope: str, d: Path, held: set[str]) -> Iterator[Occurrence]:
+def _same_dir(surface: Surface, scope: str, d: Path) -> Iterator[Occurrence]:
     """(c) and (d) in `d`: keys and a crop beside placements of their own."""
     refs = image_refs.scan(d)
     bearing = {n for n, r in refs.items() if r.image is not None}
     for sidecar in _keyed_sidecars(surface, scope):
         for key in sorted(_json_dict(d / sidecar)):
-            if key in bearing and key not in held:
+            if key in bearing:
                 yield Occurrence(surface.kind, scope, d, key, None, metadata_only="c",
                                  sidecar=sidecar, target=d,
                                  supported_only=surface.supported_only)
@@ -398,6 +410,84 @@ def _same_dir(surface: Surface, scope: str, d: Path, held: set[str]) -> Iterator
         yield Occurrence(surface.kind, scope, d, assets.AVATAR, None, metadata_only="d",
                          sidecar=assets.FOCUS_FILE, target=d,
                          supported_only=surface.supported_only)
+
+
+def world_url_parts(root: Path, wid: str, url: str) -> list[str] | None:
+    """A same-world URL's decoded route tail, under the pinned root (#478).
+    Alternate spellings count only when the filesystem says they address
+    this world. The catalog's live-root resolver cannot decide that here."""
+    if not url.startswith("/api/worlds/"):
+        return None
+    parts = [unquote(segment) for segment in urlsplit(url).path.split("/")]
+    if len(parts) < 6 or not safe_id(parts[3]):
+        return None
+    target = root / "worlds" / parts[3]
+    try:
+        if linked(root, target) or not target.samefile(root / "worlds" / wid):
+            return None
+    except (OSError, ValueError):
+        return None
+    return parts[4:]
+
+
+def _directory_name(parent: Path, name: str) -> str | None:
+    """The real entry spelling of a directory, never a link or live-root lookup."""
+    children, _bad = _subdirs(parent)
+    for child in children:
+        if child.name == name:
+            return name if not child.is_symlink() else None
+    for child in children:
+        try:
+            if not child.is_symlink() and child.samefile(parent / name):
+                return child.name
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _canonical_record_slot(wroot: Path, slot: greeting_images._Slot
+                           ) -> greeting_images._Slot | None:
+    """Use record/version entry spellings for the existing name-lock scheme.
+    POSIX resolve/normcase can preserve URL casing on case-insensitive macOS;
+    folding through that alias would miss a canonical upload's stripe (#478).
+    Keep the path builder's fixed components and canonicalize its ids only."""
+    base, owner, vid, name = slot
+    if base == "images":
+        return slot
+    nominal, _name = greeting_images._record_dir(wroot, slot)
+    if linked(wroot, nominal):
+        return None
+    canonical_owner = _directory_name(wroot / base, owner)
+    if canonical_owner is None:
+        return None
+    canonical_vid = _directory_name(
+        assets.version_dir(wroot, canonical_owner, vid, base).parent, vid)
+    return (base, canonical_owner, canonical_vid, name) if canonical_vid is not None else None
+
+
+def _url_subjects(root: Path, scope: str, d: Path) -> Iterator[Occurrence]:
+    """World greeting URL keys use the same verified-target fold as (c).
+    Resolve route shape only: the catalog can recover promotions, whereas
+    this inventory must remain read-only and pinned to `root` (#478)."""
+    wid = scope.partition(":")[2]
+    wroot = root / "worlds" / wid
+    for key in sorted(_json_dict(d / image_subjects.SUBJECTS_FILE)):
+        parts = world_url_parts(root, wid, key)
+        if parts is None:
+            continue
+        try:
+            slot = greeting_images._record_slot(wroot, parts)
+            if slot is not None:
+                slot = _canonical_record_slot(wroot, slot)
+            if slot is None:
+                continue
+            target, name = greeting_images._record_dir(wroot, slot)
+        except (*greeting_images._MISSING, ValueError):
+            continue
+        if assets.storable(name) and not linked(root, target):
+            yield Occurrence(_GREETINGS, scope, d, key, None, metadata_only="c",
+                             sidecar=image_subjects.SUBJECTS_FILE,
+                             target=target, target_name=name)
 
 
 @dataclass(frozen=True)
@@ -501,10 +591,11 @@ def occurrences(root: Path) -> Iterator[Occurrence]:
         if surface.kind == COLLECTION:
             yield from _manifests(scope, d)
             continue
-        found, held = _legacy(surface, scope, d)
-        yield from found
+        yield from _legacy(surface, scope, d)
         if surface.kind != COVER:
-            yield from _same_dir(surface, scope, d, held)
+            yield from _same_dir(surface, scope, d)
+        if surface.kind == _GREETINGS and scope.startswith(f"{_WORLD}:"):
+            yield from _url_subjects(root, scope, d)
         if scope.startswith(f"{_CAMPAIGN}:"):
             croot = root / "campaigns" / scope.partition(":")[2]
             if croot not in inherits:

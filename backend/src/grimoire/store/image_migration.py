@@ -52,8 +52,8 @@ previews: a real run re-reads every value at fold time (M9).
 per legacy file, re-read and re-hash, ingest outside every lock, then under
 the campaign lock (a campaign occurrence), `image_collection_lock` (a world
 library) and the name lock: never overwrite an image-bearing placement, write
-one when there is none, verify it under the pinned root, unlink exactly the
-file that was hashed, drop its legacy thumbnails, fold its keys. Then the
+one when there is none, verify it under the pinned root, drop its legacy
+thumbnails, unlink exactly the file that was hashed, fold its keys. Then the
 metadata-only occurrences, format-1 manifests and harvest journals. Every
 campaign written is revision-bumped under its lock.
 
@@ -73,7 +73,7 @@ import os
 import re
 import stat
 from collections.abc import Callable, Iterable
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -375,15 +375,19 @@ def _target_id(occ: Occurrence, slots: dict[tuple[Path, str], str]) -> str | Non
     image-bearing placement, else the file this plan places there."""
     if occ.target is None:
         return None
-    ref = image_refs.read(occ.target, occ.name)
+    name = occ.target_name or occ.name
+    ref = image_refs.read(occ.target, name)
     if ref is not None and ref.image is not None:
         return ref.image
-    return slots.get((occ.target, occ.name))
+    return slots.get((occ.target, name))
 
 
 def _metadata(plan: MigrationPlan, meta: list[Occurrence]) -> None:
     slots = _slot_ids(plan)
     for occ in meta:
+        if (occ.metadata_only == "c" and occ.target_name is None
+                and (occ.target, occ.name) in slots):
+            continue                # this file's own fold already carries the key
         image_id = _target_id(occ, slots)
         plan.metadata.append((occ, image_id))
         if image_id is not None and occ.metadata_only in ("a", "c"):
@@ -809,6 +813,7 @@ class _Exec:
 
 def _save_map(ex: _Exec) -> None:
     p = work_map_path(ex.root)
+    ex.guard("before-map-write")
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic.write_text(p, json.dumps({"format": 1, "pending": ex.pending},
                                     indent=2, sort_keys=True) + "\n")
@@ -928,10 +933,19 @@ def _drop_thumbs(ex: _Exec, rel: str, st: os.stat_result) -> None:
     ex.guard("before-thumbnails")
     for key in thumbs.legacy_keys(rel, st):
         p = ex.root / key
-        if p.is_file() and not image_surfaces.linked(ex.root, p):
-            with suppress(FileNotFoundError):
+        try:
+            mode = p.stat(follow_symlinks=False).st_mode
+            if stat.S_ISREG(mode) and not image_surfaces.linked(ex.root, p):
                 p.unlink()
                 ex.out["thumbnails_removed"] += 1
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            # Cache cleanup is best effort: a read-only cache must not hold
+            # the original image or its metadata hostage. Report and try the
+            # other entries; a real interruption still leaves the source for
+            # retry because cleanup remains before its unlink (#478).
+            ex.out["errors"].append({"path": ex.plan.rel(p), "error": _error_text(exc)})
 
 
 def _drop_focus_file(ex: _Exec, d: Path, moved: bool) -> bool:
@@ -983,6 +997,15 @@ def _item(ex: _Exec, item: Item) -> None:
         # Not even a promotion recovery: it writes placements in there.
         ex.skip(occ.path, image_surfaces.SYMLINKED)
         return
+    journal = image_refs.read_journal(occ.dir)
+    if journal is not None:
+        # Recovery can write BOTH named slots, not only this item's slot.
+        # A different linked slot must not be replaced as a side effect (#478).
+        name = assets._journal_ok(journal)
+        if name is not None and any(_linked_slot(ex.root, occ.dir, slot)
+                                    for slot in (assets.AVATAR, name)):
+            ex.skip(occ.path, image_surfaces.SYMLINKED)
+            return
     assets.recover_promotion(occ.dir)
     data = _reread(ex, item)
     if data is None:
@@ -1069,11 +1092,13 @@ def _place_and_clean(ex: _Exec, item: Item, blob: str) -> bool:
     ex.guard("after-verify")
     ex.verified.add((occ.dir, occ.name))
     _unpend(ex, item.image_id, rel)
+    # Cache first: if cleanup crashes, the legacy file still identifies the
+    # thumbnail keys a rerun must remove. Unlinking first orphaned them (#478).
+    _drop_thumbs(ex, rel, now)
     if _unlink_same(ex, occ.path, item.stat):
         ex.out["legacy_deleted"] += 1
         ex.deleted_bytes += item.raw_size
         written = True
-        _drop_thumbs(ex, rel, now)
     if occ.name == assets.AVATAR:
         dropped = (_move_focus(ex, occ.dir, focus) if moved
                    else _drop_focus_file(ex, occ.dir, False))
@@ -1280,13 +1305,23 @@ def _target_verified(ex: _Exec, occ: Occurrence, image_id: str) -> bool:
     now, under the pinned root."""
     if occ.target is None:
         return False
-    if (occ.target, occ.name) in ex.verified:
-        return True
-    if _linked_slot(ex.root, occ.target, occ.name):
+    name = occ.target_name or occ.name
+    if _linked_slot(ex.root, occ.target, name):
         return False
-    ref = image_refs.read(occ.target, occ.name)
-    return (ref is not None and ref.image == image_id
-            and _object_under(ex.root, image_id))
+    # A URL would serve the post-promotion picture. The inventory cannot
+    # recover it (it is read-only), so keep the key until the swap settles
+    # rather than attach its subjects to the picture about to leave (#478).
+    journal = image_refs.read_journal(occ.target)
+    promoted = assets._journal_ok(journal) if journal is not None else None
+    if promoted is not None and any(
+            name == slot or _same_file(image_refs.ref_path(occ.target, name),
+                                       image_refs.ref_path(occ.target, slot))
+            for slot in (assets.AVATAR, promoted)):
+        return False
+    ref = image_refs.read(occ.target, name)
+    if ref is None or ref.image != image_id:
+        return False
+    return (occ.target, name) in ex.verified or _object_under(ex.root, image_id)
 
 
 def _override(ex: _Exec, occ: Occurrence) -> bool:
@@ -1330,10 +1365,17 @@ def _dropped_focus(ex: _Exec, occ: Occurrence) -> bool:
 
 def _metadata_one(ex: _Exec, occ: Occurrence, image_id: str | None) -> None:
     side = occ.dir / (occ.sidecar or "")
-    if image_id is None or not _target_verified(ex, occ, image_id):
-        ex.keep(side, occ.name, "target-not-verified")
-        return
-    with _campaign_write(ex, _campaign_of(occ)):
+    # A verified pair can have been replaced since planning. Hold the target
+    # name through revalidation, object fold and source-key deletion, so a
+    # cooperating upload cannot move the URL to another image between them
+    # (#478). Focus operations take their own name locks below.
+    target_lock = (locks.image_name_lock(occ.target, occ.target_name or occ.name)
+                   if occ.target is not None and occ.metadata_only in ("a", "c")
+                   else nullcontext())
+    with _campaign_write(ex, _campaign_of(occ)), target_lock:
+        if image_id is None or not _target_verified(ex, occ, image_id):
+            ex.keep(side, occ.name, "target-not-verified")
+            return
         if occ.metadata_only == "b":
             changed = _override(ex, occ)
         elif occ.metadata_only == "d":
@@ -1376,7 +1418,7 @@ def _greeting_dirs(root: Path) -> list[tuple[Path, str, Path]]:
     return out
 
 
-def _same_dir(a: Path, b: Path) -> bool:
+def _same_file(a: Path, b: Path) -> bool:
     try:
         return os.path.samefile(a, b)
     except OSError:
@@ -1426,7 +1468,7 @@ def _rekey_one(ex: _Exec, where: tuple[Path, str, Path], wid: str, collection: s
     no longer one of the greeting's pictures (M10)."""
     wroot, gid, d = where
     side = d / _SUBJECTS
-    same = _same_dir(wroot, ex.root / "worlds" / wid)
+    same = _same_file(wroot, ex.root / "worlds" / wid)
     scope = image_scopes.world_scope_of_dir(wroot.name)
     with locks.image_sidecar_lock(d, _SUBJECTS):
         cur = _sidecar_now(ex, side)
@@ -1555,16 +1597,15 @@ def _journal(ex: _Exec, wid: str, p: Path) -> None:
 
 
 def _url_keys_kept(root: Path) -> int:
-    """Same-world URL keys in world greetings' `subjects.json`: no ruling
-    folds them, so they stay, and are counted (stage-4 Task 8 records it)."""
+    """Same-world URL subject keys still waiting for a verified target."""
     count = 0
     for wroot, _gid, d in _greeting_dirs(root):
         try:
             raw = json.loads((d / _SUBJECTS).read_text(encoding="utf-8"))
         except (OSError, ValueError, RecursionError):
             continue
-        prefix = f"/api/worlds/{wroot.name}/"
-        count += sum(1 for k in (raw if isinstance(raw, dict) else {}) if k.startswith(prefix))
+        count += sum(1 for k in (raw if isinstance(raw, dict) else {})
+                     if image_surfaces.world_url_parts(root, wroot.name, k) is not None)
     return count
 
 

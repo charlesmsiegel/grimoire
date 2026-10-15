@@ -11,6 +11,7 @@ from grimoire.store import (
     image_hash,
     image_refs,
     image_store,
+    paths,
     world_images,
     worlds,
 )
@@ -306,3 +307,58 @@ def test_an_unparseable_journal_keeps_the_guard_on(wid):
 
 def test_job_path_is_under_the_journal_directory(wid):
     assert imports.job_path(wid, 'a' * 64) == image_collections.journal_directory(wid) / f"{'a' * 64}.json"
+
+
+@pytest.mark.parametrize('entry', ['sample', 'accept'])
+def test_crashed_format_1_publication_reconciles_with_a_lost_member(wid, entry):
+    names = format1(wid, CID, pic('red'), pic('blue'))
+    target = format1_journal(wid, SOURCE, CID, names)
+    manifest = image_collections.manifest_path(wid, CID).read_bytes()
+    image_refs.ref_path(image_collections.image_directory(wid), names[1]).unlink()
+
+    job = (imports.sample(wid, SOURCE, fetch_image=_never) if entry == 'sample'
+           else imports.accept(wid, target.stem))
+
+    assert job['format'] == 1 and job['members'] == names and job['accepted']
+    assert _on_disk(target)['accepted']
+    assert image_collections.manifest_path(wid, CID).read_bytes() == manifest
+
+
+@pytest.mark.parametrize('entry', ['sample', 'accept'])
+@pytest.mark.parametrize('corruption', ['missing-manifest', 'different-members'])
+def test_accepted_format_1_corruption_refuses_without_conversion(wid, entry, corruption):
+    names = format1(wid, CID, pic('red'))
+    target = format1_journal(wid, SOURCE, CID, names, accepted=True)
+    if corruption == 'missing-manifest':
+        image_collections.manifest_path(wid, CID).unlink()
+        expected = FileNotFoundError
+    else:
+        job = _on_disk(target)
+        job['members'] = place(wid, pic('blue'))
+        target.write_text(json.dumps(job), encoding='utf-8')
+        expected = image_collections.CollectionInvalidError
+    before, files = target.read_bytes(), _store_files()
+
+    with pytest.raises(expected):
+        if entry == 'sample':
+            imports.sample(wid, SOURCE, fetch_image=_never)
+        else:
+            imports.accept(wid, target.stem)
+
+    assert target.read_bytes() == before
+    assert _store_files() == files
+
+
+@pytest.mark.parametrize('entry', ['sample', 'accept'])
+def test_accepted_format_1_reconciles_a_converted_manifest_without_writing(wid, entry):
+    names = format1(wid, CID, pic('red'), pic('blue'))
+    target = format1_journal(wid, SOURCE, CID, names, accepted=True)
+    # A migration stopped between converting the manifest and settling journals.
+    image_collections.convert_format1(paths.home().resolve(), wid, CID)
+    before, files = target.read_bytes(), _store_files()
+
+    job = (imports.sample(wid, SOURCE, fetch_image=_never) if entry == 'sample'
+           else imports.accept(wid, target.stem))
+
+    assert job['format'] == 1 and job['accepted'] and job['members'] == names
+    assert target.read_bytes() == before and _store_files() == files

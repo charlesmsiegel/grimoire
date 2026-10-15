@@ -90,7 +90,9 @@ import importlib.metadata
 import json
 import os
 import re
+import stat
 import zipfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,7 +104,9 @@ from . import (
     image_refs,
     image_scopes,
     image_store,
+    image_surfaces,
     logs,
+    paths,
     ziputil,
 )
 from .frontmatter import parse_frontmatter
@@ -219,7 +223,8 @@ def write_bundle(wid: str, dest: Path) -> None:
     A best-effort snapshot, not a locked one -- a world edited during the walk
     can be packed half-old and half-new. Files that vanish mid-walk are skipped
     rather than failing the export: by then they are genuinely not part of the
-    world any more.
+    world any more. A format-2 collection member is required instead: omitting
+    it would shift later indices on import (#478).
 
     A promotion journal left by a crash is finished before the walk
     (`assets.recover_promotions_in`), so the export packs the post-swap slots
@@ -263,13 +268,22 @@ def write_bundle(wid: str, dest: Path) -> None:
     _check_whole(entries)
     try:
         with zipfile.ZipFile(dest, "w") as z:
+            missing_blobs: set[Path] = set()
             for e in entries:
+                if e.requires_blob in missing_blobs:
+                    continue
                 if e.data is not None or e.src is None:
                     z.writestr(e.arc, e.data or b"", compress_type=e.compress)
                     continue
+                if e.blob_stat is not None:
+                    if not _write_blob(z, e):
+                        missing_blobs.add(e.src)
+                    continue
                 try:
                     z.write(e.src, e.arc, compress_type=e.compress)
-                except FileNotFoundError:
+                except FileNotFoundError as exc:
+                    if e.required is not None:
+                        raise BundleError(f"collection member unavailable: {e.required}") from exc
                     continue                    # deleted or collected mid-walk
         _check_written(dest)
     except BaseException:
@@ -287,10 +301,69 @@ class _Entry:
     src: Path | None = None
     data: bytes | None = None
     size: int = 0
+    #: A collection's member position cannot be dropped on import (#478).
+    required: str | None = None
+    #: The regular blob validated before packing, not a replacement path (#478).
+    blob_stat: os.stat_result | None = None
+    #: A projection travels only with its blob, even if GC wins mid-pack (#478).
+    requires_blob: Path | None = None
 
     def __post_init__(self) -> None:
         if self.data is not None:
             object.__setattr__(self, "size", len(self.data))
+
+
+
+def _write_blob(z: zipfile.ZipFile, entry: _Entry) -> bool:
+    """Copy the validated blob through one checked handle, hashing as copied.
+
+    A sync can replace a blob or an ancestor after preflight (#478). Refuse
+    links again at the open, and compare the handle's identity BEFORE reading
+    bytes: Windows has no O_NOFOLLOW, and that flag alone would not protect
+    ancestors on POSIX either. Once open, a path replacement cannot redirect
+    this handle. Hashing the actual copy also catches an in-place rewrite.
+    A refusal discards the whole archive through `write_bundle`. Only an
+    optional blob gone BEFORE opening returns False; its projection must then
+    be omitted too, since import refuses an object without its blob.
+    """
+    assert entry.src is not None and entry.blob_stat is not None
+    error = (f"collection member unavailable: {entry.required}" if entry.required is not None
+             else f"image changed while bundling: {entry.arc}")
+    expected = entry.blob_stat
+    opened = False
+    try:
+        if image_surfaces.linked(paths.home(), entry.src):
+            raise BundleError(error)
+        with open(entry.src, "rb", opener=lambda p, flags: os.open(
+                p, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))) as source:
+            opened = True
+            held = os.fstat(source.fileno())
+            if (not stat.S_ISREG(held.st_mode) or not os.path.samestat(held, expected)
+                    or (held.st_size, held.st_mtime_ns) != (expected.st_size, expected.st_mtime_ns)
+                    or image_surfaces.linked(paths.home(), entry.src)):
+                raise BundleError(error)
+            digest = hashlib.sha256()
+            size = 0
+            info = zipfile.ZipInfo(entry.arc)
+            info.compress_type = entry.compress
+            # atomic-ok: the caller's export archive, discarded whole on failure,
+            # never a live record in the store.
+            with z.open(info, "w", force_zip64=True) as target:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    size += len(chunk)
+                    if size > MAX_BUNDLE_BLOB_BYTES:
+                        raise BundleError(error)
+                    digest.update(chunk)
+                    target.write(chunk)
+            if digest.hexdigest() != image_store.blob_sha_of(entry.src):
+                raise BundleError(error)
+    except FileNotFoundError as exc:
+        if entry.required is None and not opened:
+            return False
+        raise BundleError(error) from exc
+    except OSError as exc:
+        raise BundleError(error) from exc
+    return True
 
 
 def _world_entries(root: Path) -> list[_Entry]:
@@ -375,9 +448,10 @@ def _checked_by_import(data: bytes) -> bool:
     return not (type(fmt) is int and fmt == 1)
 
 
-def _manifest_ids(collections: list[tuple[str, dict]]) -> set[str]:
-    """The image ids the format-2 manifests among `collections` name."""
-    return {m for _where, c in collections if c["format"] == 2 for m in c["members"]}
+def _manifest_ids(collections: list[tuple[str, dict]]) -> dict[str, str]:
+    """Image id -> one collection member position that requires it (#478)."""
+    return {m: f"{where} member {i}" for where, c in collections if c["format"] == 2
+            for i, m in enumerate(c["members"])}
 
 
 def _check_whole(entries: list[_Entry]) -> None:
@@ -412,12 +486,25 @@ def _check_written(dest: Path) -> None:
                      max_uncompressed=MAX_UNCOMPRESSED, err=BundleError)
 
 
+def _packable_object(image_id: str | None) -> image_store.ImageObject | None:
+    """An object's metadata only when no dependency path follows a link (#478).
+    Check before even the size preflight reads it, not only before packing."""
+    if image_id is None:
+        return None
+    try:
+        if image_surfaces.linked(paths.home(), image_store.object_path(image_id)):
+            return None
+    except OSError:
+        return None
+    return image_store.read(image_id)
+
+
 def _packable_blob(obj: image_store.ImageObject) -> Path | None:
     """The blob `_image_entries` would pack for `obj`, or None when it skips it
     (missing, not a regular file, or a symlink)."""
     blob = image_store.blob_path(obj.blob_sha256, obj.ext)
     try:
-        if blob.is_symlink() or not blob.is_file():
+        if image_surfaces.linked(paths.home(), blob) or not blob.is_file():
             return None
     except OSError:
         return None
@@ -450,7 +537,7 @@ def _check_blob_sizes(root: Path, collections: list[tuple[str, dict]]) -> None:
 def _oversized(image_id: str | None) -> int | None:
     """The size of `image_id`'s blob when the export would pack it and it is
     past `MAX_BUNDLE_BLOB_BYTES`; None otherwise."""
-    obj = image_store.read(image_id) if image_id is not None else None
+    obj = _packable_object(image_id)
     blob = _packable_blob(obj) if obj is not None else None
     if blob is None:
         return None
@@ -461,12 +548,14 @@ def _oversized(image_id: str | None) -> int | None:
     return size if size > MAX_BUNDLE_BLOB_BYTES and image_store.blob_intact(blob) else None
 
 
-def _image_entries(root: Path, wid: str, member_ids: set[str]) -> list[_Entry]:
+def _image_entries(root: Path, wid: str, member_ids: dict[str, str]) -> list[_Entry]:
     """The blob and the projected object of every image a placement under
     `root` or a format-2 collection manifest (`member_ids`) names -- once
     each, however many name it.
 
-    An id that does not resolve (no object, or its blob missing) is skipped:
+    A collection member that cannot be packed refuses the export: importing
+    an incomplete collection would shift every later member's index (#478).
+    A placement id that does not resolve (no object, or its blob missing) is skipped:
     the world still exports, and that ref simply travels without a picture,
     exactly as unresolvable as it already was here. A blob that is a symlink is
     skipped for the reason the world walk skips one. So is a blob whose bytes
@@ -477,12 +566,20 @@ def _image_entries(root: Path, wid: str, member_ids: set[str]) -> list[_Entry]:
     """
     scope = image_scopes.world_scope(wid)
     out = []
-    for image_id in sorted(set(image_refs.walk_ids(root)) | member_ids):
-        obj = image_store.read(image_id)
+    for image_id in sorted(set(image_refs.walk_ids(root)) | member_ids.keys()):
+        obj = _packable_object(image_id)
         blob = _packable_blob(obj) if obj is not None else None
+        blob_stat = None
+        if blob is not None:
+            with suppress(OSError):                     # collected after preflight
+                blob_stat = blob.stat(follow_symlinks=False)
+        intact = (blob is not None and blob_stat is not None and stat.S_ISREG(blob_stat.st_mode)
+                  and image_store.blob_intact(blob))
+        if image_id in member_ids and not intact:
+            raise BundleError(f"collection member unavailable: {member_ids[image_id]}")
         if obj is None or blob is None:
             continue
-        if not image_store.blob_intact(blob):
+        if not intact:
             logs.record("warning", __name__,
                         "image blob does not match its name; left out of the bundle",
                         kind="bundle_image_skipped", blob=obj.blob_sha256)
@@ -490,11 +587,12 @@ def _image_entries(root: Path, wid: str, member_ids: set[str]) -> list[_Entry]:
         sha = obj.blob_sha256
         projected = image_store.project(obj.raw, scope)
         out.append(_Entry(f"{STORE_PREFIX}/blobs/{sha[:2]}/{sha}.{obj.ext}",
-                          src=blob, size=obj.size))
+                          src=blob, size=obj.size, required=member_ids.get(image_id),
+                          blob_stat=blob_stat))
         out.append(_Entry(f"{STORE_PREFIX}/objects/{image_id[4:6]}/{image_id}.json",
                           zipfile.ZIP_DEFLATED,
                           data=(json.dumps(projected, indent=2, sort_keys=True)
-                                + "\n").encode("utf-8")))
+                                + "\n").encode("utf-8"), requires_blob=blob))
     return out
 
 

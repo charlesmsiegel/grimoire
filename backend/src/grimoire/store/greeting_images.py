@@ -62,7 +62,10 @@ def _world_target(root: Path, url: str) -> tuple[Path, list[str]] | None:
     if parts[3] != root.name:
         if not worlds_paths.world_exists(parts[3]):
             return None
-        target = worlds_paths.world_root(parts[3])
+        # A URL alias must keep this world's root spelling: subject reads
+        # compare containment lexically even on case-insensitive macOS (#478).
+        target = (root if worlds_paths.references_world(parts[3], root)
+                  else worlds_paths.world_root(parts[3]))
     return target, parts[4:]
 
 

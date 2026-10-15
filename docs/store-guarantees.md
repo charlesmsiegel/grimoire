@@ -711,9 +711,9 @@ lock (the two leaf locks above), never the reverse. On Windows a world's two
 spellings share both locks
 (`test_windows_world_aliases_share_both_locks`).
 
-**The library guard is retired by condition.** `guard_write` and
-`check_member_name` protect format-1 names, which are library files, and do
-nothing for a format-2 member, which is not one. They therefore return at once
+**The library guard is retired by condition.** `guard_write` protects published
+format-1 names, which are library files, and does nothing for a format-2 member,
+which is not one. It therefore returns at once
 unless `image_collections.has_format1(wid)`: the world holds a format-1
 manifest, a manifest that does not read (it fails closed, as `referenced`
 does) or a harvest journal that is not format 2 (one that does not parse
@@ -725,6 +725,9 @@ and never lets its format-2 manifest fail a library write
 `accept()` converts it, and the migration converts or retires the rest (see
 [Migration](#migration-legacy-files-into-the-store)); until a world has none
 left, the guard stays on. The guard code itself stays.
+`check_member_name` always reserves `collection-image-<sha256>` for its own
+bytes, including in a world holding only format 2: another device's cached
+format-1 journal is invisible here (#478).
 
 **Harvest journals hold ids.** A new journal is format 2 and `accept` publishes
 format 2. A format-1 journal in flight across the upgrade is converted when it
@@ -732,9 +735,10 @@ is first read, under the job lock and then the collection lock: a name becomes
 the id of its library placement (a legacy file's bytes are hashed against the
 name first, then ingested), the names are kept as `legacy_members`, and the
 journal is saved as format 2 at once. A name that maps to nothing refuses the
-journal. An accepted journal whose format-1 manifest is already published is
-the exception: the manifest is authoritative, so it reconciles against the
-names it already holds. Reconciling a crashed publication compares in the
+journal. Accepted format-1 journals stay unconverted, so missing or mismatched
+manifests refuse without rewriting the journal or ingesting its members. A
+crashed format-1 publication whose member is gone reconciles against the names
+it already holds: the manifest is authoritative (#478). Reconciling compares in the
 manifest's own format (`test_image_collection_imports.py`).
 
 **World bundles.** An export packs a format-2 manifest and the blobs of the ids
@@ -743,7 +747,16 @@ as format 2, so a collection-free world still opens on an older build). Export
 validates only the manifests its import would refuse: a file that is not a JSON
 object, or that says format 1, is packed unchecked as before; anything else
 must read as strict UTF-8 and pass `image_collections.validate`, or the export
-is refused before anything is written. Import contains manifests by folded
+is refused before anything is written. Export also refuses any format-2 member
+whose object or blob is missing, linked or damaged: its absence would shift
+later indices on import (`test_export_refuses_to_shift_collection_member_indices`).
+Link checks include Windows junction ancestors. Each packed blob is opened
+without following a final symlink where the platform supports it, its handle
+must match the regular file validated before packing, and the bytes copied
+through that handle must hash to its name. A disappeared, replaced or rewritten
+member refuses the export and removes the archive (`test_export_refuses_a_collection_blob_changed_after_preflight`,
+`test_export_verifies_collection_bytes_read_from_the_open_file`).
+Import contains manifests by folded
 path and rewrites members through the bundle's id map; **a member id the
 bundle does not carry is dropped, which shifts the index of every later
 member**, a duplicate the rewrite creates keeps its first place, and a
@@ -915,13 +928,18 @@ everything and writes only its report, and it has the same shape as a real one
   Several differing descriptions become `description_conflicts` on the object
   (capped at twenty; a fold past the cap keeps the key), and the describe queue
   offers each as a choice. A saved description clears them.
+  A placement's keys still fold when all its legacy siblings are untouched.
+  Same-world library and record URL subject keys fold through the same verified
+  target rule; linked targets keep their keys even after an earlier verification.
 - **Collections convert without moving anything a reader has cached.** A
   format-1 manifest becomes format 2 only when every member resolves, keeping
   its members' order and indices and its library placements, and greeting
   subject keys that named a member's library URL are rewritten with it
   (`test_format_1_manifest_converts_keeping_indices_library_urls_and_tags`).
   Harvest journals are converted, or retired only when unaccepted and
-  unmappable.
+  unmappable. An accepted format-1 journal settles after its manifest converts
+  only when its placements prove the same ordered members; otherwise it stays
+  unchanged (`test_an_accepted_journal_settles_after_its_manifest_migrates`).
 - **A cancel is honoured between journals as between files.** Journals not yet
   reached are left as they were, and the work map is kept for the rerun
   (`test_a_cancel_while_journals_settle_keeps_the_rest_and_the_map`).
@@ -932,8 +950,8 @@ everything and writes only its report, and it has the same shape as a real one
 
 **What it does not do.**
 
-- **It does not fold every key.** A same-world URL key in a greeting's
-  `subjects.json` is kept (counted as `url_subject_keys_kept`), and so is every
+- **It does not fold every key.** A same-world URL key with no verified target
+  is kept (counted as `url_subject_keys_kept`), and so is every
   key in a *campaign* greeting's `subjects.json`: nothing reads a campaign
   scope there. A key it cannot confirm on the object also stays.
 - **A folded description's provenance can read "object"** rather than the file
@@ -942,7 +960,8 @@ everything and writes only its report, and it has the same shape as a real one
   file of a name, an unsupported extension, a member whose bytes disagree with
   its name. Each is in the report with its path.
 - **A thumbnail it misses stays in the cache.** Removing a migrated file's
-  entries is best effort.
+  entries is best effort. Cleanup precedes unlinking the legacy file, so a
+  crash leaves the file available to identify those keys on the next run (#478).
 - **It is not in the campaign lock domain's survey.** Every campaign write it
   makes takes `campaign_lock(cid)` and bumps the campaign's token, but the
   domain guard surveys modules by their public `cid`-taking mutators and
@@ -1264,12 +1283,6 @@ exclude.
 - **`delete_world` takes no lock.** A tag written between the strip and the
   removal survives on the object. It is rare, and running the delete again
   clears it.
-- **Two journal edges close only when migration has run.** An unaccepted
-  format-1 journal whose manifest an older build published, and which has since
-  lost a member, does not reconcile until the migration retires it; an accepted
-  format-1 journal whose manifest is gone is converted before it is refused
-  until the migration keeps or retires it. Conversion keeps every member's
-  index, including a missing member's.
 - **A migration that cannot place a file leaves it.** The report names it. The
   image stays served as a legacy file, and a later run tries again.
 - **Usage is not cached.** Each request walks every world and campaign, so it

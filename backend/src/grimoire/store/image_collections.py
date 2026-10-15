@@ -14,9 +14,10 @@ Format 2 names image ids, so a member is its object and never a library file
 reused: a member whose picture is missing is skipped, and its own URL answers
 404 rather than another picture, because those URLs are cached immutable.
 
-`guard_write` and `check_member_name` protect format-1 names only, so they act
-only while the world holds format-1 state (`has_format1`), failing closed on a
-manifest or harvest journal that does not read.
+`guard_write` protects published format-1 names while the world holds format-1
+state (`has_format1`), failing closed on a manifest or harvest journal that
+does not read. `check_member_name` always reserves the hash-named spelling:
+another device's format-1 journal is invisible in this device's cache (#478).
 
 The member index in a URL is canonical ASCII decimal, parsed only by
 `member_index`, so one picture has one URL. `validate(raw)` is the public,
@@ -308,10 +309,9 @@ def check_member_name(wid: str, name: str, data: bytes) -> None:
     placement as the member's identity and skips the byte hash, so the name
     must never be fileable over other pixels through the ordinary write path.
 
-    Inert while the world holds no format-1 state, as `guard_write` is.
+    Always enforced, including in a format-2-only world: a format-1 journal
+    in another device's cache is invisible to this one's guard (#478).
     """
-    if not has_format1(wid):
-        return
     lowered = name.casefold()
     if _MEMBER.fullmatch(lowered) and not referenced(wid, name):
         _check_member_hash(name, data)
