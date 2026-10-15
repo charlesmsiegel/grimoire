@@ -342,7 +342,13 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
                 section["text"] = original
                 section["dropped"] = True
                 break
-            section["text"] = render(frozenset(kept))
+            # #131: an inspector capture supplies text and current source
+            # slices from ONE render. Removed sources keep their original
+            # slices; survivors reflect the new section boundaries.
+            if describe := section["shed"].get("describe"):
+                section["text"], section["source_slices"] = describe(frozenset(kept))
+            else:
+                section["text"] = render(frozenset(kept))
             if reserved + system_cost() + hist_total <= budget:
                 break
         if gone:

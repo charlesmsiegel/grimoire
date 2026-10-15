@@ -13,10 +13,11 @@
     template used to read tier 2's DATA to decide whether to emit it itself,
     which answered the wrong question the moment the layout could disable or
     reorder a half (#423). -#}
+{%- from "scene/_sources.j2" import source_text with context -%}
 {%- set lines = [] -%}
 {%- for k in offscene_known -%}
 {%- set suffix = (" (available as: " ~ (k.versions | join(", ")) ~ ")") if k.versions else "" -%}
-{%- set _ = lines.append(k.name ~ ": " ~ k.tagline ~ suffix) -%}
+{%- set _ = lines.append(source_text(k.name, k.name ~ ": " ~ k.tagline ~ suffix, "characters:" ~ k.id)) -%}
 {%- endfor -%}
 {%- if lines -%}
 {{ "## Known to exist\n" ~ (lines | join("\n")) }}

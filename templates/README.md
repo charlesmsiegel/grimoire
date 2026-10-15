@@ -517,6 +517,23 @@ It is sent with the tool definitions still attached and `tool_choice` "none".
 - `stopped` -- bool: whether a budget limit, not the model, ended the run
 
 ### `scene/` — the context builder (`store/context/`)
+
+The inspector's per-source expansion (#131) uses `scene/_sources.j2`'s
+`source_text(label, text, ref="")` macro around each character description,
+relationship line, and off-scene character. It returns the text unchanged unless
+the shared render supplies `capture_source`; that pass removes all boundaries
+before macro expansion and moves source spans with the same replacements.
+Only the already-expanded slices reach optional `sources` metadata, with a
+stable id per source occurrence. World info reuses its existing per-entry expansion; recalled
+lore receives identities beside the original bodies and annotates its rendered
+contributions. Format a contribution before passing it to `source_text`: a
+template that formats it afterwards (`| upper`, a slice) loses that section's
+annotations, and the section renders and inspects as a whole, as before.
+Templates without annotations still receive their original inputs. Shared headings and
+separators belong to the section. A source removed by packing stays inspectable
+with `shed: true`. Older templates and snapshots without annotations still show
+their whole section.
+
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
 `build_director_messages`) and …/opener (via `build_opener_messages`).
 

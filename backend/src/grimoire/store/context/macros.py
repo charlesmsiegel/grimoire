@@ -21,13 +21,23 @@ from ..scenes import read as scenes_read
 # Aliased to match `assemble.py` and `world_state.py`, where the plain name
 # `cast` is taken by a local holding the scene's cast list.
 from . import cast as cast_data
+from . import source_text
 
 
-def _substitute(text: str, subs: dict[str, str]) -> str:
+def _replace(pattern, repl, text: str, capture: source_text.Capture | None = None,
+             *, flags: int = 0) -> str:
+    """Use the same substitutions; #131 only moves inspector source spans."""
+    return (capture.sub(pattern, repl, text, flags=flags) if capture
+            else re.sub(pattern, repl, text, flags=flags))
+
+
+def _substitute(text: str, subs: dict[str, str],
+                capture: source_text.Capture | None = None) -> str:
     for token, value in subs.items():
         if value:  # only replace when non-empty, so player-less scenes keep {{user}} literal
             # function replacement => `value` is inserted literally (no backslash/group expansion)
-            text = re.sub(re.escape(token), lambda _m, v=value: v, text, flags=re.IGNORECASE)
+            text = _replace(re.escape(token), lambda _m, v=value: v, text, capture,
+                            flags=re.IGNORECASE)
     return text
 
 
@@ -86,34 +96,35 @@ def _datetime_subs(cid: str, sid: str, times: list[str] | None = None) -> dict[s
             "{{time}}": time_str or ""}
 
 
-def _expand_random(text: str) -> str:
+def _expand_random(text: str, capture: source_text.Capture | None = None) -> str:
     def repl(m: re.Match) -> str:
         options = [o.strip() for o in m.group(1).split(",") if o.strip()]
         return random.choice(options) if options else m.group(0)
-    return _RANDOM_MACRO.sub(repl, text)
+    return _replace(_RANDOM_MACRO, repl, text, capture)
 
 
-def _expand_rolls(text: str) -> str:
+def _expand_rolls(text: str, capture: source_text.Capture | None = None) -> str:
     def repl(m: re.Match) -> str:
         try:
             result = dice.roll(m.group(1).strip())
         except dice.DiceError:
             return m.group(0)  # malformed notation -> left for _strip_unknown_macros
         return str(result["total"] if result["total"] is not None else result["successes"])
-    return _ROLL_MACRO.sub(repl, text)
+    return _replace(_ROLL_MACRO, repl, text, capture)
 
 
-def _strip_unknown_macros(text: str) -> str:
+def _strip_unknown_macros(text: str, capture: source_text.Capture | None = None) -> str:
     def repl(m: re.Match) -> str:
         # {{user}}/{{char}} stay literal (existing _substitute contract); any
         # other macro this scene can't resolve is dropped rather than leaked
         # raw into the model.
         return m.group(0) if m.group(0).lower() in _LITERAL_MACROS else ""
-    return _MACRO_TOKEN.sub(repl, text)
+    return _replace(_MACRO_TOKEN, repl, text, capture)
 
 
 def expand_macros(text: str, subs: dict[str, str], cid: str, sid: str, *,
-                  datetime_subs: dict[str, str] | None = None) -> str:
+                  datetime_subs: dict[str, str] | None = None,
+                  capture: source_text.Capture | None = None) -> str:
     """The single choke point all prompt text flows through: `subs` ({{user}}/
     {{char}}, caller-supplied) plus {{date}}/{{time}}/{{weekday}} (scene calendar)
     substitute literally; {{random:a,b,...}} and {{roll:<dice.py notation>}} expand
@@ -131,7 +142,7 @@ def expand_macros(text: str, subs: dict[str, str], cid: str, sid: str, *,
     is a `{{...}}` macro."""
     if datetime_subs is None:
         datetime_subs = _datetime_subs(cid, sid) if "{{" in text else {}
-    text = _substitute(text, {**subs, **datetime_subs})
-    text = _expand_random(text)
-    text = _expand_rolls(text)
-    return _strip_unknown_macros(text)
+    text = _substitute(text, {**subs, **datetime_subs}, capture)
+    text = _expand_random(text, capture)
+    text = _expand_rolls(text, capture)
+    return _strip_unknown_macros(text, capture)
