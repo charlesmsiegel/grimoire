@@ -4,9 +4,8 @@ and the inspector row."""
 
 import io
 
-from PIL import Image
-
 import pytest
+from PIL import Image
 
 from grimoire import content_parts as cp
 from grimoire import prompts, routes, store
