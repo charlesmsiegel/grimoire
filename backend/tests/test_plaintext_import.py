@@ -139,6 +139,22 @@ def test_html_blocks_are_literal_source(client, world, body):
     assert data["personality"] == "Patient."
 
 
+@pytest.mark.parametrize("body", [
+    '[portrait]: https://example.invalid/ "caption\nName: Winifred"',
+    "[portrait\nName: Winifred]: https://example.invalid/",
+    '[portrait]: https://example.invalid/\n[portrait]: https://example.invalid/ "caption\nGreeting: literal text\nName: Winifred"',
+], ids=["title", "label", "duplicate"])
+def test_markdown_reference_definitions_remain_in_description(client, world, body):
+    response = client.post(f"/api/worlds/{world}/characters/parse-text", json={
+        "text": "Name: Mara\nDescription:\n\n" + body + "\n\nPersonality: Patient."})
+    assert response.status_code == 200
+    data = response.json()["card"]["data"]
+    assert data["name"] == "Mara"
+    assert data["description"] == body
+    assert data["first_mes"] == ""
+    assert data["personality"] == "Patient."
+
+
 def test_indented_markdown_code_retains_its_text_and_indentation(client, world):
     body = "    Greeting: quoted metadata\n    Name: Winifred"
     response = client.post(f"/api/worlds/{world}/characters/parse-text", json={

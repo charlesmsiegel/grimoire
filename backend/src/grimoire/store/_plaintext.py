@@ -88,7 +88,9 @@ def _literal_lines(text: str) -> set[int]:
     Block line maps preserve code and raw HTML; inline tokens need the rule above
     because their rendered content has lost its source line breaks/positions.
     """
-    parser = MarkdownIt("commonmark")
+    # Reference definitions normally disappear from the token stream. Ask
+    # CommonMark to retain their source maps too, including duplicates (#136).
+    parser = MarkdownIt("commonmark", {"inline_definitions": True})
     for name, rule in (("backticks", backtick), ("html_inline", html_inline), ("image", image), ("link", link)):
         parser.inline.ruler.at(name, partial(_literal_span, rule))
     lines: set[int] = set()
@@ -96,7 +98,7 @@ def _literal_lines(text: str) -> set[int]:
         if token.map is None:
             continue
         start, end = token.map
-        if token.type in ("fence", "code_block", "html_block"):
+        if token.type in ("fence", "code_block", "html_block", "definition"):
             lines.update(range(start, end))
         elif token.type == "inline":
             for child in token.children or []:
