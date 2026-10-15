@@ -1445,22 +1445,24 @@ def _section_body(section: Section, data: dict, capture: source_text.Capture | N
                   section_data: dict) -> tuple[str, source_text.Capture | None, dict]:
     """One section's rendered body, with its capture and the data it rendered with.
 
-    An annotated render must send exactly what the plain render sends. A template
-    may format a marked contribution (`| upper`, a slice), which breaks its marks;
-    and a template may draw from the global `random` (Jinja's `random` filter
-    does), so rendering it again later would consume different draws. So the
-    annotated body is taken from one render made from the state the plain render
-    starts from, and the plain render then runs LAST, from that same state. On a
-    mismatch the section renders unannotated (its plain body), and in either case
-    `random` is left exactly where `describe=False` leaves it.
+    The plain render is the one that is sent, exactly as `describe=False` sends
+    it, and it is the only render that draws from the process-wide `random`.
+    The annotated render is detached: it draws from a private copy of the state
+    the plain render started from, so a template using Jinja's `random` filter
+    makes the same choices without advancing (or rewinding) a generator that
+    another request's compose may be drawing from. Its unmarked body is kept
+    only when it equals the plain one; a template that formatted a marked
+    contribution (`| upper`, a slice) breaks its marks, and the section is then
+    inspected whole.
     """
+    template = _section_template(section, data)
     if capture is None:
-        return prompts.render(_section_template(section, data), **data).strip(), None, data
-    state = random.getstate()
-    body = capture.unmark(prompts.render(_section_template(section, section_data),
-                                         **section_data).strip())
-    random.setstate(state)
-    plain = prompts.render(_section_template(section, data), **data).strip()
+        return prompts.render(template, **data).strip(), None, data
+    rng = random.Random()
+    rng.setstate(random.getstate())
+    plain = prompts.render(template, **data).strip()
+    body = capture.unmark(prompts.render_detached(_section_template(section, section_data), rng,
+                                                  **section_data).strip())
     if body == plain:
         return body, capture, section_data
     return plain, None, data

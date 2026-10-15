@@ -285,6 +285,26 @@ def test_a_template_drawing_from_random_renders_the_plain_prompt(scene, template
     assert after_described == after_plain
 
 
+def test_source_capture_never_rewinds_the_process_random(scene, templates, monkeypatch):
+    """Another request may be drawing from the module RNG on another thread:
+    the annotated render draws from its own copy and never sets global state,
+    yet with a `random` filter it still makes the plain render's choices."""
+    cid, sid, _ = scene
+    (templates / "scene/sections/character_descriptions.j2").write_text(
+        '{%- from "scene/_sources.j2" import source_text with context -%}'
+        '{{ source_text("Mara", "keeps " ~ ["the", "a", "some"] | random ~ " map") }}',
+        encoding="utf-8")
+
+    def refuse(_state):
+        raise AssertionError("compose rewound the process-wide random generator")
+
+    monkeypatch.setattr(random, "setstate", refuse)
+    _, detail = context.compose_turn(cid, sid)
+    row = next(r for r in detail["sections"] if r["id"] == "character_descriptions")
+    assert [s["label"] for s in row["sources"]] == ["Mara"]
+    assert row["sources"][0]["text"] == row["text"]
+
+
 def test_a_custom_template_serialising_cast_rows_sees_no_source_refs(scene, templates):
     """#131: a template that dumps whole cast rows must render what it did before."""
     cid, sid, _ = scene
