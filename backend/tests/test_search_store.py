@@ -475,26 +475,28 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
 
     A RATIO, not a wall-clock ceiling. The old form asserted 20k words parse in
     under half a second, which is a statement about the runner as much as the
-    parser: it passes locally in 0.07s and failed CI at 0.72s under load. And
-    raising the ceiling would have hidden the bug -- by this docstring's own
-    numbers quadratic parsing reaches ~0.67s at 20k words, right where the
-    contended run landed. Quadrupling the input costs ~4x when linear and ~16x
-    when quadratic, and both sizes run under whatever load the machine is
-    already under, so the comparison holds where an absolute bound does not.
+    parser: it passes locally in 0.07s and failed CI at 0.72s under load. Both
+    sizes run under whatever load the machine is already under, so a
+    comparison holds where an absolute bound does not.
 
-    Four times the words, not two, and the bound at the geometric mean of the
-    two answers (8): with a doubling the bound sat 1.5x above linear and 1.33x
-    below quadratic, and a four-worker run on four vCPUs reddened it at 3.4x
-    with the parser unchanged. Here either answer is 2x from the bound, so the
-    margin against noise and against a quadratic parser both widened.
+    Sixteen times the words, not four. A linear parser is not exactly 16x here:
+    larger inputs cost a little more per word (allocation, cache), and a loaded
+    runner exaggerates that -- the 4x step, bounded at its geometric mean of 8,
+    measured 8.0x on CI with the parser unchanged, and 5.2x locally. At 16x the
+    same effect measures ~19-24x locally even with every core busy, while a
+    quadratic parser costs >= 256x. The bound of 96 is the geometric mean of
+    that worst CI-scaled linear figure (~36x) and 256x, so both sides now have
+    ~2.7x of margin rather than the 4x step's ~1x on the linear side. The small
+    size stays small (2k words) so the large one (32k) costs what the old
+    80k-word sample did.
     """
     # CPU time excludes descheduling by neighbouring workers. Timer disables
     # the collector around each timed batch, keeping the session's heap out of
-    # the parse measurement. Windows process_time can return zero for a single
-    # 20k-word parse: the old 1e-4 floor then turned a 0.046875 s large sample
-    # into a fictitious 468.8x scaling. Calibrate one common repetition count
-    # to at least 0.2 CPU seconds with the standard library's autorange; both
-    # word counts use that same batch size, so the 4x/16x comparison is intact.
+    # the parse measurement. Windows process_time can tick at ~15.6 ms, which
+    # once turned a too-short sample into a fictitious 468.8x scaling, so the
+    # repetition count is calibrated until the SMALL sample is at least 0.05
+    # CPU seconds (several ticks); both sizes use that same batch size, so the
+    # 16x/256x comparison is intact.
     def timer(n):
         q = " ".join(f"w{i}" for i in range(n))
 
@@ -503,27 +505,28 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
 
         return timeit.Timer(parse, timer=time.process_time)
 
-    small_timer, large_timer = timer(20000), timer(80000)
+    small_timer, large_timer = timer(2000), timer(32000)
     gc.collect()
-    repetitions, _elapsed = small_timer.autorange()
+    repetitions = 1
+    while small_timer.timeit(repetitions) < 0.05:
+        repetitions *= 2
 
-    # Best-of-five at each size. A single sample is dominated by whatever the
-    # machine was doing at that instant -- the first call alone measured a 0.74x
-    # "scaling" here, which is noise, not sublinearity. The minimum is the run
-    # least interfered with, which is what the comparison wants. The two sizes'
+    # Best-of-three at each size. A single sample is dominated by whatever the
+    # machine was doing at that instant; the minimum is the run least
+    # interfered with, which is what the comparison wants. The two sizes'
     # samples alternate, so a burst of load from a neighbouring worker lands on
     # both rather than on whichever size happened to be measured through it.
     smalls, larges = [], []
-    for _ in range(5):
+    for _ in range(3):
         gc.collect()
         smalls.append(small_timer.timeit(repetitions))
         gc.collect()
         larges.append(large_timer.timeit(repetitions))
     small, large = min(smalls), min(larges)
     assert small > 0, "the calibrated CPU sample must exceed the timer's resolution"
-    assert large / small < 8, (
-        f"parsing scaled {large / small:.1f}x for 4x the words -- linear is ~4, "
-        f"quadratic is ~16")
+    assert large / small < 96, (
+        f"parsing scaled {large / small:.1f}x for 16x the words -- linear is ~16-36, "
+        f"quadratic is >= 256")
 
 
 def test_a_store_with_no_worlds_or_campaigns_yet_searches_to_nothing(home):
