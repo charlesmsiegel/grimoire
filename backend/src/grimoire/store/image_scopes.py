@@ -121,13 +121,17 @@ def _scopes(raw: dict) -> frozenset[str]:
 
 
 def _memberships(image_id: str) -> frozenset[str]:
-    path = image_store.object_path(image_id)
+    # One root for the key, the stamp and the read: a data-dir move between
+    # them would otherwise remember one library's scopes under the other's
+    # stamp, and that entry would hide a needed strip until the file changes.
+    root = image_store.store_root().parent.parent
+    path = image_store.object_path(image_id, root=root)
 
     def compute() -> tuple[frozenset[str], tuple[statcache.Stamp, ...] | None]:
         # Stamp BEFORE reading: an external replacement during the read must
         # invalidate on the next sweep.
         stamp = statcache.stamp(path)
-        obj = image_store.read_fresh(image_id)
+        obj = image_store.read_fresh(image_id, root=root)
         return (_scopes(obj.raw) if obj is not None else frozenset(),
                 (stamp,) if stamp is not None else None)
 

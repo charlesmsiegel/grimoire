@@ -272,3 +272,33 @@ def test_collection_response_preserves_404_when_legacy_member_vanishes(world, mo
     with pytest.raises(image_routes.HTTPException) as exc:
         image_routes.get_world_image_collection(wid, COLLECTION)
     assert exc.value.status_code == 404
+
+
+def test_scope_candidate_cache_never_pairs_one_root_with_another(world, monkeypatch, tmp_path):
+    # A root switch between the stamp and the read must not cache library B's
+    # scopes under library A's stamp: A's next sweep would then skip a strip.
+    monkeypatch.setattr(statcache, "RACY_WINDOW_NS", 0)
+    home_a = os.environ["GRIMOIRE_HOME"]
+    home_b = str(tmp_path / "other")
+    ident = image_store.ingest(png(), "png").id
+    image_store.update(ident, lambda raw: {**raw, "reviews": {"subjects": [WORLD_SCOPE]}})
+    monkeypatch.setenv("GRIMOIRE_HOME", home_b)
+    assert image_store.ingest(png(), "png").id == ident
+    monkeypatch.setenv("GRIMOIRE_HOME", home_a)
+
+    stamp = statcache.stamp
+    switched = []
+
+    def switching(path):
+        value = stamp(path)
+        if not switched:
+            switched.append(path)
+            monkeypatch.setenv("GRIMOIRE_HOME", home_b)
+        return value
+
+    monkeypatch.setattr(statcache, "stamp", switching)
+    image_scopes._memberships(ident)
+    monkeypatch.setattr(statcache, "stamp", stamp)
+    monkeypatch.setenv("GRIMOIRE_HOME", home_a)
+    assert image_scopes.strip(WORLD_SCOPE) == 1
+    assert image_store.read_fresh(ident).raw["reviews"] == {"subjects": []}
