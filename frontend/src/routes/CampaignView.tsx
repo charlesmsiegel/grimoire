@@ -899,7 +899,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     loadScenes().catch(() => {});
     api.getConfig().then((c) => {
       setColorQuotes(c.quote_color === "on");
-      setLabels({ user: c.user_label || "You", assistant: c.assistant_label || "Grimoire" });
     }).catch(() => {});
     readModuleBound(true);   // new campaign: nothing known about it yet
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4816,7 +4815,26 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   useEffect(() => {
     setSceneModel(null);
     setSceneReady(null);
+    setLabels({ user: "You", assistant: "Grimoire" });
   }, [cid]);
+  // #73: display labels follow this campaign's effective settings. Config is
+  // only a fallback after a failed campaign read, so a late global read can
+  // never overwrite a successful campaign answer. The effect's lifetime also
+  // fences responses from the previous campaign or an older config event.
+  useEffect(() => {
+    let live = true;
+    api.getCampaignSettings(cid).then((view) => {
+      if (live) setLabels({ user: view.effective.user_label || "You",
+        assistant: view.effective.assistant_label || "Grimoire" });
+    }).catch(() => {
+      if (!live) return;
+      api.getConfig().then((config) => {
+        if (live) setLabels({ user: config.user_label || "You",
+          assistant: config.assistant_label || "Grimoire" });
+      }).catch(() => {});
+    });
+    return () => { live = false; };
+  }, [cid, modelsRev]);
   useEffect(() => {
     let live = true;
     api.getCampaignInference(cid).then((view) => {

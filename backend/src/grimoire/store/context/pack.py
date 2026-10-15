@@ -92,7 +92,7 @@ decision (the 01i spec's Open question 1).
 from __future__ import annotations
 
 from ... import content_parts
-from .. import config, tokens
+from .. import campaign_settings, tokens
 
 LOCK_IN = "lock-in"
 SPOTLIGHT = "spotlight"
@@ -143,15 +143,11 @@ MESSAGE_OVERHEAD = 5
 #: provider-reported prompt tokens.
 IMAGE_TOKENS = 1600
 
-def budget_tokens() -> int:
+def budget_tokens(cid: str = "") -> int:
     """The configured context budget in tokens; 0 = unbounded. A hand-edited
     config.md holding nonsense falls back to unbounded rather than raising: a
     malformed budget must not take scene generation down with it."""
-    try:
-        return max(int(config.read_config().get("context_budget",
-                                                config.DEFAULT_CONTEXT_BUDGET)), 0)
-    except (TypeError, ValueError):
-        return 0
+    return campaign_settings.count(cid, "context_budget")
 
 
 #: How system.j2 joins the sections. `pack` only uses it as the fallback for
@@ -280,7 +276,10 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     """
     packed = [{**s, "dropped": False} for s in sections]
     if budget is None:
-        budget = budget_tokens()
+        # Not `budget_tokens()`: with no campaign id it reads the global default,
+        # which would silently ignore a campaign's own context_budget. Callers
+        # pass the budget they resolved for their campaign.
+        raise TypeError("pack() needs the campaign's budget; resolve it with budget_tokens(cid)")
     if budget <= 0:  # unbounded: skip counting entirely, it is not free
         return {"sections": packed, "history": list(history), "history_trimmed": 0,
                 "history_trimmed_tokens": 0, "images_dropped_tokens": 0,

@@ -181,6 +181,13 @@ export function installCampaignMocks() {
   (api.getSceneChecks as any).mockResolvedValue({ actors: [] });
   (api.rollCheck as any).mockResolvedValue({ ok: true, resolution: {}, message: "" });
   (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter", model: "campaign/model" }, ready: true });
+  vi.mocked(api.getCampaignSettings).mockResolvedValue({ overrides: {}, inherited: {
+    context_scan_depth: "8", context_budget: "12000", recap_depth: "5", archive_depth: "3",
+    rolling_summary_every: "10", scene_break_every: "6", system_prompt: "", user_label: "You", assistant_label: "Grimoire",
+  }, effective: {
+    context_scan_depth: "8", context_budget: "12000", recap_depth: "5", archive_depth: "3",
+    rolling_summary_every: "10", scene_break_every: "6", system_prompt: "", user_label: "You", assistant_label: "Grimoire",
+  } });
   // The reroll popover's route picker (#77) and the header's model: the
   // campaign's inference view, with one provider and the scene route resolving
   // to it, and a provider that lists no model -- so an untouched popover is

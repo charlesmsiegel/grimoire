@@ -51,6 +51,13 @@ vi.mock("../api/client", () => ({
 import { api } from "../api/client";
 import CampaignHub from "./CampaignHub";
 
+test("the hub links to campaign settings alongside its existing panels", async () => {
+  renderHub();
+  expect(await screen.findByRole("link", { name: "Campaign settings" })).toHaveAttribute("href", "/campaigns/run/settings");
+  expect(screen.getByRole("button", { name: "Calendar" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Default prompts" })).toBeInTheDocument();
+});
+
 test("Default prompts is a reachable campaign Settings panel, with live world preview", async () => {
   vi.mocked(api.getCampaignDefaultPrompt).mockResolvedValue({ text: "Mara waits.", status: "ok",
     world: { id: "realm", text: "The river freezes.", status: "ok" } });

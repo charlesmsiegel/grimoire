@@ -24,6 +24,8 @@ import { providerPath } from "../../providerPaths";
 const ROLES: GenerativeRole[] = ["primary", "fast", "decision"];
 
 const NOTHING: InferenceSelection = { provider: "", model: "", preset: "" };
+const sameSelection = (a: InferenceSelection, b: InferenceSelection) =>
+  a.provider === b.provider && a.model === b.model && a.preset === b.preset;
 
 type Picked = { kind: "role"; role: GenerativeRole } | { kind: "route"; key: string };
 const pickKey = (p: Picked) => (p.kind === "role" ? `role:${p.role}` : `route:${p.key}`);
@@ -89,7 +91,11 @@ function MigrationLine({ settings, cid }: { settings: InferenceSettings; cid: st
  *  again at once, says whether a write can be made now, and 409
  *  `newer_format` for a campaign a newer build marked (which the global
  *  status cannot say) keeps the section read-only from then on. */
-export function CampaignModels({ cid }: { cid: string }) {
+export function CampaignModels({ cid, onDirtyChange }: {
+  cid: string;
+  /** Opt-in for the settings page, which protects all retained sections. */
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const [settings, setSettings] = useState<InferenceSettings | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [picked, setPicked] = useState<Picked | null>(null);
@@ -106,6 +112,12 @@ export function CampaignModels({ cid }: { cid: string }) {
   // re-arms on, so a failed read does not end the asking.
   const [reads, setReads] = useState(0);
   const shown = useRef<string | null>(null);
+  const [formDirty, setFormDirty] = useState(false);
+  // A confirmed row switch may retire a pending form. Its completion must not
+  // close a newer form opened on the next row.
+  const selectionSeq = useRef(0);
+  useEffect(() => { onDirtyChange?.(formDirty); }, [onDirtyChange, formDirty]);
+  useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
 
   useEffect(() => onConfigChanged(() => setRev((n) => n + 1)), []);
 
@@ -114,6 +126,8 @@ export function CampaignModels({ cid }: { cid: string }) {
     // A different campaign starts over; a re-read of this one keeps what is
     // open, and the view it had until the new one lands.
     if (shown.current !== cid) {
+      selectionSeq.current += 1;
+      setFormDirty(false);
       shown.current = cid;
       setSettings(null);
       setError(null);
@@ -157,11 +171,15 @@ export function CampaignModels({ cid }: { cid: string }) {
     ? migrationBanner(settings) : refusedStatus ?? migrationBanner(settings);
 
   async function save(body: CampaignInferenceWrite) {
+    const seq = selectionSeq.current;
     try {
       const next = await api.putCampaignInference(cid, body);
+      if (seq !== selectionSeq.current) return;
       setSettings(next);
+      setFormDirty(false);
       setMode("view");
     } catch (err: unknown) {
+      if (seq !== selectionSeq.current) return;
       if (err instanceof ApiError && err.kind === "not_migrated") {
         // Shown until the view is read again, which says whether the move
         // has finished since -- a refusal is not a latch.
@@ -171,15 +189,30 @@ export function CampaignModels({ cid }: { cid: string }) {
       }
       if (err instanceof ApiError && err.kind === "newer_format") {
         setNewerHere(err.detail);
-        setMode("view");
-        return;
+        // The settings page retains a refused draft for reading or explicit
+        // Cancel. Its controls are held read-only by newerHere; retiring the
+        // form here would lose the very edits the page's guard protects.
+        if (!onDirtyChange) {
+          setMode("view");
+          return;
+        }
       }
       throw err;
     }
   }
 
   function open(next: Picked) {
+    if (onDirtyChange && formDirty
+      && !window.confirm("Discard unsaved model settings?")) return;
+    selectionSeq.current += 1;
+    setFormDirty(false);
     setPicked(next);
+    setMode("view");
+  }
+
+  function cancel() {
+    selectionSeq.current += 1;
+    setFormDirty(false);
     setMode("view");
   }
 
@@ -193,13 +226,15 @@ export function CampaignModels({ cid }: { cid: string }) {
   if (picked?.kind === "role" && card) {
     detail = mode === "edit"
       ? <RoleForm key={picked.role} role={picked.role} card={card} settings={settings}
-                  blocked={blocked} onCancel={() => setMode("view")} onSave={save} />
+                  blocked={blocked} onCancel={cancel} onSave={save}
+                  onDirtyChange={onDirtyChange ? setFormDirty : undefined} />
       : <RoleDetail role={picked.role} card={card} settings={settings} blocked={blocked}
                     onEdit={() => setMode("edit")} />;
   } else if (route) {
     detail = mode === "edit"
       ? <RouteForm key={route.key} row={route} settings={settings} blocked={blocked}
-                   onCancel={() => setMode("view")} onSave={save} />
+                   onCancel={cancel} onSave={save}
+                   onDirtyChange={onDirtyChange ? setFormDirty : undefined} />
       : <RouteDetail row={route} settings={settings} blocked={blocked}
                      onEdit={() => setMode("edit")} />;
   }
@@ -303,17 +338,17 @@ function RoleDetail({ role, card, settings, blocked, onEdit }:
 /** Provider, then a model that can do what is needed, then a preset, with
  *  what that preset sends on the pick. Never inside a `<form>`: the picker's
  *  typed-id box has its own button, and Enter there must not submit anything. */
-function SelectionFields({ label, needs, sel, onChange, settings, blocked, presetLabel }:
+function SelectionFields({ label, needs, sel, onChange, settings, blocked, presetLabel, onDraft }:
   { label: string; needs: CapabilityNeed[]; sel: InferenceSelection;
     onChange: (sel: InferenceSelection) => void; settings: InferenceSettings;
-    blocked: boolean; presetLabel: string }) {
+    blocked: boolean; presetLabel: string; onDraft?: (draft: string) => void }) {
   // A selection with no provider is not read at all, so a preset chosen alone
   // would be stored and dormant: held until a provider is chosen, unless one
   // is already stored that way, which stays clearable.
   const presetHeld = !sel.provider && !sel.preset;
   return (
     <fieldset className="model-selection" aria-label={label}>
-      <ProviderModelPicker needs={needs} providers={settings.providers} disabled={blocked}
+      <ProviderModelPicker needs={needs} providers={settings.providers} disabled={blocked} onDraft={onDraft}
                            value={{ provider: sel.provider, model: sel.model }}
                            onChange={(v) => onChange({ ...sel, ...v })} />
       {wantsModel(sel) && <p className="field-hint">{CHOOSE_A_MODEL}</p>}
@@ -337,9 +372,10 @@ function SelectionFields({ label, needs, sel, onChange, settings, blocked, prese
   );
 }
 
-function RoleForm({ role, card, settings, blocked, onCancel, onSave }:
+function RoleForm({ role, card, settings, blocked, onCancel, onSave, onDirtyChange }:
   { role: GenerativeRole; card: RoleCard; settings: InferenceSettings; blocked: boolean;
-    onCancel: () => void; onSave: (body: CampaignInferenceWrite) => Promise<void> }) {
+    onCancel: () => void; onSave: (body: CampaignInferenceWrite) => Promise<void>;
+    onDirtyChange?: (dirty: boolean) => void }) {
   const label = ROLE_LABEL[role];
   const choiceLabel = `${label} for this campaign`;
   const [own, setOwn] = useState(overridden(card));
@@ -349,12 +385,24 @@ function RoleForm({ role, card, settings, blocked, onCancel, onSave }:
     !!(card.fallback.provider || card.fallback.model || card.fallback.preset));
   const [error, setError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
+  const pending = useRef(false);
+  const [selectionDraft, setSelectionDraft] = useState("");
+  const [fallbackDraft, setFallbackDraft] = useState("");
 
   const f = card.fallback;
   const fallbackChanged = fallback.provider !== f.provider || fallback.model !== f.model
     || fallback.preset !== f.preset;
 
+  const dirty = own !== overridden(card) || !sameSelection(own ? sel : NOTHING, card.stored)
+    || fallbackChanged
+    || (own && !!selectionDraft) || (fallbackOpen && !!fallbackDraft);
+  useEffect(() => { onDirtyChange?.(dirty || saving); }, [onDirtyChange, dirty, saving]);
+  useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
+  const held = blocked || (!!onDirtyChange && saving);
+
   async function save() {
+    if (pending.current) return;
+    pending.current = true;
     setSaving(true);
     setError(null);
     // The selection, replaced whole: inheriting sends it empty, which clears
@@ -368,6 +416,8 @@ function RoleForm({ role, card, settings, blocked, onCancel, onSave }:
       await onSave({ roles: { [role]: entry } });
     } catch (err: unknown) {
       setError(err);
+    } finally {
+      pending.current = false;
       setSaving(false);
     }
   }
@@ -378,7 +428,7 @@ function RoleForm({ role, card, settings, blocked, onCancel, onSave }:
       {error != null && <div className="banner"><ErrorNote err={error} /></div>}
       <label className="field">
         <span>{choiceLabel}</span>
-        <select aria-label={choiceLabel} value={own ? "own" : ""} disabled={blocked}
+        <select aria-label={choiceLabel} value={own ? "own" : ""} disabled={held}
                 onChange={(e) => setOwn(e.target.value === "own")}>
           <option value="">{inheritWords(card.inherits)}</option>
           <option value="own">Choose a model for this campaign…</option>
@@ -386,9 +436,9 @@ function RoleForm({ role, card, settings, blocked, onCancel, onSave }:
       </label>
       {own && (
         <SelectionFields label={label} needs={ROLE_NEEDS[role]} sel={sel} onChange={setSel}
-                         settings={settings} blocked={blocked} presetLabel="Preset" />
+                         settings={settings} blocked={held} presetLabel="Preset" onDraft={setSelectionDraft} />
       )}
-      <button type="button" className="subtle" aria-expanded={fallbackOpen}
+      <button type="button" className="subtle" aria-expanded={fallbackOpen} disabled={held}
               onClick={() => setFallbackOpen((v) => !v)}>
         Fallback
       </button>
@@ -399,15 +449,16 @@ function RoleForm({ role, card, settings, blocked, onCancel, onSave }:
             fallback applies.
           </p>
           <SelectionFields label={`${label} fallback`} needs={ROLE_NEEDS[role]} sel={fallback}
-                           onChange={setFallback} settings={settings} blocked={blocked}
-                           presetLabel="Fallback preset" />
+                           onChange={setFallback} settings={settings} blocked={held}
+                           presetLabel="Fallback preset" onDraft={setFallbackDraft} />
         </>
       )}
       <div className="form-actions">
-        <button className="subtle" onClick={onCancel}>Cancel</button>
+        <button className="subtle" onClick={onCancel} disabled={!!onDirtyChange && saving}>Cancel</button>
         <button className="primary" onClick={() => { void save(); }}
                 disabled={blocked || saving || (own && (!sel.provider || wantsModel(sel)))
-                          || (fallbackChanged && wantsModel(fallback))}>
+                          || (fallbackChanged && wantsModel(fallback))
+                          || (!!onDirtyChange && ((own && !!selectionDraft) || (fallbackOpen && !!fallbackDraft)))}>
           Save
         </button>
       </div>
@@ -449,20 +500,30 @@ function RouteDetail({ row, settings, blocked, onEdit }:
   );
 }
 
-function RouteForm({ row, settings, blocked, onCancel, onSave }:
+function RouteForm({ row, settings, blocked, onCancel, onSave, onDirtyChange }:
   { row: RouteRow; settings: InferenceSettings; blocked: boolean;
-    onCancel: () => void; onSave: (body: CampaignInferenceWrite) => Promise<void> }) {
+    onCancel: () => void; onSave: (body: CampaignInferenceWrite) => Promise<void>;
+    onDirtyChange?: (dirty: boolean) => void }) {
   const [use, setUse] = useState<RouteUse>(row.use);
   const [pin, setPin] = useState<InferenceSelection>(row.pin);
   const [preset, setPreset] = useState(row.preset);
   const [error, setError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
+  const pending = useRef(false);
+  const [pinDraft, setPinDraft] = useState("");
+  const dirty = use !== row.use || preset !== row.preset
+    || (use === "model" && (!sameSelection(pin, row.pin) || !!pinDraft));
+  useEffect(() => { onDirtyChange?.(dirty || saving); }, [onDirtyChange, dirty, saving]);
+  useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
+  const held = blocked || (!!onDirtyChange && saving);
 
   const needs = routePinNeeds(row);
   const roleLabel = `Role (default: ${ROLE_LABEL[row.default_role]})`;
   const presetLabel = "Preset override";
 
   async function save() {
+    if (pending.current) return;
+    pending.current = true;
     setSaving(true);
     setError(null);
     // This row alone; the pin only when it is the choice, so switching to a
@@ -472,6 +533,8 @@ function RouteForm({ row, settings, blocked, onCancel, onSave }:
       await onSave({ routes: { [row.key]: entry } });
     } catch (err: unknown) {
       setError(err);
+    } finally {
+      pending.current = false;
       setSaving(false);
     }
   }
@@ -482,7 +545,7 @@ function RouteForm({ row, settings, blocked, onCancel, onSave }:
       {error != null && <div className="banner"><ErrorNote err={error} /></div>}
       <label className="field">
         <span>{roleLabel}</span>
-        <select aria-label={roleLabel} value={use} disabled={blocked}
+        <select aria-label={roleLabel} value={use} disabled={held}
                 onChange={(e) => setUse(e.target.value as RouteUse)}>
           {/* No preset in it: that is the override field's below. */}
           <option value="">{inheritWords(row.inherits, false)}</option>
@@ -492,18 +555,19 @@ function RouteForm({ row, settings, blocked, onCancel, onSave }:
       </label>
       {use === "model" && (
         <SelectionFields label="Specific model" needs={needs} sel={pin} onChange={setPin}
-                         settings={settings} blocked={blocked} presetLabel="Pin preset" />
+                         settings={settings} blocked={held} presetLabel="Pin preset" onDraft={setPinDraft} />
       )}
       <label className="field">
         <span>{presetLabel}</span>
         <PresetSelect label={presetLabel} value={preset} presets={settings.presets} allowClear
-                      disabled={blocked} onChange={setPreset}
+                      disabled={held} onChange={setPreset}
                       emptyLabel={`Inherit (resolves to ${inheritedPreset(row.inherits)})`} />
       </label>
       <div className="form-actions">
-        <button className="subtle" onClick={onCancel}>Cancel</button>
+        <button className="subtle" onClick={onCancel} disabled={!!onDirtyChange && saving}>Cancel</button>
         <button className="primary" onClick={() => { void save(); }}
-                disabled={blocked || saving || (use === "model" && (!pin.provider || wantsModel(pin)))}>
+                disabled={blocked || saving || (use === "model" && (!pin.provider || wantsModel(pin)))
+                          || (!!onDirtyChange && use === "model" && !!pinDraft)}>
           Save
         </button>
       </div>

@@ -510,7 +510,10 @@ class _CampaignActivityStamp:
                 # names still counts as activity here and must not move this
                 # campaign's revision -- see `_record_campaign_write`.
                 changed = not getattr(endpoint, "grimoire_leaves_campaign", False)
-                if message["status"] < 300 and cid and not preview:
+                # #73's conditional settings writer stamps after publication:
+                # a successful no-op must not acquire a write token here.
+                self_stamped = getattr(endpoint, "grimoire_stamps_campaign_write", False)
+                if message["status"] < 300 and cid and not preview and not self_stamped:
                     # BEFORE forwarding the status, so the stamp has landed by
                     # the time the client can observe success. Otherwise a
                     # caller can navigate on the response and have the sidebar's
@@ -559,6 +562,7 @@ class _CampaignActivityStamp:
             cid = (scope.get("path_params") or {}).get("cid")
             endpoint = getattr(scope.get("route"), "endpoint", None)
             if (cid and not getattr(endpoint, "grimoire_computes_only", False)
+                    and not getattr(endpoint, "grimoire_stamps_campaign_write", False)
                     and not getattr(endpoint, "grimoire_leaves_campaign", False)):
                 await anyio.to_thread.run_sync(
                     _record_campaign_write, cid, False, True, scope.get('grimoire_library_root'))

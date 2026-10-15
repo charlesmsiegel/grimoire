@@ -1211,7 +1211,9 @@ def test_a_future_dated_generation_does_not_fence_forever(cid, s0, stored):
         data["generation"] = f"{time.time_ns() + 3_600 * 10**9:020d}-x"
     else:
         # Sorts between this run's stamp and the clock, but is not a stamp.
-        data["generation"] = f"{time.time_ns():020d}~x"
+        # '.' stays below the '~' ceiling even when Windows returns the same
+        # clock tick for consecutive reads; '~x' required the clock to advance.
+        data["generation"] = f"{time.time_ns():020d}.x"
         assert sweep.stamp < data["generation"] <= f"{time.time_ns():020d}~"
     candidates.write(cid, data)
 

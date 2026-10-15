@@ -42,6 +42,7 @@ from . import (
     briefing,
     campaign_climate,
     campaign_images,
+    campaign_settings,
     campaigns,
     cards,
     cascade,
@@ -279,6 +280,8 @@ __all__ = [
     "BundleError",
     "ziputil",
     "campaigns",
+    # #73's deliberate campaign-defaults domain, used by routes and play readers.
+    "campaign_settings",
     "chores",
     "campaign_climate",
     # The campaign's own image library (#376) -- a deliberate addition to the

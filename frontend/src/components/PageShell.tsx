@@ -40,7 +40,7 @@ const PHONE_PX = 720;
  *  Main scrolls independently of the column. Both scroll independently of the
  *  header, which never moves. */
 export function PageShell(
-  { column, footer, children, columnLabel = "Context", className = "", dismissKey, busy }: {
+  { column, footer, children, columnLabel = "Context", className = "", dismissKey, scrollKey, busy }: {
     column: ReactNode;
     /** Pinned to the foot of the column, outside its scroll port. */
     footer?: ReactNode;
@@ -53,6 +53,9 @@ export function PageShell(
      *  closes the phone column, as a pathname change does; the same value on
      *  a re-render (a filter) leaves it up. */
     dismissKey?: string | null;
+    /** Opt in when a section changes main without moving the pathname.
+     *  A draft edit keeps this key, so typing never resets its scroll. */
+    scrollKey?: string | null;
     /** Main is showing an answer remembered from an earlier visit while the
      *  page's own read is on the wire (`useRevalidated`'s `stale`). Said as
      *  `aria-busy` and nothing else: no spinner, no greyed-out list. */
@@ -62,11 +65,11 @@ export function PageShell(
   // Two library sections in a row render the same component tree, so React
   // reuses the scroll port rather than remounting it, and the destination
   // would open at the offset the previous page was left at — heading off
-  // screen, often near the bottom. Keyed to pathname only: a search or hash
-  // change is the same page.
+  // screen, often near the bottom. A page with section navigation may opt in
+  // with scrollKey; ordinary search/hash changes keep their existing behavior.
   const mainRef = useRef<HTMLElement>(null);
   const { pathname } = useLocation();
-  useEffect(() => { mainRef.current?.scrollTo(0, 0); }, [pathname]);
+  useEffect(() => { mainRef.current?.scrollTo(0, 0); }, [pathname, scrollKey]);
 
   // ---- the phone: the column is the page, and main is a push ----
   //

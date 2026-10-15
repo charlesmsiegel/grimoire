@@ -40,6 +40,67 @@ import {
 
 beforeEach(installCampaignMocks);
 
+function labelSettings(user_label = "Mara", assistant_label = "Seraphine") {
+  const effective = { context_scan_depth: "8", context_budget: "12000", recap_depth: "5", archive_depth: "3",
+    rolling_summary_every: "10", scene_break_every: "6", system_prompt: "", user_label, assistant_label };
+  return { overrides: {}, inherited: effective, effective };
+}
+
+test("campaign settings supply effective transcript labels and refresh on config changes", async () => {
+  vi.mocked(api.getCampaignSettings).mockResolvedValue(labelSettings());
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" },
+  ] });
+  const { container } = renderCampaign();
+  await screen.findByText("a reply");
+  const names = () => [...container.querySelectorAll(".plate-name")].map((n) => n.textContent);
+  expect(names()).toEqual(["Mara", "Seraphine"]);
+  vi.mocked(api.getCampaignSettings).mockResolvedValue(labelSettings("Winifred"));
+  act(() => { configChanged(); });
+  await waitFor(() => expect(names()).toEqual(["Winifred", "Seraphine"]));
+});
+
+test("a failed campaign label read retains global display labels", async () => {
+  vi.mocked(api.getCampaignSettings).mockRejectedValue(new Error("offline"));
+  (api.getConfig as any).mockResolvedValue({ quote_color: "off", user_label: "Mara", assistant_label: "Seraphine" });
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" },
+  ] });
+  const { container } = renderCampaign();
+  await screen.findByText("a reply");
+  expect(api.getCampaignSettings).toHaveBeenCalledWith("run");
+  expect([...container.querySelectorAll(".plate-name")].map((n) => n.textContent)).toEqual(["Mara", "Seraphine"]);
+});
+
+test("late campaign labels cannot replace the current campaign or a fresher config read", async () => {
+  let oldCampaign!: (value: ReturnType<typeof labelSettings>) => void;
+  let oldRefresh!: (value: ReturnType<typeof labelSettings>) => void;
+  vi.mocked(api.getCampaignSettings).mockReturnValueOnce(new Promise((r) => { oldCampaign = r; }))
+    .mockResolvedValueOnce(labelSettings("Winifred"));
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" },
+  ] });
+  const { container } = render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
+    {withPalette(<><Link to="/campaigns/other/scenes/s1">switch campaign</Link>{playRoutes()}</>)}
+  </MemoryRouter>);
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("link", { name: "switch campaign" }));
+  const names = () => [...container.querySelectorAll(".plate-name")].map((n) => n.textContent);
+  await waitFor(() => expect(names()).toEqual(["Winifred", "Seraphine"]));
+  await act(async () => { oldCampaign(labelSettings("Mara")); });
+  expect(names()).toEqual(["Winifred", "Seraphine"]);
+  vi.mocked(api.getCampaignSettings).mockReturnValueOnce(new Promise((r) => { oldRefresh = r; }))
+    .mockResolvedValueOnce(labelSettings("Seraphine", "Mara"));
+  act(() => { configChanged(); });
+  act(() => { configChanged(); });
+  await waitFor(() => expect(names()).toEqual(["Seraphine", "Mara"]));
+  await act(async () => { oldRefresh(labelSettings("Winifred")); });
+  expect(names()).toEqual(["Seraphine", "Mara"]);
+});
+
 // `listScenes` as the server actually answers it around a rename: the mount
 // read still sees the old id, and every read AFTER the rename landed sees the
 // new one. The relists that follow a mutation are `fresh` reads issued once the

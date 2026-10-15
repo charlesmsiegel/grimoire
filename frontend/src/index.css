@@ -3239,6 +3239,17 @@ a.column-back { text-decoration: none; }
 }
 .config-page .field-hint { max-width: 62ch; line-height: 1.5; }
 
+/* #73: the effective value and its inheritance travel together, in the same
+   measure as the settings prose. Long prompts and labels must wrap on phones. */
+.campaign-setting {
+  max-width: 62ch; padding: 20px 0; border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.campaign-setting h3 { margin: 0 0 12px; }
+.campaign-setting .config-copy { color: var(--ink); }
+.campaign-setting > .field { display: block; }
+.campaign-setting > .field > span { display: block; margin-bottom: 6px; }
+
 /* ---- the prompt layout editor (#29) ---- */
 .prompt-layout { margin: 20px 0 6px; }
 .prompt-layout-list {

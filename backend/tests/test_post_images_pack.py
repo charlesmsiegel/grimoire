@@ -141,7 +141,7 @@ def test_a_steered_capture_counts_text_and_images(monkeypatch):
     monkeypatch.setattr(store.prompt_log, "capturing", lambda: True)
     monkeypatch.setattr(character_turns, "_record_prompt",
                         lambda cid, sid, task, breakdown, **k: recorded.update(breakdown))
-    monkeypatch.setattr(store.context, "budget_tokens", lambda: 0)
+    monkeypatch.setattr(store.context, "budget_tokens", lambda cid="": 0)
     msgs = [{"role": "user", "content": [_t("see map"), cp.ref("/u/a", "map", False)]}]
     character_turns._capture("c", "s", "chat", msgs, wire_kit.target(kind="openrouter", model="m"))
     row, = recorded["sections"]

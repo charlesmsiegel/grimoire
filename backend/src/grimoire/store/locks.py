@@ -165,6 +165,9 @@ _registry_guard = threading.Lock()
 
 #: Modules whose public campaign-scoped mutators all take `campaign_lock(cid)`.
 DOMAIN_MODULES: frozenset[str] = frozenset({
+    # #73 settings validate and replace campaign.md, stamping only a real
+    # change while holding the same lock as every other campaign writer.
+    "store.campaign_settings",
     # Art append/reuse and guarded mutations resolve and publish campaign
     # placements under the same campaign hold as their overlay metadata.
     "store.record_art.write",

@@ -22,6 +22,7 @@ import type { ArtCreated, ArtLinkResult, ArtSourceRef, ImageDescriptionGuards, I
 // imported by name for the ones the calls below actually mention.
 export * from "./types";
 import {
+  type CampaignSettingKey, type CampaignSettings,
   type Actor, type ActorMembershipResponse, type AdvanceDigest, type AuthorsNote, type AuthorsNotes, type AuthorsNotesNext, type AdvanceRequest, type Appearance, type Availability,
   type BackupList, type BackupRun, type ImageBackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
   type CalendarScope, type CampaignClock, type CampaignImage, type CampaignLibrary,
@@ -1543,6 +1544,12 @@ export const api = {
     }),
   getCampaign: (cid: string) =>
     request<{ meta: CampaignMeta; body: string }>("GET", `/api/campaigns/${cid}`),
+  // Presence is meaningful here: empty prompts and zero counts are overrides.
+  // Always ask now so a newly opened form cannot adopt a pre-save request.
+  getCampaignSettings: (cid: string) =>
+    request<CampaignSettings>("GET", `/api/campaigns/${encodeSegment(cid)}/settings`, undefined, { fresh: true }),
+  putCampaignSettings: (cid: string, fields: Partial<Record<CampaignSettingKey, string | null>>) =>
+    request<CampaignSettings>("PUT", `/api/campaigns/${encodeSegment(cid)}/settings`, fields).then(notifyConfig),
   renameCampaign: (cid: string, name: string) =>
     request<{ id: string; name: string }>("PUT", `/api/campaigns/${cid}`, { name }).then(notifyCampaigns),
   deleteCampaign: (cid: string) =>

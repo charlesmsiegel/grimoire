@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
          type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime,
@@ -1657,6 +1658,7 @@ export const SceneInspector = memo(function SceneInspector({
       <SideSection id="models" title="Models" collapsed={collapsed.models ?? true}
                    onToggle={toggleSection}>
         <CampaignModels cid={cid} />
+        <Link className="subtle" to={`/campaigns/${cid}/settings`}>Campaign settings</Link>
       </SideSection>
 
       {/* Standing instructions placed in the history at a depth (play controls

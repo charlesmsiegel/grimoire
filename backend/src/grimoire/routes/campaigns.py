@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, Response
 
 from .. import store
 from ..llm import LLMClient
-from ..store import compiled, overview
+from ..store import campaign_settings, compiled, overview
 from ..store import paths as library_paths
 from ..store.continuity import doc as continuity_doc
 from ..store.continuity import effective as continuity_effective
@@ -59,6 +59,7 @@ from .common import (
     pc_history_404,
     record_art_mutation,
     require_inference,
+    stamps_campaign_write,
 )
 from .models import (
     AdvanceTime,
@@ -94,6 +95,30 @@ from .models import (
 from .overview_log import overview_read
 
 router = APIRouter()
+
+
+@router.get("/campaigns/{cid}/settings")
+def get_campaign_settings(cid: str):
+    try:
+        return campaign_settings.view(cid)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found") from None
+    except (OSError, UnicodeError):
+        raise HTTPException(status_code=409, detail="campaign.md is unreadable") from None
+
+
+@router.put("/campaigns/{cid}/settings")
+@stamps_campaign_write
+def put_campaign_settings(cid: str, body: dict):
+    try:
+        campaign_settings.write(cid, body)
+        return campaign_settings.view(cid)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found") from None
+    except (OSError, UnicodeError):
+        raise HTTPException(status_code=409, detail="campaign.md is unreadable") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 # ---- group state (#47): campaign-local, not covered by generic entity CRUD

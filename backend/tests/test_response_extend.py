@@ -561,6 +561,9 @@ def test_extend_on_a_closed_branch_is_refused(client):
 def test_a_fallback_capture_records_the_tail_that_fallback_was_sent(monkeypatch, tmp_path):
     """Plan-gate ruling 5: the prompt log holds a fallback's own ending."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    # #73 capture accounting reads the campaign budget, including snapshot tails.
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
     recorded = []
     monkeypatch.setattr(store.prompt_log, "capturing", lambda: True)
     monkeypatch.setattr(character_turns, "_record_prompt",
@@ -571,7 +574,7 @@ def test_a_fallback_capture_records_the_tail_that_fallback_was_sent(monkeypatch,
                                          params={"temperature": 0.4}))
     chain = wire.Chain(_t(prefill=True, provider_id="openrouter"), fallback)
     tailed = character_turns._extend_messages(_SNAP, chain.primary, "Mara waits", "", None)
-    character_turns._capture("c", "s", "extend", tailed, chain)
+    character_turns._capture(cid, "s", "extend", tailed, chain)
     assert recorded[-1][1]["messages"][-1] == {"role": "assistant", "content": "Mara waits"}
     assert recorded[-1][1]["conn"] == chain          # the primary's capture: its chain
     tailed.for_target(fallback)     # what dispatch does on the fallback attempt
