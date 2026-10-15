@@ -425,3 +425,5 @@ def test_an_excluded_post_takes_no_image_slot(monkeypatch):
     ms = [{"role": "assistant", "speaker": "Mara", "content": "![the gate](/a.png)"},
           {"role": "user", "content": "ooc: ![my cat](/b.png)", "excluded": STAMP}]
     assert story._chosen_images(ms, 1, "c") == {(0, 0)}
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")
