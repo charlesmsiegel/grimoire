@@ -61,7 +61,7 @@ Then write the character's natural response using that evidence and their own
 voice. Grounded inference is welcome, but reader-only context is not evidence.
 The application hides the perception block; it is preparation, not dialogue
 or narration, and does not count toward the prose word budget. Keep the
-ordinary handoff last. Do not emit a perception block for another actor.
+{% if not response_successor_by_decision|default(false) %}ordinary handoff last. {% endif %}Do not emit a perception block for another actor.
 {% endif %}{% endif %}Never invent the player's speech, thoughts, decisions or actions. Stop at a player decision.
 Do not complete another actor's contribution. These assigned-speaker rules take precedence over general ensemble instructions.
 
