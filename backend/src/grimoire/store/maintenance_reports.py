@@ -333,6 +333,10 @@ def heartbeat(root: Path, run_id: str, device: str,
     finally:
         stop.set()
         thread.join(timeout=HEARTBEAT_SECONDS + 5.0)
+        # A marker write blocked in I/O may outlive this bounded join and finish
+        # AFTER release_marker, recreating the marker. It can then refuse another
+        # device until its heartbeat reaches the five-minute stale window; the
+        # join does not guarantee the heartbeat thread has finished (#479).
         try:
             release_marker(root, run_id, device)
         finally:

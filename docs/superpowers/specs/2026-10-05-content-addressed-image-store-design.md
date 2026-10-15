@@ -1801,7 +1801,9 @@ tests touches the frozen campaign.
   even when its collection then stops**: a blocked or cancelled collection needs
   a new scan. `collect(token)` deletes at most that report's collectable ids,
   intersected with a fresh strict re-walk done outside the lock, in batches of up
-  to 100 objects or 2 seconds per hold of `image_ingest_gc_lock()`, each object
+  to 100 objects or 2 seconds of candidate processing per hold of
+  `image_ingest_gc_lock()` (the preceding sidecar listing and refcount rebuild
+  are outside that clock, #479), each object
   under its stripe, re-checking mtime, root, reachability and refcount, then
   deleting the sidecar, then (refcount permitting) the blob, its index entry and
   its thumbnails. **A deleted row is reported as it happens**, right after each
@@ -1815,10 +1817,13 @@ tests touches the frozen campaign.
   runs a dry-run collection and the report shows what is collectable now and what
   becomes collectable on which date; "Delete N unused images" carries the token,
   after a confirm. A live run is rediscovered by listing `/api/runs` and can be
-  cancelled; blocking paths and `maintenance_elsewhere` are shown verbatim. Known
-  limits: only a **running** run is rediscovered, so a scan that finished while
-  the page was away has lost its token from view and needs a rescan; a
-  rediscovered run shows the neutral "An image-store run is in progress…"
+  cancelled; blocking paths and `maintenance_elsewhere` are shown verbatim.
+  With no live run, the newest finished `gc` run is rediscovered while retained
+  in `/api/runs`, restoring its report and any unexpired scan token (#479).
+  A newer collection, including a failed or cancelled one, supersedes an older
+  scan: its token may already have been consumed. A missing report shows a
+  failure rather than falling back to an older token. A
+  rediscovered live run shows the neutral "An image-store run is in progress…"
   without saying migration or collection, dry or real;
   `X-Grimoire-Attempt` is optional on both start routes and minted when absent,
   as everywhere else.
@@ -1871,13 +1876,42 @@ Known limits, kept on purpose:
   run, which fails safe and can be noisy.
 - **One id per object across decoders** (stage 1) still means a second device can
   mint a duplicate object; collection reclaims it only once nothing places it.
-- **The M3 hold is per process.** `runs.maintenance_excluded` refuses a fork,
-  delete, export or backup only inside the process that runs the maintenance.
-  The proclock excludes maintenance from maintenance, not a tree operation from
-  it, so a second grimoire process on the same machine can still fork or delete
-  a world or campaign while a migration or collection runs in the first.
-- **Case variants are checked for `image-refs` only.** Collection refuses to
-  run where a placement folder's name is a case variant of `image-refs`, since a
-  case-insensitive file system would read it as the real one; it makes no such
-  check for `image-collections`, so a manifest under a case-variant name of that
-  folder is not counted as a reference.
+
+### Operational follow-up (#479)
+
+The maintenance boundary also covers whole-tree operations in another process
+on this machine: tree holds acquire the existing maintenance proclock and keep
+one descriptor per root until the last nested or overlapping hold exits. A
+foreign hold answers `maintenance_elsewhere`; its message names maintenance or
+a tree operation because the advisory lock cannot identify its owner. This
+also serializes tree operations between separate processes, while operations
+within one app can still overlap. As with the existing registry, an app is
+initialized in its serving process, rather than inherited with live holds
+through `fork`.
+
+GC checks the spelling of reserved reference-bearing paths, including world
+collection directories, journals, migration work-map directories and staging
+roots, using the existing placement walk's case-fold and link rules. It blocks
+on variants rather than guessing which files another filesystem would serve.
+That includes manifest and journal extension aliases such as `.JSON`, which a
+bundle may preserve, and the reserved migration work-map filename `map.json`.
+Old and recent staging trees appear in scan and collection reports with paths
+relative to the store. They remain roots; no automatic sweep removes a tree
+whose contents may still matter. Every collector test guards filesystem
+deletion and move targets inside its own temporary directory, including its
+machine id and fake recycle bin, and compares protected outside sentinels after
+every call, even a failed or cancelled one.
+
+World exports use the actual attachment request in a same-origin frame, keeping
+the browser's download stream for a large bundle while displaying a JSON
+refusal on the Worlds page. No preflight can race a later download request.
+The Android native download handoff retains its existing behavior.
+
+A heartbeat write blocked longer than the 35-second join may recreate the
+marker after release. This delays another device until the marker's five-minute
+expiry; it does not restart the finished run. The comment at the release and
+the maintenance guarantees state that residual.
+
+The model remains one strict roots walk, one report per run, and one shared
+maintenance boundary. New reference-bearing surfaces extend that walk and
+report instead of adding a separate cleanup or discovery mechanism.

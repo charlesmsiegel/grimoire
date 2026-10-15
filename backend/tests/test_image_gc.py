@@ -54,12 +54,63 @@ def _never() -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _machine(monkeypatch, tmp_path_factory):
+def _machine(monkeypatch, tmp_path):
     """This machine's lock directory (the device id lives there), outside the
     store and outside the developer's real one."""
-    machine = tmp_path_factory.mktemp("machine-a")
+    machine = tmp_path / "machine-a"
+    machine.mkdir()
     monkeypatch.setattr(proclock, "lock_dir", lambda: machine)
     return machine
+
+
+@pytest.fixture(autouse=True)
+def _collection_isolation(monkeypatch, tmp_path, fake_bin):
+    """#479: every collection, including cancellations and raised failures,
+    proves the same isolation as the dedicated sentinel test. Guard actual
+    filesystem mutation paths too, so a regression fails BEFORE touching a
+    file outside this test. The shared fake bin normally uses a sibling pytest
+    directory; keep its destination here so the same boundary covers moves.
+    """
+    fake_bin._dir = tmp_path / "recycle-bin"
+    fake_bin._dir.mkdir()
+    collect = image_gc.collect
+    boundary = tmp_path.resolve()
+    escaped = []
+
+    def contained(path):
+        if not Path(path).resolve().is_relative_to(boundary):
+            escaped.append(str(path))
+            raise AssertionError(f"collection tried to change a path outside its test: {path}")
+
+    def one_path(fn):
+        def checked(path, *args, **kwargs):
+            contained(path)
+            return fn(path, *args, **kwargs)
+        return checked
+
+    def two_paths(fn):
+        def checked(src, dst, *args, **kwargs):
+            contained(src)
+            contained(dst)
+            return fn(src, dst, *args, **kwargs)
+        return checked
+
+    def isolated(root, *args, **kwargs):
+        contained(root)
+        outside = tmp_path / "outside"
+        before = _tree(outside)
+        try:
+            with monkeypatch.context() as guard:
+                for name in ("unlink", "remove", "rmdir"):
+                    guard.setattr(os, name, one_path(getattr(os, name)))
+                for name in ("rename", "replace", "link"):
+                    guard.setattr(os, name, two_paths(getattr(os, name)))
+                return collect(root, *args, **kwargs)
+        finally:
+            assert not escaped, f"collection tried to change paths outside its test: {escaped}"
+            assert _tree(outside) == before, "collection changed protected files"
+
+    monkeypatch.setattr(image_gc, "collect", isolated)
 
 
 @pytest.fixture
@@ -576,7 +627,7 @@ def test_an_ingest_that_touched_the_object_after_the_scan_is_skipped(root):
 
 # ---- the token -----------------------------------------------------------------
 
-def test_a_token_is_single_use_device_bound_and_expires(root, monkeypatch, tmp_path_factory):
+def test_a_token_is_single_use_device_bound_and_expires(root, monkeypatch, tmp_path):
     for seed in (1, 2, 3):
         _obj(seed)
     report = _ready(root)
@@ -589,7 +640,8 @@ def test_a_token_is_single_use_device_bound_and_expires(root, monkeypatch, tmp_p
     report = _scan(root, now=T + 26 * 3600)
     token = report["token"]
     # Another device: the same synced .cache, read by a machine with its own id.
-    other = tmp_path_factory.mktemp("machine-b")
+    other = tmp_path / "machine-b"
+    other.mkdir()
     with monkeypatch.context() as m:
         m.setattr(proclock, "lock_dir", lambda: other)
         elsewhere = _collect(root, token, now=T + 26 * 3600 + 60)
@@ -805,6 +857,100 @@ def test_a_case_variant_image_refs_folder_aborts(root):
     assert {"path": variant.relative_to(root).as_posix(), "reason": "case-variant"} \
         in report["blocking"]
     assert _sidecar(hidden).is_file() and _sidecar(orphan).is_file()
+
+
+@pytest.mark.parametrize("staged", [False, True])
+@pytest.mark.parametrize("parts", [("assets", "Image-Collections"),
+                                   ("Assets", "image-collections")])
+def test_case_variant_collection_paths_block_scan_and_collection(root, staged, parts):
+    """#479: a manifest must never disappear because one reserved folder
+    differs in case, including inside a leftover staging tree."""
+    hidden, orphan = _obj(1), _obj(2)
+    clean = _ready(root)
+    base = (root / ".world-staging" / ("c" * 32) / "world" if staged
+            else root / "worlds" / "realm")
+    folder = base.joinpath(*parts)
+    folder.mkdir(parents=True)
+    (folder / "saltmarch.json").write_text(
+        json.dumps({"format": 2, "members": [hidden.id]}), encoding="utf-8")
+    if staged:
+        work = root / ".world-staging" / ("c" * 32)
+        for path in [work, *work.rglob("*")]:
+            os.utime(path, (OLD, OLD))
+    scan = _scan(root)
+    assert scan["state"] == "blocked" and scan["token"] is None
+    assert any(row["reason"] == "case-variant" for row in scan["blocking"])
+    done = _collect(root, clean["token"])
+    assert done["state"] == "blocked" and done["deleted"]["objects"] == []
+    assert _sidecar(hidden).is_file() and _blob(hidden).is_file()
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
+
+
+@pytest.mark.parametrize("young", [False, True])
+def test_gc_reports_staging_trees_without_removing_them(root, young):
+    """#479: the reader can find a tree keeping images alive, even when the
+    scan is blocked by work that might still be in progress."""
+    staged, orphan = _obj(1), _obj(2)
+    work = root / ".world-staging" / ("c" * 32)
+    image_refs.write(work / "world" / "assets", "avatar", staged.id)
+    for path in [work, *work.rglob("*")]:
+        os.utime(path, (T if young else OLD, T if young else OLD))
+    before = _tree(work)
+    report = _scan(root)
+    expected = [{"path": f".world-staging/{'c' * 32}",
+                 "reason": "staging-in-progress" if young else "staging-leftover"}]
+    assert report["staging"] == expected
+    assert _tree(work) == before
+    if not young:
+        assert _ids(report) == {orphan.id}
+        done = _collect(root, report["token"])
+        assert done["staging"] == expected
+        assert _tree(work) == before and _sidecar(staged).is_file()
+
+
+@pytest.mark.parametrize("relative", [
+    "Worlds/realm/assets", "Campaigns/winifred/assets",
+    ".World-Staging/" + "c" * 32,
+    ".Cache/image-collection-imports/realm",
+    ".cache/Image-Collection-Imports/realm",
+    ".cache/image-store/Migration",
+])
+def test_case_variant_root_directories_block_gc(root, relative):
+    """#479: case-sensitive devices must not hide a whole family of roots."""
+    root.joinpath(*relative.split("/")).mkdir(parents=True)
+    orphan = _obj(1)
+    report = _scan(root)
+    assert report["state"] == "blocked" and report["token"] is None
+    assert any(row["reason"] == "case-variant" for row in report["blocking"])
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
+
+
+@pytest.mark.parametrize("relative", [
+    "worlds/realm/assets/image-collections/saltmarch.JSON",
+    ".world-staging/" + "c" * 32 + "/world/assets/image-collections/saltmarch.JSON",
+    ".cache/image-collection-imports/realm/" + "a" * 64 + ".JSON",
+    ".cache/image-store/migration/Map.json",
+])
+def test_case_variant_root_files_block_gc(root, relative):
+    """#479: bundles may preserve .JSON on an insensitive device. A synced
+    or imported alias must not hide its members from a sensitive reader."""
+    orphan = _obj(1)
+    clean = _ready(root)
+    path = root.joinpath(*relative.split("/"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = ({"format": 1, "pending": {orphan.id: ["worlds/realm/assets/avatar.png"]}}
+               if path.name == "Map.json" else {"format": 2, "members": [orphan.id]})
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    if relative.startswith(".world-staging/"):
+        work = root / ".world-staging" / ("c" * 32)
+        for entry in [work, *work.rglob("*")]:
+            os.utime(entry, (OLD, OLD))
+    scan = _scan(root)
+    assert scan["state"] == "blocked" and scan["token"] is None
+    assert {"path": relative, "reason": "case-variant"} in scan["blocking"]
+    done = _collect(root, clean["token"])
+    assert done["state"] == "blocked" and done["deleted"]["objects"] == []
+    assert _sidecar(orphan).is_file() and _blob(orphan).is_file()
 
 
 @pytest.mark.parametrize("slug", ["image-refs", "Image-Refs"])
