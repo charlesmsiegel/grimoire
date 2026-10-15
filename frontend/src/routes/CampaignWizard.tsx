@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   api, type Availability, type ModuleSummary, type PCSummary, type Persona, type WorldMeta,
@@ -81,18 +81,25 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
    *  unsorted response instead. */
   const worldOptions = useMemo(() => byName(worlds), [worlds]);
 
+  // The vocabulary as last rendered, read by the world-change effect before
+  // that effect clears it (#68).
+  const vocabRef = useRef(worldTags);
+  useEffect(() => { vocabRef.current = worldTags; }, [worldTags]);
+
   useEffect(() => {
     if (!world) return;
     let live = true;
     // These lists belong to the chosen world as much as its calendar does.
     // A late PC or vocabulary answer must not supply another world's tags to
     // the opening preview (or seat that world's PC on commit) (#68).
+    const previousIds = new Set(Object.keys(vocabRef.current));
     setWorldTags({});
     setWorldPCs([]);
     setPickedPC(null); // a pick belongs to one world
-    // Draft tags are vocabulary IDs of the world they were picked in: the same
-    // ID names another tag in another world, so they cannot carry across (#68).
-    setTags([]);
+    // A draft tag that is one of the previous world's vocabulary IDs names
+    // another tag here, so it cannot carry across. Free-form tags are not IDs
+    // and stay (#68).
+    setTags((prev) => prev.filter((t) => !previousIds.has(t)));
     api.listTags(world)
       .then((rows) => { if (live) setWorldTags(rows); })
       .catch(() => { if (live) setWorldTags({}); });

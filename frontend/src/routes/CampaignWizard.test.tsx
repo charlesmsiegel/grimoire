@@ -401,7 +401,7 @@ test("step 2 previews draft tag IDs without saving any records", async () => {
   }]);
   renderWizard();
   await screen.findByText("Realm");
-  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Saltmarch" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   await screen.findByText(/missing required tags/);
   fireEvent.change(screen.getByLabelText("Add tag"), { target: { value: "rebel" } });
@@ -424,7 +424,7 @@ test("picking an existing PC previews its tags and deselecting restores the draf
   ]);
   renderWizard();
   await screen.findByText("Realm");
-  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Saltmarch" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.change(screen.getByLabelText("Add tag"), { target: { value: "scholar" } });
   fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
@@ -459,7 +459,7 @@ test.each(["success", "failure"])("ignores the old world's late PC and tag %s", 
   renderWizard();
   await screen.findByText("Realm");
   fireEvent.change(screen.getByLabelText("World"), { target: { value: "w2" } });
-  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Saltmarch" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   await screen.findByRole("button", { name: /Winifred/ });
   await act(async () => {
@@ -487,16 +487,21 @@ test("switching worlds drops the draft's tags, which name the old world's vocabu
     wid === "w1" ? { t1: "rebel" } : { t1: "sailor" });
   renderWizard();
   await screen.findByText("Realm");
-  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Saltmarch" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.change(screen.getByLabelText("Add tag"), { target: { value: "rebel" } });
   fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
   await screen.findByRole("button", { name: /rebel ✕/ });
   await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w1", ["t1"]));
+  fireEvent.change(screen.getByLabelText("Add tag"), { target: { value: "stowaway" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w1", ["t1", "stowaway"]));
   fireEvent.click(screen.getByRole("button", { name: /back/i }));
   fireEvent.change(screen.getByLabelText("World"), { target: { value: "w2" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
-  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w2", []));
+  // The free-form tag was never world vocabulary, so it carries across; the ID does not.
+  await waitFor(() => expect(api.previewGreetings).toHaveBeenLastCalledWith("w2", ["stowaway"]));
+  expect(screen.getByRole("button", { name: /stowaway ✕/ })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /sailor ✕/ })).toBeNull();
-  expect(screen.queryByRole("button", { name: /t1 ✕/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /rebel ✕/ })).toBeNull();
 });
