@@ -78,7 +78,9 @@ def _record_delimiters(state: StateInline, silent: bool) -> bool:
     start, before = state.pos, len(state.delimiters)
     matched = emphasis.tokenize(state, silent)
     if matched and not silent:
-        state.env["state"] = state
+        # The line's own parse reaches its first star before any nested parse
+        # (an image's alt text) can: keep that root state, not the last one.
+        state.env.setdefault("state", state)
         positions = state.env.setdefault("positions", {})
         for index in range(before, len(state.delimiters)):
             positions[(id(state.delimiters), index)] = start + index - before
@@ -218,6 +220,13 @@ def name_problem(name: str) -> str | None:
     return None
 
 
+def _one_line(text: str) -> str:
+    """A name taken from the source keeps its words, never a control or break
+    character: `name_problem` would refuse the unchanged draft at Refine and
+    Save, and the review form can render one as invisible whitespace (#136)."""
+    return "".join(" " if unicodedata.category(ch) in ("Cc", "Zl", "Zp") else ch for ch in text).strip()
+
+
 def _clip(text: str) -> str:
     """Shorten a guessed name until its folder fits. The reviewer still has the
     whole text in the description, so a guess may be clipped; an explicit name
@@ -227,7 +236,7 @@ def _clip(text: str) -> str:
     slugifications of a short string, however long the heading or first line
     is; re-slugifying every prefix of the whole line was quadratic (#136).
     """
-    text = text[:MAX_NAME_CHARS]
+    text = _one_line(text)[:MAX_NAME_CHARS]
     while text and not folder_fits(text):
         text = text[:-1]
     return text
@@ -237,6 +246,7 @@ def _resolve_name(explicit: str, title: str, filename: str, lines: list[str]) ->
     """An explicit name wins, then a document title, then a filename, then the
     first line. Only an explicit name is refused past the folder limit: a guess
     is clipped, and the reviewer still has the full text in the description."""
+    explicit = _one_line(explicit)
     if problem := name_problem(explicit):
         raise cards.CardParseError(problem)
     fallback = _clip(PurePosixPath(filename.replace("\\", "/")).stem.strip())
@@ -259,10 +269,14 @@ def parse(text: str, filename: str = "") -> dict:
     current = "description"
     title = ""
     name_seen = False
+    # Whether any field holds text yet. Rejoining every field per heading to
+    # ask that again was quadratic in a source of many headings (#136).
+    content_seen = False
     for index, line in enumerate(lines):
         stripped = line.strip()
         if index in literal_lines:
             parts[current].append(line)
+            content_seen = content_seen or bool(stripped)
             continue
         heading = _HEADING.fullmatch(stripped)
         # A name label counts once, and never inside example dialogue (#136).
@@ -276,14 +290,16 @@ def parse(text: str, filename: str = "") -> dict:
                 parts[current].append("")
             if colon and value:
                 parts[current].append(value)
+                content_seen = content_seen or bool(value.strip())
                 if current == "name":
                     current = "description"
             continue
         if heading:
             current = "description"
-            if not title and not any("".join(value).strip() for value in parts.values()):
+            if not title and not content_seen:
                 title = _clip(heading[1].strip())
         parts[current].append(line)
+        content_seen = content_seen or bool(stripped)
         if current == "name" and stripped:
             current = "description"
     # Blank edge lines are separators, but horizontal whitespace can carry

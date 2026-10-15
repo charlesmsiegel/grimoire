@@ -167,6 +167,20 @@ test("a text file supplies its contents and filename to the same draft review", 
   }, expect.any(AbortSignal));
 });
 
+test("a rejected replacement file clears the previous file's source", async () => {
+  renderGrid();
+  fireEvent.click(await screen.findByRole("button", { name: "Import text" }));
+  const input = screen.getByLabelText("Text file");
+  fireEvent.change(input, { target: {
+    files: [new File(["A patient keeper."], "Mara.md", { type: "text/markdown" })],
+  } });
+  await waitFor(() => expect(screen.getByLabelText("Character text")).toHaveValue("A patient keeper."));
+  fireEvent.change(input, { target: { files: [new File(["{}"], "Winifred.json", { type: "application/json" })] } });
+  await screen.findByText(/Choose a .txt or .md file/);
+  expect(screen.getByLabelText("Character text")).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Review draft" })).toBeDisabled();
+});
+
 test("a rejected save retains the reviewed draft for correction", async () => {
   vi.mocked(api.createCharacter).mockRejectedValue(new Error("Name already used"));
   renderGrid();

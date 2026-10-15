@@ -113,6 +113,8 @@ def test_inline_markdown_is_prose_not_a_label_delimiter(client, world):
     ("Name: Mara\n**Greeting: **Hello****\n", "Mara", "first_mes", "**Hello**"),
     # A pair the value opened itself is the author's, not the label's.
     ("Name: Mara\n*Greeting: *{{char}} waves.*\n", "Mara", "first_mes", "*{{char}} waves.*"),
+    # Emphasis nested in an image's alt text never hides the label's closer.
+    ("Name: Mara\n**Description: bold** ![an *image*](url)\n", "Mara", "description", "bold ![an *image*](url)"),
     # Labels may come in any order: a name below another field still counts.
     ("Personality: warm\nName: Mara\n", "Mara", "personality", "warm"),
     # Bulleted labels split like any other label.
@@ -174,6 +176,17 @@ def test_clipping_a_long_guess_is_bounded_not_quadratic(monkeypatch):
     assert _plaintext.folder_fits(data["name"])
     assert len(calls) <= _plaintext.MAX_NAME_CHARS + 2
     assert max(calls) <= _plaintext.MAX_NAME_CHARS
+
+
+@pytest.mark.parametrize(("text", "filename"), [
+    ("# Mara\tWinifred\nKeeps a ledger.", ""),
+    ("Keeps a ledger.", "Mara\nWinifred.txt"),
+    ("Mara\x0bWinifred\nKeeps a ledger.", ""),
+], ids=["title", "filename", "first-line"])
+def test_a_guessed_name_is_one_line_the_draft_can_save(text, filename):
+    data = _plaintext.parse(text, filename)["data"]
+    assert data["name"] == "Mara Winifred"
+    assert _plaintext.name_problem(data["name"]) is None
 
 
 def test_span_line_numbers_index_their_source_once():

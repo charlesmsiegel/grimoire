@@ -41,12 +41,21 @@ export function TextCharacterImport({ wid, onCancel, onSaved }: {
   }
   useHotkeys([{ keys: "escape", whileTyping: true, enabled: busy !== "save", run: cancel }], { modal: true });
 
-  function loadFile(file: File | undefined) {
+  // A rejected file replaces the source rather than leaving the previous
+  // file's text and name to be reviewed under the new file's name.
+  function reject(input: HTMLInputElement, message: string) {
+    input.value = "";
+    if (filename) { setText(""); setFilename(""); }
+    setError(new Error(message));
+  }
+
+  function loadFile(input: HTMLInputElement) {
+    const file = input.files?.[0];
     if (!file) return;
     setError(null);
     if (!/\.(txt|md)$/i.test(file.name) || file.size > MAX_TEXT_CHARS * 4) {
       // Bytes, not characters: UTF-8 is at most four bytes per code point.
-      setError(new Error("Choose a .txt or .md file with at most 64,000 characters.")); return;
+      reject(input, "Choose a .txt or .md file with at most 64,000 characters."); return;
     }
     setBusy("file");
     const controller = new AbortController(); abort.current = controller;
@@ -55,14 +64,14 @@ export function TextCharacterImport({ wid, onCancel, onSaved }: {
       if (controller.signal.aborted) return;
       const value = typeof load.result === "string" ? load.result : "";
       if (codePoints(value) > MAX_TEXT_CHARS) {
-        setError(new Error("Character text must be at most 64,000 characters."));
+        reject(input, "Character text must be at most 64,000 characters.");
       } else {
         setText(value); setFilename(file.name);
       }
       setBusy(null);
     };
     load.onerror = () => {
-      if (!controller.signal.aborted) { setError(new Error("Could not read the text file.")); setBusy(null); }
+      if (!controller.signal.aborted) { reject(input, "Could not read the text file."); setBusy(null); }
     };
     load.readAsText(file, "utf-8");
   }
@@ -118,7 +127,7 @@ export function TextCharacterImport({ wid, onCancel, onSaved }: {
       </> : <>
         <p>Paste a character description or choose a text file. Parsing is offline and free.</p>
         <Field key="source-file" label="Text file"><input type="file" accept=".txt,.md" disabled={busy !== null}
-          onChange={(e) => loadFile(e.target.files?.[0])} /></Field>
+          onChange={(e) => loadFile(e.target)} /></Field>
         <Field key="source-text" label="Character text"><textarea rows={12} value={text} disabled={busy !== null}
           onChange={(e) => setText(e.target.value)} /></Field>
         {codePoints(text) > MAX_TEXT_CHARS && <p role="alert">Character text must be at most 64,000 characters.</p>}
