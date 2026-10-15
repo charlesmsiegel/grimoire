@@ -64,7 +64,7 @@ def last_round(cid, sid):
 def test_follow_on_decisions_produce_three_distinct_npcs_without_writer_handoffs(
         client, monkeypatch):
     cid, sid, base = seed(client)
-    store.write_config(decide_speaker_sampling="off")
+    store.write_config(decide_speaker_sampling="on")
     model = FakeLLM([["Mara reacts."], ["Winifred responds."], ["Corin adds something."]])
     client.app.dependency_overrides[routes.get_llm] = lambda: model
     asked = scripted_decisions(monkeypatch, WINIFRED, CORIN)
@@ -188,3 +188,92 @@ def test_a_stopped_round_never_runs_a_successor_decision(client, monkeypatch):
     result = asyncio.run(character_turns._after_saved_contribution(
         cid, sid, None, round_, watcher, [MARA], MARA, "response-id", False))
     assert result["next"] is None and result["issue"] is None
+
+
+def test_an_invalid_successor_decision_preserves_the_saved_reply(client, monkeypatch):
+    cid, sid, base = seed(client, count=2)
+    model = FakeLLM([["Mara answers."]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: model
+
+    async def rejected(*args, **kwargs):
+        raise decisions.DecideRequestError("the selector refused its choices")
+
+    monkeypatch.setattr(character_turns.operations, "decide", rejected)
+    response = client.post(base + "/chat",
+                           json={"content": "Mara?", "speaker_ref": MARA})
+    assert '"error"' not in response.text
+    assert replies(cid, sid) == ["Mara"]
+    assert last_round(cid, sid)["issue"] == store.response_protocol.INVALID_HANDOFF
+
+
+def test_an_unusable_distribution_keeps_the_plain_successor(client, monkeypatch):
+    cid, sid, base = seed(client, count=2)
+    store.write_config(decide_speaker_sampling="on")
+    model = FakeLLM([["Mara answers."], ["Winifred reacts."]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: model
+    asked = scripted_decisions(monkeypatch, WINIFRED)
+
+    def bad_draw(*args, **kwargs):
+        raise ValueError("unusable distribution")
+
+    monkeypatch.setattr(store.response_protocol, "sampled_pick", bad_draw)
+    response = client.post(base + "/chat",
+                           json={"content": "Mara, explain.", "speaker_ref": MARA})
+    assert '"error"' not in response.text
+    assert replies(cid, sid) == ["Mara", "Winifred"]
+    assert len(asked) == 1 and last_round(cid, sid)["issue"] is None
+
+
+def test_a_sit_out_during_decision_prevents_stale_successor(client, monkeypatch):
+    cid, sid, base = seed(client, count=2)
+    store.write_config(decide_speaker_sampling="off")
+    model = FakeLLM([["Mara answers."]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: model
+
+    async def decide(task, items, **kwargs):
+        assert WINIFRED in {entry.id for entry in items[0].questions[0].options}
+        scene = store.scenes.read_scene(cid, sid)
+        settings = store.group_play.settings_of(scene["meta"])
+        settings["sitting_out"] = [WINIFRED]
+        store.scenes.set_group(cid, sid, store.group_play.dump(settings))
+        result = decisions.ItemResult(
+            {"next": decisions.Answer(WINIFRED)}, backend="structured")
+        return decisions.Decision(items=(result,), backend="structured")
+
+    monkeypatch.setattr(character_turns.operations, "decide", decide)
+    response = client.post(base + "/chat",
+                           json={"content": "Mara, speak.", "speaker_ref": MARA})
+    assert '"error"' not in response.text
+    assert replies(cid, sid) == ["Mara"]
+    assert last_round(cid, sid)["issue"] == store.response_protocol.INELIGIBLE
+
+
+def test_exhausted_explicit_extra_round_never_forces_a_narrator_response(client):
+    cid, sid, _ = seed(client, count=1)
+    round_ = {"automatic": True, "mode": "directed",
+              "eligible": character_turns.roster(cid, sid),
+              "auto_remaining": 1, "used": [MARA]}
+    result = asyncio.run(character_turns._select_successor(
+        cid, sid, None, round_, [MARA], MARA))
+    assert result["next"] is None and result["lead"] is None
+    assert result["handed_back"] is False  # only an explicitly requested round proceeds
+
+
+def test_the_recovered_reply_can_stop_without_another_decision(client, monkeypatch):
+    cid, sid, _ = seed(client, count=2)
+    round_ = store.responses.new_round(
+        cid, sid, eligible=character_turns.roster(cid, sid), automatic=True,
+        post=None, run_id="recover", actor_ref=MARA, mode="directed")
+    saved = store.responses.prepare(cid, sid, round_["id"], MARA, "Mara", {})
+    store.responses.save_variant(cid, sid, saved["id"], "Mara answers.", "complete")
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("a cancelled recovery cannot select a successor")
+
+    monkeypatch.setattr(character_turns, "_select_successor", unexpected)
+    after = {"needs_decision": True, "used": [MARA], "actor": MARA,
+             "response_id": saved["id"], "content_issue": None}
+    settled, choice = asyncio.run(character_turns._settle_recovered_successor(
+        cid, sid, None, round_, after, True))
+    assert settled["pending_response"] is None and settled["status"] == "complete"
+    assert choice["next"] is None and choice["issue"] is None
