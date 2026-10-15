@@ -298,3 +298,79 @@ def test_charx_gallery_names_over_one_member_ingest_it_once(tmp_path, monkeypatc
     assert ingests == [len(png)]
     for i in range(8):
         assert assets.image_path(tmp_path, cid, vid, f"emotion_{i}").read_bytes() == png
+
+
+def _broken_placement(monkeypatch, after: int):
+    """Let `after` placements succeed, then fail the next with a disk error."""
+    real = assets.link_in
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(args[1])
+        if len(calls) > after:
+            raise OSError("disk full")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(assets, "link_in", flaky)
+
+
+def _two_picture_card():
+    png = _picture()
+    entries = [_entry("happy", "assets/a.png"), _entry("sad", "assets/b.png")]
+    return _bundle(entries, {"assets/a.png": png, "assets/b.png": png})
+
+
+def test_failed_charx_import_leaves_no_new_character(tmp_path, monkeypatch):
+    _broken_placement(monkeypatch, after=1)
+
+    with pytest.raises(OSError):
+        ch.import_card(tmp_path, _two_picture_card(), "charx", name="Seraphine")
+
+    assert ch.list_characters(tmp_path) == []
+
+
+def test_failed_charx_import_leaves_an_existing_character_as_it_was(tmp_path, monkeypatch):
+    cid, _vid = ch.create_character(tmp_path, "Seraphine")
+    before = ch.read_character(tmp_path, cid)
+    _broken_placement(monkeypatch, after=1)
+
+    with pytest.raises(OSError):
+        ch.import_card(tmp_path, _two_picture_card(), "charx", into_cid=cid)
+
+    assert ch.read_character(tmp_path, cid) == before
+
+
+def test_failed_charx_update_restores_the_card_and_its_placements(tmp_path, monkeypatch):
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    original = ch.read_card(tmp_path, cid, vid)
+    png = _picture()
+    first = _bundle([_entry("happy", "assets/a.png")], {"assets/a.png": png})
+    ch.import_card(tmp_path, first, "charx", into_cid=cid, update_vid=vid)
+    before_card = ch.read_card(tmp_path, cid, vid)
+    before_images = ch.read_character(tmp_path, cid)["versions"][0]["images"]
+    assert before_card != original and before_images == ["happy"]
+    # The update replaces `happy` with a new picture and adds `sad`; the second
+    # placement then fails, so `happy` must come back as it was.
+    other = _picture("png_onepixel.png")
+    second = _bundle([_entry("happy", "assets/a.png"), _entry("sad", "assets/b.png")],
+                     {"assets/a.png": other, "assets/b.png": other})
+    _broken_placement(monkeypatch, after=1)
+
+    with pytest.raises(OSError):
+        ch.import_card(tmp_path, second, "charx", into_cid=cid, update_vid=vid)
+
+    assert ch.read_card(tmp_path, cid, vid) == before_card
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == before_images
+    assert assets.image_path(tmp_path, cid, vid, "happy").read_bytes() == png
+
+
+def test_a_picture_that_cannot_be_stored_leaves_no_record(tmp_path, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise OSError("image store unavailable")
+
+    monkeypatch.setattr(image_store, "ingest", refuse)
+
+    with pytest.raises(OSError):
+        ch.import_card(tmp_path, _two_picture_card(), "charx", name="Seraphine")
+
+    assert ch.list_characters(tmp_path) == []
