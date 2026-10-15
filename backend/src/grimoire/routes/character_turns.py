@@ -937,8 +937,11 @@ async def _select_successor(cid, sid, client, round_record, used, actor, respons
     """
     choices, narrator = await run_in_threadpool(
         _successor_candidates, cid, sid, round_record, used, actor)
-    if not choices and not narrator:
-        return _successor_answer(round_record, used, actor, None, exhausted=True)
+    if not choices:
+        # Do not buy a narrator-only continuation after the last eligible NPC.
+        # Narration may win a genuine event while other NPCs still have slots,
+        # but is never required just to close an otherwise complete exchange.
+        return _successor_answer(round_record, used, actor, None)
     try:
         resolved = await run_in_threadpool(
             lambda: require_inference("response-selector", cid, operation="decide"))
