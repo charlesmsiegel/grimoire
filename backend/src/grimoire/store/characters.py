@@ -960,6 +960,10 @@ _MAX_BUNDLED_READS = 4
 # reparses or placement writes. One import opens at most this many distinct
 # members and places at most this many non-avatar images (#26).
 _MAX_BUNDLED_IMAGES = 128
+# Gallery entries examined at most, whatever they turn out to be: a list of
+# entries that never place (missing members, bad names) would otherwise be
+# walked to its end on the request thread (#26).
+_MAX_BUNDLED_CANDIDATES = 4 * _MAX_BUNDLED_IMAGES
 # The V3 asset types that mean "this is the character's picture".
 _AVATAR_TYPES = ("icon", "avatar")
 # Stems a version directory's sidecars already use. An image named after one
@@ -1035,17 +1039,19 @@ def _stage_bundled(card: dict, bundled: _BundledImages,
     used: set[str] = set()
     ingested: dict[str, str] = {}
     staged: list[tuple[str, str]] = []
+    examined = 0
     for holder in holders:
         entries = holder.get("assets")
         if not isinstance(entries, list):
             continue
         for entry in entries:
-            if len(used) >= _MAX_BUNDLED_IMAGES:
+            if len(used) >= _MAX_BUNDLED_IMAGES or examined >= _MAX_BUNDLED_CANDIDATES:
                 return staged
+            examined += 1
             placed = _stage_entry(entry, bundled, ingested, used, occupied)
             if placed is not None:
                 staged.append(placed)
-                used.add(placed[0].casefold())
+                used.add(image_refs.fold(placed[0]))
     return staged
 
 
@@ -1056,10 +1062,11 @@ def _stage_entry(entry: object, bundled: _BundledImages, ingested: dict[str, str
     name, uri = entry.get("name"), entry.get("uri")
     if not (isinstance(name, str) and isinstance(uri, str) and _bundled_image_name(name)):
         return None
-    # Case-fold on every platform: a store may sync to Windows. The first valid
-    # entry owns its name, and only avatar resolution may claim the avatar slot,
-    # even when this card has no avatar.
-    if name.casefold() == assets.AVATAR or name.casefold() in used or occupied(name):
+    # Fold as the store does (`image_refs.fold`, the image lock's rule): a store
+    # may sync to Windows. The first valid entry owns its name, and only avatar
+    # resolution may claim the avatar slot, even when this card has no avatar.
+    folded = image_refs.fold(name)
+    if folded == image_refs.fold(assets.AVATAR) or folded in used or occupied(name):
         return None  # an update fills empty slots only, so never ingest for a taken one
     path = cards.embedded_path(uri)
     if path is None:
@@ -1089,7 +1096,9 @@ class _Written:
 
 def _card_text(root: Path, cid: str, vid: str) -> str | None:
     try:
-        return _card_path(root, cid, vid).read_text(encoding="utf-8")
+        # atomic's reader: it retries the transient Windows sharing error a
+        # just-replaced file can raise, which would otherwise read as "not ours".
+        return atomic.read_text(_card_path(root, cid, vid))
     except (OSError, CharacterNotFound):
         return None
 
@@ -1344,10 +1353,10 @@ def _occupied_in(root: Path, cid: str | None, vid: str | None) -> Callable[[str]
     """
     if cid is None or vid is None:
         return lambda name: False
-    directory = assets.version_dir(root, cid, vid)
+    taken = assets.taken_slots(assets.version_dir(root, cid, vid))  # read once
 
     def occupied(name: str) -> bool:
-        return assets.slot_taken(directory, name)
+        return image_refs.fold(name) in taken
     return occupied
 
 

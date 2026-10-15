@@ -562,13 +562,16 @@ def slot_taken(d: Path, name: str) -> bool:
     caller that must act on the answer holds that lock, as `link_if_vacant`
     does; unlocked it is a hint, not a guarantee.
     """
-    folded = image_refs.fold(name)
-    if any(image_refs.fold(other) == folded for other in image_refs.image_names(d)):
-        return True
-    if not d.is_dir():
-        return False
-    return any(p.is_file() and image_refs.fold(p.name.split(".", 1)[0]) == folded
-               for p in d.iterdir())
+    return image_refs.fold(name) in taken_slots(d)
+
+
+def taken_slots(d: Path) -> set[str]:
+    """Every folded name in `d` that holds a picture -- `slot_taken`'s answer
+    for all names at once, for a caller that asks about many of them."""
+    taken = {image_refs.fold(n) for n in image_refs.image_names(d)}
+    if d.is_dir():
+        taken.update(image_refs.fold(p.name.split(".", 1)[0]) for p in d.iterdir() if p.is_file())
+    return taken
 
 
 def unlink_if_holds(d: Path, name: str, image_id: str) -> bool:
@@ -580,6 +583,7 @@ def unlink_if_holds(d: Path, name: str, image_id: str) -> bool:
     if not _safe_name(name):
         raise ValueError("unsafe image id")
     with _image_lock(d, name):
+        _recover_before_write(d, name)  # as every other writer: never act on a half-swap
         ref = image_refs.read(d, name)
         if ref is None or ref.image != image_id:
             return False

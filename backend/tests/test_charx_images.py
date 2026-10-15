@@ -552,3 +552,34 @@ def test_a_case_variant_of_an_existing_picture_counts_as_taken(tmp_path):
 
     assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["Happy"]
     assert assets.slot_taken(assets.version_dir(tmp_path, cid, vid), "HAPPY")
+
+
+def test_names_one_slot_under_the_store_fold_stage_once(tmp_path, monkeypatch):
+    # `i` and dotless i (U+0131) are one file on NTFS; staging must not ingest both.
+    png, other = _picture(), _picture("png_onepixel.png")
+    blob = _bundle([_entry("i", "assets/a.png"), _entry("\u0131", "assets/b.png")],
+                   {"assets/a.png": png, "assets/b.png": other})
+    ingested = []
+    real = image_store.ingest
+
+    def counting(data, ext, **kwargs):
+        ingested.append(data)
+        return real(data, ext, **kwargs)
+
+    monkeypatch.setattr(image_store, "ingest", counting)
+
+    cid, _vid = ch.import_card(tmp_path, blob, "charx")
+
+    assert ingested == [png]
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["i"]
+
+
+def test_gallery_walk_stops_at_the_candidate_cap(tmp_path, monkeypatch):
+    png = _picture()
+    entries = [_entry(f"missing_{i}", f"assets/missing_{i}.png") for i in range(5)]
+    entries.append(_entry("happy", "assets/happy.png"))
+    monkeypatch.setattr(ch, "_MAX_BUNDLED_CANDIDATES", 3)
+
+    cid, _vid = ch.import_card(tmp_path, _bundle(entries, {"assets/happy.png": png}), "charx")
+
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == []
