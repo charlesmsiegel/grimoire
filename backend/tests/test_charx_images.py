@@ -607,3 +607,20 @@ def test_archive_parses_do_not_grow_with_gallery_entries(tmp_path, monkeypatch):
         return len(parses)
 
     assert parses_for(3) == parses_for(20)
+
+
+def test_names_one_slot_share_one_name_lock(tmp_path):
+    from grimoire.store import locks
+    assert locks._image_stripe(tmp_path, "i") == locks._image_stripe(tmp_path, "\u0131")
+    assert locks._image_stripe(tmp_path, "Happy") == locks._image_stripe(tmp_path, "happy")
+
+
+def test_gallery_badge_counts_imported_named_art(tmp_path):
+    png = _picture()
+    blob = _bundle([_entry("main", "assets/a.png", "icon"), _entry("happy", "assets/a.png"),
+                    _entry("sad", "assets/a.png")], {"assets/a.png": png})
+
+    cid, _vid = ch.import_card(tmp_path, blob, "charx")
+
+    row = next(r for r in ch.list_characters(tmp_path) if r["id"] == cid)
+    assert row["gallery_count"] == 2  # happy and sad; the avatar is not gallery

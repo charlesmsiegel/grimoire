@@ -632,7 +632,10 @@ def _build_row(root: Path, cid: str) -> tuple[dict | None, tuple | None]:
         # immutable. A token that outlives the bytes pins a stale tile.
         "avatar_v": facts["avatar_v"],
         "avatar_focus": facts["focus"],
-        "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
+        # Every picture that is neither the avatar nor a localized embed: the
+        # Chub gallery's `gallery_<i>` and a CHARX import's named art alike.
+        "gallery_count": sum(1 for n in names
+                             if n != assets.AVATAR and not n.startswith("embed-")),
         "localized_count": sum(1 for n in names if n.startswith("embed-")),
         "greeting_count": greeting_count,
         "tagline": facts["tagline"],
