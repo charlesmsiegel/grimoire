@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from grimoire import routes, store
 from grimoire.routes import character_turns, streaming
 from grimoire.store.regex import rules, stream
@@ -358,3 +360,5 @@ def test_a_hidden_stretch_of_text_still_earns_a_heartbeat_legacy(client, monkeyp
     assert beats(client.post(url, json={"content": "Hello"})) == 0
     put_rules(client, f"/api/campaigns/{cid}/regex", OPEN_THINK)
     assert beats(client.post(url, json={"content": "Hello"})) == 1
+
+pytestmark = pytest.mark.usefixtures("single_contribution_decision")
