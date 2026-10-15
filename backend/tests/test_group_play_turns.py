@@ -54,6 +54,19 @@ def reply(text, nxt):
     return [f'{text}\n```handoff\n{{"next":{json.dumps(nxt)}}}\n```']
 
 
+def _follow_on(monkeypatch, *next_speakers):
+    """Model each follow-on as an independent Decision choice."""
+    steps = list(next_speakers)
+
+    async def choose(cid, sid, client, round_record, used, actor, response_id=""):
+        if not steps:
+            raise AssertionError("unexpected follow-on Decision")
+        return character_turns._successor_answer(
+            round_record, used, actor, steps.pop(0))
+
+    monkeypatch.setattr(character_turns, "_select_successor", choose)
+
+
 def latest_round(cid, sid):
     rounds = store.responses._scope(cid, sid, store.responses._read(cid))["rounds"]
     return list(rounds.values())[-1]
@@ -216,7 +229,8 @@ def test_retry_resumes_plan_without_replanning(client, monkeypatch):
     assert speakers(cid, sid) == ["Mara", "Winifred"]
 
 
-def test_reply_as_sitting_out_npc_in_directed_keeps_its_name(client):
+def test_reply_as_sitting_out_npc_in_directed_keeps_its_name(client, monkeypatch):
+    _follow_on(monkeypatch, None)
     cid, sid, base = seed(client)
     group(client, base, order="directed", sitting_out=[WINIFRED])
     fake = FakeLLM([reply("Winifred answers anyway.", None)])
@@ -368,7 +382,8 @@ def test_list_auto_rounds_stop_at_cap(client):
     assert response.text.count('"round_start"') == 1
 
 
-def test_directed_null_handoff_ends_chain(client):
+def test_directed_null_handoff_ends_chain(client, monkeypatch):
+    _follow_on(monkeypatch, None)
     cid, sid, base = seed(client)
     group(client, base, order="directed", auto_rounds=3)
     fake = FakeLLM([reply("Mara answers.", None), reply("Nobody else.", None)])
@@ -379,7 +394,8 @@ def test_directed_null_handoff_ends_chain(client):
     assert speakers(cid, sid) == ["Mara"]
 
 
-def test_repeat_handoff_leads_next_round(client):
+def test_repeat_handoff_leads_next_round(client, monkeypatch):
+    _follow_on(monkeypatch, WINIFRED, MARA, None)
     cid, sid, base = seed(client)
     group(client, base, order="directed", auto_rounds=1)
     fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", MARA),
@@ -391,13 +407,15 @@ def test_repeat_handoff_leads_next_round(client):
     messages = store.scenes.read_scene(cid, sid)["messages"]
     assert messages[-1]["speaker"] == "Mara"
     assert speakers(cid, sid) == ["Mara", "Winifred", "Mara"]
-    prompt = "\n".join(m["content"] for m in fake.requests[1]["messages"])
-    section = prompt.split("Eligible next speakers:", 1)[1].split("The current actor", 1)[0]
-    assert MARA in section
-    assert WINIFRED not in section
+    # The repeated Mara was authorised by the NEXT-speaker Decision,
+    # not by text emitted by Winifred's writer.
+    prompts = ["\n".join(m["content"] for m in request["messages"])
+               for request in fake.requests]
+    assert all("Do not propose or emit a handoff" in p for p in prompts)
 
 
-def test_repeat_handoff_without_rounds_is_rejected(client):
+def test_repeat_handoff_without_rounds_is_rejected(client, monkeypatch):
+    _follow_on(monkeypatch, WINIFRED, MARA)
     cid, sid, base = seed(client)
     group(client, base, order="directed", auto_rounds=0)
     fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", MARA)])
@@ -406,7 +424,7 @@ def test_repeat_handoff_without_rounds_is_rejected(client):
     assert "error" not in response.text, response.text
     assert fake.calls == 2
     assert speakers(cid, sid) == ["Mara", "Winifred"]
-    assert latest_round(cid, sid)["issue"] == "repeated speaker"
+    assert latest_round(cid, sid)["issue"] == store.response_protocol.INELIGIBLE
 
 
 def test_stop_zeroes_remaining_rounds_and_retry_starts_none(client):
@@ -636,31 +654,31 @@ def test_stop_at_round_start_of_a_planned_round_leaves_nothing_to_retry(client):
     assert speakers(cid, sid) == ["Mara", "Winifred"]
 
 
-def test_handoff_text_says_a_repeat_starts_a_new_round(client):
-    _cid, _sid, base = seed(client)
+def test_directed_extended_rounds_offer_an_earlier_npc_but_not_the_current(client):
+    cid, sid, base = seed(client)
     group(client, base, order="directed", auto_rounds=1)
-    fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", None)])
-    use(client, fake)
-    response = client.post(base + "/chat", json={"content": "Hello", "speaker_ref": MARA})
-    assert "error" not in response.text, response.text
-    first, second = ("\n".join(m["content"] for m in r["messages"]) for r in fake.requests)
-    # Mara speaks first: nobody has responded yet, so today's sentence stands.
-    assert "The current actor and everyone who has already responded are excluded." in first
-    assert "begins another round" not in first
-    # Winifred is offered Mara, who already spoke.
-    assert "begins another round of the conversation" in second
-    assert "everyone who has already responded are excluded" not in second
+    round_record = {"automatic": True, "mode": "directed",
+                    "eligible": character_turns.roster(cid, sid), "auto_remaining": 1}
+    candidates, narrator = character_turns._successor_candidates(
+        cid, sid, round_record, [MARA, WINIFRED], WINIFRED)
+    assert [entry["ref"] for entry in candidates] == [MARA]
+    assert narrator
+    picked = character_turns._successor_answer(
+        round_record, [MARA, WINIFRED], WINIFRED, MARA)
+    assert picked["lead"] == MARA and picked["next"] is None
 
 
-def test_handoff_text_is_unchanged_without_rounds(client):
-    _cid, _sid, base = seed(client)
-    fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", None)])
-    use(client, fake)
-    response = client.post(base + "/chat", json={"content": "Hello", "speaker_ref": MARA})
-    assert "error" not in response.text, response.text
-    second = "\n".join(m["content"] for m in fake.requests[1]["messages"])
-    assert "The current actor and everyone who has already responded are excluded." in second
-    assert "begins another round" not in second
+def test_directed_default_excludes_used_npcs_from_new_decisions(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="directed", auto_rounds=0)
+    round_record = {"automatic": True, "mode": "directed",
+                    "eligible": character_turns.roster(cid, sid), "auto_remaining": 0}
+    candidates, narrator = character_turns._successor_candidates(
+        cid, sid, round_record, [MARA, WINIFRED], WINIFRED)
+    assert candidates == [] and narrator  # narrator is not a mandatory tail
+    assert character_turns._successor_answer(
+        round_record, [MARA, WINIFRED], WINIFRED, MARA)["issue"] == (
+            store.response_protocol.INELIGIBLE)
 
 
 def test_list_chain_survives_replies_without_handoff(client):
