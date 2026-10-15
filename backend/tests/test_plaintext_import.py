@@ -104,6 +104,8 @@ def test_inline_markdown_is_prose_not_a_label_delimiter(client, world):
     ("Name: Mara\n**Personality: stern** but *occasionally kind*.\n",
      "Mara", "personality", "stern but *occasionally kind*."),
     ("*Name:* Mara\n", "Mara", "description", ""),
+    # One run closing the value's emphasis and the label's gives up only the label's width.
+    ("Name: Mara\n**Greeting: *{{char}} waves.***\n", "Mara", "first_mes", "*{{char}} waves.*"),
     # A pair the value opened itself is the author's, not the label's.
     ("Name: Mara\n*Greeting: *{{char}} waves.*\n", "Mara", "first_mes", "*{{char}} waves.*"),
     # Labels may come in any order: a name below another field still counts.

@@ -76,23 +76,27 @@ def _inline_value(label: str, value: str) -> str:
     `**Name: Mara**`, `**Personality: stern** but *kind*`. That closer is the
     first run of the label's width that can close (it follows a non-space)
     while no run of that width opened inside the value is still open -- the
-    CommonMark flanking rule, held to one delimiter width. So an authored
-    `*Greeting: *{{char}} waves.*` keeps its own pair, and later emphasis of
-    another width never hides the label's closer (#136).
+    CommonMark flanking rule, counting runs at least that wide. So an authored
+    `*Greeting: *{{char}} waves.*` keeps its own pair, later emphasis never
+    hides the label's closer, and a run that closes both at once gives up
+    only the label's width (#136).
     """
     if not label.startswith("*") or label.rstrip().endswith("*"):
         return value.lstrip()
     width = 2 if label.startswith("**") else 1
     depth = 0
     for run in _STARS.finditer(value):
-        if len(run.group()) != width:
+        if len(run.group()) < width:
             continue
         # The value starts right after the label's colon, which is no space.
         before = value[run.start() - 1] if run.start() else ":"
         after = value[run.end():run.end() + 1]
         if not before.isspace():
             if not depth:
-                return (value[:run.start()] + value[run.end():]).lstrip()
+                # A longer run closes the inner emphasis first and the label's
+                # last (`**Greeting: *{{char}} waves.***`), so the label's
+                # width comes off its end.
+                return (value[:run.end() - width] + value[run.end():]).lstrip()
             depth -= 1
         elif after and not after.isspace():
             depth += 1
