@@ -415,7 +415,7 @@ def test_repeat_handoff_leads_next_round(client, monkeypatch):
 
 
 def test_repeat_without_extra_rounds_is_not_a_selection_option(client, monkeypatch):
-    _follow_on(monkeypatch, WINIFRED)
+    _follow_on(monkeypatch, WINIFRED, None)
     cid, sid, base = seed(client)
     group(client, base, order="directed", auto_rounds=0)
     fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", MARA)])
