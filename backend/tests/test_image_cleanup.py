@@ -83,6 +83,14 @@ def test_bulk_subject_write_waits_for_sidecar_before_validation(
     assert json.loads(p.read_text(encoding="utf-8")) == {}
 
 
+def test_bulk_subject_write_refuses_an_unsafe_greeting_id_before_writing(tmp_path):
+    # With no subjects, nothing else refuses the id: the write must not land.
+    escaped = image_subjects.subjects_path(tmp_path, "../../escaped")
+    with pytest.raises(ValueError, match="unsafe greeting id"):
+        image_subjects.write_subjects(tmp_path, "../../escaped", {})
+    assert not escaped.exists()
+
+
 def test_identity_projections_keep_unresolved_ids_and_supplied_order():
     image_id = "px1-" + "1" * 64
     refs = {
