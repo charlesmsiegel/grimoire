@@ -545,25 +545,20 @@ def test_stop_on_final_delta_preserves_pending_response_for_retry(client):
     assert fake.calls == 1
 
 
-def test_handoff_prompt_offers_only_remaining_slots(client, monkeypatch):
+def test_directed_writer_delegates_successor_without_handoff(client, monkeypatch):
     _follow_on(monkeypatch, "characters:winifred", None)
     cid, sid = seed(client)
-    fake = FakeLLM([
-        ['"Ready."\n```handoff\n{"next":"characters:winifred"}\n```'],
-        ['"So am I."\n```handoff\n{"next":"grimoire"}\n```'],
-        ['The door opens.\n```handoff\n{"next":null}\n```'],
-    ])
+    fake = FakeLLM([['"Ready."'], ['"So am I."']])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                          json={"content": "Are you both ready?", "speaker_ref": "characters:mara"})
-    assert result.status_code == 200 and fake.calls == 3
-    candidates = [request["messages"][0]["content"].split("Eligible next speakers:\n", 1)[1]
-                  .split("\n\n", 1)[0] for request in fake.requests]
-    assert "characters:mara" not in candidates[0]
-    assert "characters:winifred" in candidates[0] and "grimoire" in candidates[0]
-    assert "characters:mara" not in candidates[1] and "characters:winifred" not in candidates[1]
-    assert "grimoire" in candidates[1]
-    assert not any(ref in candidates[2] for ref in ("characters:mara", "characters:winifred", "grimoire"))
+    assert result.status_code == 200 and fake.calls == 2
+    assert _speakers(cid, sid) == ["Mara", "Winifred"]
+    for request in fake.requests:
+        prompt = request["messages"][0]["content"]
+        assert "Do not propose or emit a handoff" in prompt
+        assert "Eligible next speakers:" not in prompt
+        assert "Every ordinary completed response MUST end" not in prompt
 
 
 def test_explicit_single_response_has_no_successor_candidates(client):
@@ -583,28 +578,23 @@ def test_narrator_scope_reaches_selector_and_writer_after_npc_turn(client, monke
     cid, sid = seed(client)
     fake = FakeLLM([
         [decision_reply({"next": "characters:mara"})],
-        ['"Ready."\n```handoff\n{"next":"grimoire"}\n```'],
-        ['The door opens.\n```handoff\n{"next":null}\n```'],
+        ['"Ready."'],
+        ['The door opens.'],
     ])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                          json={"content": "Is it time?"})
     assert result.status_code == 200 and fake.calls == 3
-    # The selector's criteria are its decide item's question, in the user
-    # message; the system message is the decide contract's.
     selector = fake.requests[0]["messages"][1]["content"]
     actor, narrator = [r["messages"][0]["content"] for r in fake.requests[1:]]
     assert "An established NPC's actions or physical reactions belong to that NPC" in selector
-    assert "Do not select Grimoire to extend an established NPC's turn" in actor
-    assert "Do not select Grimoire to extend an established NPC's turn" in narrator
+    assert "Do not propose or emit a handoff" in actor
+    assert "Do not propose or emit a handoff" in narrator
     assert "Each established NPC owns their speech, actions, physical reactions and decisions" in narrator
     assert "genuinely new characters" in narrator
-    # Already-used Mara is still protected by the roster, even though she is
-    # no longer offered as a successor; an unused NPC can still respond.
-    roster, candidates = narrator.split("Present people:", 1)[1].split("Eligible next speakers:", 1)
+    roster = narrator.split("Present people:", 1)[1]
     assert "characters:mara" in roster and "characters:winifred" in roster
-    assert "characters:mara" not in candidates and "characters:winifred" in candidates
-
+    assert _speakers(cid, sid) == ["Mara", "Grimoire"]
 
 # --- the speaker pick through decide() on the Decision role (slice F) ------
 
