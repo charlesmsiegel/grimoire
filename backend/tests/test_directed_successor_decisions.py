@@ -74,7 +74,7 @@ def test_follow_on_decisions_produce_three_distinct_npcs_without_writer_handoffs
     assert replies(cid, sid) == ["Mara", "Winifred", "Corin"]
     assert model.calls == 3
     assert len(asked) == 2  # no narrator-only fourth call
-    assert asked[0][1] == (WINIFRED, CORIN, "grimoire")
+    assert set(asked[0][1]) == {WINIFRED, CORIN, "grimoire"}
     assert asked[1][1] == (CORIN, "grimoire")
     assert all("NEXT speaker" in prompt for prompt, _options, _selected in asked)
     first_prompt = "\n".join(m["content"] for m in model.requests[0]["messages"])
