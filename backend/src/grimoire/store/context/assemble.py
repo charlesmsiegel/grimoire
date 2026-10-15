@@ -1432,6 +1432,25 @@ def _source_data(section: Section, data: dict, lore: dict | None,
     return annotated
 
 
+def _section_body(section: Section, data: dict, capture: source_text.Capture | None,
+                  section_data: dict) -> tuple[str, source_text.Capture | None, dict]:
+    """One section's rendered body, with its capture and the data it rendered with.
+
+    An annotated render unmarks its body; when that body is not what the plain
+    render produces (a template formatted a marked contribution after the macro:
+    `| upper`, a slice), the marks no longer parse or a marker was lost, and the
+    prompt would drift. Such a section renders unannotated, exactly as the plain
+    path does. Rendering draws no macro, so nothing downstream shifts.
+    """
+    body = prompts.render(_section_template(section, section_data), **section_data).strip()
+    if capture is None:
+        return body, None, data
+    body = capture.unmark(body)
+    if body == prompts.render(_section_template(section, data), **data).strip():
+        return body, capture, section_data
+    return prompts.render(_section_template(section, data), **data).strip(), None, data
+
+
 def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
                      keep_guidance_slot: bool = False, describe_sources: bool = False
                      ) -> list[dict]:
@@ -1493,11 +1512,10 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
             continue
         capture = source_text.Capture() if describe_sources else None
         section_data = _source_data(section, data, lore, capture)
-        body = prompts.render(_section_template(section, section_data), **section_data).strip()
+        body, capture, section_data = _section_body(section, data, capture, section_data)
         # Heading eligibility sees the original body, even if an annotated
         # custom template emitted only whitespace. A phantom heading could
         # otherwise consume a macro draw that belongs to the next section.
-        body = capture.unmark(body) if capture else body
         # A shared heading (`Section.heading`) opens each contiguous RUN of the
         # sections that name it, and this is the only place that can tell: it
         # holds the reader's merged layout and the rendered text at once, so

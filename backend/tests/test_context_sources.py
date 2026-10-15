@@ -237,3 +237,24 @@ def test_an_empty_annotated_body_does_not_draw_a_shared_heading(scene, templates
             (s["id"], s["text"]) for s in plain]
     finally:
         random.setstate(state)
+
+
+@pytest.mark.parametrize("body", [
+    '{{ source_text("Mara", "keeps the map") | upper }}',
+    '{{ source_text("Mara", "keeps the map")[6:] }}',
+])
+def test_a_template_that_transforms_a_source_renders_the_plain_prompt(scene, templates, body):
+    """A template may format a contribution AFTER the macro (against the
+    documented order). Its marks then stop parsing or vanish; the section must
+    fall back to the plain render rather than leak NUL debris into the prompt
+    or drift from what `describe=False` sends."""
+    cid, sid, _ = scene
+    (templates / "scene/sections/character_descriptions.j2").write_text(
+        '{%- from "scene/_sources.j2" import source_text with context -%}' + body,
+        encoding="utf-8")
+    described, detail = context.compose_turn(cid, sid)
+    plain, _ = context.compose_turn(cid, sid, describe=False)
+    assert described == plain
+    assert all("\x00" not in m["content"] for m in described)
+    row = next(r for r in detail["sections"] if r["id"] == "character_descriptions")
+    assert "sources" not in row

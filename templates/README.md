@@ -526,8 +526,10 @@ before macro expansion and moves source spans with the same replacements.
 Only the already-expanded slices reach optional `sources` metadata, with a
 stable id per source occurrence. World info reuses its existing per-entry expansion; recalled
 lore receives identities beside the original bodies and annotates its rendered
-contributions. Format a contribution before passing it to `source_text`;
-templates without annotations still receive their original inputs. Shared headings and
+contributions. Format a contribution before passing it to `source_text`: a
+template that formats it afterwards (`| upper`, a slice) loses that section's
+annotations, and the section renders and inspects as a whole, as before.
+Templates without annotations still receive their original inputs. Shared headings and
 separators belong to the section. A source removed by packing stays inspectable
 with `shed: true`. Older templates and snapshots without annotations still show
 their whole section.
