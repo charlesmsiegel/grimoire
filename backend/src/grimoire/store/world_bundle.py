@@ -264,7 +264,7 @@ def write_bundle(wid: str, dest: Path) -> None:
                 "app_version": app_version(), "exported": now_iso()}
     entries = [_Entry(MANIFEST_NAME, compress=zipfile.ZIP_DEFLATED,
                       data=(json.dumps(manifest, indent=2) + "\n").encode("utf-8")),
-               *(pinned.get(e.src, e) if e.src is not None else e for e in world),
+               *_pin(world, pinned),
                *_image_entries(root, wid, member_ids)]
     _check_whole(entries)
     try:
@@ -405,13 +405,15 @@ def _strict_manifest(data: bytes) -> dict:
 
 
 def _packed_manifests(root: Path, world: list[_Entry]
-                      ) -> tuple[list[tuple[str, dict]], dict[Path, _Entry]]:
+                      ) -> tuple[list[tuple[str, dict]], dict[Path, _Entry | None]]:
     """Every format-2 collection manifest among the packed world files,
     validated by the store's own rule, as `(path relative to root, manifest)`,
-    and the validated bytes of each one as a replacement entry keyed by its
-    source. The archive writes those bytes, not the file again: a sync that
-    replaces a manifest after this read must not pack a member map other than
-    the one the blobs were chosen by (#478).
+    and what each collection manifest the walk found is packed as, keyed by its
+    source: the bytes read here, or None for one gone by now. The archive
+    writes those, never the file again, whatever format it was read as: a sync
+    that replaces or recreates a manifest after this read -- a format-1 one
+    with a format-2 one included -- must not pack a member map other than the
+    one the blobs were chosen by (#478).
 
     Validated exactly where the import would refuse (`_check_collections`): a
     file that does not parse as a JSON object, or that says format 1, is
@@ -420,7 +422,7 @@ def _packed_manifests(root: Path, world: list[_Entry]
     never packs a manifest its own import refuses. A manifest that vanished
     since the walk is not part of the world any more."""
     out: list[tuple[str, dict]] = []
-    pinned: dict[Path, _Entry] = {}
+    pinned: dict[Path, _Entry | None] = {}
     for e in world:
         rel = e.arc.split("/")[1:]
         if e.src is None or not _is_manifest(rel):
@@ -429,9 +431,11 @@ def _packed_manifests(root: Path, world: list[_Entry]
         try:
             data = e.src.read_bytes()
         except FileNotFoundError:
+            pinned[e.src] = None
             continue
         except OSError as exc:
             raise BundleError(f"unreadable collection manifest: {where}: {exc}") from exc
+        pinned[e.src] = _Entry(e.arc, compress=e.compress, data=data)
         if not _checked_by_import(data):
             continue
         try:
@@ -439,8 +443,19 @@ def _packed_manifests(root: Path, world: list[_Entry]
         except (ValueError, RecursionError) as exc:
             raise BundleError(f"invalid collection manifest: {where}: {exc}") from exc
         out.append((where, manifest))
-        pinned[e.src] = _Entry(e.arc, compress=e.compress, data=data)
     return out, pinned
+
+
+def _pin(world: list[_Entry], pinned: dict[Path, _Entry | None]) -> list[_Entry]:
+    """`world` with every collection manifest replaced by what
+    `_packed_manifests` read, and one it found gone left out."""
+    out = []
+    for e in world:
+        if e.src is None or e.src not in pinned:
+            out.append(e)
+        elif (entry := pinned[e.src]) is not None:
+            out.append(entry)
+    return out
 
 
 def _checked_by_import(data: bytes) -> bool:

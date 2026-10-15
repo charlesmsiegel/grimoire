@@ -2021,3 +2021,51 @@ def test_export_packs_the_manifest_it_validated(monkeypatch, tmp_path):
     with zipfile.ZipFile(_export(wid, tmp_path)) as z:
         packed = json.loads(z.read(COLL_MEMBER))
     assert packed["members"] == ids
+
+
+COLL2 = "fedcba9876543210fedcba9876543210"
+COLL2_MEMBER = f"world/assets/image-collections/{COLL2}.json"
+
+
+def test_export_packs_an_unchecked_manifest_as_it_was_read(monkeypatch, tmp_path):
+    """A format-1 manifest is packed unchecked, so a sync that swaps a format-2
+    one in after the read would pack members whose blobs nobody chose. Every
+    collection manifest is packed as read, not re-read (#478)."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62))
+    format1(wid, COLL2, _pixels(63))
+    path = image_collections.manifest_path(wid, COLL2)
+    read = path.read_bytes()
+    real = world_bundle._check_whole
+
+    def swap_after_read(entries):
+        real(entries)
+        path.write_text(_format2(ids[0]) + "\n")
+
+    monkeypatch.setattr(world_bundle, "_check_whole", swap_after_read)
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        assert z.read(COLL2_MEMBER) == read
+
+
+def test_export_leaves_out_a_manifest_gone_when_it_was_read(monkeypatch, tmp_path):
+    """One the walk found but the read did not is not part of the world; a
+    sync recreating it before packing must not slip it in unchecked (#478)."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62))
+    format1(wid, COLL2, _pixels(63))
+    path = image_collections.manifest_path(wid, COLL2)
+    real = world_bundle._packed_manifests
+
+    def gone_then_back(root, world):
+        path.unlink()
+        try:
+            return real(root, world)
+        finally:
+            path.write_text(_format2(ids[0]) + "\n")
+
+    monkeypatch.setattr(world_bundle, "_packed_manifests", gone_then_back)
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        assert COLL2_MEMBER not in z.namelist()
+        assert json.loads(z.read(COLL_MEMBER))["members"] == ids

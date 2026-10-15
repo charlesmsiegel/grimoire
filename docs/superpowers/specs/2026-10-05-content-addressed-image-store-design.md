@@ -1928,11 +1928,16 @@ or journal formats:
   same fold, with separate source-key and target-slot names.
 - Lone linked legacy files are reported; regular siblings keep their own reason.
   Verification checks links before reusing a verified pair, and promotion
-  recovery checks both journal slots before it can write either.
+  recovery checks both journal slots and the `descriptions.json` and
+  `focus.json` it rewrites before it can write any of them. A metadata-only
+  fold re-checks its target before deleting the key, so a placement a sync
+  client replaced mid-fold keeps its key for a later run.
 - Journal conversion and work-map writes guard the pinned root. Legacy thumbnail
   cleanup precedes unlinking its source, so a crash leaves a key for the rerun.
 - Export refuses an unavailable format-2 collection member, including one lost
   or replaced during packing, rather than producing a bundle whose import shifts
-  indices. Linked dependencies include Windows junctions. Blob copies use a
+  indices. Every collection manifest is packed as the export read it, or left
+  out when it was gone by then, never re-read from its path. Linked
+  dependencies include Windows junctions. Blob copies use a
   handle matching the validated file and hash the bytes copied into the archive.
   Campaign export decodes a member URL's index before canonical validation.

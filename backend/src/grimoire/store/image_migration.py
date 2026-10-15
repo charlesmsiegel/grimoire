@@ -1000,11 +1000,15 @@ def _item(ex: _Exec, item: Item) -> None:
         return
     journal = image_refs.read_journal(occ.dir)
     if journal is not None:
-        # Recovery can write BOTH named slots, not only this item's slot.
-        # A different linked slot must not be replaced as a side effect (#478).
+        # Recovery can write BOTH named slots, not only this item's slot,
+        # and rewrites `descriptions.json` and unlinks `focus.json` beside
+        # them. None of those may be replaced through a link as a side
+        # effect, so all four are checked junction-aware first (#478).
         name = assets._journal_ok(journal)
-        if name is not None and any(_linked_slot(ex.root, occ.dir, slot)
-                                    for slot in (assets.AVATAR, name)):
+        if name is not None and (
+                any(_linked_slot(ex.root, occ.dir, slot) for slot in (assets.AVATAR, name))
+                or any(image_surfaces.linked(ex.root, occ.dir / side)
+                       for side in (assets.DESCRIPTIONS_FILE, assets.FOCUS_FILE))):
             ex.skip(occ.path, image_surfaces.SYMLINKED)
             return
     assets.recover_promotion(occ.dir)
@@ -1125,6 +1129,17 @@ def _sidecar_now(ex: _Exec, side: Path) -> dict | None:
     return raw if isinstance(raw, dict) else None
 
 
+def _still_target(ex: _Exec, side: Path, key: str, still: Callable[[], bool] | None) -> bool:
+    """Whether a metadata-only key's target still places the picture it was
+    folded into. A sync client takes no name lock, so it can replace the
+    placement during the fold; the key then describes the new picture's URL
+    and must stay for a later run, not be deleted behind the old one (#478)."""
+    if still is None or still():
+        return True
+    ex.keep(side, key, "target-changed-during-fold")
+    return False
+
+
 def _delete_key_if(ex: _Exec, side: Path, key: str, value: object) -> bool | None:
     """Compare-and-delete: drop `key` only while it still holds `value`; an
     emptied sidecar goes with it. True when deleted, None when the key is
@@ -1177,8 +1192,8 @@ def _says(root: Path, image_id: str, value: str) -> bool:
     return bool(texts) if value == "" else value in texts
 
 
-def _fold_text_once(ex: _Exec, side: Path, key: str, image_id: str, label: str
-                    ) -> bool | None:
+def _fold_text_once(ex: _Exec, side: Path, key: str, image_id: str, label: str,
+                    still: Callable[[], bool] | None = None) -> bool | None:
     """One attempt: True folded and deleted, None stop (kept or gone), False
     the key moved under the delete."""
     cur = _sidecar_now(ex, side)
@@ -1200,19 +1215,22 @@ def _fold_text_once(ex: _Exec, side: Path, key: str, image_id: str, label: str
     if not _says(ex.root, image_id, value):
         ex.keep(side, key, "fold-not-confirmed")
         return None
+    if not _still_target(ex, side, key, still):
+        return None
     done = _delete_key_if(ex, side, key, value)
     if done:
         ex.out["descriptions_folded"] += 1
     return done
 
 
-def _fold_description(ex: _Exec, d: Path, key: str, image_id: str, label: str) -> bool:
+def _fold_description(ex: _Exec, d: Path, key: str, image_id: str, label: str,
+                      still: Callable[[], bool] | None = None) -> bool:
     """Fold `d`'s `descriptions.json[key]` into `image_id` under the sidecar's
     lock, held from the read through the delete (M9); whether it changed."""
     side = d / assets.DESCRIPTIONS_FILE
     with locks.image_sidecar_lock(d, assets.DESCRIPTIONS_FILE):
         for _ in range(_FOLD_TRIES):
-            done = _fold_text_once(ex, side, key, image_id, label)
+            done = _fold_text_once(ex, side, key, image_id, label, still)
             if done is not False:
                 return bool(done)
         ex.keep(side, key, "changed-during-fold")
@@ -1248,8 +1266,8 @@ def _tags(root: Path, image_id: str, scope: str) -> set[str] | None:
     return None if got is None else set(got)
 
 
-def _fold_subjects_once(ex: _Exec, side: Path, key: str, image_id: str, scope: str
-                        ) -> bool | None:
+def _fold_subjects_once(ex: _Exec, side: Path, key: str, image_id: str, scope: str,
+                        still: Callable[[], bool] | None = None) -> bool | None:
     cur = _sidecar_now(ex, side)
     if cur is None or key not in cur:
         return None
@@ -1268,18 +1286,21 @@ def _fold_subjects_once(ex: _Exec, side: Path, key: str, image_id: str, scope: s
         ex.plan.subject_disagreements.append(
             {"image_id": image_id, "scope": scope,
              "sets": sorted([sorted(before), sorted(set(value))])})
+    if not _still_target(ex, side, key, still):
+        return None
     done = _delete_key_if(ex, side, key, value)
     if done:
         ex.out["subjects_folded"] += 1
     return done
 
 
-def _fold_subjects(ex: _Exec, d: Path, key: str, image_id: str, scope: str) -> bool:
+def _fold_subjects(ex: _Exec, d: Path, key: str, image_id: str, scope: str,
+                   still: Callable[[], bool] | None = None) -> bool:
     """`_fold_description` for a world greeting's `subjects.json[key]`."""
     side = d / _SUBJECTS
     with locks.image_sidecar_lock(d, _SUBJECTS):
         for _ in range(_FOLD_TRIES):
-            done = _fold_subjects_once(ex, side, key, image_id, scope)
+            done = _fold_subjects_once(ex, side, key, image_id, scope, still)
             if done is not False:
                 return bool(done)
         ex.keep(side, key, "changed-during-fold")
@@ -1369,7 +1390,9 @@ def _metadata_one(ex: _Exec, occ: Occurrence, image_id: str | None) -> None:
     # A verified pair can have been replaced since planning. Hold the target
     # name through revalidation, object fold and source-key deletion, so a
     # cooperating upload cannot move the URL to another image between them
-    # (#478). Focus operations take their own name locks below.
+    # (#478). A sync client takes no lock, so each fold also re-checks the
+    # target before deleting its key. Focus operations take their own name
+    # locks below.
     target_lock = (locks.image_name_lock(occ.target, occ.target_name or occ.name)
                    if occ.target is not None and occ.metadata_only in ("a", "c")
                    else nullcontext())
@@ -1382,9 +1405,11 @@ def _metadata_one(ex: _Exec, occ: Occurrence, image_id: str | None) -> None:
         elif occ.metadata_only == "d":
             changed = _dropped_focus(ex, occ)
         elif occ.sidecar == _SUBJECTS:
-            changed = _fold_subjects(ex, occ.dir, occ.name, image_id, occ.scope)
+            changed = _fold_subjects(ex, occ.dir, occ.name, image_id, occ.scope,
+                                     lambda: _target_verified(ex, occ, image_id))
         else:
-            changed = _fold_description(ex, occ.dir, occ.name, image_id, _label(ex.plan, occ))
+            changed = _fold_description(ex, occ.dir, occ.name, image_id, _label(ex.plan, occ),
+                                        lambda: _target_verified(ex, occ, image_id))
         if changed:
             ex.wrote = True
 

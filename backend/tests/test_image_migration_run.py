@@ -1252,6 +1252,39 @@ def test_url_target_replaced_after_verification_keeps_its_subject_key(monkeypatc
     assert _subjects_of(_id(_png(2)), f"world:{wid}") == {char}
 
 
+def test_url_target_synced_during_fold_keeps_its_subject_key(monkeypatch):
+    """A sync client takes no name lock, so the placement can move while the
+    fold runs. The key then names the new picture's URL and must stay, not be
+    deleted behind the picture the fold already tagged (#478)."""
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    assets.put_in(wchar, "gallery_9", _png(2), "png")
+    replacement = image_refs.read(wchar, "gallery_9").image
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    real = image_store.update
+    synced: list[bool] = []
+
+    def update_then_sync(image_id, fn, *a, **kw):
+        result = real(image_id, fn, *a, **kw)
+        if not synced:
+            synced.append(True)
+            image_refs.write(wchar, "avatar", replacement)
+        return result
+
+    with monkeypatch.context() as concurrent:
+        concurrent.setattr(image_store, "update", update_then_sync)
+        rep = _run()
+
+    assert synced and _json(side) == {url: [char]}
+    assert any(k["reason"] == "target-changed-during-fold" for k in rep["keys_kept"])
+    _run()
+    assert not side.exists()
+    assert _subjects_of(replacement, f"world:{wid}") == {char}
+
+
 def test_url_subject_fold_holds_its_target_name_lock(monkeypatch):
     wid, wroot, char, wchar = _world()
     assets.put_in(wchar, "avatar", _png(1), "png")
@@ -1414,6 +1447,34 @@ def test_promotion_recovery_never_replaces_a_different_linked_slot(tmp_path):
     _run()
 
     assert slot.is_symlink()
+    assert image_refs.read(wchar, "avatar").image == before["avatar"]
+    assert image_refs.read_journal(wchar) == journal
+    assert legacy.read_bytes() == _png(3)
+
+
+@pytest.mark.parametrize("sidecar", ["descriptions.json", "focus.json"])
+def test_promotion_recovery_never_rewrites_a_linked_sidecar(tmp_path, sidecar):
+    """Recovery rewrites `descriptions.json` and unlinks `focus.json` beside the
+    two slots, so a linked one stops the item before recovery runs (#478)."""
+    _wid, _wroot, _char, wchar = _world()
+    legacy = _legacy(wchar, "gallery_2.png", _png(3))
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    assets.put_in(wchar, "gallery_1", _png(2), "png")
+    before = {n: image_refs.read(wchar, n).image for n in ("avatar", "gallery_1")}
+    journal = {"name": "gallery_1", "pre": before,
+               "post": {"avatar": before["gallery_1"], "gallery_1": before["avatar"]},
+               "desc": {"avatar": None, "gallery_1": None}}
+    image_refs.write_journal(wchar, journal)
+    outside = tmp_path / f"outside-{sidecar}"
+    outside.write_text(json.dumps({"gallery_1": "Kept."} if sidecar == "descriptions.json"
+                                  else {"x": 0.5, "y": 0.5}))
+    link = wchar / sidecar
+    link.symlink_to(outside)
+    content = outside.read_bytes()
+
+    _run()
+
+    assert link.is_symlink() and outside.read_bytes() == content
     assert image_refs.read(wchar, "avatar").image == before["avatar"]
     assert image_refs.read_journal(wchar) == journal
     assert legacy.read_bytes() == _png(3)
