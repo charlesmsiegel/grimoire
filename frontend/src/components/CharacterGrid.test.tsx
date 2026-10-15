@@ -188,6 +188,20 @@ test("oversized pasted text is refused whole rather than silently clipped", asyn
   expect(api.parseCharacterText).not.toHaveBeenCalled();
 });
 
+test("a reviewed name whose folder slug is too long cannot be saved or refined", async () => {
+  renderGrid();
+  await openTextDraft();
+  // 200 characters fit the field, but `İ` lowercases to two code points, so
+  // the folder name the server would write is 399 characters long.
+  fireEvent.change(screen.getByLabelText("Character name"), { target: { value: "İ".repeat(200) } });
+  expect(screen.getByRole("alert")).toHaveTextContent("This name is too long to save");
+  expect(screen.getByRole("button", { name: "Save character" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Refine with AI" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Character name"), { target: { value: "Winifred" } });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByRole("button", { name: "Save character" })).toBeEnabled();
+});
+
 test("the text limit counts code points, as the server does, not UTF-16 units", async () => {
   renderGrid();
   fireEvent.click(await screen.findByRole("button", { name: "Import text" }));

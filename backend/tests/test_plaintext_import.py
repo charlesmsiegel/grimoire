@@ -92,7 +92,7 @@ def test_inline_markdown_is_prose_not_a_label_delimiter(client, world):
 
 @pytest.mark.parametrize(("text", "name", "field", "value"), [
     # A second `Name:` is prose, not a second name joined to the first (#136).
-    ("Name: Mara\n\nSome prose.\n\nName: Morgan\n", "Mara", "description", "Some prose.\n\nName: Morgan"),
+    ("Name: Mara\n\nSome prose.\n\nName: Winifred\n", "Mara", "description", "Some prose.\n\nName: Winifred"),
     # A speaker line in example dialogue keeps its text in that dialogue.
     ("Name: Mara\nExample dialogue:\n<START>\n{{user}}: hi\nName: Oh, hello there\n",
      "Mara", "mes_example", "<START>\n{{user}}: hi\nName: Oh, hello there"),
@@ -100,6 +100,12 @@ def test_inline_markdown_is_prose_not_a_label_delimiter(client, world):
     ("**Name: Mara**\n**Personality: warm and kind**\n", "Mara", "personality", "warm and kind"),
     ("*Name: Mara*\n", "Mara", "description", ""),
     ("**Name: Mara** (the witch)\n", "Mara (the witch)", "description", ""),
+    # Later emphasis of another width never hides the label's own closer.
+    ("Name: Mara\n**Personality: stern** but *occasionally kind*.\n",
+     "Mara", "personality", "stern but *occasionally kind*."),
+    ("*Name:* Mara\n", "Mara", "description", ""),
+    # A pair the value opened itself is the author's, not the label's.
+    ("Name: Mara\n*Greeting: *{{char}} waves.*\n", "Mara", "first_mes", "*{{char}} waves.*"),
     # Labels may come in any order: a name below another field still counts.
     ("Personality: warm\nName: Mara\n", "Mara", "personality", "warm"),
     # Bulleted labels split like any other label.
@@ -124,6 +130,14 @@ def test_an_explicit_name_over_the_folder_limit_is_refused_not_saved_as_a_500(cl
     assert guessed["description"].startswith("# " + "x" * 300)
 
 
+def test_the_create_route_refuses_a_name_whose_folder_would_be_too_long(client, world):
+    # The review form can edit the name after parse, so the save checks too.
+    response = client.post(f"/api/worlds/{world}/characters", json={"name": "İ" * 200})
+    assert response.status_code == 422
+    assert "200 characters" in response.json()["detail"]
+    assert client.get(f"/api/worlds/{world}/characters").json() == []
+
+
 def test_the_folder_limit_is_on_the_slug_not_the_name(client, world):
     # Lowercasing `İ` makes two code points, so 200 of them name a 399-byte folder.
     response = client.post(f"/api/worlds/{world}/characters/parse-text", json={"text": "Name: " + "İ" * 200})
@@ -143,7 +157,7 @@ def test_clipping_a_long_guess_is_bounded_not_quadratic(monkeypatch):
     real = paths.slugify
     monkeypatch.setattr(paths, "slugify", lambda text: calls.append(len(text)) or real(text))
     data = _plaintext.parse("# " + "İ" * 60000 + "\nKeeps a ledger.")["data"]
-    assert _plaintext._folder_fits(data["name"])
+    assert _plaintext.folder_fits(data["name"])
     assert len(calls) <= _plaintext.MAX_NAME_CHARS + 2
     assert max(calls) <= _plaintext.MAX_NAME_CHARS
 

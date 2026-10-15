@@ -46,6 +46,7 @@ _HEADING = re.compile(r"^#{1,6}\s+(.+?)(?:\s+#+)?$")
 # A bullet marker in front of a label: `- **Name:** Mara`. Requires the space,
 # so a bold label's own `**` is never mistaken for a bullet.
 _LIST_MARKER = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
+_STARS = re.compile(r"\*+")
 
 
 def validate_text(text: str) -> None:
@@ -70,22 +71,32 @@ def _inline_value(label: str, value: str) -> str:
 
     Stripping arbitrary stars from a value corrupts authored Markdown such
     as `Greeting: *{{char}} waves.*`, including a value made only of stars.
-    Two cases are the label's own: the bold `**Name:** Mara` opener, and an
-    emphasis that wraps the whole line, `**Name: Mara**`, whose closer lands
-    at the end of the value. The closer counts only when no other star is left
-    in the value, so an authored `*{{char}}*` keeps its own delimiters.
+    A label that opens emphasis (`**Name`, `*Name`) and does not close it
+    before the colon closes it somewhere in the value: `**Name:** Mara`,
+    `**Name: Mara**`, `**Personality: stern** but *kind*`. That closer is the
+    first run of the label's width that can close (it follows a non-space)
+    while no run of that width opened inside the value is still open -- the
+    CommonMark flanking rule, held to one delimiter width. So an authored
+    `*Greeting: *{{char}} waves.*` keeps its own pair, and later emphasis of
+    another width never hides the label's closer (#136).
     """
-    value = value.lstrip()
     if not label.startswith("*") or label.rstrip().endswith("*"):
-        return value
-    opener = "**" if label.startswith("**") else "*"
-    if opener == "**" and value.startswith("**"):
-        value = value[2:].lstrip()
-    # The emphasis closes somewhere in the value (`**Name: Mara**`, or with prose
-    # after it). When that run is the only star left, it is the label's own.
-    if opener in value and value.count("*") == len(opener):
-        value = value.replace(opener, "", 1).strip()
-    return value
+        return value.lstrip()
+    width = 2 if label.startswith("**") else 1
+    depth = 0
+    for run in _STARS.finditer(value):
+        if len(run.group()) != width:
+            continue
+        # The value starts right after the label's colon, which is no space.
+        before = value[run.start() - 1] if run.start() else ":"
+        after = value[run.end():run.end() + 1]
+        if not before.isspace():
+            if not depth:
+                return (value[:run.start()] + value[run.end():]).lstrip()
+            depth -= 1
+        elif after and not after.isspace():
+            depth += 1
+    return value.lstrip()
 
 
 def _literal_span(rule: Callable[[StateInline, bool], bool], state: StateInline, silent: bool) -> bool:
@@ -149,7 +160,7 @@ def _label_of(line: str, stripped: str, heading: re.Match[str] | None,
     return None, value, colon
 
 
-def _folder_fits(name: str) -> bool:
+def folder_fits(name: str) -> bool:
     """The folder a character is saved under is named from the SLUG, and case
     folding can grow a name (`İ` lowercases to two code points), so the limit
     is on the slug, not on the name's length (#136)."""
@@ -166,7 +177,7 @@ def _clip(text: str) -> str:
     is; re-slugifying every prefix of the whole line was quadratic (#136).
     """
     text = text[:MAX_NAME_CHARS]
-    while text and not _folder_fits(text):
+    while text and not folder_fits(text):
         text = text[:-1]
     return text
 
@@ -175,7 +186,7 @@ def _resolve_name(explicit: str, title: str, filename: str, lines: list[str]) ->
     """An explicit name wins, then a document title, then a filename, then the
     first line. Only an explicit name is refused past the folder limit: a guess
     is clipped, and the reviewer still has the full text in the description."""
-    if not _folder_fits(explicit):
+    if not folder_fits(explicit):
         raise cards.CardParseError(
             f"A character name must be at most {MAX_NAME_CHARS} characters once it is folded for a folder name.")
     fallback = _clip(PurePosixPath(filename.replace("\\", "/")).stem.strip())
@@ -244,7 +255,7 @@ def draft_data(card: dict) -> dict[str, str]:
     result = {key: data[key] for key in FIELDS}
     if not result["name"].strip():
         raise cards.CardParseError("Give the draft a character name.")
-    if not _folder_fits(result["name"]):
+    if not folder_fits(result["name"]):
         raise cards.CardParseError(
             f"A character name must be at most {MAX_NAME_CHARS} characters once it is folded for a folder name.")
     if sum(map(len, result.values())) > MAX_DRAFT_CHARS:
