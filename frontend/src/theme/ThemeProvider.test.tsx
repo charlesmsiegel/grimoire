@@ -56,6 +56,23 @@ test("applies the chosen mode's tokens, and switches", () => {
   expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#6fe0da");
 });
 
+test("declares the look's color-scheme, so native controls follow it", () => {
+  // Without it the browser draws every part it paints itself -- an option
+  // list, a picker, an undressed control -- light on the dark desk.
+  const os = stubMatchMedia(false);
+  render(<ThemeProvider initial="system"><Probe /></ThemeProvider>);
+  expect(document.documentElement.style.colorScheme).toBe("light");
+
+  os.set(true);
+  expect(document.documentElement.style.colorScheme).toBe("dark");
+
+  // The look, not the OS: an explicit Dark on a light OS is still dark.
+  os.set(false);
+  expect(document.documentElement.style.colorScheme).toBe("light");
+  fireEvent.click(screen.getByRole("button", { name: "dark" }));
+  expect(document.documentElement.style.colorScheme).toBe("dark");
+});
+
 test("a theme name from the three-theme era maps to a mode", () => {
   stubMatchMedia(false);
   render(<ThemeProvider initial="astral"><Probe /></ThemeProvider>);

@@ -4398,7 +4398,7 @@ a.search-hit { text-decoration: none; color: inherit; }
 }
 .hub-primary {
   display: inline-flex; align-items: center; margin-top: 12px; min-height: 44px;
-  padding: 0 18px; border-radius: 3px; background: var(--accent);
+  padding: 0 18px; border: 0; border-radius: 3px; background: var(--accent);
   color: var(--on-accent); text-decoration: none;
   font-family: var(--fm, monospace); font-weight: 700; font-size: 11px;
   letter-spacing: 0.14em; text-transform: uppercase;
