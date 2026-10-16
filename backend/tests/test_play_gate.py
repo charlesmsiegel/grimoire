@@ -243,6 +243,49 @@ def test_mass_on_intended_reads_the_weights_actually_drawn():
     assert play.mass_on_intended(plain, "b") == 1.0 and play.mass_on_intended(plain, "a") == 0.0
 
 
+def _summary_by_configuration(graded) -> dict[str, str]:
+    """`play.summary`'s lines, grouped under the configuration that heads them."""
+    out: dict[str, list[str]] = {}
+    for line in play.summary(graded):
+        if not line.startswith(" "):
+            current = out.setdefault(line.split()[0], [])
+        current.append(line)
+    return {conf: "\n".join(lines) for conf, lines in out.items()}
+
+
+def test_a_figure_nothing_measured_reads_na_never_zero():
+    """`costs.py`'s rule, for the play report: an off speaker configuration
+    stores no draw, so it has no mass on the intended speaker to average, and
+    `0.000` beside an on configuration's real mean would read as one measured
+    and found wanting. Likewise a pre-generation call that carries no duration
+    was not timed, which is not the same as taking no time."""
+    off, on, _no_cutoff = play.matrix("speaker", [SCENE], [DECIDER])
+    addressed = play.BY_ID["addressed"]
+    untimed = play.PlayRun(addressed, off, 0, rows=({"task": "response-selector"},))
+    drawn = play.PlayRun(addressed, on, 0, refs={"Mara": "characters:mara"},
+                         rows=({"task": "response-selector", "duration_ms": 40},))
+    drawn.picks.append({"basis": "answer", "selected": "characters:mara",
+                        "answer": "characters:mara"})
+
+    report = _summary_by_configuration([play.Graded(untimed, ()), play.Graded(drawn, ())])
+    assert "0.000" not in report[off.id]
+    assert "mean mass on intended: n/a (no addressed pick)" in report[off.id]
+    assert "added pre-generation ms: n/a (no run timed)" in report[off.id]
+    assert "mean mass on intended: 1.000 over 1 addressed pick(s)" in report[on.id]
+    assert "added pre-generation ms: median 40, max 40 over 1 run(s)" in report[on.id]
+
+
+def test_a_run_with_no_pre_generation_call_added_no_time():
+    """No row under a pre-generation task is a real 0 -- nothing ran before
+    the first token -- unlike a row that ran untimed, which is None."""
+    off = play.matrix("intent", [SCENE], [DECIDER])[0]
+    run = play.PlayRun(play.BY_ID["addressed"], off, 0,
+                       rows=({"task": "chat", "duration_ms": 900},))
+    assert play.latency(run) == (0, 900)
+    run.rows = ({"task": "chat", "duration_ms": 900}, {"task": "continuation"})
+    assert play.latency(run) == (0, None)
+
+
 #: Recorded replies for the leak check, offline (§6.6): a clean one, and two
 #: that repeat the block's wording.
 LEAK_RECORDINGS = {

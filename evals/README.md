@@ -560,6 +560,10 @@ the seeding, the graders and the gate.
   - departures (selected is not the answer) and addressed overrides;
   - the mean mass on the intended speaker, over the weights actually drawn;
   - the money per task, per column, in the case lines and the run file.
+
+  Each median and mean says how many runs or picks it is over, and over none
+  reads n/a, never 0: an off configuration draws nothing, and a call with no
+  duration was not timed rather than instant.
 - **The leak check** (`play.leaks`) is the one feature grader that reads
   offline. `test_play_gate.py` holds it, with the rest of the harness,
   against a scripted fake.
