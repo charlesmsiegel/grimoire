@@ -983,8 +983,8 @@ def _image_source(p: Path) -> str:
         return source
     try:
         st = p.stat()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="image not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="image not found") from exc
     return f"{st.st_mtime_ns:x}-{st.st_size:x}"
 
 
@@ -1113,8 +1113,8 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
         return Response(status_code=304, headers=headers)
     try:
         content = p.read_bytes()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="image not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="image not found") from exc
     # The bytes name the type; the stored suffix answers only for bytes that
     # sniff as nothing (#321). A new upload can no longer be misnamed, but a
     # store already on disk holds files that are, and serving one as
@@ -1333,10 +1333,10 @@ def _world_char_version_or_404(wid: str, cid: str, vid: str):
     root = _world_root_or_404(wid)
     try:
         store.characters.require_version(root, cid, vid)   # two stats, no read
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     return root
 
 
@@ -1355,8 +1355,8 @@ def _card_data(card: dict) -> dict:
 def _campaign_root_or_404(cid: str):
     try:
         store.campaigns.ensure_campaign_slim(cid)  # lazy slim of pre-overlay campaigns
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return store.campaigns.campaign_root(cid)
 
 
@@ -1777,10 +1777,10 @@ def _has_standing_model(resolved: ResolvedInference, primary: wire.Target) -> bo
 def _require_scene(cid: str, sid: str) -> dict:
     try:
         return store.scenes.read_scene(cid, sid)
-    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
-        raise HTTPException(status_code=404, detail="scene not found")
+        raise HTTPException(status_code=404, detail="scene not found") from exc
 
 
 def _soft_resolved(resolve: Callable[[], UsableInference]

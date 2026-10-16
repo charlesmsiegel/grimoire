@@ -71,10 +71,10 @@ def search(q: str = "", scope: str = "", root: str = "", kinds: str = "",
             except store.semsearch.Unavailable as exc:
                 note = str(exc)
         out = store.search.search(q, scope=scope, root=root, kinds=kind_list, limit=limit)
-    except store.search.BadScope:
+    except store.search.BadScope as err:
         raise HTTPException(status_code=400,
                             detail=f"unknown scope: {scope} "
-                                   f"(expected one of {', '.join(store.search.SCOPES)})")
+                                   f"(expected one of {', '.join(store.search.SCOPES)})") from err
     except store.search.BadKind as exc:
-        raise HTTPException(status_code=400, detail=f"unknown kind(s): {exc}")
+        raise HTTPException(status_code=400, detail=f"unknown kind(s): {exc}") from exc
     return {**out, "mode": KEYWORD, "requested_mode": mode, "note": note}

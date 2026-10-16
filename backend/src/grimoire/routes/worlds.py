@@ -107,8 +107,8 @@ def post_world(body: WorldCreate):
 def get_world(wid: str):
     try:
         out = store.worlds.read_world(wid)
-    except store.worlds.WorldNotFound:
-        raise HTTPException(status_code=404, detail="world not found")
+    except store.worlds.WorldNotFound as exc:
+        raise HTTPException(status_code=404, detail="world not found") from exc
     out["meta"]["cover"] = store.covers.world_cover_version(wid)
     # How many campaigns are played in this world -- the one fact about a
     # world that is not a record inside it, and which the world page used to
@@ -138,8 +138,8 @@ def put_world(wid: str, body: WorldUpdate):
     try:
         meta = store.worlds.update_world(wid, name=name, genre=body.genre, tone=body.tone,
                                          themes=body.themes, description=body.description)
-    except store.worlds.WorldNotFound:
-        raise HTTPException(status_code=404, detail="world not found")
+    except store.worlds.WorldNotFound as err:
+        raise HTTPException(status_code=404, detail="world not found") from err
     except store.worlds.WorldChangedError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"id": wid, "name": meta.get("name", wid)}
@@ -165,10 +165,10 @@ def delete_world(wid: str, request: Request):
                         with store.overlay.world_identity_scope(store.worlds.world_root(wid)) as lifetime:
                             store.overlay.retire_world_scope_reviews(store.worlds.world_root(wid), lifetime.captured)
                             store.worlds.delete_world(wid)
-                    except store.worlds.WorldNotFound:
-                        raise HTTPException(status_code=404, detail="world not found")
+                    except store.worlds.WorldNotFound as err:
+                        raise HTTPException(status_code=404, detail="world not found") from err
                     except store.worlds.WorldInUse as exc:
-                        raise HTTPException(status_code=409, detail=str(exc))
+                        raise HTTPException(status_code=409, detail=str(exc)) from exc
             # AFTER the delete, and for the campaign route's reason: world ids
             # are slugs too, so a replacement of the same name would otherwise
             # be handed this world's taglines and scenario proposals. The
@@ -302,9 +302,9 @@ async def post_world_import(request: Request):
             # A good bundle that lost an id race, not a bad upload -- 409, so a
             # client can retry it rather than reading 400 as "this file is
             # broken" (Codex review). Must be caught before BundleError.
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except store.world_bundle.BundleError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Same reason as `post_world`: a store someone imported a world into has
     # been set up, so deleting that world later must not reopen the wizard
     # (#194). Past the rename the world exists, so a failure here must not be
@@ -347,12 +347,12 @@ def put_world_module(wid: str, body: ModuleSetting):
                     # stamps them -- the same call `sync.demote` and
                     # `store.reclassify` make, for the same reason.
                     store.revision.bump(c)
-    except store.worlds.WorldNotFound:
-        raise HTTPException(status_code=404, detail="world not found")
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
-    except store.modules.ModuleError:
-        raise HTTPException(status_code=400, detail="'none' is reserved")
+    except store.worlds.WorldNotFound as exc:
+        raise HTTPException(status_code=404, detail="world not found") from exc
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
+    except store.modules.ModuleError as exc:
+        raise HTTPException(status_code=400, detail="'none' is reserved") from exc
     return {"ok": True}
 
 
@@ -369,8 +369,8 @@ def get_world_sheets(wid: str, mid: str):
     _world_root_or_404(wid)
     try:
         store.modules.pack_root(mid)
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
     return {"coverage": store.sheets.world_coverage(wid, mid),
             "refs": store.sheets.world_list_refs(wid, mid)}
 
@@ -387,12 +387,12 @@ def put_world_sheet(wid: str, mid: str, kind: str, eid: str, body: SheetBody):
     try:
         store.sheets.write_world(wid, mid, kind, eid, body.sheet_type, body.fields,
                                  expected=body.expected)
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
     except store.sheets.SheetConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except store.sheets.SheetError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"ok": True}
 
 
@@ -402,14 +402,14 @@ def put_world_sheet_creation(wid: str, mid: str, kind: str, eid: str, body: Shee
     try:
         store.sheets.write_world_creation(wid, mid, kind, eid, body.sheet_type, body.spends,
                                           expected=body.expected)
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
-    except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound):
-        raise HTTPException(status_code=404, detail=f"{kind} not found")
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound) as exc:
+        raise HTTPException(status_code=404, detail=f"{kind} not found") from exc
     except store.sheets.SheetConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except store.sheets.SheetError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"sheet": store.sheets.read_world(wid, mid, kind, eid)}
 
 
@@ -419,7 +419,7 @@ def delete_world_sheet(wid: str, mid: str, kind: str, eid: str, gen: str | None 
     try:
         return {"ok": store.sheets.delete_world(wid, mid, kind, eid, expected_gen=gen)}
     except store.sheets.SheetConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post("/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}")
@@ -427,16 +427,16 @@ def post_world_instantiate(wid: str, kind: str, mid: str, content_id: str):
     root = _world_root_or_404(wid)
     try:
         content = store.modules.read_content(mid, kind, content_id)
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
-    except store.modules.ContentNotFound:
-        raise HTTPException(status_code=404, detail="content not found")
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
+    except store.modules.ContentNotFound as exc:
+        raise HTTPException(status_code=404, detail="content not found") from exc
     try:
         eid = store.entities.create_entity(root, kind, content["name"], content["body"],
                                            content.get("keys", ""), "",
                                            fields=_content_fields(kind, content))
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
     if content.get("sheet_type"):
         try:
             store.sheets.write_world(wid, mid, kind, eid, content["sheet_type"], content.get("fields"),
@@ -448,7 +448,7 @@ def post_world_instantiate(wid: str, kind: str, mid: str, content_id: str):
             # routes: this restores the state before the create, and anything
             # sitting under `eid` was already sitting there then (#225).
             store.entities.delete_entity(root, kind, eid)
-            raise HTTPException(status_code=_sheet_failure_status(e), detail=str(e))
+            raise HTTPException(status_code=_sheet_failure_status(e), detail=str(e)) from e
     return {"id": eid}
 
 
@@ -470,8 +470,8 @@ def post_world_tag(wid: str, body: NameBody):
 def put_world_tag(wid: str, tid: str, body: NameBody):
     try:
         store.tags.rename_tag(_world_root_or_404(wid), tid, body.name.strip())
-    except store.tags.TagNotFound:
-        raise HTTPException(status_code=404, detail="tag not found")
+    except store.tags.TagNotFound as exc:
+        raise HTTPException(status_code=404, detail="tag not found") from exc
     return {"id": tid, "name": body.name.strip()}
 
 
@@ -479,8 +479,8 @@ def put_world_tag(wid: str, tid: str, body: NameBody):
 def delete_world_tag(wid: str, tid: str):
     try:
         store.tags.delete_tag(_world_root_or_404(wid), tid)
-    except store.tags.TagNotFound:
-        raise HTTPException(status_code=404, detail="tag not found")
+    except store.tags.TagNotFound as exc:
+        raise HTTPException(status_code=404, detail="tag not found") from exc
     return {"ok": True}
 
 
@@ -516,8 +516,8 @@ def post_world_pc(wid: str, body: PCCreate):
 def get_world_pc(wid: str, pid: str):
     try:
         return store.pcs.read_pc(_world_root_or_404(wid), pid)
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCNotFound as exc:
+        raise HTTPException(status_code=404, detail="pc not found") from exc
 
 
 @router.put("/worlds/{wid}/pcs/{pid}")
@@ -540,10 +540,10 @@ def put_world_pc(wid: str, pid: str, body: PCUpdate):
             if body.tags is not None:
                 _validate_tags(root, body.tags)
                 store.pcs.set_tags(root, pid, body.tags)
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
-    except store.pcs.PCVersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.pcs.PCNotFound as err:
+        raise HTTPException(status_code=404, detail="pc not found") from err
+    except store.pcs.PCVersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
@@ -555,8 +555,8 @@ def delete_world_pc(wid: str, pid: str):
     with store.overlay.world_identity_change(root, record=("pcs", pid)) as cids:
         try:
             store.pcs.delete_pc(root, pid)
-        except store.pcs.PCNotFound:
-            raise HTTPException(status_code=404, detail="pc not found")
+        except store.pcs.PCNotFound as exc:
+            raise HTTPException(status_code=404, detail="pc not found") from exc
         store.overlay.forget_world_record(root, "pcs", pid, cids=cids)   # #225
         return {"ok": True}
 
@@ -571,8 +571,8 @@ def post_pc_version(wid: str, pid: str, body: PersonaVersionCreate):
         raise HTTPException(409, detail=str(exc)) from exc
     try:
         vid = store.pcs.create_version(_world_root_or_404(wid), pid, body.name, body.persona)
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCNotFound as err:
+        raise HTTPException(status_code=404, detail="pc not found") from err
     return {"version": vid}
 
 
@@ -590,10 +590,10 @@ def put_pc_version(wid: str, pid: str, vid: str, body: PersonaVersionUpdate):
             store.pcs.update_version(root, pid, vid, body.persona)
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
-    except store.pcs.PCVersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.pcs.PCNotFound as err:
+        raise HTTPException(status_code=404, detail="pc not found") from err
+    except store.pcs.PCVersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     return {"ok": True}
 
 
@@ -640,12 +640,12 @@ def post_pc_revision_restore(wid: str, pid: str, vid: str, rid: str):
 def delete_pc_version(wid: str, pid: str, vid: str):
     try:
         store.pcs.delete_version(_world_root_or_404(wid), pid, vid)
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
-    except store.pcs.PCVersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.pcs.PCNotFound as err:
+        raise HTTPException(status_code=404, detail="pc not found") from err
+    except store.pcs.PCVersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -671,10 +671,10 @@ def _world_pc_version_or_404(wid: str, pid: str, vid: str):
     root = _world_root_or_404(wid)
     try:
         store.pcs.require_version(root, pid, vid)   # two stats, no read
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
-    except store.pcs.PCVersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.pcs.PCNotFound as exc:
+        raise HTTPException(status_code=404, detail="pc not found") from exc
+    except store.pcs.PCVersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     return root
 
 
@@ -700,7 +700,7 @@ async def put_world_pc_image(wid: str, pid: str, vid: str, name: str,
         stored = store.assets.put_image(root, pid, vid, name, data, ext,
                                         base=store.pcs.ASSET_BASE)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"name": name, "ext": stored,
             **image_id_field(store.assets.image_id(root, pid, vid, name,
                                                    base=store.pcs.ASSET_BASE))}
@@ -772,7 +772,7 @@ async def post_lorebook_parse(wid: str, file: UploadFile = File(...), format: st
     try:
         return {"entries": store.lorebook.parse(data, format)}
     except (store.lorebook.LorebookError, store.cards.CardParseError) as exc:
-        raise HTTPException(status_code=400, detail=f"could not parse: {exc}")
+        raise HTTPException(status_code=400, detail=f"could not parse: {exc}") from exc
 
 
 @router.post("/worlds/{wid}/lorebook/import")
@@ -781,7 +781,7 @@ def post_lorebook_import(wid: str, body: LorebookCommit):
     try:
         created = store.lorebook.commit(root, [_dump(e) for e in body.entries])
     except store.lorebook.LorebookError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"created": created}
 
 
@@ -853,7 +853,7 @@ async def post_scenario_parse(wid: str, request: Request,
         try:
             card = store.cards.loads(data, format)
         except store.cards.CardParseError as exc:
-            raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
+            raise HTTPException(status_code=400, detail=f"could not parse card: {exc}") from exc
         return await run_in_threadpool(_detach_scenario, request, run, card,
                                        client, resolved, root)
 
@@ -883,13 +883,13 @@ async def post_scenario_parse_url(wid: str, body: ScenarioUrlBody, request: Requ
             data, fmt, _url, _node = await run_in_threadpool(
                 store.characters.download_card, body.url)
             card = store.cards.loads(data, fmt)
-        except store.chub.ChubParseError:
-            raise HTTPException(status_code=400, detail="not a valid URL")
-        except store.chub.ChubFetchError:
+        except store.chub.ChubParseError as err:
+            raise HTTPException(status_code=400, detail="not a valid URL") from err
+        except store.chub.ChubFetchError as err:
             raise HTTPException(status_code=404,
-                                detail="could not fetch a card from that URL")
+                                detail="could not fetch a card from that URL") from err
         except store.cards.CardParseError as exc:
-            raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
+            raise HTTPException(status_code=400, detail=f"could not parse card: {exc}") from exc
         return await run_in_threadpool(_detach_scenario, request, run, card,
                                        client, resolved, root)
 
@@ -956,7 +956,7 @@ async def post_scenario_import(wid: str, body: ScenarioProposal):
         # HTTP fetches.
         return await run_in_threadpool(store.scenario.apply, root, wid, prop, art=body.art)
     except store.lorebook.LorebookError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---- the world's calendar (#223) ----
@@ -993,7 +993,7 @@ def put_world_calendar_config(wid: str, body: CalendarConfig):
     try:
         store.calendars.validate_calendar(cfg)
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     store.calendars.write_calendar(root, cfg)
     return {"ok": True}
 
@@ -1006,4 +1006,4 @@ def get_world_calendar_months(wid: str, year: int):
     try:
         return {"months": store.calendars.get_provider(cfg["primary"]).months(year)}
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e

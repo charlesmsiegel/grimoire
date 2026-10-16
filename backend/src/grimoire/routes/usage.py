@@ -262,7 +262,7 @@ def put_campaign_budget(cid: str, body: BudgetBody):
     try:
         store.campaigns.set_campaign_budget(cid, body.budget_usd or 0,
                                             body.budget_period or "")
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     meta = store.campaigns.read_campaign(cid)["meta"]
     return store.usage.budget(cid, meta.get("budget_usd"), meta.get("budget_period"))

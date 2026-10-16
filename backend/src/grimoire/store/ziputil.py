@@ -150,8 +150,8 @@ def extract(z: zipfile.ZipFile, infos: list[zipfile.ZipInfo], staging: Path, *,
         dest = staging.joinpath(*parts)
         try:  # containment check (no Path.is_relative_to -- 3.8-safe)
             dest.resolve().relative_to(staging_resolved)
-        except ValueError:
-            raise _err(err, f"unsafe zip entry: {i.filename}")
+        except ValueError as exc:
+            raise _err(err, f"unsafe zip entry: {i.filename}") from exc
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             # Copied through a bounded buffer, not `z.read(i)`: a world bundle
@@ -163,11 +163,11 @@ def extract(z: zipfile.ZipFile, infos: list[zipfile.ZipInfo], staging: Path, *,
             # large imports
             with z.open(i) as src, open(dest, "wb") as out:
                 shutil.copyfileobj(src, out, _COPY_BUF)
-        except (OSError, RuntimeError, NotImplementedError, zipfile.BadZipFile):
+        except (OSError, RuntimeError, NotImplementedError, zipfile.BadZipFile) as exc:
             # pathological names (reserved device names CON/NUL, trailing dots
             # or spaces on Windows) can raise a raw OSError from mkdir or
             # write_bytes; z.read(i) itself can raise RuntimeError (encrypted
             # member), NotImplementedError (unsupported compression) or
             # BadZipFile (bad CRC/corrupt data) -- none of those may escape
             # uncontained (codex review finding).
-            raise _err(err, f"unextractable zip entry: {i.filename}")
+            raise _err(err, f"unextractable zip entry: {i.filename}") from exc

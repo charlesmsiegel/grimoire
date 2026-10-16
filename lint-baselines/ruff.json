@@ -32,65 +32,46 @@
     "A002": 1
   },
   "backend/src/grimoire/routes/campaigns.py": {
-    "B904": 81,
     "RUF003": 1
   },
   "backend/src/grimoire/routes/characters.py": {
     "A002": 2,
-    "B904": 40,
     "SIM105": 1
   },
   "backend/src/grimoire/routes/common.py": {
-    "B904": 6,
     "SIM105": 1
   },
   "backend/src/grimoire/routes/config.py": {
     "A002": 4,
-    "B904": 19,
     "PERF401": 1
   },
   "backend/src/grimoire/routes/entities.py": {
-    "B904": 23,
     "RUF005": 1
   },
-  "backend/src/grimoire/routes/greetings.py": {
-    "B904": 18
-  },
   "backend/src/grimoire/routes/mechanics.py": {
-    "B904": 14,
     "C901": 1,
     "SIM105": 1
   },
   "backend/src/grimoire/routes/modules.py": {
-    "A002": 3,
-    "B904": 8
+    "A002": 3
   },
   "backend/src/grimoire/routes/scenes.py": {
     "A002": 3,
-    "B904": 37,
     "C901": 5,
     "N818": 2,
     "RUF003": 2,
     "SIM105": 5
   },
-  "backend/src/grimoire/routes/search.py": {
-    "B904": 2
-  },
   "backend/src/grimoire/routes/streaming.py": {
     "C901": 4,
     "SIM105": 2
   },
-  "backend/src/grimoire/routes/usage.py": {
-    "B904": 1
-  },
   "backend/src/grimoire/routes/weather.py": {
-    "B904": 9,
     "C901": 1,
     "RET504": 1
   },
   "backend/src/grimoire/routes/worlds.py": {
     "A002": 2,
-    "B904": 46,
     "SIM105": 1
   },
   "backend/src/grimoire/store/__init__.py": {
@@ -130,8 +111,7 @@
     "SIM105": 5
   },
   "backend/src/grimoire/store/audit/apply.py": {
-    "B023": 2,
-    "B904": 1
+    "B023": 2
   },
   "backend/src/grimoire/store/backups.py": {
     "SIM105": 1
@@ -165,7 +145,6 @@
     "PERF401": 1
   },
   "backend/src/grimoire/store/checks.py": {
-    "B904": 2,
     "C901": 1
   },
   "backend/src/grimoire/store/chronicle.py": {
@@ -263,9 +242,6 @@
   "backend/src/grimoire/store/module_edit/migrate.py": {
     "C901": 2
   },
-  "backend/src/grimoire/store/module_edit/packs.py": {
-    "B904": 1
-  },
   "backend/src/grimoire/store/module_edit/renaming.py": {
     "C901": 2,
     "SIM102": 1
@@ -353,9 +329,6 @@
     "B905": 1,
     "N818": 1
   },
-  "backend/src/grimoire/store/sheets/advancement.py": {
-    "B904": 2
-  },
   "backend/src/grimoire/store/sheets/creation.py": {
     "C901": 1
   },
@@ -404,7 +377,6 @@
     "PLW2901": 1
   },
   "backend/src/grimoire/store/world_bundle.py": {
-    "B904": 3,
     "N818": 1
   },
   "backend/src/grimoire/store/worlds/lifecycle.py": {
@@ -412,9 +384,6 @@
   },
   "backend/src/grimoire/store/worlds/paths.py": {
     "N818": 1
-  },
-  "backend/src/grimoire/store/ziputil.py": {
-    "B904": 2
   },
   "backend/tests/llm_fakes.py": {
     "N818": 1
