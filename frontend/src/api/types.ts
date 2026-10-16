@@ -2027,12 +2027,19 @@ export type EpistemicDetail = {
   items: EpistemicItem[];
 };
 /** #131: one source's exact rendered contribution, frozen with its section. */
+/** #128: why a cast source is in the prompt, stated by its section. */
+export type ContextSourceReason =
+  | { type: "cast" }
+  | { type: "off_scene"; tier: "active" | "known" };
 export type ContextSource = {
   id: string;
   label: string; text: string;
   ref?: string;
   /** A lore entry removed by packing; its text remains available to inspect. */
   shed?: boolean;
+  /** Cast sources only: the fact that put this character in the prompt. Optional:
+   *  a snapshot frozen before it existed has none. */
+  reason?: ContextSourceReason;
 };
 export type ContextSection = {
   /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen

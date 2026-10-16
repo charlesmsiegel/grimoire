@@ -2997,6 +2997,12 @@ def test_scene_context_prices_the_two_off_scene_tiers_apart(client):
     assert "counting-house" in active["text"] and "cold hands" not in active["text"]
     assert "cold hands" in known["text"] and "counting-house" not in known["text"]
     assert active["tokens"] > 0 and known["tokens"] > 0
+    # #128: each tier's sources say why they are in the prompt, on the payload
+    # the inspector reads (not only on the in-process row).
+    assert [s["reason"] for s in active["sources"]] == [{"type": "off_scene", "tier": "active"}]
+    assert [s["reason"] for s in known["sources"]] == [{"type": "off_scene", "tier": "known"}]
+    cast = rows["Character descriptions"]
+    assert [s["reason"] for s in cast["sources"]] == [{"type": "cast"}]
 
 
 def test_scene_context_reports_what_the_budget_dropped(client):

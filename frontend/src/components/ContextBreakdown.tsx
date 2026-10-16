@@ -92,6 +92,18 @@ export function ContextBreakdown({ ctx, models, acceptCid }: {
   );
 }
 
+/** #128: why a cast source is in the prompt, in the reader's words. Snapshots are
+ *  hand-editable, so a reason this build does not know says nothing rather than
+ *  something invented. */
+function describeSourceReason(reason: unknown): string | null {
+  if (!reason || typeof reason !== "object") return null;
+  const r = reason as { type?: unknown; tier?: unknown };
+  if (r.type === "cast") return "in this scene's cast";
+  if (r.type === "off_scene" && r.tier === "active") return "active in this campaign, not in this scene";
+  if (r.type === "off_scene" && r.tier === "known") return "known to the world, not in this scene";
+  return null;
+}
+
 /** #131: snapshots are hand-editable JSON. Ignore damaged optional source
  *  metadata while keeping the section itself readable. Source ids distinguish
  *  repeated names and survive a refresh or a reordered template. */
@@ -102,15 +114,17 @@ function SourceEntries({ section }: { section: ContextSection }) {
   if (!sources.length) return null;
   return <div className="ctx-sources">
     <div className="ctx-caption">Sources · expand to inspect</div>
-    {sources.map((source) => (
-      <details className={"ctx-source" + (source.shed === true ? " shed" : "")} key={source.id}>
+    {sources.map((source) => {
+      const why = describeSourceReason(source.reason);
+      return <details className={"ctx-source" + (source.shed === true ? " shed" : "")} key={source.id}>
         <summary>
           {source.label}
+          {why && <span className="ctx-reason">{why}</span>}
           {source.shed === true && <span className="ctx-shed"> shed: budget</span>}
         </summary>
         <pre className="ctx-text">{source.text}</pre>
-      </details>
-    ))}
+      </details>;
+    })}
   </div>;
 }
 

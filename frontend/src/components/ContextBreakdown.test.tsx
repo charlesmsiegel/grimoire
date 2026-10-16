@@ -320,3 +320,24 @@ test.each(["bad", [null], [{ label: {}, text: "bad" }]])(
     expect(screen.getByText("The tide rises.")).toBeVisible();
   },
 );
+
+test("a cast source says why it is in the prompt, beside its name", () => {
+  render(<ContextBreakdown models={models} ctx={ctx({ sections: [{
+    id: "off_scene_cast_active", label: "Off-scene cast · active elsewhere", text: "Mara: Walks the road.",
+    tokens: 10, tier: "background", dropped: false, trimmed: 0,
+    sources: [
+      { id: "mara", label: "Mara", text: "Mara: Walks the road.", ref: "characters:mara",
+        reason: { type: "off_scene", tier: "active" } },
+      { id: "seraphine", label: "Seraphine", text: "Seraphine: Keeps the map.", ref: "characters:seraphine",
+        reason: { type: "cast" } },
+      { id: "winifred", label: "Winifred", text: "Winifred: Carries the key.", ref: "characters:winifred" },
+    ],
+  }] })} />);
+  fireEvent.click(screen.getByText("Off-scene cast · active elsewhere"));
+  expect(screen.getByText("active in this campaign, not in this scene")).toBeInTheDocument();
+  expect(screen.getByText("in this scene's cast")).toBeInTheDocument();
+  // A source with no reason, or an unknown one from a hand-edited snapshot,
+  // is listed without one rather than with a made-up reason.
+  expect(screen.getAllByText(/^(in this scene's cast|active in this campaign|known to the world)/))
+    .toHaveLength(2);
+});
