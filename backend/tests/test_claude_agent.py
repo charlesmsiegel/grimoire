@@ -4,6 +4,7 @@ import types
 import pytest
 
 import grimoire.claude_agent as claude_agent
+from grimoire import llm_usage
 from grimoire.claude_agent import ClaudeAgentClient, ClaudeAgentError
 
 # The six SDK names are read once, at import; patching sys.modules would leave
@@ -242,6 +243,33 @@ async def test_a_ttl_split_cache_creation_is_read_when_the_flat_field_is_absent(
     [c async for c in ClaudeAgentClient().stream([], "opus", usage=usage)]
 
     assert usage["cache_write_tokens"] == 700
+
+
+async def test_a_split_with_an_unreadable_tier_records_no_cache_write(monkeypatch):
+    """The tiers that read are not the whole write: 500 filed as the cache
+    write would pass for every token of it, so nothing is filed, as for a
+    block that never said."""
+    result = types.SimpleNamespace(
+        usage={"input_tokens": 10, "output_tokens": 1,
+               "cache_creation": {"ephemeral_5m_input_tokens": 500,
+                                  "ephemeral_1h_input_tokens": "lots"}})
+    install_fake_sdk(monkeypatch, replies=[result])
+
+    usage = {}
+    [c async for c in ClaudeAgentClient().stream([], "opus", usage=usage)]
+
+    assert "cache_write_tokens" not in usage
+    assert usage["prompt_tokens"] == 10
+
+
+def test_cache_written_reads_a_split_only_when_every_tier_is_a_count():
+    assert llm_usage.cache_written({"cache_creation": {"a": 500, "b": 200}}) == 700
+    assert llm_usage.cache_written({"cache_creation": {"a": 500, "b": 0}}) == 500
+    assert llm_usage.cache_written({"cache_creation": {"a": 500, "b": None}}) is None
+    assert llm_usage.cache_written({"cache_creation": {"a": 500, "b": -1}}) is None
+    assert llm_usage.cache_written({"cache_creation": {}}) is None
+    assert llm_usage.cache_written({"cache_creation_input_tokens": 700,
+                                    "cache_creation": {"a": "lots"}}) == 700
 
 
 async def test_the_flat_cache_creation_field_wins_over_the_split(monkeypatch):
