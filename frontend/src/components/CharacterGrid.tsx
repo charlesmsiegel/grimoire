@@ -12,6 +12,7 @@ import { DescribeQueue } from "./DescribeQueue";
 import { ErrorNote } from "./ErrorNote";
 import { TaglinePrompt } from "./TaglinePrompt";
 import { UrlImportPrompt } from "./UrlImportPrompt";
+import { TextCharacterImport } from "./TextCharacterImport";
 import { ImportVersionDialog, type ImportChoice } from "./character/ImportVersionDialog";
 import { characterHref, focusStyle, formatOf, initialsOf } from "./character/shared";
 
@@ -202,6 +203,7 @@ export function CharacterGrid(
   const [bulkUrl, setBulkUrl] =
     useState<{ current: number; total: number; name: string; step: string } | null>(null);
   const [urlPromptOpen, setUrlPromptOpen] = useState(false);
+  const [textImportOpen, setTextImportOpen] = useState(false);
   const [taglineQueue, setTaglineQueue] = useState<{ cid: string; name: string }[]>([]);
   const [taglineBatch, setTaglineBatch] =
     useState<{ done: number; total: number; name: string } | null>(null);
@@ -234,10 +236,24 @@ export function CharacterGrid(
     // An error is a claim about the scope it happened in.
     setError(null);
     setDrawAll(false);
+    setTextImportOpen(false);
   }
 
-  const liveScope = useRef(scope);
-  liveScope.current = scope;
+  // A visit is one stay on one scope. Its token changes only when the scope's
+  // KEY does, so leaving and returning to the same world cannot revive an
+  // older import's refresh or navigation, while a parent rebuilding its scope
+  // object per render is still the same visit -- the fence never rests on an
+  // object's identity, or on useMemo keeping its cache. Cleanup fences a
+  // roster that unmounts while a refresh is still pending (#136).
+  const visitRef = useRef<{ key: string } | null>(null);
+  if (visitRef.current?.key !== scopeKey) visitRef.current = { key: scopeKey };
+  const visit = visitRef.current;
+  const liveVisit = useRef<{ key: string } | null>(visit);
+  liveVisit.current = visit;
+  useEffect(() => {
+    liveVisit.current = visit;
+    return () => { liveVisit.current = null; };
+  }, [visit]);
   const onListedRef = useRef(onListed);
   onListedRef.current = onListed;
 
@@ -250,33 +266,35 @@ export function CharacterGrid(
   // other.
   const reload = useCallback(() => {
     const from = scope;
+    const at = visit;
     return api.listCharacters(from).then((rows) => {
-      if (liveScope.current.kind === from.kind && liveScope.current.id === from.id) {
+      if (liveVisit.current === at) {
         setChars((prev) => reuseRows(prev, rows));
         setCharsKnown(true);
       }
     });
-  }, [scope]);
+  }, [scope, visit]);
 
   const recountUndescribed = useCallback(() => {
     const from = scope;
-    const current = () => liveScope.current.kind === from.kind && liveScope.current.id === from.id;
+    const at = visit;
+    const current = () => liveVisit.current === at;
     Promise.resolve()
       .then(() => api.countUndescribedImages(from))
       .then((n) => { if (current()) setUndescribedCount(n); })
       .catch(() => { if (current()) setUndescribedCount(null); });
-  }, [scope]);
+  }, [scope, visit]);
 
   useEffect(() => { recountUndescribed(); }, [recountUndescribed]);
 
   useEffect(() => {
-    const from = scope;
+    const at = visit;
     // `alive` as well as the scope test: a reader who leaves the roster while
     // its read is in flight has left for a section that may take no module,
     // and `onListed` landing then would start the page's module reads for it.
     let alive = true;
     const current = () => alive
-      && liveScope.current.kind === from.kind && liveScope.current.id === from.id;
+      && liveVisit.current === at;
     // The revalidation, when this scope painted from remembered rows, and the
     // read, when it did not -- the same call either way.
     reload()
@@ -299,7 +317,7 @@ export function CharacterGrid(
     // standing it becomes a claim about whichever library is showing now.
     setTaglineBatchMsg(null);
     return () => { alive = false; };
-  }, [reload, scope]);
+  }, [reload, visit]);
 
   // A derive dies with the view that started it — nothing here is a detached
   // run, so leaving takes the progress line and the Stop button with it, and a
@@ -360,7 +378,8 @@ export function CharacterGrid(
    *  is corrected from the list while it is at hand. */
   function openDescribe() {
     const from = scope;
-    const current = () => liveScope.current.kind === from.kind && liveScope.current.id === from.id;
+    const at = visit;
+    const current = () => liveVisit.current === at;
     setDescribeLoading(true);
     api.listUndescribedImages(from)
       .then((q) => {
@@ -517,8 +536,8 @@ export function CharacterGrid(
     setTaglineBatch({ done: 0, total: untagged.length, name: "" });
     const ctl = new AbortController();
     taglineAbort.current = ctl;
-    const from = scope;
-    const here = () => liveScope.current.kind === from.kind && liveScope.current.id === from.id;
+    const at = visit;
+    const here = () => liveVisit.current === at;
     // Counted from the frames rather than the summary alone: a run the user
     // stops never sends one, and "you spent forty calls, here is nothing" is
     // not an acceptable answer to Stop.
@@ -631,6 +650,20 @@ export function CharacterGrid(
                              onCancel={() => setPendingImport(null)}
                              onConfirm={(c) => void confirmImport(c)} />
       )}
+      {textImportOpen && worldScope && (
+        <TextCharacterImport key={scopeKey} wid={scope.id}
+          onCancel={() => setTextImportOpen(false)}
+          onSaved={(result) => {
+            setTextImportOpen(false);
+            void reload().then(() => {
+              if (liveVisit.current === visit) {
+                navigate(characterHref(scope, result.character));
+              }
+            }).catch((err: unknown) => {
+              if (liveVisit.current === visit) setError(err);
+            });
+          }} />
+      )}
       {describeQueue !== null && (
         <DescribeQueue key={scopeKey} scope={scope} wid={wid} queue={describeQueue}
                        onSaved={recountUndescribed}
@@ -649,6 +682,7 @@ export function CharacterGrid(
             <button className="subtle" onClick={() => setWizardOpen(true)}>+ New character with sheet…</button>
           )}
           <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
+          <button className="subtle" onClick={() => setTextImportOpen(true)}>Import text</button>
           <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden
                  aria-label="Import character card" onChange={onPickFiles} />
           <button className="subtle" onClick={() => setUrlPromptOpen(true)}>Download from URL</button>

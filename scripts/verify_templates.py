@@ -111,6 +111,7 @@ def check_messages(label: str, expected: list[dict], actual: list[dict]) -> None
 # ---------------------------------------------------------------- pure checks
 
 from grimoire.store import (  # noqa: E402
+    _plaintext,
     absorb,
     chronicle,
     context,
@@ -130,6 +131,11 @@ from grimoire.store import (  # noqa: E402
 
 card = {"name": "Seraphine Vale", "description": "Tall, sharp-eyed smuggler.",
         "personality": "Wry and wary.", "scenario": "Runs the night dock."}
+text_card = _plaintext.parse("Name: Seraphine\nPersonality: Patient.")
+exp = _plaintext.build_prompt("Name: Seraphine\nPersonality: Patient.", text_card)
+check("plaintext system", exp[0]["content"], render("plaintext_import/system.j2", schema=_plaintext.SCHEMA))
+check("plaintext user", exp[1]["content"], render("plaintext_import/user.j2",
+      text="Name: Seraphine\nPersonality: Patient.", draft=_plaintext.draft_data(text_card)))
 exp = taglines.build_prompt(card)
 check("tagline system", exp[0]["content"], render("tagline/system.j2"))
 check("tagline user", exp[1]["content"], render("tagline/user.j2", card=card))

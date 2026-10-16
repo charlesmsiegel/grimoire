@@ -2335,6 +2335,8 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 .tagline-modal { background: var(--panel); border: 1px solid var(--muted); padding: 20px; width: min(520px, 92vw); }
 .tagline-modal h3 { font-family: var(--fd); margin: 0 0 6px; }
 .tagline-modal textarea { width: 100%; }
+/* #136: six editable prose fields must remain reachable on a phone. */
+.text-character-import { width: min(720px, 92vw); max-height: calc(100dvh - 32px); overflow-y: auto; }
 
 /* Per-post image picker (#376): opened from a post's gutter, scoped by who
    spoke it. Sized off the chooser above rather than the tagline modal — this

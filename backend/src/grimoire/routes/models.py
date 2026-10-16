@@ -694,6 +694,15 @@ class CharacterCreate(BaseModel):
     card: dict | None = None
 
 
+class CharacterTextParse(BaseModel):
+    text: str
+    filename: str = ""
+
+
+class CharacterTextRefine(CharacterTextParse):
+    card: dict
+
+
 class VersionCreate(BaseModel):
     name: str
     card: dict
