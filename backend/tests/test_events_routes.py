@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from grimoire.store.continuity import review as continuity_review
 from tests.llm_fakes import FakeOpenRouter
 
 
@@ -216,8 +217,6 @@ def test_an_event_delete_whose_cascade_fails_moves_the_token(client, monkeypatch
     10): a 500 that says so and where to finish, never a bare server error, and
     a write token that still moves. An event delete writes no journal row, so
     the sentence points at Reviewed links / merges rather than at Undo."""
-    from grimoire.store.continuity import review as continuity_review
-
     cid = _campaign(client)
     mid = client.post(f"/api/campaigns/{cid}/ledger/commitments",
                       json={"title": "Mara's oath"}).json()["id"]

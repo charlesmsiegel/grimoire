@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import time as time_module
 
 import pytest
 from fastapi.testclient import TestClient
@@ -105,7 +106,6 @@ def test_the_byte_fed_compute_opens_nothing_and_reads_no_clock(cid, monkeypatch)
     def trap(*a, **k):
         raise AssertionError("the compute read a clock")
     monkeypatch.setattr(store.paths, "now_iso", trap)
-    import time as time_module
     monkeypatch.setattr(time_module, "time", trap)
     with audited() as audit:
         value = kinds.continuity(cid, files)

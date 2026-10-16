@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
 
+from grimoire.llm_errors import LLMError
 from grimoire.store import usage
 
 
@@ -318,8 +320,6 @@ def test_a_call_that_never_went_out_is_not_a_row(home):
     """The absorb budget refuses a step it has no time left for, and the client
     is never awaited. A row for it would be a call that cost nothing, took no
     time and never happened -- pure noise in every rollup."""
-    from grimoire.llm_errors import LLMError
-
     with pytest.raises(LLMError), usage.meter("dossier", campaign="saltmarch"):
         raise LLMError("timeout", "the absorb budget is spent")
 
@@ -365,8 +365,6 @@ def test_the_meter_files_the_holders_operation(home):
 
 
 def test_a_failed_call_is_still_a_row_carrying_the_failure_kind(home):
-    from grimoire.llm_errors import LLMError
-
     with pytest.raises(LLMError), usage.meter("chat", campaign="saltmarch") as m:
         m.usage.update(_SENT)       # the facade stamped the route, then failed
         raise LLMError("rate_limit", "slow down")
@@ -477,8 +475,6 @@ def test_a_caller_walking_away_from_a_one_shot_call_is_aborted_not_an_error(home
     when a client disconnects. Recording it as an error would make a user who
     closes a tab mid-suggestion look like a provider failing them -- which is
     exactly what the streaming path takes care to avoid."""
-    import asyncio
-
     for cancellation in (asyncio.CancelledError(), GeneratorExit()):
         with pytest.raises(BaseException):
             with usage.meter("suggestions", campaign="saltmarch") as m:

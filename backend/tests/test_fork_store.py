@@ -7,24 +7,36 @@ than re-resolving anything, and that a retrospective fork takes back what
 carries the removed scenes' ids and says so where it cannot.
 """
 
+import io
+
 import pytest
+from PIL import Image
 
 from grimoire.store import (
+    absorb,
     appearances,
+    assets,
+    branch,
+    campaign_images,
     campaigns,
+    characters,
     chronicle,
+    covers,
     default_prompts,
     entities,
     fork,
+    image_refs,
     image_scopes,
     image_store,
     journal,
     overlay,
     plot,
     scenes,
+    world_images,
     worlds,
 )
 from grimoire.store.regex import rewrites
+from grimoire.store.worlds import lifecycle
 
 
 @pytest.fixture
@@ -154,7 +166,6 @@ def test_the_fork_inherits_from_the_same_world_through_the_overlay(wid, cid):
 def test_the_forks_version_locks_travel_rather_than_being_re_derived(wid, cid):
     """A branch that picked a different character version than the campaign it
     came from would not be a branch of it."""
-    from grimoire.store import characters
     wroot = worlds.world_root(wid)
     aid, vid = characters.create_character(wroot, "Mara")
     sid = scenes.create_scene(cid, "Saltmarch")
@@ -169,7 +180,6 @@ def test_a_materialized_records_images_travel_with_the_fork(wid, cid):
     bytes live in the campaign tree itself and only travel because the whole
     directory does. The tree-level copy is what this asserts; the overlay
     resolution above is a different claim."""
-    from grimoire.store import assets
     wroot = worlds.world_root(wid)
     eid = entities.create_entity(wroot, "locations", "Saltmarch Docks", "world docks")
     overlay.update_entity(cid, "locations", eid, body="campaign docks")
@@ -413,7 +423,6 @@ def test_the_removed_scenes_chronicle_and_beats_go_with_them(cid, three):
 def test_a_write_back_the_removed_scene_landed_is_put_back(wid, cid):
     """The change journal holds the record's actual prior value, so this is a
     restoration rather than a guess -- and the count says how many."""
-    from grimoire.store import absorb
     wroot = worlds.world_root(wid)
     entities.create_entity(wroot, "lore", "The Pact", "old body")
     one = _played(cid, "One")
@@ -442,7 +451,6 @@ def test_the_reversal_is_reported_when_it_cannot_be_made(wid, cid):
     """A record the removed scene *created* has no reversal -- `store/undo.py`
     declines it. The fork says so instead of deleting the record or claiming
     the branch is clean."""
-    from grimoire.store import absorb
     one = _played(cid, "One")
     two = _played(cid, "Two")
     absorb.apply_edits(cid, [{
@@ -475,7 +483,6 @@ def test_the_reversals_the_cut_performed_are_journalled_on_the_fork(wid, cid):
     """Reversals are recorded, not erased. `undo.undo` appends a row for the
     reversal it performs, so the fork's history says the branch was cut — which
     is the record anything reading that history later has to work from."""
-    from grimoire.store import absorb
     entities.create_entity(worlds.world_root(wid), "lore", "The Pact", "old body")
     one = _played(cid, "One")
     two = _played(cid, "Two")
@@ -540,8 +547,6 @@ def test_a_fork_at_a_post_keeps_the_scene_through_that_post(cid):
 
 
 def test_a_fork_at_a_post_reverses_that_posts_absorb_writes(cid):
-    from grimoire.store import absorb
-
     one = _played(cid, "Mara", posts=4)
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [{
@@ -582,8 +587,6 @@ def test_an_out_of_range_index_copies_nothing(cid):
 
 
 def test_a_fork_removes_the_scenes_alternatives_by_number(cid):
-    from grimoire.store import branch
-
     one = _played(cid, "Mara")
     alt = branch.branch_scene(cid, one, 0, title="Abel")      # 001--abel sorts first
     assert alt < one
@@ -613,8 +616,6 @@ def test_a_fork_inherits_the_same_library_and_the_same_hidden_entries(monkeypatc
     in `fork.py` changed for this -- which is exactly why it is worth asserting
     rather than assuming.
     """
-    from grimoire.store import campaign_images, campaigns, fork, world_images, worlds
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Nights", wid)
@@ -629,9 +630,6 @@ def test_a_fork_inherits_the_same_library_and_the_same_hidden_entries(monkeypatc
 
 
 def _fork_png() -> bytes:
-    import io
-
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
     return buf.getvalue()
@@ -654,9 +652,6 @@ def test_a_retrospective_fork_drops_the_cut_scenes_rewrite_records(cid):
 
 
 def _noise_png(seed: int) -> bytes:
-    import io
-
-    from PIL import Image
     im = Image.new("RGB", (10, 8))
     im.putdata([((x * 13 + seed) % 256, (y * 29 + seed) % 256, (x * y * seed) % 256)
                 for y in range(8) for x in range(10)])
@@ -669,16 +664,6 @@ def test_forks_write_no_blob(monkeypatch, tmp_path):
     """Spec section 13: a fork copies placements, never pictures. Forking a
     campaign and a world that both hold placements of every kind leaves the
     image store's blobs exactly as they were."""
-    from grimoire.store import (
-        assets,
-        campaign_images,
-        characters,
-        covers,
-        image_refs,
-        image_store,
-        world_images,
-    )
-    from grimoire.store.worlds import lifecycle
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")

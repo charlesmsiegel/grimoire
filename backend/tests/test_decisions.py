@@ -6,6 +6,7 @@ tests need no store and no client: every case is a pure function of its input.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import pytest
@@ -1170,7 +1171,6 @@ def _rank_answer(value, rank: Rank | None = None) -> Answer:
 
 
 def test_question_kinds_are_class_constants():
-    import dataclasses
     assert [cls.KIND for cls in (Predicate, Choice, Score, Rank, MultiSelect)] == [
         "predicate", "choice", "score", "rank", "select"]
     for cls in (Predicate, Choice, Score, Rank, MultiSelect):

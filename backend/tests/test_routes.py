@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import hashlib
 import importlib
 import io
 import json
@@ -7,23 +8,32 @@ import re
 import shutil
 import threading
 import time
+import traceback
 import zipfile
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from PIL import Image
 
 import grimoire.store as store
-from grimoire import llm, routes, schemas, wire
+import grimoire.store.suggest as suggest_mod
+from grimoire import catalog, decisions, inference, llm, routes, schemas, wire
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
+from grimoire.openrouter import OpenRouterError
+from grimoire.routes import campaigns as campaign_routes
 from grimoire.routes import character_turns
-from grimoire.store import atomic
+from grimoire.routes import scenes as scene_routes
+from grimoire.routes.models import ConfigUpdate
+from grimoire.store import atomic, calendars, campaigns, cards, chub, climates, image_hash
+from grimoire.store import audit as audit_mod
 from grimoire.store import inference_keys as keys
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from tests import draft_runs as drafts
 from tests import review_runs, wire_kit
 from tests.inference_fixtures import (
@@ -256,7 +266,6 @@ def test_models_refresh_400_only_for_the_kind_with_no_catalog(client):
 
 
 def _mixed_catalog():
-    from grimoire import catalog
     return [catalog.entry(r) for r in (
         {"id": "a/chat", "architecture": {"output_modalities": ["text"]}},
         {"id": "b/embed", "architecture": {"output_modalities": ["embeddings"]}},
@@ -323,7 +332,6 @@ def test_models_refresh_for_openrouter_presents_the_stored_key(client):
 
 
 def test_models_refresh_upstream_error_normalized(client):
-    from grimoire.llm_errors import LLMError
     r = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://x", "api_key": "sk-x"})
     cid = r.json()["id"]
@@ -550,8 +558,6 @@ def test_every_writable_config_key_is_reported_back(client):
     Names the missing keys in the failure, because the fix is one line per key
     and the useful part is which line.
     """
-    from grimoire.routes.models import ConfigUpdate
-
     # `model_fields` on v2, `__fields__` on v1 — short-circuited rather than
     # tried in order, so v2 never touches the deprecated name. No `pydantic-ok`
     # marker: `test_pydantic_guard.py` scans `src/grimoire` only, so one here
@@ -629,8 +635,6 @@ def test_every_key_writable_at_format_2_reports_back_the_value_it_stored(client)
 def _writable_config_keys() -> list[str]:
     """Every key `ConfigUpdate` accepts, but the confirmation: a yes to a
     question the write asks, never stored, so nothing to read back."""
-    from grimoire.routes.models import ConfigUpdate
-
     return sorted(set(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
                   - {"confirm_embedding"})
 
@@ -2552,8 +2556,6 @@ def test_character_import_garbage_400(client):
 
 
 def test_chub_import_route(client, monkeypatch):
-    from grimoire.store import cards, chub
-
     wid = _world(client)
     png = cards.dumps({"spec": "chara_card_v3", "spec_version": "3.0",
                         "data": {"name": "Imp", "extensions": {}}}, "png")
@@ -2574,8 +2576,6 @@ def test_chub_import_route(client, monkeypatch):
 
 
 def test_chub_import_route_names_the_version_it_creates(client, monkeypatch):
-    from grimoire.store import cards, chub
-
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Winifred"}).json()["character"]
     png = cards.dumps({"spec": "chara_card_v3", "spec_version": "3.0",
@@ -2597,8 +2597,6 @@ def test_chub_import_route_names_the_version_it_creates(client, monkeypatch):
 
 
 def test_chub_import_route_updates_in_place_when_already_linked(client, monkeypatch):
-    from grimoire.store import cards, chub
-
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Abelha"}).json()["character"]
     client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source", json={"url": "creator/abelha"})
@@ -2626,8 +2624,6 @@ def test_chub_import_route_updates_in_place_when_already_linked(client, monkeypa
 
 
 def test_chub_import_route_direct_url_not_chub(client, monkeypatch):
-    from grimoire.store import cards
-
     wid = _world(client)
     png = cards.dumps({"spec": "chara_card_v3", "spec_version": "3.0",
                         "data": {"name": "Direct", "extensions": {}}}, "png")
@@ -2654,8 +2650,6 @@ def test_chub_import_route_bad_url(client):
 
 
 def test_chub_import_route_unreachable(client, monkeypatch):
-    from grimoire.store import chub
-
     wid = _world(client)
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: None)
     r = client.post(f"/api/worlds/{wid}/characters/import/chub", json={"url": "creator/missing"})
@@ -2739,8 +2733,6 @@ def test_chub_source_route_unknown_character_or_version(client):
 
 
 def test_chub_gallery_and_lorebooks_routes(client, monkeypatch):
-    from grimoire.store import chub
-
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Abelha"}).json()["character"]
     client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source",
@@ -3371,7 +3363,6 @@ def test_location_bad_weather_values_are_400_not_500(client):
 
 
 def test_campaign_accepts_a_climate(client):
-    from grimoire.store import climates
     wid = _world(client)
     r = client.post("/api/campaigns",
                     json={"name": "Run", "world": wid, "climate": climates.FALLBACK_ID})
@@ -4611,7 +4602,6 @@ def test_regenerate_with_desynced_turn_boundaries_returns_400(client):
     """turn_sizes that no longer fits the transcript must not authorize a
     deletion — it would consume blocks from an earlier generation. The refusal
     is a handled 400, and every message survives."""
-    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
@@ -6584,7 +6574,6 @@ def test_post_voice_anchor_generate_requires_key(client):
 
 # ---- scene calendar ----
 def test_campaign_create_writes_calendar_with_region(client):
-    from grimoire.store import calendars, campaigns
     wid = _world(client)
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid, "region": "GB"}).json()["id"]
     cfg = calendars.read_calendar(campaigns.campaign_root(cid))
@@ -6592,7 +6581,6 @@ def test_campaign_create_writes_calendar_with_region(client):
 
 
 def test_campaign_create_defaults_region_us(client):
-    from grimoire.store import calendars, campaigns
     _wid, cid = _campaign(client)
     assert calendars.read_calendar(campaigns.campaign_root(cid))["primary"]["region"] == "US"
 
@@ -7560,8 +7548,6 @@ def test_a_unique_name_is_still_judged_alongside_a_clashing_pair(client):
 
 
 def test_a_failing_voice_check_does_not_fail_absorb(client):
-    from grimoire.llm_errors import LLMError
-
     cid, sid = _voice_scene(client)
 
     class Failing:
@@ -7602,8 +7588,6 @@ def test_voice_drift_runs_on_decide_and_meters_under_its_task(client):
     """The judge is one `decide()` item: the shared decision prompt around the
     judge's context, the question and the corrective instruction, sent with
     the batch's schema, and filed as a decide row under `voice-drift`."""
-    from grimoire import decisions, inference
-
     cid, sid = _voice_scene(client, prior="Keep her answers short.")
     fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She rambled again."))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
@@ -7632,8 +7616,6 @@ def test_the_voice_item_renders_off_the_event_loop(client, monkeypatch):
     its rationale instruction render templates, and absorb runs on the
     lifespan loop a detached turn shares -- so both are built in a worker
     thread, where no event loop is running."""
-    import asyncio
-
     on_loop: dict[str, bool] = {}
 
     def spy(name, real):
@@ -8042,8 +8024,6 @@ def test_put_chronicle_serializes_the_whole_commit(client):
     both read a matching `before` before either writes, and the guard would stop
     neither. The commit runs under the campaign lock so it cannot interleave --
     the same lock domain every other campaign mutator uses."""
-    import threading
-
     cid, sid = _dossier_scene(client)
     client.app.dependency_overrides[routes.get_llm] =         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
@@ -8752,8 +8732,6 @@ def test_absorb_missing_key_returns_409(client):
 
 
 def test_absorb_upstream_error_returns_502(client):
-    from grimoire.openrouter import OpenRouterError
-
     class FakeRaises:
         async def complete(self, messages, cfg, usage=None, *, schema=None):
             raise OpenRouterError("bad_response", "boom")
@@ -8884,7 +8862,6 @@ def test_absorb_survives_audit_pipeline_crash(client, module_scene, monkeypatch)
     """Never-fail-absorb: an exception ANYWHERE in the audit pipeline
     (here: materialize) yields mechanics failed, absorb 200 + intact prose."""
     cid, sid = module_scene
-    from grimoire.store import audit as audit_mod
     monkeypatch.setattr(audit_mod, "materialize",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     client.app.dependency_overrides[routes.get_llm] = \
@@ -9477,8 +9454,6 @@ def test_absorb_budget_of_zero_is_unbounded(client, npc_module_scene, monkeypatc
 
 def test_absorb_extraction_overrunning_the_budget_is_a_504(client, npc_module_scene):
     """Nothing has been produced yet, so there is nothing to degrade to."""
-    import asyncio
-
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "0.05"})
 
@@ -9981,8 +9956,6 @@ def test_a_dossier_call_cancelled_mid_flight_counts_as_attempted(
     """A call the budget kills *while it is in flight* did reach the model --
     unlike one the budget refused to start. Both blame the budget; only the
     second is un-attempted."""
-    import asyncio
-
     cid, sid = npc_module_scene
     # Real seconds, not the fake clock: only a genuine asyncio timeout cancels a
     # call that is already in flight. 0.5s is the whole absorb's ceiling, so the
@@ -10064,8 +10037,6 @@ def test_the_budget_refuses_a_call_it_cannot_start(monkeypatch):
     after the caller's own check, so the budget can cross zero in between. Only
     `run` can decide-and-start atomically, which is why the attempt is recorded
     from inside it rather than by the caller."""
-    import asyncio
-
     # one value per _clock() read: __init__, the caller's spent(), run's
     # remaining(). The last value repeats rather than running out, so a
     # regression fails on the assertion below instead of on a spent iterator.
@@ -10120,8 +10091,6 @@ def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
     only the detail sentinel tells them apart. A stalled provider with budget to
     spare is not something a bigger budget fixes -- saying it is would send the
     user to the wrong setting."""
-    from grimoire.llm_errors import LLMError
-
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "600"})
     clock = [0.0]
@@ -11556,7 +11525,6 @@ def test_cast_batch_unknown_actor_404s(client):
 
 # ---- image thumbnails ----
 def _real_png(w=1200, h=800):
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", (w, h), (180, 40, 40)).save(buf, format="PNG")
     return buf.getvalue()
@@ -11702,7 +11670,6 @@ def test_scene_suggestions_rank_false_skips_greeting_picks(client, monkeypatch):
     # three startable greetings is what normally triggers ranking
     cid, gids = _campaign_with_greetings(client, 3)
     seen = {}
-    import grimoire.store.suggest as suggest_mod
     real = suggest_mod.greeting_candidates
 
     def _spy(*a, **k):
@@ -12435,7 +12402,6 @@ def test_modules_api(client):
 
 
 def _seed_content_module(client, tmp_path, mid="contentmod", statted=False):
-    import json as _json
     home = tmp_path  # GRIMOIRE_HOME is already tmp_path via the client fixture
     d = home / "modules" / mid
     d.mkdir(parents=True)
@@ -12446,14 +12412,14 @@ def _seed_content_module(client, tmp_path, mid="contentmod", statted=False):
             "label": "Trinket", "kind": "items", "groups": [],
             "fields": [{"key": "power", "type": "dots", "max": 5}],
         }
-    (d / "sheets.json").write_text(_json.dumps(sheets_def), encoding="utf-8")
+    (d / "sheets.json").write_text(json.dumps(sheets_def), encoding="utf-8")
     cd = d / "content" / "items"
     cd.mkdir(parents=True)
     (cd / "lantern.md").write_text(
         "---\nname: Lantern of Winnowing\nkeys: lantern\n---\nA soft lantern.\n", encoding="utf-8")
     if statted:
         (cd / "lantern.sheet.json").write_text(
-            _json.dumps({"sheet_type": "trinket", "fields": {"power": 2}}), encoding="utf-8")
+            json.dumps({"sheet_type": "trinket", "fields": {"power": 2}}), encoding="utf-8")
     return mid
 
 
@@ -12503,19 +12469,18 @@ def _seed_content_module_bad_sheet_type(client, tmp_path, mid="badsheetmod"):
     """Content whose sidecar names a sheet_type the module doesn't declare --
     simulates the module pack changing out from under an instantiate between
     the content read and the sheet write."""
-    import json as _json
     home = tmp_path
     d = home / "modules" / mid
     d.mkdir(parents=True)
     (d / "module.md").write_text("---\nname: Bad Sheet Test\n---\n", encoding="utf-8")
     # No "trinket" sheet type declared here -- the sidecar below references it anyway.
-    (d / "sheets.json").write_text(_json.dumps({"groups": {}, "sheet_types": {}}), encoding="utf-8")
+    (d / "sheets.json").write_text(json.dumps({"groups": {}, "sheet_types": {}}), encoding="utf-8")
     cd = d / "content" / "items"
     cd.mkdir(parents=True)
     (cd / "lantern.md").write_text(
         "---\nname: Lantern of Winnowing\nkeys: lantern\n---\nA soft lantern.\n", encoding="utf-8")
     (cd / "lantern.sheet.json").write_text(
-        _json.dumps({"sheet_type": "trinket", "fields": {"power": 2}}), encoding="utf-8")
+        json.dumps({"sheet_type": "trinket", "fields": {"power": 2}}), encoding="utf-8")
     return mid
 
 
@@ -12553,7 +12518,6 @@ def test_instantiate_into_campaign_exception_handling_covers_module_not_found(cl
     """Verify that post_campaign_instantiate's exception handler correctly catches
     both SheetError (existing) and ModuleNotFound (TOCTOU race) by confirming the
     route properly handles ModuleNotFound raised during sheet write."""
-    from unittest.mock import patch
     mid = _seed_content_module(client, tmp_path, statted=True)
     wid, cid = _campaign(client)
     client.put(f"/api/campaigns/{cid}/module", json={"module": mid})
@@ -12640,7 +12604,6 @@ def test_campaign_module_put_serializes_on_campaign_lock(client, module_scene):
     window. Deleting the `with store.locks.campaign_lock(cid):` wrapper from that
     route makes this test fail (the PUT thread completes immediately, before
     the lock is released)."""
-    import threading
     cid, sid = module_scene
     assert store.audit.read_baselines(cid) != {}
     result: dict = {}
@@ -12665,7 +12628,6 @@ def test_world_module_put_serializes_on_affected_campaign_lock(client):
     locks blocks the whole PUT -- not just that one campaign's slice of it.
     Deleting the ExitStack/campaign_lock wrapper from that route makes this test
     fail the same way as the campaign-PUT variant above."""
-    import threading
     wid = _world(client)
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     client.put(f"/api/worlds/{wid}/module", json={"module": "pool-basic"})
@@ -12711,7 +12673,6 @@ def test_world_module_put_locks_newly_inheriting_campaign(client):
     X still overridden and leaves it alone; the other -- running after --
     sees X freshly inheriting and clears it). Y, already inheriting, must
     also be cleared by the world PUT."""
-    import threading
     wid = _world(client)
     cid_x = client.post("/api/campaigns", json={"name": "X", "world": wid}).json()["id"]
     cid_y = client.post("/api/campaigns", json={"name": "Y", "world": wid}).json()["id"]
@@ -13560,8 +13521,6 @@ def test_concurrent_resolved_retries_persist_once(client, monkeypatch):
     thread that dies before reaching it fails the other with
     `BrokenBarrierError` rather than hanging the suite.
     """
-    import threading
-    import traceback
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
     real_cont = routes.mechanics._continuation_messages
@@ -13690,7 +13649,6 @@ def test_concurrent_accept_vs_manual_check_distinct_entries(client):
     that refuses needs the accept to win, which an idle machine rarely lets it
     do.
     """
-    import threading
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["cont"])
@@ -15314,7 +15272,6 @@ def test_absorb_and_audit_do_not_count_as_campaign_activity(client):
     """Both return staged edits and write nothing -- `PUT /chronicle` is what
     persists them. Reviewing an absorb and discarding it, or retrying the audit
     step, must not move the campaign up Recent for work that never landed."""
-    from grimoire.routes import scenes as scene_routes
     for fn in (scene_routes.post_absorb, scene_routes.post_audit):
         assert getattr(fn, "grimoire_computes_only", False), (
             f"{fn.__name__} stages its edits; it must declare itself, "
@@ -15328,7 +15285,6 @@ def test_a_preview_post_does_not_count_as_campaign_activity(client):
     wid, cid = _campaign(client)
     before = [c for c in client.get("/api/campaigns").json() if c["id"] == cid][0]["activity"]
 
-    from grimoire.routes import campaigns as campaign_routes
     assert getattr(campaign_routes.post_campaign_voice_anchor_generate,
                    "grimoire_computes_only", False), (
         "the preview route must declare itself, or the middleware cannot tell")
@@ -16066,11 +16022,10 @@ def test_a_ref_to_a_record_that_does_not_exist_is_accepted(client):
 
 def _seed_content_module_with_holder(client, tmp_path, holder, mid="refmod"):
     """A module item whose `holder` is whatever the caller wants to test."""
-    import json as _json
     d = tmp_path / "modules" / mid
     (d / "content" / "items").mkdir(parents=True)
     (d / "module.md").write_text("---\nname: Content Test\n---\n", encoding="utf-8")
-    (d / "sheets.json").write_text(_json.dumps({"groups": {}, "sheet_types": {}}),
+    (d / "sheets.json").write_text(json.dumps({"groups": {}, "sheet_types": {}}),
                                    encoding="utf-8")
     (d / "content" / "items" / "lantern.md").write_text(
         f"---\nname: Lantern\nholder: {holder}\n---\nA soft lantern.\n", encoding="utf-8")
@@ -16125,9 +16080,6 @@ def _world_and_campaign(client):
 
 
 def _lib_png() -> bytes:
-    import io
-
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
     return buf.getvalue()
@@ -16318,7 +16270,6 @@ def _put_world_char_avatar(client, wid, cid, data, name="avatar"):
 def test_serve_blob_etag_is_byte_sha(client):
     """A blob is named by the sha of its bytes, so that is its validator: the
     same bytes under any placement, mtime or device revalidate as one."""
-    import hashlib
     wid, cid = _default_world_char(client)
     assert _put_world_char_avatar(client, wid, cid, _png_bytes()).status_code == 200
     url = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar"
@@ -16349,7 +16300,6 @@ def test_legacy_file_keeps_mtime_etag(client):
 def test_a_blob_that_vanished_is_a_404_not_a_500(client):
     """A blob's tag needs no stat, so the 404 comes from the read (and from the
     thumbnail path falling through to it)."""
-    from fastapi import HTTPException
     wid, cid = _default_world_char(client)
     _put_world_char_avatar(client, wid, cid, _png_bytes())
     p = store.assets.image_path(store.worlds.world_root(wid), cid, "default", "avatar")
@@ -16362,7 +16312,6 @@ def test_a_blob_that_vanished_is_a_404_not_a_500(client):
 
 
 def test_put_record_image_returns_image_id(client):
-    from grimoire.store import image_hash
     # a world character
     wid, cid = _default_world_char(client)
     r = _put_world_char_avatar(client, wid, cid, _png_bytes())
@@ -16395,7 +16344,6 @@ def test_put_record_image_returns_image_id(client):
 
 
 def test_library_and_cover_puts_return_image_id(client):
-    from grimoire.store import image_hash
     wid, cid = _campaign(client)
     png = ("a.png", io.BytesIO(_png_bytes()), "image/png")
     w = client.put(f"/api/worlds/{wid}/images/coastline", files={"file": png}).json()

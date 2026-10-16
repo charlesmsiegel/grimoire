@@ -12,6 +12,8 @@ from evals import run as eval_run
 from evals import runner as reports
 from evals.epistemic import cases, decision, graders, live
 from evals.graders import Check
+from grimoire.llm_errors import LLMError
+from grimoire.store import config, llm_connections, paths, routing, usage
 from tests.llm_fakes import FakeLLM, decision_reply
 
 RULE_WORDS = ("override", "witnessed", "unaware", "suspect", "narrator", "withheld",
@@ -20,7 +22,6 @@ RULE_WORDS = ("override", "witnessed", "unaware", "suspect", "narrator", "withhe
 
 def _store(monkeypatch, home):
     """A seeded throwaway store whose `chat` resolves to a local model."""
-    from grimoire.store import config, llm_connections
     monkeypatch.setenv("GRIMOIRE_HOME", str(home))
     config.read_config()
     llm_connections.create_connection("openai_compatible", "Mara Local",
@@ -146,7 +147,6 @@ def test_a_leaking_reply_is_on_the_leakage_line_and_fails_the_gate(monkeypatch, 
 
 
 def test_an_empty_or_failed_reply_is_never_clean(monkeypatch, tmp_path):
-    from grimoire.llm_errors import LLMError
     _store(monkeypatch, tmp_path / "real")
     _results, records = live.run(_target(), client=FakeLLM([[""]]),
                                  real_home=tmp_path / "real")
@@ -186,7 +186,6 @@ def test_the_tripwire_is_checked_again_before_the_harvest(monkeypatch, tmp_path)
 
 def test_money_is_reported_never_zero_and_the_real_ledger_stays_empty(monkeypatch, tmp_path):
     from evals import costs
-    from grimoire.store import usage
     _store(monkeypatch, tmp_path / "real")
     results, _records = live.run(_target(), client=FakeLLM([["Plain words."]]),
                                  real_home=tmp_path / "real")
@@ -262,7 +261,6 @@ def test_live_resolves_before_any_home_moves(monkeypatch, tmp_path, capsys):
     judge = _judge()
 
     def resolve(*a, **k):
-        from grimoire.store import paths
         seen["home"] = paths.home()
         return {"chat": target, "epistemic-access (decide)": judge}
     monkeypatch.setattr(reports, "resolve_connections", resolve)
@@ -365,7 +363,6 @@ def test_the_gate_end_to_end_reports_false_known_apart(monkeypatch, tmp_path):
 
 
 def test_the_judge_and_the_gate_decide_on_the_epistemic_route():
-    from grimoire.store import routing
     for task in (live.JUDGE_TASK, decision.TASK):
         route = routing.route(task)
         assert route is not None and route.key == "epistemic" and route.operation == "decide"

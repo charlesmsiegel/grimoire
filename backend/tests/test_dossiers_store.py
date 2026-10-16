@@ -1,3 +1,5 @@
+import pytest
+
 from grimoire.store import characters, dossiers, worlds
 
 
@@ -22,7 +24,6 @@ def test_write_then_read_roundtrip(monkeypatch, tmp_path):
 def test_write_rejects_ids_that_escape_the_characters_dir(monkeypatch, tmp_path):
     """A dossier edit arrives in a client-supplied PUT body, so its target id is
     untrusted: an id with a separator must not write outside the campaign."""
-    import pytest
     root = _root(monkeypatch, tmp_path)
     outside = tmp_path / "pwned.md"
     for bad in ("../../pwned", "..\\..\\pwned", "..", ".", ""):

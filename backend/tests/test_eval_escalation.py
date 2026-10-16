@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from grimoire.store import config, llm_connections
+
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
@@ -251,8 +253,6 @@ def test_overriding_puts_the_table_back():
 def _store(monkeypatch, home: Path) -> None:
     """A format-2 store: the Decision role natively on `vendor/decider`, the
     Primary structured on `vendor/active`, one keyed OpenRouter provider."""
-    from grimoire.store import config, llm_connections
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(home))
     config.read_config()
     llm_connections.update_connection("openrouter", api_key="sk-test")
@@ -296,8 +296,6 @@ def test_the_escalator_refuses_a_mismatched_resolution(monkeypatch, tmp_path):
 
 
 def test_escalation_roles_refuses_with_the_seam_s_sentence(monkeypatch, tmp_path):
-    from grimoire.store import config, llm_connections
-
     _store(monkeypatch, tmp_path / "real")
     created = llm_connections.create_connection("openrouter", "keyless")
     config.write_config(role_primary_provider=created, role_primary_model="vendor/x")

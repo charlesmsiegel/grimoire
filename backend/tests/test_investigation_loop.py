@@ -14,8 +14,9 @@ import pytest
 from grimoire import tool_calls
 from grimoire.llm_errors import LLMError
 from grimoire.routes import investigation
-from grimoire.store import config, llm_connections
+from grimoire.store import config, llm_connections, usage
 from grimoire.store.inference import limits
+from grimoire.store.inference import resolve as inference_resolve
 from grimoire.store.investigation import budget as inv_budget
 from grimoire.store.investigation import state, trace
 from tests import wire_kit
@@ -109,7 +110,6 @@ def test_every_row_the_run_filed_is_part_of_its_usage(cid, scene):
     """The decide tool's calls -- a failed one included, which hands back no
     rows -- are metered apart from the loop's turns; the trace's money is
     every row filed under the run's id, and no other run's."""
-    from grimoire.store import usage
     usage.record(task="investigation-decide", campaign=cid, run_id=RUN, operation="decide",
                  model="vendor/judge", provider="openrouter", status="error",
                  error="timeout", prompt_tokens=10, cost_usd=0.25)
@@ -201,7 +201,6 @@ def test_a_loop_that_raises_still_reports_the_turns_it_filed(cid, scene):
 def test_the_searchs_embedding_rows_are_part_of_the_runs_usage(cid, scene):
     """09's retrieval meters its embedding under `history-recall` with the
     run's id and hands back no rows: the trace reads them from the ledger."""
-    from grimoire.store import usage
     usage.record(task="history-recall", campaign=cid, run_id=RUN, operation="embed",
                  model="vendor/embed", provider="openrouter", prompt_tokens=12,
                  cost_usd=0.125)
@@ -218,7 +217,6 @@ def test_the_searchs_embedding_rows_are_part_of_the_runs_usage(cid, scene):
 def test_a_failed_first_turn_is_attributed_to_the_model_that_served_it(cid, scene):
     """A turn-1 failure raises with no `LoopResult`; the trace names the
     model its filed row names (a fallback that served), not the primary."""
-    from grimoire.store import usage
     usage.record(task=TASK, campaign=cid, run_id=RUN, model="vendor/backup",
                  provider="openrouter", provider_id="backup", status="error",
                  error="rate_limit")
@@ -234,7 +232,6 @@ def test_a_failed_first_turn_is_attributed_to_the_model_that_served_it(cid, scen
 def test_a_fallback_that_cannot_call_tools_bounds_no_context(monkeypatch):
     """A tool run never sends a fallback known unable to call tools, so its
     window -- unknown here -- is no reason to stop on `context`."""
-    from grimoire.store.inference import resolve as inference_resolve
     seen = {}
 
     def ceiling(resolved, *, reserve=None, max_tokens=None):

@@ -3,9 +3,11 @@
 drawn, through 01c's one sampler, and the draw's record is stored with the
 speaker so nothing ever draws it again."""
 
+import asyncio
+
 import pytest
 
-from grimoire import decisions, draws, routes, store
+from grimoire import decisions, draws, openai_compatible, openrouter, routes, store
 from grimoire.decisions import NONE_KEY, Answer, Decision, ItemResult
 from grimoire.routes import character_turns
 from grimoire.store import response_protocol as rp
@@ -229,7 +231,6 @@ def test_a_handed_back_pick_is_decided_and_never_asked_again(client, monkeypatch
     assert record["pick"]["basis"] == "none" and record["actor_ref"] is None
     assert asked == ["response-selector"]
 
-    import asyncio
     actor, again = asyncio.run(character_turns._first_actor(cid, sid, None, record))
     assert actor is None and again is record
     assert asked == ["response-selector"]
@@ -256,8 +257,6 @@ def test_the_hand_back_is_described_to_a_native_endpoint_as_the_players_turn():
     of the other options fits."; named as the player's turn, it handed back.
     Both native adapters send the pick's own wording; any other choice keeps
     the generic one."""
-    from grimoire import decisions, openai_compatible, openrouter
-
     named = rp.selector_item([{"ref": MARA, "name": "Mara"}], [], "", "Seraphine")
     (q,) = named.questions
     assert q.none_text.startswith("Seraphine (the player):")
@@ -273,8 +272,6 @@ def test_the_hand_back_is_described_to_a_native_endpoint_as_the_players_turn():
 
 
 def test_the_pick_names_the_scenes_player_character(monkeypatch):
-    from grimoire.routes import character_turns
-
     seen = {}
     real = rp.selector_item
 

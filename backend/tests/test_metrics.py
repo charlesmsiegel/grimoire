@@ -3,6 +3,9 @@ latency, failure and trend (#154)."""
 
 from __future__ import annotations
 
+import statistics
+from datetime import date, timedelta
+
 import pytest
 
 from grimoire.store import logs, metrics, usage
@@ -62,8 +65,6 @@ def test_a_known_distribution_gives_the_textbook_cut_points():
 def test_it_agrees_with_the_stdlib_method_it_claims_to_implement():
     """The docstring says "inclusive"; this is what holds it to that, so a
     future rewrite cannot quietly become a different percentile."""
-    import statistics
-
     for values in ([1, 2, 3, 4], list(range(1, 101)), [5, 5, 5, 900]):
         cuts = statistics.quantiles(values, n=100, method="inclusive")
         for q in metrics.PERCENTILES:
@@ -140,7 +141,6 @@ def test_the_error_block_comes_from_the_error_store_and_may_differ(home):
 
 
 def test_by_day_is_a_trend_of_that_days_own_percentiles(home):
-    from datetime import date, timedelta
     today = date.fromisoformat(_today())
     yesterday = (today - timedelta(days=1)).isoformat()
     _call(100, day=yesterday)

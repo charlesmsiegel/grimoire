@@ -24,7 +24,9 @@ import itself, and only when the reason is actually true.
 from __future__ import annotations
 
 import ast
+import importlib
 import pathlib
+import types
 
 import grimoire
 
@@ -270,8 +272,6 @@ def test_no_submodule_is_shadowed_by_a_facade_export():
     call time -- having passed both import and the cycle check above. This
     catches the collision at its source instead.
     """
-    import importlib
-    import types
 
     shadowed = []
     for mod in sorted(PACKAGES):

@@ -19,6 +19,7 @@ import pytest
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.routes import campaigns as campaign_routes
 from grimoire.store import (
     absorb,
     appearances,
@@ -283,8 +284,6 @@ def test_pc_state_edit_is_staged_and_applied(home):
 def test_the_changes_listing_keeps_a_pc_state_row(home):
     """`/changes` names each record it lists and drops one it cannot name (a
     record deleted since). A PC is a record it must be able to name."""
-    from grimoire.routes import campaigns as campaign_routes
-
     cid, sid, _croot = home
     absorb.apply_edits(cid, [_pc_edit(cid, sid)], sid)
     out = campaign_routes.get_changes(cid)

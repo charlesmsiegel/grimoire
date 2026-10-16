@@ -8,6 +8,7 @@ from concurrent.futures import CancelledError as PortalCancelledError
 from dataclasses import replace
 from types import SimpleNamespace
 
+import anyio
 import pytest
 
 from grimoire import routes, store
@@ -437,7 +438,6 @@ def test_the_phase_never_waits_on_the_shared_worker_pool(cid):
     while the phase runs; were the phase's stages to need that pool too,
     enough concurrent turns would starve it for good. With every shared token
     held, the phase still completes on its own threads."""
-    import anyio
     old = played(cid)
     absorbed(cid, old)
     sid = played(cid, text="silver ledger")

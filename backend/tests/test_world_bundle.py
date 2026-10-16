@@ -12,11 +12,14 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import zipfile
 from pathlib import Path
 
 import pytest
+from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 
 from grimoire.store import (
     assets,
@@ -635,7 +638,6 @@ def test_image_descriptions_survive_a_round_trip(monkeypatch, tmp_path):
 # is exactly what a format-1 bundle lost (Codex review, P1).
 
 def _pixels(seed: int = 0) -> bytes:
-    from PIL import Image
     im = Image.new("RGB", (8, 6))
     im.putdata([((x * 11 + seed) % 256, (y * 23 + seed) % 256, (x * y + seed) % 256)
                 for y in range(6) for x in range(8)])
@@ -677,7 +679,6 @@ def _store_members(bundle: Path) -> tuple[list[str], list[str]]:
 
 
 def _wipe_image_store(tmp_path: Path) -> None:
-    import shutil
     shutil.rmtree(image_store.store_root(), ignore_errors=True)
     shutil.rmtree(tmp_path / ".cache", ignore_errors=True)
 
@@ -1249,8 +1250,6 @@ def test_import_sanitizes_a_planted_blob(monkeypatch, tmp_path):
     """A hand-built blob carrying a text chunk and trailing bytes must not
     become the blob a later local upload of the same pixels dedupes onto --
     that would carry the bundle's bytes out in the user's own exports."""
-    from PIL import Image
-    from PIL.PngImagePlugin import PngInfo
     _home(monkeypatch, tmp_path)
     im = Image.new("RGB", (8, 6), (30, 60, 90))
     info = PngInfo()

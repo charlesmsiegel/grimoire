@@ -5,6 +5,7 @@ import pathlib
 
 import pytest
 
+import grimoire
 from grimoire.store import campaign_climate, campaigns, climates, worlds
 
 
@@ -109,7 +110,6 @@ def test_only_the_owning_module_names_the_file():
     A caller can still take `campaign_climate.path(cid)` and read or write it
     directly without naming the file, which no static check here would see.
     """
-    import grimoire
     package = pathlib.Path(grimoire.__file__).parent
     owner = package / "store" / "campaign_climate.py"
     offenders = [str(p.relative_to(package)) for p in sorted(package.rglob("*.py"))

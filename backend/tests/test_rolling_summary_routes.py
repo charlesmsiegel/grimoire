@@ -19,6 +19,7 @@ from grimoire import routes
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import scenes as scenes_routes
+from grimoire.store import entities
 
 from .llm_fakes import FakeLLM
 
@@ -64,7 +65,6 @@ def _scene(client, posts=0):
 def _location(cid: str, name: str) -> str:
     """A campaign location, created through the store: `set_location` resolves
     the entity, so the scene cannot be moved somewhere that does not exist."""
-    from grimoire.store import entities
     return entities.create_entity(store.campaigns.campaign_root(cid), "locations", name)
 
 

@@ -414,7 +414,6 @@ def test_start_from_greeting_refuses_campaign_purged_version(monkeypatch, tmp_pa
     """An inherited greeting names a version the campaign has purged from a
     materialized (but unlocked) actor: a materialized actor's version set is
     authoritative, so the start must fail rather than revive it from the world."""
-    from grimoire.store import overlay
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     char_id, _ = characters.create_character(wroot, "Mara", "young", characters.blank_card("Mara"))

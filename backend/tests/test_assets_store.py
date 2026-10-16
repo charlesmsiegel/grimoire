@@ -4,12 +4,24 @@ import io
 import json
 import os
 import re
+import threading
 import time
 
 import pytest
 from PIL import Image
 
-from grimoire.store import assets, image_refs, image_store, locks, statcache
+from grimoire.store import (
+    assets,
+    atomic,
+    campaigns,
+    characters,
+    image_refs,
+    image_store,
+    locks,
+    overlay,
+    statcache,
+    worlds,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +95,6 @@ def test_list_images_reports_one_entry_per_logical_image(tmp_path, ext):
     lets a cache token be read off the sibling the server will not serve, which
     a `?v=` URL then pins immutably for a year.
     """
-    import os
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"served bytes", "png")
     served = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
     stale = served.with_suffix(f".{ext}")
@@ -220,8 +231,6 @@ def test_base_param_roots_other_kinds(tmp_path):
 
 
 def test_list_images_version_token_tracks_content(tmp_path):
-    from grimoire.store import assets
-
     assets.put_image(tmp_path, "c", "v1", "avatar", b"png-one", "png")
     first = assets.list_images(tmp_path, "c", "v1")
     assert first[0]["v"]
@@ -240,7 +249,6 @@ def test_a_failed_image_write_keeps_the_previous_image(tmp_path, monkeypatch):
     """put_image used to unlink prior-extension files BEFORE writing the new
     one, so anything that failed in between lost the image outright -- a bug no
     amount of write atomicity can fix, because the delete came first (#233)."""
-    from grimoire.store import atomic
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"original", "png")
 
     def boom(*a, **kw):
@@ -322,8 +330,6 @@ def test_concurrent_puts_of_different_extensions_leave_exactly_one_image(tmp_pat
     survives and it is one that was actually written. Two earlier attempts at
     this (glob-after-write, then snapshot-by-path) each left a window where
     both calls succeeded and NO image remained."""
-    import threading
-
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"ORIGINAL", "png")
     payloads = {"png": b"NEW-PNG", "jpg": b"NEW-JPG", "webp": b"NEW-WEBP"}
     start = threading.Barrier(len(payloads))
@@ -376,8 +382,6 @@ def _fail_after(monkeypatch, allowed: int):
     `test_temp_files_are_invisible_to_the_record_listers` (PR review asked
     where that coverage lives).
     """
-    from grimoire.store import atomic
-
     left = [allowed]
     real_rename, real_write = assets.Path.rename, atomic.write_bytes
 
@@ -513,8 +517,6 @@ def test_the_newest_stranded_temp_is_the_one_that_becomes_the_avatar(tmp_path):
     user was promoting, so it gets the avatar slot -- picking by sorted name
     would hand it to whichever extension sorts first (#253 says image_path
     prefers the newest mtime, so recovery has a sensible target)."""
-    import os
-
     # .png sorts first but is the OLDER file, so name order and mtime order
     # disagree -- which is the whole point of the assertion below.
     d = _stranded(tmp_path, ext="png", data=b"OLDER")
@@ -619,8 +621,6 @@ def test_concurrent_promotions_neither_collide_nor_lose_an_image(tmp_path):
     promotions in one process fought over one path. Whatever order they land
     in, promotion only ever permutes the images: all three survive, one per
     slot."""
-    import threading
-
     payloads = {assets.AVATAR: b"A", "gallery_1": b"B", "gallery_2": b"C"}
     for name, data in payloads.items():
         assets.put_image(tmp_path, "sera", "default", name, data, "png")
@@ -653,8 +653,6 @@ def test_concurrent_promotions_neither_collide_nor_lose_an_image(tmp_path):
 def test_a_promotion_racing_an_upload_does_not_interleave(tmp_path):
     """Promotion takes the same per-image lock as put_image/delete_image, on
     both slots it touches, so an upload cannot land in the middle of a swap."""
-    import threading
-
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"OLD", "png")
     assets.put_image(tmp_path, "sera", "default", "gallery_1", b"NEW", "png")
     start = threading.Barrier(2)
@@ -693,8 +691,6 @@ def test_a_promotion_racing_an_upload_does_not_interleave(tmp_path):
 def test_a_delete_racing_an_upload_does_not_interleave(tmp_path):
     """delete_image shares put_image's lock, so it removes the whole set or
     none of it -- never half of a set an upload is mid-way through replacing."""
-    import threading
-
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"ORIGINAL", "png")
     start = threading.Barrier(2)
     errors = []
@@ -1124,8 +1120,6 @@ def test_image_id(tmp_path):
 
 
 def test_campaign_focus_override_list_and_detail_agree(tmp_path):
-    from grimoire.store import campaigns, characters, overlay, worlds
-
     wid = worlds.create_world("Realm")
     wroot = worlds.world_root(wid)
     chid, vid = characters.create_character(wroot, "Seraphine")
@@ -1402,8 +1396,6 @@ def test_recovery_never_waits_on_a_busy_slot(tmp_path, monkeypatch):
     """A read that finds a journal while the slots are held (a promotion in
     flight, or a caller holding one slot's lock as `delete_image` does while it
     looks) leaves the journal for the next read rather than waiting."""
-    import threading
-
     a, g = _two_slots(tmp_path)
     _crash_on_write(monkeypatch, 1)
     with pytest.raises(OSError):
@@ -1436,8 +1428,6 @@ def test_promote_never_overwrites_a_journal_it_could_not_finish(tmp_path, monkey
     """A half-done swap's journal is the only record of the picture it moved
     out of the avatar slot. A promotion of ANOTHER slot that cannot finish it
     first (its slot busy) must refuse rather than write its own over it."""
-    import threading
-
     a, g = _two_slots(tmp_path)
     assets.put_image(tmp_path, "sera", "default", "gallery_2", _png(85), "png")
     _crash_on_write(monkeypatch, 2)          # avatar written, gallery_1 not

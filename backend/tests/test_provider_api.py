@@ -1018,8 +1018,6 @@ def test_a_facts_write_that_cannot_read_the_file_is_refused_and_writes_nothing(
         client, monkeypatch):
     """A facts file another program holds is not an empty one: the write is
     refused (503, try again) rather than replacing every other model's facts."""
-    from pathlib import Path
-
     _format("2")
     pid = _spare(client)
     assert facts.record_verified(pid, "vendor/other", _raw(pid)["rev"],

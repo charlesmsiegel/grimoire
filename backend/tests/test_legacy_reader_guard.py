@@ -56,6 +56,7 @@ import ast
 import pathlib
 
 from grimoire.store import inference_keys, routing
+from grimoire.store.inference import legacy_plan
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire"
 
@@ -221,7 +222,6 @@ def test_only_resolve_migrate_and_retire_import_the_planner():
     assert importers - {ROSTER} <= IMPORTERS, sorted(importers - IMPORTERS - {ROSTER})
     assert "store/inference/settings.py" not in importers
 
-    from grimoire.store.inference import legacy_plan
 
     tree = ast.parse((SRC / "store/inference/resolve.py").read_text(encoding="utf-8"))
     named = {n.attr for n in ast.walk(tree)

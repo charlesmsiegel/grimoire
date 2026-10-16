@@ -502,8 +502,7 @@ def test_items_with_no_campaign_are_empty_rather_than_an_error(client):
 
 def test_a_capped_list_reports_that_it_was_capped(client, campaign, monkeypatch):
     """A short list nobody labels reads as a complete one."""
-    from grimoire.routes import todo as todo_routes
-    monkeypatch.setattr(todo_routes, "ITEM_CAP", 2)
+    monkeypatch.setattr(todo, "ITEM_CAP", 2)
     cid, _ = campaign
     for t in ("A", "B", "C", "D"):
         client.post(f"/api/campaigns/{cid}/scenes", json={"title": t})
@@ -655,8 +654,6 @@ def test_the_image_backlog_is_not_excluded_for_the_campaigns_world(client, campa
 
 def test_the_badge_never_disagrees_with_the_page(client, campaign):
     """The compatibility count still agrees with the live report at either scope."""
-    from grimoire.routes import todo as todo_routes
-
     cid, wid = campaign
     ch = client.post(f"/api/worlds/{wid}/characters",
                      json={"name": "Winifred"}).json()["character"]
@@ -664,7 +661,7 @@ def test_the_badge_never_disagrees_with_the_page(client, campaign):
     _world_with_a_character(client, "Elsewhere")
 
     for c in (cid, ""):
-        assert todo_routes.badge_count(c) == todo_routes.live(c)["count"], c
+        assert todo.badge_count(c) == todo.live(c)["count"], c
 
 
 def test_a_world_that_cannot_be_read_does_not_break_the_global_page(client, campaign,
@@ -820,9 +817,6 @@ def test_an_ignored_chore_takes_its_heading_with_it(client, campaign):
 
 
 def _todo_lib_png() -> bytes:
-    import io
-
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
     return buf.getvalue()

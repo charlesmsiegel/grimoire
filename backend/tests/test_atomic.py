@@ -8,10 +8,12 @@ recovery is a platform property these tests cannot exercise -- see the spec
 
 from __future__ import annotations
 
+import inspect
 import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -406,8 +408,6 @@ def test_reading_the_umask_does_not_race_other_threads(tmp_path):
     """There is no getter for the umask -- you set it to read it -- so doing
     that per-write would briefly expose a 0 umask to every other thread
     creating a file. It must be sampled once, at import."""
-    import inspect
-
     src = inspect.getsource(atomic._carry_metadata)
     assert "os.umask" not in src, "umask is being read inside a write call"
     assert isinstance(atomic._UMASK, int)
@@ -614,8 +614,6 @@ def test_concurrent_appends_interleave_whole_lines(tmp_path):
     """O_APPEND resolves the offset and the write as one step, so two writers
     land whole rows in some order rather than halves of one spliced into
     another -- the property a jsonl reader depends on."""
-    import threading
-
     p = tmp_path / "ledger.jsonl"
     rows = [f"{who}-{n}" for who in "ab" for n in range(50)]
 

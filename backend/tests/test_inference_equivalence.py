@@ -322,6 +322,8 @@ def test_the_named_differences_touch_exactly_their_states():
     """Each of `retired_expectation`'s rules applies to the states it names
     and to no other, across both frozen baselines -- and so does rule 3,
     the stripped store's."""
+    # Local on purpose: the `_c` module imports this one at its top, so a
+    # module-scope import here would be a cycle.
     from . import test_inference_equivalence_c as equivalence_c
 
     touched: dict[str, set[str]] = {"derived": set(), "route_preset": set(), "stripped": set()}

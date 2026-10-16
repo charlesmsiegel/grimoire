@@ -7,6 +7,7 @@ import os
 import shutil
 import threading
 import time
+from pathlib import Path
 
 import pytest
 import uvicorn
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from grimoire.routes import character_turns
 from grimoire.routes import continuity as continuity_routes
 from grimoire.store import (
     appearances,
@@ -28,6 +30,7 @@ from grimoire.store import (
     recycle_bin,
     scenes,
     sheets,
+    vectors,
     worlds,
 )
 from grimoire.store import (
@@ -98,7 +101,6 @@ def _no_embedding_outage_from_another_test(monkeypatch):
 def _no_parked_vector_history():
     """Vector history parked under a lock (`store.vectors._DEFERRED`) is
     process state; one test's leftovers must not be another's rows."""
-    from grimoire.store import vectors
     vectors._DEFERRED.clear()
     yield
     vectors._DEFERRED.clear()
@@ -188,7 +190,6 @@ class FakeBin:
         self.paths: list = []
 
     def send(self, path: str) -> None:
-        from pathlib import Path
         if self._dir is None:
             self._dir = self._factory.mktemp("recycle-bin")
         src = Path(path)
@@ -441,8 +442,6 @@ def single_contribution_decision(monkeypatch):
     model a legitimate follow-on Decision abstention without spending another
     fake LLM call or depending on provider-script order.
     """
-    from grimoire.routes import character_turns
-
     async def hand_back(cid, sid, client, round_record, used, actor, response_id=""):
         return character_turns._successor_answer(round_record, used, actor, None)
 

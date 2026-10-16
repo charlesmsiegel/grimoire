@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from grimoire.store import calendars, campaigns, worlds
 from grimoire.store.weather import overrides
 
@@ -459,7 +461,6 @@ def test_an_inherited_span_starting_later_in_the_range_is_suppressed(monkeypatch
 
 def test_a_failed_authoring_write_raises_rather_than_reporting_success(monkeypatch, tmp_path):
     cid, p = setup(monkeypatch, tmp_path)
-    import pytest
     def boom(*a, **k):
         raise OSError("read-only file system")
     monkeypatch.setattr(overrides.atomic, "write_text", boom)

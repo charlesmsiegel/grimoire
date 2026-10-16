@@ -15,6 +15,7 @@ import pytest
 
 import grimoire.store as store
 from grimoire import inference, llm, llm_reasoning, tool_calls
+from grimoire.store import response_protocol
 from grimoire.tool_calls import RunBudget, ToolOutput, Toolset, ToolSpec
 from tests import wire_kit
 from tests.llm_fakes import FakeLLM, FakeToolTurns, ToolTurn
@@ -169,8 +170,6 @@ def test_text_the_caller_hides_does_not_lift_the_turn_bound(monkeypatch):
     """With a visibility predicate (roadmap 02 §8.2), a leading perception
     fence has shown the reader nothing: a turn that writes only that and
     stalls is still cut, where text the reader sees would lift the bound."""
-    from grimoire.store import response_protocol
-
     monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
     hidden = FakeToolTurns(("", [("read", {})]), ToolTurn(
         deltas=("```perception\nShe waits.\n```\n", "", "late"), pause=1.2))

@@ -20,6 +20,8 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from grimoire.store import search
+from grimoire.store.inference import settings as inference_settings
 from tests.draft_runs import post as draft_post
 from tests.llm_fakes import FakeOpenRouterComplete
 
@@ -234,8 +236,6 @@ def test_a_campaign_override_governs_its_capsule_draft(client):
     """The draft is a campaign-specific prompt, so the campaign's own model
     settings must apply to it -- the tagline route is campaign-scoped for this
     reason, while its world call sites (no campaign) are unaffected."""
-    from grimoire.store.inference import settings as inference_settings
-
     cid = _campaign(client)
     aid, _ = _emergent(client, cid)
     inference_settings.write("campaign", cid, {"roles": {"fast": {"selection": {
@@ -253,8 +253,6 @@ def test_a_campaign_capsule_on_an_inherited_character_is_searchable(client):
     its own, and search reads only what is on disk, so the capsule must be
     indexed by itself or the words the campaign wrote about the character would
     never find it."""
-    from grimoire.store import search
-
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
@@ -290,8 +288,6 @@ def test_the_excerpt_starts_at_the_entrance_not_the_scene_head(client):
 def test_an_inherited_capsule_row_carries_the_characters_display_name(client):
     """The row's name is what a query's name terms match, so it has to be the
     character's name as the library holds it, not the slug the id was made from."""
-    from grimoire.store import search
-
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
@@ -327,8 +323,6 @@ def test_a_blank_capsule_save_answers_the_sentence_the_campaign_now_shows(client
 def test_an_unreadable_campaign_record_still_searches_the_inherited_capsule(client, tmp_path):
     """A hand-edited or synced campaign record that is not valid text must not
     take the whole search down; the row falls back to the character's id."""
-    from grimoire.store import search
-
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]

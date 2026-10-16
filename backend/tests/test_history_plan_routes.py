@@ -7,6 +7,7 @@ import asyncio
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,8 +17,8 @@ from grimoire.routes import character_turns, common, history_recall
 from grimoire.store import chronicle, routing, scenes
 from grimoire.store.context import assemble, epistemic
 from grimoire.store.history import model, query
+from tests.history_fixtures import actor, played
 from tests.history_fixtures import cid as cid
-from tests.history_fixtures import played
 from tests.llm_fakes import FakeLLM
 
 QUESTION = "Who counted the lanterns at the pier?"
@@ -413,7 +414,6 @@ def test_an_actor_step_never_plans(cid):
     """11's NPC steps retrieve from their own perspective; the planner is
     shown the narrator's seeds, so an actor's thin retrieval is never
     planned -- the same rule that keeps the rerank off an actor's step."""
-    from tests.history_fixtures import actor
     sid, *_ = setup_thin(cid)
     aid, _vid = actor(cid, sid, "Mara")
     fake = FakeLLM([[plan_reply()]])
@@ -435,7 +435,6 @@ def test_the_first_rerank_status_survives_the_merge(cid):
 
 
 def test_a_planned_step_counts_every_retrieval_and_embedding():
-    from types import SimpleNamespace
     trace = model.PlanTrace("repaired", rounds=(model.RoundRecord(), model.RoundRecord()),
                             semantic=("ok", "failed:network", "skipped:deadline"))
     view = SimpleNamespace(evidence=model.Evidence(

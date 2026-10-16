@@ -7,6 +7,7 @@ import pytest
 
 from grimoire.store import statcache
 from grimoire.store.campaigns import read as campaigns_read
+from grimoire.store.scenes import read as scenes_read
 from grimoire.store.worlds import read as worlds_read
 
 
@@ -83,7 +84,6 @@ def _add_scene(store, sid, title="One", body="Long transcript body\n" * 50):
 
 
 def test_scene_heads_parse_once_and_in_their_own_pool(store, monkeypatch):
-    from grimoire.store.scenes import read as scenes_read
     _add_scene(store, "scene-1")
     calls = []
     real = scenes_read.parse_frontmatter_head

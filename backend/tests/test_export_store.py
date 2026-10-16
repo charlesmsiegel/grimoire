@@ -7,6 +7,7 @@ import re
 import zipfile
 
 import pytest
+from PIL import Image
 
 from grimoire.store import (
     appearances,
@@ -17,10 +18,14 @@ from grimoire.store import (
     chronicle,
     covers,
     entities,
+    epub,
     export,
+    fork,
     image_library,
+    overlay,
     pcs,
     scenes,
+    world_images,
     worlds,
 )
 
@@ -32,7 +37,6 @@ def _img(fmt: str = "PNG", color=(10, 20, 30), size=(8, 8)) -> bytes:
     one whose bytes name no format it can declare, so a fixture that stores a
     marker string is not storing an image the book will carry.
     """
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", size, color).save(buf, fmt)
     return buf.getvalue()
@@ -118,7 +122,6 @@ def test_a_forked_campaigns_book_carries_its_own_library_copy(monkeypatch, tmp_p
     name the campaign they were written in. The book is unaffected: every
     localized URL resolves against the campaign being EXPORTED, not against the
     id written into it, so the fork packs the fork's own bytes."""
-    from grimoire.store import fork
     _wid, cid = _campaign(monkeypatch, tmp_path)
     campaign_images.put_image(cid, "coastline", _img(color=(1, 2, 3)), "png")
     branch = fork.fork_campaign(cid, "Branch")["id"]
@@ -142,7 +145,6 @@ def test_a_world_scoped_library_url_is_now_a_shape_the_app_writes(monkeypatch, t
     written, and `(?P<lib>images)` captures the segment rather than the scope.
     """
     wid, cid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import world_images
     world_images.put_image(wid, "coastline", _img(), "png")
 
     m = export._IMG_URL.match(f"/api/worlds/{wid}/images/coastline")
@@ -161,7 +163,6 @@ def test_a_hidden_library_image_degrades_to_alt_text_in_either_url_shape(
     picture this campaign hid does not reach its book by the back door. A
     world-shaped URL in an inherited lore body is still being exported *for
     this campaign*."""
-    from grimoire.store import world_images
     wid, cid = _campaign(monkeypatch, tmp_path)
     world_images.put_image(wid, "coastline", _img(), "png")
     campaign_images.delete_image(cid, "coastline")      # hidden here
@@ -174,7 +175,6 @@ def test_a_hidden_library_image_degrades_to_alt_text_in_either_url_shape(
 
 
 def test_rewrite_images_honors_asset_tombstone(monkeypatch, tmp_path):
-    from grimoire.store import overlay
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Saltmarch")
     wroot = worlds.world_root(wid)
@@ -466,7 +466,6 @@ def test_build_json_dump(monkeypatch, tmp_path):
 
 def test_export_unknown_campaign(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    import pytest
     with pytest.raises(campaigns.CampaignNotFound):
         export.collect("nope")
     with pytest.raises(campaigns.CampaignNotFound):
@@ -682,7 +681,6 @@ def test_an_inherited_library_url_packs_the_worlds_bytes(monkeypatch, tmp_path):
     """The ordinary inherited export path, which the negative cases around it
     left untested: a post carrying the CAMPAIGN-scoped URL for a picture the
     campaign only reads through to."""
-    from grimoire.store import world_images
     wid, cid = _campaign(monkeypatch, tmp_path)
     world_images.put_image(wid, "coastline", _img(), "png")
 
@@ -752,8 +750,6 @@ def _hidden_scene(monkeypatch, tmp_path):
 
 
 def test_every_export_marks_an_excluded_post(monkeypatch, tmp_path):
-    from grimoire.store import epub
-
     cid, _sid = _hidden_scene(monkeypatch, tmp_path)
     md = zipfile.ZipFile(io.BytesIO(export.build_markdown_bundle(cid)[0]))
     chapter = next(n for n in md.namelist() if n != "index.md" and not n.startswith("images/"))

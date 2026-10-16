@@ -10,8 +10,10 @@ import json
 
 import pytest
 
-from grimoire import routes, store
+from grimoire import routes, store, tool_calls
+from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
+from grimoire.store import response_protocol
 from tests.llm_fakes import FakeLLM, FakeToolTurns, ToolTurn, decision_reply
 
 MARA = "characters:mara"
@@ -178,7 +180,6 @@ def test_a_reroll_is_offered_the_tool_and_a_retry_is_not(client):
     assert by_id[first["id"]]["tool"] == first["tool"]          # untouched
     assert by_id[after["active_variant"]]["tool"]["selected"] == "truth"
 
-    from grimoire.llm_errors import LLMError
     broken = _install(client, FakeToolTurns(LLMError("rate_limit", "Wait")))
     client.post(base + "/chat", json={"content": "And Winifred?", "speaker_ref": MARA})
     assert broken.requests[0].get("tools")                      # a fresh contribution
@@ -224,8 +225,6 @@ def test_an_invalid_request_is_a_result_not_a_failure(client, args, reason):
 def test_a_loop_that_ends_before_any_text_falls_back_to_a_plain_generation(client, first):
     """§3.3: the optional tool never fails, or empties, a turn a plain
     contribution would have played."""
-    from grimoire.llm_errors import LLMError
-
     cid, sid, base = seed(client)
     store.write_config(decide_play_tool="on")
     opening = (LLMError("bad_response", "garbled") if first == "error"
@@ -250,8 +249,6 @@ def test_a_loop_meter_reads_the_serving_turns_holder():
 
 
 def test_an_uncapped_run_takes_no_spend_ceiling():
-    from grimoire import tool_calls
-
     assert tool_calls.RunBudget(max_output_tokens=None).max_output_tokens is None
     with pytest.raises(ValueError):
         tool_calls.RunBudget(max_output_tokens=None, spend_ceiling_usd=1.0)
@@ -285,8 +282,6 @@ def test_a_call_after_any_fence_but_perception_is_declined(client, opening):
     state, handoff or roll fence the reply's controls are under way, so a
     call is declined rather than carried into a second turn the controls
     would misread."""
-    from grimoire.store import response_protocol
-
     sees = response_protocol.opens_reply(True)
     assert not sees("```perception\nShe waits.\n```\n") and not sees("\n")
     assert response_protocol.opens_reply(True)(opening)

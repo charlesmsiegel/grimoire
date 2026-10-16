@@ -12,7 +12,9 @@ Invented connection ids and the codebase's placeholder names only.
 
 from __future__ import annotations
 
+import json
 import threading
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -23,7 +25,7 @@ from grimoire import routes
 from grimoire.store import embed_space, locks, revision, routing
 from grimoire.store import inference_keys as keys
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import migrate, settings
+from grimoire.store.inference import facts, migrate, settings
 from grimoire.store.inference import resolve as inference
 
 from . import inference_baseline as base
@@ -860,8 +862,6 @@ def test_the_card_says_why_options_turned_embedding_off(client, monkeypatch):
     names no space -- and the card says so, naming the file, before any
     capability reason (which, with the file unreadable, was judged from no
     facts at all)."""
-    import json
-    from pathlib import Path
 
     _fresh(client)
     conn = store.llm_connections.create_connection(
@@ -1118,8 +1118,6 @@ def test_the_view_never_carries_a_key(client):
 # ---- the Embedding card's options (01h-S4) ----
 
 def test_the_embedding_card_reads_back_its_options(client):
-    from grimoire.store.inference import facts
-
     _fresh(client)
     _ok(client, {**EMBED, "confirm_embedding": True})
     assert _global(client)["roles"]["embedding"]["options"] is None

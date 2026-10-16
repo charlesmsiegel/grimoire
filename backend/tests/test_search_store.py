@@ -240,7 +240,6 @@ def test_inherited_world_content_is_reported_once_under_the_world(campaign, worl
 
 
 def test_a_campaign_fork_is_its_own_record_with_the_same_id(campaign, world):
-    from grimoire.store import overlay
     _, root = world
     eid = entities.create_entity(root, "lore", "The Salt Pact", body="Owed to the sea.")
     overlay.update_entity(campaign, "lore", eid, body="Owed to the sea, and to the keep.")
@@ -382,7 +381,6 @@ def test_a_search_does_not_evict_the_shared_stat_cache(world, monkeypatch):
     """A sweep touches every file in the store. Through the process-wide cache
     that would evict every entity and card hash in it and hand the next sync
     sweep a cold one — search made cheap at everyone else's expense."""
-    from grimoire.store import statcache
     _, root = world
     aged = statcache.time.time_ns() + 60_000_000_000
     monkeypatch.setattr(statcache.time, 'time_ns', lambda: aged)
@@ -406,7 +404,6 @@ def test_a_library_bigger_than_the_shared_budget_is_still_remembered_whole(world
     evicts in walk order, so every repeat query re-reads everything. The
     budget is search's own, sized above the corpus, rather than the shared
     cache's -- shrunk here so the test does not need thousands of files."""
-    from grimoire.store import statcache
     _, root = world
     aged = statcache.time.time_ns() + 60_000_000_000
     monkeypatch.setattr(statcache.time, 'time_ns', lambda: aged)

@@ -6,6 +6,9 @@ returns the same shape `GET .../context` does, and that an entry cannot be
 read through a scene it does not belong to.
 """
 
+import threading
+import time
+
 import pytest
 
 from grimoire import routes, store
@@ -388,8 +391,6 @@ def test_a_contended_capture_records_nothing_stamps_nothing_and_never_waits(clie
     and the turn is not held up. Only a race inside a concurrency test used to
     reach that branch, and only when the suite ran serially; this holds it
     deterministically, with the uncontended call as the control."""
-    import threading
-    import time
 
     cid, sid = _scene(client)
     _chat(client, cid, sid)

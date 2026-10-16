@@ -11,18 +11,41 @@ Android build packages backend/src verbatim into the APK.
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import json
+import os
 import sys
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+from grimoire import decisions, inference
+from grimoire.llm_errors import LLMError
+from grimoire.store import (
+    config,
+    inference_keys,
+    llm_connections,
+    paths,
+    pricing,
+    response_protocol,
+    routing,
+    scene_break,
+    usage,
+    voice_drift,
+)
+from grimoire.store.continuity import identity, reconcile
+from grimoire.store.inference import capabilities, facts
+from tests.llm_fakes import FakeLLM
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from evals import cases as case_mod  # noqa: E402
-from evals import runner  # noqa: E402
+from evals import costs, graders, run, runfile, runner  # noqa: E402
 from evals.graders import Check  # noqa: E402
 from tests import wire_kit  # noqa: E402
 
@@ -83,7 +106,6 @@ def test_no_orphan_recordings():
 def test_every_case_names_a_routed_task():
     """A live run sends each case where the app sends that generation, so each
     case names the task the app meters it under, and a route claims it."""
-    from grimoire.store import routing
     for case in case_mod.CASES:
         assert case.task in routing.TASK_ROUTE, (case.id, case.task)
     assert case_mod.BY_ID["absorb"].task == "absorb"
@@ -94,7 +116,6 @@ def test_a_live_run_resolves_through_the_seam_not_the_active_connection(
         monkeypatch, tmp_path):
     """On a format-2 store `active_connection_id` is frozen for older builds;
     a live pass must be scored on the model the app plays on now."""
-    from grimoire.store import config, inference_keys, llm_connections
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     config.read_config()
     llm_connections.create_connection("openai_compatible", "Mara Local",
@@ -124,9 +145,6 @@ def test_live_resolves_a_decide_case_on_its_task(monkeypatch, tmp_path):
     a decide operation and is answered down the decide chain of that
     resolution, so it measures what production sends; replay scores the
     recording and never builds a schema."""
-    from grimoire import decisions
-    from grimoire.store import config, inference_keys, llm_connections
-    from tests.llm_fakes import FakeLLM
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
     config.read_config()
@@ -194,8 +212,6 @@ DECIDER, BOTH, ACTIVE = "vendor/decider", "vendor/both", "vendor/active"
 def _decision_store(monkeypatch, home: Path, decision_model: str) -> None:
     """A format-2 store with the Decision role on `decision_model` at the
     seeded OpenRouter provider, no fallback. Nothing reaches a provider."""
-    from grimoire.store import config, inference_keys, llm_connections
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(home))
     config.read_config()
     llm_connections.update_connection("openrouter", api_key="sk-test")
@@ -218,8 +234,6 @@ def _decide_target(case):
 
 def _over(rationale: str = "The debt is paid."):
     """The scene-break case's right answer, as a native endpoint returns it."""
-    from grimoire import decisions
-    from grimoire.store import scene_break
     return decisions.ItemResult({scene_break.QUESTION_ID: decisions.Answer(True)},
                                 rationale=rationale)
 
@@ -231,8 +245,6 @@ def _compliant(case) -> str:
 def test_live_runs_a_decide_case_through_the_chain(monkeypatch, tmp_path):
     """A native-only Decision model: the chain production sends is one native
     stage, so the case is answered natively and nothing is completed."""
-    from tests.llm_fakes import FakeLLM
-
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     case = case_mod.BY_ID["decide-scene-break"]
     target = _decide_target(case)
@@ -253,8 +265,6 @@ def test_live_a_native_decision_carries_no_rationale(monkeypatch, tmp_path):
     """What a real native endpoint returns: answers and no rationale. A native
     item was never asked for one, so on a case whose prompt asks for one its
     `decide.rationale` passes as not applicable -- visibly, in the report."""
-    from evals import graders
-    from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     case = case_mod.BY_ID["decide-scene-break"]
@@ -269,8 +279,6 @@ def test_live_a_native_decision_carries_no_rationale(monkeypatch, tmp_path):
 def test_live_a_structured_reply_without_a_rationale_still_fails(monkeypatch, tmp_path):
     """The n/a is the native item's alone: a structured answer that leaves out
     the rationale it was asked for fails `decide.rationale` as before."""
-    from tests.llm_fakes import FakeLLM
-
     _decision_store(monkeypatch, tmp_path / "home", BOTH)
     case = case_mod.BY_ID["decide-scene-break"]
     fake = FakeLLM([['{"0": {"answers": {"over": true}}}']])
@@ -286,8 +294,6 @@ def test_only_a_natively_answered_item_reads_its_rationale_as_not_applicable(
     case is n/a only when IT is in the set. A set naming another item (as a
     mixed batch would) leaves item 0 a structured answer, which fails a
     missing rationale; replay sets no key at all."""
-    from evals import graders
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     case = case_mod.BY_ID[case_id]
     ctx = runner.prepare(case)
@@ -310,7 +316,6 @@ def test_only_a_natively_answered_item_reads_its_rationale_as_not_applicable(
 def _pick(distribution):
     """The speaker case's right pick, as a native endpoint returns it, with
     the distribution it reported beside it."""
-    from grimoire import decisions
     return decisions.ItemResult({"next": decisions.Answer("characters:winifred",
                                                           distribution=distribution)})
 
@@ -325,8 +330,6 @@ def test_live_grades_a_native_picks_distribution(monkeypatch, tmp_path, distribu
     it: `--decide-backend native` on a model that also generates. A usable
     distribution passes `decide.distribution`; a partial or inconsistent one
     fails it alone, the pick itself still right."""
-    from tests.llm_fakes import FakeLLM
-
     _decision_store(monkeypatch, tmp_path / "home", BOTH)
     case = case_mod.BY_ID["decide-speaker"]
     fake = FakeLLM([["never sent"]], decisions=[_pick(distribution)])
@@ -339,8 +342,6 @@ def test_live_grades_a_native_picks_distribution(monkeypatch, tmp_path, distribu
 
 def test_live_a_structured_pick_reads_its_distribution_as_not_applicable(monkeypatch,
                                                                          tmp_path):
-    from evals import graders
-    from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", BOTH)
     case = case_mod.BY_ID["decide-speaker"]
@@ -353,8 +354,6 @@ def test_live_a_structured_pick_reads_its_distribution_as_not_applicable(monkeyp
 
 
 def test_live_forces_the_native_backend_on_a_dual_capable_model(monkeypatch, tmp_path):
-    from grimoire import inference
-    from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", BOTH)
     case = case_mod.BY_ID["decide-scene-break"]
@@ -374,8 +373,6 @@ def test_live_forces_the_native_backend_on_a_dual_capable_model(monkeypatch, tmp
 
 
 def test_live_forces_the_structured_backend(monkeypatch, tmp_path):
-    from tests.llm_fakes import FakeLLM
-
     _decision_store(monkeypatch, tmp_path / "home", BOTH)
     case = case_mod.BY_ID["decide-scene-break"]
     target = _decide_target(case)
@@ -394,8 +391,6 @@ def test_live_forces_the_structured_backend(monkeypatch, tmp_path):
 def test_a_forced_backend_measures_the_primary_alone(monkeypatch, tmp_path):
     """A forced stage is the primary without the fallback it carries, so the
     comparison is of one model on two backends."""
-    from grimoire.store import config, llm_connections
-
     _decision_store(monkeypatch, tmp_path / "home", BOTH)
     llm_connections.create_connection("openrouter", "Rowan Spare", api_key="sk-spare")
     config.write_config(role_decision_fallback_provider="rowan-spare",
@@ -419,9 +414,6 @@ def test_live_refuses_native_on_a_kind_without_an_endpoint(monkeypatch, tmp_path
                                                            setup, backend, says):
     """A forced backend the model cannot take: exit 2, one sentence, nothing
     sent -- every chain is built before the first case runs."""
-    from evals import run
-    from grimoire.store import config, llm_connections
-    from grimoire.store.inference import facts
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     if setup == "anthropic":
@@ -455,8 +447,6 @@ def test_an_unknown_decide_native_is_not_refused(monkeypatch, tmp_path):
     """Spec 5.3: only a known `no` refuses. A model the catalog says only
     generates leaves `decide_native` unknown (absence says nothing), so a
     native run may be forced on it."""
-    from grimoire.store.inference import capabilities
-
     _decision_store(monkeypatch, tmp_path / "home", ACTIVE)
     target = _decide_target(case_mod.BY_ID["decide-scene-break"])
     assert target.attempts[0].capabilities["decide_native"].value == capabilities.UNKNOWN
@@ -469,11 +459,6 @@ def test_a_run_whose_chain_has_no_stage_is_refused(monkeypatch, tmp_path, capsys
     unable to do either thing) is refused before anything is sent, rather
     than raising mid-run after earlier cases spent money. The seam refuses
     such a model first; this holds the runner on its own."""
-    import dataclasses
-
-    from evals import run
-    from grimoire import inference
-    from grimoire.store.inference import capabilities
 
     _decision_store(monkeypatch, tmp_path / "home", ACTIVE)
     case = case_mod.BY_ID["decide-scene-break"]
@@ -502,10 +487,6 @@ def test_a_mixed_chain_answers_through_live_and_names_each_backend(monkeypatch, 
     `inference.stages` -- native, then the fallback as a structured stage of
     its own -- and a batch whose middle item the native endpoint fails is
     finished by the fallback. The note counts each backend's items."""
-    from grimoire import decisions, inference
-    from grimoire.llm_errors import LLMError
-    from grimoire.store import config, llm_connections
-    from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     llm_connections.create_connection("openrouter", "Rowan Spare", api_key="sk-spare")
@@ -536,9 +517,6 @@ def test_a_partly_failed_batch_says_why_in_its_note(monkeypatch, tmp_path):
     """No fallback to finish it: the item the native endpoint failed stays
     unanswered (`Decision.errors` holds why), and the note carries the cause
     beside the answer check that item fails."""
-    from grimoire import decisions
-    from grimoire.llm_errors import LLMError
-    from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     case = case_mod.BY_ID["decide-continuity-identity"]
@@ -557,7 +535,6 @@ def test_a_partly_failed_batch_says_why_in_its_note(monkeypatch, tmp_path):
 
 
 def test_a_live_only_flag_without_live_is_refused():
-    from evals import run
     for flags in (["--decide-backend", "native"], ["--provider", "openrouter"],
                   ["--model", "vendor/both"]):
         with pytest.raises(SystemExit) as exc:
@@ -571,9 +548,6 @@ def test_live_override_writes_no_settings(monkeypatch, tmp_path):
     """`--provider/--model` runs the case on the named model through the
     reroll's seam, and writes nothing: `config.md`, every connection file and
     every facts file are byte-identical afterwards."""
-    from evals import run
-    from grimoire.store.inference import facts
-    from tests.llm_fakes import FakeLLM
 
     home = tmp_path / "home"
     _decision_store(monkeypatch, home, BOTH)
@@ -600,8 +574,6 @@ def test_live_structured_decide_case_sends_the_schema(monkeypatch, tmp_path):
     """F's assertion, through the chain: a structured stage sends the case's
     own prompt and its schema -- the case's prompt and schema ARE what
     production sends for its items."""
-    from tests.llm_fakes import FakeLLM
-
     _decision_store(monkeypatch, tmp_path / "home", ACTIVE)
     case = case_mod.BY_ID["decide-scene-break"]
     fake = FakeLLM([[_compliant(case)]])
@@ -645,8 +617,6 @@ VOCABULARY_READINGS = {
 
 @pytest.mark.parametrize("case_id", sorted(VOCABULARY_READINGS))
 def test_each_vocabulary_counterexample_reads_as_the_contract_says(case_id):
-    from grimoire import decisions
-
     case = case_mod.BY_ID[case_id]
     ctx = case.build()
     (question,) = ctx["items"][0].questions
@@ -669,8 +639,6 @@ def test_the_native_joint_recording_is_read_as_a_pair_with_its_distribution():
     """The joint's native recording goes through the production adapter: sent
     as one flattened choice, read back as a `Pair` whose distribution is
     keyed by the legal pairs' keys -- the joint distribution 01c samples."""
-    from grimoire import decisions
-
     case = case_mod.BY_ID["decide-joint"]
     (recording,) = [r for r in case.recordings if r.native]
     ctx = case.build()
@@ -699,8 +667,6 @@ def test_the_native_rank_and_select_recordings_are_lifted_from_their_predicates(
     """Each is read through its production adapter, which sent one pointwise
     predicate per candidate or option: the answer carries every P(true) on
     `marginals`, never a distribution."""
-    from grimoire import decisions
-
     rank = _native_reading("decide-rank", "native")
     assert isinstance(rank.answer, decisions.Ranking) and rank.answer.rest == ()
     assert rank.answer.flat()[:2] == ("scene:ledger-search", "scene:lost-ledger")
@@ -717,8 +683,6 @@ def test_every_decide_case_runs_through_live(monkeypatch, tmp_path, case):
     """Every decide case, F's and G's, runs down the chain: its compliant
     recording, answered by the fake as the structured reply, is parsed by the
     chain, written back by `decisions.render` and still grades PASS."""
-    from tests.llm_fakes import FakeLLM
-
     _decision_store(monkeypatch, tmp_path / "home", ACTIVE)
     target = _decide_target(case)
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "fixture"))
@@ -733,8 +697,6 @@ def test_a_mixed_decision_names_each_backend():
     """`Decision.backend` is "" when stages with different backends split the
     batch; the note then counts each one's items, in item order, and leaves
     out an item nothing answered."""
-    from grimoire import decisions
-
     def answered(backend: str) -> decisions.ItemResult:
         return decisions.ItemResult({"q": decisions.Answer(True)}, backend=backend)
 
@@ -753,8 +715,6 @@ def test_a_mixed_decision_names_each_backend():
 
 
 def test_a_generate_case_is_sent_with_no_schema(monkeypatch, tmp_path):
-    from tests.llm_fakes import FakeLLM
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     case = case_mod.BY_ID["scene-length"]
     assert case.schema is None and runner.operation(case) == "generate"
@@ -768,8 +728,6 @@ def test_decide_scene_break_holds_the_decide_prompt_contract(monkeypatch, tmp_pa
     """The permanent scene-break decide case: its prompt is the structured
     prompt production sends for `build_item`'s item, a live run sends that
     item's schema, and each counterexample isolates one output check."""
-    from grimoire import decisions, inference
-    from grimoire.store import scene_break
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     case = case_mod.BY_ID["decide-scene-break"]
@@ -791,8 +749,6 @@ def test_decide_voice_drift_holds_the_decide_prompt_contract(monkeypatch, tmp_pa
     prompt the switch will send for `build_item`'s item -- the outstanding
     correction included -- a live run sends that item's schema, and each
     counterexample isolates one output check."""
-    from grimoire import decisions, inference
-    from grimoire.store import voice_drift
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     case = case_mod.BY_ID["decide-voice-drift"]
@@ -817,8 +773,6 @@ def test_decide_speaker_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
     the switch will send for `selector_item`'s item -- no rationale asked for,
     the roster as options beside `grimoire`, null allowed -- a live run sends
     that item's schema, and each counterexample isolates the answer."""
-    from grimoire import decisions, inference
-    from grimoire.store import response_protocol
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     case = case_mod.BY_ID["decide-speaker"]
@@ -850,8 +804,6 @@ def test_decide_continuity_identity_holds_the_decide_prompt_contract(monkeypatch
     prompt absorb sends for `build_items`' items over what `examine` finds, a
     live run sends that batch's schema, and each counterexample carries a
     failure mode of the duplicate check into the decide shape."""
-    from grimoire import decisions, inference
-    from grimoire.store.continuity import identity
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     case = case_mod.BY_ID["decide-continuity-identity"]
@@ -884,8 +836,6 @@ def test_decide_continuity_reconcile_holds_the_decide_prompt_contract(monkeypatc
     prompt the sweep sends for `build_items`' items over the payload the case
     builds, a live run sends that batch's schema, and each counterexample
     carries a failure mode of the sweep into the decide shape."""
-    from grimoire import decisions, inference
-    from grimoire.store.continuity import reconcile
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     case = case_mod.BY_ID["decide-continuity-reconcile"]
@@ -1002,8 +952,6 @@ def test_native_grading_reads_what_the_endpoint_answered(monkeypatch, tmp_path):
 def _generate_store(monkeypatch, home: Path):
     """A real home whose Primary is an OpenAI-compatible connection, and the
     `scene-length` case's resolution read from it."""
-    from grimoire.store import config, llm_connections
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(home))
     config.read_config()
     llm_connections.create_connection("openai_compatible", "Mara Local",
@@ -1017,8 +965,6 @@ def _isolates(monkeypatch, root: Path, real: Path):
     """An isolate factory as `evals/run.py`'s `temp_home` behaves: a fresh
     home per case, the real one restored afterwards. Each made home is kept
     in `made` so a test can look inside it."""
-    import contextlib
-
     made: list[Path] = []
 
     @contextlib.contextmanager
@@ -1043,8 +989,6 @@ def test_a_live_generate_case_files_one_eval_row(monkeypatch, tmp_path):
     """Test 1 (rows): the generation is metered by the production meter into
     the isolate; the harvested copy is stamped as an eval row, the ledger's
     own row is not."""
-    from grimoire.store import usage
-    from tests.llm_fakes import FakeLLM
 
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
@@ -1067,14 +1011,11 @@ def test_the_tripwire_sends_and_builds_nothing(monkeypatch, tmp_path):
     """Test 7: an isolate that is the real home is refused before the
     fixture is built and before anything is sent; `real_home=None` checks
     nothing."""
-    from tests.llm_fakes import FakeLLM
-
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
     fake = FakeLLM([[_compliant(case)]])
     before = sorted(p.relative_to(real) for p in real.rglob("*"))
 
-    import contextlib
 
     @contextlib.contextmanager
     def not_isolated():
@@ -1095,8 +1036,6 @@ def test_the_tripwire_sends_and_builds_nothing(monkeypatch, tmp_path):
 def test_no_eval_row_reaches_the_real_home(monkeypatch, tmp_path):
     """Test 8: after a whole `live_all`, the real home has no ledger at all;
     each case's rows are its own."""
-    from tests.llm_fakes import FakeLLM
-
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
     isolate, made = _isolates(monkeypatch, tmp_path, real)
@@ -1111,8 +1050,6 @@ def test_no_eval_row_reaches_the_real_home(monkeypatch, tmp_path):
 
 def test_a_run_crossing_midnight_keeps_its_rows(monkeypatch, tmp_path):
     """Test 10: the harvest reads from the run's start day, not today."""
-    from grimoire.store import usage
-    from tests.llm_fakes import FakeLLM
 
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
@@ -1128,8 +1065,6 @@ def test_a_run_crossing_midnight_keeps_its_rows(monkeypatch, tmp_path):
 def test_an_unreadable_ledger_is_reported_not_zero(monkeypatch, tmp_path):
     """Test 17: a ledger the strict read cannot decode says so, and is never
     `calls 0`; the case is still graded."""
-    from grimoire.store import usage
-    from tests.llm_fakes import FakeLLM
 
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
@@ -1163,10 +1098,7 @@ class _FollowUps:
 
     def __init__(self, home: Path, delay: float,
                  tasks: tuple[str, ...] = ("scene-break",)):
-        import threading
-        from types import SimpleNamespace
 
-        from grimoire.store import usage
 
         self.release = threading.Event()
 
@@ -1190,9 +1122,6 @@ class _FollowUps:
 def _play_case(holder: dict, delay: float, tasks: tuple[str, ...] = ("scene-break",)):
     """The scene-length case, but its fixture hands over an app with a
     follow-up still running, as a play case through the routes would."""
-    import dataclasses
-
-    from grimoire.store import paths
 
     plain = case_mod.BY_ID["scene-length"]
 
@@ -1207,8 +1136,6 @@ def _play_case(holder: dict, delay: float, tasks: tuple[str, ...] = ("scene-brea
 def test_the_drain_waits_for_a_follow_up(monkeypatch, tmp_path):
     """Test 18, first half: a follow-up that files its row after the case's
     call returned is in the harvest."""
-    from tests.llm_fakes import FakeLLM
-
     real = tmp_path / "real"
     _plain, target = _generate_store(monkeypatch, real)
     holder: dict = {}
@@ -1225,10 +1152,6 @@ def test_a_follow_up_past_the_ceiling_keeps_the_isolate(monkeypatch, tmp_path):
     """Test 18, second half: past `DRAIN_CEILING_S` the case fails, the run
     stops, the isolate is kept and GRIMOIRE_HOME is not restored while the
     follow-up may still write."""
-    import os
-
-    from evals import run
-    from tests.llm_fakes import FakeLLM
 
     real = tmp_path / "real"
     plain, target = _generate_store(monkeypatch, real)
@@ -1257,8 +1180,6 @@ def test_a_follow_up_past_the_ceiling_keeps_the_isolate(monkeypatch, tmp_path):
 def test_rates_are_read_in_the_real_store(monkeypatch, tmp_path):
     """The one set of rates is read before any isolate, in the real home,
     and handed to every case with the tripwire's reference."""
-    from evals import run
-    from grimoire.store import paths, usage
 
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
@@ -1287,9 +1208,6 @@ def test_an_unexpected_exception_is_drained_before_the_isolate_restores(
     drain failure, so `temp_home` keeps the isolate rather than restoring
     the real home under a running follow-up. Its rows so far are kept,
     marked partial."""
-    import os
-
-    from evals import run
 
     real = tmp_path / "real"
     plain, target = _generate_store(monkeypatch, real)
@@ -1318,9 +1236,6 @@ def test_an_unexpected_exception_is_drained_before_the_isolate_restores(
 def test_live_all_trips_on_the_home_active_when_it_starts(monkeypatch, tmp_path):
     """Review S2: a caller that names no `real_home` still has a tripwire,
     the home active before the first isolate."""
-    import contextlib
-
-    from tests.llm_fakes import FakeLLM
 
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
@@ -1348,8 +1263,6 @@ def _live_generate(monkeypatch, tmp_path, fake, **kwargs):
 def test_a_billed_generate_case_reports_its_bucket(monkeypatch, tmp_path):
     """Test 1 (bucket): the bucket is the production fold of the rows; the
     metrics line gives wall time, tokens and the billed column."""
-    from tests.llm_fakes import FakeLLM
-
     case = case_mod.BY_ID["scene-length"]
     result = _live_generate(monkeypatch, tmp_path, FakeLLM([[_compliant(case)]], usage=BILLED))
     assert result.bucket["cost_usd"] == 0.0042 and result.bucket["calls"] == 1
@@ -1364,8 +1277,6 @@ def test_a_billed_generate_case_reports_its_bucket(monkeypatch, tmp_path):
 def test_an_unpriced_case_is_not_reported_and_a_rate_models_it(monkeypatch, tmp_path):
     """Test 2: no cost and no rates is `cost: not reported`, with no `$0.00`
     anywhere; with a rate the same call is `modelled ~$...`, never billed."""
-    from grimoire.store import pricing, usage
-    from tests.llm_fakes import FakeLLM
 
     case = case_mod.BY_ID["scene-length"]
     counts = {"prompt_tokens": 1000, "completion_tokens": 500}
@@ -1385,10 +1296,6 @@ def test_a_mixed_chains_items_name_the_stage_that_answered(monkeypatch, tmp_path
     fallback stage answers them. The records name stage, mode, batch items
     and an empty hop; the failed calls keep kind and status, no detail; the
     two items name stage 1 and the one call that carried both."""
-    from grimoire import decisions
-    from grimoire.llm_errors import LLMError
-    from grimoire.store import config, llm_connections
-    from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     llm_connections.create_connection("openrouter", "Rowan Spare", api_key="sk-spare")
@@ -1419,15 +1326,12 @@ def test_a_mixed_chains_items_name_the_stage_that_answered(monkeypatch, tmp_path
 
 
 def inference_module():
-    from grimoire import inference
     return inference
 
 
 def test_a_structured_chunks_items_share_its_call_and_carry_no_money(monkeypatch, tmp_path):
     """Test 6: three items answered by one structured call share its `call`
     index, and no item record carries a money or token figure."""
-    from tests.llm_fakes import FakeLLM
-
     _decision_store(monkeypatch, tmp_path / "home", BOTH)
     case = case_mod.BY_ID["decide-continuity-identity"]
     target = _decide_target(case)
@@ -1447,8 +1351,6 @@ def test_a_structured_chunks_items_share_its_call_and_carry_no_money(monkeypatch
 def test_a_case_that_ran_several_tasks_is_summed_and_split(monkeypatch, tmp_path):
     """Test 15: a play case whose rows fall under three tasks has one bucket
     folding all three, and a `by task` entry per task, printed beneath."""
-    from evals import costs
-    from tests.llm_fakes import FakeLLM
 
     real = tmp_path / "real"
     _plain, target = _generate_store(monkeypatch, real)
@@ -1470,8 +1372,6 @@ def test_a_case_that_ran_several_tasks_is_summed_and_split(monkeypatch, tmp_path
 def test_a_decide_case_with_no_answer_is_reported_from_its_rows(monkeypatch, tmp_path):
     """No item answered, so no `Decision`: the case fails with the provider's
     error and its metrics come from its rows alone."""
-    from grimoire.llm_errors import LLMError
-    from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     case = case_mod.BY_ID["decide-scene-break"]
@@ -1490,8 +1390,6 @@ def test_a_decide_case_with_no_answer_is_reported_from_its_rows(monkeypatch, tmp
 def test_one_refused_backend_of_several_refuses_the_run(monkeypatch, tmp_path, capsys):
     """Test 12: every backend's chain is built first; one refusal exits 2
     before `live_all` runs."""
-    from evals import run
-    from grimoire.store import config, llm_connections
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     llm_connections.create_connection("openai_compatible", "Winifred Local",
@@ -1518,7 +1416,6 @@ def test_one_refused_backend_of_several_refuses_the_run(monkeypatch, tmp_path, c
     ["--gate", "--out", "x.json"],
 ])
 def test_repeat_and_record_refusals(flags):
-    from evals import run
     with pytest.raises(SystemExit) as exc:
         run.main(flags)
     assert exc.value.code == 2
@@ -1528,11 +1425,6 @@ def test_the_run_file_keeps_kinds_never_words(monkeypatch, tmp_path):
     """Test 19: a failed call and a failed case are `{"kind", "status"}`;
     the provider's detail is nowhere in the file's bytes, and a long check
     detail is cut to `MAX_DETAIL_CHARS`."""
-    from evals import runfile
-    from evals.graders import Check
-    from grimoire import decisions
-    from grimoire.llm_errors import LLMError
-    from tests.llm_fakes import FakeLLM
 
     _decision_store(monkeypatch, tmp_path / "home", DECIDER)
     case = case_mod.BY_ID["decide-continuity-identity"]
@@ -1569,8 +1461,6 @@ def test_live_out_then_compare_end_to_end(monkeypatch, tmp_path, capsys):
     writes a valid eval-run v1 file whose generate case stands for both
     configs (test 22), and `--compare` of it against itself prints the
     table. Nothing reaches the real home's ledger."""
-    from evals import run, runfile
-    from tests.llm_fakes import FakeLLM
 
     home = tmp_path / "home"
     _decision_store(monkeypatch, home, BOTH)
@@ -1615,8 +1505,6 @@ def test_one_crashing_case_does_not_lose_the_run(monkeypatch, tmp_path):
     """Review: an exception that is not a provider's error fails its own
     case; the cases after it still run and the run is still reported. Each
     line names its config and repeat when the run had several."""
-    from grimoire.store import usage
-    from tests.llm_fakes import FakeLLM
 
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
@@ -1650,9 +1538,6 @@ def test_one_crashing_case_does_not_lose_the_run(monkeypatch, tmp_path):
 def test_a_grader_crash_keeps_what_the_case_cost(monkeypatch, tmp_path):
     """Review: a grader that raises on live output fails its case, and the
     case keeps its harvested rows, bucket and wall time."""
-    import dataclasses
-
-    from tests.llm_fakes import FakeLLM
 
     real = tmp_path / "real"
     plain, target = _generate_store(monkeypatch, real)
@@ -1675,8 +1560,6 @@ def test_a_grader_crash_keeps_what_the_case_cost(monkeypatch, tmp_path):
 def test_a_baseline_that_cannot_be_written_keeps_the_cases_cost(monkeypatch, tmp_path):
     """Review: `--record` into a directory it cannot write fails the case
     for that, and the case keeps its harvested rows and bucket."""
-    from tests.llm_fakes import FakeLLM
-
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
     fake = FakeLLM([[_compliant(case)]], usage=BILLED)    # read before the folder moves
@@ -1695,8 +1578,6 @@ def test_item_records_name_the_chain_call_when_the_hop_was_rejected():
     """Roadmap 01d-S3 (plan gate 4): a hop call is an item's answering call
     only when its escalation was `answered`; a hop the merge rejected leaves
     the item on the chain's call, and still marks it escalated."""
-    from grimoire import decisions
-
     before = decisions.ItemResult({"over": decisions.Answer(True)}, backend="native")
     calls = (decisions.CallRecord(stage=0, mode="native", items=(0,), row=None),
              decisions.CallRecord(stage=1, mode="structured", items=(0,), row=None,

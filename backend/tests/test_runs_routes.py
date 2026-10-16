@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time as _t
 
 import pytest
 from fastapi import HTTPException
@@ -265,13 +267,11 @@ def test_a_live_stream_delivers_frames_appended_after_the_client_attached(client
     `from` is already at the tail -- must keep receiving. Snapshotting the
     buffer once and reaching EOF means the client disconnects before the run is
     terminal and never sees the rest of the reply."""
-    import threading
     cid, sid = campaign_scene
     run = _reserve(client, cid, sid)
     run.append_frame(_sse({"delta": "Wind off the "}))
 
     def finish_later():
-        import time as _t
         _t.sleep(0.2)
         run.append_frame(_sse({"delta": "water."}))
         run.finish("landed")
@@ -286,12 +286,10 @@ def test_a_live_stream_delivers_frames_appended_after_the_client_attached(client
 def test_attaching_at_the_tail_of_a_live_run_still_receives(client, campaign_scene):
     """`from` equal to `next_index` is what an adopting client sends when it is
     already caught up. A one-shot replay answers empty and closes."""
-    import threading
     cid, sid = campaign_scene
     run = _reserve(client, cid, sid)
 
     def produce():
-        import time as _t
         _t.sleep(0.2)
         run.append_frame(_sse({"delta": "later"}))
         run.finish("landed")

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
+from grimoire.routes import campaigns as campaign_routes
 
 
 @pytest.fixture
@@ -139,7 +140,6 @@ def test_a_hand_edited_row_degrades_field_by_field(client, cid):
 
 
 def test_the_listing_is_capped(client, cid, monkeypatch):
-    from grimoire.routes import campaigns as campaign_routes
     monkeypatch.setattr(campaign_routes, "RELATIONSHIP_HISTORY_PAGE", 2)
     store.relationship_history.append(cid, [
         store.relationship_history.row("feeling", "characters:a", "characters:b",

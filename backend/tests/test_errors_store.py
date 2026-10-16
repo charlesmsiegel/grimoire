@@ -3,10 +3,13 @@ up to per module (#156)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
 
+from grimoire.llm_errors import LLMError
+from grimoire.routes.scenes import Abandoned, BudgetRefused
 from grimoire.store import errors, logs, usage
 
 
@@ -193,8 +196,6 @@ def test_a_failed_llm_call_is_recorded_against_the_task_that_made_it(home):
 
 
 def test_an_llm_error_carries_its_kind_rather_than_its_class_name(home):
-    from grimoire.llm_errors import LLMError
-
     with pytest.raises(LLMError), usage.meter("chat", campaign="saltmarch") as m:
         m.usage.update({"model": "realm/opus"})
         raise LLMError("rate_limit", "429 Too Many Requests")
@@ -208,8 +209,6 @@ def test_a_failure_before_anything_was_sent_is_recorded_though_no_ledger_row_is(
     """`missing_key` never reaches a provider, so `usage` stays empty and the
     ledger records nothing -- and a provider that was never configured is
     exactly the failure a user most needs written down."""
-    from grimoire.llm_errors import LLMError
-
     with pytest.raises(LLMError), usage.meter("tagline"):   # `usage` never filled
         raise LLMError("missing_key", "no connection is configured")
 
@@ -221,8 +220,6 @@ def test_a_failure_before_anything_was_sent_is_recorded_though_no_ledger_row_is(
 def test_a_cancelled_call_is_not_an_error(home):
     """A user closing a tab mid-suggestion must not read as a provider failing
     them -- the distinction `Meter.__exit__` already draws for the ledger."""
-    import asyncio
-
     with pytest.raises(asyncio.CancelledError), usage.meter("suggestions") as m:
         m.usage.update({"model": "realm/opus"})
         raise asyncio.CancelledError
@@ -235,8 +232,6 @@ def test_a_provider_failure_the_meter_recorded_is_not_recorded_again(home):
     """The normal shape: the meter writes the row, and the call site around it
     catches the same exception to turn it into a phase status. A call site that
     recorded too would double every provider failure in the per-kind counts."""
-    from grimoire.llm_errors import LLMError
-
     caught = None
     try:
         with usage.meter("dossier", campaign="saltmarch") as m:
@@ -290,8 +285,6 @@ def test_work_that_was_deliberately_not_done_is_not_a_failure(home):
     only looks, from a provider that really did time out. `Abandoned` means the
     person waiting closed the review. Neither belongs in the error store, and
     the budget one would be the worst possible false positive."""
-    from grimoire.routes.scenes import Abandoned, BudgetRefused
-
     for exc in (BudgetRefused("timeout", "no time left"), Abandoned()):
         with pytest.raises(type(exc)), usage.meter("dossier", campaign="saltmarch") as m:
             m.usage.update({"model": "realm/opus"})
@@ -302,8 +295,6 @@ def test_work_that_was_deliberately_not_done_is_not_a_failure(home):
 
 def test_a_provider_that_really_did_time_out_is_still_recorded(home):
     """The other side of the exemption: it must not silence the real thing."""
-    from grimoire.llm_errors import LLMError
-
     with pytest.raises(LLMError), usage.meter("dossier") as m:
         m.usage.update({"model": "realm/opus"})
         raise LLMError("timeout", "the provider stopped responding")

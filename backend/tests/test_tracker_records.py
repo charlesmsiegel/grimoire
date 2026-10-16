@@ -2,13 +2,14 @@
 scene's identity, and the transcript walk that orders them."""
 
 import json
+import logging
 
 import pytest
 
 from grimoire.store import appearances, campaigns, characters, responses, scenes, worlds
 from grimoire.store.appearances import paths as appearances_paths
-from grimoire.store.scenes import identity, serialize
-from grimoire.store.tracker import fields, records, walk
+from grimoire.store.scenes import identity, lifecycle, serialize
+from grimoire.store.tracker import fields, records, view, walk
 from grimoire.store.tracker import paths as tpaths
 
 SNAP = {"characters:mara": {"present": True, "fields": {
@@ -304,9 +305,6 @@ def test_delete_scene_drops_tracker_dir_and_recycled_sid_starts_clean(home):
 def test_a_tracker_drop_that_fails_still_deletes_the_scene(home, monkeypatch, caplog):
     """The drop runs after the transcript is gone and fails soft: a failing
     removal must not leave a scene standing with its sidecars already gone."""
-    import logging
-
-    from grimoire.store.scenes import lifecycle
 
     _, cid, sid = home
     scenes.append_message(cid, sid, "user", "Hi.", post_id=A)
@@ -426,8 +424,6 @@ def test_a_snapshot_that_is_not_an_object_reads_as_absent(home):
 
 
 def test_the_walk_and_view_read_a_mangled_snapshot(home):
-    from grimoire.store.tracker import view
-
     _, cid, sid = home
     ident, keys = _three_posts(cid, sid)
     records.save(cid, ident, keys[0], MANGLED, changed=[], fields_digest="d", model="m")

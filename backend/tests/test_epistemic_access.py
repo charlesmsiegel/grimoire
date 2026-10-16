@@ -14,6 +14,7 @@ from grimoire import decisions
 from grimoire.decisions import Answer, Decision, Escalation, ItemResult
 from grimoire.store import epistemic_access as ea
 from grimoire.store import routing
+from tests import test_task_policy as tp
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
@@ -121,8 +122,6 @@ def test_the_candidate_policy_row_breaks_no_rule(monkeypatch):
     route 11-S6 landed -- never sampled, escalated only on refusal or a
     permissive low margin. Not registered: the task landed with escalation
     off, as every task does."""
-    from tests import test_task_policy as tp
-
     route = ea.ROUTE
     assert route is not None and route.tasks == (ea.TASK,)
     assert route.legacy == routing.NO_LEGACY and route.operation == "decide"

@@ -1,19 +1,25 @@
+import io
 import logging
+import shutil
 import threading
 from pathlib import Path
 
 import pytest
+from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 
 from grimoire.store import (
     appearances,
     assets,
     atomic,
+    campaign_images,
     campaigns,
     characters,
     entities,
     failsoft,
     greetings,
     groupstate,
+    image_descriptions,
     image_refs,
     image_store,
     locks,
@@ -23,6 +29,7 @@ from grimoire.store import (
     sync,
     taglines,
     voice_anchors,
+    world_images,
     worlds,
 )
 from grimoire.store.campaigns import read as campaigns_read
@@ -269,7 +276,6 @@ def _actor_pair(monkeypatch, tmp_path):
     characters.create_version(wroot, aid, "dark", characters.blank_card("Hero"))
     taglines.write(wroot, aid, "A hero of legend.")
     cid = campaigns.create_campaign("C", wid)
-    import shutil
     d = campaigns.campaign_root(cid) / "characters" / aid
     if d.exists():   # already thin from creation; only needed pre-Task-6
         shutil.rmtree(d)
@@ -404,9 +410,6 @@ def _damage_placed(root, aid, vid, name):
 
 
 def _png(color) -> bytes:
-    import io
-
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), color).save(buf, "PNG")
     return buf.getvalue()
@@ -441,7 +444,6 @@ def test_deleting_an_inherited_image_whose_blob_is_damaged_tombstones_it(
 
 def test_a_campaign_library_image_whose_blob_is_damaged_takes_a_re_upload(
         monkeypatch, tmp_path):
-    from grimoire.store import campaign_images, world_images
     wid, _wroot, cid, _eid = _pair(monkeypatch, tmp_path)
     campaign_images.put_image(cid, "coastline", _png((5, 5, 5)), "png")
     world_images.put_image(wid, "coastline", _png((4, 4, 4)), "png")   # the world's, later
@@ -1911,7 +1913,6 @@ def _base_pair(monkeypatch, tmp_path):
     wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
     assets.put_image(wroot, aid, "default", "avatar", PNG, "png")
     assets.put_image(wroot, aid, "default", "gallery_1", PNG + b"2", "png")
-    from grimoire.store import image_descriptions
     image_descriptions.set_description(wroot, aid, "default", "gallery_1", "at the tide gate")
     return wroot, cid, aid
 
@@ -1985,7 +1986,6 @@ def test_base_versions_absent_for_a_deleted_record(monkeypatch, tmp_path):
 def test_base_versions_absent_when_the_world_has_no_such_character(monkeypatch, tmp_path):
     wroot, cid, aid = _base_pair(monkeypatch, tmp_path)
     appearances.pick_version(cid, "characters", aid, "dark")
-    import shutil
     shutil.rmtree(wroot / "characters" / aid)
     assert overlay.base_versions(cid, aid) == []
 
@@ -2183,10 +2183,6 @@ def test_demote_copy_keeps_campaign_legacy_art(monkeypatch, tmp_path):
 def _real_png(seed: int, text: bytes | None = None) -> bytes:
     """A decodable PNG; `text` adds a tEXt chunk, which changes the bytes and
     not the picture (the store sanitizes it away)."""
-    import io
-
-    from PIL import Image
-    from PIL.PngImagePlugin import PngInfo
     im = Image.new("RGB", (6, 4), (seed * 37 % 256, seed * 11 % 256, 90))
     info = None
     if text is not None:

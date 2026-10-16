@@ -12,9 +12,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
+from grimoire import routes
 from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
-from grimoire.store.continuity import doc, effective, review
+from grimoire.store.continuity import canon, doc, effective, review
+
+from . import review_runs
+from .llm_fakes import from_entries
 
 S1, S2 = "001--saltmarch", "002--realm"
 
@@ -333,7 +337,6 @@ def test_labels_and_refusals_about_missing_records_carry_no_ref(cid):
     link and Unmerge on a broken entry, and the History rail shows the journal
     rows those write -- so a missing end is named by its kind, as the review
     names it, never by the ref `describe` falls back to."""
-    from grimoire.store.continuity import canon
     lid = canon.link_id("before", "commitment:mara-oath", "event:gone")
     doc.put_link(cid, lid, {"a": "commitment:mara-oath", "b": "event:gone",
                             "relation": "before", "created": "", "scene": "", "note": ""})
@@ -395,7 +398,6 @@ def test_forget_ref_uses_the_given_name(cid):
 
 
 def test_create_link_refuses_an_occupied_null_id(cid):
-    from grimoire.store.continuity import canon
     lid = canon.link_id("pays_off", "thread:maras-map", "commitment:mara-oath")
     (_root(cid) / "continuity.json").write_text(json.dumps({"links": {lid: None}}),
                                                 encoding="utf-8")
@@ -421,9 +423,6 @@ def staged(client):
     """(cid, sid): "Mara's map" and "Winifred's chart" seeded in an earlier
     scene, a key on the active connection, and a scene "Saltmarch" with two
     posts whose absorb moves "Mara's map" and "The Realm feud"."""
-    from grimoire import routes
-
-    from .llm_fakes import from_entries
 
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-active"})
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
@@ -449,8 +448,6 @@ def staged(client):
 
 
 def _absorbed(client, cid, sid) -> dict:
-    from . import review_runs
-
     r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 200, r.json()
     return r.json()

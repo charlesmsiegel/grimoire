@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import pytest
 
-from grimoire import decisions, llm_usage, wire
+from grimoire import decisions, llm_usage, store, wire
+from grimoire.store import inference_keys as keys
 from grimoire.store import llm_connections, pricing, usage
-from grimoire.store.inference import facts
+from grimoire.store.inference import facts, in_use
 
 FACTS = {"prompt_usd_per_1k": 0.001, "completion_usd_per_1k": 0.002}
 TABLE = {"prompt_usd_per_1k": 0.01, "completion_usd_per_1k": 0.02}
@@ -254,9 +255,6 @@ def test_a_table_entry_for_either_name_prices_the_call_and_clears_both_chores(pi
     too, so the configuration chore and the ledger chore never disagree:
     both judge through `pricing.rate_for_call`, which matches the table
     against the model that answered and then the model asked for."""
-    from grimoire import store
-    from grimoire.store import inference_keys as keys
-    from grimoire.store.inference import in_use
     store.write_config(**{keys.FORMAT_KEY: keys.CURRENT_FORMAT,
                           keys.role_key("primary", "provider"): pid,
                           keys.role_key("primary", "model"): "vendor/model-a"})

@@ -8,10 +8,12 @@ from unittest import mock
 import httpx
 import pytest
 
-from grimoire import routes
+from grimoire import routes, store
+from grimoire.llm_errors import LLMError
 from grimoire.routes import observability
-from grimoire.store import logs, usage
+from grimoire.store import config, logs, usage
 from tests import review_runs
+from tests.test_routes import _campaign, _cast_npc
 
 
 @pytest.fixture(autouse=True)
@@ -150,8 +152,6 @@ def test_logs_filters_by_module_text_and_campaign(client):
 def test_a_route_error_reaches_the_log_through_the_meter(client):
     """End to end: a failing LLM call is recorded against its task, with no
     call site having had to remember to do it."""
-    from grimoire.llm_errors import LLMError
-
     with pytest.raises(LLMError), usage.meter("suggestions", campaign="saltmarch") as m:
         m.usage.update({"model": "realm/opus"})
         raise LLMError("rate_limit", "429 Too Many Requests")
@@ -169,8 +169,6 @@ def test_a_dossier_that_fails_during_absorb_leaves_a_trace(client):
     The failure here is raised OUTSIDE the meter -- it is the store read, not
     the provider -- so nothing else in the app records it.
     """
-    from grimoire import store
-    from tests.test_routes import _campaign, _cast_npc
 
     wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
@@ -242,7 +240,6 @@ def test_repointing_the_store_re_reads_that_librarys_own_threshold(client, tmp_p
     moves with the root. Without this the process kept writing at the old
     tree's floor while `GET /config` reported the new tree's -- two endpoints
     disagreeing about one setting, rows landing under the wrong one."""
-    from grimoire.store import config
     client.put("/api/config", json={"log_level": "error"})
     assert client.get("/api/logs/level").json()["level"] == "error"
 

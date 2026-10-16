@@ -11,10 +11,12 @@ are the ones where it declines to make one.
 import pytest
 
 from grimoire.store import (
+    absorb,
     campaigns,
     changes,
     chronicle,
     commitments,
+    commits,
     entities,
     plot,
     provenance,
@@ -96,7 +98,6 @@ def absorbed(cid, sid):
     a plot beat, and the panels that describe them. The same shape
     `test_cascade_store.py` builds, because a retcon reverses exactly what a cut
     reverses."""
-    from grimoire.store import absorb
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "new body")], sid)
     chronicle.absorb(cid, {"id": sid, "one_line": "They swore.", "summary": "A long night.",
@@ -338,7 +339,6 @@ def test_an_open_review_cannot_save_over_a_retcon(cid, sid):
     commit token, and saving it would write that transcript's summary and edits
     straight back over the reversal. The same fence a cut raises, for the same
     reason."""
-    from grimoire.store import commits
     before = commits.scene_epoch(cid, sid)
     retcon.retcon(cid, sid, 1, "she never said it")
     assert commits.scene_epoch(cid, sid) > before

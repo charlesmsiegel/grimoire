@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from grimoire import decisions, llm, llm_usage, openai_compatible, wire
+from grimoire import decisions, llm, llm_capture, llm_usage, openai_compatible, wire
 from grimoire.decisions import Answer, Choice, Item, ItemResult, Option, Predicate, Score
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
@@ -1370,8 +1370,6 @@ async def test_a_native_joint_past_the_option_limit_is_refused_unsent(provider):
 
 async def test_a_native_capture_carries_the_run_id_across_a_retry():
     """01g-S3: a native item's capture names the run on every attempt."""
-    from grimoire import llm_capture
-
     wire = Wire((429, {"error": {"code": 429, "message": "slow down"}}), (200, body("answered")))
     events: list[dict] = []
     client = facade(wire, capture=lambda: events.append, retries=1)

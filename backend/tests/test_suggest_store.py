@@ -23,9 +23,10 @@ from grimoire.store import (
     taglines,
     worlds,
 )
+from grimoire.store import greetings as gr
 from grimoire.store.continuity import doc as continuity_doc
 from grimoire.store.continuity import drivers as continuity_drivers
-from grimoire.store.continuity import pressure
+from grimoire.store.continuity import effective, pressure
 
 
 def _world(monkeypatch, tmp_path):
@@ -173,11 +174,10 @@ def test_build_snapshot_dormancy_counts_scenes_since_last_advance(monkeypatch, t
 def test_snapshot_threads_are_canonical(monkeypatch, tmp_path):
     """A merged-away thread is not a second suggestion signal: the snapshot
     lists the canonical alone, still annotated with its dormancy."""
-    from grimoire.store.continuity import doc
     cid = _campaign(monkeypatch, tmp_path)
     plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "open", "Winifred inks it.", "001--gate")
     plot.set_movement(cid, "maras-map", "Mara's map", "open", "Mara finds it.", "002--causeway")
-    doc.put_alias(cid, "thread:maras-map",
+    continuity_doc.put_alias(cid, "thread:maras-map",
                   {"to": "thread:winifreds-chart", "created": "", "source": "manual", "note": ""})
     snap = suggest.build_snapshot(cid)
     assert [t["id"] for t in snap["open_threads"]] == ["winifreds-chart"]
@@ -188,8 +188,6 @@ def test_a_continuity_side_failure_still_lists_the_physical_threads(monkeypatch,
     """Whatever makes the effective projection raise costs the merge (spec
     3.9), never the threads: the snapshot falls back to the physical ledger,
     as the briefing and the advance digest do."""
-    from grimoire.store.continuity import effective
-
     def _boom(*_a, **_k):
         raise RuntimeError("an unanticipated continuity.json shape")
 
@@ -324,7 +322,6 @@ def _campaign_with_greetings(monkeypatch, tmp_path, n):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     ch = _char(wroot, "Ann")
-    from grimoire.store import greetings as gr
     gids = [gr.create_greeting(wroot, f"Opening {i}", ch, "main", f"Body of opening {i}. " * 30)
             for i in range(n)]
     return campaigns.create_campaign("Run", wid), gids

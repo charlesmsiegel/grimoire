@@ -20,6 +20,7 @@ from grimoire.store import config, embed_space, llm_connections, routing
 from grimoire.store import inference_keys as keys
 from grimoire.store.inference import cascade, facts
 from grimoire.store.inference import resolve as inference_resolve
+from tests.inference_fixtures import legacy_store
 
 
 @pytest.fixture(autouse=True)
@@ -298,8 +299,6 @@ def test_a_format_1_edit_that_turns_the_legacy_embedding_on_asks_first():
     STORED, not as the mapping judged the record the edit replaces, so the
     edit is a move and asks (CLAUDE.md: a settings surface never spends
     unasked)."""
-    from tests.inference_fixtures import legacy_store
-
     legacy_store()
     conn = _local()
     llm_connections.set_cached_models(conn, [{"id": "m", "outputs": ["text"]}], _rev(conn))
@@ -315,8 +314,6 @@ def test_a_format_1_edit_of_a_legacy_openrouter_embedding_moves_nothing():
     """A legacy OpenRouter Embedding choice has always meant "off", before and
     after any edit of the provider: its key edit is no move, and asks
     nothing -- as at the base, where the endpoint rule took the format."""
-    from tests.inference_fixtures import legacy_store
-
     legacy_store()
     router = llm_connections.create_connection("openrouter", "Router", api_key="sk-or-fake",
                                                model="", post_process="none")

@@ -1,18 +1,35 @@
 import json
+import shutil
 
 import pytest
 
 from grimoire.store import (
     absorb,
+    appearances,
     audit,
     campaigns,
     changes,
+    characters,
+    commitments,
+    context,
+    dossiers,
+    entities,
+    facts,
+    groupstate,
+    overlay,
     playstate,
+    plot,
+    provenance,
+    relationships,
     scenes,
     sheets,
     steering,
     worlds,
 )
+from grimoire.store.absorb import apply as absorb_apply
+from grimoire.store.absorb import conflicts as absorb_conflicts
+from grimoire.store.absorb import materializer
+from grimoire.store.continuity import doc, review
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -22,7 +39,6 @@ def _campaign(monkeypatch, tmp_path):
 
 
 def _char(root, name):
-    from grimoire.store import characters
     card = characters.blank_card(name)
     card["data"]["personality"] = "aloof"
     return characters.create_character(root, name, "main", card)[0]  # (cid, vid) -> cid
@@ -151,7 +167,6 @@ def test_parse_output_treats_null_id_as_new_thread_not_the_string_none():
 
 
 def test_plot_snapshot_renders_open_threads(monkeypatch, tmp_path):
-    from grimoire.store import plot, scenes
     cid = _campaign(monkeypatch, tmp_path)
     scenes.create_scene(cid, "S")
     plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", "s12")
@@ -168,7 +183,6 @@ def test_plot_snapshot_tolerates_garbled(monkeypatch, tmp_path):
 
 
 def test_materialize_builds_before_after(monkeypatch, tmp_path):
-    from grimoire.store import appearances, entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -196,7 +210,6 @@ def test_append_kinds_covers_every_entity_kind():
     for three of the five it could not (#224). The guard is against the next
     kind: `entities.ENTITY_KINDS` is where a sixth would be added, and nothing
     else would notice that absorb had quietly left it out."""
-    from grimoire.store import entities
     assert sorted(absorb.APPEND_KINDS) == sorted(entities.ENTITY_KINDS)
     assert len(absorb.APPEND_KINDS) == len(set(absorb.APPEND_KINDS))
 
@@ -222,7 +235,6 @@ def test_materialize_evolves_items_groups_and_creatures(monkeypatch, tmp_path):
     """Items, groups and creatures were unreachable from `lore_edits` (#224), so
     a group could only move through its campaign-side state and an item or a
     creature was static from the day it was created."""
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "items", "The Ledger", body="A tally of bribes.")
@@ -250,7 +262,6 @@ def test_a_group_can_take_a_body_append_and_a_state_edit_in_one_absorb(monkeypat
     now means something in TWO sections. They must not collide: the state edit
     writes the campaign's groupstate sidecar, the append writes the world
     record's body, and the reviewer gets one row for each."""
-    from grimoire.store import entities, groupstate, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     gid = entities.create_entity(croot, "groups", "Salt Circle", body="A quiet cabal.")
@@ -274,7 +285,6 @@ def test_a_group_can_take_a_body_append_and_a_state_edit_in_one_absorb(monkeypat
 def test_materialize_lore_edit_id_may_name_its_kind(monkeypatch, tmp_path, raw):
     """Both prefix spellings, because `group_state_edits` already accepts both
     and the model has no way to know the two sections differ."""
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "The Ledger", body="A rumour of a tally.")
@@ -291,7 +301,6 @@ def test_materialize_qualified_lore_edit_id_does_not_fall_back_to_another_kind(
     """Naming a kind is the model saying the bare id is ambiguous. Falling back
     to the scan on a miss would answer a question it did not ask — and would
     write the item's paragraph into a same-slugged lore entry."""
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "The Ledger", body="A rumour of a tally.")
@@ -308,7 +317,6 @@ def test_a_bare_lore_edit_id_resolves_in_the_declared_kind_order(monkeypatch, tm
     lore and locations lead because they are the two this resolver knew before
     the other three joined it (#224), and reordering them would silently move an
     append that has been landing on a lore entry onto a same-slugged location."""
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     for kind in absorb.APPEND_KINDS:
@@ -330,7 +338,6 @@ def test_materialize_lore_edit_drops_an_id_naming_a_kind_that_is_not_a_record(
     append is not a thing a character has. A prefix that is not an entity kind
     must be dropped, not read as a bare id that happens to contain a slash --
     and neither is a kind with nothing after it."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -342,7 +349,6 @@ def test_materialize_lore_edit_drops_an_id_naming_a_kind_that_is_not_a_record(
 def test_materialize_lore_edit_reaches_an_inherited_item(monkeypatch, tmp_path):
     """A thin campaign never copies the world's records, so resolution has to go
     through the overlay for every kind — not just the two it used to."""
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     wid = campaigns.read_campaign(cid)["meta"]["world"]
     entities.create_entity(worlds.world_root(wid), "items", "The Ledger", body="A tally.")
@@ -358,7 +364,6 @@ def test_apply_edits_writes_a_body_append_onto_every_entity_kind(monkeypatch, tm
     """The apply side was always kind-generic (it writes `target["kind"]`); this
     holds it that way now that materialize can actually stage the other three,
     and that the write-back is logged under the record's own ref."""
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
@@ -383,7 +388,6 @@ def test_materialize_character_state_edit_strips_kind_prefix(monkeypatch, tmp_pa
     """The model echoes ids from the "Present: characters/<id>, ..." context line, so
     character_state_edits arrives "characters/<id>"-prefixed far more often than bare —
     materialize must resolve that form, not just the bare id the model sometimes uses."""
-    from grimoire.store import appearances, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -402,7 +406,6 @@ def test_materialize_character_state_edit_not_dropped_for_inherited_character(mo
     for a cast member that's still purely inherited (never appeared/materialized)
     must not be silently dropped just because campaigns.campaign_root(cid) lacks
     the character dir."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     wid = campaigns.read_campaign(cid)["meta"]["world"]
     wroot = worlds.world_root(wid)
@@ -422,7 +425,6 @@ def test_materialize_character_state_edit_label_uses_inherited_character_name(mo
     slug, even when the character is still purely inherited (never materialized
     campaign-side) — the label helper must resolve through the overlay, not just
     the campaign's own copy."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     wid = campaigns.read_campaign(cid)["meta"]["world"]
     wroot = worlds.world_root(wid)
@@ -441,7 +443,6 @@ def test_materialize_character_state_edit_drops_an_unknown_pc(monkeypatch, tmp_p
     under the characters/ tree using the PC's id as if it were a character slug.
     (A PC that IS cast gets its own state file: test_tracker_absorb.py.)"""
     cid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import scenes
     sid = scenes.create_scene(cid, "S")
     parsed = {"character_state_edits": [
         {"id": "pcs/mara", "current_state": "Should not be applied."}]}
@@ -450,7 +451,6 @@ def test_materialize_character_state_edit_drops_an_unknown_pc(monkeypatch, tmp_p
 
 
 def test_materialize_composes_knowledge_blob(monkeypatch, tmp_path):
-    from grimoire.store import appearances, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -503,7 +503,6 @@ def test_materialize_explicit_empty_clears_knowledge(monkeypatch, tmp_path):
 
 
 def test_materialize_drops_noop_state(monkeypatch, tmp_path):
-    from grimoire.store import appearances, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -517,7 +516,6 @@ def test_materialize_drops_noop_state(monkeypatch, tmp_path):
 
 def test_materialize_skips_unknown_targets(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import scenes
     sid = scenes.create_scene(cid, "S")
     parsed = {"character_state_edits": [{"id": "ghost", "current_state": "x"}],
               "lore_edits": [{"id": "nope", "append": "y"}],
@@ -526,7 +524,6 @@ def test_materialize_skips_unknown_targets(monkeypatch, tmp_path):
 
 
 def test_apply_edits_writes_each_kind(monkeypatch, tmp_path):
-    from grimoire.store import appearances, characters, entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -556,7 +553,6 @@ def test_apply_edits_skips_missing_target(monkeypatch, tmp_path):
 
 
 def test_apply_edits_authored_rejects_non_card_field(monkeypatch, tmp_path):
-    from grimoire.store import appearances, characters, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -570,7 +566,6 @@ def test_apply_edits_authored_rejects_non_card_field(monkeypatch, tmp_path):
 
 
 def test_apply_edits_new_character_creates_and_casts_npc(monkeypatch, tmp_path):
-    from grimoire.store import appearances, characters, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
@@ -603,7 +598,6 @@ def test_apply_edits_new_character_creates_and_casts_npc(monkeypatch, tmp_path):
 
 
 def test_apply_edits_new_character_does_not_narrate_into_a_messaged_scene(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     scenes.append_message(cid, sid, "assistant", "*The tavern is loud.*")
@@ -617,7 +611,6 @@ def test_apply_edits_new_character_does_not_narrate_into_a_messaged_scene(monkey
 
 
 def test_apply_edits_new_character_without_sid_skips_casting(monkeypatch, tmp_path):
-    from grimoire.store import characters
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     applied, _ = absorb.apply_edits(cid, [
@@ -629,7 +622,6 @@ def test_apply_edits_new_character_without_sid_skips_casting(monkeypatch, tmp_pa
 
 
 def test_apply_edits_new_location_auto_links_empty_scene(monkeypatch, tmp_path):
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
@@ -645,7 +637,6 @@ def test_apply_edits_new_location_auto_links_empty_scene(monkeypatch, tmp_path):
 
 
 def test_apply_edits_new_location_leaves_existing_location_alone(monkeypatch, tmp_path):
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
@@ -659,7 +650,6 @@ def test_apply_edits_new_location_leaves_existing_location_alone(monkeypatch, tm
 
 
 def test_apply_edits_new_lore_creates_entity(monkeypatch, tmp_path):
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
@@ -683,7 +673,6 @@ def test_parse_new_lore_kind_clamps():
 
 
 def test_materialize_dedupes_new_lore_per_kind(monkeypatch, tmp_path):
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "items", "Lantern")
@@ -707,7 +696,6 @@ def test_materialize_keeps_same_named_rows_of_two_kinds_apart(monkeypatch, tmp_p
     """An item and a lore entry may share a name -- the dedupe is per kind --
     so their staged ids must differ too, or the review keys one row over the
     other. Lore keeps the bare shape every existing review already carries."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     edits = absorb.materialize(cid, sid, {"new_lore": [
@@ -721,7 +709,6 @@ def test_materialize_keeps_same_named_rows_of_two_kinds_apart(monkeypatch, tmp_p
 
 
 def test_apply_new_lore_creates_the_proposed_kind(monkeypatch, tmp_path):
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
@@ -742,7 +729,6 @@ def test_apply_new_lore_refuses_a_duplicate_in_the_kind_it_was_edited_to(
     """Staging dedupes in the kind the model proposed; the reviewer can change
     it. Re-asked in the kind the row lands as -- by name, or by the slug a new
     record would take -- and reported rather than suffixed into a duplicate."""
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
@@ -759,7 +745,6 @@ def test_apply_new_lore_refuses_a_duplicate_in_the_kind_it_was_edited_to(
 
 
 def test_apply_clamps_a_client_edited_kind(monkeypatch, tmp_path):
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
@@ -774,7 +759,6 @@ def test_apply_clamps_a_client_edited_kind(monkeypatch, tmp_path):
 
 
 def test_created_record_citation_is_recorded(monkeypatch, tmp_path):
-    from grimoire.store import provenance, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     review = {"quote": "She lifted the brass lantern.", "speaker": "Mara", "certainty": 0.8}
@@ -796,7 +780,6 @@ def test_created_record_citation_never_reaches_a_prompt(monkeypatch, tmp_path):
     """Spec §9.3: provenance is never read by the context builder. A created
     record that activates brings its body into the prompt and not the quote
     it was cited with."""
-    from grimoire.store import context, provenance, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     review = {"quote": "QUOTE_SHE_LIFTED_THE_LANTERN", "speaker": "Mara", "certainty": 0.8}
@@ -815,8 +798,6 @@ def test_created_record_citation_never_reaches_a_prompt(monkeypatch, tmp_path):
 
 
 def test_created_outcome_names_the_new_record(monkeypatch, tmp_path):
-    from grimoire.store import scenes
-    from grimoire.store.absorb import apply as absorb_apply
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
@@ -834,7 +815,6 @@ def test_absorb_prompt_asks_for_kind():
 
 
 def test_apply_edits_writes_dossier(monkeypatch, tmp_path):
-    from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -851,7 +831,6 @@ def test_apply_edits_skips_a_stale_dossier(monkeypatch, tmp_path):
     order is now the SAVE order, which can invert the absorb order: two reviews
     open on the same NPC, the newer one saved first, and the older one would
     overwrite it with earlier-scene state. The staged `before` is the check."""
-    from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -869,7 +848,6 @@ def test_a_character_vanishing_before_the_save_is_reported(monkeypatch, tmp_path
     """The existence check sat outside the dossier failure handler, so a
     character deleted between staging and saving dropped an approved edit into
     the generic per-edit skip -- silently, with the save reading as a success."""
-    from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -889,7 +867,6 @@ def test_a_dossier_read_failure_is_reported(monkeypatch, tmp_path):
     """The conflict check reads before it writes, and that read sits inside the
     generic per-edit `except`. A permissions or I/O error there would drop an
     approved edit with the save still reading as a success."""
-    from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -915,7 +892,6 @@ def test_a_stale_dossier_is_reported_as_a_conflict(monkeypatch, tmp_path):
     """Skipping the stale write is right; skipping it silently is not -- the
     reviewer approved that dossier and would otherwise be told the save
     succeeded while the text they wrote was dropped."""
-    from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -930,7 +906,6 @@ def test_a_stale_dossier_is_reported_as_a_conflict(monkeypatch, tmp_path):
 
 
 def test_apply_edits_writes_a_dossier_whose_before_still_matches(monkeypatch, tmp_path):
-    from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -945,7 +920,6 @@ def test_apply_edits_writes_a_dossier_whose_before_still_matches(monkeypatch, tm
 
 def test_apply_edits_skips_empty_dossier(monkeypatch, tmp_path):
     """An empty `after` would blank a good dossier -- skip rather than erase."""
-    from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -995,7 +969,6 @@ def test_apply_edits_dossier_rejects_a_non_character_target(monkeypatch, tmp_pat
 
 
 def test_apply_edits_records_dossier_in_changes(monkeypatch, tmp_path):
-    from grimoire.store import dossiers, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -1012,7 +985,6 @@ def test_apply_edits_records_dossier_in_changes(monkeypatch, tmp_path):
 
 
 def test_dossier_edit_stages_before_and_after(monkeypatch, tmp_path):
-    from grimoire.store import dossiers
     _campaign(monkeypatch, tmp_path)
     edit = dossiers.stage_edit("seraphine", "Seraphine", "Seraphine is wary.",
                                "Seraphine is loyal.")
@@ -1074,7 +1046,6 @@ def test_parse_output_new_locations_current_setting_defaults_false():
 
 
 def test_relationships_snapshot_renders_present(monkeypatch, tmp_path):
-    from grimoire.store import appearances, relationships, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     a = _char(croot, "Ann")
@@ -1088,7 +1059,6 @@ def test_relationships_snapshot_renders_present(monkeypatch, tmp_path):
 
 
 def test_state_snapshot_includes_knowledge(monkeypatch, tmp_path):
-    from grimoire.store import appearances, playstate, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -1102,7 +1072,6 @@ def test_state_snapshot_includes_knowledge(monkeypatch, tmp_path):
 
 
 def test_materialize_relationship_and_bond(monkeypatch, tmp_path):
-    from grimoire.store import appearances, relationships, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     a = _char(croot, "Ann")
@@ -1133,7 +1102,6 @@ def test_materialize_relationship_label_uses_inherited_character_names(monkeypat
     """Same overlay-resolution requirement as the character_state label, but for
     relationship/bond edit labels: an inherited (never-materialized) actor's
     display name must still show, not the raw slug."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     wid = campaigns.read_campaign(cid)["meta"]["world"]
     wroot = worlds.world_root(wid)
@@ -1155,7 +1123,6 @@ def test_materialize_relationship_label_uses_inherited_character_names(monkeypat
 
 
 def test_materialize_plot_new_and_advance(monkeypatch, tmp_path):
-    from grimoire.store import plot, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     plot.set_movement(cid, "the-map", "The map", "open", "Elara got it.", "s10")
@@ -1180,7 +1147,6 @@ def test_materialize_plot_new_title_differing_from_colliding_thread_gets_a_suffi
     """§10.5: an id-less row whose title only SLUGS like a stored thread's is a
     slug accident, not a reference -- the commitment predicate, applied to plot.
     Merging it would file the new beat into a thread it never named."""
-    from grimoire.store import plot, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s10")
@@ -1197,7 +1163,6 @@ def test_materialize_plot_new_title_differing_from_colliding_thread_gets_a_suffi
 
 
 def test_materialize_plot_dedupes_same_pid(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     parsed = {"plot_movements": [
@@ -1208,7 +1173,6 @@ def test_materialize_plot_dedupes_same_pid(monkeypatch, tmp_path):
 
 
 def test_materialize_tolerates_garbled_plot(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     (campaigns.campaign_root(cid) / "plot.json").write_text("{ not json", encoding="utf-8")
@@ -1219,7 +1183,6 @@ def test_materialize_tolerates_garbled_plot(monkeypatch, tmp_path):
 
 
 def test_materialize_new_character_creates_staged_edit(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     parsed = {"new_characters": [
@@ -1246,7 +1209,6 @@ def test_materialize_new_character_creates_staged_edit(monkeypatch, tmp_path):
 
 
 def test_materialize_new_character_without_history_keeps_description_bare(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     parsed = {"new_characters": [{"name": "Old Bram", "description": "W++ block", "sd_prompt": ""}]}
@@ -1255,7 +1217,6 @@ def test_materialize_new_character_without_history_keeps_description_bare(monkey
 
 
 def test_materialize_new_character_without_progressive_metadata_defaults_thin(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     parsed = {"new_characters": [{"name": "Old Bram", "description": "W++ block", "sd_prompt": ""}]}
@@ -1266,7 +1227,6 @@ def test_materialize_new_character_without_progressive_metadata_defaults_thin(mo
 
 
 def test_new_character_invalid_confidence_normalizes_to_thin(monkeypatch, tmp_path):
-    from grimoire.store import characters, dossiers, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     parsed = absorb.parse_output(json.dumps({
@@ -1288,7 +1248,6 @@ def test_new_character_invalid_confidence_normalizes_to_thin(monkeypatch, tmp_pa
 
 
 def test_materialize_new_character_drops_existing_name_collision(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     _char(croot, "Seraphine")
@@ -1301,9 +1260,6 @@ def test_materialize_new_character_drops_world_inherited_name_collision(monkeypa
     """A character that only exists in the world (not yet materialized into the
     campaign) must still suppress a duplicate new_character proposal -- dedup
     has to see the overlay's merged namespace, not just the campaign copy."""
-    import shutil
-
-    from grimoire.store import scenes
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -1323,7 +1279,6 @@ def test_materialize_new_character_drops_world_inherited_name_collision(monkeypa
 
 
 def test_materialize_new_character_drops_blank_name_or_description(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     parsed = {"new_characters": [
@@ -1333,7 +1288,6 @@ def test_materialize_new_character_drops_blank_name_or_description(monkeypatch, 
 
 
 def test_materialize_new_locations_and_lore(monkeypatch, tmp_path):
-    from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "locations", "Old Dock")
@@ -1359,7 +1313,6 @@ def test_materialize_new_locations_and_lore(monkeypatch, tmp_path):
 
 
 def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
-    from grimoire.store import relationships
     cid = _campaign(monkeypatch, tmp_path)
     applied, _ = absorb.apply_edits(cid, [
         {"id": "feeling:characters:a->characters:b", "kind": "relationship",
@@ -1375,7 +1328,6 @@ def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
 
 
 def test_apply_edits_writes_plot(monkeypatch, tmp_path):
-    from grimoire.store import plot
     cid = _campaign(monkeypatch, tmp_path)
     applied, _ = absorb.apply_edits(cid, [
         {"id": "plot:the-map", "kind": "plot",
@@ -1389,7 +1341,6 @@ def test_apply_edits_writes_plot(monkeypatch, tmp_path):
 
 
 def test_apply_new_character_seeds_progressive_metadata_and_dossier(monkeypatch, tmp_path):
-    from grimoire.store import characters, dossiers, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     edit = {
@@ -1426,7 +1377,6 @@ def test_apply_new_character_seeds_progressive_metadata_and_dossier(monkeypatch,
 
 
 def test_apply_new_character_survives_dossier_write_failure(monkeypatch, tmp_path):
-    from grimoire.store import characters, dossiers, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     edit = {
@@ -1456,7 +1406,6 @@ def test_apply_new_character_survives_dossier_write_failure(monkeypatch, tmp_pat
 
 
 def test_relationships_snapshot_tolerates_garbled(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     (campaigns.campaign_root(cid) / "relationships.json").write_text("{ not json", encoding="utf-8")
@@ -1464,7 +1413,6 @@ def test_relationships_snapshot_tolerates_garbled(monkeypatch, tmp_path):
 
 
 def _campaign_with_group(monkeypatch, tmp_path):
-    from grimoire.store import entities, scenes
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Saltmarch")
     cid = campaigns.create_campaign("Run", wid)
@@ -1485,7 +1433,6 @@ def test_parse_output_group_state_keeps_key_presence():
 
 
 def test_group_state_materialize_merges_and_applies(monkeypatch, tmp_path):
-    from grimoire.store import groupstate
     cid, sid, croot = _campaign_with_group(monkeypatch, tmp_path)
     groupstate.write_state(croot, "salt-circle", "## Goals\nOld goal.\n\n## Secrets\nThe abbot.")
     parsed = absorb.parse_output(json.dumps({
@@ -1511,7 +1458,6 @@ def test_group_state_edit_for_unknown_group_dropped(monkeypatch, tmp_path):
 
 
 def test_group_snapshot_lists_ids_and_state(monkeypatch, tmp_path):
-    from grimoire.store import groupstate
     cid, sid, croot = _campaign_with_group(monkeypatch, tmp_path)
     groupstate.write_state(croot, "salt-circle", "## Goals\nExpand.")
     snap = absorb.group_snapshot(cid)
@@ -1524,7 +1470,6 @@ def test_group_snapshot_omits_gm_only_groups(monkeypatch, tmp_path):
     """This is a second prompt, built outside the scene context, so the gate in
     `context.activate` does not reach it — and it carries `groupstate`'s
     `secrets` field verbatim (#49)."""
-    from grimoire.store import entities, groupstate
     cid, sid, croot = _campaign_with_group(monkeypatch, tmp_path)
     groupstate.write_state(croot, "salt-circle", "## Goals\nExpand.")
     gid = entities.create_entity(croot, "groups", "Referee Cabal", "x", secrecy="gm-only")
@@ -1583,7 +1528,6 @@ def test_apply_edits_sheet_malformed_edit_reports_error(scene_with_sheeted_cast)
 
 
 def test_apply_edits_mixed_batch_still_applies_non_sheet(scene_with_sheeted_cast):
-    from grimoire.store import entities
     cid, sid = scene_with_sheeted_cast
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
@@ -1602,7 +1546,6 @@ def test_apply_edits_mixed_batch_still_applies_non_sheet(scene_with_sheeted_cast
 
 
 def test_apply_edits_sheet_missing_id_rejected_before_apply(scene_with_sheeted_cast):
-    from grimoire.store import entities
     cid, sid = scene_with_sheeted_cast
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
@@ -1623,7 +1566,6 @@ def test_apply_edits_sheet_missing_id_rejected_before_apply(scene_with_sheeted_c
 
 
 def test_apply_edits_skips_non_dict_batch_items(scene_with_sheeted_cast):
-    from grimoire.store import entities
     cid, sid = scene_with_sheeted_cast
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
@@ -1686,7 +1628,6 @@ def test_parse_output_carries_due_only_when_the_model_sent_the_key():
 def test_a_scene_that_says_nothing_about_a_deadline_leaves_it_alone(monkeypatch, tmp_path):
     """The absorb path end to end: no `due` key survives as None through
     materialize's payload, and `set_movement` reads None as "keep it"."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
@@ -1705,7 +1646,6 @@ def test_a_scene_that_lifts_a_deadline_clears_it(monkeypatch, tmp_path):
     """The other half: an explicit "" reaches the store as a cleared deadline,
     and the reviewer sees it go — the label drops the `due` clause the `before`
     head still carries, so the diff shows what the save will do."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
@@ -1723,7 +1663,6 @@ def test_a_scene_that_lifts_a_deadline_clears_it(monkeypatch, tmp_path):
 
 
 def test_commitment_snapshot_renders_unresolved(monkeypatch, tmp_path):
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
@@ -1744,8 +1683,6 @@ def test_absorb_snapshots_show_canonical_ids_only(monkeypatch, tmp_path):
     """An aliased source is folded into its canonical: the extraction prompt
     offers the model the canonical id alone, so it cannot advance (or open a
     duplicate of) a record that was merged away."""
-    from grimoire.store import commitments, plot, scenes
-    from grimoire.store.continuity import doc
     cid = _campaign(monkeypatch, tmp_path)
     scenes.create_scene(cid, "S")
     plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "open", "Winifred inks it.", "001--gate")
@@ -1768,7 +1705,6 @@ def test_absorb_snapshots_show_canonical_ids_only(monkeypatch, tmp_path):
 
 
 def test_materialize_commitment_new_and_resolve(monkeypatch, tmp_path):
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
@@ -1800,7 +1736,6 @@ def test_materialize_commitment_new_and_resolve(monkeypatch, tmp_path):
 
 
 def test_materialize_commitment_dedupes_same_id(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     parsed = {"commitment_movements": [
@@ -1811,7 +1746,6 @@ def test_materialize_commitment_dedupes_same_id(monkeypatch, tmp_path):
 
 
 def test_apply_edits_writes_a_commitment(monkeypatch, tmp_path):
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     applied, failures = absorb.apply_edits(cid, [
@@ -1831,7 +1765,6 @@ def test_apply_edits_commitment_payload_without_the_newer_keys_still_lands(monke
     """A row that round-tripped through the reviewer's PUT body may carry only
     the keys plot's payload has. The beat must still land rather than the whole
     edit being swallowed."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     applied, _ = absorb.apply_edits(cid, [
@@ -1848,7 +1781,6 @@ def test_apply_edits_commitment_payload_without_the_newer_keys_still_lands(monke
 def test_commitments_are_not_browsable_record_changes(monkeypatch, tmp_path):
     """Like plot movements, a commitment is not a record with a page to open, so
     it must not turn up in the Changes panel's per-record diffs."""
-    from grimoire.store import changes, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     absorb.apply_edits(cid, [
@@ -1864,7 +1796,6 @@ def test_omitting_kind_does_not_reclassify_an_existing_commitment(monkeypatch, t
     """Appending a beat to a THREAT while saying nothing about its kind must not
     turn it into a promise. The blank has to survive parse and materialize, or
     set_movement's preserve-on-blank never gets the chance to fire."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
@@ -1883,7 +1814,6 @@ def test_omitting_kind_does_not_reclassify_an_existing_commitment(monkeypatch, t
 def test_the_staged_label_shows_the_kind_and_status_the_save_will_produce(monkeypatch, tmp_path):
     """The payload carries blanks (meaning "unchanged"), but the reviewer's label
     has to name the values the record will actually read after the save."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
@@ -1914,7 +1844,6 @@ def test_an_unreadable_commitments_file_stages_nothing(monkeypatch, tmp_path, bo
     unknown, and approving it hits the same broken read inside `apply_edits`,
     whose per-edit `except` drops it without recording a failure — so the panel
     closes on a 200 and the approved commitment is simply gone."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     (campaigns.campaign_root(cid) / "commitments.json").write_text(body, encoding="utf-8")
@@ -1930,7 +1859,6 @@ def test_a_commitment_deadline_is_visible_before_it_is_approved(monkeypatch, tmp
     """`due` is applied on save and then steers the ledger and every later scene
     prompt. A model that invents or overwrites one must not be able to do it in a
     row whose only visible text is the beat."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
@@ -1962,7 +1890,6 @@ def test_materialize_tolerates_malformed_fields_inside_a_commitment(monkeypatch,
     a list-valued `status` concatenated into a label (or a list-valued `due`
     handed to `.strip()`) raises from inside materialize — after the extraction
     call, so a paid-for absorb becomes a 500."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     (campaigns.campaign_root(cid) / "commitments.json").write_text(
@@ -1978,7 +1905,6 @@ def test_a_commitment_resolved_by_a_newer_review_is_not_reopened(monkeypatch, tm
     fulfilled; this one still carries the `open` it saw at materialize time. The
     campaign lock serializes the two writes but cannot tell the second is stale
     — only the staged `before` dates the proposal."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
@@ -2005,7 +1931,6 @@ def test_an_intervening_movement_with_the_same_beat_text_is_still_a_conflict(
     four reads as unmoved. Applying the stale row appends its older-scene beat
     AFTER the newer one and rewinds `last_scene`, which is what #103's aging
     reads. The beat count and last scene in the line are what close it."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
@@ -2033,7 +1958,6 @@ def test_a_new_commitment_does_not_reopen_a_resolved_one_by_title(monkeypatch, t
     shown the old one and cannot have meant it; treating the collision as a
     reference reopens a fulfilled promise and files the new beat into the closed
     record's history."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "The debt", "promise", "fulfilled",
@@ -2053,7 +1977,6 @@ def test_a_new_commitment_still_lands_on_an_open_one_of_the_same_title(monkeypat
     """The other side of the rule: an OPEN commitment under that title is in the
     snapshot, so the model naming it without an id is moving it, not opening a
     second one."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "The debt", "promise", "open",
@@ -2069,7 +1992,6 @@ def test_two_titles_that_slug_alike_do_not_merge(monkeypatch, tmp_path):
     becomes the literal `untitled` — every one of them. Reusing an open record
     on the slug alone would file the second commitment's beat into the first and
     keep the first's title, leaving the new one with no record of its own."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "untitled", "Промолчать", "promise", "open",
@@ -2087,7 +2009,6 @@ def test_two_titles_that_slug_alike_in_one_absorb_do_not_merge(monkeypatch, tmp_
     alone hands both the same id and the one-edit-per-commitment dedup drops the
     second outright — the model opened two commitments and one silently vanishes
     before the reviewer ever sees it."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     edits = absorb.materialize(cid, sid, {"commitment_movements": [
@@ -2102,7 +2023,6 @@ def test_an_explicit_id_reserves_itself_against_a_later_new_title(monkeypatch, t
     the store nor the staged map, so the allocator handed the same id to a later
     new row whose title slugs to it — and the one-edit-per-commitment dedup then
     dropped that row outright, before the reviewer ever saw it."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     edits = absorb.materialize(cid, sid, {"commitment_movements": [
@@ -2119,7 +2039,6 @@ def test_an_explicit_id_reserves_the_stored_title_when_the_row_omits_one(monkeyp
     under "" made the reservation disagree with the record it names — so the
     same commitment named by TITLE later in the batch missed the merge and
     staged `the-debt-2`, which approving would turn into a duplicate."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "The debt", "promise", "open",
@@ -2134,7 +2053,6 @@ def test_an_explicit_id_on_a_stored_commitment_reserves_its_stored_title(monkeyp
     stages the stored title and apply never renames. Reserving it under the
     row's paraphrase instead let the same commitment named by its real title
     later in the batch miss the merge and stage a duplicate."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "The debt", "promise", "open",
@@ -2149,7 +2067,6 @@ def test_an_explicit_id_on_a_stored_commitment_reserves_its_stored_title(monkeyp
 def test_an_explicit_id_and_a_matching_title_are_still_one_edit(monkeypatch, tmp_path):
     """The reservation must not break the dedup it sits beside: the same title,
     once by id and once without, is one commitment moving once."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     edits = absorb.materialize(cid, sid, {"commitment_movements": [
@@ -2162,7 +2079,6 @@ def test_an_explicit_id_and_a_matching_title_are_still_one_edit(monkeypatch, tmp
 def test_one_commitment_named_twice_in_a_batch_is_still_one_edit(monkeypatch, tmp_path):
     """And the dedup this must not break: the SAME title twice is one commitment
     moving twice in one scene, which stays a single staged row."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     edits = absorb.materialize(cid, sid, {"commitment_movements": [
@@ -2173,7 +2089,6 @@ def test_one_commitment_named_twice_in_a_batch_is_still_one_edit(monkeypatch, tm
 
 def test_the_same_title_still_lands_on_its_open_record(monkeypatch, tmp_path):
     """Case and surrounding space do not make it a different commitment."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "The debt", "promise", "open",
@@ -2187,7 +2102,6 @@ def test_the_same_title_still_lands_on_its_open_record(monkeypatch, tmp_path):
 def test_an_id_the_model_gave_is_never_redirected(monkeypatch, tmp_path):
     """A movement carrying an id is a reference and keeps pointing where it says,
     resolved or not — silently redirecting it would be the opposite mistake."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "The debt", "promise", "fulfilled",
@@ -2204,7 +2118,6 @@ def test_applying_over_an_unreadable_record_keeps_the_approved_title(monkeypatch
     commitment that exists: `materialize` skips it and stages the model's title
     as new, `set_movement` replaces the record wholesale, and blanking on mere
     truthiness stored the row the reviewer approved as "The debt" under its id."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     (campaigns.campaign_root(cid) / "commitments.json").write_text(
@@ -2228,7 +2141,6 @@ def test_a_store_that_breaks_between_staging_and_saving_is_reported(monkeypatch,
     The commitment branch carried a bespoke handler for this until #271 gave
     every kind an error contract; the reason text is the generic one now, and
     what this pins is the contract rather than the wording."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     edits = absorb.materialize(cid, sid, {"commitment_movements": [
@@ -2244,7 +2156,6 @@ def test_a_store_that_breaks_between_staging_and_saving_is_reported(monkeypatch,
 
 def test_an_absorb_still_cannot_rename_a_readable_commitment(monkeypatch, tmp_path):
     """The rule the fix above must not undo: a stored title stands."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
@@ -2259,7 +2170,6 @@ def test_an_absorb_still_cannot_rename_a_readable_commitment(monkeypatch, tmp_pa
 def test_an_unchanged_commitment_still_applies(monkeypatch, tmp_path):
     """The staleness check must not turn every ordinary save into a conflict —
     materialize and apply have to spell the head identically."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
@@ -2277,7 +2187,6 @@ def test_a_reclassification_is_visible_before_it_is_approved(monkeypatch, tmp_pa
     """Approving the row writes the new kind. The label names the resulting kind;
     without the stored one in `before` there is nothing to read it against and a
     threat-to-promise reclassification looks like an ordinary beat."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
@@ -2339,7 +2248,6 @@ def test_apply_edits_reports_a_failed_non_sheet_write(scene_with_sheeted_cast, m
     """Before #271 only sheet and dossier edits had an error contract; every
     other kind was swallowed by a bare `except: continue`, so a save whose
     approved lore edit hit a full disk still returned 200 saying nothing."""
-    from grimoire.store import entities, overlay
     cid, sid = scene_with_sheeted_cast
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
@@ -2370,7 +2278,6 @@ def test_apply_edits_reports_a_failed_changes_log(scene_with_sheeted_cast, monke
     """The edits landed; only the Changes panel's delta did not. Raising would
     500 a commit that already succeeded, and silence would claim a write-back
     history that is not there -- so it is reported alongside the applied ids."""
-    from grimoire.store import changes, entities
     cid, sid = scene_with_sheeted_cast
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
@@ -2392,7 +2299,6 @@ def test_a_plot_beat_is_stamped_with_the_scene_being_saved(monkeypatch, tmp_path
     the payload still names the id the scene had before. Writing that would stamp
     the beat and `last_scene` with a scene that no longer exists, and
     `plot.repoint_scenes` has already run, so nothing would come back for it."""
-    from grimoire.store import plot
     cid = _campaign(monkeypatch, tmp_path)
     edit = {"id": "plot:the-map", "kind": "plot", "field": "beat",
             "target": {"kind": "plot", "id": "the-map"},
@@ -2411,7 +2317,6 @@ def test_a_plot_beat_is_stamped_with_the_scene_being_saved(monkeypatch, tmp_path
 def test_a_plot_beat_falls_back_to_the_payload_when_there_is_no_scene(monkeypatch, tmp_path):
     """`sid` is optional on `apply_edits`, and a caller that passes none still
     gets the staged attribution rather than a blank one."""
-    from grimoire.store import plot
     cid = _campaign(monkeypatch, tmp_path)
     absorb.apply_edits(cid, [{"id": "plot:the-map", "kind": "plot", "field": "beat",
                               "target": {"kind": "plot", "id": "the-map"},
@@ -2426,7 +2331,6 @@ def test_a_mixed_case_resolved_record_does_not_capture_a_new_commitment(monkeypa
     hidden from the snapshot by that one, and this one would still have read it
     as unresolved — landing the model's new commitment on the record it was
     never shown, and reopening it."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     (campaigns.campaign_root(cid) / "commitments.json").write_text(
@@ -2449,7 +2353,6 @@ def test_a_commitment_edit_writes_where_its_target_says(monkeypatch, tmp_path):
     `conflicts` surveyed it, `target_key` keyed the journal by it, and the
     reviewer's basis describes it. A payload naming a different record would be
     written with none of that having looked at it."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "the-debt", "The debt", "promise", "open", "",
@@ -2485,7 +2388,6 @@ def test_replacing_a_new_commitment_does_not_merge_it_into_another(monkeypatch, 
     saves, and if its reviewer answers Replace, writing to the taken id would
     append their beat, kind, status and deadline onto somebody else's promise:
     two unrelated commitments merged under whichever title landed first."""
-    from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     # the first review's save, already landed
@@ -2524,8 +2426,6 @@ def _fact_row(cid, sid, **row):
 def test_a_reallocated_commitment_is_cited_and_read_on_the_record_it_wrote(monkeypatch, tmp_path):
     """The commitment twin of the plot case: the reallocation predates the plot
     one, and so did the citation landing on the record it moved off."""
-    from grimoire.store import commitments, provenance, scenes
-    from grimoire.store.absorb import conflicts as absorb_conflicts
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "pay-mara", "Pay Mara", "promise", "open", "",
@@ -2563,7 +2463,6 @@ def test_parse_output_facts():
 
 
 def test_fact_snapshot_renders_standing_facts(monkeypatch, tmp_path):
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     fid = facts.record(cid, "The bridge stands.", "the third night", "s1")
     facts.record(cid, "The east gate is barred.", "", "s2")
@@ -2591,7 +2490,6 @@ def test_materialize_stages_a_new_fact(monkeypatch, tmp_path):
 
 
 def test_materialize_stages_a_supersession_against_the_fact_it_retires(monkeypatch, tmp_path):
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The ambassador trusts the party.", "night one", "s3")
     (edit,) = _fact_row(cid, "s9", text="The ambassador thinks he was sold out.",
@@ -2606,7 +2504,6 @@ def test_materialize_stages_a_supersession_against_the_fact_it_retires(monkeypat
 
 
 def test_materialize_stages_a_bare_retirement_as_a_deletion(monkeypatch, tmp_path):
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The east gate is barred at dusk.", "", "s2")
     (edit,) = _fact_row(cid, "s9", supersedes=old)
@@ -2620,7 +2517,6 @@ def test_a_supersedes_naming_a_fact_that_is_gone_still_stages_the_new_fact(monke
     """The snapshot offers only standing facts, so a reference to a retired or
     missing one is the model's mistake — but the fact the scene established is
     still true, and dropping the whole row would lose it."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     gone = facts.record(cid, "The bridge stands.", "", "s1")
     facts.retire(cid, gone, "s4")
@@ -2634,7 +2530,6 @@ def test_a_supersedes_naming_a_fact_that_is_gone_still_stages_the_new_fact(monke
 def test_retiring_a_fact_that_is_already_gone_stages_nothing(monkeypatch, tmp_path):
     """With the supersession dropped there is no text left either, so the row
     would be a staged edit that writes nothing."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     gone = facts.record(cid, "The bridge stands.", "", "s1")
     facts.retire(cid, gone, "s4")
@@ -2646,7 +2541,6 @@ def test_retiring_a_fact_that_is_already_gone_stages_nothing(monkeypatch, tmp_pa
 def test_one_fact_is_retired_at_most_once_per_scene(monkeypatch, tmp_path):
     """The second row would retire a record the first already retired — moving
     `superseded_by` off the fact that really replaced it."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The bridge stands.", "", "s1")
     parsed = absorb.parse_output(json.dumps({"facts": [
@@ -2672,7 +2566,6 @@ def test_re_absorbing_a_scene_does_not_re_stage_its_own_facts(monkeypatch, tmp_p
     """`POST .../absorb?force` re-proposes every fact the first pass found. A row
     whose only possible effect is a duplicate must not reach the reviewer — the
     `timeline.md` re-append this ledger exists to improve on."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     facts.record(cid, "The bridge stands.", "the third night", "s9")
     assert _fact_row(cid, "s9", text="  the BRIDGE stands.  ") == []
@@ -2684,7 +2577,6 @@ def test_a_replay_still_stages_a_retirement_its_first_pass_did_not_finish(monkey
     """Dedup is only allowed to swallow a row that has nothing left to do. A
     first pass that recorded the fact and did not retire its predecessor left
     the ledger contradicting itself, and this is the row that fixes it."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The bridge stands.", "", "s1")
     facts.record(cid, "The bridge is rubble.", "", "s9")     # recorded, not linked
@@ -2716,7 +2608,6 @@ def test_materialize_tolerates_malformed_fields_inside_a_fact(monkeypatch, tmp_p
 
 
 def test_apply_edits_records_a_fact_and_retires_the_one_it_replaces(monkeypatch, tmp_path):
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     old = facts.record(cid, "The ambassador trusts the party.", "night one", "000--earlier")
@@ -2731,7 +2622,6 @@ def test_apply_edits_records_a_fact_and_retires_the_one_it_replaces(monkeypatch,
 
 
 def test_apply_edits_retires_a_fact_outright(monkeypatch, tmp_path):
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     old = facts.record(cid, "The east gate is barred at dusk.", "", "000--earlier")
@@ -2747,7 +2637,6 @@ def test_a_replacement_edited_down_to_nothing_is_refused_not_reclassified(monkey
     happens to be blank. Read the other way, a reviewer trimming the replacement
     text would silently turn it into a bare retirement — a fact off the ledger
     with nothing recorded in its place, which nobody asked for."""
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     old = facts.record(cid, "The bridge stands.", "", "000--earlier")
@@ -2761,7 +2650,6 @@ def test_a_replacement_edited_down_to_nothing_is_refused_not_reclassified(monkey
 def test_a_retirement_the_reviewer_typed_a_replacement_into_becomes_one(monkeypatch, tmp_path):
     """The opposite direction is honoured: they wrote the fact that replaces it,
     which is exactly what a supersession is."""
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     old = facts.record(cid, "The bridge stands.", "", "000--earlier")
@@ -2777,7 +2665,6 @@ def test_retiring_a_fact_the_ledger_does_not_hold_is_reported(monkeypatch, tmp_p
     """A hand-built or forged body naming an id nothing holds. Reported rather
     than skipped: the reviewer approved it and would otherwise read the save as
     a success."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     applied, failures = absorb.apply_edits(cid, [
@@ -2792,7 +2679,6 @@ def test_retiring_a_fact_the_ledger_does_not_hold_is_reported(monkeypatch, tmp_p
 def test_a_fact_row_that_writes_nothing_is_skipped_not_failed(monkeypatch, tmp_path):
     """Neither text nor a fact to retire: nothing was written and nothing was
     lost, which is the difference `_apply_one` draws between skipped and failed."""
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     applied, failures = absorb.apply_edits(cid, [
@@ -2806,7 +2692,6 @@ def test_a_fact_row_that_writes_nothing_is_skipped_not_failed(monkeypatch, tmp_p
 def test_a_fact_edit_writes_where_its_target_says(monkeypatch, tmp_path):
     """`conflicts` surveyed the target and the reviewer's basis describes it, so
     a payload naming a different record must not be the one that gets retired."""
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     judged = facts.record(cid, "The bridge stands.", "", "000--earlier")
@@ -2825,7 +2710,6 @@ def test_a_fact_edit_writes_where_its_target_says(monkeypatch, tmp_path):
 def test_facts_are_not_browsable_record_changes(monkeypatch, tmp_path):
     """Like plot movements and commitments, a fact is not a record with a page
     to open, so it must not turn up in the Changes panel's per-record diffs."""
-    from grimoire.store import changes, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     absorb.apply_edits(cid, _fact_row(cid, sid, text="The bridge stands."), sid)
@@ -2835,7 +2719,6 @@ def test_facts_are_not_browsable_record_changes(monkeypatch, tmp_path):
 def test_a_fact_edit_follows_a_scene_renamed_between_absorb_and_save(monkeypatch, tmp_path):
     """`facts.repoint_scenes` has already moved every stored reference onto the
     new id, so a retry must stamp the fact with the id the scene has now."""
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     (edit,) = _fact_row(cid, sid, text="The bridge stands.")
@@ -2848,7 +2731,6 @@ def test_a_restatement_of_a_standing_fact_stages_nothing(monkeypatch, tmp_path):
     it retires a correctly dated fact and re-records the same sentence under this
     scene's date — so the ledger claims the world changed when nothing did, and
     the date the fact really became true drops off the standing list."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The ambassador trusts the party.", "night one", "s1")
     assert _fact_row(cid, "s9", text="  the AMBASSADOR trusts the party.  ",
@@ -2881,7 +2763,6 @@ def test_one_fact_said_twice_in_a_batch_is_staged_once(monkeypatch, tmp_path):
 
 
 def test_a_new_fact_repeating_what_a_supersession_stages_is_dropped(monkeypatch, tmp_path):
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The bridge stands.", "", "s1")
     parsed = absorb.parse_output(json.dumps({"facts": [
@@ -2896,7 +2777,6 @@ def test_two_facts_ended_by_one_replacement_both_stage(monkeypatch, tmp_path):
     work. `facts.record` files one fact and each row retires its own predecessor
     onto it — dropping the second as a duplicate would leave a fact standing
     that the scene ended."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     a = facts.record(cid, "The north span is passable.", "", "s1")
     b = facts.record(cid, "The south span is passable.", "", "s1")
@@ -2920,7 +2800,6 @@ def test_retiring_a_fact_deleted_by_hand_is_a_conflict_the_reviewer_answers(monk
     """A record removed from facts.json between absorb and save. Reported rather
     than passed over: the retirement the reviewer approved cannot happen, and a
     silent success would leave them believing the ledger no longer stands it."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The bridge stands.", "", "s1")
     (edit,) = _fact_row(cid, "s9", supersedes=old)
@@ -2937,7 +2816,6 @@ def test_the_fact_snapshot_is_capped(monkeypatch, tmp_path):
     scene contradicts it, and the absorb budget is wall-clock rather than tokens
     — so an uncapped snapshot grows every absorb until the extraction call stops
     fitting in the model's context and every absorb fails."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     for n in range(absorb.FACT_SNAPSHOT_LIMIT + 5):
         facts.record(cid, f"Standing fact {n}.", "", f"{n:04d}--s")
@@ -2952,7 +2830,6 @@ def test_the_fact_snapshot_is_capped(monkeypatch, tmp_path):
 def test_the_ledger_view_is_not_capped_by_the_prompt_limit(monkeypatch, tmp_path):
     """The cap is a prompt-side backstop, not a truth about the ledger — a human
     reading what the campaign stands on must see all of it."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     for n in range(absorb.FACT_SNAPSHOT_LIMIT + 5):
         facts.record(cid, f"Standing fact {n}.", "", f"{n:04d}--s")
@@ -2964,7 +2841,6 @@ def test_re_absorbing_a_scene_does_not_resurrect_a_fact_a_later_scene_retired(
     """`force` is exactly the operation the per-scene dedup exists for, and an
     active-only check cannot see the retired record — so it stages the sentence
     again and puts a truth a later scene explicitly ended back on the ledger."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The bridge stands.", "the third night", "s10")
     facts.record(cid, "The bridge is rubble.", "", "s12", supersedes=old)
@@ -2980,7 +2856,6 @@ def test_a_replacement_the_reviewer_edited_into_a_restatement_is_refused(
     through it. Unchecked, it retires a correctly dated fact and re-records the
     same sentence under this scene's later date — a lifecycle change
     manufactured out of a truth that did not move."""
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     old = facts.record(cid, "The ambassador trusts the party.", "night one", "000--earlier")
@@ -3003,7 +2878,6 @@ def test_a_genuinely_different_replacement_the_reviewer_typed_still_lands(
         monkeypatch, tmp_path):
     """The recheck must not block the ordinary case it sits next to: editing the
     replacement is what the textarea is for."""
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     old = facts.record(cid, "The ambassador trusts the party.", "night one", "000--earlier")
@@ -3021,7 +2895,6 @@ def test_the_fact_snapshot_is_scoped_to_the_scene_being_absorbed(monkeypatch, tm
     it their facts invites the model to supersede one from a scene that ran
     before it existed — which `facts.record` then refuses, so the snapshot and
     the store have to agree on what this scene can end."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     facts.record(cid, "The keep is held.", "", "001--early")
     facts.record(cid, "The keep has fallen.", "", "009--late")
@@ -3035,7 +2908,6 @@ def test_a_supersession_of_a_later_scenes_fact_stages_as_a_new_fact(monkeypatch,
     """`facts.record` will refuse to write that retirement, so the row must not
     be STAGED as one — the reviewer would approve a retirement that silently
     does not happen."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     later = facts.record(cid, "The keep has fallen.", "", "009--late")
     (edit,) = _fact_row(cid, "001--early", text="The keep is held.", supersedes=later)
@@ -3050,7 +2922,6 @@ def test_a_new_fact_the_reviewer_edited_onto_an_existing_one_is_reported(
     so the row promised a new entry with its own date and made none. The
     duplicate-approval gap `materialize` closes for the text the MODEL wrote,
     reopened one layer down by the reviewer editing `after`."""
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     facts.record(cid, "The bridge stands.", "the third night", sid)
@@ -3064,7 +2935,6 @@ def test_a_new_fact_the_reviewer_edited_onto_an_existing_one_is_reported(
 
 
 def test_two_approved_rows_edited_to_the_same_fact_report_the_second(monkeypatch, tmp_path):
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     parsed = absorb.parse_output(json.dumps({"facts": [
@@ -3082,7 +2952,6 @@ def test_a_deduped_row_that_also_retires_something_is_still_applied(monkeypatch,
     """The report is only for a row with nothing left to do. One that retires a
     fact did real work even when its text landed on an existing record — calling
     that failed would be the opposite lie."""
-    from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     old = facts.record(cid, "The bridge stands.", "", "000--earlier")
@@ -3254,7 +3123,6 @@ def test_absorb_system_prompt_asks_for_the_identity_fields():
 # predicate `_new_commitment_id` has always applied to commitments.
 
 def test_materialize_plot_same_title_open_thread_is_honoured(monkeypatch, tmp_path):
-    from grimoire.store import plot
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s10")
@@ -3265,7 +3133,6 @@ def test_materialize_plot_same_title_open_thread_is_honoured(monkeypatch, tmp_pa
 
 
 def test_materialize_plot_same_title_closed_thread_is_not_reopened(monkeypatch, tmp_path):
-    from grimoire.store import plot
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     plot.set_movement(cid, "the-map", "The map", "closed", "Mara burned it.", "s10")
@@ -3279,7 +3146,6 @@ def test_materialize_plot_same_title_closed_thread_is_not_reopened(monkeypatch, 
 def test_materialize_plot_untitled_titles_never_merge(monkeypatch, tmp_path):
     """Review Focus 1: every title with no ASCII letters slugs to `untitled`, so
     two different CJK-titled threads collide on the slug alone."""
-    from grimoire.store import plot
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     plot.set_movement(cid, "untitled", "海図", "open", "Mara drew the chart.", "s10")
@@ -3306,7 +3172,6 @@ def test_materialize_plot_explicit_id_on_a_stored_thread_reserves_its_stored_tit
     which is what materialize stages and apply keeps. Under the row's paraphrase
     the thread named by its real title later in the batch staged `the-map-2`,
     two rows with one label that approving turns into a duplicate open thread."""
-    from grimoire.store import plot
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s1")
@@ -3319,8 +3184,6 @@ def test_materialize_plot_explicit_id_on_a_stored_thread_reserves_its_stored_tit
 def test_apply_plot_new_row_whose_id_was_taken_is_reallocated(monkeypatch, tmp_path):
     """Mirrors the commitment branch: a row staged as NEW whose id another write
     took since must not append its beat onto somebody else's thread."""
-    from grimoire.store import plot
-    from grimoire.store.absorb import conflicts as absorb_conflicts
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     [staged] = absorb.materialize(cid, sid, {"plot_movements": [
@@ -3344,8 +3207,6 @@ def test_a_reallocated_plot_row_is_cited_and_read_on_the_thread_it_wrote(monkeyp
     staged target instead, a reallocated beat's quote landed on the thread it
     moved OFF -- somebody else's -- explaining a beat that thread does not
     contain, while the thread that holds it was left uncited."""
-    from grimoire.store import plot, provenance
-    from grimoire.store.absorb import conflicts as absorb_conflicts
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     [staged] = absorb.materialize(cid, sid, {"plot_movements": [
@@ -3369,7 +3230,6 @@ def test_a_reallocated_plot_row_is_cited_and_read_on_the_thread_it_wrote(monkeyp
 def test_materialize_slug_collision_with_non_string_status_does_not_raise(monkeypatch, tmp_path):
     """Both stores are hand-editable; a non-string `status` reads as "" (unsettled)
     rather than raising out of a paid-for absorb."""
-    from grimoire.store import commitments, plot
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open", "",
@@ -3391,8 +3251,6 @@ def test_materialize_slug_collision_with_non_string_status_does_not_raise(monkey
 
 
 def test_assign_ids_matches_materialize(monkeypatch, tmp_path):
-    from grimoire.store import commitments, plot
-    from grimoire.store.absorb import materializer
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s1")
@@ -3446,8 +3304,6 @@ def test_assign_ids_matches_materialize(monkeypatch, tmp_path):
 def _alias_campaign(monkeypatch, tmp_path, canonical_status="open"):
     """A campaign whose thread "Mara's map" (stored where absorb would have
     opened it, `mara-s-map`) is merged into "Winifred's chart"."""
-    from grimoire.store import plot
-    from grimoire.store.continuity import review
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara lost the map.", "s1")
@@ -3461,8 +3317,6 @@ def _alias_campaign(monkeypatch, tmp_path, canonical_status="open"):
 def test_materialize_redirects_an_alias_source_id(monkeypatch, tmp_path):
     """The model may still name a merged record by its own id (a remembered
     one, or a physical snapshot): the beat lands on the record it now is."""
-    from grimoire.store import plot
-    from grimoire.store.absorb import conflicts as absorb_conflicts
     cid, sid = _alias_campaign(monkeypatch, tmp_path)
     [row] = absorb.materialize(cid, sid, {"plot_movements": [
         {"id": "mara-s-map", "title": "", "status": "advanced", "beat": "Mara found a clue."}]})
@@ -3500,9 +3354,6 @@ def test_source_and_canonical_in_one_batch_stage_once(monkeypatch, tmp_path):
 
 
 def test_commitment_alias_source_redirects_and_reserves_canonical_title(monkeypatch, tmp_path):
-    from grimoire.store import commitments
-    from grimoire.store.absorb import conflicts as absorb_conflicts
-    from grimoire.store.continuity import review
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open", None,
@@ -3525,7 +3376,6 @@ def test_commitment_alias_source_redirects_and_reserves_canonical_title(monkeypa
 
 
 def test_dangling_alias_does_not_redirect(monkeypatch, tmp_path):
-    from grimoire.store import plot
     cid, sid = _alias_campaign(monkeypatch, tmp_path)
     plot.restore(cid, "winifreds-chart", None)
     [row] = absorb.materialize(cid, sid, {"plot_movements": [
@@ -3546,7 +3396,6 @@ def test_malformed_continuity_file_stages_physically(monkeypatch, tmp_path):
 def test_slug_collision_on_a_source_with_closed_canonical_is_not_redirected(monkeypatch, tmp_path):
     """Redirecting a slug accident onto a CLOSED canonical would reopen it with
     no identity check (§10.2, §10.5): the row is new, at the next free slug."""
-    from grimoire.store import plot
     cid, sid = _alias_campaign(monkeypatch, tmp_path, canonical_status="closed")
     [row] = absorb.materialize(cid, sid, {"plot_movements": [
         {"id": "", "title": "Mara's map", "status": "open", "beat": "Mara found a clue."}]})
@@ -3584,8 +3433,6 @@ def test_explicit_source_reserves_its_own_slug_with_closed_canonical(monkeypatch
 
 def test_commitment_explicit_source_reserves_its_own_slug_with_resolved_canonical(
         monkeypatch, tmp_path):
-    from grimoire.store import commitments
-    from grimoire.store.continuity import review
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open", None,
@@ -3624,7 +3471,6 @@ _SERA = ("thread:seraphine-s-map", "Seraphine's map", "open")
 
 def _identity_campaign(monkeypatch, tmp_path):
     """Three open threads seeded in an earlier scene, and the scene absorbed."""
-    from grimoire.store import plot
     cid = _campaign(monkeypatch, tmp_path)
     s0 = scenes.create_scene(cid, "Saltmarch docks")
     plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara lost the map.", s0)
@@ -3717,8 +3563,6 @@ def test_alternatives_are_complete_rows_with_valid_before_tokens(monkeypatch, tm
     """Each alternative is a whole staged row for its candidate, carrying the
     same `before` token a primary row on that thread would: swapping to it and
     saving must not read as a conflict."""
-    from grimoire.store import plot
-    from grimoire.store.absorb import conflicts as absorb_conflicts
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     staged = absorb.materialize(cid, sid, {"plot_movements": [
         _chart_row(identity_check=_ic("uncertain", "accepted", _MAP, _CHART))]})
@@ -3741,8 +3585,6 @@ def test_alternatives_are_complete_rows_with_valid_before_tokens(monkeypatch, tm
 def test_accepted_row_offers_the_as_new_variant(monkeypatch, tmp_path):
     """A wrong but accepted `existing` is one click from undone: its as-new
     alternative is the model's own row, on a fresh record."""
-    from grimoire.store import plot
-    from grimoire.store.absorb import conflicts as absorb_conflicts
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     staged = absorb.materialize(cid, sid, {"plot_movements": [
         _accepted("mara-s-map", _MAP, _CHART)]})
@@ -3762,7 +3604,6 @@ def test_accepted_row_offers_the_as_new_variant(monkeypatch, tmp_path):
 
 
 def test_alternatives_skip_closed_and_batch_taken_candidates(monkeypatch, tmp_path):
-    from grimoire.store import plot
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     plot.restore(cid, "mara-s-map", {**plot.get(cid, "mara-s-map"), "status": "closed"})
     staged = absorb.materialize(cid, sid, {"plot_movements": [
@@ -3780,8 +3621,6 @@ def test_alternatives_are_revalidated_against_the_current_store(monkeypatch, tmp
     """The examination's snapshot is stale by the time materialize runs: a
     candidate closed since is skipped, and one merged away since is offered as
     the record it now is -- never as the hidden source."""
-    from grimoire.store import plot
-    from grimoire.store.continuity import review
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     plot.restore(cid, "mara-s-map", {**plot.get(cid, "mara-s-map"), "status": "closed"})
     review.create_alias(cid, "thread:winifred-s-chart", "thread:seraphine-s-map")
@@ -3792,7 +3631,6 @@ def test_alternatives_are_revalidated_against_the_current_store(monkeypatch, tmp
 
 
 def test_two_candidates_sharing_a_canonical_yield_one_alternative(monkeypatch, tmp_path):
-    from grimoire.store.continuity import review
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     review.create_alias(cid, "thread:winifred-s-chart", "thread:seraphine-s-map")
     [row] = absorb.materialize(cid, sid, {"plot_movements": [
@@ -3809,8 +3647,6 @@ def test_candidates_follow_a_merge_made_during_the_absorb(monkeypatch, tmp_path)
     same alias map the alternatives are: the merged source is shown as its
     canonical, two that now share one are one, and one whose record is gone
     is dropped."""
-    from grimoire.store import plot
-    from grimoire.store.continuity import doc
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     doc.put_alias(cid, "thread:winifred-s-chart",
                   {"to": "thread:seraphine-s-map", "created": "", "source": "manual", "note": ""})
@@ -3830,7 +3666,6 @@ def test_a_lone_candidate_merged_away_is_listed_as_its_canonical(monkeypatch, tm
     """The finding's shape exactly: the only candidate merged into another
     record mid-absorb -- its one alternative writes the canonical, and the
     candidate list says so rather than naming the hidden source."""
-    from grimoire.store.continuity import doc
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     doc.put_alias(cid, "thread:winifred-s-chart",
                   {"to": "thread:seraphine-s-map", "created": "", "source": "manual", "note": ""})
@@ -3846,7 +3681,6 @@ def test_a_candidate_closed_during_the_absorb_stays_listed_as_closed(monkeypatch
     """Unlike an alternative, a closed candidate is still listed -- the
     examination shows settled records on purpose, and the no-alternative hint
     names one -- but with the status it has now, not the one examined."""
-    from grimoire.store import plot
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     plot.restore(cid, "mara-s-map", {**plot.get(cid, "mara-s-map"), "status": "closed"})
     [row] = absorb.materialize(cid, sid, {"plot_movements": [
@@ -3884,7 +3718,6 @@ def test_as_new_variant_never_keeps_a_non_slug_id(monkeypatch, tmp_path):
 def test_accepted_target_closed_before_staging_is_downgraded(monkeypatch, tmp_path):
     """Identity resolution never reopens a record -- including one closed in
     the window between the resolver's answer and staging."""
-    from grimoire.store import plot
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     closed = {**plot.get(cid, "mara-s-map"), "status": "closed"}
     plot.restore(cid, "mara-s-map", closed)
@@ -3910,7 +3743,6 @@ def test_a_sibling_of_a_downgraded_row_does_not_reopen_the_closed_target(monkeyp
     the accepted row held their id (its siblings) onto the same record, where
     they are dropped as a second move. Downgrading the accepted row must take
     them back off it: left there, the sibling stages onto the closed record."""
-    from grimoire.store import plot
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     plot.restore(cid, "mara-s-map", {**plot.get(cid, "mara-s-map"), "status": "closed"})
     staged = absorb.materialize(cid, sid, {"plot_movements": [
@@ -3928,7 +3760,6 @@ def test_accepted_target_merged_onto_another_rows_target_is_downgraded(
     would be dropped as a second move -- a beat that never reaches the review.
     The accepted row is put back as the new row the model wrote, as it is for
     a target closed in the same window."""
-    from grimoire.store.continuity import doc
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
     explicit = {"id": "seraphine-s-map", "title": "", "status": "advanced",
                 "beat": "Seraphine bought the map back."}
@@ -3951,8 +3782,6 @@ def test_accepted_target_merged_onto_another_rows_target_is_downgraded(
 
 
 def test_commitment_alternative_before_is_commitment_line(monkeypatch, tmp_path):
-    from grimoire.store import commitments
-    from grimoire.store.absorb import conflicts as absorb_conflicts
     cid = _campaign(monkeypatch, tmp_path)
     s0 = scenes.create_scene(cid, "Saltmarch docks")
     commitments.set_movement(cid, "the-debt", "The debt", "threat", "open", "by midwinter",
@@ -3988,8 +3817,6 @@ def test_alternatives_never_carry_identity_check(monkeypatch, tmp_path):
 def test_a_failing_alternatives_pass_stages_the_rows_without_alternatives(monkeypatch, tmp_path):
     """An identity-only pass may not turn a paid-for extraction into a failed
     absorb: the rows stage without it, and the caller is told."""
-    from grimoire.store.absorb import materializer
-
     def boom(*a, **k):
         raise RuntimeError("alternatives exploded")
 
@@ -4005,8 +3832,6 @@ def test_a_failing_alternatives_pass_stages_the_rows_without_alternatives(monkey
 
 
 def test_a_failing_recheck_pass_stages_the_rows_as_given(monkeypatch, tmp_path):
-    from grimoire.store.absorb import materializer
-
     def boom(*a, **k):
         raise RuntimeError("recheck exploded")
 

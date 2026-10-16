@@ -1,12 +1,29 @@
+import json
 import threading
 import time
 
 import pytest
 
-from grimoire.store import appearances, campaigns, frontmatter, pcs, scenes, worlds
+from grimoire.store import (
+    appearances,
+    atomic,
+    calendars,
+    campaigns,
+    changes,
+    chronicle,
+    entities,
+    frontmatter,
+    length_drift,
+    pcs,
+    plot,
+    scenes,
+    worlds,
+)
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.scenes import lifecycle as scenes_lifecycle
 from grimoire.store.scenes import moment as scenes_moment
 from grimoire.store.scenes import read as scenes_read
+from grimoire.store.scenes import serialize
 from grimoire.store.scenes import write as scenes_write
 
 
@@ -97,7 +114,6 @@ def test_create_in_missing_campaign_raises(monkeypatch, tmp_path):
 
 
 def test_set_location_first_is_silent_then_move_announces(monkeypatch, tmp_path):
-    from grimoire.store import entities
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     a = entities.create_entity(croot, "locations", "Salt Cathedral", "A drowned basilica.")
@@ -120,7 +136,6 @@ def test_set_location_first_is_silent_then_move_announces(monkeypatch, tmp_path)
 
 
 def test_set_location_unknown_id_raises(monkeypatch, tmp_path):
-    from grimoire.store import entities
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     with pytest.raises(entities.EntityNotFound):
@@ -130,7 +145,6 @@ def test_set_location_unknown_id_raises(monkeypatch, tmp_path):
 def test_set_location_resolves_inherited_world_location(monkeypatch, tmp_path):
     """A thin campaign never copies world locations up front; setting one of
     them as a scene's setting must resolve through the overlay, not 404."""
-    from grimoire.store import entities
     cid = _campaign(monkeypatch, tmp_path)
     wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
     eid = entities.create_entity(wroot, "locations", "Seraphine's Hall", "Never copied to the campaign.")
@@ -215,9 +229,6 @@ def test_set_datetime_first_silent_then_advance(monkeypatch, tmp_path):
 
 
 def test_first_datetime_rename_carries_references(monkeypatch, tmp_path):
-    import json
-
-    from grimoire.store import appearances
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     (campaigns.campaign_root(cid) / "appearances.json").write_text(json.dumps(
@@ -238,7 +249,6 @@ def test_first_datetime_with_time_of_day_keeps_filename_windows_safe(monkeypatch
 
 
 def test_set_datetime_bad_input_raises(monkeypatch, tmp_path):
-    from grimoire.store import calendars
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     with pytest.raises(calendars.CalendarError):
@@ -293,7 +303,6 @@ def test_rename_preserves_number_and_date_sections(monkeypatch, tmp_path):
 
 
 def test_rename_repoints_chronicle_changes_and_plot(monkeypatch, tmp_path):
-    from grimoire.store import changes, chronicle, plot
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     chronicle.absorb(cid, {"id": sid, "one_line": "x", "summary": "", "keywords": []})
@@ -320,7 +329,6 @@ def test_numbering_skips_gaps_left_by_deletes(monkeypatch, tmp_path):
 
 
 def test_repad_widens_every_scene_and_repoints(monkeypatch, tmp_path):
-    from grimoire.store import chronicle
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "One")           # 001--one
     d = campaigns.campaign_root(cid) / "scenes"
@@ -639,7 +647,6 @@ def test_trim_continuation_missing_scene_raises(monkeypatch, tmp_path):
 # ---- transition speaker / turn boundaries (2026-07-26 response-presets design) ----
 
 def test_transition_messages_carry_the_reserved_speaker(monkeypatch, tmp_path):
-    from grimoire.store import entities
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Moves")
     croot = campaigns.campaign_root(cid)
@@ -717,7 +724,6 @@ def test_editing_a_reply_into_two_blocks_retracks_the_turn(monkeypatch, tmp_path
 def test_editing_an_earlier_turn_keeps_later_turns_attributed(monkeypatch, tmp_path):
     """A block spliced in mid-transcript shifts the last-sum(sizes) window, so
     drift segmentation would read the wrong blocks as the most recent turn."""
-    from grimoire.store import length_drift
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Window")
     scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "First."}])
@@ -732,7 +738,6 @@ def test_editing_an_earlier_turn_keeps_later_turns_attributed(monkeypatch, tmp_p
 def test_editing_an_untracked_legacy_block_leaves_turn_sizes_alone(monkeypatch, tmp_path):
     """The tracked suffix is anchored at the END: growing the pre-tracking
     prefix cannot move it, so nothing needs adjusting."""
-    from grimoire.store import length_drift
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Upgraded")
     scenes.append_message(cid, sid, "assistant", "Written before turn tracking.")
@@ -749,7 +754,6 @@ def test_an_edit_that_removes_a_model_block_shrinks_the_turn(monkeypatch, tmp_pa
     label is rewritten as plain `**Name:**` by the next save, and when Name is
     the seated player that block parses back as a USER line — one model block
     fewer than turn_sizes was told about."""
-    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
     cid, sid = _campaign_with_pc(monkeypatch, tmp_path)
     p = campaigns.campaign_root(cid) / "scenes" / f"{sid}.md"
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
@@ -914,7 +918,6 @@ def _count_scene_writes(monkeypatch):
     exists, and the next reroll trusts sizes[-1] and deletes blocks belonging
     to an older generation — irreversible transcript loss.
     """
-    from grimoire.store import atomic
     writes: list[str] = []
     real = atomic.write_text
 
@@ -978,7 +981,6 @@ def test_edit_message_persists_transcript_and_boundary_in_one_write(monkeypatch,
 def _hand_write_turn_sizes(cid, sid, raw):
     """Corrupt turn_sizes out of band, as a hand-edit or a half-finished write
     from an older build would."""
-    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
     p = campaigns.campaign_root(cid) / "scenes" / f"{sid}.md"
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["turn_sizes"] = raw
@@ -1056,7 +1058,6 @@ def test_a_failed_append_leaves_the_whole_transcript_readable(monkeypatch, tmp_p
     """The #233 case: a scene transcript is the one piece of user data that
     cannot be regenerated. A write that dies mid-flight must leave every
     earlier message intact rather than a truncated file."""
-    from grimoire.store import atomic
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Durable")
     scenes.append_message(cid, sid, "user", "First message.")
@@ -1293,7 +1294,6 @@ def test_window_of_an_unknown_scene_raises(monkeypatch, tmp_path):
 def _round_trip(name):
     """The speaker a stored block parses back to, via the same two functions
     the real reader uses."""
-    from grimoire.store.scenes import serialize
     block = serialize._block("assistant", name, "Some dialogue.")
     markers = serialize._markers(block)
     assert len(markers) == 1, f"{name!r} produced {len(markers)} markers"
@@ -1306,8 +1306,6 @@ def test_label_preserved_means_the_speaker_survives_a_round_trip():
     merely that a regex liked it. `$` used to match before a trailing newline,
     so "Aese\\n" passed and `_label` emitted a marker split across two lines
     that nothing could parse: the message folded into the previous speaker."""
-    from grimoire.store.scenes import serialize
-
     for name in ["Aese", "Aese Vane", "Winifred (the elder)", "Zoë-Ann", "A" * 64]:
         assert serialize.label_preserved(name), name
         assert _round_trip(name) == (name, "assistant")
@@ -1329,8 +1327,6 @@ def test_no_name_is_preserved_unless_it_actually_round_trips():
     `label_preserved` is TRUE only where serialize-then-parse gives the name
     back. Both defects found here (a trailing newline, a reserved sub-speaker)
     were cases where the predicate said yes and the round trip disagreed."""
-    from grimoire.store.scenes import serialize
-
     probes = ["Aese", "Aese Vane", "Winifred (the elder)", "A (B) (C)", "Zoë-Ann",
               "A" * 64, "A" * 65, "Aese\n", "Aese\r\n", "Aese\r", "Aese\nVane",
               "Aese *the Grey*", "You", "Grimoire", "You (Bob)", "Grimoire (Alice)",
@@ -1356,8 +1352,6 @@ def test_a_prefix_boundary_is_checked_in_the_lowercased_name():
     indexing the ORIGINAL name by the normalized prefix's length lands past the
     boundary. "İpek" then failed to name "İpek Yılmaz", which reads as ambiguity
     and skips that character's voice checks with no competing speaker at all."""
-    from grimoire.store.scenes import serialize
-
     assert serialize.match_name("İpek", ["İpek Yılmaz"]) == "İpek Yılmaz"
     assert not serialize.confusable("İpek Yılmaz", ["İpek Yılmaz", "You", "Grimoire"])
     # ...and a real collision in the same alphabet is still ambiguous
@@ -1374,8 +1368,6 @@ def test_a_whole_name_that_shadows_a_longer_ones_prefix_is_confusable():
     cleanly, and wrongly, because the model writing `**Mara:**` may have been
     shortening the longer name. Asking only "where does this label land?" cannot
     see that; the question is also "who else could have written it?"."""
-    from grimoire.store.scenes import serialize
-
     roster = ["Mara", "Mara Vell"]
     # the resolver is unchanged -- exact match still wins, as every other caller
     # (role assignment, drift canonicalization) needs it to
@@ -1402,8 +1394,6 @@ def test_a_name_the_transcript_cannot_hold_is_never_expanded():
     serializer cannot write never appears as a transcript label (its blocks read
     as "Grimoire"), so it owns no label, and `label_preserved` already caps a
     writable one at 64 characters."""
-    from grimoire.store.scenes import serialize
-
     monstrous = "A " * 4000
     expanded = []
     real = serialize._labels

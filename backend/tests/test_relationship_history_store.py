@@ -4,7 +4,10 @@ import json
 
 from grimoire.store import (
     absorb,
+    appearances,
     campaigns,
+    cascade,
+    characters,
     journal,
     relationship_history,
     relationships,
@@ -269,7 +272,6 @@ def test_undoing_something_else_leaves_the_timeline_alone(monkeypatch, tmp_path)
 # ---- end to end, through the real staging path -----------------------------
 
 def _char(root, name):
-    from grimoire.store import characters
     return characters.create_character(root, name, "main", characters.blank_card(name))[0]
 
 
@@ -278,7 +280,6 @@ def test_the_arc_of_two_scenes_reads_as_a_timeline(monkeypatch, tmp_path):
     `before` is the first scene's `after` because `materialize` read it off
     `relationships.json` — which is what makes the row evidence rather than a
     restatement of the write."""
-    from grimoire.store import appearances
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     mara, winifred = _char(croot, "Mara"), _char(croot, "Winifred")
@@ -329,7 +330,6 @@ def test_a_cut_scene_leaves_its_deltas_and_their_reversals(monkeypatch, tmp_path
     a cut appends reversals rather than erasing rows. That is the opposite of
     what `changes.forget_scene` does, and deliberately: this log is append-only,
     and the rows before the cut are still true about what happened."""
-    from grimoire.store import cascade
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "The crypt")
     absorb.apply_edits(cid, [_feeling(cid, A, B, 2, 1, 3, "wary")], sid=sid)

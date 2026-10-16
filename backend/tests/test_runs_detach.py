@@ -11,6 +11,7 @@ cancels on a real socket close.
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 import httpx
@@ -115,7 +116,6 @@ def test_two_scenes_generate_at_once_without_cross_contamination(live_server):
     """Sequential requests through a buffering client would pass this against a
     shared mutable producer. Both are in flight here before either is released.
     """
-    import threading
     cid, (a, b) = live_server.two_scenes
     # DISTINCT replies, keyed on each request's own prompt. Giving both scenes
     # the same text made this unfalsifiable: a producer that swapped or
@@ -286,8 +286,6 @@ def test_a_stopped_turn_that_flushed_a_partial_still_asks_for_its_follow_ups(
     nothing. Stalling parks on a cancellable sleep with the deltas already fed
     to the watcher, which is the shape a real Stop mid-generation has.
     """
-    import threading
-
     cid, sid = live_server.campaign_scene
     live_server.set_provider(StallingOpenRouter(["Mist over the dock."]))
 

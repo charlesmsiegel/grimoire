@@ -17,9 +17,9 @@ import pytest
 from fastapi import HTTPException
 
 from evals.epistemic import cases, runner, synth
-from grimoire import content_parts, store
+from grimoire import content_parts, routes, store
 from grimoire.llm_errors import LLMError
-from grimoire.routes import character_turns, common
+from grimoire.routes import character_turns, common, history_recall
 from grimoire.routes import epistemic as stage
 from grimoire.store import epistemic_access, routing
 from grimoire.store.context import assemble, epistemic
@@ -418,8 +418,6 @@ _HANDOFF = '\n```handoff\n{"next":null}\n```'
 
 
 def _chat(home, cast, monkeypatch, fake, *, on=True):
-    from grimoire import routes
-    from grimoire.routes import history_recall
     store.write_config(epistemic_decide="on" if on else "off")
     items = CASE["7"].build(cast)[0]
     runner._seat(cast)

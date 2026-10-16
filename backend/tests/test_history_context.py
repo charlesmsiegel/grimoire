@@ -1,5 +1,6 @@
 """Frozen history is additive, bounded after macros, and inspected separately."""
 
+import ast
 import json
 import shutil
 from dataclasses import replace
@@ -8,12 +9,25 @@ from pathlib import Path
 import pytest
 
 from grimoire import prompts
-from grimoire.store import campaigns, chronicle, config, entities, locks, pins, scenes, tokens
+from grimoire.store import (
+    campaigns,
+    chronicle,
+    config,
+    embed_space,
+    entities,
+    locks,
+    pins,
+    scenes,
+    tokens,
+)
 from grimoire.store.context import assemble, epistemic, layout, macros
+from grimoire.store.context import history as history_section
 from grimoire.store.context import pack as packer
 from grimoire.store.history import model, query
 from grimoire.store.history import retrieval as retrieve
+from grimoire.store.inference import limits
 from grimoire.store.scenes import serialize
+from grimoire.store.searchdocs import live
 from tests.history_fixtures import absorbed, actor, appear, played
 from tests.history_fixtures import cid as cid
 
@@ -74,7 +88,6 @@ def test_macro_expanded_ceiling_independent_of_packer(cid, monkeypatch, context_
 
 
 def test_frozen_draws_and_legacy_units_shed_separately(cid, monkeypatch):
-    from grimoire.store.context import history as history_section
     draws = []
     def expand(text):
         if "{{random:x,y}}" in text:
@@ -148,8 +161,6 @@ def test_off_is_identical_and_never_prepares_or_retrieves(cid, monkeypatch, off)
     # Off reads no SearchDocument (so no compiled-cache lookup) and resolves no
     # embedding space, let alone builds a client for one.
     from grimoire import embeddings
-    from grimoire.store import embed_space
-    from grimoire.store.searchdocs import live
     monkeypatch.setattr(live, "scene_documents", lambda *a, **k: pytest.fail("cache read while off"))
     monkeypatch.setattr(embed_space, "endpoint", lambda *a, **k: pytest.fail("space resolved while off"))
     monkeypatch.setattr(embeddings, "AsyncEmbeddingsClient",
@@ -198,7 +209,6 @@ def test_history_api_settings_persist(client):
 
 
 def test_live_preview_uses_supplied_resolved_window_with_unbounded_context(cid, monkeypatch):
-    from grimoire.store.inference import limits
     old = played(cid)
     absorbed(cid, old)
     current = played(cid)
@@ -218,7 +228,6 @@ def test_live_preview_uses_supplied_resolved_window_with_unbounded_context(cid, 
 
 
 def test_full_recap_omission_and_no_bare_header(cid):
-    from grimoire.store.context import history as history_section
     old = played(cid)
     absorbed(cid, old, "Seraphine found the key.")
     current = played(cid)
@@ -233,14 +242,12 @@ def test_full_recap_omission_and_no_bare_header(cid):
 
 
 def test_oversized_summary_is_not_truncated_into_a_header_only_item(cid):
-    from grimoire.store.context import history as history_section
     ev = evidence(replace(item(), summary="Seraphine " * 500), ceiling=100)
     text, _extra = history_section.section(ev, lambda text: text, len, {}, config.read_config())
     assert not text
 
 
 def test_frame_and_item_macro_draws_are_frozen_through_fit_and_shed(cid, tmp_path, monkeypatch):
-    from grimoire.store.context import history as history_section
     root = tmp_path / "templates"
     shutil.copytree(prompts.DEFAULT_TEMPLATES_DIR, root)
     frame = root / "scene" / "sections" / "history_recall.j2"
@@ -268,7 +275,6 @@ def test_frame_and_item_macro_draws_are_frozen_through_fit_and_shed(cid, tmp_pat
 
 
 def test_macro_fit_metadata_contains_only_retained_posts_and_evidence_ids(cid):
-    from grimoire.store.context import history as history_section
     config.write_config(history_recall_depth="1")
     posts = (model.EvidencePost(41, "p-41", None, "Mara", "{{random:x,y}} " + "{{user}} " * 30),
              model.EvidencePost(42, "p-42", None, "Mara", "TRAILING_POST_MARKER"))
@@ -335,7 +341,6 @@ def test_preview_archive_scan_omission_matches_actual_compose_window(cid, monkey
 
 @pytest.mark.parametrize("expanded_summary", ["", " \n\t"])
 def test_expanded_empty_summary_cannot_keep_header_or_evidence(cid, expanded_summary):
-    from grimoire.store.context import history as history_section
     supplied = replace(item(summary="{{user}}"), date="", excerpts=())
     calls = []
     def expand(text):
@@ -350,7 +355,6 @@ def test_expanded_empty_summary_cannot_keep_header_or_evidence(cid, expanded_sum
 
 
 def test_disappearing_summary_keeps_retained_excerpt_without_another_draw(cid):
-    from grimoire.store.context import history as history_section
     calls = []
     def expand(text):
         if "{{random:x,y}}" in text:
@@ -384,7 +388,6 @@ def test_world_info_and_history_are_the_only_shedding_sections():
     World info and Recalled history are the two that may (their order under
     pressure is pinned by `test_frozen_draws_and_legacy_units_shed_separately`
     and the lore-shedding suite)."""
-    import ast
     root = Path(assemble.__file__).parent
     found = set()
     for path in sorted(root.glob("*.py")):

@@ -1,9 +1,20 @@
 """Durable response identity and strict handoff protocol."""
 
+import json
+import threading
+
 import pytest
 
-from grimoire import store
+from grimoire import decisions, prompts, routes, store
+from grimoire.routes import character_turns
+from grimoire.store import frontmatter
+from grimoire.store import response_protocol as rp
+from grimoire.store.campaigns import paths as campaign_paths
 from grimoire.store.response_protocol import ResponseWatcher, validate_handoff
+from grimoire.store.scenes import paths as scene_paths
+from grimoire.store.scenes import serialize, write
+from tests.llm_fakes import FakeLLM
+from tests.test_character_turns import seed
 
 
 def test_decision_owned_prose_needs_no_generated_handoff():
@@ -14,8 +25,6 @@ def test_decision_owned_prose_needs_no_generated_handoff():
 
 
 def test_follow_on_selector_has_only_supplied_npcs_and_optional_narrator():
-    from grimoire.store import response_protocol as rp
-
     roster = [{"ref": "characters:winifred", "name": "Winifred"}]
     item = rp.selector_item(roster, [{"speaker": "Mara", "content": "It's time."}],
                             follow_on=True, include_grimoire=False)
@@ -130,7 +139,6 @@ def test_recovery_replaces_partial_text_after_variant_commit_crash(tmp_path, mon
                                      "characters:mara", "Mara", {})
     rid = record["id"]
     store.responses.save_variant(cid, sid, rid, "Partial", "incomplete")
-    from grimoire.store.scenes import write
     original = write.replace_messages
     def crash(*args, **kwargs):
         raise OSError("simulated transcript write failure")
@@ -167,8 +175,6 @@ def _legacy_scene():
 
 
 def test_needs_migration_matches_what_migrate_assigns():
-    from grimoire.store.scenes import serialize
-
     def post(**extra):
         return {"role": "assistant", "speaker": "Mara", "content": "Hm.", **extra}
 
@@ -219,8 +225,6 @@ def test_a_migrated_scene_opens_without_the_campaign_lock(client, monkeypatch):
 
 
 def test_a_scene_without_an_identity_still_takes_the_full_migrate(client, monkeypatch):
-    from grimoire.store import frontmatter
-
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
@@ -249,7 +253,6 @@ def test_reroll_takes_the_same_fast_path(client, monkeypatch):
     client.get(f"/api/campaigns/{cid}/scenes/{sid}")   # the one real migration
     calls = []
     monkeypatch.setattr(store.responses, "migrate", lambda c, s: calls.append((c, s)))
-    from grimoire.routes import character_turns
     seen = []
     monkeypatch.setattr(character_turns, "regenerate_response",
                         lambda cid, sid, rid, *rest: seen.append(rid) or {"ok": True})
@@ -264,8 +267,6 @@ def test_the_ledger_is_written_compact_and_still_reads_indented(tmp_path, monkey
     `indent` both inflates it and, before CPython 3.13, pushes `json.dumps`
     onto the pure-Python encoder. Older builds wrote it indented, and that must
     still read."""
-    import json
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
@@ -284,9 +285,6 @@ def test_the_ledger_is_written_compact_and_still_reads_indented(tmp_path, monkey
 def _two_turns_with_a_reroll(client):
     """Two played turns, the second's reply rerolled once: the transcript is
     user / Mara / user / Mara, and the trailing response has two variants."""
-    from grimoire import routes
-    from tests.llm_fakes import FakeLLM
-    from tests.test_character_turns import seed
 
     cid, sid = seed(client)
     fake = FakeLLM([
@@ -359,10 +357,6 @@ def _swipe_path(base, rid):
 
 
 def test_swipe_state_takes_no_lock_and_writes_nothing(client):
-    import threading
-
-    from grimoire.store.campaigns import paths as campaign_paths
-    from grimoire.store.scenes import paths as scene_paths
 
     cid, sid, _base, rid, old = _two_turns_with_a_reroll(client)
     watched = (scene_paths._scene_path(cid, sid), campaign_paths.campaign_root(cid) / "responses.json")
@@ -471,8 +465,6 @@ def test_selector_item_offers_the_roster_and_grimoire_and_allows_none():
     and `grimoire`, with null allowed: null is how the selector hands control
     back to the player. The context is the observable transcript, and the user
     direction only when there is one."""
-    from grimoire import decisions, prompts
-    from grimoire.store import response_protocol as rp
 
     item = rp.selector_item(_SPEAKERS, _HEARD)
     decisions.validate([item])
@@ -506,8 +498,6 @@ def test_selector_item_refuses_a_roster_whose_refs_collide_once_normalised(first
     """Two offered ids that differ only in case or separator would read as one
     answer, so the request is refused before anything is sent (Task 10 maps
     the refusal to `INVALID_HANDOFF`, plan Minor 15)."""
-    from grimoire import decisions
-    from grimoire.store import response_protocol as rp
 
     roster = [{"ref": first, "name": "Mara"}, {"ref": second, "name": "Mara again"}]
     with pytest.raises(decisions.DecideRequestError, match="collides"):
@@ -517,8 +507,6 @@ def test_selector_item_refuses_a_roster_whose_refs_collide_once_normalised(first
 def test_the_issue_constants_are_todays_strings():
     """`selection_of` must store exactly what `validate_handoff` reports, and
     what `character_turns._HANDOFF_ISSUES` ends a Directed chain on."""
-    from grimoire.routes import character_turns
-    from grimoire.store import response_protocol as rp
 
     assert rp.INVALID_HANDOFF == "missing or invalid handoff"
     assert rp.INELIGIBLE == "ineligible or repeated speaker"
@@ -528,8 +516,6 @@ def test_the_issue_constants_are_todays_strings():
 
 
 def _selected(reply):
-    from grimoire import decisions
-    from grimoire.store import response_protocol as rp
 
     item = rp.selector_item(_SPEAKERS, _HEARD)
     (result,) = decisions.parse(reply, [item], explain=False)
@@ -543,8 +529,6 @@ def test_selection_of_an_answer_is_the_speaker_with_no_issue():
 
 
 def test_selection_of_null_returns_control_without_an_issue():
-    from grimoire import decisions
-    from grimoire.store import response_protocol as rp
 
     assert _selected('{"0": {"answers": {"next": null}}}') == (None, None)
     abstained = decisions.ItemResult({"next": decisions.Answer(None, "abstained")})
@@ -552,16 +536,12 @@ def test_selection_of_null_returns_control_without_an_issue():
 
 
 def test_selection_of_an_off_roster_answer_raises_the_ineligible_issue():
-    from grimoire.store import response_protocol as rp
-
     for ref in ('"pcs:seraphine"', '"absent"', "5", "true"):
         assert _selected(f'{{"0": {{"answers": {{"next": {ref}}}}}}}') == (
             None, rp.INELIGIBLE), ref
 
 
 def test_selection_of_an_unreadable_answer_raises_the_invalid_handoff_issue():
-    from grimoire import decisions
-    from grimoire.store import response_protocol as rp
 
     for reply in ("not json", "{}", '{"0": {"answers": {}}}', '{"0": {"answers": {"next'):
         assert _selected(reply) == (None, rp.INVALID_HANDOFF), reply
@@ -580,8 +560,6 @@ def test_npc_roster_is_the_present_cast_but_the_player():
     """A scene's cast as roster entries -- `kind:id` refs named by the cast's
     names, in cast order -- with the player's own character left out: the
     shape the planner plans over and `selector_item` offers."""
-    from grimoire.store import response_protocol as rp
-
     cast = [{"kind": "characters", "id": "mara", "name": "Mara", "role": "npc"},
             {"kind": "pcs", "id": "rowan", "name": "Rowan", "role": "player"},
             {"kind": "characters", "id": "winifred", "name": "Winifred", "role": "npc"}]
@@ -600,8 +578,6 @@ def test_observable_conversation_is_the_last_twelve_posts_in_context_through_the
     length (so a depth-limited rule counts over the whole scene). A synthetic
     line keeps its slot and is dropped from what the pick reads, and a post
     with no speaker is the player's or the narrator's by its role."""
-    from grimoire import store
-    from grimoire.store import response_protocol as rp
 
     messages = [_post(n) for n in range(14)]
     messages[13] = {"role": "user", "content": "post 13"}
@@ -624,8 +600,6 @@ def test_observable_conversation_is_the_last_twelve_posts_in_context_through_the
 
 
 def test_observable_conversation_of_an_empty_or_all_hidden_scene_is_empty():
-    from grimoire.store import response_protocol as rp
-
     seen = []
 
     def view(posts, offset, total):

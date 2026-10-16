@@ -1,12 +1,15 @@
 """Capture the provider boundary, including fields no consumer recognizes."""
+import importlib
 import json
+import pkgutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 import httpx
 import pytest
 
-from grimoire import llm, llm_capture, routes, wire
+import grimoire
+from grimoire import llm, llm_capture, llm_reasoning, llm_usage, routes, tool_calls, wire
 from grimoire.llm import LLMClient
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import OpenRouterClient
@@ -221,10 +224,7 @@ async def test_the_run_id_rides_every_attempt_of_a_call(monkeypatch, tmp_path):
 def _declared_holder_keys() -> dict[str, str]:
     """Every holder key the gateway declares: a module-level `KEY`, `*_KEY`
     or `ATTEMPTED` string beginning with `_`, in a top-level module."""
-    import importlib
-    import pkgutil
 
-    import grimoire
 
     found: dict[str, str] = {}
     for info in pkgutil.iter_modules(grimoire.__path__):
@@ -244,8 +244,6 @@ def test_the_keys_stamp_keeps_are_the_pre_send_keys():
     must not count as a request sent (`PRE_SEND_KEYS`), or a holder refused
     before sending files a model-less row. A key the gateway declares without
     a value here fails first, so a new kept key cannot skip the comparison."""
-    from grimoire import llm_reasoning, llm_usage, tool_calls
-
     values = {
         llm_capture.RUN_KEY: "run-1",
         llm_capture.KEY: llm_capture.Capture(lambda event: None, "c", 1, "m", "p"),

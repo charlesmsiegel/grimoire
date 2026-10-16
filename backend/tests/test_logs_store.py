@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import tracemalloc
 
 import pytest
 
-from grimoire.store import errors, logs
+from grimoire.store import config, errors, logs
 
 
 @pytest.fixture
@@ -102,7 +104,6 @@ def test_a_row_below_the_threshold_is_not_written(home):
 
 
 def test_the_threshold_comes_from_the_config_and_moves_when_it_is_rewritten(home):
-    from grimoire.store import config
     config.write_config(log_level="debug")
 
     assert logs.apply_level() == "debug"
@@ -110,7 +111,6 @@ def test_the_threshold_comes_from_the_config_and_moves_when_it_is_rewritten(home
 
 
 def test_an_unrecognized_configured_level_falls_back_rather_than_crashing(home):
-    from grimoire.store import config
     config.write_config(log_level="chatty")
 
     assert logs.apply_level() == "info"
@@ -254,8 +254,6 @@ def test_the_floor_governs_the_file_without_silencing_the_terminal(home, capsys)
 def test_two_threads_recording_at_once_lose_no_rows_and_tear_no_lines(home):
     """`atomic.append_line` publishes a row with one `O_APPEND` write, so
     concurrent writers interleave whole lines rather than halves of one."""
-    import threading
-
     def write(n):
         for i in range(50):
             logs.record("info", f"worker{n}", f"row {n}-{i}")
@@ -274,8 +272,6 @@ def test_two_threads_recording_at_once_lose_no_rows_and_tear_no_lines(home):
 def test_the_reentrancy_latch_is_per_thread_not_global(home):
     """A second thread logging while the first is mid-record is not a
     recursion, and silencing it would drop rows under any concurrency at all."""
-    import threading
-
     started, done = threading.Event(), threading.Event()
     real_home = logs.paths.home
 
@@ -355,8 +351,6 @@ def test_the_paged_reader_never_holds_a_whole_month_in_memory(home):
     Measured rather than asserted against the source: the property is peak
     memory, and a reader could regress to slurping without the word
     `read_text` appearing anywhere."""
-    import tracemalloc
-
     day = logs._now()[:10]
     fat = home / "logs" / f"{logs._now()[:7]}.jsonl"
     fat.parent.mkdir(parents=True, exist_ok=True)

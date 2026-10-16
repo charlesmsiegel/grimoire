@@ -15,6 +15,7 @@ import pytest
 
 from evals import run as eval_run
 from evals.investigation import cases, graders, runner, synth
+from grimoire.store import usage
 
 
 @pytest.fixture(scope="module")
@@ -191,7 +192,6 @@ def test_the_hidden_route_probe_searches_as_the_arms_do_and_costs_them_nothing(m
     """Live, the probe gets the arms' embeddings client -- semantic ranking is
     what could tell a hidden word from a missing one -- and files under its
     own run id, so its calls are never the arm's cost."""
-    from grimoire.store import usage
     seen = []
 
     async def probe(planted, *, embed_client=None, run_id=""):

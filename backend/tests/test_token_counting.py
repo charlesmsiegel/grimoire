@@ -10,6 +10,7 @@ import pytest
 
 from grimoire import store
 from grimoire.store import tokens
+from grimoire.store.context import assemble
 
 
 class _Enc:
@@ -80,7 +81,6 @@ def test_count_tokens_records_which_counter_it_used(monkeypatch):
 
 
 def test_a_compose_reports_the_counter_it_counted_with(monkeypatch):
-    from grimoire.store.context import assemble
     count = assemble._token_memo()
     monkeypatch.setattr(tokens, "_encoder", _Enc)
     count("Mara walks the Saltmarch road")

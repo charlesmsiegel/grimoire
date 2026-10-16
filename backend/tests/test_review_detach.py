@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import threading
 import time
 
 import pytest
@@ -26,6 +27,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.llm import LLMClient
 from grimoire.main import create_app
 from tests import review_runs
 from tests.llm_fakes import decision_reply, from_entries
@@ -440,7 +442,6 @@ class _Wedged:
 
 
 def _facade(provider):
-    from grimoire.llm import LLMClient
     return LLMClient(openrouter=provider, claude=provider,
                      openai_compatible=provider, timeout=120)
 
@@ -913,8 +914,6 @@ def test_a_retry_reserves_its_run_under_the_lock_cancel_deletes_beneath(client, 
     and the reservation then starts a retry for a review that is gone -- holding
     the scene and spending the whole retry budget before ending in
     `review_missing`, with the browser's abort stopping none of it."""
-    import threading
-
     cid, sid = scene
     _absorb(client, cid, sid)
     held: list[bool] = []

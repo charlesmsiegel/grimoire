@@ -1,4 +1,6 @@
 import json
+import os as _os
+import threading
 
 import pytest
 
@@ -9,6 +11,7 @@ from grimoire.store import (
     entities,
     locks,
     modules,
+    overlay,
     pcs,
     sheets,
     worlds,
@@ -248,11 +251,9 @@ def test_no_seed_without_module_and_no_reseed_on_bind(monkeypatch, tmp_path):
 
 
 def test_campaign_coverage(monkeypatch, tmp_path):
-    from grimoire.store import entities as ent
-    from grimoire.store import overlay
     wid, cid = _campaign(monkeypatch, tmp_path)          # pool-basic
-    ent.create_entity(worlds.world_root(wid), "items", "Moon Disc")
-    ent.create_entity(worlds.world_root(wid), "locations", "Old Chapel")
+    entities.create_entity(worlds.world_root(wid), "items", "Moon Disc")
+    entities.create_entity(worlds.world_root(wid), "locations", "Old Chapel")
     overlay.create_entity(cid, "items", "Salt Knife")
     sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
     cov = sheets.coverage(cid)
@@ -265,7 +266,6 @@ def test_campaign_coverage(monkeypatch, tmp_path):
 
 def test_coverage_counts_invalid(monkeypatch, tmp_path):
     wid, cid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import overlay
     overlay.create_entity(cid, "items", "Moon Disc")
     sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
     modules.set_campaign_module(cid, "d20-basic")        # talisman now unknown
@@ -279,9 +279,8 @@ def test_coverage_empty_without_module(monkeypatch, tmp_path):
 
 
 def test_world_coverage(monkeypatch, tmp_path):
-    from grimoire.store import entities as ent
     wid, _ = _campaign(monkeypatch, tmp_path, module=None)
-    ent.create_entity(worlds.world_root(wid), "items", "Moon Disc")
+    entities.create_entity(worlds.world_root(wid), "items", "Moon Disc")
     sheets.write_world(wid, "pool-basic", "items", "moon-disc", "talisman", None, expected=None)
     cov = sheets.world_coverage(wid, "pool-basic")
     assert cov["items"] == {"total": 1, "sheeted": 1, "invalid": 0}
@@ -298,10 +297,8 @@ def test_seed_via_world_default_module(monkeypatch, tmp_path):
 
 
 def test_coverage_excludes_tombstoned_entities(monkeypatch, tmp_path):
-    from grimoire.store import overlay
     wid, cid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import entities as ent
-    ent.create_entity(worlds.world_root(wid), "items", "Moon Disc")
+    entities.create_entity(worlds.world_root(wid), "items", "Moon Disc")
     overlay.add_deleted(cid, "items/moon-disc")
     cov = sheets.coverage(cid)
     assert cov["items"]["total"] == 0
@@ -589,7 +586,6 @@ def test_advance_orphan_sheet_without_backing_character_raises_not_found(monkeyp
 
 
 def test_advance_concurrent_calls_only_one_succeeds(monkeypatch, tmp_path):
-    import threading
     wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Duelist")  # id: "duelist"
     sheets.write(cid, "characters", "duelist", "hero", {"wits": 2, "xp": {"current": 9, "max": 999}},
@@ -922,7 +918,6 @@ def test_delete_legacy_gen_null_matches_expected_none(monkeypatch, tmp_path):
 def test_editor_write_serializes_with_advance(monkeypatch, tmp_path):
     """The pre-existing hole: a whole-sheet write interleaving advance's
     read-modify-write could lose the advancement. Serialized, both survive."""
-    import threading
     _wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path)
     base_fields = sheets.read(cid, "characters", "mara")["fields"]
     errs = []
@@ -1086,7 +1081,6 @@ def _campaign_with_advancement_and_hp_module(monkeypatch, tmp_path):
 
 def test_set_field_race_vs_advance(monkeypatch, tmp_path):
     """Threaded: both complete under the lock, neither write lost."""
-    import threading
     cid = _campaign_with_advancement_and_hp_module(monkeypatch, tmp_path)
     s = sheets.read(cid, "characters", "mara")
     results = []
@@ -1134,7 +1128,6 @@ def test_set_field_rejects_kind_that_traverses_into_another_campaign(monkeypatch
     victim = sheets.read(cid1, "characters", "mara")
     p1 = sheets._campaign_path(cid1, "characters", "mara")
     p2dir = sheets._campaign_dir(cid2)
-    import os as _os
     rel = _os.path.relpath(p1, p2dir)
     body = rel[:-len(".json")]
     idx = body.rfind("--")
@@ -1264,12 +1257,11 @@ def test_a_legacy_sheet_without_the_mark_reads_as_uncreated(monkeypatch, tmp_pat
     """Absent and false are the same answer: a store written before the mark
     existed must read exactly like one written today, and `_sheet_doc` omits
     the key rather than writing it false."""
-    import json as _json
     wid, cid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Mara")
     sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     p = sheets._campaign_path(cid, "characters", "mara")
-    assert "creation" not in _json.loads(p.read_text(encoding="utf-8"))
+    assert "creation" not in json.loads(p.read_text(encoding="utf-8"))
     assert sheets.read(cid, "characters", "mara")["creation"] is False
 
 
@@ -1325,7 +1317,6 @@ def test_creation_pending_does_not_flag_a_module_whose_defaults_clear_its_floors
 
 
 def test_roster_names_the_cast_and_says_who_has_a_sheet(monkeypatch, tmp_path):
-    from grimoire.store import overlay
     wid, cid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Mara")
     characters.create_character(worlds.world_root(wid), "Winifred")
@@ -1350,7 +1341,6 @@ def test_roster_names_the_cast_and_says_who_has_a_sheet(monkeypatch, tmp_path):
 
 
 def test_roster_carries_an_invalid_sheets_errors(monkeypatch, tmp_path):
-    from grimoire.store import overlay
     _, cid = _campaign(monkeypatch, tmp_path)
     overlay.create_entity(cid, "items", "Moon Disc")
     sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
@@ -1366,7 +1356,6 @@ def test_roster_is_empty_without_a_module(monkeypatch, tmp_path):
 
 
 def test_create_missing_fills_the_gap_and_flags_what_is_incomplete(monkeypatch, tmp_path):
-    from grimoire.store import overlay
     wid, cid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Mara")
     characters.create_character(worlds.world_root(wid), "Winifred")

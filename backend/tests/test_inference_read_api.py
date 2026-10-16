@@ -14,7 +14,7 @@ import pytest
 
 from grimoire import llm_sampling
 from grimoire.store import llm_connections, sampler_presets
-from grimoire.store.inference import facts
+from grimoire.store.inference import capabilities, facts
 from grimoire.store.inference import resolve as inf
 from tests.inference_fixtures import primary
 
@@ -72,7 +72,6 @@ def test_a_row_is_the_catalog_entry_plus_its_capabilities(client):
     cid = _connection(client, rows=[row])
     got = _get(client, cid, "embed").json()["groups"]["fits"][0]
     assert {k: got[k] for k in row} == row
-    from grimoire.store.inference import capabilities
     assert set(got["capabilities"]) == set(capabilities.NAMES)
     assert all(set(v) == {"value", "source"} for v in got["capabilities"].values())
     assert got["reason"] == "catalog"

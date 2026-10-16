@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 
 import pytest
 
@@ -253,8 +255,6 @@ def test_the_prompt_path_waits_on_no_held_campaign_lock(cast_scene):
     ledger. That read is one atomically written file and takes no lock, so a
     campaign held elsewhere (an absorb, a long write) costs the prompt nothing
     -- where a lock there was a wait of up to the lock timeout per prompt."""
-    import threading
-    import time
 
     cid, sid = cast_scene
     held, done = threading.Event(), threading.Event()

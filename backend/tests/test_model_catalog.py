@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import catalog, routes, wire
+from grimoire import llm_sampling as ls
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests.llm_fakes import FakeCatalog
@@ -314,7 +315,6 @@ def test_an_anthropic_row_with_no_capability_tree_keeps_what_else_it_states():
     """`capabilities` is nullable in the Models API: a null tree says nothing
     about capabilities, but the row is still Anthropic's -- its name, window
     and reply cap are read, and the cap reaches the request's `max_tokens`."""
-    from grimoire import llm_sampling as ls
     got = catalog.entry(_anthropic_row(capabilities=None))
     assert got["name"] == "Claude Test One"
     assert got["context"] == 200000

@@ -1,11 +1,13 @@
 """Contention reaches the user as a 409, and never as a hang, a silent skip,
 or a mislabelled error (#234)."""
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 
 from grimoire import main, store
-from grimoire.store import campaigns, locks, worlds
+from grimoire.routes import streaming
+from grimoire.store import audit, campaigns, locks, worlds
 from tests import wire_kit
 
 
@@ -76,8 +78,6 @@ def test_capture_baseline_propagates_contention(monkeypatch, tmp_path):
     campaign lock (reentrantly) -- so this re-raise guards a future caller that
     does not, rather than a live path.
     """
-    from grimoire.store import audit
-
     cid = _campaign(monkeypatch, tmp_path)
 
     def busy(c):
@@ -108,9 +108,6 @@ def test_a_busy_finalize_emits_an_error_frame_and_persists_nothing(
     Parameterized over a list-returning and a GENERATOR finalize, because
     guarding only the call leaves a generator's StoreBusy escaping the `for`.
     """
-    import anyio
-
-    from grimoire.routes import streaming
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     persisted = []

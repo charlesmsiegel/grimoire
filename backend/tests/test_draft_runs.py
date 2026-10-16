@@ -726,7 +726,6 @@ def test_a_preflight_refusal_keeps_its_status_on_the_run(client, world):
 
 def _first_run_id(body: str) -> str:
     """The id from the leading `run` frame every producing route emits first."""
-    import json
     for line in body.splitlines():
         if line.startswith("data: "):
             payload = json.loads(line[6:])

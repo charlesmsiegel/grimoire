@@ -10,6 +10,7 @@ and a same-titled replacement lands on the same id.
 from __future__ import annotations
 
 import logging
+import pathlib
 
 import pytest
 
@@ -466,7 +467,6 @@ def test_an_unreadable_scenes_directory_does_not_abort_startup(tmp_path, monkeyp
 
     broken_dir = store.scenes.paths._scenes_dir(broken)
 
-    import pathlib
     original = pathlib.Path.glob
 
     def refuse(self, pattern):

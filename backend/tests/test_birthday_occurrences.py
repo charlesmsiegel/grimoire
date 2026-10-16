@@ -9,7 +9,18 @@ from __future__ import annotations
 
 import pytest
 
-from grimoire.store import birthdays, calendars, campaigns, characters, clock, overlay, worlds
+from grimoire.store import (
+    appearances,
+    assets,
+    birthdays,
+    calendars,
+    campaigns,
+    characters,
+    clock,
+    overlay,
+    pcs,
+    worlds,
+)
 
 
 def _campaign(monkeypatch, tmp_path, *, calendar="gregorian", now="2026-05-08"):
@@ -239,7 +250,6 @@ def test_gather_names_a_pc_without_scanning_images(monkeypatch, tmp_path):
     """A seated PC's birthday is named from its meta: the read that named it
     used to list every version's images, which `pressure.build` (and so every
     graph read) paid per rostered PC."""
-    from grimoire.store import appearances, assets, pcs
     cid = _campaign(monkeypatch, tmp_path, now="2026-05-10")
     pid, vid = overlay.create_pc(cid, "Seraphine", [], persona={
         **pcs.blank_persona("Seraphine"), "birthdate": "--05-11"})

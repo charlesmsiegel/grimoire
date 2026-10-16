@@ -1,4 +1,4 @@
-from grimoire.store import length_drift, scenes
+from grimoire.store import fence, length_drift, scenes
 
 
 def test_actor_drift_counts_only_that_speakers_recent_contributions():
@@ -163,8 +163,6 @@ def test_user_messages_are_not_part_of_turns():
 def test_roll_fence_pattern_is_derived_from_the_fence_module():
     """One definition of the opener grammar, not two. A second copy here would
     silently stop matching the day store/fence.py's opener changes."""
-    from grimoire.store import fence
-
     assert length_drift._ROLL_FENCE.pattern.startswith(fence.OPENER.pattern)
     # and it still spans the whole fence, opener through closer
     msgs = [{"role": "assistant", "speaker": "Mara",

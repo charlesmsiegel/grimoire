@@ -155,12 +155,11 @@ def test_complete_examples_and_conflicts_survive_bounded_pressure(cast_scene):
 
 
 def test_examples_skip_overlong_exchange_without_slicing():
-    from grimoire.store.context import actor
     short = "Mara: Is the ledger here?\nWinifred: Yes."
     long = "Mara: " + "entire sentence " * 100
-    selected = actor.select_examples("<START>\n" + long + "\n<START>\n" + short, 100, "ledger")
+    selected = actor_context.select_examples("<START>\n" + long + "\n<START>\n" + short, 100, "ledger")
     assert selected == "<START>\n" + short
-    assert actor.select_examples(long, 100) == ""
+    assert actor_context.select_examples(long, 100) == ""
 
 
 def test_presence_remap_keeps_absent_posts_hidden(cast_scene):
@@ -173,8 +172,7 @@ def test_presence_remap_keeps_absent_posts_hidden(cast_scene):
     before = scenes.read_scene(cid, sid)["messages"]
     mapping = {i: i - 1 for i in range(1, len(before))}
     paths.remap_presence(cid, sid, mapping, len(before) - 1)
-    from grimoire.store.context import actor
-    visible = actor.observed_history(cid, sid, "characters:mara", before[1:])
+    visible = actor_context.observed_history(cid, sid, "characters:mara", before[1:])
     assert "PRIVATE" not in str(visible)
     assert "VISIBLE_LAST" in str(visible)
 

@@ -15,6 +15,7 @@ from tests.llm_fakes import FakeLLM
 from tests.test_character_turns import seed
 from tests.test_group_play_turns import MARA, WINIFRED, group, reply, speakers, use
 from tests.test_response_controls_routes import _answer
+from tests.test_responses import _fold, _summary, _two_turns_with_a_reroll
 
 STAMP = "2026-10-05T12:00:00Z"
 
@@ -226,7 +227,6 @@ def test_covered_digest_reads_only_the_posts_in_context():
 
 
 def test_activating_an_excluded_folded_response_keeps_the_summary(client):
-    from tests.test_responses import _fold, _summary, _two_turns_with_a_reroll
     cid, sid, base, rid, old = _two_turns_with_a_reroll(client)
     store.scenes.set_excluded(cid, sid, 3, True)
     _fold(cid, sid, 4)

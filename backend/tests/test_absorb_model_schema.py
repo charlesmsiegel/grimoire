@@ -1,6 +1,7 @@
 """The generated wire contract preserves explicit clears and closes every object."""
 
 import json
+from pathlib import Path
 
 from grimoire import inference, model_schema, schemas
 from grimoire.store import absorb, groupstate, playstate
@@ -91,6 +92,5 @@ def test_the_schema_is_the_same_on_both_pydantic_runtimes():
     `make check-py` on v2 and `make check-pydantic1` on v1. A deliberate model
     change regenerates the fixture (`prompt.extraction_schema()`, dumped with
     indent=1 and sorted keys) in the same commit."""
-    from pathlib import Path
     fixture = Path(__file__).parent / "fixtures" / "absorb_extraction_schema.json"
     assert prompt.extraction_schema() == json.loads(fixture.read_text(encoding="utf-8"))

@@ -1,9 +1,26 @@
 import asyncio
+import contextlib
 import json as json_module
 import sys
 from pathlib import Path
 
 import pytest
+
+from grimoire.store import (
+    appearances,
+    characters,
+    chronicle,
+    commitments,
+    config,
+    facts,
+    inference_keys,
+    llm_connections,
+    overlay,
+    pcs,
+    playstate,
+    plot,
+    scenes,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import ingest_scene
@@ -34,15 +51,13 @@ def test_manifest_round_trips(monkeypatch, tmp_path):
 
 
 def test_ensure_character_creates_once(monkeypatch, tmp_path):
-    from grimoire.store import campaigns as campaigns_store
     wid = _world(monkeypatch, tmp_path)
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
-    croot = campaigns_store.campaign_root(cid)
+    croot = campaigns.campaign_root(cid)
     aid1 = ingest_scene.ensure_character(cid, {"name": "Cassian", "personality": "wary, precise"})
     aid2 = ingest_scene.ensure_character(cid, {"name": "Cassian"})
     assert aid1 == aid2 == "cassian"
     vid = ingest_scene.resolve_version(cid, "characters", aid1)
-    from grimoire.store import characters
     assert characters.read_card(croot, aid1, vid)["data"]["personality"] == "wary, precise"
 
 
@@ -50,16 +65,13 @@ def test_ensure_character_returns_world_character_without_shadow_copy(monkeypatc
     """A thin campaign's world may already hold a character of that name (by
     slug); ensure_character must return the world character's id and must
     NOT create a blank-card campaign-side shadow of it."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import characters, overlay
-    from grimoire.store import worlds as worlds_store
     wid = _world(monkeypatch, tmp_path)
-    wroot = worlds_store.world_root(wid)
+    wroot = worlds.world_root(wid)
     card = characters.blank_card("Cassian")
     card["data"]["personality"] = "wary, precise"
     characters.create_character(wroot, "Cassian", "main", card)
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
-    croot = campaigns_store.campaign_root(cid)
+    croot = campaigns.campaign_root(cid)
 
     aid = ingest_scene.ensure_character(cid, {"name": "Cassian"})
 
@@ -78,11 +90,9 @@ def test_ensure_location_creates_once(monkeypatch, tmp_path):
 
 
 def test_resolve_version_for_pc(monkeypatch, tmp_path):
-    from grimoire.store import pcs
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("Ashgrove")
-    wroot = worlds_store.world_root(wid)
+    wid = worlds.create_world("Ashgrove")
+    wroot = worlds.world_root(wid)
     pcs.create_pc(wroot, "Julian", [], "default")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     vid = ingest_scene.resolve_version(cid, "pcs", "julian")
@@ -90,12 +100,9 @@ def test_resolve_version_for_pc(monkeypatch, tmp_path):
 
 
 def test_build_scene_writes_transcript_cast_location_date(monkeypatch, tmp_path):
-    from grimoire.store import appearances, scenes
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("Ashgrove")
-    wroot = worlds_store.world_root(wid)
-    from grimoire.store import pcs
+    wid = worlds.create_world("Ashgrove")
+    wroot = worlds.world_root(wid)
     pcs.create_pc(wroot, "Julian", [], "default")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
 
@@ -138,7 +145,6 @@ def test_build_scene_does_not_narrate_a_first_time_cast_member(monkeypatch, tmp_
         "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
     }
     sid = ingest_scene.build_scene(cid, scene)
-    from grimoire.store import scenes
     assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == \
         ["\"You've grown bold.\""]
 
@@ -154,13 +160,10 @@ class FakeClient:
 
 
 def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import playstate
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("Ashgrove")
+    wid = worlds.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
-    croot = campaigns_store.campaign_root(cid)
+    croot = campaigns.campaign_root(cid)
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
     scene = {
@@ -195,9 +198,8 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
 
 
 def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("Ashgrove")
+    wid = worlds.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
@@ -229,10 +231,8 @@ def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
 def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
     """If build_scene succeeded but absorb/apply never ran (process died in between),
     a retry must reuse the recorded sid instead of minting a duplicate scene."""
-    from grimoire.store import scenes
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("Ashgrove")
+    wid = worlds.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
@@ -267,9 +267,8 @@ def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
 
 def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     """Scene 2's snapshot must see scene 1's applied character-state edit."""
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("Ashgrove")
+    wid = worlds.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
@@ -317,10 +316,8 @@ def test_run_absorb_primes_the_prompt_with_open_commitments(monkeypatch, tmp_pat
     """A later imported scene has to be able to resolve a commitment an earlier
     import opened. Without its id in the prompt the model can only file a
     duplicate."""
-    from grimoire.store import commitments
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     sid = ingest_scene.build_scene(cid, {
         "title": "The Reckoning",
@@ -367,11 +364,10 @@ _PARTIAL_OUTPUT = json_module.dumps({
 def _break_commitments_during_apply(monkeypatch):
     """Break `commitments.json` between staging and saving, which `apply_edits`
     reports as a failure for that row while the plot row still lands."""
-    from grimoire.store import campaigns as campaigns_store
     real_apply = ingest_scene.absorb.apply_edits
 
     def _break_then_apply(cid_, edits, sid_):
-        (campaigns_store.campaign_root(cid_) / "commitments.json").write_text(
+        (campaigns.campaign_root(cid_) / "commitments.json").write_text(
             "{ no", encoding="utf-8")
         return real_apply(cid_, edits, sid_)
 
@@ -385,11 +381,8 @@ def test_a_scene_whose_edits_did_not_all_land_is_not_marked_done(monkeypatch, tm
     permanent, since a done key is skipped outright on the next run. It is recorded
     `incomplete` with the reasons, and the retry resumes on the same sid rather than
     minting a duplicate scene."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import scenes
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
@@ -402,7 +395,7 @@ def test_a_scene_whose_edits_did_not_all_land_is_not_marked_done(monkeypatch, tm
 
     # the retry resumes rather than skipping or duplicating
     monkeypatch.setattr(ingest_scene.absorb, "apply_edits", real_apply)
-    (campaigns_store.campaign_root(cid) / "commitments.json").unlink()
+    (campaigns.campaign_root(cid) / "commitments.json").unlink()
     second = asyncio.run(ingest_scene.ingest_one_scene(
         cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
     assert second["status"] == "done" and second["sid"] == first["sid"]
@@ -421,15 +414,12 @@ def test_an_incomplete_scene_retries_only_the_rows_that_did_not_land(monkeypatch
     edit, which is exactly the shape that cannot show the bug. It has both here:
     the timeline event and the plot beat are the rows that already landed, and
     the assertion is that the retry leaves them at one each."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import commitments, plot
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     real_apply = _break_commitments_during_apply(monkeypatch)
     first = asyncio.run(ingest_scene.ingest_one_scene(
@@ -444,7 +434,7 @@ def test_an_incomplete_scene_retries_only_the_rows_that_did_not_land(monkeypatch
     # approved and persisted, so re-extracting would spend tokens to produce a
     # second, possibly different, set of them.
     monkeypatch.setattr(ingest_scene.absorb, "apply_edits", real_apply)
-    (campaigns_store.campaign_root(cid) / "commitments.json").unlink()
+    (campaigns.campaign_root(cid) / "commitments.json").unlink()
     client = FakeClient(_PARTIAL_OUTPUT)
     second = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
 
@@ -465,11 +455,8 @@ def test_apply_scene_holds_the_campaign_lock_across_the_whole_sequence(monkeypat
     window and this older ingested beat is appended after it -- rewinding
     `last_scene` instead of being reported. Same hold, for the same reason, as
     the web chronicle-save route."""
-    import contextlib
-
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     sid = ingest_scene.build_scene(cid, _PARTIAL_SCENE)
 
@@ -512,7 +499,6 @@ def _move_commitment_during_apply(monkeypatch):
     """Another writer advances `the-debt` between staging and applying, so the
     staged row's `before` no longer matches and `batch_verdicts` reports a
     conflict rather than an I/O error."""
-    from grimoire.store import commitments
     real_apply = ingest_scene.absorb.apply_edits
 
     def _move_then_apply(cid_, edits, sid_):
@@ -533,15 +519,12 @@ def test_a_conflicting_row_is_not_replayed_on_the_next_run(monkeypatch, tmp_path
     so replaying it reproduces the identical verdict forever. Retrying it would
     leave the scene `incomplete` on every future run while re-acquiring the lock
     and re-reading the store to be told the same thing."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import commitments, plot
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     _move_commitment_during_apply(monkeypatch)
     first = asyncio.run(ingest_scene.ingest_one_scene(
@@ -567,14 +550,12 @@ def test_a_conflict_is_carried_across_a_retry_that_clears_the_io_failure(monkeyp
     conflict has to survive that — otherwise the run that fixes the disk reports
     `done` on a scene still missing a movement, which is the silent loss the
     whole `incomplete` status exists to prevent."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    croot = campaigns_store.campaign_root(cid)
+    croot = campaigns.campaign_root(cid)
 
     # Hand-write the entry the first attempt would have produced: one conflict
     # (unreplayable) beside one error (replayable), so the retry has both.
@@ -603,9 +584,8 @@ def test_the_cli_exits_nonzero_when_a_scene_is_incomplete(monkeypatch, tmp_path,
     wrote, so carrying on past a scene whose movement never landed extracts every
     later scene against a snapshot missing it — the damage compounds down the
     file, silently."""
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
     scene_file = tmp_path / "scene.json"
@@ -638,11 +618,8 @@ def test_a_renamed_scene_stops_the_resume_rather_than_writing_to_a_ghost(monkeyp
     has, which is worse than not resuming: nothing surfaces it and the manifest
     then says `done`. Rebuilding is not the alternative either — a rename means
     the scene is still there under another name, and rebuilding duplicates it."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import commitments, plot, scenes
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
@@ -652,7 +629,7 @@ def test_a_renamed_scene_stops_the_resume_rather_than_writing_to_a_ghost(monkeyp
         cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
     assert first["status"] == "incomplete" and first["pending"]
 
-    (campaigns_store.campaign_root(cid) / "commitments.json").unlink()
+    (campaigns.campaign_root(cid) / "commitments.json").unlink()
     new_sid = scenes.rename_scene(cid, first["sid"], "The Reckoning, Revisited")
     assert new_sid != first["sid"]
 
@@ -668,9 +645,8 @@ def test_a_renamed_scene_stops_the_resume_rather_than_writing_to_a_ghost(monkeyp
 
 def test_the_cli_reports_a_resume_whose_scene_vanished(monkeypatch, tmp_path, capsys):
     """Same stop, through the exit code the batch driver actually reads."""
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     sid = ingest_scene.build_scene(cid, _PARTIAL_SCENE)
     ingest_scene.save_manifest(cid, {_PARTIAL_SCENE["key"]: {"status": "in_progress",
@@ -694,15 +670,12 @@ def test_a_failure_after_the_timeline_does_not_file_it_twice(monkeypatch, tmp_pa
     after it left the manifest `in_progress`, and the next run replayed the
     whole sequence and filed the same events a second time — permanently, since
     nothing downstream reconciles a timeline."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import scenes
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     real_mark = ingest_scene.scenes.mark_absorbed
 
@@ -728,14 +701,12 @@ def test_the_extraction_is_recorded_before_the_timeline_is_written(monkeypatch, 
     the append, so the case that motivated a checkpoint — the manifest being
     unwritable while the timeline is not — cannot file events the resume will
     not know about: the run dies before appending anything at all."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     real_save = ingest_scene.save_manifest
 
@@ -763,14 +734,12 @@ def test_a_new_scene_repeating_the_previous_events_still_files_them(monkeypatch,
     same date and wording. Skipping the append there loses that scene's events
     outright, which is worse than the duplicate the check exists to prevent, so
     only a run resuming a scene a previous run started may consult the tail."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     first = asyncio.run(ingest_scene.ingest_one_scene(
         cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
@@ -790,14 +759,12 @@ def test_a_resumed_scene_repeating_the_previous_events_still_files_them(monkeypa
     then skipped this scene's events permanently. The pre-image recorded with the
     extraction answers it — a timeline byte-identical to the one this scene
     started from cannot already contain this scene's append."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     # The preceding scene files the batch this one will honestly repeat.
     asyncio.run(ingest_scene.ingest_one_scene(
@@ -837,14 +804,12 @@ def test_a_resume_after_its_own_append_does_not_file_the_events_twice(monkeypatc
     append HAS landed, the file differs from the pre-image, the tail is read, and
     the batch is recognized. Pinned beside the test above because a fix for one
     direction that breaks the other is the shape this file keeps producing."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     real_mark = ingest_scene.scenes.mark_absorbed
 
@@ -869,15 +834,12 @@ def test_a_later_concurrent_append_does_not_make_the_resume_refile(monkeypatch, 
     the resume filed this scene's events a second time. The pre-image is a
     POSITION, so the question is whether OUR lines sit at the offset our append
     would have started at; what came after them belongs to whoever wrote it."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import chronicle
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     real_mark = ingest_scene.scenes.mark_absorbed
 
@@ -905,9 +867,8 @@ def test_the_pre_image_is_retaken_inside_the_lock(monkeypatch, tmp_path):
     `put_chronicle` appends while holding it — so a live absorb can land in
     between and leave the recorded pre-image describing a file that no longer
     exists. Re-taken under the lock, the capture and the append are one span."""
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
@@ -947,10 +908,8 @@ def test_the_positional_check_answers_only_for_this_scene(monkeypatch, tmp_path)
     """The protocol, at the level of the predicate. Without a usable pre-image
     there is nothing to anchor on, so the batch is filed — that path can
     duplicate, and the alternative (guessing from the tail) can lose a scene."""
-    from grimoire.store import chronicle
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     events = [{"date": "Firstmonth 3", "text": "Marisol swore on the stair."}]
 
     pre = ingest_scene._timeline_preimage(cid)       # taken before the append
@@ -989,10 +948,8 @@ def test_a_resume_keeps_the_conflict_basis_it_was_staged_against(monkeypatch, tm
     `materialize` on resume takes each record's CURRENT value instead, so a
     movement another save made in between becomes the basis rather than the
     conflict it is — and the stale row sails through the conflict pass."""
-    from grimoire.store import commitments
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
@@ -1027,10 +984,8 @@ def test_the_timeline_check_agrees_with_the_store(monkeypatch, tmp_path):
     """The check renders the store's own line format, so a change on either side
     has to fail HERE rather than silently making the check stop matching — which
     would bring the duplicate events back with nothing to catch them."""
-    from grimoire.store import chronicle
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     events = [{"date": "Firstmonth 3", "text": "Marisol swore on the stair."},
               {"date": "Firstmonth 4", "text": "The gate held."}]
 
@@ -1050,15 +1005,12 @@ def test_a_resume_uses_the_saved_extraction(monkeypatch, tmp_path):
     chronicle record and edits with the OLD timeline events — and drops the
     events that exist only in the new one. The extraction that produced what
     landed is the one the resume has to finish."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import chronicle
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     real_mark = ingest_scene.scenes.mark_absorbed
 
@@ -1095,9 +1047,8 @@ def test_a_vanished_scene_is_persisted_so_it_can_be_resolved(monkeypatch, tmp_pa
     the "delete the key" instruction was removed — refuses anything not
     persisted as `incomplete`. No rerun could finish it (the scene is gone) and
     no person could close it either."""
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     key = _PARTIAL_SCENE["key"]
     sid = ingest_scene.build_scene(cid, _PARTIAL_SCENE)
@@ -1129,15 +1080,12 @@ def test_resolve_closes_a_conflicted_scene_without_rebuilding_it(monkeypatch, tm
     again, duplicating the scene, its timeline events and every beat that
     already landed. That is what the manifest entry exists to prevent, produced
     by following the instruction printed when nothing else could finish it."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import commitments, plot, scenes
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
-    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+    timeline = campaigns.campaign_root(cid) / "timeline.md"
 
     _move_commitment_during_apply(monkeypatch)
     first = asyncio.run(ingest_scene.ingest_one_scene(
@@ -1165,9 +1113,8 @@ def test_resolve_closes_a_conflicted_scene_without_rebuilding_it(monkeypatch, tm
 def test_resolve_refuses_a_key_it_should_not_close(monkeypatch, tmp_path):
     """It closes a scene that absorbed and could not finish — not an unknown key
     (a typo would silently invent an entry) and not one still mid-flight."""
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
 
     ok, why = ingest_scene.resolve_key(cid, "file1-scene99")
     assert not ok and "no manifest entry" in why
@@ -1187,9 +1134,8 @@ def test_resolve_refuses_a_key_it_should_not_close(monkeypatch, tmp_path):
 def test_the_cli_points_at_resolve_rather_than_at_deleting_the_key(monkeypatch, tmp_path, capsys):
     """The instruction is the fix here: the old one told the operator to do the
     thing that duplicates the scene."""
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
     scene_file = tmp_path / "scene.json"
@@ -1213,11 +1159,8 @@ def test_the_resume_revalidates_the_scene_inside_the_lock(monkeypatch, tmp_path)
     serialize on the same campaign lock, so a rename that starts after the check
     completes before the replay acquires it — and the replay then stamps beats
     and change records with an id no scene has, then marks the entry done."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import commitments, scenes
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
@@ -1226,7 +1169,7 @@ def test_the_resume_revalidates_the_scene_inside_the_lock(monkeypatch, tmp_path)
     first = asyncio.run(ingest_scene.ingest_one_scene(
         cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
     assert first["status"] == "incomplete" and first["pending"]
-    (campaigns_store.campaign_root(cid) / "commitments.json").unlink()
+    (campaigns.campaign_root(cid) / "commitments.json").unlink()
     monkeypatch.setattr(ingest_scene.absorb, "apply_edits",
                         ingest_scene.absorb.apply.apply_edits)
 
@@ -1257,9 +1200,8 @@ def test_the_cli_prints_each_unreplayable_reason(monkeypatch, tmp_path, capsys):
     What it must not do is arrive under a message that says every unreplayable
     failure is a conflict: the reasons are printed, so the operator can tell a
     lost delta from a record that moved."""
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
     scene_file = tmp_path / "scene.json"
@@ -1305,9 +1247,8 @@ def test_a_record_creating_row_is_not_replayed(monkeypatch, tmp_path):
 def test_a_scene_whose_only_failure_created_a_record_stops_for_a_person(monkeypatch, tmp_path):
     """End to end: no `pending`, so the run reports incomplete and the next one
     does nothing rather than minting a duplicate."""
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
@@ -1354,10 +1295,8 @@ def test_an_unreplayable_failure_survives_a_successful_retry(monkeypatch, tmp_pa
     rows and the `changes` log joined them, and a `kind == "conflict"` filter
     silently dropped the new ones — so a retry that cleared the last I/O error
     reported the scene `done` while a half-created character still stood."""
-    from grimoire.store import campaigns as campaigns_store
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = wire_kit.resolution(wire_kit.target(model="test/model", api_key="k"),
                                "absorb")
@@ -1382,7 +1321,7 @@ def test_an_unreplayable_failure_survives_a_successful_retry(monkeypatch, tmp_pa
     assert result["status"] == "incomplete"                  # but the other still stands
     assert result["failures"] == [stranded]
     assert "pending" not in result                            # and it is not replayable
-    assert campaigns_store.campaign_root(cid).exists()
+    assert campaigns.campaign_root(cid).exists()
 
 
 def test_run_absorb_primes_the_prompt_with_standing_facts(monkeypatch, tmp_path):
@@ -1390,10 +1329,8 @@ def test_run_absorb_primes_the_prompt_with_standing_facts(monkeypatch, tmp_path)
     where an unprimed prompt hurts most: without the ids, every imported scene's
     facts land as new and nothing can ever be superseded — the ledger fills with
     mutually contradicting facts (#114)."""
-    from grimoire.store import facts
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     sid = ingest_scene.build_scene(cid, {
         "title": "The Reckoning",
@@ -1415,10 +1352,8 @@ def test_run_absorb_primes_the_prompt_with_standing_facts(monkeypatch, tmp_path)
 def _format_2_campaign(monkeypatch, tmp_path) -> str:
     """A campaign on a format-2 store whose Primary is a local provider, while
     the frozen legacy `active_connection_id` still names a keyless OpenRouter."""
-    from grimoire.store import config, inference_keys, llm_connections
-    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     llm_connections.create_connection("openai_compatible", "Mara Local",
                                       base_url="http://localhost:1234/v1")
@@ -1447,12 +1382,10 @@ def test_the_cli_runs_where_the_apps_absorb_would(monkeypatch, tmp_path, capsys)
     assert (conn.primary.provider_id, conn.primary.model) == ("mara-local", "local-model")
     # The scene is stamped with what chat would run on, as the app stamps one.
     sid = ingest_scene.load_manifest(cid)[_PARTIAL_SCENE["key"]]["sid"]
-    from grimoire.store import scenes
     assert scenes.read_scene(cid, sid)["meta"]["model"] == "local-model"
 
 
 def test_the_cli_refuses_with_the_seams_reason(monkeypatch, tmp_path, capsys):
-    from grimoire.store import config
     cid = _format_2_campaign(monkeypatch, tmp_path)
     config.write_config(role_primary_provider="openrouter", role_primary_model="vendor/m")
     scene_file = tmp_path / "scene.json"

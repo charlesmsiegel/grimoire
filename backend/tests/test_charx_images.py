@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.store import assets, cards, image_store
+from grimoire.store import assets, cards, image_refs, image_store, image_subjects, locks
 from grimoire.store import characters as ch
 
 
@@ -526,7 +526,6 @@ def test_failed_new_version_import_leaves_a_version_saved_meanwhile(tmp_path, mo
 
 
 def test_sidecar_stems_match_the_sidecar_files():
-    from grimoire.store import image_refs, image_subjects
     expected = {image_refs.fold(Path(f).stem)
                 for f in (assets.FOCUS_FILE, assets.DESCRIPTIONS_FILE, image_subjects.SUBJECTS_FILE)}
     assert expected == ch._SIDECAR_STEMS
@@ -620,7 +619,6 @@ def test_archive_parses_do_not_grow_with_gallery_entries(tmp_path, monkeypatch):
 
 
 def test_names_one_slot_share_one_name_lock(tmp_path):
-    from grimoire.store import locks
     assert locks._image_stripe(tmp_path, "i") == locks._image_stripe(tmp_path, "\u0131")
     assert locks._image_stripe(tmp_path, "Happy") == locks._image_stripe(tmp_path, "happy")
 

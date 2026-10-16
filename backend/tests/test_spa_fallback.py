@@ -11,9 +11,11 @@ import ntpath
 import os.path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from grimoire.main import SPAStaticFiles
+from grimoire.routes import router
 
 PAGE = {"accept": "text/html,application/xhtml+xml"}
 
@@ -45,9 +47,7 @@ def client(tmp_path, monkeypatch):
     (dist / "favicon.ico").write_bytes(b"\x00\x00\x01\x00")
     monkeypatch.setenv("GRIMOIRE_DIST", str(dist))
 
-    from fastapi import FastAPI
 
-    from grimoire.routes import router
 
     app = FastAPI()
     app.include_router(router, prefix="/api")

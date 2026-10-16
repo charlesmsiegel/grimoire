@@ -1,3 +1,5 @@
+import ast
+import inspect
 import io
 import json
 import threading
@@ -5,9 +7,24 @@ import zipfile
 
 import pytest
 
-from grimoire.store import campaigns, locks, module_edit, modules, revision, worlds
+from grimoire.routes import mechanics, streaming
+from grimoire.store import (
+    campaigns,
+    characters,
+    entities,
+    locks,
+    module_edit,
+    modules,
+    proposals,
+    revision,
+    sheets,
+    worlds,
+)
+from grimoire.store import checks as checks_mod
+from grimoire.store import context as context_mod
 from grimoire.store.frontmatter import parse_frontmatter
 from grimoire.store.module_edit import migrate as me_migrate
+from grimoire.store.modules import fields as modules_fields
 
 
 def _zip_bytes(entries: dict) -> bytes:
@@ -331,8 +348,6 @@ def test_every_kind_the_content_picker_offers_is_one_upsert_accepts(monkeypatch,
     offered-equals-accepted test exists to prevent. `CONTENT_KINDS` is the
     entity tuple now; this is what keeps it that way.
     """
-    from grimoire.store import entities
-    from grimoire.store.modules import fields as modules_fields
     assert modules_fields.CONTENT_KINDS == entities.ENTITY_KINDS
 
     mid = _mk_schema(monkeypatch, tmp_path)
@@ -519,7 +534,6 @@ def _bound_campaign(mid):
 
 
 def test_check_rename_blocked_by_live_proposal(monkeypatch, tmp_path):
-    from grimoire.store import proposals
     mid = _mk_schema(monkeypatch, tmp_path)
     assert module_edit.upsert_check(mid, "brawl", CHECK)["ok"]
     wid, cid = _bound_campaign(mid)
@@ -1079,7 +1093,6 @@ def test_delete_module_rejects_builtin_before_campaign_locks(monkeypatch, tmp_pa
 def test_llm_consumers_hold_campaign_lock(monkeypatch, tmp_path):
     """An edit holding the campaign locks excludes context assembly (proxy
     for all R2 consumers — they share the campaign_lock domain)."""
-    from grimoire.store import proposals
     mid = _mk_schema(monkeypatch, tmp_path)
     wid, cid = _bound_campaign(mid)
     # proposals lock domain is unified: campaign_lock(cid) blocks proposals.new
@@ -1096,7 +1109,6 @@ def test_llm_consumers_hold_campaign_lock(monkeypatch, tmp_path):
 def test_proposal_derivation_excluded_by_edit_lock(monkeypatch, tmp_path):
     """The whole derive→persist span holds the campaign lock: with the lock
     held by an 'edit', a proposal creation cannot even START deriving."""
-    from grimoire.store import proposals
     mid = _mk_schema(monkeypatch, tmp_path)
     assert module_edit.upsert_check(mid, "brawl", CHECK)["ok"]
     wid, cid = _bound_campaign(mid)
@@ -1123,9 +1135,6 @@ def test_proposal_derivation_excluded_by_edit_lock(monkeypatch, tmp_path):
 
 
 def test_proposal_route_sites_locked():
-    import inspect
-
-    from grimoire.routes import streaming
     src = inspect.getsource(streaming)
     for line_marker in ("proposals.new(",):
         # every proposals.new call site sits inside a
@@ -1138,11 +1147,6 @@ def test_proposal_route_sites_locked():
 
 
 def test_r2_consumers_reference_campaign_lock():
-    import inspect
-
-    from grimoire.routes import mechanics
-    from grimoire.store import checks as checks_mod
-    from grimoire.store import context as context_mod
     assert "campaign_lock" in inspect.getsource(checks_mod.resolve_check)
     assert "campaign_lock" in inspect.getsource(context_mod._mechanics)
     assert "campaign_lock" in inspect.getsource(mechanics._continuation_rule_bodies)
@@ -1229,10 +1233,8 @@ def test_sheet_type_migration_leaves_a_malformed_fields_value_alone(monkeypatch,
 def test_a_migrated_sheet_is_written_the_way_a_save_writes_one(monkeypatch, tmp_path):
     """T7. Same bytes as the sheet writer produces, so a migration does not
     leave a file that differs from a saved one by a trailing newline."""
-    from grimoire.store import sheets
     mid = _mk_schema(monkeypatch, tmp_path)
     _wid, cid = _bound_campaign(mid)
-    from grimoire.store import characters
     characters.create_character(worlds.world_root(_wid), "Mara")
     sheets.write(cid, "characters", "mara", "warden", {"strength": 3}, expected=None)
     p = campaigns.campaign_root(cid) / "sheets" / "characters--mara.json"
@@ -1338,10 +1340,7 @@ def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
     streaming finalizers must be lexically inside a `with ...campaign_lock(...)`
     block -- the exclusion `test_proposal_derivation_excluded_by_edit_lock`
     proves at runtime for one site is here proved for all of them."""
-    import ast
-    import inspect
 
-    from grimoire.routes import streaming
 
     tree = ast.parse(inspect.getsource(streaming))
     parents: dict[ast.AST, ast.AST] = {}

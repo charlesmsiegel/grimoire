@@ -10,10 +10,13 @@ question.
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
 from grimoire import routes, store
+from grimoire.routes import runs as runs_routes
+from grimoire.routes import tracker as tracker_routes
 
 from .llm_fakes import FakeLLM, HeldCassette, from_entries
 
@@ -309,9 +312,6 @@ def test_tracking_waits_on_no_lock_in_front_of_the_turns_frames(client, monkeypa
     the run is started only once the turn's terminal frames are out -- taking
     no campaign lock to do it, so a contended campaign cannot hold the
     player's `done` frame back behind tracker bookkeeping."""
-    import threading
-
-    from grimoire.routes import tracker as tracker_routes
 
     _use(client, from_entries(_llm(_tracked({}))))
     cid, sid = _scene(client)
@@ -364,8 +364,6 @@ def test_tracking_waits_on_no_lock_in_front_of_the_turns_frames(client, monkeypa
 def test_a_run_that_cannot_be_started_leaves_the_record_failed(client, monkeypatch):
     """After the frames there is nobody to tell, so a reservation that cannot
     happen must say so on the record rather than leave it `pending` (or absent)."""
-    from grimoire.routes import runs as runs_routes
-
     _use(client, from_entries(_llm(_tracked({}))))
     cid, sid = _scene(client)
     monkeypatch.setattr(runs_routes, "reserve_background", lambda *a, **k: None)

@@ -1,8 +1,12 @@
+import ast
+import inspect
 import json
+import textwrap
 
 import pytest
 
-from grimoire import decisions, prompts
+from grimoire import decisions, inference, prompts, store
+from grimoire.routes import scenes
 from grimoire.store import characters, voice_drift, worlds
 
 
@@ -284,7 +288,6 @@ def test_an_oversized_note_is_not_a_usable_corrective():
 # ---- the judge is shown the correction the writer was actually given ----
 def _prompt(name: str, anchor: str, transcript: str, correction: str = "") -> list[dict]:
     """What `decide()` sends for one judge item."""
-    from grimoire import inference
     return inference.structured_messages(
         [voice_drift.build_item(name, anchor, transcript, correction)],
         explain=voice_drift.explain())
@@ -440,11 +443,7 @@ def test_a_native_note_over_the_cap_still_fails():
 
 
 def _route_source():
-    import ast
-    import inspect
-    import textwrap
 
-    from grimoire.routes import scenes
 
     # With `_voice_item`, the helper the route hands to a worker thread so the
     # item renders off the loop: what it calls, the route calls.
@@ -455,9 +454,6 @@ def _route_source():
 def _route_reasons() -> set[str]:
     """Every reason string `_stage_voice_drift` appends to `failed` as a
     literal or an f-string over `store` alone, evaluated."""
-    import ast
-
-    from grimoire import store
 
     found = set()
     for node in ast.walk(_route_source()):
@@ -477,8 +473,6 @@ def _route_reasons() -> set[str]:
 
 def _route_calls() -> set[str]:
     """The dotted names `_stage_voice_drift` calls."""
-    import ast
-
     return {ast.unparse(node.func) for node in ast.walk(_route_source())
             if isinstance(node, ast.Call)}
 

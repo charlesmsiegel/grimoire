@@ -458,7 +458,6 @@ async def test_the_probe_is_bounded_well_under_a_generations_timeout():
 
 
 async def test_sampling_is_merged_into_the_request_body():
-    import json
     seen = {}
 
     def handler(request):
@@ -473,7 +472,6 @@ async def test_sampling_is_merged_into_the_request_body():
 
 
 async def test_no_sampling_leaves_the_body_as_it_was():
-    import json
     seen = {}
 
     def handler(request):

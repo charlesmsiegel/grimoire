@@ -17,7 +17,8 @@ from grimoire.store import campaigns, config, tokens, worlds
 from grimoire.store.context import assemble, epistemic, layout
 from grimoire.store.context import history as history_section
 from grimoire.store.context import pack as packer
-from grimoire.store.history import model
+from grimoire.store.history import budget, model
+from grimoire.store.scenes import identity as scenes_identity
 
 BEFORE = "QUILLNEEDLE"
 SHARED = "LANTERNNEEDLE"
@@ -208,7 +209,6 @@ def test_the_aside_tier_is_dropped_before_recalled_history_under_pressure():
 
 
 def test_an_empty_title_leaves_no_empty_bold():
-    from grimoire.store.history import budget
     item = model.EvidenceItem(model.SceneRef("", "a" * 32), "", date="Day 3",
                               excerpts=(model.Excerpt((), "Mara: hello"),))
     rendered = budget.render_item(item)
@@ -238,8 +238,6 @@ def test_a_view_for_another_identity_of_the_same_scene_is_refused(stage):
 
 
 def test_an_unreadable_scene_header_costs_the_history_not_the_turn(stage, monkeypatch):
-    from grimoire.store.scenes import identity as scenes_identity
-
     def unreadable(*_a):
         raise scenes_identity.UnreadableError("mid-sync")
     monkeypatch.setattr(scenes_identity, "scene_identity_strict", unreadable)

@@ -184,7 +184,6 @@ def test_at_the_cap_an_error_or_a_result():
 
 
 def test_a_failed_decision_is_a_result_and_the_run_goes_on():
-    from grimoire.llm_errors import LLMError
     fake = FakeLLM([["x"]], error=LLMError("rate_limit", "slow down"))
     spec, _ = decision_tool(TASK, _resolved(), fake, cid="c")
     with pytest.raises(ToolError, match="could not be made: rate_limit"):

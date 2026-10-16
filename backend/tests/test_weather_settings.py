@@ -1,6 +1,6 @@
 import json
 
-from grimoire.store import campaign_climate, campaigns, climates, worlds
+from grimoire.store import campaign_climate, campaigns, climates, entities, worlds
 from grimoire.store.weather import settings
 
 
@@ -15,7 +15,6 @@ def location(cid, name, **fields):
     `create_entity` takes a display *name* and slugifies it into the id, and
     accepts the extra frontmatter fields directly.
     """
-    from grimoire.store import entities
     return entities.create_entity(
         campaigns.campaign_root(cid), "locations", name, "A place", fields=fields or None)
 

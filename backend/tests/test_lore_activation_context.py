@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import pytest
 
+from grimoire import health
+from grimoire.routes import config as config_routes
 from grimoire.store import (
     alternates,
     appearances,
@@ -76,8 +78,6 @@ def test_recursion_setting_rejects_out_of_range(client):
 
 
 def test_hand_edited_recursion_depth_is_capped(client):
-    from grimoire import health
-    from grimoire.routes import config as config_routes
 
     config.write_config(lore_recursion_depth="9")       # a hand edit: no route refused it
     assert config.lore_recursion_depth() == 3

@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from grimoire import routes, store, wire
+from grimoire import llm, llm_reasoning, routes, store, wire
 from grimoire.llm import LLMClient
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.store.inference import resolve
@@ -29,7 +29,6 @@ def gateway(thought=THOUGHT, requests=None):
 
 
 async def test_reasoning_events_precede_visible_text_without_entering_complete():
-    from grimoire import llm_reasoning
     client = gateway()
     holder: dict = {}
     try:
@@ -105,7 +104,6 @@ def test_reasoning_effort_connection_roundtrip(legacy_client):
 
 
 async def test_reasoning_is_delivered_while_provider_is_still_thinking():
-    from grimoire import llm_reasoning
     release = asyncio.Event()
     class Frames(httpx.AsyncByteStream):
         async def __aiter__(self):
@@ -132,7 +130,6 @@ async def test_reasoning_is_delivered_while_provider_is_still_thinking():
 
 
 async def test_retry_resets_failed_attempt_reasoning(monkeypatch):
-    from grimoire import llm, llm_reasoning
     monkeypatch.setattr(llm, "_backoff_delay", lambda attempt: 0)
     calls = []
     class Broken(httpx.AsyncByteStream):
@@ -175,7 +172,6 @@ async def test_glm_effort_is_not_sent_after_switching_to_another_model():
 
 
 def test_reasoning_matches_the_selected_content_choice():
-    from grimoire import llm_reasoning
     buffer = llm_reasoning.Buffer()
     llm_reasoning.from_chunk({"choices": [
         {"delta": {"reasoning_content":"Selected"}},

@@ -20,7 +20,8 @@ import pytest
 
 from grimoire import decisions, prompts
 from grimoire.store import absorb, calendars, scenes, suggest
-from grimoire.store.continuity import reconcile
+from grimoire.store.continuity import identity, reconcile
+from tests.llm_fakes import decision_reply
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
@@ -458,8 +459,6 @@ _WHY = ("Same ledger.", "A different question.", "It grew out of the debts.")
 
 
 def _identity_decided(*answers: dict, rationales=_WHY) -> set[str]:
-    from grimoire.store.continuity import identity
-    from tests.llm_fakes import decision_reply
 
     rows = _identity_decision_rows()
     items = identity.build_items(rows, {})
@@ -468,8 +467,6 @@ def _identity_decided(*answers: dict, rationales=_WHY) -> set[str]:
 
 
 def test_identity_decision_compliant_passes():
-    from grimoire.store.continuity import identity
-    from tests.llm_fakes import decision_reply
 
     rows = _identity_decision_rows()
     items = identity.build_items(rows, {})
@@ -484,8 +481,6 @@ def test_identity_decision_compliant_passes():
 
 
 def test_identity_decision_undecodable_fails_json_only():
-    from grimoire.store.continuity import identity
-
     rows = _identity_decision_rows()
     items = identity.build_items(rows, {})
     for text in ("Row r1 looks like the ledger thread.",
@@ -520,8 +515,6 @@ def test_identity_decision_unknown_word_fails_enum():
 
 
 def test_identity_decision_missing_item_fails_covers_rows_alone():
-    from grimoire.store.continuity import identity
-    from tests.llm_fakes import decision_reply
 
     rows = _identity_decision_rows()
     items = identity.build_items(rows, {})
@@ -635,8 +628,6 @@ _RD = {
 
 
 def _reconcile_decided(*, skip: str = "", **over: dict) -> set[str]:
-    from tests.llm_fakes import decision_reply
-
     payload = _reconcile_decision_payload()
     items = reconcile.build_items(payload)
     answers = []
@@ -650,8 +641,6 @@ def _reconcile_decided(*, skip: str = "", **over: dict) -> set[str]:
 
 
 def test_reconcile_decision_compliant_passes():
-    from tests.llm_fakes import decision_reply
-
     payload = _reconcile_decision_payload()
     items = reconcile.build_items(payload)
     assert all(len([q for q in item.questions if q.id in reconcile.EVIDENCE_IDS]) == 3

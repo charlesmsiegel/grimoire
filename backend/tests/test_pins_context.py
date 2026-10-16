@@ -22,6 +22,7 @@ from grimoire.store import (
     scenes,
     worlds,
 )
+from grimoire.store.context import assemble
 from grimoire.store.context import pack as context_pack
 
 
@@ -331,7 +332,6 @@ def test_every_protected_id_is_a_section_that_exists():
     up the wrong one. Against the CATALOG rather than a rendered layout: a
     reader may have dropped a section from their own order, and that is them
     choosing to lose it, not this mapping being wrong."""
-    from grimoire.store.context import assemble
     ids = {s.id for s in assemble.SECTIONS}
     protected = {*assemble._CAST_SECTIONS, assemble._WORLD_INFO_SECTION,
                  assemble._GROUP_STATE_SECTION, assemble._SETTING_SECTION}
@@ -445,7 +445,6 @@ def test_a_pinned_character_holds_their_voice_blocks(monkeypatch, tmp_path):
     """A pin is a promise about content, and the voice sections carry
     per-character content. Without this a reader could pin a character and
     still watch the packer drop that character's anchor."""
-    from grimoire.store.context import assemble
     assert assemble._VOICE_CAST_SECTIONS == ("voice_anchors", "voice_examples")
     # voice_policy is LOCK_IN, so it is never dropped and needs no pin
     assert "voice_policy" not in assemble._VOICE_CAST_SECTIONS
@@ -457,7 +456,6 @@ def test_pinning_an_anchorless_npc_does_not_hold_everyone_elses_voice(monkeypatc
     """`_pinned_sections`' own rule: a pin on something that selected nothing
     protects nothing. Sections drop whole, so pinning a voiceless NPC would
     otherwise make every OTHER character's anchors undroppable."""
-    from grimoire.store.context import assemble
     cast = [{"kind": "characters", "id": "mara", "role": "npc"},
             {"kind": "characters", "id": "winifred", "role": "npc"}]
     pinned = frozenset({"characters:mara"})

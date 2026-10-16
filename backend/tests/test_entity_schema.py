@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from grimoire.store import entities, entity_schema
+from grimoire.store import climates, entities, entity_schema
 
 
 def test_descriptor_shape():
@@ -46,7 +46,6 @@ def test_the_location_weather_fields_declare_their_constraints():
 
 def test_climate_options_are_the_climate_ids(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import climates
     spec = next(f for f in entity_schema.FIELDS["locations"] if f["key"] == "climate")
     got = entity_schema.choice_options(spec)
     assert got == [c["id"] for c in climates.list_climates()]
@@ -110,7 +109,6 @@ def test_fields_survive_in_list_summaries(tmp_path: Path):
 
 
 def test_locations_accept_weather_fields():
-    from grimoire.store import entity_schema
     assert entity_schema.invalid_keys(
         "locations", {"climate": "temperate-interior", "persistence": "0.3",
                       "weather_zone": "saltmarch"}) == []
@@ -118,7 +116,6 @@ def test_locations_accept_weather_fields():
 
 def test_valid_location_weather_values_pass(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import entity_schema
     assert entity_schema.invalid_values(
         "locations", {"climate": "temperate-interior", "persistence": "0.3",
                       "weather_zone": "anything-goes"}) == []
@@ -126,14 +123,12 @@ def test_valid_location_weather_values_pass(monkeypatch, tmp_path):
 
 def test_unknown_climate_is_rejected_at_save(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import entity_schema
     assert entity_schema.invalid_values(
         "locations", {"climate": "temperate-costal"}) == ["climate"]
 
 
 def test_out_of_range_persistence_is_rejected_at_save(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import entity_schema
     for bad in ("2", "-1", "NaN", "wet"):
         assert entity_schema.invalid_values("locations", {"persistence": bad}) == ["persistence"], bad
 
@@ -142,20 +137,17 @@ def test_empty_values_are_treated_as_clears_not_rejections(monkeypatch, tmp_path
     # EntityEditor sends "" for a field the user cleared or never set, and the
     # store drops empties only after route validation.
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import entity_schema
     assert entity_schema.invalid_values(
         "locations", {"climate": "", "persistence": ""}) == []
 
 
 def test_boundary_persistence_values_are_accepted(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import entity_schema
     for good in ("0", "1", "0.0", "1.0"):
         assert entity_schema.invalid_values("locations", {"persistence": good}) == [], good
 
 
 def test_other_kinds_are_unaffected():
-    from grimoire.store import entity_schema
     assert entity_schema.invalid_values("items", {"item_type": "anything"}) == []
 
 
@@ -163,7 +155,6 @@ def test_a_bignum_persistence_is_rejected_not_an_overflow(monkeypatch, tmp_path)
     # `fields` is an untyped dict, so a JSON integer this large reaches the
     # validator as a Python int with no float value. Uncaught that is a 500.
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import entity_schema
     assert entity_schema.invalid_values(
         "locations", {"persistence": 10 ** 1000}) == ["persistence"]
 
@@ -173,14 +164,12 @@ def test_a_boolean_persistence_is_rejected(monkeypatch, tmp_path):
     # as the string "True", which the resolver cannot parse, so the setting
     # silently never takes effect.
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import entity_schema
     for bad in (True, False):
         assert entity_schema.invalid_values("locations", {"persistence": bad}) == ["persistence"], bad
 
 
 def test_a_non_string_climate_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import entity_schema
     assert entity_schema.invalid_values("locations", {"climate": ["temperate-interior"]}) == ["climate"]
 
 

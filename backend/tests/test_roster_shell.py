@@ -19,6 +19,7 @@ import grimoire.store as store
 from grimoire.main import create_app
 from grimoire.routes import todo as todo_routes
 from grimoire.store import (
+    assets,
     campaigns,
     characters,
     entities,
@@ -204,7 +205,6 @@ def _record(monkeypatch, owner, name):
 
 
 def test_the_pc_roster_scans_no_image(monkeypatch, tmp_path):
-    from grimoire.store import assets
     cid, _ = _library(monkeypatch, tmp_path)
     listed = _record(monkeypatch, assets, "list_images")
     focused = _record(monkeypatch, assets, "read_focus")

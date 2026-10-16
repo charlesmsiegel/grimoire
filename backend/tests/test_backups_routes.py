@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from grimoire import main
 from grimoire.main import create_app
-from grimoire.store import backups, config
+from grimoire.store import backups, config, locks
 
 
 @pytest.fixture()
@@ -138,8 +138,6 @@ def test_a_listing_that_cannot_be_read_is_not_reported_as_empty(client, monkeypa
 
 
 def test_a_second_process_holding_the_backup_lock_is_a_409(client, monkeypatch):
-    from grimoire.store import locks
-
     def busy(*_a, **_kw):
         raise locks.BackupBusy()
 

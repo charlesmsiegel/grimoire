@@ -1,22 +1,30 @@
 """`store.context.art` — the candidate pool, the ranking, and the stateless
 handle resolution that runs on the way back in."""
 
-import pytest
+import io
 
+import pytest
+from PIL import Image
+
+from grimoire import prompts
 from grimoire.store import (
     appearances,
     assets,
     campaign_images,
     campaigns,
     characters,
+    config,
     entities,
     image_descriptions,
+    image_refs,
+    length_drift,
     overlay,
     scenes,
     usage,
+    world_images,
     worlds,
 )
-from grimoire.store.context import art
+from grimoire.store.context import art, assemble, layout, story
 from tests.llm_fakes import FakeEmbeddings
 
 
@@ -398,8 +406,6 @@ def test_switching_the_section_off_skips_the_ranking_entirely(world, sid, monkey
     the catalogue makes a blocking HTTP call, and paying for one whose section
     will not render is the one case where "assemble everything, render what
     survives" costs real money."""
-    from grimoire.store import config
-    from grimoire.store.context import assemble, layout
 
     calls = []
     monkeypatch.setattr(assemble.art, "catalogue",
@@ -424,7 +430,6 @@ def test_history_sends_a_picture_to_the_model_as_its_alt_text(world, sid):
     URL: the URL costs ~27 tokens per image on every remaining turn and is a
     worked example of a shape the model must not produce, since a raw markdown
     URL is passed through unvalidated where a handle is checked."""
-    from grimoire.store.context import story
     camp, char, vid = world["cid"], world["char"], world["vid"]
     _cast(camp, char, vid, sid)
     md = art.resolve_handles(camp, f"She turns. [[art:characters:{char}:gallery_1]] Rain.", sid)
@@ -442,7 +447,6 @@ def test_a_picture_does_not_count_against_the_length_budget(world, sid):
     the available-art section asked -- and under a `terse` budget one image was
     enough on its own (7 phantom words, a phantom paragraph) to trip the drift
     correction and tell it to write less."""
-    from grimoire.store import length_drift
     camp, char, vid = world["cid"], world["char"], world["vid"]
     _cast(camp, char, vid, sid)
     prose = "She turns from the rail, rain running off the pauldron, saying nothing."
@@ -459,7 +463,6 @@ def test_the_documented_knobs_are_actually_readable(monkeypatch, tmp_path):
     on it says. Both of these were documented and neither was listed, so
     `settings()` answered with its defaults whatever anyone wrote."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import config
     config.write_config(art_catalog_depth="9", art_catalog_threshold="0.7")
     got = art.settings()
     assert (got["depth"], got["threshold"]) == (9, 0.7)
@@ -469,7 +472,6 @@ def test_a_hand_edited_knob_falls_back_rather_than_raising(monkeypatch, tmp_path
     """A store may be hand-edited or half-synced; a preference must not be able
     to take a turn down with it."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import config
     config.write_config(art_catalog_depth="lots", art_catalog_threshold="nan")
     got = art.settings()
     assert (got["depth"], got["threshold"]) == (art.DEFAULT_DEPTH, art.DEFAULT_THRESHOLD)
@@ -544,8 +546,6 @@ def test_art_sends_its_query_as_a_query(world, monkeypatch):
 def test_a_turns_art_embed_is_in_its_scenes_usage(world, sid, monkeypatch):
     """The art catalogue a turn builds is part of what playing the scene cost,
     so its embed row names the scene and the scene's own totals carry it."""
-    from grimoire.store import scenes
-    from grimoire.store.context import assemble
 
     double = FakeEmbeddings()
     monkeypatch.setattr(art, "_CLIENT", double)
@@ -602,7 +602,6 @@ def test_a_lone_backtick_beside_a_handle_is_left_alone(world, sid):
 
 def test_the_section_offers_handles_bare(world, sid):
     """The rendered section must not print the shape that breaks when copied."""
-    from grimoire import prompts
     rendered = prompts.render(
         "scene/sections/available_art.j2",
         available_art=[{"handle": "[[art:campaign:coastline]]", "description": "A map."}])
@@ -720,8 +719,6 @@ def test_a_described_world_image_is_offered_to_a_campaign(monkeypatch, tmp_path)
     """The pool is the campaign's view of the library, so a picture described
     once in the world is offerable in every campaign on it -- which is the whole
     reason the library moved up a level."""
-    from grimoire.store import campaigns, world_images, worlds
-    from grimoire.store.context import art
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
@@ -740,8 +737,6 @@ def test_a_described_world_image_is_offered_to_a_campaign(monkeypatch, tmp_path)
 
 
 def test_a_hidden_world_image_is_not_offered(monkeypatch, tmp_path):
-    from grimoire.store import campaign_images, campaigns, world_images, worlds
-    from grimoire.store.context import art
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
@@ -755,9 +750,6 @@ def test_a_hidden_world_image_is_not_offered(monkeypatch, tmp_path):
 
 
 def _art_png() -> bytes:
-    import io
-
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
     return buf.getvalue()
@@ -834,7 +826,6 @@ def test_candidates_scan_each_record_once(world, sid, monkeypatch):
     """The per-turn catalogue reads each in-scope record's placements once: the
     description sweep hands back the listing it was built from, so `candidates`
     never lists a record and then has the sweep list it again."""
-    from grimoire.store import image_refs
     camp, char, vid = world["cid"], world["char"], world["vid"]
     _cast(camp, char, vid, sid)
     _share_the_characters_picture(world)

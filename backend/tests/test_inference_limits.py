@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from grimoire import llm_sampling, wire
+from grimoire.routes.common import UsableInference
 from grimoire.store.inference import limits
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
@@ -230,7 +231,6 @@ def test_binding_is_a_tuple_for_a_model_id_with_a_slash():
 
 def test_an_override_resolution_answers_the_same_way():
     """A reroll's override resolution is just another resolution."""
-    from grimoire.routes.common import UsableInference
     a = _attempt(16384)
     usable = UsableInference(task="chat", operation="generate", route="chat", role="",
                              via="", scope="none", attempts=(a,))

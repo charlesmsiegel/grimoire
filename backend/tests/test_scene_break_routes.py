@@ -8,8 +8,10 @@ transcript which changed under a question in flight does not get the answer
 stamped onto it.
 """
 
+import asyncio
 import importlib
 import logging
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +22,7 @@ from grimoire.decisions import Answer, ItemResult
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import scenes as scenes_routes
+from grimoire.store import entities
 
 from .inference_fixtures import (
     OPENAI_DECIDER,
@@ -105,7 +108,6 @@ def _posts(cid: str, sid: str, n: int, start: int = 0, text: str = "Post") -> No
 def _location(cid: str, name: str) -> str:
     """A campaign location, created through the store: `set_location` resolves
     the entity, so the scene cannot be moved somewhere that does not exist."""
-    from grimoire.store import entities
     return entities.create_entity(store.campaigns.campaign_root(cid), "locations", name)
 
 
@@ -628,8 +630,6 @@ def test_the_title_path_reads_and_renders_off_the_event_loop(client, monkeypatch
     adds -- the title route's resolution (`config.md`, the connections, the
     catalog sidecar), the title prompt, and the verdict item's -- run in a
     worker thread, never on the loop thread."""
-    import asyncio
-    import threading
 
     _key(client)
     llm = _judge(YES)

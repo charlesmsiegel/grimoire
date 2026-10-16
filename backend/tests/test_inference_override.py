@@ -37,6 +37,7 @@ from grimoire.store.inference import resolve as inf
 from tests import wire_kit
 
 from . import inference_baseline as base
+from .test_adapter_wire_golden import _drive
 
 PRESET_CLEAR = store.sampler_presets.PRESET_CLEAR
 
@@ -311,8 +312,6 @@ def test_a_format_1_reroll_naming_a_glm_provider_sends_its_effort(at, active, bo
     or onto the standing GLM provider itself -- sends what main sent: the
     connection's own preset and its legacy reasoning effort, on the wire.
     Onto the standing provider at its own model it is no move at all."""
-    from .test_adapter_wire_golden import _drive
-
     ctx = at()
     _glm_format_1(active=active)
     resolved, got_routed = _run(body, ctx["cid"])
@@ -340,8 +339,6 @@ def _tobin_format_1(*, active: bool) -> None:
 
 
 def _sent(body, cid: str) -> tuple[str, dict]:
-    from .test_adapter_wire_golden import _drive
-
     resolved, _ = _run(body, cid)
     call = _drive("ok", resolved.chain, frozenset())["wire"]["openai_compatible"][0]
     return call[1][1], call[2]

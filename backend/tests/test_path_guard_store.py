@@ -9,23 +9,35 @@ CLI script, a batch importer -- got no protection at all.
 
 import os
 import re
+import tempfile
 import types
 
 import pytest
 from fastapi.testclient import TestClient
 
+from grimoire import store as store_pkg
 from grimoire.main import create_app
 from grimoire.store import (
     appearances,
+    assets,
     campaigns,
     characters,
     entities,
+    export,
+    greetings,
     llm_connections,
+    migrations,
+    modules,
     overlay,
     pcs,
+    response_presets,
+    scenes,
+    sheets,
+    styles,
     sync,
     worlds,
 )
+from grimoire.store import paths as paths_mod
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.paths import safe_id
 
@@ -372,8 +384,6 @@ MIN_ID_ROUTES = 150
 
 
 def _id_routes():
-    import tempfile
-
     # Runs at COLLECTION, outside every test's monkeypatch, so the env var is
     # set for this call only. A bare `os.environ.setdefault` outlived it: every
     # later test that does not set `GRIMOIRE_HOME` itself then shared one store
@@ -523,8 +533,6 @@ MARK = "zz-unusable"
 
 
 def _reject_mark(monkeypatch):
-    from grimoire import store as store_pkg
-    from grimoire.store import paths as paths_mod
     real = paths_mod.safe_id
 
     def guarded(value):
@@ -553,15 +561,6 @@ def _reject_mark(monkeypatch):
 
 
 def test_no_listing_hands_back_an_id_its_own_lookups_refuse(monkeypatch, tmp_path):
-    from grimoire.store import (
-        assets,
-        greetings,
-        llm_connections,
-        response_presets,
-        scenes,
-        sheets,
-        styles,
-    )
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
     wroot = worlds.world_root(wid)
@@ -669,7 +668,6 @@ def test_a_hidden_campaign_still_pins_its_world(monkeypatch, tmp_path):
 def test_startup_migrations_survive_unusable_ids(monkeypatch, tmp_path):
     """`bake_char_macros` and `migrate_scene_ids` both run in the app lifespan
     and both scan directories directly rather than through a listing."""
-    from grimoire.store import greetings, migrations, scenes
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch", wid)
@@ -691,7 +689,6 @@ def test_module_content_with_an_unusable_id_is_reported_not_advertised(monkeypat
     """A pack is authored, not user data, so an unusable content id is an error
     in the pack -- but it must never be listed as content the detail route
     cannot open."""
-    from grimoire.store import modules
     home(monkeypatch, tmp_path)
     root = tmp_path / "modules" / "pack"
     (root / "content" / "locations").mkdir(parents=True)
@@ -745,7 +742,6 @@ def test_a_campaign_that_cannot_be_read_at_all_still_blocks_deletion(monkeypatch
 
 
 def test_export_survives_an_unusable_stored_world(monkeypatch, tmp_path):
-    from grimoire.store import export
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch", wid)
@@ -863,7 +859,6 @@ def test_an_actor_with_no_addressable_version_has_no_hash(monkeypatch, tmp_path)
 
 
 def test_incoming_survives_an_actor_with_no_addressable_version(monkeypatch, tmp_path):
-    from grimoire.store import sync
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
     wroot = worlds.world_root(wid)

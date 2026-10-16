@@ -11,7 +11,8 @@ import pytest
 
 from grimoire import embeddings
 from grimoire.llm_errors import LLMError
-from grimoire.store import compiled, embed_space, llm_connections, usage, vectors
+from grimoire.routes import history_recall
+from grimoire.store import compiled, embed_space, llm_connections, logs, usage, vectors
 from grimoire.store.context import semantic as lore
 from grimoire.store.history import model, retrieval, semantic
 from grimoire.store.searchdocs import embedded, live, scene
@@ -519,7 +520,6 @@ def test_a_stalled_endpoint_costs_one_phase_per_turn_and_keeps_file_evidence(cid
     """10.2 through the turn-path wrapper: a stalled embed costs at most the
     phase deadline, the file evidence survives it, and -- the cut being the
     turn's own clock -- the next turn asks again rather than backing off."""
-    from grimoire.routes import history_recall
     old = played(cid, text="Mara studies the silver ledger.")
     absorbed(cid, old)
     sid = played(cid, text="Where is the silver ledger?")
@@ -664,7 +664,6 @@ def test_the_phase_deadline_cut_files_aborted_not_an_error(cid, space):
     """The phase deadline is the turn's own budget: a request it cuts (the
     door reporting `embeddings.DEADLINE`) files its row `aborted` and puts
     nothing in the error store, as absorb's budget does."""
-    from grimoire.store import logs
     docs = documents(cid)
     ours = LLMError("network", "deadline spent", code=embeddings.DEADLINE)
     assert score(cid, space, FakeAsyncEmbeddings(error=ours), docs).status == "failed:network"

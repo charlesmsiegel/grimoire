@@ -223,7 +223,6 @@ def test_only_scene_turns_is_registered_as_shipped():
 
 
 def test_a_short_scene_is_never_persisted_and_a_long_one_is(tmp_path, monkeypatch):
-    from grimoire.store.overview import read as overview_read
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
     importlib.reload(store)

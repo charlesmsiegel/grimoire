@@ -3,6 +3,7 @@ import pytest
 
 from grimoire import routes, store
 from grimoire.llm_errors import LLMError
+from grimoire.store.appearances import paths
 from tests.llm_fakes import FakeLLM, decision_reply
 from tests.test_character_turns import seed
 
@@ -119,8 +120,6 @@ def test_explicit_actor_remains_available_in_combined_mode(client):
 
 
 def test_legacy_cast_retains_observations_across_later_player_rounds(client):
-    from grimoire.store.appearances import paths
-
     cid, sid = seed(client)
     data = paths.record(cid)
     for rec in data.values():

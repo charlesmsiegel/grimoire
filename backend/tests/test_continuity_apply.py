@@ -17,10 +17,12 @@ import json
 import pytest
 
 from grimoire.routes import ledger as ledger_routes
+from grimoire.routes.models import ContinuityDismiss
 from grimoire.store import (
     campaigns,
     characters,
     commitments,
+    events,
     journal,
     locks,
     plot,
@@ -556,7 +558,6 @@ def test_plan_apply_plans_each_op(cid, s0):
 
 
 def test_a_temporal_pair_links_from_the_commitment(cid):
-    from grimoire.store import events
     event = "event:" + events.create(cid, "The coronation", "2026-05-09", "")
     key = _cache(cid, REL, [OATH, event])
     assert _plan(cid, key, {"op": "link", "from": OATH, "to": event,
@@ -672,7 +673,6 @@ def test_a_suppression_failure_lands_nothing(cid, monkeypatch):
 
 
 def test_the_dismiss_body_is_additive():
-    from grimoire.routes.models import ContinuityDismiss
     assert ContinuityDismiss().decision is None
     body = ContinuityDismiss(decision="keep_open", expect_fingerprint="fp1_x")
     assert (body.decision, body.expect_fingerprint) == ("keep_open", "fp1_x")

@@ -3,6 +3,9 @@ import importlib.util
 
 import pytest
 
+from grimoire.store import scenes
+from grimoire.store.history import model
+
 
 def test_history_corpus_exists():
     assert importlib.util.find_spec("evals.history") is not None
@@ -22,7 +25,6 @@ def test_history_flags_dispatch_own_mode(monkeypatch, flags, mode):
 
 def test_real_corpus_gold_and_all_offline_arms(monkeypatch, tmp_path):
     from evals.history import cases, runner, synth
-    from grimoire.store import scenes
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     assert {c.shape for c in cases.CASES} == set(range(1, 11))
     planted = synth.build(cases.CASES[4])
@@ -47,7 +49,6 @@ def test_real_corpus_gold_and_all_offline_arms(monkeypatch, tmp_path):
 
 def test_grading_uses_planted_ranges_and_packed_text():
     from evals.history import graders, synth
-    from grimoire.store.history import model
     gold = synth.Gold("001--saltmarch", "identity", 2, 2)
     post = model.EvidencePost(2, "p-post", None, "Mara", "amberseal")
     item = model.EvidenceItem(model.SceneRef(gold.sid, gold.identity), "Saltmarch",
@@ -66,7 +67,6 @@ def test_context_only_rules_read_scene_markers_not_the_shared_fact():
     fails the rule, and a gold scene is credited only when its own line is
     there."""
     from evals.history import cases, runner, synth
-    from grimoire.store.history import model
     case = cases.CASES[6]
     gold = synth.Gold("001--saltmarch", "g", 0, 0, "Tally 0.")
     planted = synth.Planted("realm", "009--saltmarch", (gold,), frozenset({"005--saltmarch"}),

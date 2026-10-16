@@ -7,17 +7,23 @@ already exist. Dates are asserted on the campaign's own fixed-day axis
 
 from __future__ import annotations
 
+import ast
+import contextlib
+import inspect
 import json
 import textwrap
 from typing import ClassVar
 
 import pytest
 
+import grimoire.embeddings
 from grimoire import store
 from grimoire.store import (
     appearances,
+    assets,
     calendars,
     campaigns,
+    characters,
     chronicle,
     clock,
     commitments,
@@ -25,6 +31,7 @@ from grimoire.store import (
     group_inventory,
     membership,
     overlay,
+    pcs,
     plot,
     relationships,
     scene_ideas,
@@ -1165,8 +1172,6 @@ def _cost_campaign(monkeypatch, tmp_path) -> str:
 
 
 def test_graph_makes_no_model_call(monkeypatch, tmp_path):
-    import grimoire.embeddings
-    import grimoire.llm
     cid = _cost_campaign(monkeypatch, tmp_path)
     _RecordingEmbeddings.built = []
     monkeypatch.setattr(store.embed_space, "endpoint", lambda *a, **k: {
@@ -1197,7 +1202,6 @@ def test_graph_makes_no_model_call(monkeypatch, tmp_path):
 def _hold_state(monkeypatch):
     """`best_effort_campaign_lock` as graph sees it, replaced by one that marks
     a mutable cell while it is held and counts how often it was entered."""
-    import contextlib
     state = {"inside": False, "entered": 0}
 
     @contextlib.contextmanager
@@ -1236,7 +1240,6 @@ def test_plugin_code_runs_outside_the_hold(monkeypatch, tmp_path, _hold_state):
 
 
 def test_graph_reads_no_card_or_image(monkeypatch, tmp_path):
-    from grimoire.store import assets, characters, pcs
     cid = _campaign(monkeypatch, tmp_path)
     seraphine, seraphine_v = overlay.create_pc(cid, "Seraphine", [], persona={
         **pcs.blank_persona("Seraphine"), "birthdate": "--05-11"})
@@ -1333,8 +1336,6 @@ def test_the_graph_reads_the_group_listing_once(monkeypatch, tmp_path):
 
 
 def test_graph_calls_no_card_image_or_blocking_lock():
-    import ast
-    import inspect
     tree = ast.parse(inspect.getsource(graph))
     forbidden = {"read_pc", "read_character", "list_images", "actor_name", "list_pcs",
                  "campaign_lock"}
