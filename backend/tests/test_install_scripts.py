@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import re
 import shutil
 import socket
@@ -140,7 +141,7 @@ def test_store_location_is_reported_after_the_venv_exists(script):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="no execute bit on a Windows checkout")
-@pytest.mark.parametrize("name", ["install.sh", "run.sh", "shutdown.sh"])
+@pytest.mark.parametrize("name", ["install.sh", "run.sh", "shutdown.sh", "macos-launcher.sh"])
 def test_the_unix_scripts_are_executable(name):
     """The README invokes all three by path, so the mode git records has to
     allow it. `install.sh` chmods the directory, but that only ever repaired
@@ -267,7 +268,7 @@ def test_the_ports_agree_everywhere_they_are_written():
 # cannot open the Windows path it would be handed.
 @pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
                     reason="no POSIX bash to parse with")
-@pytest.mark.parametrize("name", ["install.sh", "run.sh", "shutdown.sh"])
+@pytest.mark.parametrize("name", ["install.sh", "run.sh", "shutdown.sh", "macos-launcher.sh"])
 def test_the_unix_scripts_parse(name):
     """Nothing in the gate runs these, so a syntax error in a branch its author
     did not exercise (`--dev`, the build-failed fallback) would first be met by
@@ -385,3 +386,89 @@ def test_venv_paths_are_given_for_both_platforms(doc):
         if WINDOWS_PY.search(line):
             assert UNIX_PY.search(window), (
                 f"{doc.name}:{number + 1} gives a Windows-only venv python:\n  {line.strip()}")
+
+
+# --- macOS launcher ----------------------------------------------------------
+#
+# macOS draws an icon for an application bundle and for nothing else: a bare
+# `.command` file gets the generic script icon whatever sits beside it. So the
+# installer wraps the launcher in `Grimoire.app`, and the icon is built with the
+# platform's own iconset tools (`sips`, `iconutil`), which exist only on a Mac.
+# Here both are stubbed, so the bundle's layout and the iconset's contents are
+# checked for real on any Unix. Whether the icon renders is a check for a Mac.
+
+MACOS_LAUNCHER = UNIX.with_name("macos-launcher.sh")
+SOURCE_ICON = FRONTEND / "public" / "grimoire-512.png"
+ICONSET_NAMES = {
+    "icon_16x16.png", "icon_16x16@2x.png",
+    "icon_32x32.png", "icon_32x32@2x.png",
+    "icon_128x128.png", "icon_128x128@2x.png",
+    "icon_256x256.png", "icon_256x256@2x.png",
+    "icon_512x512.png",
+}
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
+                    reason="no POSIX bash to run it with")
+def test_macos_launcher_builds_an_app_bundle_with_an_icon(tmp_path):
+    root = tmp_path / "grimoire"
+    (root / "frontend" / "public").mkdir(parents=True)
+    shutil.copy2(SOURCE_ICON, root / "frontend" / "public" / "grimoire-512.png")
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    # What an earlier install left behind: a bare launcher, and a bundle whose
+    # contents a rebuild must not keep.
+    (desktop / "Grimoire.command").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    stale = desktop / "Grimoire.app" / "Contents" / "Resources" / "old.txt"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("from the last install", encoding="utf-8")
+
+    sizes = tmp_path / "sizes.txt"
+    listing = tmp_path / "iconset.txt"
+    # sips is told a height (-z H W); each output records the pixel size it was
+    # asked for, so the iconset's sizes can be checked and not just its names.
+    _executable(tmp_path / "bin" / "sips",
+                f'#!/bin/sh\necho "$6 $2" >> "{sizes}"\ncp "$4" "$6"\n')
+    _executable(tmp_path / "bin" / "iconutil",
+                f'#!/bin/sh\nls "$3" > "{listing}"\nprintf icns > "$5"\n')
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}"}
+    done = subprocess.run(["bash", str(MACOS_LAUNCHER), str(root), str(desktop)],
+                          env=env, capture_output=True, text=True, timeout=60, check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    assert not (desktop / "Grimoire.command").exists(), "the bare launcher survived"
+    assert not stale.exists(), "a rebuild kept the previous bundle's contents"
+    app = desktop / "Grimoire.app" / "Contents"
+
+    info = plistlib.loads((app / "Info.plist").read_bytes())
+    assert info["CFBundleExecutable"] == "Grimoire"
+    assert info["CFBundleIconFile"] == "AppIcon"
+    assert info["CFBundlePackageType"] == "APPL"
+
+    assert (app / "Resources" / "AppIcon.icns").read_bytes() == b"icns"
+    names = set(listing.read_text(encoding="utf-8").split())
+    assert names >= ICONSET_NAMES, f"iconset is missing {ICONSET_NAMES - names}"
+    assert "icon_512x512@2x.png" not in names, "would need an upscaled 1024px source"
+    for line in sizes.read_text(encoding="utf-8").splitlines():
+        output, pixels = line.rsplit(" ", 1)
+        match = re.fullmatch(r"icon_(\d+)x\d+(@2x)?\.png", Path(output).name)
+        assert match, f"unexpected iconset entry {output}"
+        expected = int(match.group(1)) * (2 if match.group(2) else 1)
+        assert int(pixels) == expected, f"{Path(output).name} is {pixels}px, not {expected}px"
+
+    executable = app / "MacOS" / "Grimoire"
+    assert executable.stat().st_mode & stat.S_IXUSR, "the bundle's executable is not runnable"
+    assert "open -a Terminal" in executable.read_text(encoding="utf-8")
+    launcher = app / "Resources" / "Grimoire.command"
+    assert launcher.stat().st_mode & stat.S_IXUSR, "the .command inside the bundle is not runnable"
+    assert str(root / "scripts" / "unix" / "run.sh") in launcher.read_text(encoding="utf-8"), (
+        "the bundle's launcher does not run run.sh")
+    for script in (executable, launcher):
+        assert subprocess.run(["bash", "-n", str(script)], capture_output=True, check=False).returncode == 0
+
+
+def test_installer_hands_the_desktop_launcher_to_the_macos_script():
+    """install.sh decides the platform; the bundle is built by the script it
+    names, so the two cannot drift into two copies of the icon steps."""
+    _first_command_matching(UNIX, r"macos-launcher\.sh")
+    assert "Grimoire.command" not in _text(UNIX), "install.sh still writes the bare launcher"

@@ -214,7 +214,10 @@ installer made (`frontend/dist`). Once it is ready the script opens
 **<http://127.0.0.1:8173>** in your browser, then streams the server's log into
 that terminal so you can watch status and errors live. Bookmarks and reloads
 work on any page, not just the home screen. The installer also drops a
-**Grimoire** launcher on your desktop that opens the same console.
+**Grimoire** launcher on your desktop that opens the same console. On macOS it
+is `Grimoire.app`, so it has an icon; drag it to the Dock to keep it there. On
+Linux, pin the desktop entry from your application menu or dock. Re-running the
+installer rebuilds the launcher.
 
 **After an update** (`git pull`), the first launch notices that the UI's sources
 are newer than its build and rebuilds it before starting — a few seconds, once.
