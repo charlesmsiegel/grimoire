@@ -2872,6 +2872,18 @@ def tagline(cid: str, char_id: str, *, v: View | None = None) -> str:
     return taglines.read(v.wroot, char_id)
 
 
+def set_tagline(cid: str, char_id: str, text: str) -> None:
+    """Write the campaign's own capsule for `char_id`.
+
+    A per-file sidecar, like the anchor's writer but without its tombstone: the
+    campaign copy of `tagline.md` shadows the library's, so writing it needs no
+    materialized actor, and an inherited character stays inherited (no copied
+    cards, no whole-actor sync base). A blank save is the campaign's blank copy,
+    which `tagline()` reads as "no sentence here" and falls back from.
+    """
+    taglines.write(croot_of(cid), char_id, text)
+
+
 def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
     """Write the campaign's own anchor for `char_id`; blank opts the character
     out of voice checks in this campaign.

@@ -2324,7 +2324,7 @@ def put_campaign_character_tagline(cid: str, char: str, body: TaglineSave):
             store.characters.read_character(store.overlay.char_root(cid, char), char)
         except store.characters.CharacterNotFound as exc:
             raise HTTPException(status_code=404, detail="character not found") from exc
-        store.taglines.write(store.overlay.croot_of(cid), char, body.tagline)
+        store.overlay.set_tagline(cid, char, body.tagline)
     return {"ok": True}
 
 
