@@ -204,7 +204,7 @@ def test_a_capsule_on_an_inherited_character_leaves_it_inherited(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
     aid = client.post(f"/api/worlds/{wid}/characters",
-                      json={"name": "Aese", "version_name": "main"}).json()["character"]
+                      json={"name": "Seraphine", "version_name": "main"}).json()["character"]
 
     resp = client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline",
                       json={"tagline": "A snowleopardgirl."})
@@ -213,3 +213,18 @@ def test_a_capsule_on_an_inherited_character_leaves_it_inherited(client):
     croot = store.overlay.croot_of(cid)
     assert not (croot / "characters" / aid / "character.md").exists()
     assert store.overlay.tagline(cid, aid) == "A snowleopardgirl."
+
+
+def test_generate_reads_the_first_scene_after_the_character_has_left_it(client):
+    cid = _campaign(client)
+    aid, vid = _emergent(client, cid)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "The gate"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", MARKER)
+    store.appearances.transitions.appear(cid, sid, "characters", aid, vid, "npc")
+    store.appearances.transitions.leave(cid, sid, "characters", aid)
+    fake = _answers(client, "Capsule: A gate-warden.\nTags: loyal")
+
+    resp = draft_post(client, f"/api/campaigns/{cid}/characters/{aid}/capsule/generate")
+
+    assert resp.status_code == 200
+    assert MARKER in fake.messages[-1]["content"]

@@ -2238,12 +2238,16 @@ def _first_scene_transcript(cid: str, char: str) -> str:
     """The transcript of the first scene `char` was placed in, as the prompt
     reads it, or "" when the character has never appeared in one (#62).
 
-    `scenes[0]` is the first placement: the appearance record keeps scenes in
-    the order they were entered. The view is the prompt phase, the same as every
+    The first key is the first placement: the record keeps scenes in the order
+    they were entered. The view is the prompt phase, the same as every
     other LLM reader of transcript text.
     """
     rec = store.appearances.record(cid).get(f"characters/{char}") or {}
-    scenes = rec.get("scenes") or []
+    # The history, not current membership: `leave` drops a scene from `scenes`
+    # but keeps its interval under `presence`, and the scene a character walked
+    # on in is the one this reads even after they have walked off it. Records
+    # written before `presence` existed fall back to `scenes`.
+    scenes = list(rec.get("presence") or {}) or list(rec.get("scenes") or [])
     if not scenes:
         return ""
     sid = scenes[0]
