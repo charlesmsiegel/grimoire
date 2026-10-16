@@ -390,6 +390,12 @@ function RefField({ spec, options, value, onChange, unresolvedHint, optionsCompl
   );
 }
 
+/** How wide a card's image is drawn, at the breakpoints `.entity-grid` uses in
+ *  index.css: one column on a phone, two to 720px, three above. A sizes hint
+ *  that describes a retired rail makes the browser fetch a wider file than the
+ *  half-width card shows, or a smaller one than a desktop card needs. */
+const ENTITY_CARD_SIZES = "(max-width: 420px) calc(100vw - 32px), (max-width: 720px) calc((100vw - 50px) / 2), (max-width: 1120px) 33vw, 340px";
+
 export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = false, newOwner, sectionPath, newHref, recordHref, onOpenOwner, onReclassified, module = null }: {
   wid: string;
   kind: EntityKind;
@@ -1120,7 +1126,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
           <img className="loc-row-img" alt="" loading="lazy" decoding="async"
                style={e.image_focus == null ? undefined : { objectPosition: e.image_focus + "% " + e.image_focus + "%" }}
                {...thumbSet((w) => api.entityImageUrl(at, kind, e.id, "avatar", { w, v: e.image_v }),
-                            "(max-width: 640px) 100vw, 220px", THUMB.tile,
+                            ENTITY_CARD_SIZES, THUMB.tile,
                             api.entityImageUrl(at, kind, e.id, "avatar", { v: e.image_v }))}
                onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
         )}
@@ -1464,7 +1470,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
                              onDemoted={() => {
                                // A completed sidebar write belongs to the record
                                // that opened it, not a later selection's form.
-                               if (selectedRead === readReq.current) { void reload(); resetForm(); }
+                               // The address still names the record just removed: go to the grid.
+                               if (selectedRead === readReq.current) { void reload(); resetForm(); navigate(sectionPath); }
                              }} />
               ))}
               <div className="side-section">

@@ -2386,6 +2386,16 @@ test("reclassification guards an Art draft before its own confirmation and write
   expect(screen.getByRole("textbox", { name: "Description of avatar" })).toHaveValue("Unsaved");
   confirm.mockRestore();
 });
+test("removing the open record from the library returns to the grid", async () => {
+  vi.mocked(api.demoteFromLibrary).mockResolvedValue(undefined as any);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  lastPath = "";
+  render(<Wrap wid="w" kind="locations" selected="saltmarch" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Remove from library/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Remove and copy down" }));
+  await waitFor(() => expect(lastPath).toBe("/section"));
+});
+
 test("library removal refuses to discard an Art draft before deleting the record", async () => {
   vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target));
   vi.mocked(api.demoteFromLibrary).mockImplementation(() => new Promise(() => {}));
