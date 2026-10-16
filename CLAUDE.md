@@ -326,7 +326,7 @@ post the player can see.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Thirty-six handlers** start detached runs, in five classes:
+subscriber. **Thirty-seven handlers** start detached runs, in five classes:
 
 - `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn`,
   `post_roll_proposal`, and the per-response pair in `character_turns.py`,
