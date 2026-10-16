@@ -69,7 +69,8 @@ export type SectionTarget =
   | { kind: "section"; at: "images"; forCampaign: string; view: "campaign-library" }
   | { kind: "section"; at: "greetings"; view?: "graph" }
   | { kind: "section"; at: "lore"; newOwner?: string; new?: true }
-  | { kind: "section"; at: Exclude<RecordSection, "lore" | "greetings">; new?: true }
+  | { kind: "section"; at: "locations" | "items" | "groups" | "creatures"; new?: true }
+  | { kind: "section"; at: Exclude<RecordSection, "lore" | "greetings" | "locations" | "items" | "groups" | "creatures"> }
   // one record inside one
   | { kind: "record"; at: "characters" | "pcs"; rid: string; v?: string; tab?: "art" }
   | { kind: "record"; at: Exclude<RecordSection, "characters" | "pcs" | "greetings">; rid: string; tab?: "art" }

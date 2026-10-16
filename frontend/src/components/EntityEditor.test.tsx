@@ -439,6 +439,24 @@ test("lore detail owner chips include an avatar or initials", async () => {
   expect(await screen.findByText("MV")).toBeInTheDocument(); // initials inside the owner chip
 });
 
+test("deleting the open record returns to the grid rather than a blank form under its id", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  lastPath = "";
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+  await waitFor(() => expect(lastPath).toBe("/section"));
+});
+
+test("a failed listing on the browse grid says so instead of reading as an empty library", async () => {
+  (api.listEntities as any).mockRejectedValue(new Error("network down"));
+  renderEditor({ kind: "items", isNew: false });
+  expect(await screen.findByText(/network down/)).toBeInTheDocument();
+  expect(screen.queryByText("No item yet.")).not.toBeInTheDocument();
+});
+
 test("deletes after confirm", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(true);

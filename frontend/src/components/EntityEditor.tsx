@@ -992,7 +992,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     const stillHere = captureViewGuard();
     await api.deleteEntity(scope, kind, e.id);
     if (!stillHere()) return;
-    if (editing === e.id) resetForm();
+    if (editing === e.id) {
+      // The address still names the record just deleted; leave it for the grid
+      // rather than a blank form under a dead id.
+      resetForm();
+      navigate(sectionPath);
+    }
     await reload();
   }
 
@@ -1296,6 +1301,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
           handful. */}
       {browsing ? (
         <div className="entity-browse">
+          {error && <div className="banner">{error}</div>}
           <div className="entity-browse-head">
             <Link className="primary new" to={newHref}>+ New {label}</Link>
             {/* Adoption is per record on the banner, and here for the whole
