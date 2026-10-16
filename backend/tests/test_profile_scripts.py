@@ -79,6 +79,19 @@ def test_concentration_is_the_share_held_by_the_slowest_nodes():
     assert profile_report.concentration([3.0, 1.0])["top_1%"] == pytest.approx(0.75)
 
 
+def test_a_profile_no_node_reported_in_has_no_median_and_no_concentration(capsys):
+    """A run stopped at collection reported no node: its median and its
+    concentration were not measured, so they read n/a -- never a 0.0ms median
+    or a 0% share that look like a measured, instant suite."""
+    s = profile_report.summarize(_profile({}))
+    assert s["median_node_s"] is None
+    assert set(s["concentration"].values()) == {None}
+    profile_report._print_summary(s, top=5)
+    out = capsys.readouterr().out
+    assert "median node n/a" in out and "top_1% n/a" in out
+    assert "0.0ms" not in out and "0.0%" not in out
+
+
 def test_manifest_is_the_sorted_node_ids():
     doc = _profile({"t.py::b": _node(), "t.py::a": _node()})
     assert profile_report.manifest(doc) == ["t.py::a", "t.py::b"]
