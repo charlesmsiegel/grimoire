@@ -66,7 +66,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from . import chronicle, entities, facts, plot, relationships, statcache
-from .frontmatter import parse_frontmatter, text_of
+from .frontmatter import parse_frontmatter, parse_frontmatter_head, text_of
 from .paths import home, natural_key, safe_id
 
 WORLD = "world"
@@ -418,15 +418,29 @@ def _actor_docs(root: Path) -> Iterator[dict]:
 
     # A campaign's capsule on an inherited character is written without a card or
     # a character.md of its own (`overlay.set_tagline`), so the loop above never
-    # sees it. Search reads only what is on disk, and the card and name belong to
-    # the library, so the capsule is indexed alone under the character's id.
+    # sees it. Search reads only what is on disk, and the card belongs to the
+    # library, so the capsule is indexed alone under the character's id, named as
+    # the library names the character (`_inherited_name`).
     for tag_path in sorted((root / "characters").glob("*/tagline.md")):
         cid = tag_path.parent.name
         if not safe_id(cid) or (tag_path.parent / "character.md").exists():
             continue
         tag = _doc(_markdown_doc, tag_path)
         if tag is not None and tag[2]:
-            yield _row("characters", cid, "", cid, tag[2], tag[2])
+            yield _row("characters", cid, "", _inherited_name(root, cid), tag[2], tag[2])
+
+
+def _inherited_name(campaign_root: Path, cid: str) -> str:
+    """The display name a campaign's inherited character carries in its world,
+    which is what a query's name terms have to match; the id when the world or
+    its copy cannot be read. The world is the one the campaign's own record
+    names, so this reads the library's copy, not anything the campaign writes."""
+    meta = campaign_root / "campaign.md"
+    world = parse_frontmatter_head(meta).get("world", "") if meta.exists() else ""
+    if not world or not safe_id(world):
+        return cid
+    copy = _doc(_markdown_doc, home() / "worlds" / world / "characters" / cid / "character.md")
+    return copy[0] if copy is not None and copy[0] else cid
 
 
 def _pc_docs(root: Path) -> Iterator[dict]:

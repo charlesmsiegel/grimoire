@@ -285,3 +285,21 @@ def test_the_excerpt_starts_at_the_entrance_not_the_scene_head(client):
 
     assert resp.status_code == 200
     assert MARKER in fake.messages[-1]["content"]
+
+
+def test_an_inherited_capsule_row_carries_the_characters_display_name(client):
+    """The row's name is what a query's name terms match, so it has to be the
+    character's name as the library holds it, not the slug the id was made from."""
+    from grimoire.store import search
+
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    aid = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Lady Seraphine", "version_name": "main"}).json()["character"]
+    client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline",
+               json={"tagline": "A snowleopardgirl who keeps the tide ledger."})
+
+    hits = search.search("lady snowleopardgirl", scope="campaign", root=cid)["hits"]
+
+    assert [(h["id"], h["name"]) for h in hits] == [(aid, "Lady Seraphine")]
