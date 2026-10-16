@@ -720,6 +720,10 @@ class CharacterBirthdate(BaseModel):
     birthdate: str = ""
 
 
+class CharacterTags(BaseModel):
+    tags: list[str] = []
+
+
 class ChubImportBody(BaseModel):
     url: str
     into: str | None = None

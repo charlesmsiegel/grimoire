@@ -59,6 +59,43 @@ def test_player_tags_unions_player_pcs_only(monkeypatch, tmp_path):
     assert playing.player_tags(cid) == {"student", "sailor"}
 
 
+def test_player_tags_include_a_character_cast_as_player(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    tags.add_tag(wroot, "vip")
+    kid, vid = characters.create_character(wroot, "Mara")
+    characters.set_tags(wroot, kid, ["vip"])
+    cid, sid = _campaign_after_seed(wid)
+    ap.appear(cid, sid, "characters", kid, vid, "player")
+    assert playing.player_tags(cid) == {"vip"}
+
+
+def test_a_character_cast_in_another_role_contributes_no_tags(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    tags.add_tag(wroot, "vip")
+    kid, vid = characters.create_character(wroot, "Mara")
+    characters.set_tags(wroot, kid, ["vip"])
+    cid, sid = _campaign_after_seed(wid)
+    ap.appear(cid, sid, "characters", kid, vid, "npc")
+    assert playing.player_tags(cid) == set()
+
+
+def test_character_as_player_gates_a_tagged_greeting(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    tags.add_tag(wroot, "vip")
+    kid, vid = characters.create_character(wroot, "Mara")
+    g = greetings.create_greeting(wroot, "Gala", kid, vid, requires_tags=["vip"])
+    cid, sid = _campaign_after_seed(wid)
+    ap.appear(cid, sid, "characters", kid, vid, "player")
+    assert {x["id"]: x["available"] for x in playing.available_greetings(cid)}[g] is False
+    characters.set_tags(wroot, kid, ["vip"])
+    cid2, sid2 = _campaign_after_seed(wid)
+    ap.appear(cid2, sid2, "characters", kid, vid, "player")
+    assert {x["id"]: x["available"] for x in playing.available_greetings(cid2)}[g] is True
+
+
 def test_available_greetings_end_to_end(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)

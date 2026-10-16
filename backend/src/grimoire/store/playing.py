@@ -107,10 +107,19 @@ def mark_greeting(cid: str, gid: str, status: str) -> None:
 def player_tags(cid: str) -> set[str]:
     out: set[str] = set()
     for a in appearances_cast.roster(cid):
-        if a["role"] == "player" and a["kind"] == "pcs":
+        if a["role"] != "player":
+            continue
+        # A character cast as the player carries its own tags (#18), read from
+        # the campaign's copy the way a PC's are; PCs are the faithful default.
+        if a["kind"] == "pcs":
             try:
                 out |= set(pcs.read_pc(overlay.pc_root(cid, a["id"]), a["id"])["meta"]["tags"])
             except pcs.PCNotFound:
+                continue
+        elif a["kind"] == "characters":
+            try:
+                out |= set(characters.read_tags(overlay.char_root(cid, a["id"]), a["id"]))
+            except characters.CharacterNotFound:
                 continue
     return out
 

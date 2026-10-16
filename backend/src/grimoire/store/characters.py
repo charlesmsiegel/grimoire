@@ -182,6 +182,25 @@ def birthdate_meta(root: Path, cid: str) -> tuple[str, str]:
     return meta.get("name", cid), meta.get("birthdate", "")
 
 
+def read_tags(root: Path, cid: str) -> list[str]:
+    """The tags this character carries when cast as the player (#18).
+
+    Container-level, like a PC's tags: one set for every version, so a greeting
+    gated on a tag does not flip with which version of the character is played.
+    Stored as the world tag vocabulary's ids, comma-joined, the same shape as a
+    PC's `pc.md` tags, so `greetings.requires_tags` compares verbatim."""
+    _require_char(root, cid)
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    return [t for t in (x.strip() for x in meta.get("tags", "").split(",")) if t]
+
+
+def set_tags(root: Path, cid: str, tags: list[str]) -> None:
+    _require_char(root, cid)
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    meta["tags"] = ",".join(tags)
+    atomic.write_text(_meta_path(root, cid), dump_frontmatter(meta, ""))
+
+
 def set_chub_source(root: Path, cid: str, vid: str, full_path: str) -> None:
     """Link one version to a chub.ai card. Stored in that version's own card
     (extensions, same spot as grimoire_label) so each variant of a character

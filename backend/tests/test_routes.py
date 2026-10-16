@@ -6644,6 +6644,27 @@ def test_character_birthdate_route_sets_meta(client):
     assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["birthdate"] == "1985-03-14"
 
 
+def test_character_tags_route_checks_the_world_vocabulary(client):
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    vip = client.post(f"/api/worlds/{wid}/tags", json={"name": "VIP"}).json()["id"]
+    r = client.put(f"/api/worlds/{wid}/characters/{chid}/tags", json={"tags": [vip]})
+    assert r.json() == {"ok": True}
+    assert store.characters.read_tags(store.worlds.world_root(wid), chid) == [vip]
+    r = client.put(f"/api/worlds/{wid}/characters/{chid}/tags", json={"tags": ["nope"]})
+    assert r.status_code == 400
+    assert store.characters.read_tags(store.worlds.world_root(wid), chid) == [vip]
+
+
+def test_campaign_character_tags_are_its_own_and_leave_the_world_alone(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    r = client.put(f"/api/campaigns/{cid}/characters/{chid}/tags", json={"tags": ["local"]})
+    assert r.json() == {"ok": True}
+    assert store.characters.read_tags(store.overlay.char_root(cid, chid), chid) == ["local"]
+    assert store.characters.read_tags(store.worlds.world_root(wid), chid) == []
+
+
 def test_campaign_character_birthdate_is_editable_without_changing_world(client):
     wid, cid = _campaign(client)
     world_id = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
