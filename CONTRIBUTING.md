@@ -77,7 +77,7 @@ locally with the same one-line command.
 | `make check-lint` | ruff, against `lint-baselines/ruff.json` | lint |
 | `make check-mypy` | mypy, against `lint-baselines/mypy.json` | mypy |
 | `make check-py` | `pytest backend -q` under coverage, floored at `COV_FLOOR`, across `WORKERS` processes | backend (py3.11, py3.14) |
-| `make check-web` | `npm run typecheck && npm run test:coverage` in `frontend/` | frontend |
+| `make check-web` | `npm run typecheck && npm run test:coverage` in `frontend/`, the coverage floored by `test.coverage.thresholds` in `frontend/vite.config.ts` | frontend |
 | `make check-eslint` | eslint, against `lint-baselines/eslint.json` | eslint |
 | `make check-templates` | `scripts/verify_templates.py` — builders and templates agree byte-for-byte, and every template is rendered by a check or named in `UNRENDERED` with why | templates |
 | `make check-pydantic1` | the same suite again, in a throwaway venv resolved to what the APK ships, across `WORKERS` processes | pydantic1 |

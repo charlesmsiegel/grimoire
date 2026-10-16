@@ -53,6 +53,17 @@ export default defineConfig({
         // of a number this config goes out of its way to keep honest.
         "src/testkit/**",
       ],
+      // The frontend's coverage floor, the counterpart of the Makefile's
+      // COV_FLOOR: each figure is the measured total (91.76% of lines, 89.16%
+      // of statements, 84.73% of functions, 84.43% of branches) rounded down
+      // to the integer below it. A floor, not a target: it fails `make
+      // check-web` on a change that *drops* coverage -- a deleted test file, a
+      // module nothing exercises any more -- and says nothing about one that
+      // does not raise it. Raise a figure when the number rises; lowering one
+      // needs the same justification as any other gate being weakened. Only a
+      // whole-suite run can meet it: `vitest run --coverage` over a few files
+      // misses it, with `all` above counting every other file at 0%.
+      thresholds: { lines: 91, statements: 89, functions: 84, branches: 84 },
     },
   },
 });
