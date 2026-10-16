@@ -373,7 +373,10 @@ def test_a_round_never_starts_past_the_deadline(cid, monkeypatch):
     sid, *_ = setup_thin(cid)
     _late(monkeypatch)
     retrieved = _spy_retrieve(monkeypatch)
-    ev = gather(cid, sid, FakeLLM([[plan_reply()]]), deadline=time.monotonic() + 1.5)
+    # The window must outlast the first retrieval on a loaded runner: a deadline
+    # spent before the first step is a skipped plan with no steps, which is not
+    # what this test is about. `_late` still lands the plan on the deadline.
+    ev = gather(cid, sid, FakeLLM([[plan_reply()]]), deadline=time.monotonic() + 4.0)
     assert ev.plan.terminal == "skipped:deadline" and len(retrieved) == 1
     assert ev.plan.rounds == () and ev.plan.steps[0].outcome == "ok"
 
@@ -385,7 +388,7 @@ def test_a_repair_round_never_starts_past_the_deadline(cid, monkeypatch):
     check = json.dumps({"0": {"answers": {"sufficient": False}}})
     repair = plan_reply(questions=["Where did the gulls wheel?"], terms=["gulls", "overhead"])
     ev = gather(cid, sid, FakeLLM([[plan_reply()], [check], [repair]]),
-                deadline=time.monotonic() + 2.5)
+                deadline=time.monotonic() + 4.0)
     assert ev.plan.terminal == "unrepaired" and len(retrieved) == 2
     assert len(ev.plan.rounds) == 1
 
