@@ -137,7 +137,7 @@ def test_the_capsule_is_saved_campaign_side_only(client):
     resp = client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline",
                       json={"tagline": "A gate-warden who keeps every promise."})
 
-    assert resp.json() == {"ok": True}
+    assert resp.json()["ok"] is True
     root = store.overlay.char_root(cid, aid)
     assert store.taglines.read(root, aid) == "A gate-warden who keeps every promise."
 
@@ -209,7 +209,7 @@ def test_a_capsule_on_an_inherited_character_leaves_it_inherited(client):
     resp = client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline",
                       json={"tagline": "A snowleopardgirl."})
 
-    assert resp.json() == {"ok": True}
+    assert resp.json()["ok"] is True
     croot = store.overlay.croot_of(cid)
     assert not (croot / "characters" / aid / "character.md").exists()
     assert store.overlay.tagline(cid, aid) == "A snowleopardgirl."
@@ -303,3 +303,41 @@ def test_an_inherited_capsule_row_carries_the_characters_display_name(client):
     hits = search.search("lady snowleopardgirl", scope="campaign", root=cid)["hits"]
 
     assert [(h["id"], h["name"]) for h in hits] == [(aid, "Lady Seraphine")]
+
+
+def test_a_blank_capsule_save_answers_the_sentence_the_campaign_now_shows(client):
+    """Blanking the campaign's copy of an inherited capsule lets the library's
+    sentence show through, so the save's answer is that sentence, not the blank
+    that was sent."""
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    aid = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Seraphine", "version_name": "main"}).json()["character"]
+    client.put(f"/api/worlds/{wid}/characters/{aid}/tagline",
+               json={"tagline": "A gate-warden of the old wall."})
+    client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline",
+               json={"tagline": "Something of the campaign's own."})
+
+    resp = client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline", json={"tagline": ""})
+
+    assert resp.json() == {"ok": True, "tagline": "A gate-warden of the old wall."}
+
+
+def test_an_unreadable_campaign_record_still_searches_the_inherited_capsule(client, tmp_path):
+    """A hand-edited or synced campaign record that is not valid text must not
+    take the whole search down; the row falls back to the character's id."""
+    from grimoire.store import search
+
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    aid = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Seraphine", "version_name": "main"}).json()["character"]
+    client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline",
+               json={"tagline": "A snowleopardgirl who keeps the tide ledger."})
+    (store.campaigns.paths.campaign_root(cid) / "campaign.md").write_bytes(b"---\nworld: \xff\xfe\n---\n")
+
+    hits = search.search("snowleopardgirl", scope="campaign", root=cid)["hits"]
+
+    assert [(h["id"], h["name"]) for h in hits] == [(aid, aid)]

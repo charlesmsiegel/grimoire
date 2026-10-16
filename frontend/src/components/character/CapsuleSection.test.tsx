@@ -59,7 +59,7 @@ test("Generate fills the draft and writes nothing until Save", async () => {
 
 test("Save writes the capsule and, when they changed, the tags onto the card", async () => {
   (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
-  (api.setCampaignCharacterTagline as any).mockResolvedValue({ ok: true });
+  (api.setCampaignCharacterTagline as any).mockImplementation(async (_c: string, _h: string, t: string) => ({ ok: true, tagline: t }));
   const onSaveTags = vi.fn().mockResolvedValue(true);
   mount({ tags: ["loyal"], onSaveTags });
   await screen.findByText("Old.");
@@ -75,7 +75,7 @@ test("Save writes the capsule and, when they changed, the tags onto the card", a
 
 test("Save leaves the card alone when only the capsule changed", async () => {
   (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
-  (api.setCampaignCharacterTagline as any).mockResolvedValue({ ok: true });
+  (api.setCampaignCharacterTagline as any).mockImplementation(async (_c: string, _h: string, t: string) => ({ ok: true, tagline: t }));
   const onSaveTags = vi.fn().mockResolvedValue(true);
   mount({ tags: ["loyal"], onSaveTags });
   await screen.findByText("Old.");
@@ -151,7 +151,7 @@ test("a draft with no tags line keeps the card's tags rather than clearing them"
 
 test("a refused tags save leaves the draft open rather than reporting it written", async () => {
   (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
-  (api.setCampaignCharacterTagline as any).mockResolvedValue({ ok: true });
+  (api.setCampaignCharacterTagline as any).mockImplementation(async (_c: string, _h: string, t: string) => ({ ok: true, tagline: t }));
   const onSaveTags = vi.fn().mockResolvedValue(false);
   mount({ tags: ["loyal"], onSaveTags });
   await screen.findByText("Old.");
@@ -163,4 +163,34 @@ test("a refused tags save leaves the draft open rather than reporting it written
   await waitFor(() => expect(onSaveTags).toHaveBeenCalled());
   expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
   expect(screen.getByLabelText("Tags")).toBeTruthy();
+});
+
+test("a blank save shows the sentence the campaign now answers, not the blank", async () => {
+  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Campaign's own." });
+  (api.setCampaignCharacterTagline as any).mockResolvedValue({ ok: true, tagline: "The library's sentence." });
+  mount({ tags: [] });
+  await screen.findByText("Campaign's own.");
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Capsule"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  expect(await screen.findByText("The library's sentence.")).toBeTruthy();
+  expect(screen.queryByText("No capsule yet.")).toBeNull();
+});
+
+test("an error from a draft discarded by a version switch is not reported", async () => {
+  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Kept." });
+  let fail: (e: unknown) => void = () => {};
+  (api.generateCampaignCapsule as any).mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+  const onError = vi.fn();
+  const { unmount } = mount({ onError });
+  await screen.findByText("Kept.");
+
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  unmount();
+  fail(new Error("provider failed"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(onError).not.toHaveBeenCalled();
 });

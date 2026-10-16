@@ -436,7 +436,12 @@ def _inherited_name(campaign_root: Path, cid: str) -> str:
     its copy cannot be read. The world is the one the campaign's own record
     names, so this reads the library's copy, not anything the campaign writes."""
     meta = campaign_root / "campaign.md"
-    world = parse_frontmatter_head(meta).get("world", "") if meta.exists() else ""
+    try:
+        world = parse_frontmatter_head(meta).get("world", "") if meta.exists() else ""
+    except (OSError, ValueError):
+        # Unreadable or vanished between the check and the open, as the walker
+        # elsewhere treats any record it cannot read: absent, not an error.
+        world = ""
     if not world or not safe_id(world):
         return cid
     copy = _doc(_markdown_doc, home() / "worlds" / world / "characters" / cid / "character.md")

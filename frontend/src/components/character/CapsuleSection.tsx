@@ -75,9 +75,9 @@ export function CapsuleSection(
     setSaving(true);
     try {
       if (nextCapsule !== stored.current) {
-        await api.setCampaignCharacterTagline(campaignId, cid, nextCapsule);
-        stored.current = nextCapsule;
-        if (live.current) setCapsule(nextCapsule);
+        const saved = await api.setCampaignCharacterTagline(campaignId, cid, nextCapsule);
+        stored.current = saved.tagline;
+        if (live.current) setCapsule(saved.tagline);
       }
       if (tagsChanged) {
         // A refused save (the page is busy) leaves the draft open to retry.
@@ -110,7 +110,9 @@ export function CapsuleSection(
       setTagsText((r.tags.length ? r.tags : currentTags).join(", "));
       setEditing(true);
     } catch (err: unknown) {
-      onError(err);
+      // A failure from a draft this section was discarded for (a version switch
+      // remounts it) is not the newly shown version's error.
+      if (live.current) onError(err);
     } finally {
       if (live.current) setBusy(false);
     }

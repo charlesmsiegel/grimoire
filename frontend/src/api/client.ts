@@ -2336,8 +2336,10 @@ export const api = {
    *  PUT on Save, never by the draft below. */
   getCampaignCharacterTagline: (cid: string, char: string) =>
     request<{ tagline: string }>("GET", `/api/campaigns/${cid}/characters/${char}/tagline`),
+  /** `tagline` is the sentence the campaign now shows: a blank save of an
+   *  inherited capsule answers the library's, not the blank that was sent. */
   setCampaignCharacterTagline: (cid: string, char: string, tagline: string) =>
-    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/characters/${char}/tagline`, { tagline }),
+    request<{ ok: boolean; tagline: string }>("PUT", `/api/campaigns/${cid}/characters/${char}/tagline`, { tagline }),
   /** A drafted capsule and tag list, read from the card and the character's
    *  first scene. Preview only, like every draft: the answer is the form's to
    *  keep or discard. */

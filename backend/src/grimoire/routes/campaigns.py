@@ -2342,7 +2342,10 @@ def put_campaign_character_tagline(cid: str, char: str, body: TaglineSave):
         except store.characters.CharacterNotFound as exc:
             raise HTTPException(status_code=404, detail="character not found") from exc
         store.overlay.set_tagline(cid, char, body.tagline)
-    return {"ok": True}
+        # The sentence the campaign now shows: a blank copy of an inherited one
+        # lets the library's show through, and the editor should say so.
+        shown = store.overlay.tagline(cid, char)
+    return {"ok": True, "tagline": shown}
 
 
 @router.put("/campaigns/{cid}/characters/{char}")
