@@ -594,9 +594,11 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     {!worldScope && <CampaignSection label={campaignLabel} name={name} state={campaignState} />}
 
     {!worldScope && card && vid && (
-      <CapsuleSection key={`${scope.kind}:${scope.id}:${eid}`}
+      // Keyed on the version too: a draft is for the card it was made from, so
+      // switching versions discards it rather than saving its tags onto the next.
+      <CapsuleSection key={`capsule:${scope.id}:${eid}:${vid}`}
                       campaignId={scope.id} cid={eid} vid={vid} card={card}
-                      onSaved={() => { void reload(); }} onError={setError} />
+                      onSaved={() => { void refresh(); }} onError={setError} />
     )}
 
     <VoiceAnchorSection key={`${scope.kind}:${scope.id}:${eid}`}

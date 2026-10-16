@@ -49,7 +49,7 @@ test("Generate fills the draft and writes nothing until Save", async () => {
 
   expect(await screen.findByDisplayValue("A gate-warden who keeps every promise.")).toBeTruthy();
   expect(screen.getByDisplayValue("loyal, wary")).toBeTruthy();
-  expect(api.generateCampaignCapsule).toHaveBeenCalledWith("run", "mara");
+  expect(api.generateCampaignCapsule).toHaveBeenCalledWith("run", "mara", "default");
   expect(api.setCampaignCharacterTagline).not.toHaveBeenCalled();
   expect(api.updateVersion).not.toHaveBeenCalled();
 });
@@ -121,4 +121,16 @@ test("an empty generated capsule is reported and installs no draft", async () =>
 
   await waitFor(() => expect(onError).toHaveBeenCalled());
   expect(screen.queryByLabelText("Capsule")).toBeNull();
+});
+
+test("Edit is disabled while a draft is being generated, so a late result cannot reopen a discarded form", async () => {
+  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Kept." });
+  (api.generateCampaignCapsule as any).mockReturnValue(new Promise(() => {}));
+  mount();
+  await screen.findByText("Kept.");
+
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+  expect(await screen.findByRole("button", { name: "Generating…" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
 });

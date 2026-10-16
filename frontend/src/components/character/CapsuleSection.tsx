@@ -100,7 +100,7 @@ export function CapsuleSection(
     if (busy || saving || state !== "ready") return;
     setBusy(true);
     try {
-      const r = await api.generateCampaignCapsule(campaignId, cid);
+      const r = await api.generateCampaignCapsule(campaignId, cid, vid);
       if (!live.current) return;
       // An empty completion is a failed generation, not a draft.
       if (!r.capsule.trim()) {
@@ -129,7 +129,7 @@ export function CapsuleSection(
             : <p className="field-hint">No capsule yet.</p>}
         {currentTags.length > 0 && <p className="field-hint">Tags: {currentTags.join(", ")}</p>}
         <div className="column-actions">
-          <button className="subtle" type="button" disabled={state !== "ready"}
+          <button className="subtle" type="button" disabled={state !== "ready" || busy}
                   onClick={beginEdit}>{capsule.trim() ? "Edit" : "Write one"}</button>
           <button className="subtle" type="button"
                   disabled={busy || saving || state !== "ready"}

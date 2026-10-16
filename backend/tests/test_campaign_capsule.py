@@ -165,3 +165,35 @@ def test_the_saved_capsule_reads_back_through_the_campaign(client):
 def test_the_capsule_read_404s_on_an_unknown_character(client):
     cid = _campaign(client)
     assert client.get(f"/api/campaigns/{cid}/characters/nope/tagline").status_code == 404
+
+
+ALT_MARKER = "Keeps the salt-ledger for the Saltmarch wharf"
+
+
+def test_generate_drafts_from_the_version_being_edited(client):
+    cid = _campaign(client)
+    aid, _ = _emergent(client, cid)
+    card = {"spec": "chara_card_v3", "spec_version": "3.0",
+            "data": {"name": "Mara", "description": ALT_MARKER}}
+    alt = client.post(f"/api/campaigns/{cid}/characters/{aid}/versions",
+                      json={"name": "alt", "card": card}).json()["version"]
+    fake = _answers(client, "Capsule: A ledger-keeper.\nTags: careful")
+
+    resp = draft_post(client,
+                      f"/api/campaigns/{cid}/characters/{aid}/capsule/generate?version={alt}")
+
+    assert resp.status_code == 200
+    assert ALT_MARKER in fake.messages[-1]["content"]
+
+
+def test_generate_404s_on_a_version_the_character_does_not_have(client):
+    cid = _campaign(client)
+    aid, _ = _emergent(client, cid)
+    resp = client.post(f"/api/campaigns/{cid}/characters/{aid}/capsule/generate?version=nope")
+    assert resp.status_code == 404
+
+
+def test_a_capsule_for_an_unknown_character_creates_no_folder(client):
+    cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/characters/ghost/tagline", json={"tagline": "x"})
+    assert not (store.overlay.croot_of(cid) / "characters" / "ghost").exists()

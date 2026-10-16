@@ -2341,10 +2341,10 @@ export const api = {
   /** A drafted capsule and tag list, read from the card and the character's
    *  first scene. Preview only, like every draft: the answer is the form's to
    *  keep or discard. */
-  generateCampaignCapsule: (cid: string, char: string, signal?: AbortSignal) =>
+  generateCampaignCapsule: (cid: string, char: string, version: string, signal?: AbortSignal) =>
     draftRun<{ capsule: string; tags: string[] }>(draftScopeOf({ kind: "campaign", id: cid }), (attempt) =>
       request<{ run: RunHandle }>(
-        "POST", `/api/campaigns/${cid}/characters/${char}/capsule/generate`,
+        "POST", `/api/campaigns/${cid}/characters/${char}/capsule/generate?version=${encodeURIComponent(version)}`,
         undefined, { attempt, signal }), { signal }),
   createVersion: (scope: EntityScope, cid: string, body: { name: string; card: Card }) =>
     request<{ version: string }>("POST", `${entityBase(scope)}/characters/${cid}/versions`, body),

@@ -2259,20 +2259,25 @@ def _first_scene_transcript(cid: str, char: str) -> str:
 @computes_only
 def post_campaign_capsule_generate(
         cid: str, char: str, request: Request,
+        version: str | None = None,
         client: LLMClient = Depends(get_llm),
         x_grimoire_attempt: str | None = Header(default=None)):
     """Start a drafted capsule and tags for a character, read from its card and
-    the first scene it appears in (#62). Preview only: the capsule is saved
-    through PUT .../tagline and the tags through the version PUT, both on Save.
+    the first scene it appears in (#62). `version` is the version the editor has
+    open, since the tags it returns are saved onto that version; the default one
+    when omitted. Preview only: the capsule is saved through PUT .../tagline and
+    the tags through the version PUT, both on Save.
     """
     _campaign_root_or_404(cid)
     resolved = require_inference("tagline")
     root = store.overlay.char_root(cid, char)
     try:
         ch = store.characters.read_character(root, char)
-        card = store.characters.read_card(root, char, ch["meta"]["default_version"])
-    except (store.characters.CharacterNotFound, store.characters.VersionNotFound) as exc:
+        card = store.characters.read_card(root, char, version or ch["meta"]["default_version"])
+    except store.characters.CharacterNotFound as exc:
         raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     data = card.get("data")
     messages = store.taglines.build_capsule_prompt(
         data if isinstance(data, dict) else {}, _first_scene_transcript(cid, char))
@@ -2301,20 +2306,25 @@ def get_campaign_character_tagline(cid: str, char: str):
 
 @router.put("/campaigns/{cid}/characters/{char}/tagline")
 def put_campaign_character_tagline(cid: str, char: str, body: TaglineSave):
-    """Write the campaign's own capsule for a character. Written campaign-side
-    under the campaign lock, so an emergent character (no world copy) is written
-    where it lives, and an inherited one diverges per file rather than rewriting
-    the library's sentence. A blank save writes a blank campaign copy, which
-    `overlay.tagline` reads as "no sentence here", so the library's shows through
-    again -- unlike a voice anchor, a capsule has no opt-out to preserve."""
+    """Write the campaign's own capsule for a character.
+
+    The sidecar is written straight under the campaign root, and nothing
+    materializes the actor: `tagline.md` overlays per file (`overlay.tagline`
+    reads the campaign's copy first), so an inherited character keeps its cards
+    inherited and its sync base untouched. The existence check runs inside the
+    lock hold that writes, so a delete cannot land between the two.
+
+    A blank save writes a blank campaign copy, which `overlay.tagline` reads as
+    "no sentence here", so the library's shows through again -- unlike a voice
+    anchor, a capsule has no opt-out to preserve.
+    """
     _campaign_root_or_404(cid)
-    try:
-        store.characters.read_character(store.overlay.char_root(cid, char), char)
-    except store.characters.CharacterNotFound as exc:
-        raise HTTPException(status_code=404, detail="character not found") from exc
     with store.locks.campaign_lock(cid):
-        root = store.overlay.ensure_actor_writable(cid, "characters", char)
-        store.taglines.write(root, char, body.tagline)
+        try:
+            store.characters.read_character(store.overlay.char_root(cid, char), char)
+        except store.characters.CharacterNotFound as exc:
+            raise HTTPException(status_code=404, detail="character not found") from exc
+        store.taglines.write(store.overlay.croot_of(cid), char, body.tagline)
     return {"ok": True}
 
 
