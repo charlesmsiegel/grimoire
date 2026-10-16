@@ -304,6 +304,15 @@ def test_available_keeps_indices_stable_when_a_member_is_missing(wid):
         assert collections.member_path(wid, CID, index) is None
 
 
+def test_member_answers_from_the_callers_manifest_or_none(wid):
+    ids = format2(wid, CID, png('red'), png('blue'))
+    manifest = collections.read(wid, CID)
+    found = collections.member(wid, CID, 1, manifest=manifest)
+    assert (found.path, found.image_id, found.name) == (_blob(ids[1]), ids[1], None)
+    assert collections.member(wid, CID, 2, manifest=manifest) is None
+    assert collections.member(wid, CID, True, manifest=manifest) is None
+
+
 def test_format_1_rows_keep_library_urls_and_indices(wid):
     names = format1(wid, CID, png('red'), png('blue'))
     world_images.image_path(wid, names[0]).unlink()
@@ -357,7 +366,8 @@ def test_has_format1_fails_closed(wid):
     _journal(wid, {'format': 2, 'members': []})
     write_manifest(wid, CID, {'format': 9, 'members': []})
     assert collections.has_format1(wid)
-    write_manifest(wid, CID, {'format': 1, 'members': [member_name(png())]})
+    collections.manifest_path(wid, CID).unlink()
+    format1(wid, CID, png())
     assert collections.has_format1(wid)
 
 

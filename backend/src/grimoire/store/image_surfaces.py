@@ -11,7 +11,7 @@ surface end to end, so a surface added there and forgotten here fails.
 `occurrences(root)` yields, per directory:
 
 - **a legacy file** to place: the one file per logical name that
-  `assets._legacy_path` would serve (library and cover directories with
+  `assets.legacy_path` would serve (library and cover directories with
   `supported_only`, as their own modules read them), sidecars excepted;
 - **a legacy file left alone** (`untouched` says why): a name's other
   siblings, an extension nothing accepts, a name nothing can store;
@@ -327,19 +327,19 @@ def _files(d: Path, *, links: bool = False) -> list[Path]:
 
 def _accepted(p: Path) -> bool:
     """An extension `assets` stores under (its private rule, read not copied)."""
-    return bool(assets._norm_ext(p.suffix))
+    return bool(assets.norm_ext(p.suffix))
 
 
 def _name_files(surface: Surface, scope: str, d: Path, name: str
                 ) -> tuple[list[Occurrence], set[Path]]:
     """The occurrences for logical `name` in `d`, and every file they cover."""
-    # `assets._legacy_path`'s rule (M7): its sibling glob, newest by
+    # `assets.legacy_path`'s rule (M7): its sibling glob, newest by
     # (mtime, name), `supported_only` where the directory's module reads so --
     # over every file of the name EXCEPT a sidecar. `focus.json` globs as a
     # file of `focus`, and is never anybody's picture.
-    sibs = {p for p in assets._siblings(d, name, False) if p.name not in SIDECARS}
+    sibs = {p for p in assets.siblings(d, name, False) if p.name not in SIDECARS}
     pool = [p for p in sibs if _accepted(p)] if surface.supported_only else list(sibs)
-    chosen = max(pool, key=lambda p: (assets._mtime_ns(p), p.name)) if pool else None
+    chosen = max(pool, key=lambda p: (assets.mtime_ns(p), p.name)) if pool else None
 
     def occ(p: Path, why: str | None) -> Occurrence:
         return Occurrence(surface.kind, scope, d, name, p, untouched=why,
@@ -566,11 +566,11 @@ def _world_side(surface: Surface, d: Path, inh: _Inherits
     if surface.kind in (COVER, COLLECTION):
         return None
     base, rid, vid = surface.kind, d.parent.parent.name, d.name
-    record = overlay._flat_ref(base, rid)
+    record = overlay.flat_ref(base, rid)
     if record in inh.gone or record in inh.off:
         return None
     wdir = assets.version_dir(inh.wroot, rid, vid, base=base)
-    return wdir, overlay._asset_ref(base, rid, vid, ""), record
+    return wdir, overlay.asset_ref(base, rid, vid, ""), record
 
 
 def _inherited(surface: Surface, scope: str, d: Path, inh: _Inherits | None

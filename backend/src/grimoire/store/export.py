@@ -13,7 +13,7 @@ import io
 import json
 import re
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -30,7 +30,6 @@ from . import (
     entities,
     fetch,
     image_collections,
-    image_refs,
     overlay,
     pcs,
     worlds,
@@ -264,18 +263,21 @@ def _resolve_collection(cid: str, collection_id: str, n: str | None) -> Path | N
     wid = campaigns_read.world_root_of(cid).name
     manifest = image_collections.read(wid, collection_id)
     members = manifest["members"]
-    if n is not None:
-        index = image_collections.member_index(unquote(n))
+    indexes: Sequence[int]
+    if n is None:
+        indexes = range(len(members))
+    else:
         # Member `n` alone: out of range is no member, and a missing one is
         # never replaced by the next.
-        members = members[index:index + 1] if index is not None else []
+        index = image_collections.member_index(unquote(n))
+        indexes = [index] if index is not None and index < len(members) else []
     if manifest["format"] == 1:
-        return next((path for name in members
-                     if (path := campaign_images.image_path(cid, name)) is not None), None)
+        return next((path for i in indexes
+                     if (path := campaign_images.image_path(cid, members[i])) is not None), None)
     # Lazily: the first that resolves, without resolving the rest.
-    return next((found.blob_path for image_id in members
-                 if (found := image_refs.resolve_ref(
-                     image_refs.Ref(name="", image=image_id, focus=None))) is not None), None)
+    return next((found.path for i in indexes
+                 if (found := image_collections.member(
+                     wid, collection_id, i, manifest=manifest)) is not None), None)
 
 
 def rewrite_images(text: str, cid: str, images: Images, prefix: str = "images/") -> str:

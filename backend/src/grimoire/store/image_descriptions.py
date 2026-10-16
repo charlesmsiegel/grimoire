@@ -822,9 +822,8 @@ def _backlog_rows(d: Path) -> tuple[list[dict], dict]:
     placements that one call scanned. Unfiltered; `_todo_in` applies
     `assets.storable`. (A flat library builds its rows with
     `image_library.backlog_rows`, by its own name policy.)"""
-    names, has_sidecar, refs = assets.names_in(d, DESCRIPTIONS_FILE, with_refs=True)
-    rows = image_refs.name_rows(names, refs)
-    return rows, (read_raw(d) if has_sidecar and names else {})
+    rows, has_sidecar = assets.name_rows_in(d, DESCRIPTIONS_FILE)
+    return rows, (read_raw(d) if has_sidecar and rows else {})
 
 
 def _todo_rows_in(d: Path) -> list[dict]:

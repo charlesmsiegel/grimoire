@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import assets, image_refs
+from . import assets
 
 #: Ceiling on one stored image, and the same number and the same reason as
 #: ``covers.MAX_BYTES``: the backend is packaged verbatim into the Android app
@@ -136,8 +136,8 @@ def backlog_rows(d: Path) -> list[dict]:
     price is ``names_in``'s: mid-sync, a placement whose object or blob has not
     arrived is a row here before ``listing`` shows it.
     """
-    names, _found, refs = assets.names_in(d, with_refs=True)
-    return image_refs.name_rows((name for name in sorted(names) if addressable(name)), refs)
+    rows, _found = assets.name_rows_in(d)
+    return [row for row in sorted(rows, key=lambda row: row["name"]) if addressable(row["name"])]
 
 
 def listing(d: Path) -> list[dict]:

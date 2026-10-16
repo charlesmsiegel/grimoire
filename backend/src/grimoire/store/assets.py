@@ -96,7 +96,7 @@ def storable(name: str) -> bool:
     return _safe_name(name)
 
 
-def _norm_ext(ext: str) -> str:
+def norm_ext(ext: str) -> str:
     ext = ext.lstrip(".").lower()
     return ext if ext in _EXTS else ""
 
@@ -213,13 +213,13 @@ def _newest_stranded(d: Path) -> Path | None:
     it is the one that should become the avatar. Sorted-by-name would hand that
     slot to whichever extension happens to sort first (PR review).
     """
-    strays = [p for p in d.glob(f"{_PROMOTE_TMP}.*") if _norm_ext(p.suffix)]
-    return max(strays, key=lambda p: (_mtime_ns(p), p.name)) if strays else None
+    strays = [p for p in d.glob(f"{_PROMOTE_TMP}.*") if norm_ext(p.suffix)]
+    return max(strays, key=lambda p: (mtime_ns(p), p.name)) if strays else None
 
 
 # Bounds LOST RACES only -- a successful rename does not spend it. Budgeting
 # total passes instead would let a directory holding more temps than the budget
-# keep one stranded after an uncontended scan (`_norm_ext` lowercases, so
+# keep one stranded after an uncontended scan (`norm_ext` lowercases, so
 # `promote-tmp.PNG` and `promote-tmp.png` are two eligible files on a
 # case-sensitive filesystem: the count is not bounded by the five extensions --
 # PR review). Successful renames strictly reduce the number of temps, so the
@@ -335,7 +335,7 @@ def _heal_slot(d: Path) -> str:
     return AVATAR
 
 
-def _mtime_ns(p: Path) -> int:
+def mtime_ns(p: Path) -> int:
     """Sort key that tolerates the file vanishing mid-scan. put_in writes
     the new extension and then unlinks the stale sibling, so a concurrent
     reader can genuinely glob a path that is gone by the time it stats -- and
@@ -347,7 +347,7 @@ def _mtime_ns(p: Path) -> int:
         return -1
 
 
-def _siblings(d: Path, name: str, supported_only: bool) -> list[Path]:
+def siblings(d: Path, name: str, supported_only: bool) -> list[Path]:
     """Every file in `d` whose stem is `name`.
 
     `supported_only` narrows that to the extensions we actually accept. The
@@ -360,22 +360,22 @@ def _siblings(d: Path, name: str, supported_only: bool) -> list[Path]:
     still hand one back.
     """
     found = list(d.glob(f"{name}.*"))
-    return [p for p in found if _norm_ext(p.suffix)] if supported_only else found
+    return [p for p in found if norm_ext(p.suffix)] if supported_only else found
 
 
-def _legacy_path(d: Path, name: str, supported_only: bool) -> Path | None:
+def legacy_path(d: Path, name: str, supported_only: bool) -> Path | None:
     """The newest legacy ``<name>.*`` file in `d` -- `path_in`'s pre-placement
     rule, and its fallback."""
-    matches = _siblings(d, name, supported_only)
+    matches = siblings(d, name, supported_only)
     if not matches:
         return None
-    return max(matches, key=lambda p: (_mtime_ns(p), p.name))
+    return max(matches, key=lambda p: (mtime_ns(p), p.name))
 
 
 def has_legacy(d: Path, name: str) -> bool:
     """Whether a legacy ``<name>.*`` file sits in `d`, whatever its extension
     -- one `path_in` would fall back to if the placement of `name` went."""
-    return _safe_name(name) and bool(_siblings(d, name, False))
+    return _safe_name(name) and bool(siblings(d, name, False))
 
 
 def resolve(d: Path, name: str) -> image_refs.ResolvedImage | None:
@@ -414,7 +414,7 @@ def file_in(d: Path, name: str, *, supported_only: bool = False) -> tuple[Path, 
     resolved = image_refs.resolve(d, name)
     if resolved is not None:
         return resolved.blob_path, resolved.image_id
-    legacy = _legacy_path(d, name, supported_only)
+    legacy = legacy_path(d, name, supported_only)
     return (legacy, None) if legacy is not None else None
 
 
@@ -422,7 +422,7 @@ def _snapshot_siblings(d: Path, name: str,
                        supported_only: bool) -> list[tuple[Path, int, int]]:
     """Every legacy file of `name`, with its identity, for `_drop_snapshotted`."""
     stale = []
-    for p in _siblings(d, name, supported_only):
+    for p in siblings(d, name, supported_only):
         try:
             st = p.stat()
             stale.append((p, st.st_dev, st.st_ino))
@@ -484,7 +484,7 @@ def _sheds_caption(d: Path, name: str, old: image_refs.Ref | None,
         return False
     if old is not None and old.image is not None:
         return old.image != image_id
-    legacy = _legacy_path(d, name, supported_only)
+    legacy = legacy_path(d, name, supported_only)
     if legacy is None:
         return False
     try:
@@ -533,7 +533,7 @@ def put_in(d: Path, name: str, data: bytes, ext: str, *,
     """
     if not _safe_name(name):
         raise ValueError("unsafe image id")
-    if not _norm_ext(ext):
+    if not norm_ext(ext):
         raise ValueError("unsupported image type")
     # Outside the name lock: ingest takes the store's own locks, and the
     # decode is the slow part of a write.
@@ -636,10 +636,10 @@ def adopt_legacy(d: Path, name: str) -> str | None:
         old = image_refs.read(d, name)
         if old is not None and old.image is not None:
             return old.image
-        src = _legacy_path(d, name, False)
+        src = legacy_path(d, name, False)
         if src is None:
             return None
-        if not _norm_ext(src.suffix):
+        if not norm_ext(src.suffix):
             raise ValueError(f"unsupported image type: {src.name}")
         obj = image_store.ingest(src.read_bytes(), src.suffix)
         focus = old.focus if old is not None else None
@@ -677,7 +677,7 @@ def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
         _recover_before_write(d, name)
         with suppress(OSError):     # swallowed like the legacy files below
             image_refs.delete(d, name)
-        for p in _siblings(d, name, supported_only):
+        for p in siblings(d, name, supported_only):
             try:
                 p.unlink()
             except OSError:
@@ -689,7 +689,7 @@ def is_slot_file(p: Path) -> bool:
     file -- a slot `copy_slots` answers for -- rather than one of the folder's
     other files (`descriptions.json`, `focus.json`, ...). The rule is
     `names_in`'s, so the two agree on what counts as a slot."""
-    return bool(_norm_ext(p.suffix)) and _addressable_name(p.stem)
+    return bool(norm_ext(p.suffix)) and _addressable_name(p.stem)
 
 
 def copy_slots(src: Path, dst: Path, *, skip: Callable[[str], bool] = lambda n: False,
@@ -734,7 +734,7 @@ def copy_slots(src: Path, dst: Path, *, skip: Callable[[str], bool] = lambda n: 
         if skip(name) or not _addressable_name(name):
             continue
         ref = refs.get(name)
-        legacy = (_legacy_path(src, name, True)
+        legacy = (legacy_path(src, name, True)
                   if ref is None or ref.image is None or image_refs.resolve_ref(ref) is None
                   else None)
         if ref is None and legacy is None:
@@ -867,13 +867,21 @@ def names_in(d: Path, also: str = "", *, with_refs: bool = False
                     found = True
                     continue
                 stem, _, ext = e.name.rpartition(".")
-                if stem and e.is_file() and _norm_ext("." + ext) and _addressable_name(stem):
+                if stem and e.is_file() and norm_ext("." + ext) and _addressable_name(stem):
                     out.add(stem)
     except OSError:
         return (set(), False, {}) if with_refs else (set(), False)
     refs = image_refs.scan(d)
     out.update(n for n, r in refs.items() if r.image is not None and _addressable_name(n))
     return (out, found, refs) if with_refs else (out, found)
+
+
+def name_rows_in(d: Path, also: str = "") -> tuple[list[dict], bool]:
+    """`(image_refs.name_rows, presence of `also`)` for every name in `d`: the
+    one read a describe backlog needs. The rows are unfiltered and unsorted;
+    each backlog applies its own name policy, which is the part that differs."""
+    names, found, refs = names_in(d, also, with_refs=True)
+    return image_refs.name_rows(names, refs), found
 
 
 def list_in(d: Path) -> list[dict]:
@@ -953,7 +961,7 @@ def _candidates(d: Path) -> tuple[_Files, dict[str, image_refs.Ref]] | None:
             # `promote-tmp` is the one deliberate exception -- unwritable, but a
             # stranded one is shown on purpose so failed recovery is visible
             # rather than silent (#253).
-            if not (stem and _norm_ext(ext) and _addressable_name(stem)):
+            if not (stem and norm_ext(ext) and _addressable_name(stem)):
                 continue
             try:
                 if not e.is_file():
@@ -1255,7 +1263,7 @@ def write_focus(root: Path, cid: str, vid: str, focus: int, base: str = "charact
     with _image_lock(d, AVATAR):
         _recover_before_write(d, AVATAR)
         ref = image_refs.read(d, AVATAR)
-        if ref is None and _siblings(d, AVATAR, False):
+        if ref is None and siblings(d, AVATAR, False):
             atomic.write_text(d / FOCUS_FILE, json.dumps({AVATAR: value}))
             return
         image_refs.write(d, AVATAR, ref.image if ref is not None else None, focus=value)
@@ -1574,7 +1582,7 @@ def _check_promotable(d: Path, name: str) -> None:
     if src is None:
         raise FileNotFoundError(name)
     for p in (src, path_in(d, AVATAR)):
-        if p is not None and not _norm_ext(p.suffix):
+        if p is not None and not norm_ext(p.suffix):
             raise ValueError(f"unsupported image type: {p.name}")
     check_arrived(d, AVATAR)
 

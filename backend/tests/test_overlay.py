@@ -725,7 +725,7 @@ def test_a_pcs_campaign_art_outlives_dematerialization(monkeypatch, tmp_path):
 
 
 def test_a_detached_pc_does_not_inherit_a_strangers_image(monkeypatch, tmp_path):
-    """`_flat_ref("pcs", pid)` in `detached` governs PC assets too: once the
+    """`flat_ref("pcs", pid)` in `detached` governs PC assets too: once the
     world PC is gone and a new one takes its id, the campaign's spared copy
     must not start wearing the newcomer's art."""
     wroot, cid, pid = _pc_pair(monkeypatch, tmp_path)

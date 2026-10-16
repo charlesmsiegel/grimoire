@@ -125,21 +125,27 @@ class Member:
     name: str | None
 
 
-def _resolve_member(wid: str, fmt: int, member: str) -> Member | None:
+def _resolve_member(wid: str, fmt: int, entry: str) -> Member | None:
     if fmt == 1:
-        found = assets.file_in(image_directory(wid), member, supported_only=True)
+        found = assets.file_in(image_directory(wid), entry, supported_only=True)
         if found is None:
             return None
         path, image_id = found
-        return Member(path, assets.image_version(path), image_id, member)
-    placed = image_refs.resolve_ref(image_refs.Ref(name="", image=member, focus=None))
+        return Member(path, assets.image_version(path), image_id, entry)
+    placed = image_refs.resolve_ref(image_refs.Ref(name="", image=entry, focus=None))
     return (Member(placed.blob_path, placed.blob_sha256, placed.image_id, None)
             if placed is not None else None)
 
 
-def resolve_member(wid: str, collection_id: str, index: int) -> Member | None:
-    """The member at its original index, resolved once, or None (#477/#480)."""
-    manifest = read(wid, collection_id)
+def member(wid: str, collection_id: str, index: int, *, manifest: dict | None = None) -> Member | None:
+    """The member at its original index, resolved once, or None (#477/#480).
+
+    The one resolver for a member's picture: `greeting_images` asks it, and
+    `export` asks it for a format-2 member (a format-1 export still applies the
+    campaign's library rule first). `manifest` is the caller's own read of
+    `collection_id`, passed when it already has one, so it is not read twice."""
+    if manifest is None:
+        manifest = read(wid, collection_id)
     members = manifest["members"]
     if type(index) is not int or not 0 <= index < len(members):
         return None
@@ -176,14 +182,14 @@ def available(wid: str, collection_id: str, *, manifest: dict | None = None) -> 
         manifest = read(wid, collection_id)
     fmt = manifest["format"]
     out = []
-    for index, member in enumerate(manifest["members"]):
-        found = _resolve_member(wid, fmt, member)
+    for index, entry in enumerate(manifest["members"]):
+        found = _resolve_member(wid, fmt, entry)
         if found is None:
             continue
         path, v, image_id = found.path, found.version, found.image_id
         if fmt == 1:
             out.append({"index": index, "path": path,
-                        "url": f"/api/worlds/{wid}/images/{member}?v={v}"})
+                        "url": f"/api/worlds/{wid}/images/{entry}?v={v}"})
         else:
             # Built here, not by `member_url`: `read` already proved the world
             # and the id, and that would re-prove them for every row.
@@ -196,7 +202,7 @@ def member_path(wid: str, collection_id: str, index: int) -> Path | None:
     """The file serving member `index`, in either format; None when the index
     is out of range or that member's picture is missing -- never another
     member's."""
-    found = resolve_member(wid, collection_id, index)
+    found = member(wid, collection_id, index)
     return found.path if found is not None else None
 
 
