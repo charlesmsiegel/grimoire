@@ -624,6 +624,46 @@ What it cannot show: whether a real library retrieves well. A synthetic
 corpus is evidence for a choice of model or options; the recall thresholds
 stay "tune against the inspector".
 
+## Continuity candidate floors
+
+`--continuity-floors` asks which record pairs the continuity candidate filter
+lets through to the judge -- absorb's duplicate check and the reconcile sweep
+ask about nothing else, so a pair under the floors is never examined and
+leaves no trace. It lives in `evals/continuity_floors/`:
+
+- **The corpus** (`corpus.json`) is invented pairs of ledger records, placeholder
+  names only, each labelled with the answer the reconcile judge should give in
+  its own vocabulary: `duplicate`, `continuation`, `related` or `pays_off` (a
+  pair the filter should let through) or `distinct` (one it should not). It
+  keeps the embedding corpus's two rules, with that corpus's `content_words`:
+  a `paraphrase` duplicate shares no content word, and every `distinct` pair
+  is a `decoy` that shares some. `corpus.problems` holds both, and that every
+  answer and shape is present.
+- **The filter is production's**: `similarity.subject`, `lexical` and
+  `admitted_by`, with no embedding, so the semantic clause never admits.
+  Each pair is scored **alone** (no shared actor, so only the lexical clause,
+  `TOKEN_FLOOR` and `CHAR_FLOOR`, decides) and in a **shared cast** (both
+  records involve the player's character, as nearly every pair in a campaign
+  does, so the structural clause on `WEAK_TOKEN` and `WEAK_CHAR` can admit
+  too).
+- **The report** gives recall (the positives let through) and precision (the
+  positives among what was let through), with their counts, per answer, the
+  misses and the decoys let through, at the floors in force -- then a sweep of
+  each condition's two floors, two steps of 0.05 either side. A share of
+  nothing reads n/a. `test_continuity_floors_evals.py` runs it in `pytest
+  backend` and pins the figures at the floors in force, so a change to a
+  floor or a signal says what it did to them.
+
+```sh
+backend/.venv/bin/python evals/run.py --continuity-floors
+backend\.venv\Scripts\python.exe evals\run.py --continuity-floors
+```
+
+What it cannot show: how often a real ledger holds each kind of pair, so its
+figures are the floors' behaviour on the kinds it holds, not a library's
+recall; and `COSINE_FLOOR`, which needs a real embedding model. It changes no
+floor -- each stays "to be tuned against real prompts later".
+
 ## The epistemic leakage suite (roadmap 11)
 
 `evals/epistemic/` is spec 11 §8.1's offline arm: each case in `cases.py`
