@@ -39,9 +39,10 @@ RUN="$ROOT/scripts/unix/run.sh"
 chmod +x "$ROOT/scripts/unix/"*.sh
 DESKTOP="${HOME}/Desktop"
 if [ "$(uname)" = "Darwin" ]; then
+  # An application bundle, not a bare script: macOS draws an icon for a bundle
+  # and no other file. macos-launcher.sh builds it.
   mkdir -p "$DESKTOP"
-  printf '#!/usr/bin/env bash\nexec "%s"\n' "$RUN" > "$DESKTOP/Grimoire.command"
-  chmod +x "$DESKTOP/Grimoire.command"
+  "$ROOT/scripts/unix/macos-launcher.sh" "$ROOT" "$DESKTOP"
 else
   ENTRY="[Desktop Entry]
 Type=Application
