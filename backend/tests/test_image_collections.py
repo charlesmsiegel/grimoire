@@ -185,8 +185,13 @@ def test_guard_write_compares_identity_for_ref_members(wid):
     assert Image.open(after.blob_path).convert('RGB').getpixel((0, 0)) == (255, 0, 0)
 
 
-def test_a_member_name_is_not_fileable_over_other_pixels(wid):
-    format1(wid, OTHER, png('green'))  # the guard is on only beside format-1 state
+@pytest.mark.parametrize('state', ['format1', 'format2', 'empty'])
+def test_a_member_name_is_not_fileable_over_other_pixels(wid, state):
+    # A format-1 journal on another device is invisible here (#478).
+    if state == 'format1':
+        format1(wid, OTHER, png('green'))
+    elif state == 'format2':
+        format2(wid, OTHER, png('green'))
     name = collections.MEMBER_PREFIX + hashlib.sha256(png('red')).hexdigest()
     d = collections.image_directory(wid)
     with pytest.raises(collections.CollectionInvalidError):

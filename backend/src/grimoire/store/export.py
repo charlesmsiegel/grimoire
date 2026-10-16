@@ -265,7 +265,7 @@ def _resolve_collection(cid: str, collection_id: str, n: str | None) -> Path | N
     manifest = image_collections.read(wid, collection_id)
     members = manifest["members"]
     if n is not None:
-        index = image_collections.member_index(n)
+        index = image_collections.member_index(unquote(n))
         # Member `n` alone: out of range is no member, and a missing one is
         # never replaced by the next.
         members = members[index:index + 1] if index is not None else []

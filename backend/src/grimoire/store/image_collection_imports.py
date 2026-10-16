@@ -10,21 +10,22 @@ older grimoire) is converted the first time it is read, under the job lock and
 then the collection lock: each name becomes the id it stands for
 (`image_collections.format1_member_id`), the names are kept as
 `legacy_members`, and the journal is saved as format 2 at once. A name that
-maps to nothing refuses the journal. The one exception is an accepted journal
-whose format-1 manifest is already published: that manifest is authoritative,
-so the journal is left as it is and reconciles against its names, even when a
-member's file has since gone.
-
-Two edges are known and left for stage 4's journal retirement: an unaccepted
-format-1 journal whose manifest an older build published, and which has since
-lost a member, does not reconcile; and an accepted format-1 journal whose
-manifest is gone is converted before it is refused.
+maps to nothing refuses an unpublished journal. Accepted format-1 journals
+stay unconverted on ordinary reads: reconciliation must refuse a missing or
+inconsistent manifest without first changing their state. A published
+format-1 manifest is authoritative even when a member's file has since gone;
+an unconfirmed publication whose member cannot convert also reconciles in
+its original format against that manifest. A damaged publication also
+leaves the journal unconverted, so it cannot be mistaken for an unmappable
+job and retired (#478).
 
 Stage 4's migration settles leftover format-1 journals (`convert_or_retire`,
 M10): one that converts is converted exactly as a first read would; one that
 cannot, and was never accepted, is retired -- renamed to
 ``<job>.json.retired``, outside the ``*.json`` glob every reader and the
 `has_format1` guard use -- and an accepted one that cannot is left as it is.
+Once migration has converted an accepted journal's manifest to format 2, it
+settles the journal only after its placements prove those same ordered ids.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from . import atomic, fetch, image_collections, image_hash, locks
+from . import atomic, fetch, image_collections, image_hash, locks, paths
 from .worlds import paths as worlds_paths
 
 _JOB = re.compile(r"[0-9a-f]{64}\Z")
@@ -73,21 +74,26 @@ def _published_format1(wid: str, job: dict) -> bool:
         return False
 
 
-def _converted(wid: str, target: Path, job: dict) -> dict:
+def _converted(wid: str, target: Path, job: dict, *,
+               guard: Callable[[], None] | None = None) -> dict:
     """A format-1 journal as format 2, saved before it is returned. Two names
     for one picture (the same pixels under other metadata) become one member,
     as a format-2 harvest would have counted them."""
     ids: list[str] = []
     for name in job["members"]:
+        if guard is not None:
+            guard()
         image_id = image_collections.format1_member_id(wid, name)
         if image_id not in ids:
             ids.append(image_id)
     converted = {**job, "format": 2, "members": ids, "legacy_members": list(job["members"])}
+    if guard is not None:
+        guard()
     _save(target, converted)
     return converted
 
 
-def _read(wid: str, path: Path) -> dict:
+def _read(wid: str, path: Path, *, guard: Callable[[], None] | None = None) -> dict:
     """The journal at `path`, converting a format-1 one (module docstring).
     Called under its job lock; refuses anything that is not a journal."""
     try:
@@ -110,9 +116,21 @@ def _read(wid: str, path: Path) -> dict:
     # Job lock, then collection lock: the published check and the conversion
     # see one state of the manifests and the library.
     with locks.image_collection_lock(wid):
-        if job["accepted"] and _published_format1(wid, job):
+        if job["accepted"]:
             return job
-        return _converted(wid, path, job)
+        try:
+            published = _published_format1(wid, job)
+        except image_collections.CollectionInvalidError:
+            # Publication damage says nothing about whether this job maps.
+            # Reconciliation refuses it; migration keeps the active journal
+            # for a repaired publication instead of retiring it (#478).
+            return job
+        try:
+            return _converted(wid, path, job, guard=guard)
+        except image_collections.CollectionInvalidError:
+            if published:
+                return job
+            raise
 
 
 def _load_job(wid: str, target: Path, source_url: str, job_id: str) -> dict:
@@ -126,12 +144,15 @@ def _load_job(wid: str, target: Path, source_url: str, job_id: str) -> dict:
             "totals": dict.fromkeys(_COUNTERS, 0), "stop": "sampling"}
 
 
-def _published_members(job: dict, manifest_format: int) -> list[str] | None:
+def _published_members(wid: str, job: dict, manifest_format: int) -> list[str] | None:
     """What the journal says a manifest of this format should list: names
-    against a format-1 manifest, ids against a format-2 one."""
+    against a format-1 manifest, ids against a format-2 one. A journal left
+    format 1 by an interrupted migration proves those ids from its existing
+    placements without ingesting or rewriting anything (#478)."""
     if manifest_format == 1:
         return job["members"] if job["format"] == 1 else job.get("legacy_members")
-    return job["members"] if job["format"] == 2 else None
+    return (job["members"] if job["format"] == 2 else
+            image_collections.format2_members(paths.home(), wid, job["members"]))
 
 
 def _reconcile_publication(wid: str, target: Path, job: dict) -> bool:
@@ -144,7 +165,7 @@ def _reconcile_publication(wid: str, target: Path, job: dict) -> bool:
         if job["accepted"]:
             raise
         return False
-    if manifest["members"] != _published_members(job, manifest["format"]):
+    if manifest["members"] != _published_members(wid, job, manifest["format"]):
         raise image_collections.CollectionInvalidError("journal differs from published collection")
     if not job["accepted"]:
         job["accepted"] = True
@@ -253,17 +274,41 @@ def _raw(path: Path) -> dict | None:
     return got if isinstance(got, dict) else None
 
 
+def _settle_accepted(wid: str, path: Path, job: dict,
+                     guard: Callable[[], None] | None) -> dict:
+    """Migration may already have converted this accepted journal's manifest.
+    Settle it only when its existing placements prove the same ordered ids;
+    no ingest, and no rewrite before that comparison (#478). Ordinary reads
+    leave accepted format-1 journals alone."""
+    with locks.image_collection_lock(wid):
+        if guard is not None:
+            guard()
+        manifest = image_collections.read(wid, job["collection_id"])
+        if manifest["format"] != 2:
+            return job
+        ids = _published_members(wid, job, manifest["format"])
+        if ids != manifest["members"]:
+            raise image_collections.CollectionInvalidError("journal differs from published collection")
+        converted = {**job, "format": 2, "members": ids, "legacy_members": list(job["members"])}
+        if guard is not None:
+            guard()
+        _save(path, converted)
+        return converted
+
+
 def convert_or_retire(wid: str, path: Path, *,
                       guard: Callable[[], None] | None = None) -> str:
     """Settle one harvest journal for the migration (module docstring), under
     its job lock: `FORMAT2` for one already format 2, `CONVERTED` for a
     format-1 one this read converted, `RETIRED` for an unaccepted one that maps
     to nothing (renamed beside itself with `RETIRED_SUFFIX`), and `KEPT` for
-    anything else -- accepted, published as format 1, or not a journal at all.
+    anything else -- still published as format 1, accepted without a matching
+    format-2 manifest, or not a journal at all.
 
     `path` is under the caller's pinned root and is never resolved through the
     live one; the world may be gone, which makes the journal unmappable.
-    `guard()` runs right before a retirement's rename and raises to stop it."""
+    `guard()` runs before conversion ingests and its journal write, and right
+    before a retirement's rename, raising to stop a moved-root run (#478)."""
     job_id = path.stem
     if not _JOB.fullmatch(job_id) or path.suffix != ".json":
         return KEPT
@@ -274,7 +319,9 @@ def convert_or_retire(wid: str, path: Path, *,
         if type(raw.get("format")) is int and raw["format"] == 2:
             return FORMAT2
         try:
-            job = _read(wid, path)
+            job = _read(wid, path, guard=guard)
+            if job["format"] == 1 and job["accepted"]:
+                job = _settle_accepted(wid, path, job, guard)
         except (image_collections.CollectionInvalidError, worlds_paths.WorldNotFound):
             # Unmappable: a member that maps to nothing, or no world at all.
             if raw.get("accepted") is False:

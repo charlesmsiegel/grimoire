@@ -1474,8 +1474,9 @@ they refine §10, and where they differ from the text above, they win.
   for any format-1 manifest, any manifest that does not read (fail closed, as
   `referenced` does), or any harvest journal under
   `.cache/image-collection-imports/<wid>/` that is still format 1 or does not
-  parse. `guard_write` and `check_member_name` return at once when it is
-  false; `referenced` considers format-1 manifests only. Nothing converts a
+  parse. `guard_write` returns at once when it is false; `referenced` considers
+  format-1 manifests only. `check_member_name` remains active under #478's
+  amendment below. Nothing converts a
   journal but `sample()` and `accept()`, so a leftover format-1 journal keeps
   the guard on until stage 4. Deleting the guard code waits for stage 4.
 - **C5, harvest journals hold ids.** New journals are format 2 and `accept`
@@ -1559,10 +1560,8 @@ Rulings made while implementing:
   spelling of the journal directory (the harvest module's `job_path` uses it),
   and `image_collections.validate(raw)` is the public, content-only manifest
   validator that world bundles call.
-- **Known deferred edges, for stage 4.** An unaccepted format-1 journal whose
-  manifest an older build published, and which has since lost a member, does
-  not reconcile. An accepted format-1 journal whose manifest is gone is
-  converted before it is refused. Stage 4's journal retirement covers both.
+- **Journal recovery edges.** #478's amendment below resolves the deferred
+  missing-member and missing-manifest cases at read time.
 
 ### Stage-4 amendments
 
@@ -1861,15 +1860,7 @@ Known limits, kept on purpose:
 - **Late reads.** Catalog reads (`greeting_images.catalog_with_slots`, journal
   `_read`) resolve other worlds through the live root; each is reached only after
   a root guard, and the window between that guard and the read is the same one
-  every live-root call has. Journal conversion and work-map writes sit under
-  `.cache` and carry no root guard of their own.
-- **A linked legacy file** (as opposed to a linked directory) is left and
-  reported, and a lone symlinked legacy file with nothing else around it is not
-  reported at all. A verified-pair decision is made before the linked check, which
-  affects only whether a metadata key is kept.
-- **A (c) key stays** when every file of its name was left untouched: the
-  inventory then has no occurrence to fold it through. That keeps a key and
-  never deletes one.
+  every live-root call has.
 - **Refcount and device races.** The blob refcount is rebuilt per batch, not per
   object; a sidecar a sync client delivers mid-batch is the accepted residual
   risk. A stray non-JSON file inside an `objects/` shard keeps every blob that
@@ -1920,3 +1911,36 @@ the maintenance guarantees state that residual.
 The model remains one strict roots walk, one report per run, and one shared
 maintenance boundary. New reference-bearing surfaces extend that walk and
 report instead of adding a separate cleanup or discovery mechanism.
+
+### Deferred migration edges resolved (#478)
+
+These repairs extend the existing stage-4 rules without changing either image
+or journal formats:
+
+- Reads return accepted format-1 journals unconverted, including when their
+  manifest is missing. Migration settles one after its manifest converts only
+  when its placements prove the same ordered ids. A crashed publication that
+  cannot convert a missing member reconciles against its format-1 manifest.
+- Hash-named library members remain reserved for their own bytes even in a
+  format-2-only world: another device's cached format-1 journal cannot be seen.
+- Metadata-only (c) occurrences remain eligible when all legacy files of their
+  name are untouched. Same-world library and record URL subject keys use that
+  same fold, with separate source-key and target-slot names, and only while
+  the greeting still references the URL: a stale key stays where nothing
+  reads it.
+- Lone linked legacy files are reported; regular siblings keep their own reason.
+  Verification checks links before reusing a verified pair, and promotion
+  recovery checks both journal slots and the `descriptions.json` and
+  `focus.json` it rewrites before it can write any of them. A metadata-only
+  fold re-checks its target before and after deleting the key, so a
+  placement a sync client replaced mid-fold keeps, or gets back, its key for a
+  later run.
+- Journal conversion and work-map writes guard the pinned root. Legacy thumbnail
+  cleanup precedes unlinking its source, so a crash leaves a key for the rerun.
+- Export refuses an unavailable format-2 collection member, including one lost
+  or replaced during packing, rather than producing a bundle whose import shifts
+  indices. Every collection manifest is packed as the export read it, or left
+  out when it was gone by then, never re-read from its path. Linked
+  dependencies include Windows junctions. Blob copies use a
+  handle matching the validated file and hash the bytes copied into the archive.
+  Campaign export decodes a member URL's index before canonical validation.

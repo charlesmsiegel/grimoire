@@ -19,6 +19,8 @@ import io
 import json
 import os
 import re
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -31,6 +33,7 @@ from grimoire.store import (
     assets,
     campaigns,
     characters,
+    greeting_images,
     greetings,
     image_collection_imports,
     image_collections,
@@ -647,6 +650,46 @@ def test_legacy_thumbnails_are_removed():
     assert not made.exists() and not sibling.exists()
 
 
+@pytest.mark.parametrize("cache_operation", ["stat", "unlink"])
+def test_an_undeletable_thumbnail_does_not_block_migration(monkeypatch, cache_operation):
+    _wid, _wroot, _char, wchar = _world()
+    avatar = _legacy(wchar, "avatar.png", _png(1))
+    made = thumbs.thumbnail(avatar, 128)
+    _sidecar(wchar, "descriptions.json", {"avatar": "A portrait."})
+    rel = avatar.relative_to(_root()).as_posix()
+    keys = thumbs.legacy_keys(rel, avatar.stat())
+    sibling = _root() / next(k for k in keys if "jpeg" in k.parts[2])
+    sibling.parent.mkdir(parents=True, exist_ok=True)
+    sibling.write_bytes(b"thumb")
+    cache_api = os if cache_operation == "stat" else Path
+    real = getattr(cache_api, cache_operation)
+    real_is_file = Path.is_file
+
+    def inaccessible_is_file(p, *a, **kw):
+        # 3.14 predicates hide access errors, and the Windows fast path can
+        # bypass os.stat/Path.stat entirely. Model the same denied entry at
+        # both interfaces: the predicate says false; an explicit stat fails.
+        return False if p == made else real_is_file(p, *a, **kw)
+
+    def deny_one_cache_entry(p, *a, **kw):
+        if isinstance(p, (str, os.PathLike)) and Path(p) == made:
+            raise PermissionError(errno.EACCES, "cache entry cannot be accessed")
+        return real(p, *a, **kw)
+
+    with monkeypatch.context() as cache:
+        cache.setattr(cache_api, cache_operation, deny_one_cache_entry)
+        if cache_operation == "stat":
+            cache.setattr(Path, "is_file", inaccessible_is_file)
+        rep = _run()
+
+    assert rep["outcome"] == "done" and rep["legacy_deleted"] == 1
+    assert made.exists() and not sibling.exists() and not avatar.exists()
+    assert rep["thumbnails_removed"] == 1
+    assert _texts(_id(_png(1))) == {"A portrait."}
+    assert rep["errors"] == [{"path": made.relative_to(_root()).as_posix(),
+                              "error": "PermissionError [EACCES]"}]
+
+
 # ---- collections and journals ----------------------------------------------------------
 
 _COLLECTION = "0123456789abcdef0123456789abcdef"
@@ -1016,7 +1059,576 @@ def test_a_root_flip_before_a_journal_retires_keeps_it(tmp_path, monkeypatch):
     assert journal.exists()
 
 
+# ---- deferred stage-4 edges (#478) ---------------------------------------------------
+
+
+@pytest.mark.parametrize("legacy", ["unsupported", "undecodable", "different-pixels"])
+def test_untouched_siblings_do_not_hide_placement_metadata(legacy):
+    _wid, _wroot, _char, wchar = _world()
+    assets.put_in(wchar, "gallery_1", _png(1), "png")
+    suffix, data = {"unsupported": ("txt", b"text"),
+                    "undecodable": ("png", b"garbage"),
+                    "different-pixels": ("png", _png(2))}[legacy]
+    sibling = _legacy(wchar, f"gallery_1.{suffix}", data)
+    side = _sidecar(wchar, "descriptions.json", {"gallery_1": "A portrait."})
+
+    rep = _run()
+
+    assert _texts(_id(_png(1))) == {"A portrait."}
+    assert not side.exists() and sibling.read_bytes() == data
+    assert rep["legacy_deleted"] == 0
+
+
+@pytest.mark.parametrize("target", ["library", "record"])
+def test_same_world_url_subject_keys_fold_into_verified_placements(target):
+    wid, wroot, char, wchar = _world()
+    if target == "library":
+        d = wroot / "assets" / world_images.DIRNAME
+        name = "quay"
+        url = f"/api/worlds/{wid}/images/{name}"
+    else:
+        d, name = wchar, "avatar"
+        url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/{name}"
+    _legacy(d, f"{name}.png", _png(1))
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+
+    rep = _run()
+
+    assert _subjects_of(_id(_png(1)), f"world:{wid}") == {char}
+    assert not side.exists() and rep["url_subject_keys_kept"] == 0
+    assert image_subjects.read_subjects(wroot, gid)[url] == [char]
+
+
+@pytest.mark.parametrize("spelling", ["avatar", "Avatar"])
+def test_url_subjects_wait_for_an_unfinished_promotion(spelling):
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    assets.put_in(wchar, "gallery_1", _png(2), "png")
+    before = {n: image_refs.read(wchar, n).image for n in ("avatar", "gallery_1")}
+    if spelling != "avatar" and not image_refs.ref_path(wchar, spelling).exists():
+        pytest.skip("case-sensitive filesystem: Avatar is another slot")
+    journal = {"name": "gallery_1", "pre": before,
+               "post": {"avatar": before["gallery_1"], "gallery_1": before["avatar"]},
+               "desc": {"avatar": None, "gallery_1": None}}
+    image_refs.write_journal(wchar, journal)
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/{spelling}"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    snapshot = _tree(_root())
+
+    _run(dry_run=True)
+    assert _tree(_root()) == snapshot
+    rep = _run()
+
+    assert _json(side) == {url: [char]}
+    assert rep["url_subject_keys_kept"] == 1
+    assert _subjects_of(before["avatar"], f"world:{wid}") == set()
+    assert image_refs.read_journal(wchar) == journal
+    assets.recover_promotion(wchar)
+    _run()
+    assert not side.exists()
+    assert _subjects_of(before["gallery_1"], f"world:{wid}") == {char}
+    assert _subjects_of(before["avatar"], f"world:{wid}") == set()
+
+
+@pytest.mark.parametrize("alias", ["case", "percent"])
+def test_same_world_url_alias_uses_filesystem_identity(monkeypatch, alias):
+    wid, wroot, char, _wchar = _world()
+    if alias == "case" and not (wroot.parent / wid.upper()).exists():
+        pytest.skip("case-sensitive filesystem: REALM is another world")
+    d = wroot / "assets" / world_images.DIRNAME
+    assets.put_in(d, "quay", _png(1), "png")
+    spelling = wid.upper() if alias == "case" else f"%{ord(wid[0]):02X}{wid[1:]}"
+    url = f"/api/worlds/{spelling}/images/quay"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    # Keyed as the app keys it (`image_key`, what `write_subjects` accepts and
+    # `read_subjects` answers): the alias is the body's URL spelling.
+    side = _sidecar(gdir, "subjects.json", {greeting_images.image_key(wroot, gid, url): [char]})
+
+    def live_root_forbidden(*_a, **_kw):
+        raise AssertionError("inventory must resolve aliases under its pinned root")
+
+    with monkeypatch.context() as pinned:
+        pinned.setattr(worlds.paths, "world_root", live_root_forbidden)
+        rep = _run()
+
+    assert _subjects_of(_id(_png(1)), f"world:{wid}") == {char}
+    assert not side.exists() and rep["url_subject_keys_kept"] == 0
+    # PosixPath containment is lexical even on a case-insensitive macOS
+    # volume, so the catalog must preserve this world's root spelling.
+    assert greeting_images._world_target(wroot, url)[0].name == wid
+    key = greeting_images.image_key(wroot, gid, url)
+    assert image_subjects.read_subjects(wroot, gid)[key] == [char]
+
+
+def test_distinct_world_with_different_case_keeps_url_subjects():
+    wid, wroot, char, _wchar = _world()
+    if (wroot.parent / wid.upper()).exists():
+        pytest.skip("case-insensitive filesystem: REALM is the same world")
+    other = worlds.world_root(worlds.create_world("Saltmarch"))
+    other = other.rename(wroot.parent / wid.upper())
+    assets.put_in(wroot / "assets" / world_images.DIRNAME, "quay", _png(1), "png")
+    assets.put_in(other / "assets" / world_images.DIRNAME, "quay", _png(2), "png")
+    url = f"/api/worlds/{wid.upper()}/images/quay"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+
+    _run()
+
+    assert _json(side) == {url: [char]}
+    assert _subjects_of(_id(_png(1)), f"world:{wid}") == set()
+    assert _subjects_of(_id(_png(2)), f"world:{wid}") == set()
+
+
+@pytest.mark.parametrize("route", ["characters/mara/versions/default/images/avatar",
+                                   "characters/seraphine/versions/mara/images/avatar",
+                                   "pcs/mara/versions/default/images/avatar",
+                                   "greetings/mara/images/avatar",
+                                   "locations/mara/images/avatar"])
+def test_url_subjects_for_missing_records_remain_untouched(route):
+    wid, wroot, char, _wchar = _world()
+    url = f"/api/worlds/{wid}/{route}"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    before = _tree(_root())
+
+    assert _run(dry_run=True)["outcome"] == "done"
+    assert _tree(_root()) == before
+    rep = _run()
+
+    assert _json(side) == {url: [char]}
+    assert rep["outcome"] == "done" and not rep["errors"]
+    assert rep["url_subject_keys_kept"] == 1
+
+
+def test_invalid_decoded_world_url_keeps_its_key_without_blocking_migration():
+    _wid, wroot, char, wchar = _world()
+    _legacy(wchar, "avatar.png", _png(1))
+    url = "/api/worlds/%00/images/quay"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    before = _tree(_root())
+
+    assert _run(dry_run=True)["outcome"] == "done"
+    assert _tree(_root()) == before
+    rep = _run()
+
+    assert rep["outcome"] == "done" and not rep["errors"]
+    assert image_refs.read(wchar, "avatar").image == _id(_png(1))
+    assert _json(side) == {url: [char]}
+
+
+def test_url_target_replaced_after_verification_keeps_its_subject_key(monkeypatch):
+    wid, wroot, char, wchar = _world()
+    _legacy(wchar, "avatar.png", _png(1))
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    real = image_migration._metadata_one
+
+    def replace_before_fold(ex, occ, image_id):
+        if occ.target_name is not None:
+            assert (wchar, "avatar") in ex.verified
+            assets.put_in(wchar, "avatar", _png(2), "png")
+        return real(ex, occ, image_id)
+
+    with monkeypatch.context() as concurrent:
+        concurrent.setattr(image_migration, "_metadata_one", replace_before_fold)
+        rep = _run()
+
+    assert _json(side) == {url: [char]}
+    assert _subjects_of(_id(_png(1)), f"world:{wid}") == set()
+    assert _subjects_of(_id(_png(2)), f"world:{wid}") == set()
+    assert any(k["reason"] == "target-not-verified" for k in rep["keys_kept"])
+    _run()
+    assert not side.exists()
+    assert image_subjects.read_subjects(wroot, gid)[url] == [char]
+    assert _subjects_of(_id(_png(2)), f"world:{wid}") == {char}
+
+
+def test_url_target_synced_during_fold_keeps_its_subject_key(monkeypatch):
+    """A sync client takes no name lock, so the placement can move while the
+    fold runs. The key then names the new picture's URL and must stay, not be
+    deleted behind the picture the fold already tagged (#478)."""
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    assets.put_in(wchar, "gallery_9", _png(2), "png")
+    replacement = image_refs.read(wchar, "gallery_9").image
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    real = image_store.update
+    synced: list[bool] = []
+
+    def update_then_sync(image_id, fn, *a, **kw):
+        result = real(image_id, fn, *a, **kw)
+        if not synced:
+            synced.append(True)
+            image_refs.write(wchar, "avatar", replacement)
+        return result
+
+    with monkeypatch.context() as concurrent:
+        concurrent.setattr(image_store, "update", update_then_sync)
+        rep = _run()
+
+    assert synced and _json(side) == {url: [char]}
+    assert any(k["reason"] == "target-changed-during-fold" for k in rep["keys_kept"])
+    _run()
+    assert not side.exists()
+    assert _subjects_of(replacement, f"world:{wid}") == {char}
+
+
+def test_url_target_synced_right_after_the_key_delete_restores_it(monkeypatch):
+    """The re-check before the delete leaves a window; the one after it closes
+    it, putting back a key whose placement a sync client moved meanwhile."""
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    assets.put_in(wchar, "gallery_9", _png(2), "png")
+    replacement = image_refs.read(wchar, "gallery_9").image
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    real = image_migration._delete_key_if
+    synced: list[bool] = []
+
+    def delete_then_sync(ex, side_, key, value):
+        done = real(ex, side_, key, value)
+        if done and key == url and not synced:
+            synced.append(True)
+            image_refs.write(wchar, "avatar", replacement)
+        return done
+
+    with monkeypatch.context() as concurrent:
+        concurrent.setattr(image_migration, "_delete_key_if", delete_then_sync)
+        rep = _run()
+
+    assert synced and _json(side) == {url: [char]}
+    assert any(k["reason"] == "target-changed-during-fold" for k in rep["keys_kept"])
+    _run()
+    assert not side.exists()
+    assert _subjects_of(replacement, f"world:{wid}") == {char}
+
+
+def test_url_subject_key_the_greeting_no_longer_shows_is_left_alone():
+    """`read_subjects` answers only keys the greeting references, so a stale
+    one is invisible; folding it would surface its tags through every other
+    placement of the picture (#478)."""
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body="No art here.")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+
+    _run()
+
+    assert _json(side) == {url: [char]}
+    assert _subjects_of(_id(_png(1)), f"world:{wid}") == set()
+
+
+def test_url_key_unreferenced_after_the_inventory_is_left_alone(monkeypatch):
+    """The inventory admits a URL key the greeting references; an edit before
+    the fold drops the reference, so the fold asks again and keeps it (#478)."""
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    real = image_migration._metadata_one
+    edited: list[bool] = []
+
+    def edit_then_fold(ex, occ, image_id):
+        if occ.target_name is not None and not edited:
+            edited.append(True)
+            greetings.update_greeting(wroot, gid, body="No art any more.")
+        return real(ex, occ, image_id)
+
+    monkeypatch.setattr(image_migration, "_metadata_one", edit_then_fold)
+    rep = _run()
+
+    assert edited and _json(side) == {url: [char]}
+    assert _subjects_of(_id(_png(1)), f"world:{wid}") == set()
+    assert any(k["reason"] == "url-no-longer-shown" for k in rep["keys_kept"])
+
+
+def test_url_subject_fold_holds_its_target_name_lock(monkeypatch):
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    held = []
+    real = image_migration._fold_subjects
+
+    def fold_under_lock(*a, **kw):
+        held.append(locks.image_name_lock(wchar, "avatar")._is_owned())
+        result = real(*a, **kw)
+        held.append(locks.image_name_lock(wchar, "avatar")._is_owned())
+        return result
+
+    monkeypatch.setattr(image_migration, "_fold_subjects", fold_under_lock)
+    _run()
+
+    assert held == [True, True]
+    assert not side.exists()
+    assert image_subjects.read_subjects(wroot, gid)[url] == [char]
+
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction containment")
+def test_url_subjects_keep_a_junctioned_record_target(tmp_path):
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    url = f"/api/worlds/{wid}/characters/{char}/versions/default/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    owner = wroot / "characters" / char
+    saved = tmp_path / "linked-character"
+    assert owner.resolve().is_relative_to(tmp_path.resolve())
+    assert saved.resolve().is_relative_to(tmp_path.resolve())
+    owner.rename(saved)
+    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(owner), str(saved)],
+                            capture_output=True, text=True, check=False)
+    if result.returncode:
+        saved.rename(owner)
+        pytest.skip("junction creation unavailable")
+    before = _tree(saved)
+    try:
+        rep = _run()
+        assert _json(side) == {url: [char]}
+        assert rep["url_subject_keys_kept"] == 1
+        assert _subjects_of(_id(_png(1)), f"world:{wid}") == set()
+        assert _tree(saved) == before
+    finally:
+        os.rmdir(owner)  # remove only the junction, never its target
+        saved.rename(owner)
+
+
+def test_record_directory_alias_locks_the_canonical_upload_target(monkeypatch):
+    wid, wroot, char, wchar = _world()
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    alias = wroot / "characters" / char.upper() / "assets" / "DEFAULT"
+    if not alias.exists():
+        pytest.skip("case-sensitive filesystem: the aliases are different records")
+    url = f"/api/worlds/{wid}/characters/{char.upper()}/versions/DEFAULT/images/avatar"
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body=f"![Art]({url})")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    side = _sidecar(gdir, "subjects.json", {url: [char]})
+    real_metadata = image_migration._metadata_one
+    real_fold = image_migration._fold_subjects
+    seen = []
+
+    def check_target(ex, occ, image_id):
+        if occ.target_name is not None:
+            # Windows path equality hides casing differences; compare the
+            # actual spelling that becomes the lock key on POSIX/macOS.
+            assert occ.target.parts == wchar.parts
+        return real_metadata(ex, occ, image_id)
+
+    def replace_if_unlocked():
+        lock = locks.image_name_lock(wchar, "avatar")
+        if not lock.acquire(blocking=False):
+            return False
+        try:
+            assets.put_in(wchar, "avatar", _png(2), "png")
+            return True
+        finally:
+            lock.release()
+
+    with ThreadPoolExecutor(max_workers=1) as upload:
+        def fold_while_upload_attempts(*a, **kw):
+            seen.append(upload.submit(replace_if_unlocked).result(timeout=10))
+            return real_fold(*a, **kw)
+
+        monkeypatch.setattr(image_migration, "_metadata_one", check_target)
+        monkeypatch.setattr(image_migration, "_fold_subjects", fold_while_upload_attempts)
+        rep = _run()
+
+    assert rep["outcome"] == "done" and not rep["errors"]
+    assert seen == [False] and not side.exists()
+    assert image_refs.read(wchar, "avatar").image == _id(_png(1))
+    assert image_subjects.read_subjects(wroot, gid)[url] == [char]
+
+
+def test_a_corrupt_publication_does_not_retire_a_convertible_journal():
+    wid, _wroot, _char, _wchar = _world()
+    names = place(wid, _png(1))
+    journal = format1_journal(wid, "https://example.test/rotate", _COLLECTION, names)
+    before = journal.read_bytes()
+    manifest = image_collections.manifest_path(wid, _COLLECTION)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("{", encoding="utf-8")
+
+    rep = _run()
+
+    assert journal.read_bytes() == before
+    assert rep["journals"]["kept"] == 1
+    assert not journal.with_name(journal.name + image_collection_imports.RETIRED_SUFFIX).exists()
+    manifest.write_text(json.dumps({"format": 1, "members": names}), encoding="utf-8")
+    _run()
+    assert _json(journal)["format"] == 2
+
+
+def test_a_previously_verified_target_that_becomes_linked_keeps_its_key(tmp_path, monkeypatch):
+    wid, _wroot, char, wchar = _world()
+    _legacy(wchar, "avatar.png", _png(1))
+    _cid, croot = _campaign(wid)
+    cdir = assets.version_dir(croot, char, "default")
+    side = _sidecar(cdir, "descriptions.json", {"avatar": "A portrait."})
+    real = image_migration._unlink_same
+
+    def link_after_verify(ex, p, snap):
+        result = real(ex, p, snap)
+        ref = image_refs.ref_path(wchar, "avatar")
+        outside = tmp_path / "avatar.json"
+        ref.replace(outside)
+        ref.symlink_to(outside)
+        return result
+
+    monkeypatch.setattr(image_migration, "_unlink_same", link_after_verify)
+    rep = _run()
+
+    assert _json(side) == {"avatar": "A portrait."}
+    assert _texts(_id(_png(1))) == set()
+    assert any(k["reason"] == "target-not-verified" for k in rep["keys_kept"])
+
+
+def test_promotion_recovery_never_replaces_a_different_linked_slot(tmp_path):
+    _wid, _wroot, _char, wchar = _world()
+    legacy = _legacy(wchar, "gallery_2.png", _png(3))
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    assets.put_in(wchar, "gallery_1", _png(2), "png")
+    before = {n: image_refs.read(wchar, n).image for n in ("avatar", "gallery_1")}
+    journal = {"name": "gallery_1", "pre": before,
+               "post": {"avatar": before["gallery_1"], "gallery_1": before["avatar"]},
+               "desc": {"avatar": None, "gallery_1": None}}
+    image_refs.write_journal(wchar, journal)
+    slot = image_refs.ref_path(wchar, "gallery_1")
+    outside = tmp_path / "gallery_1.json"
+    slot.replace(outside)
+    slot.symlink_to(outside)
+
+    _run()
+
+    assert slot.is_symlink()
+    assert image_refs.read(wchar, "avatar").image == before["avatar"]
+    assert image_refs.read_journal(wchar) == journal
+    assert legacy.read_bytes() == _png(3)
+
+
+@pytest.mark.parametrize("sidecar", ["descriptions.json", "focus.json"])
+def test_promotion_recovery_never_rewrites_a_linked_sidecar(tmp_path, sidecar):
+    """Recovery rewrites `descriptions.json` and unlinks `focus.json` beside the
+    two slots, so a linked one stops the item before recovery runs (#478)."""
+    _wid, _wroot, _char, wchar = _world()
+    legacy = _legacy(wchar, "gallery_2.png", _png(3))
+    assets.put_in(wchar, "avatar", _png(1), "png")
+    assets.put_in(wchar, "gallery_1", _png(2), "png")
+    before = {n: image_refs.read(wchar, n).image for n in ("avatar", "gallery_1")}
+    journal = {"name": "gallery_1", "pre": before,
+               "post": {"avatar": before["gallery_1"], "gallery_1": before["avatar"]},
+               "desc": {"avatar": None, "gallery_1": None}}
+    image_refs.write_journal(wchar, journal)
+    outside = tmp_path / f"outside-{sidecar}"
+    outside.write_text(json.dumps({"gallery_1": "Kept."} if sidecar == "descriptions.json"
+                                  else {"x": 0.5, "y": 0.5}))
+    link = wchar / sidecar
+    link.symlink_to(outside)
+    content = outside.read_bytes()
+
+    _run()
+
+    assert link.is_symlink() and outside.read_bytes() == content
+    assert image_refs.read(wchar, "avatar").image == before["avatar"]
+    assert image_refs.read_journal(wchar) == journal
+    assert legacy.read_bytes() == _png(3)
+
+
+def test_a_root_flip_before_pending_map_write_creates_no_map(tmp_path, monkeypatch):
+    _wid, _wroot, _char, wchar = _world()
+    legacy = _legacy(wchar, "avatar.png", _png(1))
+    root = _root()
+    other, _theirs = _other_root(tmp_path)
+    real = image_migration._reread
+
+    def flip(ex, item):
+        data = real(ex, item)
+        monkeypatch.setenv("GRIMOIRE_HOME", str(other))
+        return data
+
+    monkeypatch.setattr(image_migration, "_reread", flip)
+    rep = _run()
+
+    assert rep["outcome"] == "root-changed"
+    assert not image_migration.work_map_path(root).exists()
+    assert not image_store.store_root(other).exists()
+    assert legacy.read_bytes() == _png(1)
+
+
+def test_a_root_flip_before_journal_conversion_keeps_format_1(tmp_path, monkeypatch):
+    wid, _wroot, _char, _wchar = _world()
+    names = place(wid, _png(1))
+    journal = format1_journal(wid, "https://example.test/rotate", _COLLECTION, names)
+    before = journal.read_bytes()
+    other, _theirs = _other_root(tmp_path)
+    real = image_collections.format1_member_id
+
+    def flip(*a, **kw):
+        image_id = real(*a, **kw)
+        monkeypatch.setenv("GRIMOIRE_HOME", str(other))
+        return image_id
+
+    monkeypatch.setattr(image_collections, "format1_member_id", flip)
+    rep = _run()
+
+    assert rep["outcome"] == "root-changed"
+    assert journal.read_bytes() == before
+
+
+def test_an_accepted_journal_settles_after_its_manifest_migrates():
+    wid, wroot, _char, _wchar = _world()
+    names = place(wid, _png(1), _png(2))
+    _manifest(wroot, names)
+    journal = format1_journal(wid, "https://example.test/rotate", _COLLECTION,
+                              names, accepted=True)
+
+    rep = _run()
+
+    assert rep["journals"]["converted"] == 1
+    assert _json(journal)["format"] == 2
+    job = image_collection_imports.accept(wid, journal.stem)
+    assert job["accepted"] and job["members"] == [_id(_png(1)), _id(_png(2))]
+
+
+def test_a_crash_before_thumbnail_cleanup_keeps_the_legacy_file(monkeypatch):
+    _wid, _wroot, _char, wchar = _world()
+    legacy = _legacy(wchar, "avatar.png", _png(1))
+    thumb = thumbs.thumbnail(legacy, 128)
+    with monkeypatch.context() as patch:
+        patch.setattr(image_migration, "_drop_thumbs", _crash)
+        rep = _run()
+    assert rep["errors"]
+    assert legacy.exists() and thumb.exists()
+
+    _run()
+
+    assert not legacy.exists() and not thumb.exists()
+
 # ---- what may never migrate ---------------------------------------------------------
+
 
 def test_no_test_migrates_the_frozen_campaign():
     """M17: the frozen campaign's `home/` is never handed to the migration or

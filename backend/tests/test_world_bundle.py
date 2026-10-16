@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -1568,6 +1570,223 @@ def test_export_packs_format_2_members(monkeypatch, tmp_path):
     assert sorted(objects) == sorted(f"image-store/objects/{i[4:6]}/{i}.json" for i in ids)
 
 
+@pytest.mark.parametrize("unavailable", ["missing-object", "missing-blob", "damaged-blob",
+                                         "linked-blob", "linked-object", "linked-objects-dir",
+                                         "linked-blobs-dir", "linked-store-dir"])
+def test_export_refuses_to_shift_collection_member_indices(monkeypatch, tmp_path, unavailable):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world('Realm')
+    ids = format2(wid, COLL, _pixels(62), _pixels(63), _pixels(64))
+    obj = image_store.read(ids[0])
+    blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+    if unavailable == 'missing-object':
+        image_store.object_path(obj.id).unlink()
+    elif unavailable == 'missing-blob':
+        blob.unlink()
+    elif unavailable == 'damaged-blob':
+        blob.write_bytes(b'damaged')
+    elif unavailable == "linked-blob":
+        saved = tmp_path / "portrait.png"
+        blob.replace(saved)
+        blob.symlink_to(saved)
+    elif unavailable == "linked-object":
+        sidecar = image_store.object_path(obj.id)
+        saved = tmp_path / "portrait.json"
+        sidecar.replace(saved)
+        sidecar.symlink_to(saved)
+    else:
+        dependency = {"linked-objects-dir": image_store.object_path(obj.id).parent.parent,
+                      "linked-blobs-dir": blob.parent.parent,
+                      "linked-store-dir": image_store.store_root()}[unavailable]
+        saved = tmp_path / "linked-dependency"
+        assert dependency.is_relative_to(tmp_path) and saved.is_relative_to(tmp_path)
+        dependency.rename(saved)
+        dependency.symlink_to(saved, target_is_directory=True)
+    dest = tmp_path / 'bundle.zip'
+
+    position = "member [0-2]" if unavailable.endswith("-dir") else "member 0"
+    with pytest.raises(world_bundle.BundleError, match=position):
+        world_bundle.write_bundle(wid, dest)
+
+    assert not dest.exists()
+    assert image_collections.read(wid, COLL)['members'] == ids
+
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction containment")
+@pytest.mark.parametrize("directory", ["objects", "blobs", "image-store"])
+@pytest.mark.parametrize("path_api", [True, False], ids=["native", "python311"])
+def test_export_refuses_a_junctioned_collection_dependency(monkeypatch, tmp_path, directory,
+                                                          path_api):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62), _pixels(63))
+    dependency = image_store.store_root()
+    if directory != "image-store":
+        dependency /= directory
+    saved = tmp_path / "linked-dependency"
+    assert dependency.resolve().is_relative_to(tmp_path.resolve())
+    assert saved.resolve().is_relative_to(tmp_path.resolve())
+    dependency.rename(saved)
+    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(dependency), str(saved)],
+                            capture_output=True, text=True, check=False)
+    if result.returncode:
+        saved.rename(dependency)
+        pytest.skip("junction creation unavailable")
+    if not path_api:
+        monkeypatch.delattr(Path, "is_junction", raising=False)
+    try:
+        dest = tmp_path / "bundle.zip"
+        with pytest.raises(world_bundle.BundleError, match=r"member [01]"):
+            world_bundle.write_bundle(wid, dest)
+        assert not dest.exists()
+        assert image_collections.read(wid, COLL)["members"] == ids
+    finally:
+        os.rmdir(dependency)  # remove only the junction, never its target
+        saved.rename(dependency)
+
+
+@pytest.mark.parametrize("replacement", ["linked-blob", "linked-parent", "junction-parent",
+                                         "replaced-file", "changed-bytes"])
+def test_export_refuses_a_collection_blob_changed_after_preflight(monkeypatch, tmp_path,
+                                                                 replacement):
+    if replacement == "junction-parent" and os.name != "nt":
+        pytest.skip("Windows junction containment")
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62), _pixels(63))
+    obj = image_store.read(ids[0])
+    blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+    real = world_bundle._check_whole
+    junction = []
+
+    def replace_after_preflight(entries):
+        real(entries)
+        if replacement in ("linked-parent", "junction-parent"):
+            saved = tmp_path / "linked-dependency"
+            assert blob.parent.resolve().is_relative_to(tmp_path.resolve())
+            assert saved.resolve().is_relative_to(tmp_path.resolve())
+            blob.parent.rename(saved)
+            if replacement == "junction-parent":
+                result = subprocess.run(["cmd", "/c", "mklink", "/J", str(blob.parent),
+                                         str(saved)], capture_output=True, text=True, check=False)
+                if result.returncode:
+                    saved.rename(blob.parent)
+                    pytest.skip("junction creation unavailable")
+                junction.append(blob.parent)
+            else:
+                blob.parent.symlink_to(saved, target_is_directory=True)
+            (saved / blob.name).write_bytes(_pixels(64))
+        elif replacement == "linked-blob":
+            saved = tmp_path / "portrait.png"
+            saved.write_bytes(_pixels(64))
+            blob.unlink()
+            blob.symlink_to(saved)
+        elif replacement == "replaced-file":
+            saved = tmp_path / "portrait.png"
+            saved.write_bytes(_pixels(64))
+            saved.replace(blob)
+        else:
+            blob.write_bytes(_pixels(64))
+
+    monkeypatch.setattr(world_bundle, "_check_whole", replace_after_preflight)
+    dest = tmp_path / "bundle.zip"
+    try:
+        with pytest.raises(world_bundle.BundleError, match="member 0"):
+            world_bundle.write_bundle(wid, dest)
+        assert not dest.exists()
+        assert image_collections.read(wid, COLL)["members"] == ids
+    finally:
+        for link in junction:
+            os.rmdir(link)  # remove only the junction, never its target
+
+
+def test_export_verifies_collection_bytes_read_from_the_open_file(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    [member] = format2(wid, COLL, _pixels(62))
+    obj = image_store.read(member)
+    blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+    real = zipfile.ZipFile.open
+    changed = []
+
+    def mutate_before_copy(z, name, mode="r", *a, **kw):
+        arc = name.filename if isinstance(name, zipfile.ZipInfo) else str(name)
+        if mode == "w" and arc.startswith("image-store/blobs/"):
+            blob.write_bytes(_pixels(64))
+            changed.append(arc)
+        return real(z, name, mode, *a, **kw)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", mutate_before_copy)
+    dest = tmp_path / "bundle.zip"
+    with pytest.raises(world_bundle.BundleError, match="member 0"):
+        world_bundle.write_bundle(wid, dest)
+    assert changed and not dest.exists()
+
+
+
+def test_an_optional_blob_lost_before_packing_still_exports_an_importable_world(monkeypatch,
+                                                                              tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid, shared, avatar = _placed_realm()
+    obj = image_store.read(shared)
+    blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+    real = world_bundle._check_whole
+
+    def vanish(entries):
+        real(entries)
+        blob.unlink()
+
+    monkeypatch.setattr(world_bundle, "_check_whole", vanish)
+    dest = _export(wid, tmp_path)
+    blobs, objects = _store_members(dest)
+    assert len(blobs) == 1
+    assert objects == [f"image-store/objects/{avatar[4:6]}/{avatar}.json"]
+    imported = world_bundle.import_bundle(dest)
+    assert world_images.image_path(imported, "coastline") is None
+
+
+def test_a_collection_blob_lost_during_packing_refuses_the_export(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world('Realm')
+    [member] = format2(wid, COLL, _pixels(62))
+    obj = image_store.read(member)
+    blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+    real = world_bundle._check_whole
+
+    def vanish(entries):
+        real(entries)
+        blob.unlink()
+
+    monkeypatch.setattr(world_bundle, "_check_whole", vanish)
+    dest = tmp_path / 'bundle.zip'
+    with pytest.raises(world_bundle.BundleError, match='member 0'):
+        world_bundle.write_bundle(wid, dest)
+    assert not dest.exists()
+
+
+def test_a_collection_blob_lost_after_integrity_check_refuses_the_export(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62), _pixels(63))
+    obj = image_store.read(ids[0])
+    blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+    real = image_store.blob_intact
+
+    def vanish_after_check(candidate):
+        intact = real(candidate)
+        if candidate == blob and intact:
+            blob.unlink()
+        return intact
+
+    monkeypatch.setattr(image_store, "blob_intact", vanish_after_check)
+    dest = tmp_path / "bundle.zip"
+    with pytest.raises(world_bundle.BundleError, match="member 0"):
+        world_bundle.write_bundle(wid, dest)
+    assert not dest.exists()
+    assert image_collections.read(wid, COLL)["members"] == ids
+
+
 def test_import_rewrites_format_2_members_to_local_ids(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     claimed = "px1-" + "c" * 64
@@ -1783,3 +2002,70 @@ def test_a_format_3_bundle_round_trips_through_its_own_export(monkeypatch, tmp_p
     assert _imported_members(new) == ids
     assert all(image_collections.member_path(new, COLL, i) is not None for i in (0, 1))
     assert image_collections.read(new, "f" * 32)["format"] == 1
+
+
+def test_export_packs_the_manifest_it_validated(monkeypatch, tmp_path):
+    """A sync that replaces a collection manifest after the export validated it
+    must not reach the archive: the member map of the blobs packed beside it is
+    the validated one, so the packed manifest has to be those same bytes (#478)."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62), _pixels(63))
+    real = world_bundle._check_whole
+
+    def replace_after_validation(entries):
+        real(entries)
+        image_collections.manifest_path(wid, COLL).write_text(_format2(ids[1], ids[0]) + "\n")
+
+    monkeypatch.setattr(world_bundle, "_check_whole", replace_after_validation)
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        packed = json.loads(z.read(COLL_MEMBER))
+    assert packed["members"] == ids
+
+
+COLL2 = "fedcba9876543210fedcba9876543210"
+COLL2_MEMBER = f"world/assets/image-collections/{COLL2}.json"
+
+
+def test_export_packs_an_unchecked_manifest_as_it_was_read(monkeypatch, tmp_path):
+    """A format-1 manifest is packed unchecked, so a sync that swaps a format-2
+    one in after the read would pack members whose blobs nobody chose. Every
+    collection manifest is packed as read, not re-read (#478)."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62))
+    format1(wid, COLL2, _pixels(63))
+    path = image_collections.manifest_path(wid, COLL2)
+    read = path.read_bytes()
+    real = world_bundle._check_whole
+
+    def swap_after_read(entries):
+        real(entries)
+        path.write_text(_format2(ids[0]) + "\n")
+
+    monkeypatch.setattr(world_bundle, "_check_whole", swap_after_read)
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        assert z.read(COLL2_MEMBER) == read
+
+
+def test_export_leaves_out_a_manifest_gone_when_it_was_read(monkeypatch, tmp_path):
+    """One the walk found but the read did not is not part of the world; a
+    sync recreating it before packing must not slip it in unchecked (#478)."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62))
+    format1(wid, COLL2, _pixels(63))
+    path = image_collections.manifest_path(wid, COLL2)
+    real = world_bundle._packed_manifests
+
+    def gone_then_back(root, world):
+        path.unlink()
+        try:
+            return real(root, world)
+        finally:
+            path.write_text(_format2(ids[0]) + "\n")
+
+    monkeypatch.setattr(world_bundle, "_packed_manifests", gone_then_back)
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        assert COLL2_MEMBER not in z.namelist()
+        assert json.loads(z.read(COLL_MEMBER))["members"] == ids

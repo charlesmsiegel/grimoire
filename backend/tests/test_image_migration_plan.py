@@ -661,3 +661,24 @@ def test_a_symlink_to_a_target_nobody_may_stat_is_reported(tmp_path_factory):
         assert untouched[link.relative_to(_root()).as_posix()] == "symlinked-directory"
     finally:
         closed.chmod(0o755)
+
+
+@pytest.mark.parametrize('sibling', [False, True])
+def test_linked_legacy_files_are_reported_individually(tmp_path, sibling):
+    _wid, _wroot, _char, wchar = _world()
+    wchar.mkdir(parents=True, exist_ok=True)
+    target = tmp_path / 'portrait.png'
+    target.write_bytes(_png(1))
+    linked = wchar / 'gallery_1.png'
+    linked.symlink_to(target)
+    regular = _legacy(wchar, 'gallery_1.webp', _webp(2)) if sibling else None
+    os.utime(linked, ns=(target.stat().st_atime_ns, target.stat().st_mtime_ns + 10**9))
+
+    plan = _plan()
+    untouched = _untouched(image_migration.report(plan))
+
+    assert untouched[linked.relative_to(_root()).as_posix()] == 'not-a-regular-file'
+    if regular is not None:
+        assert untouched[regular.relative_to(_root()).as_posix()] == 'extra-sibling'
+    assert plan.items == []
+    assert target.read_bytes() == _png(1)
