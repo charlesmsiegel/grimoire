@@ -29,6 +29,19 @@ ARMS: dict[str, tuple[str, ...]] = {
 #: stated here in advance of any run: a fifth of the corpus.
 MARGIN = 0.2
 
+#: The other half of that bar, stated beside it and, like it, before any live
+#: run -- moving it after one would be fitting the bar to the result. A margin
+#: of rates says how far apart the arms finished, not whether that is more
+#: than luck: over five continuity cases one case changing hands is the whole
+#: margin, and over two question cases it is half the scale. So each case is
+#: also paired with itself across the arms, and the challenger must win
+#: enough of the cases they disagree on that an even coin, deciding each of
+#: those cases, would give it as many wins this rarely at most: a one-sided
+#: exact sign test, ties dropped (`runner.sign_test`). At 0.05 no record
+#: passes on fewer than five cases won, so an entry point whose corpus is
+#: smaller than that cannot be adopted until it grows.
+SIGN_ALPHA = 0.05
+
 
 @dataclass(frozen=True)
 class Case:

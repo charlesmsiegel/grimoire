@@ -758,6 +758,14 @@ point:
 - the `--investigate <mode> --live --out FILE` table, with the models it ran on;
 - that C beats B on that entry point's correctness by at least the margin stated
   in advance, `evals/investigation/cases.MARGIN` (0.20);
+- that C also wins enough of the cases the two arms disagree on -- each case
+  paired with itself across the arms, a case that ran more than once counted
+  once, ties dropped -- to pass a one-sided exact sign test at
+  `cases.SIGN_ALPHA` (0.05), stated beside the margin and as far in advance.
+  A margin of rates can be met by one case changing hands; this cannot. It
+  takes at least five cases won, so `question` (E3), whose corpus has two,
+  cannot be adopted until its corpus grows -- offline included, where it
+  reports FAIL with the count;
 - that neither leakage line is worse in C than in B, and the hidden route is
   clean;
 - the cost (the three money columns, never added), latency and

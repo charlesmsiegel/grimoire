@@ -69,9 +69,82 @@ def test_the_hidden_route_ignores_run_local_evidence_ids():
 
 
 def test_the_gate_reads_per_entry_point_and_e1_is_absent(records):
+    """Offline the scripted challenger wins every case. Continuity's five are
+    enough for the sign test; question's two never are, so E3 cannot be
+    adopted on its corpus as it stands, however its cases score."""
     verdict = runner.gate(records)
-    assert verdict == {"rp": False, "continuity": True, "question": True}
-    assert "absent until 12-S6" in runner.summary(records, live=False)
+    assert verdict == {"rp": False, "continuity": True, "question": False}
+    assert runner.paired(records, "continuity") == {"won": 5, "lost": 0, "tied": 0,
+                                                    "p": 1 / 32}
+    assert runner.paired(records, "question") == {"won": 2, "lost": 0, "tied": 0, "p": 0.25}
+    text = runner.summary(records, live=False)
+    assert "absent until 12-S6" in text
+    assert ("question: FAIL (margin 0.20 over its incumbent; cases won 2, lost 0, tied 0: "
+            "sign test p=0.250, at most 0.05)") in text
+
+
+def test_the_sign_test_is_the_exact_binomial_tail_and_five_wins_is_its_floor():
+    assert runner.sign_test(0, 0) == 1.0
+    assert runner.sign_test(5, 0) == 1 / 32
+    assert runner.sign_test(4, 1) == 6 / 32
+    assert runner.sign_test(0, 3) == 1.0
+    # Stated in `cases.SIGN_ALPHA`'s comment, and what makes a small corpus
+    # unadoptable: no record of fewer than five cases won passes, whatever
+    # it lost.
+    assert runner.sign_test(5, 0) <= cases.SIGN_ALPHA
+    assert all(runner.sign_test(won, lost) > cases.SIGN_ALPHA
+               for won in range(5) for lost in range(20))
+
+
+def _continuity_won_on(records, kept: set[str]) -> list[dict]:
+    """The offline records with the challenger right on the continuity cases
+    in `kept` only, and abstaining on the rest."""
+    return [{**r, "grade": graders.ABSTAINED}
+            if r["mode"] == "continuity" and r["arm"] == "investigation"
+            and r["case"] not in kept else r for r in records]
+
+
+def test_one_case_changing_hands_no_longer_meets_the_bar(records):
+    """What the sign test is for: over five continuity cases one case the
+    challenger gets and the incumbent does not is the whole margin, and the
+    margin alone would have adopted on it."""
+    one = _continuity_won_on(records, {"same-errand-duplicate"})
+    totals = runner.aggregate(one)
+    assert (totals["continuity/investigation"]["correct"]
+            - totals["continuity/sweep"]["correct"] >= cases.MARGIN)
+    assert runner.paired(one, "continuity") == {"won": 1, "lost": 0, "tied": 4, "p": 0.5}
+    assert runner.gate(one)["continuity"] is False
+
+
+def test_a_case_the_incumbent_wins_counts_against_the_challenger(records):
+    lost = [{**r, "grade": graders.CORRECT}
+            if r["case"] == "errand-continuation" and r["arm"] == "sweep" else r
+            for r in _continuity_won_on(records, {c.id for c in cases.CASES}
+                                        - {"errand-continuation"})]
+    assert runner.paired(lost, "continuity") == {"won": 4, "lost": 1, "tied": 0, "p": 6 / 32}
+    assert runner.gate(lost)["continuity"] is False
+
+
+def test_the_margin_still_binds_where_the_sign_test_alone_would_pass(records):
+    """Five cases won and forty-five tied pass the sign test, and are a lead
+    of a tenth: under the margin, so still no."""
+    continuity = [r for r in records if r["mode"] == "continuity"]
+    tied = [{**r, "case": f"{r['case']}-tied-{n}", "grade": graders.CORRECT}
+            for n in range(9) for r in continuity]
+    wide = records + tied
+    assert runner.paired(wide, "continuity") == {"won": 5, "lost": 0, "tied": 45,
+                                                 "p": 1 / 32}
+    assert runner.gate(wide)["continuity"] is False
+
+
+def test_a_case_is_one_observation_however_often_it_ran(records):
+    """Repeats re-sample the same items, so they are not more cases: paired
+    counts each case once, by its correctness rate in each arm."""
+    twice = records + [dict(r) for r in records]
+    assert runner.paired(twice, "continuity") == runner.paired(records, "continuity")
+    split = twice + [{**r, "grade": graders.ABSTAINED} for r in records
+                     if r["case"] == "same-errand-duplicate" and r["arm"] == "investigation"]
+    assert runner.paired(split, "continuity")["won"] == 5    # 2/3 still beats 0
 
 
 def test_every_case_runs_in_a_long_history_and_a_short_one_fails_the_gate(records):
@@ -91,6 +164,10 @@ def test_a_run_that_came_back_failed_is_an_error(records, monkeypatch):
     _results, ran = runner.run_all(selected=("question",))
     failed = [r for r in ran if r["arm"] == "investigation"]
     assert failed and all(r["error"] == "rate_limit" for r in failed)
+    # With the sign test set aside, so the two question cases could pass and
+    # only the error is what fails them.
+    monkeypatch.setattr(cases, "SIGN_ALPHA", 1.0)
+    assert runner.gate(records)["question"] is True
     assert runner.gate(ran)["question"] is False
 
 
@@ -132,10 +209,10 @@ def test_the_gate_fails_without_the_margin(records):
     assert runner.gate(worse)["continuity"] is False
     leaky = [{**r, "steered": ["scene:x"]} if r["arm"] == "investigation" else r
              for r in records]
-    assert runner.gate(leaky)["question"] is False
+    assert runner.gate(leaky)["continuity"] is False
 
 
-def test_the_gate_refuses_a_run_that_did_not_cover_the_corpus(records):
+def test_the_gate_refuses_a_run_that_did_not_cover_the_corpus(records, monkeypatch):
     """Spec 10.2's items per entry point: a run missing one -- a case dropped,
     or never run in one arm -- cannot pass, however it scored."""
     assert all(c.covers in cases.COVERAGE[c.mode] for c in cases.CASES)
@@ -147,6 +224,8 @@ def test_the_gate_refuses_a_run_that_did_not_cover_the_corpus(records):
     assert "corpus items not run: continuation" in runner.summary(gap, live=False)
     one_arm = [r for r in records
                if not (r["case"] == "thread-change-question" and r["arm"] == "retrieval")]
+    monkeypatch.setattr(cases, "SIGN_ALPHA", 1.0)   # so only the gap can fail question
+    assert runner.gate(records)["question"] is True
     assert runner.gate(one_arm)["question"] is False
 
 

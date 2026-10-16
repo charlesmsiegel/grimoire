@@ -769,8 +769,12 @@ def run_investigate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> in
                    runfile.config("c2", "investigation", {"arm": "investigation"})]
         doc = runfile.build(results, configs, run_id=args.run_id, started=started)
         doc["investigation"] = {"mode": "live" if args.live else "offline",
-                                "margin": investigation_cases.MARGIN, "records": records,
+                                "margin": investigation_cases.MARGIN,
+                                "sign_alpha": investigation_cases.SIGN_ALPHA,
+                                "records": records,
                                 "aggregate": investigation_runner.aggregate(records),
+                                "paired": {m: investigation_runner.paired(records, m)
+                                           for m in modes},
                                 "gate": verdict}
         runfile.write(Path(args.out), doc)
         print(runner.ascii_safe(f"wrote {args.out}"))
