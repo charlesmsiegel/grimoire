@@ -197,3 +197,19 @@ def test_a_capsule_for_an_unknown_character_creates_no_folder(client):
     cid = _campaign(client)
     client.put(f"/api/campaigns/{cid}/characters/ghost/tagline", json={"tagline": "x"})
     assert not (store.overlay.croot_of(cid) / "characters" / "ghost").exists()
+
+
+def test_a_capsule_on_an_inherited_character_leaves_it_inherited(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    aid = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Aese", "version_name": "main"}).json()["character"]
+
+    resp = client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline",
+                      json={"tagline": "A snowleopardgirl."})
+
+    assert resp.json() == {"ok": True}
+    croot = store.overlay.croot_of(cid)
+    assert not (croot / "characters" / aid / "character.md").exists()
+    assert store.overlay.tagline(cid, aid) == "A snowleopardgirl."
