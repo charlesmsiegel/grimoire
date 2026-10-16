@@ -48,6 +48,67 @@ def parse_output(text: str) -> str:
     return ""
 
 
+#: The campaign-side capsule (#62) reads a character's first scene as well as
+#: the card, because an emergent NPC's card is nearly empty. What is sent is the
+#: excerpt from the character's entrance (the caller starts it there): a bounded
+#: prefix of that, not the whole transcript.
+CAPSULE_SOURCE_CHARS = 4000
+TAGS_MAX = 8
+TAG_MAX_CHARS = 40
+
+_CAPSULE_LABEL = "capsule:"
+_TAGS_LABEL = "tags:"
+
+
+def build_capsule_prompt(card_data: dict, transcript: str = "") -> list[dict]:
+    """The capsule-and-tags prompt: the character's card, plus an excerpt of the
+    first scene the character appears in when there is one (#62). Both messages
+    are templates of their own under capsule/, one folder per call."""
+    excerpt = transcript.strip()[:CAPSULE_SOURCE_CHARS]
+    return [{"role": "system", "content": prompts.render("capsule/system.j2")},
+            {"role": "user", "content": prompts.render("capsule/user.j2", card=card_data,
+                                                       excerpt=excerpt)}]
+
+
+def parse_capsule_output(text: str) -> dict:
+    """Read a capsule-and-tags reply by its labels.
+
+    A reply with no `Capsule:` label still yields its first unlabelled line as
+    the capsule, so a model that ignores the format is not a failed draft. Tags
+    are cleaned, de-duplicated (case-insensitively) and capped; an overlong tag
+    is dropped rather than truncated, because a clipped word is not a tag.
+    """
+    capsule = ""
+    loose = ""
+    tags: list[str] = []
+    for raw in text.strip().split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        low = line.lower()
+        if low.startswith(_CAPSULE_LABEL):
+            capsule = capsule or line[len(_CAPSULE_LABEL):].strip()
+        elif low.startswith(_TAGS_LABEL):
+            tags = tags or _clean_tags(line[len(_TAGS_LABEL):])
+        else:
+            loose = loose or line
+    return {"capsule": capsule or loose, "tags": tags}
+
+
+def _clean_tags(text: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in text.split(","):
+        tag = part.strip().strip("\"'").strip().rstrip(".").strip()
+        if not tag or len(tag) > TAG_MAX_CHARS or tag.casefold() in seen:
+            continue
+        seen.add(tag.casefold())
+        out.append(tag)
+        if len(out) == TAGS_MAX:
+            break
+    return out
+
+
 def untagged_ids(root: Path, char_ids: list[str]) -> list[str]:
     """Which of `char_ids` have no tagline, without reading a file per character.
 

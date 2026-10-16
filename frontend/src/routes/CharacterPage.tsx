@@ -19,6 +19,7 @@ import { ArtTab } from "../components/character/ArtTab";
 import { MobileArtEntry } from "../components/MobileArtEntry";
 import { CampaignSection } from "../components/character/CampaignSection";
 import { CardTab } from "../components/character/CardTab";
+import { CapsuleSection } from "../components/character/CapsuleSection";
 import { GreetingsTab } from "../components/character/GreetingsTab";
 import { ImportVersionDialog, type ImportChoice } from "../components/character/ImportVersionDialog";
 import { TaglineSection } from "../components/character/TaglineSection";
@@ -591,6 +592,14 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
            aria-label="Import version" onChange={onImportVersionFile} />
 
     {!worldScope && <CampaignSection label={campaignLabel} name={name} state={campaignState} />}
+
+    {!worldScope && card && vid && (
+      // Keyed on the version too: a draft is for the card it was made from, so
+      // switching versions discards it rather than saving its tags onto the next.
+      <CapsuleSection key={`capsule:${scope.id}:${eid}:${vid}`}
+                      campaignId={scope.id} cid={eid} vid={vid} card={card}
+                      onSaveTags={(tags) => saveField({ tags })} onError={setError} />
+    )}
 
     <VoiceAnchorSection key={`${scope.kind}:${scope.id}:${eid}`}
                         scope={scope} cid={eid} cap={voiceAnchorCap} onError={setError} />

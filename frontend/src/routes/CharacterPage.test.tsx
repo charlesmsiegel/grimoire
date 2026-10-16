@@ -25,6 +25,8 @@ vi.mock("../api/client", async () => {
       updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
       setCharacterName: vi.fn(), setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
       getCalendarConfig: vi.fn(),
+      getCampaignCharacterTagline: vi.fn().mockResolvedValue({ tagline: "" }),
+      setCampaignCharacterTagline: vi.fn(), generateCampaignCapsule: vi.fn(),
       importCharacter: vi.fn(), localizeImages: vi.fn(),
       putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
       setCharacterImageDescription: vi.fn(), draftCharacterImageDescription: vi.fn(),

@@ -89,6 +89,7 @@ from .models import (
     ScheduledEventCreate,
     ScheduledEventEdit,
     SyncPin,
+    TaglineSave,
     VersionCreate,
     VersionUpdate,
     VoiceAnchorSave,
@@ -2232,6 +2233,128 @@ def post_campaign_voice_anchor_generate(
 
     return runs.run_draft(request.app, runs.campaign_subject(cid), "voice-anchor",
                           x_grimoire_attempt, work)
+
+
+#: Messages before a recorded placement that the capsule excerpt includes: the
+#: turn that introduced the character lands before the placement is written.
+_ENTRANCE_LEAD = 2
+
+
+def _first_scene_transcript(cid: str, char: str) -> str:
+    """The transcript of the first scene `char` was placed in, as the prompt
+    reads it, or "" when the character has never appeared in one (#62).
+
+    The first key is the first placement: the record keeps scenes in the order
+    they were entered. The view is the prompt phase, the same as every
+    other LLM reader of transcript text.
+    """
+    rec = store.appearances.record(cid).get(f"characters/{char}") or {}
+    # The history, not current membership: `leave` drops a scene from `scenes`
+    # but keeps its interval under `presence`, and the scene a character walked
+    # on in is the one this reads even after they have walked off it. Records
+    # written before `presence` existed fall back to `scenes`.
+    presence = rec.get("presence") or {}
+    scenes = list(presence) or list(rec.get("scenes") or [])
+    if not scenes:
+        return ""
+    sid = scenes[0]
+    try:
+        messages = store.scenes.read_scene(cid, sid)["messages"]
+    except store.SceneNotFound:
+        return ""
+    # The interval's `start` is the message count when the character was placed,
+    # which is after the turn that introduced them, so the excerpt begins a
+    # couple of messages earlier. A scene that runs long before they walk on still
+    # gives the model the entrance and what follows it.
+    arrived = [i.get("start") for i in presence.get(sid) or [] if i.get("start") is not None]
+    begin = max(0, min(arrived, default=0) - _ENTRANCE_LEAD)
+    shown = store.regex.view.view(messages, cid=cid, phase="prompt")
+    return store.chronicle.transcript_text(shown[begin:],
+                                           store.appearances.player_label(cid, sid))
+
+
+@router.post("/campaigns/{cid}/characters/{char}/capsule/generate", status_code=202)
+@computes_only
+def post_campaign_capsule_generate(
+        cid: str, char: str, request: Request,
+        version: str | None = None,
+        client: LLMClient = Depends(get_llm),
+        x_grimoire_attempt: str | None = Header(default=None)):
+    """Start a drafted capsule and tags for a character, read from its card and
+    the first scene it appears in (#62). `version` is the version the editor has
+    open, since the tags it returns are saved onto that version; the default one
+    when omitted. Preview only: the capsule is saved through PUT .../tagline and
+    the tags through the version PUT, both on Save.
+    """
+    _campaign_root_or_404(cid)
+    resolved = require_inference("capsule", cid)
+    root = store.overlay.char_root(cid, char)
+    try:
+        ch = store.characters.read_character(root, char)
+        card = store.characters.read_card(root, char, version or ch["meta"]["default_version"])
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
+    data = card.get("data")
+    messages = store.taglines.build_capsule_prompt(
+        data if isinstance(data, dict) else {}, _first_scene_transcript(cid, char))
+
+    async def work():
+        return await draft_completion(
+            client, resolved, messages, "capsule",
+            store.taglines.parse_capsule_output, cid=cid)
+
+    return runs.run_draft(request.app, runs.campaign_subject(cid), "capsule",
+                          x_grimoire_attempt, work)
+
+
+@router.get("/campaigns/{cid}/characters/{char}/tagline")
+def get_campaign_character_tagline(cid: str, char: str):
+    """The capsule as this campaign sees it: its own sentence, else the world's
+    (`overlay.tagline`). An emergent character has no world copy, so its
+    sentence is simply its own."""
+    _campaign_root_or_404(cid)
+    try:
+        store.characters.read_character(store.overlay.char_root(cid, char), char)
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    return {"tagline": store.overlay.tagline(cid, char)}
+
+
+def _shown_capsule(cid: str, char: str) -> str:
+    """The capsule the campaign shows once a save has landed. The write is
+    already published when this reads, so an unreadable library sentence answers
+    blank rather than failing a save that happened."""
+    try:
+        return store.overlay.tagline(cid, char)
+    except (OSError, ValueError):
+        return ""
+
+
+@router.put("/campaigns/{cid}/characters/{char}/tagline")
+def put_campaign_character_tagline(cid: str, char: str, body: TaglineSave):
+    """Write the campaign's own capsule for a character.
+
+    The sidecar is written straight under the campaign root, and nothing
+    materializes the actor: `tagline.md` overlays per file (`overlay.tagline`
+    reads the campaign's copy first), so an inherited character keeps its cards
+    inherited and its sync base untouched. The existence check runs inside the
+    lock hold that writes, so a delete cannot land between the two.
+
+    A blank save writes a blank campaign copy, which `overlay.tagline` reads as
+    "no sentence here", so the library's shows through again -- unlike a voice
+    anchor, a capsule has no opt-out to preserve.
+    """
+    _campaign_root_or_404(cid)
+    with store.locks.campaign_lock(cid):
+        try:
+            store.characters.read_character(store.overlay.char_root(cid, char), char)
+        except store.characters.CharacterNotFound as exc:
+            raise HTTPException(status_code=404, detail="character not found") from exc
+        store.overlay.set_tagline(cid, char, body.tagline)
+        shown = _shown_capsule(cid, char)
+    return {"ok": True, "tagline": shown}
 
 
 @router.put("/campaigns/{cid}/characters/{char}")

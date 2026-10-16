@@ -163,14 +163,15 @@ def test_a_route_born_at_format_two_has_no_legacy_key():
     `NO_LEGACY_TASKS` -- which the frozen inference baselines leave out."""
     born = [r for r in routing.ROUTES if r.legacy == routing.NO_LEGACY]
     assert [r.key for r in born] == ["turn_plan", "history_check", "epistemic", "history_plan",
-                                     "investigation", "investigation_decide", "character_text"]
+                                     "investigation", "investigation_decide", "capsule",
+                                     "character_text"]
     for r in born:
         assert r not in routing.LEGACY_ROUTES
         assert r.key not in {x.key for x in routing.LEGACY_ROUTES}
         assert routing.config_key(r.key) not in routing.CONFIG_KEYS
         assert routing.preset_key(r.key) not in routing.PRESET_CONFIG_KEYS
         assert routing.legacy_key(r) == ""
-    assert sorted(routing.NO_LEGACY_TASKS) == ["character-text", "epistemic-access", "history-query-plan",
+    assert sorted(routing.NO_LEGACY_TASKS) == ["capsule", "character-text", "epistemic-access", "history-query-plan",
                                                "history-rerank", "history-sufficiency",
                                                "investigation-continuity",
                                                "investigation-decide",
@@ -203,7 +204,9 @@ def test_every_route_declares_operation_and_default_role():
     assert routing.route_by_key("investigation").requires == ("tools",)
     assert routing.route_by_key("character_text").tasks == ("character-text",)
     assert not routing.route_by_key("character_text").campaign_scoped
-    assert len(routing.ROUTES) == 22
+    assert routing.route_by_key("capsule").tasks == ("capsule",)
+    assert routing.route_by_key("capsule").campaign_scoped
+    assert len(routing.ROUTES) == 23
 
 
 def test_the_scene_break_title_is_drafted_on_the_summary_route():

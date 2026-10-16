@@ -98,6 +98,11 @@ def test_default_prompt_literal_precedes_entity_route(method, scope, param):
 # are the ones that were in effect before the routes package was split out
 # (#241), so this pins existing behaviour rather than asserting a preference.
 CROSSING_PAIRS = [
+    # A character whose slug is literally "instantiate" drafting a capsule
+    # reaches the capsule route: it is registered in campaigns.py ahead of the
+    # generic instantiate route, which is what this pin keeps.
+    ("/api/campaigns/{cid}/characters/{char}/capsule/generate",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/worlds/{wid}/record-art/{kind}/{rid}/images",
      "/api/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/campaigns/{cid}/record-art/{kind}/{rid}/images",
