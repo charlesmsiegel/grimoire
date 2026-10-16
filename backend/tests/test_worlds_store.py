@@ -1,6 +1,7 @@
 import pytest
 
 from grimoire.store import entities, worlds
+from grimoire.store.worlds import lifecycle
 
 
 def home(monkeypatch, tmp_path):
@@ -47,7 +48,6 @@ def test_delete_removes_world(monkeypatch, tmp_path):
 
 def test_world_counts_include_greetings(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import worlds
     wid = worlds.create_world("Saltmarch")
     root = worlds.world_root(wid)
     (root / "greetings").mkdir()
@@ -111,7 +111,6 @@ def _rewrite_during_update(monkeypatch, wid, times):
     """Land a competing `world.md` write (a module bind) inside `update_world`'s
     read-modify-write, `times` times. `now_iso` is called between the read and
     the re-check, which is exactly the window a concurrent writer uses."""
-    from grimoire.store.worlds import lifecycle
     mp = worlds.world_meta_path(wid)
     real_now = lifecycle.now_iso
     left = {"n": times}

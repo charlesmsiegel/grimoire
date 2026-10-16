@@ -13,6 +13,7 @@ import json
 import pytest
 
 from grimoire.store import (
+    absorb,
     alternates,
     campaigns,
     cascade,
@@ -24,9 +25,11 @@ from grimoire.store import (
     journal,
     plot,
     provenance,
+    rolls,
     scenes,
     worlds,
 )
+from grimoire.store.scenes import serialize as scenes_serialize
 from grimoire.store.scenes import turns as scenes_turns
 
 
@@ -82,7 +85,6 @@ def test_roll_lines_below_the_cut_go_with_it(cid, sid):
     """`edit_message` refuses to touch a dice-roll line and `trim_continuation`
     re-parks one, both protecting a line the player did not ask to lose. Here
     they did — and `rolls.json` keeps the ledger entry either way."""
-    from grimoire.store.scenes import serialize as scenes_serialize
     scenes.append_message(cid, sid, "assistant", "3d6 → 11",
                           speaker=scenes_serialize.ROLL_SPEAKER)
     assert cascade.delete_from(cid, sid, 2)["removed"] == 3
@@ -127,7 +129,6 @@ def test_parked_alternates_survive_a_cut_above_them(cid):
     """A cut that reaches only what sits ABOVE the archived generation leaves the
     set exactly as valid as it was — the anchor steps over trailing transition
     lines, so it has not moved and there is nothing to invalidate."""
-    from grimoire.store.scenes import serialize as scenes_serialize
     sid = _scene_with_parked_alternates(cid)
     scenes.append_message(cid, sid, "assistant", "— they move to the wharf —",
                           speaker=scenes_serialize.TRANSITION_SPEAKER)
@@ -150,7 +151,6 @@ def test_an_open_review_cannot_save_over_a_cut_scene(cid, sid):
 
 
 def _absorb_lore_edit(cid, sid, before, after):
-    from grimoire.store import absorb
     return absorb.apply_edits(cid, [{
         "id": "lore:pact", "kind": "lore", "target": {"kind": "lore", "id": "pact"},
         "label": "The Pact — lore", "field": "body",
@@ -245,7 +245,6 @@ def test_a_record_the_scene_created_is_reported_not_deleted(cid, sid):
     cascade — and the cascade declines it too. A created lore entry may already
     be named by later scenes, and deleting it here would take those with it. So
     it stands, and the report says so in the store's own words."""
-    from grimoire.store import absorb
     absorb.apply_edits(cid, [{
         "id": "new_lore:tithe", "kind": "new_lore",
         "target": {"kind": "lore", "id": ""}, "label": "The Tithe — new lore",
@@ -351,7 +350,6 @@ def test_the_roll_ledger_and_the_timeline_survive_the_cut(cid, absorbed):
     """Two append-only records this deliberately does not touch: `rolls.json`
     never drops an entry, and `timeline.md` has no scene attribution to match
     on."""
-    from grimoire.store import rolls
     rolls.append(cid, absorbed, "Athletics", {"notation": "3d6", "total": 11})
     chronicle.append_timeline(cid, [{"date": "day one", "text": "They swore."}])
 
@@ -457,7 +455,6 @@ def test_an_actor_join_line_is_not_mistaken_for_a_move(cid):
     """Join and leave lines carry the same speaker and are deliberately NOT the
     scene's own moves — counting one as a move would rewind the setting by a
     step that never changed it."""
-    from grimoire.store.scenes import serialize as scenes_serialize
     _two_locations(cid)
     sid = scenes.create_scene(cid, "Arrivals")
     scenes.set_location(cid, sid, "the-wharf")

@@ -155,7 +155,6 @@ def test_importable_count_drops_exactly_what_the_import_drops():
 
 def test_commit_accepts_new_kind_categories(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import lorebook
     created = lorebook.commit(tmp_path, [
         {"name": "Salt Knife", "keys": ["knife"], "body": "sharp", "category": "items"}])
     assert created == [{"kind": "items", "id": "salt-knife"}]

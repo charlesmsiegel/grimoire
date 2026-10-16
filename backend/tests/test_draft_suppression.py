@@ -21,6 +21,8 @@ and the first is the one write the opener path is documented to make.
 """
 
 import functools
+import json
+import time
 
 import pytest
 
@@ -102,7 +104,6 @@ def campaign(instrumented, world):
 
 
 def _wait_landed(client, base, run_id, timeout=10.0):
-    import time
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         run = client.get(f"{base}/{run_id}").json()["run"]
@@ -113,7 +114,6 @@ def _wait_landed(client, base, run_id, timeout=10.0):
 
 
 def _first_run_id(body: str) -> str:
-    import json
     for line in body.splitlines():
         if line.startswith("data: "):
             payload = json.loads(line[6:])

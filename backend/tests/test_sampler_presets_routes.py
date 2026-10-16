@@ -2,7 +2,9 @@
 a turn is actually sent."""
 
 
-from grimoire import llm, routes, store
+import json as _json
+
+from grimoire import llm, llm_sampling, routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import common
 from grimoire.store.sampler_presets import PRESET_CLEAR
@@ -223,7 +225,6 @@ def test_a_model_override_does_not_inherit_the_standing_models_param_list(client
     resolved, routed = common.override_inference(Body(), "chat", cid)
     target = resolved.chain.primary
     assert routed and target.model_params is None
-    from grimoire import llm_sampling
     report = llm_sampling.report(target)
     assert report["applied"] == {"temperature": 0.6, "min_p": 0.05}
     assert report["verified"] is False
@@ -338,7 +339,6 @@ def test_a_malformed_catalog_sidecar_degrades_to_unverified(client):
     _primary(client, preset=pid)
     rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
     sidecar = store.paths.home() / "llm_connections" / "openrouter.models.json"
-    import json as _json
     for models in (None, [{"id": "m", "params": [{"x": 1}, "temperature"]}]):
         sidecar.write_text(_json.dumps({"models": models, "fetched_at": "", "rev": rev}))
         live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context")

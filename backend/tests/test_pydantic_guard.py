@@ -31,6 +31,8 @@ import pathlib
 
 import pytest
 
+from grimoire.routes import models
+
 from . import guard_markers
 
 # The trailing colon is load-bearing. `guard_markers._stated_reason` returns
@@ -208,8 +210,6 @@ def test_a_mutable_field_default_is_per_instance_on_whichever_pydantic_is_instal
     else -- and the day either line stops copying defaults, this fails instead
     of eight request bodies quietly sharing a list across requests.
     """
-    from grimoire.routes import models
-
     first, second = models.StyleCreate(name="a"), models.StyleCreate(name="b")
     first.tags.append("leaked")
     assert second.tags == [], "a mutable default must not be shared between bodies"

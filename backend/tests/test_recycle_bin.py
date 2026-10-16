@@ -128,7 +128,6 @@ def test_availability_to_dict():
 
 
 def test_the_real_platform_names_this_machine():
-    import sys
     assert REAL_PLATFORM() == {"win32": "windows", "darwin": "darwin"}.get(sys.platform, "linux")
 
 

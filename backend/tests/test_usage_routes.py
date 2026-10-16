@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import importlib
+import io
 import json
 from datetime import date, timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.llm import LLMClient
 from grimoire.main import create_app
+from grimoire.openrouter import OpenRouterClient
+from grimoire.routes import streaming
+from grimoire.store import inference_keys
 from tests import draft_runs as drafts
 from tests import inference_fixtures, review_runs, wire_kit
-from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
+from tests.llm_fakes import (
+    FailingOpenRouter,
+    FakeOpenRouter,
+    FakeOpenRouterComplete,
+    StallingOpenRouter,
+)
 
 
 def _unfenced_stream(cid, sid, messages, conn, *args, **kw):
@@ -223,8 +234,6 @@ async def test_a_cancelled_turn_is_recorded_as_aborted_not_as_a_failure(client, 
     cannot produce the close this path exists for. One empty frame first, so the
     generator is suspended on a heartbeat yield when `aclose` arrives — closing
     one that has never yielded runs none of its body."""
-    from tests.llm_fakes import StallingOpenRouter
-
     _, cid = _campaign(client)
     sid = _scene(client, cid)
     resp = _unfenced_stream(
@@ -247,8 +256,6 @@ def test_an_absorb_step_the_budget_refuses_files_no_row(client, home, monkeypatc
 
     Refused is not cancelled: a phase the clock stops mid-flight WAS sent and
     does file a row. Only the never-sent case is covered here."""
-    from grimoire import routes as routes_pkg
-
     class ClockEatingFake(FakeOpenRouterComplete):
         """Answers instantly, optionally advancing the (faked) absorb clock, so
         budget arithmetic is exercised without any real waiting."""
@@ -272,7 +279,7 @@ def test_an_absorb_step_the_budget_refuses_files_no_row(client, home, monkeypatc
     client.put("/api/config", json={"absorb_budget": "60"})
 
     clock = [0.0]
-    monkeypatch.setattr(routes_pkg.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
     _use(client.app, ClockEatingFake(
         clock, 0.0,
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}',
@@ -307,10 +314,6 @@ def test_the_whole_chain_from_the_wire_to_the_ledger(client, home):
     over a mock transport instead, which is the only way the request field, the
     chunk the block rides on, and the row it becomes are checked as one thing.
     """
-    import httpx
-
-    from grimoire.llm import LLMClient
-    from grimoire.openrouter import OpenRouterClient
 
     sent = {}
 
@@ -352,8 +355,6 @@ def test_the_scenario_extraction_files_a_world_level_row(client, home):
     """Main's scenario import (#217) landed while this branch was open, and the
     usage guard caught it unmetered. This pins the row itself, since the guard
     only proves the holder was passed, not that anything files it."""
-    import io
-
     _use(client.app, FakeOpenRouterComplete("{}", usage=USAGE))
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
 
@@ -687,7 +688,6 @@ def test_the_scene_list_says_whether_a_models_own_rates_can_be_written(client):
     """The Costs page's "Set its rates" opens an editor that saves only on a
     store at the current model-settings format (`PUT .../facts` answers 409
     `not_migrated` before it, `newer_format` after), so the page is told."""
-    from grimoire.store import inference_keys
     inference_fixtures.legacy_store()
     _, cid = _campaign(client)
 
@@ -858,8 +858,6 @@ def test_the_scene_cost_list_can_be_ordered_by_the_caller(client, home):
 def test_the_answering_post_is_the_last_player_message(home):
     """Read off a transcript that came from disk, so it is read defensively:
     an attribution must cost itself, never the turn it is attributing."""
-    from grimoire.routes import streaming
-
     assert streaming._answering_post([{"role": "user"}, {"role": "assistant"}]) == 0
     assert streaming._answering_post(
         [{"role": "user"}, {"role": "assistant"}, {"role": "user"}]) == 2
@@ -880,7 +878,6 @@ def test_a_director_note_is_something_the_player_put_there(home):
     actually posted, so a retry or a reroll of a director turn would be charged
     to a post from ten turns ago.
     """
-    from grimoire.routes import streaming
     note = {"role": "assistant", "speaker": store.scenes.DIRECTOR_SPEAKER,
             "content": "make it rain"}
 
@@ -902,7 +899,6 @@ def test_a_continuation_inherits_its_proposals_attribution(client, home):
     """Re-deriving it here gets a DIFFERENT answer for the case the first half
     got right — see `_continuation_post`."""
     from grimoire import store
-    from grimoire.routes import streaming
 
     _, cid = _campaign(client)
     sid = _scene(client, cid)
@@ -923,7 +919,6 @@ def test_a_continuation_inherits_its_proposals_attribution(client, home):
 
 def test_a_hand_edited_post_index_on_a_proposal_is_ignored(client, home):
     from grimoire import store
-    from grimoire.routes import streaming
 
     _, cid = _campaign(client)
     sid = _scene(client, cid)

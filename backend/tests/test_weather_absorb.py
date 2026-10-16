@@ -1,6 +1,6 @@
 import json
 
-from grimoire.store import absorb, campaigns, entities, scenes, weather, worlds
+from grimoire.store import absorb, calendars, campaigns, entities, scenes, weather, worlds
 
 
 def setup(monkeypatch, tmp_path, when="2026-06-14T09:00"):
@@ -100,7 +100,6 @@ def test_a_stated_duration_extends_the_span(monkeypatch, tmp_path):
 
 
 def test_a_manual_override_still_beats_the_extractor(monkeypatch, tmp_path):
-    from grimoire.store import calendars
     cid, sid, lid = setup(monkeypatch, tmp_path)
     rows = [r for r in absorb.materialize(cid, sid, {"weather_edits": [{"condition": "drizzle"}]})
             if r["kind"] == "weather"]

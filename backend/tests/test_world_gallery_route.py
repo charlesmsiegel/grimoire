@@ -7,10 +7,12 @@ listing can offer a tile nothing will serve.
 """
 
 import importlib
+import io
 import json
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import grimoire.store as store
 from grimoire.main import create_app
@@ -246,9 +248,6 @@ def test_the_listing_is_ordered_and_stable(client, world):
 # ---- the world's own library, as a gallery base ---------------------------
 
 def _lib_png() -> bytes:
-    import io
-
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
     return buf.getvalue()

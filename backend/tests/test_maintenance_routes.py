@@ -15,6 +15,7 @@ import time
 
 import pytest
 
+from grimoire.routes import runs
 from grimoire.store import (
     image_gc,
     image_migration,
@@ -249,7 +250,6 @@ def test_a_pass_that_raises_still_leaves_a_report(client, monkeypatch):
 
 
 def test_a_hold_on_the_store_refuses_a_start_as_busy(client):
-    from grimoire.routes import runs
     with runs.maintenance_excluded(client.app):
         res = _start(client, MIGRATE)
     assert res.status_code == 409

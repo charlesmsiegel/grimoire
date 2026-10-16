@@ -33,6 +33,7 @@ import pathlib
 import pytest
 
 import grimoire
+from grimoire.store import knowledge
 
 PACKAGE = pathlib.Path(grimoire.__file__).parent
 
@@ -144,7 +145,6 @@ def test_only_the_listed_writers_call_a_knowledge_mutator():
 
 
 def test_the_guard_names_functions_that_exist():
-    from grimoire.store import knowledge
     missing = [n for n in MUTATORS if not callable(getattr(knowledge, n, None))]
     assert not missing, f"MUTATORS names functions store.knowledge no longer has: {missing}"
 

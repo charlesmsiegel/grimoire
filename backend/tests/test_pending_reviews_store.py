@@ -17,6 +17,7 @@ import sys
 import pytest
 
 import grimoire.store as store
+from grimoire.routes import scenes as routes_scenes
 
 
 @pytest.fixture
@@ -414,8 +415,6 @@ def test_a_phase_row_carries_exactly_what_the_phase_report_puts_in_one():
     test would say so. Both now read `PHASE_KEYS`, and this is what fails if one
     of them stops.
     """
-    from grimoire.routes import scenes as routes_scenes
-
     block = {"status": "ok", "reason": None, "attempted": True,
              "budget_exhausted": False}
     built = routes_scenes._phase_report(block, block, block, block)

@@ -1,9 +1,35 @@
+import base64
+import contextlib
+import io
 import json
+import os
+import random
+import struct
+import threading
+import time
+import zipfile
+import zlib
+from io import BytesIO
+from pathlib import Path
 
 import pytest
+from PIL import Image, ImageCms, ImageFile, ImageOps
 
+from grimoire.store import (
+    assets,
+    cards,
+    chub,
+    fetch,
+    image_descriptions,
+    image_hash,
+    image_sanitize,
+    image_store,
+    statcache,
+    taglines,
+    voice_anchors,
+)
 from grimoire.store import characters as ch
-from grimoire.store import fetch, image_sanitize, voice_anchors
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
 def test_create_and_read_single_card(tmp_path):
@@ -101,7 +127,6 @@ def test_counts_and_refs(tmp_path):
 
 
 def test_list_characters_includes_tagline(tmp_path):
-    from grimoire.store import taglines
     cid, _ = ch.create_character(tmp_path, "Sera")
     assert ch.list_characters(tmp_path)[0]["tagline"] == ""
     taglines.write(tmp_path, cid, "Keeper of the salt ledgers.")
@@ -109,7 +134,6 @@ def test_list_characters_includes_tagline(tmp_path):
 
 
 def test_read_exposes_images_and_list_has_avatar(tmp_path):
-    from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     # no images yet
     assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == []
@@ -121,7 +145,6 @@ def test_read_exposes_images_and_list_has_avatar(tmp_path):
 
 
 def test_png_import_saves_avatar(tmp_path):
-    from grimoire.store import assets, cards
     blob = cards.dumps(ch.blank_card("Imp"), "png")
     cid, vid = ch.import_card(tmp_path, blob, "png")
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
@@ -130,19 +153,15 @@ def test_png_import_saves_avatar(tmp_path):
 
 
 def test_json_import_downloads_avatar_url(tmp_path, monkeypatch):
-    import json as _json
-
-    from grimoire.store import assets
     card = ch.blank_card("Imp")
     card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png", "name": "main", "ext": "png"}]
     monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"DOWNLOADED", "image/png"))
-    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    cid, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json")
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
     assert p is not None and p.read_bytes() == b"DOWNLOADED" and p.suffix == ".png"
 
 
 def test_import_card_update_vid_overwrites_in_place(tmp_path):
-    from grimoire.store import assets, cards
     cid, vid = ch.create_character(tmp_path, "Imp")
     new_png = cards.dumps(ch.blank_card("Imp Updated"), "png")
 
@@ -156,24 +175,18 @@ def test_import_card_update_vid_overwrites_in_place(tmp_path):
 
 
 def test_import_card_update_vid_downloads_avatar_for_json(tmp_path, monkeypatch):
-    import json as _json
-
-    from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Imp")
     card = ch.blank_card("Imp Updated")
     card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png", "name": "main", "ext": "png"}]
     monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"DOWNLOADED", "image/png"))
 
-    ch.import_card(tmp_path, _json.dumps(card).encode(), "json", into_cid=cid, update_vid=vid)
+    ch.import_card(tmp_path, json.dumps(card).encode(), "json", into_cid=cid, update_vid=vid)
 
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
     assert p is not None and p.read_bytes() == b"DOWNLOADED"
 
 
 def test_json_import_download_failure_is_swallowed(tmp_path, monkeypatch):
-    import json as _json
-
-    from grimoire.store import assets
     card = ch.blank_card("Imp")
     card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png"}]
 
@@ -181,20 +194,18 @@ def test_json_import_download_failure_is_swallowed(tmp_path, monkeypatch):
         raise RuntimeError("network down")
 
     monkeypatch.setattr(fetch, "_http_get_bytes", boom)
-    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")  # must not raise
+    cid, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json")  # must not raise
     assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None
 
 
 def test_json_import_decodes_data_uri_avatar(tmp_path):
     # an embedded base64 data-URI avatar is decoded and stored without any network.
     import base64 as _b64
-    import json as _json
 
-    from grimoire.store import assets
     png = b"\x89PNG\r\n\x1a\nDATA"
     card = ch.blank_card("Imp")
     card["data"]["avatar"] = "data:image/png;base64," + _b64.b64encode(png).decode()
-    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    cid, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json")
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
     assert p is not None and p.read_bytes() == png and p.suffix == ".png"
 
@@ -224,15 +235,12 @@ def test_resolving_without_the_network_never_fetches(tmp_path, monkeypatch):
 
 
 def test_json_import_no_url_makes_no_call(tmp_path, monkeypatch):
-    import json as _json
-
-    from grimoire.store import assets
 
     def boom(url):
         raise AssertionError("should not be called")
 
     monkeypatch.setattr(fetch, "_http_get_bytes", boom)
-    cid, vid = ch.import_card(tmp_path, _json.dumps(ch.blank_card("Imp")).encode(), "json")
+    cid, vid = ch.import_card(tmp_path, json.dumps(ch.blank_card("Imp")).encode(), "json")
     assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None
 
 
@@ -342,8 +350,6 @@ def test_find_unlinked_versions_all_linked(tmp_path):
 
 
 def test_import_from_chub_happy_path(tmp_path, monkeypatch):
-    from grimoire.store import assets, cards, chub
-
     png = cards.dumps(ch.blank_card("Imp"), "png")
     node = {
         "id": 42, "fullPath": "creator/imp", "hasGallery": True,
@@ -376,20 +382,17 @@ def test_import_from_chub_happy_path(tmp_path, monkeypatch):
 
 
 def test_import_from_chub_bad_url_raises_parse_error(tmp_path):
-    from grimoire.store import chub
     with pytest.raises(chub.ChubParseError):
         ch.import_from_chub(tmp_path, "not a url")
 
 
 def test_import_from_chub_unreachable_character_raises_fetch_error(tmp_path, monkeypatch):
-    from grimoire.store import chub
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: None)
     with pytest.raises(chub.ChubFetchError):
         ch.import_from_chub(tmp_path, "creator/missing")
 
 
 def test_import_from_chub_png_download_failure_raises_fetch_error(tmp_path, monkeypatch):
-    from grimoire.store import chub
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
         "id": 1, "hasGallery": False, "related_lorebooks": [],
         "max_res_url": "https://avatars.charhub.io/avatars/creator/imp/chara_card_v2.png",
@@ -405,8 +408,6 @@ def test_import_from_chub_png_download_failure_raises_fetch_error(tmp_path, monk
 
 
 def test_import_from_chub_gallery_failure_is_best_effort(tmp_path, monkeypatch):
-    from grimoire.store import cards, chub
-
     png = cards.dumps(ch.blank_card("Imp"), "png")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
         "id": 1, "hasGallery": True, "related_lorebooks": [],
@@ -427,8 +428,6 @@ def test_import_from_chub_gallery_failure_is_best_effort(tmp_path, monkeypatch):
 
 
 def test_import_from_chub_lorebook_failure_is_best_effort(tmp_path, monkeypatch):
-    from grimoire.store import cards, chub
-
     png = cards.dumps(ch.blank_card("Imp"), "png")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
         "id": 1, "hasGallery": False, "related_lorebooks": [7, 8],
@@ -444,8 +443,6 @@ def test_import_from_chub_lorebook_failure_is_best_effort(tmp_path, monkeypatch)
 
 
 def test_import_from_chub_into_existing_character_adds_a_version(tmp_path, monkeypatch):
-    from grimoire.store import cards, chub
-
     cid, _ = ch.create_character(tmp_path, "Seraphine")
     png = cards.dumps(ch.blank_card("Variant"), "png")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
@@ -461,8 +458,6 @@ def test_import_from_chub_into_existing_character_adds_a_version(tmp_path, monke
 
 
 def test_import_from_chub_into_existing_character_names_the_new_version(tmp_path, monkeypatch):
-    from grimoire.store import cards, chub
-
     cid, _ = ch.create_character(tmp_path, "Seraphine")
     png = cards.dumps(ch.blank_card("Variant"), "png")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
@@ -483,8 +478,6 @@ def test_import_from_chub_into_existing_character_names_the_new_version(tmp_path
 
 
 def test_import_from_chub_into_matching_chub_source_updates_in_place(tmp_path, monkeypatch):
-    from grimoire.store import assets, cards, chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
     png = cards.dumps(ch.blank_card("Abelha Updated"), "png")
@@ -508,8 +501,6 @@ def test_import_from_chub_into_matching_chub_source_updates_in_place(tmp_path, m
 
 
 def test_import_from_chub_into_mismatched_chub_source_creates_new_version(tmp_path, monkeypatch):
-    from grimoire.store import cards, chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     ch.set_chub_source(tmp_path, cid, vid, "creator/a-different-card")
     png = cards.dumps(ch.blank_card("Variant"), "png")
@@ -566,8 +557,6 @@ def test_import_from_chub_matching_source_on_a_sibling_version_still_creates(tmp
 
 
 def test_import_from_chub_into_unknown_version_raises(tmp_path, monkeypatch):
-    from grimoire.store import cards, chub
-
     cid, _ = ch.create_character(tmp_path, "Abelha", "main")
     png = cards.dumps(ch.blank_card("Imp"), "png")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
@@ -580,8 +569,6 @@ def test_import_from_chub_into_unknown_version_raises(tmp_path, monkeypatch):
 
 
 def test_import_from_chub_into_unknown_character_raises(tmp_path, monkeypatch):
-    from grimoire.store import cards, chub
-
     png = cards.dumps(ch.blank_card("Imp"), "png")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
         "id": 1, "hasGallery": False, "related_lorebooks": [],
@@ -593,8 +580,6 @@ def test_import_from_chub_into_unknown_character_raises(tmp_path, monkeypatch):
 
 
 def test_import_from_chub_direct_url_png_creates_character_with_no_gallery_or_lore(tmp_path, monkeypatch):
-    from grimoire.store import assets, cards
-
     png = cards.dumps(ch.blank_card("Direct"), "png")
     monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
 
@@ -611,34 +596,26 @@ def test_import_from_chub_direct_url_png_creates_character_with_no_gallery_or_lo
 
 
 def test_import_from_chub_direct_url_json_creates_character(tmp_path, monkeypatch):
-    import json as _json
-
     card = ch.blank_card("Direct JSON")
-    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (_json.dumps(card).encode(), "application/json"))
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (json.dumps(card).encode(), "application/json"))
 
     result = ch.import_from_chub(tmp_path, "https://example.com/card.json")
     assert ch.read_card(tmp_path, result["character"], result["version"])["data"]["name"] == "Direct JSON"
 
 
 def test_import_from_chub_direct_url_unparseable_content_raises(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"just some text", "text/plain"))
     with pytest.raises(chub.ChubFetchError):
         ch.import_from_chub(tmp_path, "https://example.com/nope")
 
 
 def test_import_from_chub_direct_url_non_dict_json_raises(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"[1, 2, 3]", "application/json"))
     with pytest.raises(chub.ChubFetchError):
         ch.import_from_chub(tmp_path, "https://example.com/nope.json")
 
 
 def test_import_from_chub_direct_url_fetch_failure_raises(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     def boom(url):
         raise RuntimeError("network down")
 
@@ -648,8 +625,6 @@ def test_import_from_chub_direct_url_fetch_failure_raises(tmp_path, monkeypatch)
 
 
 def test_import_from_chub_direct_url_updates_in_place_when_already_linked(tmp_path, monkeypatch):
-    from grimoire.store import cards
-
     cid, vid = ch.create_character(tmp_path, "Direct", "main")
     ch.set_chub_source(tmp_path, cid, vid, "https://example.com/card.png")
     png = cards.dumps(ch.blank_card("Direct Updated"), "png")
@@ -666,8 +641,6 @@ def test_import_from_chub_direct_url_updates_in_place_when_already_linked(tmp_pa
 def _stale_png_and_node(definition):
     """A PNG whose embedded card is a stale revision, plus a chub node carrying
     `definition` (chub regenerates the PNG lazily, so the two can disagree)."""
-    from grimoire.store import cards
-
     stale = ch.blank_card("Imp")
     stale["data"].update({
         "description": "old description",
@@ -687,8 +660,6 @@ def _stale_png_and_node(definition):
 
 
 def test_import_from_chub_definition_overrides_stale_png_card(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     # chub's definition field names predate the tavern spec: `personality` holds
     # the card description, `tavern_personality` the personality, `description`
     # the creator notes.
@@ -724,8 +695,6 @@ def test_import_from_chub_definition_overrides_stale_png_card(tmp_path, monkeypa
 
 
 def test_import_from_chub_empty_definition_fields_keep_png_values(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     # An empty/missing definition field must not wipe the PNG card's value —
     # fail-safe if chub stops populating a field.
     png, node = _stale_png_and_node({
@@ -746,8 +715,6 @@ def test_import_from_chub_empty_definition_fields_keep_png_values(tmp_path, monk
 
 
 def test_import_from_chub_no_definition_keeps_png_card(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     png, node = _stale_png_and_node(None)
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: node)
     monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
@@ -761,17 +728,13 @@ def test_import_from_chub_no_definition_keeps_png_card(tmp_path, monkeypatch):
 
 
 def test_import_card_bakes_char_macro(tmp_path):
-    import json as _json
-
     card = ch.blank_card("Sera")
     card["data"]["first_mes"] = "{{char}} smiles at {{user}}"
-    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    cid, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json")
     assert ch.read_card(tmp_path, cid, vid)["data"]["first_mes"] == "Sera smiles at {{user}}"
 
 
 def test_import_from_chub_bakes_char_macro_in_definition_fields(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     png, node = _stale_png_and_node({"name": "Imp", "first_message": "{{char}} bows",
                                      "alternate_greetings": ["{{char}} waves"]})
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: node)
@@ -785,8 +748,6 @@ def test_import_from_chub_bakes_char_macro_in_definition_fields(tmp_path, monkey
 
 
 def test_import_from_chub_definition_applies_on_in_place_update(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     cid, vid = ch.create_character(tmp_path, "Imp", "main")
     ch.set_chub_source(tmp_path, cid, vid, "creator/imp")
     png, node = _stale_png_and_node({"first_message": "new hello",
@@ -803,8 +764,6 @@ def test_import_from_chub_definition_applies_on_in_place_update(tmp_path, monkey
 
 
 def test_download_chub_gallery_for_linked_version(tmp_path, monkeypatch):
-    from grimoire.store import assets, chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
@@ -819,8 +778,6 @@ def test_download_chub_gallery_for_linked_version(tmp_path, monkeypatch):
 
 
 def test_download_chub_gallery_clears_stale_images_from_a_shrinking_gallery(tmp_path, monkeypatch):
-    from grimoire.store import assets, chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {"id": 1, "hasGallery": True})
@@ -839,8 +796,6 @@ def test_download_chub_gallery_clears_stale_images_from_a_shrinking_gallery(tmp_
 
 
 def test_download_chub_gallery_no_gallery_on_chub(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {"id": 1, "hasGallery": False})
@@ -849,8 +804,6 @@ def test_download_chub_gallery_no_gallery_on_chub(tmp_path, monkeypatch):
 
 
 def test_download_chub_gallery_unlinked_version_raises(tmp_path):
-    from grimoire.store import chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     with pytest.raises(chub.ChubFetchError):
         ch.download_chub_gallery(tmp_path, cid, vid)
@@ -882,7 +835,6 @@ def test_download_chub_gallery_honors_legacy_character_level_link(tmp_path, monk
     # (read_character's display path) must still work for an explicit
     # gallery/lorebook download -- not just for showing the link in the UI.
     from grimoire.store import chub
-    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
     cid, default_vid = ch.create_character(tmp_path, "Abelha", "main")
     meta_path = tmp_path / "characters" / cid / "character.md"
@@ -895,8 +847,6 @@ def test_download_chub_gallery_honors_legacy_character_level_link(tmp_path, monk
 
 
 def test_download_chub_gallery_stream_yields_progress_per_image(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     node = {"id": 1, "hasGallery": True}
     monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: ["https://g/1.jpg", "https://g/2.jpg"])
@@ -912,8 +862,6 @@ def test_download_chub_gallery_stream_yields_progress_per_image(tmp_path, monkey
 
 
 def test_download_chub_gallery_stream_one_image_fails(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     node = {"id": 1, "hasGallery": True}
     monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: ["https://g/1.jpg", "https://g/2.jpg"])
@@ -936,8 +884,6 @@ def test_download_chub_gallery_stream_no_gallery_short_circuits(tmp_path):
 
 
 def test_download_chub_lorebooks_for_linked_version(tmp_path, monkeypatch):
-    from grimoire.store import chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
@@ -953,15 +899,12 @@ def test_download_chub_lorebooks_for_linked_version(tmp_path, monkeypatch):
 
 
 def test_download_chub_lorebooks_unlinked_version_raises(tmp_path):
-    from grimoire.store import chub
-
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     with pytest.raises(chub.ChubFetchError):
         ch.download_chub_lorebooks(tmp_path, cid, vid)
 
 
 def test_list_characters_counts_gallery_and_localized(tmp_path):
-    from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Sera")
     row = ch.list_characters(tmp_path)[0]
     assert (row["gallery_count"], row["localized_count"]) == (0, 0)
@@ -988,7 +931,6 @@ def test_list_characters_counts_greetings_of_default_version(tmp_path):
 
 
 def test_avatar_focus_exposed_on_read_and_list(tmp_path):
-    from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Sera")
     assert ch.read_character(tmp_path, cid)["versions"][0]["avatar_focus"] is None
     assert ch.list_characters(tmp_path)[0]["avatar_focus"] is None
@@ -1014,10 +956,7 @@ def test_dir_hash_tracks_meta_and_versions_not_assets(tmp_path):
 
 def _age_tree(root):
     """Back-date every file past statcache's racy window so caches may hold them."""
-    import os
-    import time
 
-    from grimoire.store import statcache
 
     old = time.time_ns() - 2 * statcache.RACY_WINDOW_NS
     for f in root.rglob("*"):
@@ -1026,8 +965,6 @@ def _age_tree(root):
 
 
 def test_list_characters_reads_no_cards_when_unchanged(tmp_path, monkeypatch):
-    from pathlib import Path
-
     cid, vid = ch.create_character(tmp_path, "Ada")
     ch.create_version(tmp_path, cid, "alt", ch.blank_card("Ada"))
     _age_tree(tmp_path)
@@ -1059,8 +996,6 @@ def test_list_characters_reflects_card_edits_after_warm_cache(tmp_path):
 
 
 def test_find_unlinked_versions_reads_no_cards_when_unchanged(tmp_path, monkeypatch):
-    from pathlib import Path
-
     cid, vid = ch.create_character(tmp_path, "Ada")
     ch.set_chub_source(tmp_path, cid, vid, "https://chub.ai/characters/a/b")
     ch.create_version(tmp_path, cid, "alt", ch.blank_card("Ada"))
@@ -1084,8 +1019,6 @@ def test_find_unlinked_versions_reads_no_cards_when_unchanged(tmp_path, monkeypa
 
 def _avatar_png(w: int = 2, h: int = 2) -> bytes:
     """A PNG with real pixels, unlike the 1x1 placeholder `cards.dumps` writes."""
-    import struct
-    import zlib
 
     def chunk(typ: bytes, payload: bytes) -> bytes:
         body = typ + payload
@@ -1101,8 +1034,6 @@ def _image_plane(png: bytes) -> bytes:
     """Everything but the tEXt chunks: PNG export writes the card into one, so a
     re-imported avatar is never byte-equal to the original even when the picture
     is."""
-    import struct
-
     out, pos = b"", 8
     while pos + 8 <= len(png):
         (length,) = struct.unpack(">I", png[pos:pos + 4])
@@ -1115,7 +1046,6 @@ def _image_plane(png: bytes) -> bytes:
 
 @pytest.mark.parametrize("fmt", ["json", "png", "charx"])
 def test_export_roundtrips_the_stored_avatar(tmp_path, fmt):
-    from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     avatar = _avatar_png(4, 3)
     assets.put_image(tmp_path, cid, vid, assets.AVATAR, avatar, "png")
@@ -1134,11 +1064,7 @@ def test_export_names_the_avatar_from_its_bytes_not_its_stored_suffix(tmp_path):
     """#321: the exported card's `data:` mime and its CHARX member name both
     come from the stored avatar's extension, so a JPEG a store holds as
     `avatar.png` used to leave the app still claiming to be a PNG."""
-    import json
-    import zipfile
-    from io import BytesIO
 
-    from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     jpg = b"\xff\xd8\xff" + b"JPEGDATA"
     assets.put_image(tmp_path, cid, vid, assets.AVATAR, jpg, "png")  # misnamed on disk
@@ -1206,7 +1132,6 @@ def test_import_keeps_the_embedded_avatar_out_of_the_stored_card(tmp_path, fmt):
 
 
 def test_export_without_an_avatar_is_the_bare_card(tmp_path):
-    from grimoire.store import cards
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     for fmt in ("json", "png", "charx"):
         blob, _filename = ch.export_card(tmp_path, cid, vid, fmt)
@@ -1238,9 +1163,7 @@ def test_import_keeps_the_long_standing_candidate_order(tmp_path, monkeypatch):
     # the card lists them, exactly as before #25 -- our own exports put their
     # entry first, so nothing about the round trip needs that precedence changed.
     import base64 as _b64
-    import json as _json
 
-    from grimoire.store import assets
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [
         {"type": "icon", "uri": "https://x/remote.png", "name": "remote", "ext": "png"},
@@ -1249,7 +1172,7 @@ def test_import_keeps_the_long_standing_candidate_order(tmp_path, monkeypatch):
     ]
     monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"\x89PNG\r\n\x1a\nREMOTE", "image/png"))
 
-    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    cid, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json")
 
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
     assert p is not None and p.read_bytes() == b"\x89PNG\r\n\x1a\nREMOTE"
@@ -1264,7 +1187,6 @@ def test_png_import_still_prefers_the_pngs_own_pixels(tmp_path):
     # card's copy only wins when the pixels are our own placeholder.
     import base64 as _b64
 
-    from grimoire.store import assets, cards
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [
         {"type": "icon", "uri": "data:image/png;base64," + _b64.b64encode(b"\x89PNG\r\n\x1a\nOTHER").decode(),
@@ -1287,14 +1209,12 @@ def test_round_trip_keeps_a_card_that_already_embedded_its_own_avatar(tmp_path):
     # copy export added, or the character comes back an asset lighter with a
     # different hash (Codex review).
     import base64 as _b64
-    import json as _json
 
-    from grimoire.store import assets
     avatar = _avatar_png()
     uri = "data:image/png;base64," + _b64.b64encode(avatar).decode()
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [{"type": "icon", "uri": uri, "name": "main", "ext": "png"}]
-    cid, vid = ch.create_character(tmp_path, "Seraphine", card=_json.loads(_json.dumps(card)))
+    cid, vid = ch.create_character(tmp_path, "Seraphine", card=json.loads(json.dumps(card)))
     assets.put_image(tmp_path, cid, vid, assets.AVATAR, avatar, "png")
 
     blob, _filename = ch.export_card(tmp_path, cid, vid, "json")
@@ -1311,13 +1231,12 @@ def test_import_unhooks_the_reference_it_actually_resolved(tmp_path):
     # removal has to walk the same order: dropping the other copy would leave
     # the consumed one -- base64 and all -- on the stored card (Codex review).
     import base64 as _b64
-    import json as _json
     uri = "data:image/png;base64," + _b64.b64encode(b"\x89PNG\r\n\x1a\nSAME").decode()
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [{"type": "icon", "uri": uri, "name": "main", "ext": "png"}]
     card["data"]["avatar"] = uri
 
-    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    cid, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json")
 
     stored = ch.read_card(tmp_path, cid, vid)["data"]
     assert "assets" not in stored           # the entry that resolved is gone
@@ -1328,13 +1247,12 @@ def test_import_keeps_an_asset_of_another_kind_sharing_the_avatar_uri(tmp_path):
     # One image can serve as both icon and background. Consuming the icon must
     # not take the background's reference with it (Codex review).
     import base64 as _b64
-    import json as _json
     uri = "data:image/png;base64," + _b64.b64encode(b"\x89PNG\r\n\x1a\nSHARED").decode()
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [{"type": "icon", "uri": uri, "name": "main", "ext": "png"},
                               {"type": "background", "uri": uri, "name": "bg", "ext": "png"}]
 
-    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    cid, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json")
 
     kept = ch.read_card(tmp_path, cid, vid)["data"]["assets"]
     assert [a["type"] for a in kept] == ["background"]
@@ -1344,19 +1262,15 @@ def test_import_bounds_the_bytes_one_card_can_inflate(tmp_path, monkeypatch):
     # A hostile CHARX can list over-compressed members as its avatar many times
     # over. Every miss costs a decompression, so one byte budget is spent across
     # the whole walk rather than granted per candidate (Codex review).
-    import json as _json
-    import zipfile as _zip
-    from io import BytesIO
 
-    from grimoire.store import cards
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [
         {"type": "icon", "uri": f"embeded://assets/decoy_{i}.png", "name": f"d{i}", "ext": "png"}
         for i in range(50)
     ]
     buf = BytesIO()
-    with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as z:
-        z.writestr("card.json", _json.dumps(card))
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("card.json", json.dumps(card))
         for i in range(50):
             z.writestr(f"assets/decoy_{i}.png", b"\x00" * 8192)  # not an image: never resolves
 
@@ -1381,19 +1295,15 @@ def test_import_bounds_the_bytes_one_card_can_inflate(tmp_path, monkeypatch):
 def test_import_bounds_lookups_even_when_no_bytes_are_read(tmp_path):
     # Empty members cost no budget, so a byte cap alone bounds nothing: every
     # candidate would still re-parse the whole archive (Codex review).
-    import json as _json
-    import zipfile as _zip
-    from io import BytesIO
 
-    from grimoire.store import cards
     card = ch.blank_card("Seraphine")
     card["data"]["assets"] = [
         {"type": "icon", "uri": f"embeded://assets/empty_{i}.png", "name": f"e{i}", "ext": "png"}
         for i in range(200)
     ]
     buf = BytesIO()
-    with _zip.ZipFile(buf, "w", _zip.ZIP_DEFLATED) as z:
-        z.writestr("card.json", _json.dumps(card))
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("card.json", json.dumps(card))
         for i in range(200):
             z.writestr(f"assets/empty_{i}.png", b"")
 
@@ -1479,7 +1389,6 @@ def test_list_characters_carries_the_avatar_cache_token(tmp_path):
 
 
 def test_avatar_cache_token_changes_when_the_bytes_do(tmp_path):
-    from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"\x89PNG-one", "png")
     before = ch.list_characters(tmp_path)[0]["avatar_v"]
@@ -1488,7 +1397,6 @@ def test_avatar_cache_token_changes_when_the_bytes_do(tmp_path):
 
 
 def test_read_character_carries_a_cache_token_per_image(tmp_path):
-    from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"\x89PNG-one", "png")
     assets.put_image(tmp_path, cid, vid, "gallery_0", b"\x89PNG-two", "png")
@@ -1503,9 +1411,6 @@ def _stale_sibling(tmp_path, cid, vid, ext="gif"):
     """The state `put_in` leaves for a moment and leaves for good if its unlink
     fails: two files sharing one stem. `path_in` resolves newest-wins, and
     self-heals exactly this, so it is reachable state and not a hypothetical."""
-    import os
-
-    from grimoire.store import assets
     served = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
     stale = served.with_suffix(f".{ext}")
     stale.write_bytes(b"stale bytes of a different length")
@@ -1530,7 +1435,6 @@ def test_avatar_token_names_the_file_the_server_actually_serves(tmp_path, ext):
 
 @pytest.mark.parametrize("ext", ["gif", "webp"])
 def test_per_image_token_names_the_file_the_server_actually_serves(tmp_path, ext):
-    from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"\x89PNG-served", "png")
     served_v = _stale_sibling(tmp_path, cid, vid, ext)
@@ -1668,10 +1572,9 @@ def test_blank_label_falls_back_rather_than_showing_an_empty_row(tmp_path):
 
 
 def test_import_card_names_the_version_it_creates(tmp_path):
-    import json as _json
     cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
     card = ch.blank_card("Winifred Ashcroft")
-    data = _json.dumps(card).encode()
+    data = json.dumps(card).encode()
     _, vid = ch.import_card(tmp_path, data, "json", into_cid=cid, version_name="after the flood")
     assert vid == "after-the-flood"
     labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
@@ -1679,11 +1582,10 @@ def test_import_card_names_the_version_it_creates(tmp_path):
 
 
 def test_import_without_a_version_name_keeps_the_character_version_fallback(tmp_path):
-    import json as _json
     cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
     card = ch.blank_card("Winifred Ashcroft")
     card["data"]["character_version"] = "chub-v3"
-    _, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json", into_cid=cid)
+    _, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json", into_cid=cid)
     assert vid == "chub-v3"
     labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
     assert labels[vid] == "chub-v3"
@@ -1694,10 +1596,9 @@ def test_a_label_the_caller_did_not_choose_never_masks_the_card_version(tmp_path
     # store "default" as the label -- the placeholder `create_character` uses
     # for a version nobody named -- which then beat the card's own
     # `character_version` in the fallback chain and hid it.
-    import json as _json
     card = ch.blank_card("Winifred Ashcroft")
     card["data"]["character_version"] = "young"
-    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    cid, vid = ch.import_card(tmp_path, json.dumps(card).encode(), "json")
     assert vid == "default"      # the id is unchanged: nothing re-slugs
     labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
     assert labels[vid] == "young"
@@ -1706,12 +1607,11 @@ def test_a_label_the_caller_did_not_choose_never_masks_the_card_version(tmp_path
 def test_an_in_place_re_import_keeps_the_name_the_version_was_given(tmp_path):
     # A chub re-download REPLACES the stored card, and the downloaded one knows
     # nothing about a label somebody typed here.
-    import json as _json
     cid, _ = ch.create_character(tmp_path, "Winifred Ashcroft")
     vid = ch.create_version(tmp_path, cid, "after the flood", ch.blank_card("Winifred Ashcroft"))
     fresh = ch.blank_card("Winifred Ashcroft")
     fresh["data"]["description"] = "redownloaded"
-    ch.import_card(tmp_path, _json.dumps(fresh).encode(), "json", into_cid=cid, update_vid=vid)
+    ch.import_card(tmp_path, json.dumps(fresh).encode(), "json", into_cid=cid, update_vid=vid)
     stored = ch.read_card(tmp_path, cid, vid)
     assert stored["data"]["description"] == "redownloaded"
     labels = {v["id"]: v["name"] for v in ch.read_character(tmp_path, cid)["versions"]}
@@ -1736,9 +1636,6 @@ def test_a_card_whose_extensions_are_not_an_object_still_reads(tmp_path):
 # ---- chub gallery: ingest everything first, replace only after -------------
 
 def _gallery_png(seed: int, size=(8, 6)) -> bytes:
-    import io
-
-    from PIL import Image
     im = Image.new("RGB", size, (seed * 40 % 256, seed * 90 % 256, 20))
     buf = io.BytesIO()
     im.save(buf, "PNG")
@@ -1746,7 +1643,6 @@ def _gallery_png(seed: int, size=(8, 6)) -> bytes:
 
 
 def _gallery_setup(tmp_path, monkeypatch, paths, served):
-    from grimoire.store import chub
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: list(paths))
 
@@ -1762,13 +1658,11 @@ def _gallery_setup(tmp_path, monkeypatch, paths, served):
 
 
 def _gallery_ids(tmp_path, cid, vid):
-    from grimoire.store import assets
     return {i["name"]: assets.image_id(tmp_path, cid, vid, i["name"])
             for i in assets.list_images(tmp_path, cid, vid) if i["name"].startswith("gallery_")}
 
 
 def test_chub_gallery_failure_midway_keeps_old_gallery(tmp_path, monkeypatch):
-    from grimoire.store import assets
     old = [_gallery_png(1), _gallery_png(2)]
     cid, vid, node = _gallery_setup(
         tmp_path, monkeypatch, ["u/1", "u/2"],
@@ -1805,7 +1699,6 @@ def test_chub_gallery_replaces_after_download(tmp_path, monkeypatch):
 
 
 def test_chub_replaced_slot_drops_description(tmp_path, monkeypatch):
-    from grimoire.store import assets, image_descriptions
     cid, vid, node = _gallery_setup(
         tmp_path, monkeypatch, ["u/1", "u/2"],
         {"u/1": (_gallery_png(1), "png"), "u/2": (_gallery_png(2), "png")})
@@ -1825,7 +1718,6 @@ def test_chub_replaced_slot_drops_description(tmp_path, monkeypatch):
 
 
 def test_chub_gallery_records_each_url_as_a_source(tmp_path, monkeypatch):
-    from grimoire.store import assets, image_store
     cid, vid, node = _gallery_setup(
         tmp_path, monkeypatch, ["https://g.example/1.png"],
         {"https://g.example/1.png": (_gallery_png(1), "png")})
@@ -1835,7 +1727,6 @@ def test_chub_gallery_records_each_url_as_a_source(tmp_path, monkeypatch):
 
 
 def test_import_card_url_avatar_records_source_url(tmp_path, monkeypatch):
-    from grimoire.store import assets, image_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     card = ch.blank_card("Mara")
     card["data"]["assets"] = [{"type": "icon", "name": "main", "uri": "https://a.example/mara.png",
@@ -1847,11 +1738,7 @@ def test_import_card_url_avatar_records_source_url(tmp_path, monkeypatch):
 
 
 def test_png_export_of_jpeg_avatar_embeds_real_pixels(tmp_path):
-    import io
 
-    from PIL import Image
-
-    from grimoire.store import assets, cards
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     buf = io.BytesIO()
     Image.new("RGB", (24, 16), (200, 30, 30)).save(buf, "JPEG")
@@ -1869,16 +1756,12 @@ def test_png_export_of_jpeg_avatar_embeds_real_pixels(tmp_path):
 
 
 def _real_jpeg(color, size=(24, 16)) -> bytes:
-    import io
-
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", size, color).save(buf, "JPEG")
     return buf.getvalue()
 
 
 def test_png_export_of_jpeg_avatar_reimports_the_original_bytes(tmp_path, monkeypatch):
-    from grimoire.store import assets
     src, dest = tmp_path / "src", tmp_path / "dest"
     src.mkdir()
     dest.mkdir()
@@ -1900,9 +1783,6 @@ def test_png_export_of_jpeg_avatar_reimports_the_original_bytes(tmp_path, monkey
 
 
 def test_png_import_keeps_plane_when_carried_avatar_is_a_different_picture(tmp_path, monkeypatch):
-    import base64
-
-    from grimoire.store import assets, cards
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     plane = _gallery_png(3, size=(10, 10))
     other = _real_jpeg((10, 200, 10))
@@ -1920,9 +1800,6 @@ def test_png_import_keeps_plane_when_carried_avatar_is_a_different_picture(tmp_p
 # ---- final review: the PNG plane is the carried avatar as a browser shows it ----
 
 def _noise_rgb(seed: int, size=(24, 16)):
-    import random
-
-    from PIL import Image
     rng = random.Random(seed)
     im = Image.new("RGB", size)
     im.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
@@ -1931,29 +1808,23 @@ def _noise_rgb(seed: int, size=(24, 16)):
 
 
 def _jpeg_bytes(im, **kw) -> bytes:
-    import io
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=90, **kw)
     return buf.getvalue()
 
 
 def _exif6_jpeg() -> bytes:
-    from PIL import Image
     ex = Image.Exif()
     ex[0x0112] = 6
     return _jpeg_bytes(_noise_rgb(31), exif=ex.tobytes())
 
 
 def _icc_jpeg() -> bytes:
-    from PIL import ImageCms
     icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
     return _jpeg_bytes(_noise_rgb(32), icc_profile=icc)
 
 
 def _animated_gif() -> bytes:
-    import io
-
-    from PIL import Image
     frames = [Image.new("RGB", (12, 10), c) for c in ((255, 0, 0), (0, 0, 255))]
     buf = io.BytesIO()
     frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:],
@@ -1965,7 +1836,6 @@ def _round_trip_png(tmp_path, monkeypatch, avatar: bytes, ext: str):
     """Export a character whose avatar is `avatar` as a PNG card, import that
     card into a fresh store. Returns (stored original, exported blob, the
     source card hash, the imported avatar path, the imported card hash)."""
-    from grimoire.store import assets
     src, dest = tmp_path / "src", tmp_path / "dest"
     src.mkdir()
     dest.mkdir()
@@ -1983,9 +1853,6 @@ def _round_trip_png(tmp_path, monkeypatch, avatar: bytes, ext: str):
 
 
 def test_png_round_trip_of_an_exif_oriented_jpeg_keeps_the_original(tmp_path, monkeypatch):
-    import io
-
-    from PIL import Image, ImageOps
     original, blob, source_hash, p, new_hash = _round_trip_png(
         tmp_path, monkeypatch, _exif6_jpeg(), "jpg")
     assert p.read_bytes() == original and p.suffix == ".jpg"
@@ -2007,9 +1874,6 @@ def test_png_round_trip_of_an_icc_jpeg_keeps_the_original(tmp_path, monkeypatch)
 
 
 def test_png_round_trip_of_an_animated_gif_keeps_the_animation(tmp_path, monkeypatch):
-    import io
-
-    from PIL import Image
     original, _blob, source_hash, p, new_hash = _round_trip_png(
         tmp_path, monkeypatch, _animated_gif(), "gif")
     assert p.read_bytes() == original and p.suffix == ".gif"
@@ -2021,13 +1885,9 @@ def test_png_round_trip_of_an_animated_gif_keeps_the_animation(tmp_path, monkeyp
 def test_png_import_keeps_a_plane_that_is_the_carried_picture_turned(tmp_path, monkeypatch):
     """The same raster, but not as a browser shows the carried copy: the plane
     is a different picture on screen, so it stays."""
-    import base64
-    import io
 
-    from grimoire.store import assets, cards
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     carried = _exif6_jpeg()
-    from PIL import Image
     with Image.open(io.BytesIO(carried)) as im:
         buf = io.BytesIO()
         im.convert("RGB").save(buf, "PNG")              # NOT turned
@@ -2047,7 +1907,6 @@ def _refuse_decoding(monkeypatch, size) -> list:
     reads (`Image.open`, `.size`) still work, `load()` and `convert()` raise.
     Returns the record -- the code under test swallows the raise, so the
     caller asserts the record is empty."""
-    from PIL import Image, ImageFile
     real_load, real_convert = ImageFile.ImageFile.load, Image.Image.convert
     decoded: list = []
 
@@ -2077,11 +1936,7 @@ def test_png_round_trip_of_an_over_budget_avatar_never_decodes_it(tmp_path, monk
     over-budget identity) is not decoded to draw the plane either: the export
     writes the placeholder and carries the original, and the import takes the
     carried original back without decoding it."""
-    import io
 
-    from PIL import Image
-
-    from grimoire.store import assets, cards, image_hash, image_store
     avatar = make()
     with Image.open(io.BytesIO(avatar)) as im:
         size = im.size
@@ -2115,9 +1970,6 @@ def test_png_import_never_decodes_an_over_budget_carried_avatar(tmp_path, monkey
     """A third-party PNG whose plane is a real picture and whose card carries
     an over-budget avatar: the carried copy is not decoded to compare it, and
     the PNG's own pixels stay the picture, as for any plane that is not ours."""
-    import base64
-
-    from grimoire.store import assets, cards, image_hash
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     plane = _gallery_png(3, size=(10, 10))
     carried = _real_jpeg((10, 200, 10), size=(24, 16))
@@ -2138,7 +1990,6 @@ def test_chub_redownload_keeps_the_caption_of_a_legacy_slot(tmp_path, monkeypatc
     """A gallery slot written before the image store (a bare `gallery_0.png`)
     holding the very picture chub serves again keeps its caption: identity is
     compared for legacy slots too, not only for placements."""
-    from grimoire.store import assets, image_descriptions
     picture = _gallery_png(4)
     cid, vid, node = _gallery_setup(tmp_path, monkeypatch, ["u/1"],
                                     {"u/1": (picture, "png")})
@@ -2155,12 +2006,10 @@ def test_chub_redownload_keeps_the_caption_of_a_legacy_slot(tmp_path, monkeypatc
 
 
 def _cmyk_jpeg() -> bytes:
-    from PIL import Image
     return _jpeg_bytes(Image.merge("CMYK", (*_noise_rgb(33).split(), _noise_rgb(34).getchannel(0))))
 
 
 def _palette(fmt: str) -> bytes:
-    import io
     im = _noise_rgb(35).quantize(colors=16)
     assert im.mode == "P"
     buf = io.BytesIO()
@@ -2179,9 +2028,6 @@ def test_png_round_trip_of_a_cmyk_or_palette_avatar_keeps_the_original(
     expansion, so neither shares a pixel identity with the plane -- which is
     why the plane is compared as decoded pixels (`_shown`), not by id. The
     carried original comes back, not the plane."""
-    import io
-
-    from PIL import Image
     avatar = make()
     with Image.open(io.BytesIO(avatar)) as im:
         assert im.mode in ("CMYK", "P")
@@ -2196,9 +2042,6 @@ def test_chub_gallery_replace_lists_slots_inside_its_lock_hold(tmp_path, monkeyp
     left out of a listing taken before the locks, so it survived the replace
     on a stale view. The listing is taken under the hold now: a slot that
     exists when the replacement takes its locks is replaced like the rest."""
-    import contextlib
-
-    from grimoire.store import assets
     cid, vid, node = _gallery_setup(tmp_path, monkeypatch, ["u/1"],
                                     {"u/1": (_gallery_png(1), "png")})
     assets.put_image(tmp_path, cid, vid, "gallery_0", _gallery_png(2), "png")
@@ -2226,11 +2069,7 @@ def test_chub_gallery_replace_cannot_wedge_against_a_promotion(tmp_path, monkeyp
     promotion holding `avatar` while it waits for `gallery_0` -- which the
     replace holds -- would wedge both for good (ABBA). A stray promote-tmp
     whose rename keeps failing makes every healing listing try."""
-    import threading
-    import time
-    from pathlib import Path
 
-    from grimoire.store import assets, image_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid, vid = ch.create_character(tmp_path, "Seraphine")
     assets.put_image(tmp_path, cid, vid, "avatar", _gallery_png(1), "png")
@@ -2250,7 +2089,6 @@ def test_chub_gallery_replace_cannot_wedge_against_a_promotion(tmp_path, monkeyp
     inside = threading.Event()
     replacer = []
 
-    import contextlib
 
     @contextlib.contextmanager
     def held(dd, *names):

@@ -17,11 +17,13 @@ from grimoire.store import (
     branch,
     campaigns,
     characters,
+    entities,
     group_refs,
     journal,
     knowledge,
     knowledge_scene,
     overlay,
+    reclassify,
     responses,
     scenes,
     undo,
@@ -615,7 +617,6 @@ def test_a_branch_carries_withholding_narrowed_to_the_kept_posts(cid):
 
 
 def test_a_world_group_reclassify_prunes_the_grants_of_campaigns_that_followed_it(cid):
-    from grimoire.store import entities, reclassify
     wid = campaigns.read_campaign(cid)["meta"]["world"]
     gid = entities.create_entity(worlds.world_root(wid), "groups", "The Saltmarch Watch")
     knowledge.add(cid, _entry(audience=f"groups:{gid}", name="The Saltmarch Watch"))
@@ -637,7 +638,6 @@ def test_a_branch_refuses_when_any_entry_does_not_read(cid):
 
 
 def test_an_unreadable_file_does_not_block_a_world_delete_of_what_it_cannot_name(cid):
-    from grimoire.store import entities
     wid = campaigns.read_campaign(cid)["meta"]["world"]
     wroot = worlds.world_root(wid)
     lid = entities.create_entity(wroot, "locations", "The Pier")
@@ -663,7 +663,6 @@ def test_retiring_only_undo_offers_still_reports_a_write(cid):
 
 
 def test_a_campaign_keeping_its_own_copy_does_not_block_a_world_delete(cid):
-    from grimoire.store import entities
     wid = campaigns.read_campaign(cid)["meta"]["world"]
     wroot = worlds.world_root(wid)
     gid = entities.create_entity(wroot, "groups", "The Saltmarch Watch")

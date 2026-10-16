@@ -1,4 +1,6 @@
 import importlib
+import json
+from pathlib import Path
 
 import pytest
 
@@ -115,7 +117,6 @@ def test_create_read_update_delete_openai_compatible(monkeypatch, tmp_path):
     s.llm_connections.update_connection(cid, name="z.ai GLM (renamed)")
     assert s.llm_connections.read_connection_raw(cid)["name"] == "z.ai GLM (renamed)"
     s.llm_connections.delete_connection(cid)
-    import pytest
     with pytest.raises(s.llm_connections.ConnectionNotFound):
         s.llm_connections.read_connection_raw(cid)
 
@@ -210,7 +211,6 @@ def test_a_sidecar_written_before_the_stamp_existed_still_reads(monkeypatch, tmp
     """`fetched_by` arrived with #398, so every catalog cached before it has
     none. A refresh is not worth failing over a field that only decides whether
     a lost response can be recovered."""
-    import json
     s = reload_with_home(monkeypatch, tmp_path)
     cid = s.llm_connections.create_connection("openai_compatible", "Endpoint",
                                               base_url="https://x")
@@ -305,7 +305,6 @@ def test_delete_clears_active_id_even_if_file_removal_then_fails(monkeypatch, tm
     cid = s.llm_connections.create_connection("openai_compatible", "Endpoint", base_url="https://x")
     s.write_config(active_connection_id=cid)
 
-    from pathlib import Path
     original_unlink = Path.unlink
     state = {"failed_once": False}
 

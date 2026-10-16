@@ -18,6 +18,7 @@ Every provider, name and key below is invented.
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 
 import pytest
@@ -130,7 +131,6 @@ def _rev(conn: str) -> str:
 
 
 def _hand_write(conn: str, doc: object) -> None:
-    import json
     path = llm_connections.facts_path(conn)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc), encoding="utf-8")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -242,8 +243,6 @@ def test_no_write_replaces_a_file_it_could_not_read(conn, monkeypatch, write):
     it) is refused as well -- rewritten from an empty read, it would hold only
     this write, and every other model's verified results and overrides would
     be gone. It is the transient case, so it is not `FactsMangledError`."""
-    from pathlib import Path
-
     cid, rev = conn
     assert facts.record_verified(cid, "other", rev, {"vision": _ok()})
     p = llm_connections.facts_path(cid)
@@ -438,8 +437,6 @@ QWEN_QUERY = ("Instruct: Given a passage of a story, retrieve the lore, records 
 
 
 def test_embedding_options_are_a_stated_fact(conn):
-    from grimoire import wire
-
     cid, rev = conn
     facts.state(cid, "embed-1", embedding={**NOMIC_BLOCK, "colour": "red"})
     assert facts.read(cid)["embed-1"]["embedding"] == NOMIC_BLOCK   # unknown key dropped
@@ -576,8 +573,6 @@ def test_no_block_reads_as_no_options(conn):
 
 
 def test_adopted_strict_raises_on_a_held_file(conn, monkeypatch):
-    from pathlib import Path
-
     cid, rev = conn
     facts.state(cid, "m", prefill=True)
     p = llm_connections.facts_path(cid)

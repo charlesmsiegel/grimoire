@@ -22,8 +22,10 @@ from pathlib import Path
 
 import pytest
 
-from grimoire import decisions
-from grimoire.store.continuity import identity
+from grimoire import decisions, llm
+from grimoire.store import paths
+from grimoire.store import response_protocol as rp
+from grimoire.store.continuity import identity, reconcile
 from tests.llm_fakes import decision_reply
 
 REPO = Path(__file__).resolve().parents[2]
@@ -439,8 +441,6 @@ def test_speaker_is_gated_on_what_the_call_site_stores():
     today through the frozen `selector_parse` over the round's eligible refs,
     after the switch through the production `selection_of`. Both of today's
     issue strings survive, and a null hands control back with no issue."""
-    from grimoire.store import response_protocol as rp
-
     conv = _speaker()
     assert not conv.explain
     assert _from_legacy(conv.legacy)
@@ -494,8 +494,6 @@ def test_speaker_near_twin_out_of_the_roster_resolves_to_the_listed_ref():
     digits and single hyphens, on which `normalise` is one-to-one -- the test
     below holds that for every pair of slugs it can make from one stem. It
     takes a hand-made id (`safe_id` accepts `mara_vale`)."""
-    from grimoire.store import paths
-    from grimoire.store import response_protocol as rp
 
     roster = [{"ref": "characters:mara-vale", "name": "Mara Vale"},
               {"ref": "characters:winifred", "name": "Winifred"}]
@@ -525,8 +523,6 @@ def test_continuity_identity_is_gated_on_what_the_call_site_stores():
     today through the frozen parse, after the switch through the production
     `answers_of`. Both sides are settled by the production `take` on a fresh
     in-memory examination, so the acceptance guard is the same code."""
-    from grimoire.store.continuity import identity
-
     conv = _identity_gate()
     assert conv.explain
     assert _from_legacy(conv.legacy)
@@ -591,8 +587,6 @@ def test_continuity_reconcile_is_gated_on_the_proposals_the_sweep_stores():
     production `proposals_of`. The fixture holds one candidate per
     vocabulary, and the thread closure shows all four scenes, so one item
     asks three evidence questions and has a fourth scene to leave out."""
-    from grimoire.store.continuity import reconcile
-
     conv = _reconcile_gate()
     assert conv.explain
     assert _from_legacy(conv.legacy)
@@ -785,8 +779,6 @@ def test_run_gate_flag_exits_zero_when_all_pass(tmp_path, monkeypatch, capsys):
 def test_run_gate_flag_is_offline_and_isolated(tmp_path, monkeypatch, capsys):
     """`--gate` constructs no client, and judges each conversion in a
     throwaway store rather than the user's real one."""
-    from grimoire import llm
-
     def no_client(*args, **kwargs):
         raise AssertionError("--gate constructed an LLMClient")
 

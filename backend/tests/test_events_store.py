@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from grimoire.store import calendars, campaigns, clock, events, worlds
+from grimoire.store import calendars, campaigns, clock, events, scenes, worlds
 
 
 def _campaign(monkeypatch, tmp_path, calendar="gregorian"):
@@ -318,7 +318,6 @@ def test_a_long_skip_still_fires_a_distant_event(monkeypatch, tmp_path):
 def test_a_scene_date_fires_what_it_carries_the_clock_past(monkeypatch, tmp_path):
     """Most campaigns move time only by dating scenes; an event only
     `POST /advance` could fire would sit through the session it was set for."""
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
     clock.advance(cid, to="2026-05-01", reason="start")
     eid = events.create(cid, "Coronation", "2026-05-09")

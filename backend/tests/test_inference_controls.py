@@ -14,13 +14,14 @@ import itertools
 
 import pytest
 
+from grimoire import llm_reasoning, wire
 from grimoire import llm_sampling as ls
-from grimoire import wire
-from grimoire.llm import LLMClient
+from grimoire.llm import LLMClient, _preset_refusal
 from grimoire.llm_errors import LLMError
 from grimoire.store import llm_connections, sampler_presets
 from grimoire.store.inference import capabilities, controls, providers, resolve
 from tests.llm_fakes import RefusingProvider
+from tests.test_llm import FakeProvider
 
 
 def _conn(kind="openrouter", params=None, *, model="m", provider_id="", model_params=None,
@@ -238,7 +239,6 @@ def test_the_openai_host_rule_agrees_with_the_provider_presets(url):
 
 
 async def test_the_openai_endpoint_receives_max_completion_tokens():
-    from tests.test_llm import FakeProvider
     op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = _conn("openai_compatible", {"max_tokens": 300}, base_url="https://api.openai.com/v1",
@@ -302,7 +302,6 @@ def test_an_openai_non_reasoning_model_is_not_sent_reasoning_effort(model):
 
 
 async def test_a_non_reasoning_openai_model_never_sees_reasoning_effort_on_the_wire():
-    from tests.test_llm import FakeProvider
     op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = dataclasses.replace(_openai_model("gpt-4.1"), api_key="k")
@@ -664,7 +663,6 @@ def test_off_where_the_catalog_does_not_say_is_unknown(features):
 
 
 async def test_disabled_thinking_reaches_the_anthropic_request():
-    from tests.test_llm import FakeProvider
     an = FakeProvider("an")
     client = LLMClient(openrouter=FakeProvider("or"), claude=FakeProvider("cl"),
                        openai_compatible=FakeProvider("oc"), anthropic=an)
@@ -760,7 +758,6 @@ def test_the_legacy_glm_setting_is_never_read(legacy, model):
     """Slice I: a connection's legacy GLM effort sends nothing on its own
     (a legacy store's rides on a derived reasoning preset, `legacy_plan`), and
     the preset's effort is what `glm_effort` speaks for."""
-    from grimoire import llm_reasoning
     conn = _conn("openai_compatible", {}, base_url=GLM["base_url"], model=model,
                  reasoning_effort=legacy)
     assert "reasoning_effort" not in ls.effective(conn)["effective"]
@@ -806,7 +803,6 @@ def test_the_legacy_setting_is_ignored_on_other_kinds():
 
 # ---- the facade sends what `effective` decided ----
 async def test_an_openrouter_effort_reaches_the_request():
-    from tests.test_llm import FakeProvider
     op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = _conn("openrouter", {"temperature": 0.5, "reasoning_effort": "high"},
@@ -816,7 +812,6 @@ async def test_an_openrouter_effort_reaches_the_request():
 
 
 async def test_an_openai_effort_reaches_the_request_as_a_keyword():
-    from tests.test_llm import FakeProvider
     op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = _conn("openai_compatible", {"reasoning_effort": "low", "temperature": 1},
@@ -876,7 +871,6 @@ async def test_an_unrelated_400_beside_an_adaptive_effort_still_falls_back():
     ("You have reached your specified workspace API usage limits for max_tokens and "
      "output_config.effort.")])
 def test_a_spend_limit_400_is_never_a_preset_refusal(why):
-    from grimoire.llm import _preset_refusal
     conn = _claude_api({"reasoning_effort": "high", "max_tokens": 900, "stop": ["x"]}, CURRENT)
     assert _preset_refusal(LLMError("bad_response", why, status=400),
                            _chain(conn).primary) is None
@@ -887,7 +881,6 @@ def test_a_thinking_type_is_not_a_spelling_of_its_own():
     other `type` (a content block's) must not read as the preset refused."""
     exc = LLMError("bad_response", "messages.0.content.0.type: Input should be 'text'",
                    status=400)
-    from grimoire.llm import _preset_refusal
     assert _preset_refusal(
         exc, _chain(_claude_api({"reasoning_effort": "high"}, CURRENT)).primary) is None
 

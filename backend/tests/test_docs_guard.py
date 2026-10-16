@@ -44,11 +44,26 @@ from __future__ import annotations
 
 import ast
 import importlib
+import inspect
 import itertools
 import pathlib
 import re
+import typing
 
 import pytest
+
+from grimoire.routes import runs
+from grimoire.store import (
+    atomic,
+    backups,
+    inference_keys,
+    locks,
+    pricing,
+    routing,
+    usage,
+    usage_rollup,
+)
+from grimoire.store.inference import migrate
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = ROOT / "backend" / "src" / "grimoire"
@@ -355,8 +370,6 @@ def test_agents_points_at_claude_md():
 def test_store_guarantees_quotes_the_real_lock_timeout():
     """The doc states the contention timeout as a number; that number is a
     constant in `store/locks.py`, and the two must not disagree."""
-    from grimoire.store import locks
-
     text = _read(GUARANTEES)
     seconds = int(locks.LOCK_TIMEOUT)
     assert f"{seconds} s" in text or f"{seconds} seconds" in text, (
@@ -371,8 +384,6 @@ def test_store_guarantees_names_every_busy_exception():
     A new lock domain arrives as a new `StoreBusy` subclass, and a caller
     handling 409s needs to know it exists.
     """
-    from grimoire.store import locks
-
     text = _read(GUARANTEES)
     subclasses = sorted(
         name for name, obj in vars(locks).items()
@@ -406,8 +417,6 @@ def _section(text: str, heading: str) -> str:
 def test_store_guarantees_names_the_image_store_locks():
     """The image store's two leaf locks and their stripe count, by the names
     `store/locks.py` gives them -- and those names must still be there."""
-    from grimoire.store import locks
-
     section = _section(_read(GUARANTEES), "The image store")
     names = ("image_object_lock", "image_ingest_gc_lock", "IMAGE_OBJECT_STRIPES")
     missing = [n for n in names if n not in section]
@@ -422,8 +431,6 @@ def test_store_guarantees_names_the_striped_name_and_sidecar_locks():
     the order they sit in (campaign, collection, name, sidecar, ingest/GC,
     object stripe), so a lock renamed away would leave that order describing
     nothing."""
-    from grimoire.store import locks
-
     section = _section(_read(GUARANTEES), "The image store")
     names = ("image_name_lock", "image_sidecar_lock", "IMAGE_NAME_STRIPES")
     missing = [n for n in names if n not in section]
@@ -449,8 +456,6 @@ def test_store_guarantees_names_the_collection_locks():
     -- and those names must still be there. The image store section states
     their order (job, then collection, then any image lock), so a lock renamed
     away would leave that order describing nothing."""
-    from grimoire.store import locks
-
     section = _section(_read(GUARANTEES), "The image store")
     names = ("image_collection_lock", "image_collection_job_lock")
     missing = [n for n in names if n not in section]
@@ -498,8 +503,6 @@ def test_store_guarantees_names_the_inference_migration():
     `CLAUDE.md`, so it is held to `backups.SAFETY_PREFIX` too -- and so is
     retirement's (`pre-retirement-`, `backups.RETIRE_PREFIX`), beside the
     entry point the migration runs it through (`migrate._retire`)."""
-    from grimoire.store import backups, inference_keys
-    from grimoire.store.inference import migrate
 
     section = _section(_read(GUARANTEES), "Model settings migration")
     for name, owner, attr in (("migrate.ensure", migrate, "ensure"),
@@ -532,8 +535,6 @@ def test_store_guarantees_names_every_public_atomic_writer():
     them — so a new one added without a line in the table fails here. The doc
     deliberately writes no *count* of them, since nothing could check that.
     """
-    from grimoire.store import atomic
-
     text = _read(GUARANTEES)
     public = sorted(n for n in vars(atomic) if not n.startswith("_")
                     and callable(getattr(atomic, n))
@@ -594,9 +595,6 @@ def test_claude_md_names_every_run_class():
     section's handler count and its exclusion rules silently leave out. It was
     "four classes" in prose while a fifth was being written; this is what makes
     the section's list follow the type rather than a memory of it."""
-    import typing
-
-    from grimoire.routes import runs
 
     classes = typing.get_args(runs.RunClass)
     assert classes, "runs.RunClass has no members -- the lookup is stale"
@@ -625,9 +623,6 @@ def test_claude_md_costs_names_real_ledger_fields():
     The section is the first thing a reader of the cost surfaces is pointed
     at, so a field renamed in code and not in prose sends them looking for a
     row key that no row carries."""
-    import inspect
-
-    from grimoire.store import pricing, usage
 
     section = _section(_read(CLAUDE), "Costs")
     unnamed = [f for f in COSTS_LEDGER_FIELDS + COSTS_BUCKET_COUNTS
@@ -656,8 +651,6 @@ def test_claude_md_costs_names_the_rollup_version_in_force():
     reason an older build's rollup is never read with a native row folded in.
     A version it names must be `usage_rollup.VERSION`: the next bump would
     otherwise leave the prose pointing at a file no build writes."""
-    from grimoire.store import usage_rollup
-
     section = _section(_read(CLAUDE), "Costs")
     named = re.findall(r"`usage_rollup\.VERSION = (\d+)`", section)
     assert named, "CLAUDE.md's Costs section no longer names `usage_rollup.VERSION`"
@@ -790,8 +783,6 @@ def test_llm_capture_doc_names_every_continuity_task():
     """§29: the capture note says which continuity calls it records, by task. A
     third task added to the `continuity` route fails here until the note names
     it too."""
-    from grimoire.store import routing
-
     text = (ROOT / "docs" / "incoming-llm-capture.md").read_text(encoding="utf-8")
     for task in routing.route_by_key("continuity").tasks:
         assert f"`{task}`" in text, task

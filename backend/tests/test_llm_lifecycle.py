@@ -25,6 +25,7 @@ from grimoire import main, routes
 from grimoire.health import ProviderHealth
 from grimoire.llm import LLMClient
 from grimoire.main import create_app
+from grimoire.routes import config as config_routes
 
 
 class _Recorder:
@@ -187,8 +188,6 @@ def test_shutdown_closes_the_model_tests_embeddings_pool(app):
     """`routes.config._EMBEDDINGS` is a route module's singleton: the lifespan
     of the router it serves closes its pool, and the next app's use reopens
     one rather than finding it closed."""
-    from grimoire.routes import config as config_routes
-
     with TestClient(app):
         pool = config_routes._EMBEDDINGS._client()
         assert not pool.is_closed

@@ -1,6 +1,11 @@
+import json
+import pathlib
+
 import pytest
 
 from grimoire.store import climates
+from grimoire.store.weather.draw import draw
+from grimoire.store.weather.seasons import season_for
 
 EXPECTED = {"temperate-interior", "temperate-coastal", "high-desert",
             "monsoon", "boreal", "equatorial"}
@@ -27,8 +32,6 @@ def test_presets_have_climatically_varied_season_counts(monkeypatch, tmp_path):
 
 def test_every_preset_resolves_weather_all_year(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store.weather.draw import draw
-    from grimoire.store.weather.seasons import season_for
     for cid in EXPECTED:
         climate = climates.get(cid)
         for step in range(100):
@@ -41,11 +44,8 @@ def test_every_preset_id_matches_its_filename(monkeypatch, tmp_path):
     # The registry keys on the id inside the document, so a mismatched filename
     # would ship a preset nobody can address by the name they see.
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    import json
-    import pathlib
 
-    from grimoire.store import climates as reg
-    presets = pathlib.Path(reg.__file__).parent / "presets"
+    presets = pathlib.Path(climates.__file__).parent / "presets"
     for path in presets.glob("*.json"):
         assert json.loads(path.read_text(encoding="utf-8"))["id"] == path.stem
 
@@ -53,7 +53,6 @@ def test_every_preset_id_matches_its_filename(monkeypatch, tmp_path):
 def test_constrained_conditions_never_escape_their_band(monkeypatch, tmp_path):
     # boreal's blizzard requires `bitter`, its snow requires bitter or freezing.
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store.weather.draw import draw
     climate = climates.get("boreal")
     winter = climate["seasons"][0]
     for i in range(3000):

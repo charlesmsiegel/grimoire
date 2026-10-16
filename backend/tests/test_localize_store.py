@@ -1,6 +1,9 @@
+import io
 import re as _re
 
-from grimoire.store import assets, greetings, image_refs, localize
+from PIL import Image
+
+from grimoire.store import assets, characters, greetings, image_refs, image_store, localize
 
 
 def test_find_markdown_image():
@@ -299,11 +302,7 @@ def test_localize_greeting_respects_cap_and_dedups(tmp_path):
 
 
 def test_localize_records_source_url(tmp_path, monkeypatch):
-    import io
 
-    from PIL import Image
-
-    from grimoire.store import characters, image_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid, vid = characters.create_character(tmp_path, "Seraphine")
     card = characters.read_card(tmp_path, cid, vid)

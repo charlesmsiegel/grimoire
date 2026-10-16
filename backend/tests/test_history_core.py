@@ -2,6 +2,7 @@
 
 import pytest
 
+from grimoire import prompts
 from grimoire.store import (
     campaigns,
     chronicle,
@@ -17,6 +18,7 @@ from grimoire.store import (
 )
 from grimoire.store.history import budget, coverage, expand, lexical, model, settings
 from grimoire.store.history import retrieval as retrieve
+from grimoire.store.inference import limits
 from grimoire.store.searchdocs import live, scene
 from tests.history_fixtures import absorbed, actor, appear, location, played
 from tests.history_fixtures import cid as cid
@@ -291,8 +293,6 @@ def test_budget_counts_heading_and_trimmed_post_text(cid):
 
 
 def test_ceiling_uses_shared_prompt_ceiling_and_context_budget(cid, monkeypatch):
-    from grimoire.store.inference import limits
-
     monkeypatch.setattr(
         limits, "prompt_ceiling", lambda resolved: limits.Ceiling(1000, 2000, 1000, True, None, "")
     )
@@ -437,8 +437,6 @@ def test_mixed_date_and_ordinal_ids_use_archive_string_order(cid, monkeypatch):
 
 
 def test_section_and_item_templates_share_the_exact_renderer(cid):
-    from grimoire import prompts
-
     item = model.EvidenceItem(
         model.SceneRef("001--saltmarch", None),
         "Saltmarch",

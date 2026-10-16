@@ -1,13 +1,16 @@
 """Bounded individual response orchestration over the shared fake gateway."""
 
+import asyncio
 import json
+import logging
+from types import SimpleNamespace
 
 import pytest
 
-from grimoire import routes, store
+from grimoire import decisions, routes, store
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm_errors import LLMError
-from grimoire.routes import character_turns
+from grimoire.routes import character_turns, streaming
 from tests import wire_kit
 from tests.inference_fixtures import (
     SAME_PROVIDER,
@@ -113,8 +116,6 @@ def test_old_combined_setting_cannot_disable_individual_generation(client):
 
 
 def test_failure_second_preserves_first_and_retry_only_unfinished(client, monkeypatch):
-    from grimoire.llm_errors import LLMError
-
     _follow_on(monkeypatch, "characters:winifred", None)
     cid, sid = seed(client)
     fake = FakeLLM(
@@ -228,8 +229,6 @@ def test_accepted_roll_is_before_same_response_outcome_and_never_reapplied(clien
 
 
 def test_completed_response_crash_retry_never_replays_it(client, monkeypatch):
-    from grimoire.routes import character_turns
-
     _follow_on(monkeypatch, "characters:winifred", "characters:winifred", None)
     cid, sid = seed(client)
     original = character_turns._round_state
@@ -299,11 +298,7 @@ def test_authority_violation_preserves_own_prose_stops_handoff(client):
 
 
 def test_single_npc_skips_selector_and_stop_blocks_successor(client, monkeypatch):
-    import asyncio
-    import json
-    from types import SimpleNamespace
 
-    from grimoire.routes import character_turns, streaming
 
     cid, sid = seed(client)
     round_record = store.responses.new_round(
@@ -422,8 +417,6 @@ def test_reroll_wrong_actor_cannot_create_a_second_message(client):
 
 
 def test_frozen_reroll_failure_retains_previous_variant(client):
-    from grimoire.llm_errors import LLMError
-
     cid, sid = seed(client)
     first = FakeLLM([['Original.\n```handoff\n{"next":null}\n```']])
     client.app.dependency_overrides[routes.get_llm] = lambda: first
@@ -461,8 +454,6 @@ def test_selector_and_reroll_capture_and_meter_each_actual_call(client):
 
 
 def test_response_survives_rename_and_delete_cleans_its_snapshot(client):
-    import pytest
-
     cid, sid = seed(client)
     fake = FakeLLM([['Original.\n```handoff\n{"next":null}\n```']])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
@@ -510,13 +501,8 @@ def test_legacy_opener_replay_and_cancel_preserve_identity(client):
 
 
 def test_stop_on_final_delta_preserves_pending_response_for_retry(client):
-    import asyncio
-    import json
-    from types import SimpleNamespace
 
-    import pytest
 
-    from grimoire.routes import character_turns, streaming
 
     cid, sid = seed(client)
     round_record = store.responses.new_round(
@@ -862,8 +848,6 @@ def test_a_pick_refused_inside_the_run_takes_the_post_back(client, monkeypatch):
     the pick as a defence (settings can change between the two). If THAT one
     refuses, the post it was answering comes back off, as a failed turn's
     does, so the 409 still means nothing happened."""
-    from grimoire.routes import character_turns
-
     cid, sid = seed(client)
     neither(client)
     monkeypatch.setattr(character_turns, "refuse_an_unanswerable_pick",
@@ -883,8 +867,6 @@ def test_a_provider_error_at_the_pick_fails_the_turn_and_is_filed_once(client):
     """The pick's `LLMError` is the turn's, as it was before the switch: the
     turn fails with that kind, `decide()`'s meter files exactly one error row
     under `response-selector`, and no actor is asked to write."""
-    from grimoire.llm_errors import LLMError
-
     cid, sid = seed(client)
     fake = FakeLLM([[""]], error=LLMError("rate_limit", "Wait"))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
@@ -948,9 +930,6 @@ def test_a_colliding_roster_raises_an_issue_not_a_500(client, monkeypatch, caplo
     carries today's invalid-handoff issue -- control returns to the player --
     rather than the turn failing, and the refusal is logged against the
     campaign and scene."""
-    import logging
-
-    from grimoire.routes import character_turns
 
     cid, sid = seed(client)
     monkeypatch.setattr(character_turns, "roster", lambda _cid, _sid: [
@@ -977,8 +956,6 @@ def test_a_roster_past_the_schema_string_budget_raises_an_issue(client, monkeypa
     budget for an enum of more than 250 values. `decide()` refuses that before
     anything is sent, whatever the backend, so the round carries today's
     invalid-handoff issue and control returns to the player."""
-    from grimoire import decisions
-    from grimoire.routes import character_turns
 
     refs = [f"characters:mara-{i:03d}-".ljust(60, "x") for i in range(254)]
     assert sum(map(len, refs)) > decisions.MAX_ENUM_STRING_CHARS

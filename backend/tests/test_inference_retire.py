@@ -12,9 +12,12 @@ Invented names (Realm, Saltmarch, Winifred, Mara) and fake keys only.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import threading
+import time
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -542,8 +545,6 @@ def test_a_c_era_writer_keeps_the_retired_marker(home):
 
 # ---- the archive's series ----
 def test_sweep_never_prunes_a_pre_retirement_archive(home):
-    from datetime import UTC, datetime, timedelta
-
     start = datetime(2026, 1, 1, tzinfo=UTC)
     kept = backups.create_backup(when=start, prefix=backups.RETIRE_PREFIX)
     for n in range(3):
@@ -564,8 +565,6 @@ def test_backups_lists_a_pre_retirement_archive(client):
 
 
 def test_an_abandoned_pre_retirement_temp_is_swept(home):
-    import os
-    import time
 
     directory = backups.backup_dir()
     directory.mkdir(parents=True, exist_ok=True)

@@ -26,12 +26,14 @@ import json
 import threading
 import time
 import zlib
+from pathlib import Path
 
 import httpx
 import pytest
 
 import grimoire.store as store
 from grimoire import catalog, decisions, embeddings, routes, tool_calls, wire
+from grimoire import llm as llm_mod
 from grimoire.anthropic import AnthropicClient
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
@@ -40,7 +42,8 @@ from grimoire.routes import config as config_routes
 from grimoire.store.inference import capabilities, facts, probes, resolve
 from grimoire.store.inference.capabilities import Cap
 from tests import wire_kit
-from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter, carrying
+from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter, StallingGateway, carrying
+from tests.test_claude_agent import _AssistantMessage, _sdk_073, _TextBlock
 
 REFUSAL = ("This test sends a request to the provider and may cost money — "
            "confirm to run it.")
@@ -678,7 +681,6 @@ def _endpoint(client, name: str, host: str) -> str:
 
 
 def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, monkeypatch):
-    from grimoire import llm as llm_mod
     monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.0)
     conn = _endpoint(client, "Mara Endpoint", "primary.example")
     backup = config_routes._probe_target(store.llm_connections.read_connection_raw(
@@ -1136,8 +1138,6 @@ def test_an_embed_probe_row_carries_what_the_endpoint_reported(client, monkeypat
 def test_an_embed_probes_local_count_runs_off_the_event_loop(client, monkeypatch):
     """`_embed_probe` is a coroutine on the lifespan loop, and the estimate
     can count with an encoder: it runs in a worker, as the embed does."""
-    import asyncio
-
     _use(client, FakeOpenRouter(["ok"]))
     conn = _connection(client)
     _embedder(monkeypatch, lambda _r: httpx.Response(200, json={
@@ -1188,7 +1188,6 @@ def test_an_embed_probe_failure_logs_only_its_kind_and_status(client, monkeypatc
 
 def test_the_gateway_fake_answers_single_like_complete():
     """`llm_fakes` stands in for the whole facade surface routes use."""
-    import asyncio
     fake = FakeLLM([["o", "k"]], error=None)
     usage: dict = {}
     assert asyncio.run(fake.single([], wire_kit.target(model="m"), usage)) == "ok"
@@ -1205,8 +1204,6 @@ def test_a_probe_that_never_answers_ends_the_run_whatever_the_budget_says(
     transport bound) would hold the run -- and `PUT /config/data-dir` with it
     -- for good. The probes carry a ceiling of their own, as the health check
     does, and an overrun is a `timeout` that stops the probes after it."""
-    from tests.llm_fakes import StallingGateway
-
     store.write_config(llm_call_budget="0")
     monkeypatch.setattr(config_routes, "MODEL_TEST_CEILING", 0.05)
     _use(client, StallingGateway(where="single"))
@@ -1418,8 +1415,6 @@ def test_the_embed_probe_sends_nothing_when_its_options_cannot_be_judged(
         client, monkeypatch, state):
     """What the probe would send is not what the role sends, so it sends
     nothing, files nothing, and is not a verdict."""
-    from pathlib import Path
-
     _use(client, FakeOpenRouter(["ok"]))
     conn = _connection(client)
     path = store.llm_connections.facts_path(conn)
@@ -1713,7 +1708,6 @@ def test_an_sdk_too_old_for_tools_fails_only_the_tools_probe(client, monkeypatch
     """Brutal review F3: on a claude-agent-sdk with the tool API's names but
     not its options (0.1.73), the tools probe is refused as the coded failure
     it is -- the run still answers, and the probes before it are filed."""
-    from tests.test_claude_agent import _AssistantMessage, _sdk_073, _TextBlock
     _sdk_073(monkeypatch, replies=[_AssistantMessage([_TextBlock("ok")])])
     _use(client, LLMClient(timeout=0, retries=0))
     conn = _connection(client, kind="claude", name="Mara Subscription", api_key="")

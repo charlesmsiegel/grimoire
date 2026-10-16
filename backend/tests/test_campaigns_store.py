@@ -7,17 +7,21 @@ from grimoire.store import (
     appearances,
     assets,
     atomic,
+    campaign_climate,
     campaigns,
     characters,
+    climates,
     entities,
     greetings,
     image_refs,
+    image_store,
     overlay,
     pcs,
     worlds,
 )
 from grimoire.store.campaigns import lifecycle
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from grimoire.store.weather import settings
 
 
 def home(monkeypatch, tmp_path):
@@ -64,7 +68,6 @@ def test_create_campaign_does_not_copy_entities_but_overlay_reads_them(monkeypat
 
 
 def test_create_campaign_does_not_copy_entity_assets(monkeypatch, tmp_path):
-    from grimoire.store import assets
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -368,7 +371,6 @@ def test_slimming_keeps_an_identical_placement_beside_a_divergent_legacy_file(
     data), and once the image syncs in the placement shadows it. Pruning that
     placement as identical to the world's would hand the name back to the
     stale legacy file. So it is left, with the file beside it."""
-    from grimoire.store import image_store
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -1121,7 +1123,6 @@ def test_slim_keeps_a_locked_actors_card(monkeypatch, tmp_path):
 
 def test_create_campaign_writes_the_default_climate(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
-    from grimoire.store import campaign_climate, climates
     worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Chronicle", "realm",
                                     climate=climates.FALLBACK_ID)
@@ -1130,7 +1131,6 @@ def test_create_campaign_writes_the_default_climate(monkeypatch, tmp_path):
 
 def test_create_campaign_defaults_the_climate_when_omitted(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
-    from grimoire.store import campaign_climate, climates
     worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Chronicle", "realm")
     assert campaign_climate.read_default(cid) == climates.FALLBACK_ID
@@ -1138,7 +1138,6 @@ def test_create_campaign_defaults_the_climate_when_omitted(monkeypatch, tmp_path
 
 def test_create_campaign_rejects_an_unknown_climate_before_creating_anything(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
-    from grimoire.store import climates
     worlds.create_world("Realm")
     # list_campaigns() returns dicts, so compare ids rather than the rows.
     before = {c["id"] for c in campaigns.list_campaigns()}
@@ -1151,8 +1150,6 @@ def test_the_written_default_is_what_the_resolver_reads_back(monkeypatch, tmp_pa
     # The file is only worth writing if settings.resolve honours it; this pins
     # the two halves together rather than trusting the shape of the JSON.
     home(monkeypatch, tmp_path)
-    from grimoire.store import climates
-    from grimoire.store.weather import settings
     worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Chronicle", "realm",
                                     climate=climates.FALLBACK_ID)

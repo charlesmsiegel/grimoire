@@ -10,19 +10,24 @@ it.
 from __future__ import annotations
 
 import copy
+import json as _json
 
 from grimoire.store import (
     absorb,
+    appearances,
     campaigns,
+    changes,
     characters,
     dossiers,
     entities,
+    facts,
     groupstate,
     overlay,
     playstate,
     plot,
     relationships,
     scenes,
+    weather,
     worlds,
 )
 from grimoire.store.absorb import conflicts
@@ -265,7 +270,6 @@ def test_group_state_drift_is_caught(monkeypatch, tmp_path):
 
 
 def test_authored_card_field_drift_is_caught(monkeypatch, tmp_path):
-    from grimoire.store import appearances
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -325,7 +329,6 @@ def test_plot_drift_is_caught_and_shares_its_rendering_with_materialize(monkeypa
 
 
 def test_weather_drift_is_caught(monkeypatch, tmp_path):
-    from grimoire.store import weather
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Chronicle", "realm")
@@ -361,7 +364,6 @@ def test_every_staged_before_equals_what_the_check_reads_back(monkeypatch, tmp_p
     """The two halves are separate implementations of "what does the record say
     now", and a disagreement between them would flag an untouched store as
     conflicted. This is the test that holds them together."""
-    from grimoire.store import appearances
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -608,7 +610,6 @@ def test_a_conflict_carries_its_position_in_the_submitted_batch(monkeypatch, tmp
 def test_an_answered_edit_is_logged_against_what_it_actually_replaced(monkeypatch, tmp_path):
     """The reviewer merged over "Witnessed by the watch."; logging the staged
     `before` instead would render that sentence as text this edit added."""
-    from grimoire.store import changes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "The Pact", body="Witnessed by the watch.")
@@ -627,7 +628,6 @@ def test_an_answered_edit_is_logged_against_what_it_actually_replaced(monkeypatc
 
 
 def test_an_unanswered_edit_is_still_logged_against_its_staged_before(monkeypatch, tmp_path):
-    from grimoire.store import changes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "The Pact", body="Signed at dusk.")
@@ -864,11 +864,8 @@ def test_a_resume_does_not_mistake_another_record_holding_the_same_text(monkeypa
 # --- the fact ledger (#114) ---------------------------------------------------
 
 def _staged_fact(cid, sid, **row):
-    import json as _json
-
-    from grimoire.store import absorb as absorb_pkg
-    parsed = absorb_pkg.parse_output(_json.dumps({"facts": [row]}))
-    (edit,) = absorb_pkg.materialize(cid, sid, parsed)
+    parsed = absorb.parse_output(_json.dumps({"facts": [row]}))
+    (edit,) = absorb.materialize(cid, sid, parsed)
     return edit
 
 
@@ -876,7 +873,6 @@ def test_a_fact_retired_between_staging_and_saving_is_reported(monkeypatch, tmp_
     """Two reviews can be open on the same fact, and the second must not retire a
     record the first already retired — that would re-aim `superseded_by` away
     from the fact that really replaced it, with nothing on screen to say so."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The bridge stands.", "", "s1")
     edit = _staged_fact(cid, "s9", text="The bridge is rubble.", supersedes=old)
@@ -895,7 +891,6 @@ def test_a_fact_retired_between_staging_and_saving_is_reported(monkeypatch, tmp_
 
 
 def test_a_fact_that_did_not_move_applies(monkeypatch, tmp_path):
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The bridge stands.", "", "s1")
     edit = _staged_fact(cid, "s9", text="The bridge is rubble.", supersedes=old)
@@ -921,7 +916,6 @@ def test_a_fact_answered_over_a_conflict_lands_without_re_aiming_the_retirement(
     established it — but not at the cost of erasing the only record of what
     actually replaced the old fact first. Both replacements stand; a human can
     retire the one the story did not keep."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The bridge stands.", "", "s1")
     edit = _staged_fact(cid, "s9", text="The bridge is rubble.", supersedes=old)
@@ -942,7 +936,6 @@ def test_a_retirement_answered_over_a_conflict_reports_rather_than_restamping(
     """A bare retirement has nothing left to write once something else retired
     the fact, and the reviewer has to be told: the end state they asked for
     holds, but this scene is not what brought it about."""
-    from grimoire.store import facts
     cid = _campaign(monkeypatch, tmp_path)
     old = facts.record(cid, "The bridge stands.", "", "s1")
     edit = _staged_fact(cid, "s9", supersedes=old)

@@ -10,7 +10,8 @@ import json
 import pytest
 
 from grimoire import tool_calls
-from grimoire.store import campaigns, chronicle, entities, facts, locks, plot, regex, scenes
+from grimoire.store import campaigns, chronicle, config, entities, facts, locks, plot, regex, scenes
+from grimoire.store.history import query as history_query
 from grimoire.store.history import retrieval
 from grimoire.store.investigation import readers, state, tools
 from tests.history_fixtures import absorbed, actor, played
@@ -309,7 +310,6 @@ def test_search_builds_its_query_under_the_best_effort_lock_and_retrieves_outsid
     as a turn's recall does (its contract), so no hold spans its awaits."""
     held: list[bool] = []
     real_hold, real_retrieve = locks.best_effort_campaign_lock, retrieval.retrieve
-    from grimoire.store.history import query as history_query
     real_for_text = history_query.for_text
 
     @contextlib.contextmanager
@@ -367,7 +367,6 @@ def test_search_under_a_spend_ceiling_sends_no_embedding(run, monkeypatch, room,
 
 
 def test_search_works_with_turn_recall_off(run):
-    from grimoire.store import config
     config.write_config(history_recall_depth="0")
     old = played(run.cid, text="Winifred finds the amber seal.")
     absorbed(run.cid, old, "Winifred finds the amber seal.")

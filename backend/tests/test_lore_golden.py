@@ -51,6 +51,7 @@ from grimoire.store import (
     taglines,
     worlds,
 )
+from grimoire.store.scenes import serialize
 
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "lore_golden.json"
 SEED = 20261005
@@ -217,7 +218,6 @@ def off_scene_heading() -> dict:
 def director() -> dict:
     """A stored director note in the transcript (it is in the scan window),
     then a director turn whose note seeds activation."""
-    from grimoire.store.scenes import serialize
     wid, _ = _world("Mara")
     cid = campaigns.create_campaign("Saltmarch", wid)
     croot = campaigns.campaign_root(cid)

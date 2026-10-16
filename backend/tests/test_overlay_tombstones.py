@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from PIL import Image
 
-from grimoire.store import campaigns, overlay, world_images, worlds
+from grimoire.store import campaigns, locks, overlay, world_images, worlds
 
 
 def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
@@ -93,8 +93,6 @@ def test_a_busy_campaign_does_not_fail_the_world_side_delete(cid, wid, monkeypat
     aborting the sweep would 500 a delete that has already happened. The stale
     tombstone that survives is visible through `list_hidden` and clearable by
     hand, which is the whole reason best-effort is affordable here."""
-    from grimoire.store import locks
-
     world_images.put_image(wid, "coastline", _png(), "png")
     overlay.add_deleted(cid, overlay.library_ref("coastline"))
 

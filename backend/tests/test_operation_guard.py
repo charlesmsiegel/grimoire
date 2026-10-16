@@ -113,6 +113,7 @@ from __future__ import annotations
 import ast
 import functools
 import pathlib
+import sys
 from collections.abc import Callable, Iterator
 
 import pytest
@@ -1632,8 +1633,6 @@ def outside_walk() -> Iterator[tuple[str, ast.Module, bool]]:
 def _eval_cases_generate() -> bool:
     """The eval runner's task is `case.task`, data: every generate case (no
     `schema`) names a task on a generate route, read off the cases themselves."""
-    import sys
-
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
     from evals import cases as case_mod

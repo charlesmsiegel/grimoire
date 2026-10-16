@@ -1,5 +1,5 @@
 from grimoire.store import appearances as ap
-from grimoire.store import campaigns, characters, sync, worlds
+from grimoire.store import campaigns, characters, pcs, sync, worlds
 
 
 def _setup(monkeypatch, tmp_path):
@@ -82,7 +82,6 @@ def test_push_counts_include_characters(monkeypatch, tmp_path):
 
 
 def test_pc_sync_update(monkeypatch, tmp_path):
-    from grimoire.store import pcs
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     pcs.create_pc(worlds.world_root(wid), "Elara", [])
@@ -100,7 +99,6 @@ def test_pc_sync_update(monkeypatch, tmp_path):
 
 
 def test_pc_sync_conflict_and_reject_keeps_mine(monkeypatch, tmp_path):
-    from grimoire.store import pcs
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     pcs.create_pc(worlds.world_root(wid), "Elara", [])

@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import campaigns, checks, rolls, scenes, sheets, worlds
+from grimoire.store import campaigns, characters, checks, dice, rolls, scenes, sheets, worlds
 
 
 def _play(monkeypatch, tmp_path, module="pool-basic"):
@@ -102,7 +102,6 @@ def test_resolve_check_never_appeared_actor(monkeypatch, tmp_path):
     # locked version exists, so the label path must not crash on vid=None
     # (regression: TypeError via characters.read_card(croot, eid, None)).
     _, cid, _ = _play(monkeypatch, tmp_path)
-    from grimoire.store import characters
     wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
     eid, _vid = characters.create_character(wroot, "Mara")
     sheets.write(cid, "characters", eid, "medium", {"vigor": 3, "brawl": 2}, expected=None)
@@ -124,7 +123,6 @@ def test_resolve_check_never_appeared_actor(monkeypatch, tmp_path):
 
 def test_rolls_proposal_tag(monkeypatch, tmp_path):
     _, cid, _ = _play(monkeypatch, tmp_path)
-    from grimoire.store import dice
     entry = rolls.append(cid, "s1", "test", dice.roll("1d6", seed=1), proposal="pr-000001")
     assert entry["proposal"] == "pr-000001"
     assert rolls.find_by_proposal(cid, "pr-000001")["id"] == entry["id"]

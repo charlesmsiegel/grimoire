@@ -7,20 +7,26 @@ recorded `skipped`, and its leak check reads offline."""
 
 from __future__ import annotations
 
+import contextlib
+import os
+import re
+import shutil
 import sys
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from grimoire import store
-from grimoire.store import paths, turn_plan
+from grimoire.routes import character_turns
+from grimoire.store import paths, play_decisions, turn_plan
 from tests.llm_fakes import FakeLLM, decision_reply
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from evals import play  # noqa: E402
+from evals import play, runner  # noqa: E402
 from evals import run as run_cli  # noqa: E402
 from evals.graders import Check  # noqa: E402
 
@@ -55,7 +61,6 @@ class _Scripted(FakeLLM):
 
     @staticmethod
     def _refs(text):
-        import re
         return re.findall(r"- (characters:[\w-]+): (\w+)", text)
 
 
@@ -78,7 +83,6 @@ def _run(feature, client, *, repeat=1, fixtures=play.FIXTURES, seen=None):
     selected = play.read_selected(configs)
     real_home = paths.home()
 
-    import contextlib
 
     @contextlib.contextmanager
     def isolate():
@@ -156,8 +160,6 @@ def test_the_intent_gate_passes_on_a_well_behaved_run(real):
 
 
 def test_a_configuration_that_skipped_fails_the_gate(real, monkeypatch):
-    from grimoire.routes import character_turns
-
     async def skipped(*_args, **_kwargs):
         return {"task": "turn-intent", "skipped": "missing_key"}
 
@@ -271,9 +273,6 @@ def test_a_drain_timeout_keeps_the_isolate_and_the_environment(real, monkeypatch
     """Follow-ups that outlive the drain leave the app running, so the run
     stops with `FollowUpsRunningError` -- the one the isolate keeps its home
     and the environment for -- and the real home is never restored under it."""
-    import os
-
-    from evals import runner
 
     # The app is shut down here (a real timeout would leave it up), so the
     # test leaves nothing running; the drain still reports it did not settle.
@@ -287,19 +286,15 @@ def test_a_drain_timeout_keeps_the_isolate_and_the_environment(real, monkeypatch
     assert kept[0] != str(real) and Path(kept[0]).is_dir()
     assert "isolate is kept at" in stopped.value.result.error
     monkeypatch.setenv("GRIMOIRE_HOME", str(real))
-    import shutil
     shutil.rmtree(kept[0], ignore_errors=True)
 
 
 def test_a_send_that_raises_is_a_failed_run_the_caller_still_drains(real, monkeypatch):
-    from fastapi.testclient import TestClient
-
     def broken(self, *_a, **_k):
         raise RuntimeError("socket gone")
 
     monkeypatch.setattr(TestClient, "post", broken)
     drained: list[dict] = []
-    from evals import runner
 
     real_drain = runner.drain
     monkeypatch.setattr(runner, "drain", lambda ctx: drained.append(ctx) or real_drain(ctx))
@@ -310,8 +305,6 @@ def test_a_send_that_raises_is_a_failed_run_the_caller_still_drains(real, monkey
 def test_each_gate_measures_one_switch_with_the_others_off(real):
     """The speaker draw is on by default (02-S6): an intent gate must not
     sample its speakers too, so every switch not under test is written off."""
-    from grimoire.store import play_decisions
-
     conf = play.matrix("intent", [SCENE], [DECIDER])[1]
     selected = play.read_selected([conf])
     with run_cli.temp_home():

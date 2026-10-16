@@ -14,18 +14,19 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import threading
 from copy import deepcopy
 
 import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
-from grimoire import decisions, inference, llm, llm_usage, prompts, routes, wire
+from grimoire import adapters, decisions, inference, llm, llm_usage, prompts, routes, wire
 from grimoire.decisions import Choice, Item, Option, Predicate, Score
 from grimoire.llm import ATTEMPTED, LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.routes import common
-from grimoire.store.inference import capabilities, facts, migrate, settings
+from grimoire.store.inference import capabilities, facts, migrate, providers, settings
 from grimoire.store.inference import resolve as inf
 from tests.llm_fakes import (
     FailingOpenRouter,
@@ -519,8 +520,6 @@ def test_the_prompt_renders_off_the_event_loop(client, monkeypatch):
     """`decide` is awaited by detached turns (the speaker pick), which must not
     block the loop on the template loader's file reads: each chunk's prompt is
     rendered in a worker thread, never on the loop thread that awaits it."""
-    import threading
-
     _store(client)
     rendered_on: list[int] = []
     real = inference.structured_messages
@@ -1268,8 +1267,6 @@ def test_every_preset_without_a_decisions_endpoint_never_decides_natively():
     (`capabilities.resolve_caps`). A preset added without it would let a
     user's `decide_native: yes` put a stage in front that is refused unsent
     on every call."""
-    from grimoire import adapters
-    from grimoire.store.inference import providers
 
     for preset in providers.PRESETS.values():
         if not adapters.decides_natively(preset.kind):

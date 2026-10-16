@@ -10,6 +10,7 @@ where being wrong costs a scene nobody can regenerate.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import sys
 from pathlib import Path
@@ -156,8 +157,6 @@ def test_included_paths(rel):
 
 
 def test_a_conflict_copy_keeps_its_suffix_and_matches_the_apps_pattern():
-    import fnmatch
-
     name = gs.conflict_name("worlds/realm/world.md", "20260818-120000", "SERIAL1")
     assert name == "worlds/realm/world.sync-conflict-20260818-120000-SERIAL1.md"
     # store/external.py's syncthing rule, which is what puts these in the

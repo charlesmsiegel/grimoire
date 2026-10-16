@@ -29,6 +29,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.continuity import candidates, canon, doc, pending, reconcile
+from tests.llm_fakes import decision_reply
 
 MAP = "thread:mara-s-map"
 CHART = "thread:winifred-s-chart"
@@ -689,8 +690,6 @@ def _answers(item, **given):
 
 
 def _proposals(payload, *per_item, rationales=()):
-    from tests.llm_fakes import decision_reply
-
     items = reconcile.build_items(payload)
     answers = [_answers(item, **(per_item[n] if n < len(per_item) else {}))
                for n, item in enumerate(items)]

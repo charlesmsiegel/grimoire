@@ -10,6 +10,7 @@ call's (`llm.CapRefusalError`), never the user's preset.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from dataclasses import replace
 
@@ -130,9 +131,6 @@ def test_a_cap_that_is_not_a_positive_int_is_refused_before_any_call(bad, stream
 def test_the_cap_is_held_to_the_models_known_max_output():
     """01i-C1: a known maximum output (the user's or the catalog's) holds the
     caller's cap down to it; an unknown one holds nothing back."""
-    import dataclasses
-
-    from grimoire import wire
 
     assert CONN.limits.max_output == wire.UNKNOWN_LIMIT
     assert inference.clamp_to_max_output(CONN, 777) == 777

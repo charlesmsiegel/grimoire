@@ -1,9 +1,20 @@
 import shutil
+from pathlib import Path
 
 import pytest
 
 from grimoire.store import appearances as ap
-from grimoire.store import campaigns, characters, entities, greetings, overlay, sync, worlds
+from grimoire.store import (
+    campaigns,
+    characters,
+    entities,
+    frontmatter,
+    greetings,
+    overlay,
+    sync,
+    worlds,
+)
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
 def home(monkeypatch, tmp_path):
@@ -119,8 +130,6 @@ def test_accept_nonpending_is_noop(monkeypatch, tmp_path):
 
 
 def test_accept_or_reject_already_synced_ref_does_not_bump(monkeypatch, tmp_path):
-    from grimoire.store import frontmatter
-
     _wid, cid = _setup(monkeypatch, tmp_path)
     overlay.materialize_entity(cid, "locations", "seraphine")  # base == world already
     # force a known-old updated timestamp so any spurious touch() is detectable
@@ -261,8 +270,6 @@ def test_locked_actor_new_world_version_invisible(monkeypatch, tmp_path):
 
 
 def test_incoming_reads_campaign_meta_and_manifest_once(monkeypatch, tmp_path):
-    from pathlib import Path
-
     wid, cid = _setup(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     char_id, _ = characters.create_character(wroot, "Ada")  # exercise the actor passes too
@@ -341,8 +348,6 @@ def test_new_kind_flows_live_and_syncs_updates(monkeypatch, tmp_path):
 
 def _stamp_full(cid: str) -> None:
     """Mark a campaign pre-overlay full-copy — see campaigns.read.slim_pending."""
-    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-
     mp = campaigns.campaign_meta_path(cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     meta["world_copy"] = "full"

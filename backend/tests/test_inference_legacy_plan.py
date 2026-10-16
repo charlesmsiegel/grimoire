@@ -32,7 +32,7 @@ from grimoire.store import (
     sampler_presets,
 )
 from grimoire.store import inference_retired as retired
-from grimoire.store.frontmatter import parse_frontmatter
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import facts, legacy_plan, migrate, resolve
 from tests import inference_baseline as base
 from tests import inference_baseline_c as base_c
@@ -1015,8 +1015,6 @@ def test_a_retired_but_unmarked_scope_is_mapped_as_the_migration_maps_it(home):
 
 # ---- the overlay: play's read, in memory ----
 def _write_campaign(cid: str, meta: dict) -> None:
-    from grimoire.store.frontmatter import dump_frontmatter
-
     path = store.campaigns.campaign_root(cid) / "campaign.md"
     _, body = parse_frontmatter(path.read_text(encoding="utf-8"))
     path.write_text(dump_frontmatter(meta, body), encoding="utf-8")  # atomic-ok: test fixture

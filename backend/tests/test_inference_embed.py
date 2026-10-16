@@ -42,7 +42,7 @@ from grimoire.store import (
     usage,
 )
 from grimoire.store import inference_keys as keys
-from grimoire.store.inference import embed
+from grimoire.store.inference import embed, facts
 from grimoire.store.inference import resolve as inference_resolve
 from tests.llm_fakes import FakeEmbeddings
 
@@ -557,8 +557,6 @@ NOMIC_BLOCK = {"input": "prefix", "query_prefix": "search_query: ",
 
 @pytest.fixture
 def nomic_space() -> dict:
-    from grimoire.store.inference import facts
-
     conn = _provider()
     _role(conn)
     facts.state(conn, "embed-1", embedding=NOMIC_BLOCK)
@@ -626,8 +624,6 @@ def test_the_async_door_forwards_queries(nomic_space):
 # ---- the request field and dimensions (01h-S3) ----
 
 def _stated_space(block: dict) -> dict:
-    from grimoire.store.inference import facts
-
     conn = _provider()
     _role(conn)
     facts.state(conn, "embed-1", embedding=block)

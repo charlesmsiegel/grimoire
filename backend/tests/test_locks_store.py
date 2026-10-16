@@ -15,13 +15,18 @@ import threading
 import time
 
 import pytest
+from fastapi.testclient import TestClient
 
+from grimoire import main
 from grimoire.store import (
     audit,
     calendars,
     campaigns,
+    chronicle,
     dice,
+    fork,
     locks,
+    module_edit,
     proclock,
     proposals,
     rolls,
@@ -360,7 +365,6 @@ def test_module_edit_holds_every_campaign_lock_from_this_registry():
     ``locks.hold_all`` (#234), which is where the sorted-order rule lives; the
     order itself is asserted behaviourally in
     ``test_module_edit_acquires_campaign_locks_in_sorted_order``."""
-    from grimoire.store import module_edit
     assert "locks.hold_all(" in inspect.getsource(module_edit._campaign_locks)
 
 
@@ -452,8 +456,6 @@ def test_module_edit_acquires_campaign_locks_in_sorted_order(monkeypatch, tmp_pa
     """Behavioural, not a source grep: spy on the registry and assert the ORDER
     module_edit actually asks for. A source assertion would pass on a docstring
     mention and would not catch an alias."""
-    from grimoire.store import module_edit
-
     _three_campaigns_in_reverse_recency(monkeypatch, tmp_path)
 
     order = []
@@ -472,9 +474,6 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
     Same fixture as module_edit's, deliberately: this route is the holder that
     sorts by cid, so it is only distinguishable from the one that iterates
     `list_campaigns()` when those two orders disagree."""
-    from fastapi.testclient import TestClient
-
-    from grimoire import main
 
     wid = _three_campaigns_in_reverse_recency(monkeypatch, tmp_path)
 
@@ -507,8 +506,6 @@ def test_fork_acquires_both_campaign_locks_in_sorted_order(monkeypatch, tmp_path
     a spy that only counted would be satisfied by a holder that took one lock
     twice and never locked the source at all.
     """
-    from grimoire.store import fork
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
     cid = campaigns.create_campaign("Zulu", wid)
@@ -826,8 +823,6 @@ def test_a_second_process_cannot_hold_the_module_edit_lock(monkeypatch, tmp_path
     would pass before _M is rewired, so _M could stay a private process-local
     RLock and every test would still be green.
     """
-    from grimoire.store import module_edit
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     p = _hold_in_child(tmp_path, "module_edit_lock()")
     try:
@@ -865,8 +860,6 @@ def test_a_campaign_named_module_edit_does_not_collide_with_the_module_lock(
 def test_lock_domains_are_folded_into_the_digest(tmp_path):
     """Not merely into the readable prefix -- otherwise a crafted campaign id
     could still be made to hash onto another domain's file."""
-    from grimoire.store import proclock
-
     a = proclock.lock_path(tmp_path, "campaign", "x")
     b = proclock.lock_path(tmp_path, "domain", "x")
     assert a != b
@@ -877,8 +870,6 @@ def test_a_held_module_edit_lock_blocks_a_real_publication(monkeypatch, tmp_path
     """`with module_edit._M` proves the object is shared; this proves the thing
     users actually hit. A child holds the module-edit lock and a real
     publication entry point must refuse rather than swap a pack under it."""
-    from grimoire.store import module_edit
-
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     p = _hold_in_child(tmp_path, "module_edit_lock()")
     try:
@@ -989,10 +980,6 @@ def test_a_manual_roll_and_its_transcript_line_share_one_hold(
     when each mutator is left to take its own. That zero-versus-one is the
     whole property, and it is verified red-green.
     """
-    from fastapi.testclient import TestClient
-
-    from grimoire import main
-    from grimoire.store import rolls
 
     _wid, cid = _campaign(monkeypatch, tmp_path)
     sheets.write(cid, "characters", "mara", "medium", None, expected=None)
@@ -1036,10 +1023,6 @@ def test_the_chronicle_save_persists_under_one_hold(monkeypatch, tmp_path):
     the spies stand in front of the real mutators, so they see the depth the
     ROUTE established -- 1 with the outer hold, 0 without.
     """
-    from fastapi.testclient import TestClient
-
-    from grimoire import main
-    from grimoire.store import chronicle
 
     _wid, cid = _campaign(monkeypatch, tmp_path)
     client = TestClient(main.create_app())

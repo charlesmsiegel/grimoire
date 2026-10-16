@@ -26,8 +26,9 @@ from grimoire.store import (
     pcs,
     plot,
 )
-from grimoire.store.continuity import drivers, pressure
+from grimoire.store.continuity import drivers, effective, pressure
 from tests.test_continuity_pressure import (
+    _DAY_RAISING_PROVIDER_SRC,
     CORONATION,
     OATH,
     F,
@@ -36,6 +37,8 @@ from tests.test_continuity_pressure import (
     _campaign,
     _commitment,
     _link,
+    _plugin,
+    _primary,
     _root,
     _rule,
 )
@@ -202,7 +205,6 @@ def test_temporal_drivers_and_anchors(monkeypatch, tmp_path):
 def test_a_past_event_is_no_anchor_when_another_day_cannot_be_named(monkeypatch, tmp_path):
     """A suggestion may not date itself against a day the campaign has gone
     by, even when a plugin calendar fails on some other event's day."""
-    from tests.test_continuity_pressure import _DAY_RAISING_PROVIDER_SRC, _plugin, _primary
     cid = _campaign(monkeypatch, tmp_path)
     audience = events.create(cid, "Mara's audience", "2026-05-05")
     coronation = events.create(cid, "The coronation", "2026-05-20")
@@ -351,8 +353,6 @@ def test_a_continuity_side_failure_falls_back_to_the_physical_records(monkeypatc
     """Defence in depth past `doc.read`: whatever else makes the effective
     projection raise costs the merge (spec 3.9), never the drivers -- the
     thread and the commitment are still listed, from the physical ledgers."""
-    from grimoire.store.continuity import effective
-
     def _boom(*_a, **_k):
         raise RuntimeError("an unanticipated continuity.json shape")
 

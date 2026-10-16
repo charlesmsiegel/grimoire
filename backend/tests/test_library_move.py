@@ -23,6 +23,7 @@ from grimoire.store import (
     sync,
     worlds,
 )
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
 def home(monkeypatch, tmp_path):
@@ -588,7 +589,6 @@ def test_push_refreshes_the_worlds_updated_stamp(monkeypatch, tmp_path):
 
 
 def _backdate_world(wid: str, stamp: str) -> None:
-    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
     mp = worlds.world_meta_path(wid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     meta["updated"] = stamp

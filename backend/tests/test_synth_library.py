@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.store import paths, search
+from grimoire.store import paths, scenes, search
 from grimoire.store.campaigns import read as campaigns_read
 from grimoire.store.worlds import read as worlds_read
 
@@ -100,7 +100,6 @@ def test_benchmark_refuses_unmarked_root_without_changes(tmp_path):
 
 
 def test_generated_library_api_pages_and_scene_posts(client, tmp_path, monkeypatch):
-    from grimoire.store import scenes
     module = _synth()
     target = tmp_path / 'Realm'
     module.generate(target, module.Shape(worlds=1, campaigns_per_world=1, scenes_per_campaign=1,

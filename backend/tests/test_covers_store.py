@@ -1,4 +1,5 @@
 import io
+import os
 import pathlib
 
 import pytest
@@ -71,7 +72,6 @@ def test_foreign_sibling_is_ignored_and_kept(cid):
     covers.put_cover(cid, _png(), "png")
     stray = campaigns.campaign_root(cid) / "assets" / "cover.txt"
     stray.write_text("sync conflict", encoding="utf-8")
-    import os
     os.utime(stray, (2 ** 31, 2 ** 31))  # newest, so a naive glob would pick it
 
     assert covers.cover_path(cid) != stray
@@ -88,7 +88,6 @@ def test_a_legacy_cover_is_read_past_a_newer_foreign_sibling(cid):
     """The read side's `supported_only`: a placement wins whatever lies beside
     it, so only a LEGACY cover can show the rule -- the newest file named
     `cover.*` is a sync client's `cover.txt`, and the cover is still the png."""
-    import os
     d = campaigns.campaign_root(cid) / "assets"
     d.mkdir(parents=True, exist_ok=True)
     legacy = d / "cover.png"
@@ -256,7 +255,6 @@ def test_removing_a_world_cover_that_is_not_there_is_quiet(wid):
 
 
 def test_a_legacy_world_cover_is_read_past_a_newer_foreign_sibling(wid):
-    import os
     d = worlds.world_root(wid) / "assets"
     d.mkdir(parents=True, exist_ok=True)
     legacy = d / "cover.jpg"

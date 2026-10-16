@@ -22,6 +22,7 @@ import asyncio
 import dataclasses
 import importlib
 import json
+import threading
 from copy import deepcopy
 
 import pytest
@@ -35,7 +36,7 @@ from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import common
-from grimoire.store import pricing
+from grimoire.store import pricing, usage_rollup
 from grimoire.store.inference import facts
 from grimoire.store.inference import resolve as inf
 from tests.llm_fakes import FakeLLM, decision_reply
@@ -873,7 +874,6 @@ def test_a_native_row_still_files_decision_mode_native(client):
     totals = store.usage.summary(days=1)["totals"]
     assert totals["modelled_usd"] == 0.0 and totals["modelled_calls"] == 0
     assert totals["unpriced_calls"] == 1
-    from grimoire.store import usage_rollup
     assert usage_rollup.VERSION == 6
 
 
@@ -1517,8 +1517,6 @@ def test_a_call_the_clock_refused_unsent_is_captured_with_no_messages(client):
 def test_the_native_capture_renders_off_the_loop(client, monkeypatch):
     """The capture's body is built in a worker thread, as F's prompt is
     (`test_the_prompt_renders_off_the_event_loop`)."""
-    import threading
-
     resolved = _native_resolution(client, fallback=False)
     built_on: list[int] = []
     real = llm.native_body

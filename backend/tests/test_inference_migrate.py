@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,7 @@ from grimoire.store import (
     backups,
     campaigns,
     config,
+    fork,
     inference_keys,
     llm_connections,
     locks,
@@ -214,7 +216,6 @@ def test_the_safety_backup_survives_retention(home):
 
 
 def _at(n: int):
-    from datetime import UTC, datetime
     return datetime(2030, 1, 1, 0, 0, n, tzinfo=UTC)
 
 
@@ -373,8 +374,6 @@ def test_a_fork_landing_after_the_migrations_list_is_born_translated_and_marked(
     migration listed the campaigns to move, was born unmarked and left behind
     (the status went back to pending). It is born through the same seam as a
     created campaign: translated as the migration translates, and marked."""
-    from grimoire.store import fork
-
     _legacy()
     source = _campaign("Saltmarch")
     campaigns.set_campaign_routing(source, {"route_scene": "openrouter"})

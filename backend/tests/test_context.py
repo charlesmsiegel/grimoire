@@ -1,6 +1,24 @@
+import logging
+import tempfile
+from pathlib import Path
+
 import pytest
 
-from grimoire.store import config, context, pins
+from grimoire.store import (
+    absorb,
+    config,
+    context,
+    dossiers,
+    events,
+    pins,
+    playstate,
+    relationships,
+    styles,
+    taglines,
+)
+from grimoire.store.context import assemble, world_state
+from grimoire.store.context import layout as ctx_layout
+from grimoire.store.context import macros as context_macros
 
 
 def test_activate_keyword_and_always_on():
@@ -448,7 +466,6 @@ def test_worldinfo_keyword_depth(monkeypatch, tmp_path):
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Salt Pact", "the pact lore", keys="pact")
     for i in range(10):
         scenes.append_message(cid, sid, "user", "we mentioned the pact" if i == 0 else f"filler {i}")
-    from grimoire.store import config
     config.write_config(context_scan_depth="3")
     # the only 'pact' is message 0; with depth 3 the scan sees only the last 3 fillers.
     # no cast, no always-on entry, key outside depth -> only the Response format section.
@@ -617,7 +634,6 @@ def test_offscreen_opener_keeps_actor_instruction_last(monkeypatch, tmp_path):
 
 
 def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
-    from grimoire.store import config
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "Salt", "pact lore", keys="pact")
@@ -630,7 +646,6 @@ def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
 
 
 def test_cast_directory_tiers(monkeypatch, tmp_path):
-    from grimoire.store import dossiers, taglines
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -694,7 +709,6 @@ def test_cast_directory_tiers(monkeypatch, tmp_path):
 def test_cast_directory_heading_travels_to_tier_three_alone(monkeypatch, tmp_path):
     """With no tier 2 to carry it, the directory's heading rides on tier 3 --
     so the prompt opens the same way whichever tiers a campaign happens to have."""
-    from grimoire.store import taglines
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -727,7 +741,6 @@ def _two_tier_world(monkeypatch, tmp_path, n_active, n_known):
     below: each tier's per-entry text is fixed, so `n_active` and `n_known`
     decide which half is the larger and therefore which one the packer reaches
     for first. Returns `(cid, sid)`."""
-    from grimoire.store import dossiers, taglines
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -761,7 +774,6 @@ def _squeeze_out(cid, sid, row):
     Neither of these scenes has anything below `background`, and each has one
     history message -- under the trim floor -- so the packer's first real move
     is the largest background section."""
-    from grimoire.store import config
     total = context.context_breakdown(cid, sid)["total_tokens"]
     config.write_config(context_budget=str(total - row["tokens"] // 2))
     return {s["label"]: s for s in context.context_breakdown(cid, sid)["sections"]}
@@ -819,7 +831,6 @@ def test_the_heading_is_expanded_before_the_body_it_sits_above(monkeypatch, tmp_
     can edit them, which is what makes a macro in the heading a real thing
     rather than a hypothetical -- and this is pinned by a test rather than a
     comment because the comment saying it has been wrong once already."""
-    from grimoire.store.context import macros as context_macros
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
 
     seen: list[str] = []
@@ -853,7 +864,6 @@ def test_packing_out_the_section_between_the_runs_leaves_one_heading(monkeypatch
     prompt WITH both copies, so removing one only ever lowers the total; the
     cost is that the fit was computed a heading pessimistically, which is the
     right way round."""
-    from grimoire.store import chronicle, config
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
     # A background section between the two tiers, and DECISIVELY the largest of
     # the three -- largest within a tier goes first. Decisively because the two
@@ -923,7 +933,6 @@ def test_a_reordered_layout_can_still_drop_the_half_holding_the_heading(monkeypa
     fit would add the heading's tokens to a total already measured against the
     ceiling. That needs the section-grouping notion `pack` deliberately does
     not have (see SECTIONS), so it is recorded here rather than half-done."""
-    from grimoire.store import config
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=12)
     entries = [e for e in _full_layout() if e["id"] != "off_scene_cast_known"]
     at = next(n for n, e in enumerate(entries) if e["id"] == "off_scene_cast_active")
@@ -953,7 +962,6 @@ def test_layout_disabling_tier_two_moves_the_heading_to_tier_three(monkeypatch, 
     2's data, so switching tier 2 off in the prompt layout left tier 3's data
     non-empty, tier 3 silent about the heading, and the prompt carrying a bare
     list of names with nothing saying those characters are absent."""
-    from grimoire.store import config
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
     context.layout.write_layout(
         _full_layout(off_scene_cast_active={"enabled": False}))
@@ -974,7 +982,6 @@ def test_layout_reordering_the_tiers_keeps_the_heading_on_top(monkeypatch, tmp_p
     """The other half of #423: put tier 3 first and the heading has to move with
     it, or it renders in the MIDDLE of the block — tier 3 suppressing it and
     tier 2 emitting it second."""
-    from grimoire.store import config
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
     entries = [e for e in _full_layout() if e["id"] != "off_scene_cast_known"]
     at = next(n for n, e in enumerate(entries) if e["id"] == "off_scene_cast_active")
@@ -1003,7 +1010,6 @@ def test_a_section_between_the_tiers_gets_each_run_its_own_heading(monkeypatch, 
     has closed the directory, what follows reads as part of THAT section: a
     list of absent characters under `# Response target`, which is the unframed
     list #423 is about, reached from a third direction."""
-    from grimoire.store import config
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
     entries = [e for e in _full_layout() if e["id"] != "response_budget"]
     at = next(n for n, e in enumerate(entries) if e["id"] == "off_scene_cast_known")
@@ -1028,7 +1034,6 @@ def test_the_heading_is_priced_with_the_tier_that_carries_it(monkeypatch, tmp_pa
     """The heading is part of a section's rendered text, so it is part of that
     section's token count — and it moves between the two rows with the layout
     rather than being billed to a row that did not send it."""
-    from grimoire.store import config
     cid, sid = _two_tier_world(monkeypatch, tmp_path, n_active=1, n_known=1)
     active, known = _tier_rows(cid, sid)
     assert "# Other characters in this world" in active["text"]
@@ -1045,7 +1050,6 @@ def test_the_heading_is_priced_with_the_tier_that_carries_it(monkeypatch, tmp_pa
 def _known_world(monkeypatch, tmp_path, n):
     """A world whose tier 3 is `n` briefed characters (`char00`…), plus `Aese`
     in the scene whose card names the LAST of them."""
-    from grimoire.store import taglines
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -1067,9 +1071,6 @@ def _known_world(monkeypatch, tmp_path, n):
 def test_known_tier_capped_keeping_the_mentioned_and_logging_the_rest(monkeypatch, tmp_path, caplog):
     """Tier 3 is bounded (#3), relevance decides who survives, and the omitted
     names are logged rather than silently gone."""
-    import logging
-
-    from grimoire.store import config
     cid, sid, names = _known_world(monkeypatch, tmp_path, 6)
     config.write_config(offscene_known_limit="3")
 
@@ -1096,9 +1097,6 @@ def test_known_tier_drop_log_summarises_a_long_tail(monkeypatch, tmp_path, caplo
     """The count is exact; the names are a bounded sample. A world big enough to
     trip the ceiling is big enough that spelling out every omission on every
     generated turn is its own problem."""
-    import logging
-
-    from grimoire.store import config
     n, limit = context_cast._LOGGED_DROPS + 5, 2
     cid, sid, names = _known_world(monkeypatch, tmp_path, n)
     config.write_config(offscene_known_limit=str(limit))
@@ -1113,7 +1111,6 @@ def test_known_tier_drop_log_summarises_a_long_tail(monkeypatch, tmp_path, caplo
 
 def test_known_tier_uncapped_when_limit_is_zero(monkeypatch, tmp_path):
     """"0" is the escape hatch back to the unbounded listing."""
-    from grimoire.store import config
     cid, sid, names = _known_world(monkeypatch, tmp_path, 6)
     config.write_config(offscene_known_limit="0")
     sys = context.build_messages(cid, sid)[0]["content"]
@@ -1136,7 +1133,6 @@ def test_known_tier_under_the_ceiling_is_untouched(monkeypatch, tmp_path):
 def test_known_tier_cap_survives_an_unreadable_relevance_signal(monkeypatch, tmp_path):
     """The bound is the feature; the ranking is the refinement. A relevance scan
     that raises must cost the ordering, not the turn."""
-    from grimoire.store import config
     cid, sid, names = _known_world(monkeypatch, tmp_path, 6)
     config.write_config(offscene_known_limit="3")
 
@@ -1230,7 +1226,6 @@ def test_natural_prose_section_in_opener_prompt(monkeypatch, tmp_path):
 
 def test_context_sections_labels_and_global_prompt(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(system_prompt="Never speak for the PC.")
     characters.create_character(worlds.world_root(wid), "Seraphine", "default",
                                 _npc_card("Seraphine", description="keeper"))
@@ -1264,7 +1259,6 @@ def test_today_block_present_when_dated(monkeypatch, tmp_path):
 def test_today_block_carries_scheduled_events(monkeypatch, tmp_path):
     """The campaign's own dated events (#101) land in the same block as the
     calendar's holidays: to the model reading it, both are "what today is"."""
-    from grimoire.store import events
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     events.create(cid, "The envoy arrives", "2026-12-25")
     events.create(cid, "The Regatta", "2026-12-28")
@@ -1383,7 +1377,6 @@ def test_birthdate_lookup_obeys_character_exclusion(monkeypatch, tmp_path):
 
 
 def test_story_so_far_section_is_injected(monkeypatch, tmp_path):
-    from grimoire.store import campaigns, chronicle, context, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
@@ -1409,7 +1402,6 @@ def test_an_empty_campaign_emits_none_of_the_optional_ledger_sections(monkeypatc
     `test_relationships_absent_when_none`, which each built this same campaign
     to check one label. The garbled-file and populated-section tests stay
     apart: they reach different code."""
-    from grimoire.store import campaigns, context, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
@@ -1420,7 +1412,6 @@ def test_an_empty_campaign_emits_none_of_the_optional_ledger_sections(monkeypatc
 
 
 def test_story_so_far_tolerates_garbled_chronicle(monkeypatch, tmp_path):
-    from grimoire.store import campaigns, context, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
@@ -1432,22 +1423,13 @@ def test_story_so_far_tolerates_garbled_chronicle(monkeypatch, tmp_path):
 
 
 def test_character_state_section_injected(monkeypatch, tmp_path):
-    from grimoire.store import (
-        appearances,
-        campaigns,
-        characters,
-        context,
-        playstate,
-        scenes,
-        worlds,
-    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
     croot = campaigns.campaign_root(cid)
     ch = characters.create_character(croot, "Seraphine", "main", characters.blank_card("Seraphine"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    ap.appear(cid, sid, "characters", ch, "main", "npc")
     playstate.write_state(croot, ch, "Wounded; travels with the party.")
     system = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
     assert "Character state" in system
@@ -1455,22 +1437,13 @@ def test_character_state_section_injected(monkeypatch, tmp_path):
 
 
 def test_character_state_renders_knowledge(monkeypatch, tmp_path):
-    from grimoire.store import (
-        appearances,
-        campaigns,
-        characters,
-        context,
-        playstate,
-        scenes,
-        worlds,
-    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
     croot = campaigns.campaign_root(cid)
     ch = characters.create_character(croot, "Seraphine", "main", characters.blank_card("Seraphine"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    ap.appear(cid, sid, "characters", ch, "main", "npc")
     playstate.write_state(croot, ch, playstate.compose_body("Hurt.", "map is fake", "elara lies"))
     section = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}["Character state"]
     assert "Seraphine: Hurt." in section
@@ -1479,22 +1452,13 @@ def test_character_state_renders_knowledge(monkeypatch, tmp_path):
 
 
 def test_character_state_no_dangling_name_when_current_state_empty(monkeypatch, tmp_path):
-    from grimoire.store import (
-        appearances,
-        campaigns,
-        characters,
-        context,
-        playstate,
-        scenes,
-        worlds,
-    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
     croot = campaigns.campaign_root(cid)
     ch = characters.create_character(croot, "Alice", "main", characters.blank_card("Alice"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    ap.appear(cid, sid, "characters", ch, "main", "npc")
     playstate.write_state(croot, ch, playstate.compose_body("", "the password", ""))
     section = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}["Character state"]
     assert "Alice:\n" not in section and not section.endswith("Alice:")  # no dangling colon
@@ -1502,22 +1466,13 @@ def test_character_state_no_dangling_name_when_current_state_empty(monkeypatch, 
 
 
 def test_character_state_multiline_knowledge_stays_indented(monkeypatch, tmp_path):
-    from grimoire.store import (
-        appearances,
-        campaigns,
-        characters,
-        context,
-        playstate,
-        scenes,
-        worlds,
-    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
     croot = campaigns.campaign_root(cid)
     ch = characters.create_character(croot, "Seraphine", "main", characters.blank_card("Seraphine"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    ap.appear(cid, sid, "characters", ch, "main", "npc")
     playstate.write_state(croot, ch, playstate.compose_body("Hurt.", "line one\nline two", ""))
     section = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}["Character state"]
     assert "  Knows: line one" in section
@@ -1525,7 +1480,6 @@ def test_character_state_multiline_knowledge_stays_indented(monkeypatch, tmp_pat
 
 
 def test_plot_threads_section_injected(monkeypatch, tmp_path):
-    from grimoire.store import campaigns, context, plot, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     sid = scenes.create_scene(cid, "Now")
@@ -1537,7 +1491,6 @@ def test_plot_threads_section_injected(monkeypatch, tmp_path):
 
 
 def test_plot_threads_tolerates_garbled(monkeypatch, tmp_path):
-    from grimoire.store import campaigns, context, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     sid = scenes.create_scene(cid, "Now")
@@ -1546,23 +1499,14 @@ def test_plot_threads_tolerates_garbled(monkeypatch, tmp_path):
 
 
 def test_relationships_section_injected(monkeypatch, tmp_path):
-    from grimoire.store import (
-        appearances,
-        campaigns,
-        characters,
-        context,
-        relationships,
-        scenes,
-        worlds,
-    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
     a = characters.create_character(croot, "Ann", "main", characters.blank_card("Ann"))[0]
     b = characters.create_character(croot, "Bo", "main", characters.blank_card("Bo"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", a, "main", "npc")
-    appearances.appear(cid, sid, "characters", b, "main", "npc")
+    ap.appear(cid, sid, "characters", a, "main", "npc")
+    ap.appear(cid, sid, "characters", b, "main", "npc")
     relationships.set_feeling(cid, f"characters:{a}", f"characters:{b}", 4, 3, 1, "warm")
     system = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
     assert "Relationships" in system
@@ -1629,8 +1573,6 @@ def test_response_format_section_lists_players(monkeypatch, tmp_path):
 
 
 def test_prose_style_resolves_scene_then_campaign_then_global(monkeypatch, tmp_path):
-    from grimoire.store import config
-
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.append_message(cid, sid, "user", "hello")
 
@@ -1860,7 +1802,6 @@ def test_roll_macro_expands_in_opener_prompt(monkeypatch, tmp_path):
 
 def test_natural_prose_in_context_sections(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     # A configured style makes the ordering assertion meaningful: the spec
     # requires Natural prose directly AFTER Prose style, mirroring system.j2.
     config.write_config(default_style_id="gothic-horror")
@@ -2040,7 +1981,6 @@ def test_corrective_rides_alone_when_cards_have_no_post_history(monkeypatch, tmp
 def _two_npc_scene(monkeypatch, tmp_path, pcless=False):
     """Seraphine and Winifred both on stage, plus one absent character (Mara)
     for suspicions to be about."""
-    from grimoire.store import appearances, campaigns, characters, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2049,8 +1989,8 @@ def _two_npc_scene(monkeypatch, tmp_path, pcless=False):
         ids[name] = characters.create_character(croot, name, "main",
                                                 characters.blank_card(name))[0]
     sid = scenes.create_scene(cid, "Now", pcless=pcless)
-    appearances.appear(cid, sid, "characters", ids["Seraphine Vale"], "main", "npc")
-    appearances.appear(cid, sid, "characters", ids["Winifred"], "main", "npc")
+    ap.appear(cid, sid, "characters", ids["Seraphine Vale"], "main", "npc")
+    ap.appear(cid, sid, "characters", ids["Winifred"], "main", "npc")
     return cid, sid, croot, ids
 
 
@@ -2060,7 +2000,6 @@ def _state_section(cid, sid):
 
 
 def test_suspicion_about_a_present_actor_is_withheld(monkeypatch, tmp_path):
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "The ledger is real.",
@@ -2073,7 +2012,6 @@ def test_suspicion_about_a_present_actor_is_withheld(monkeypatch, tmp_path):
 
 
 def test_a_first_name_reference_counts_as_naming_a_present_actor(monkeypatch, tmp_path):
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Winifred"], playstate.compose_body(
         "Impatient.", "", "Seraphine is stalling."))   # card name is "Seraphine Vale"
@@ -2081,7 +2019,6 @@ def test_a_first_name_reference_counts_as_naming_a_present_actor(monkeypatch, tm
 
 
 def test_a_suspicion_about_oneself_is_kept(monkeypatch, tmp_path):
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Winifred"], playstate.compose_body(
         "", "", "Winifred thinks she is being followed."))
@@ -2090,7 +2027,6 @@ def test_a_suspicion_about_oneself_is_kept(monkeypatch, tmp_path):
 
 
 def test_a_suspicion_about_a_present_player_is_withheld(monkeypatch, tmp_path):
-    from grimoire.store import appearances, campaigns, characters, pcs, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2098,8 +2034,8 @@ def test_a_suspicion_about_a_present_player_is_withheld(monkeypatch, tmp_path):
                                      characters.blank_card("Seraphine"))[0]
     pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ch, "main", "npc")
-    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    ap.appear(cid, sid, "characters", ch, "main", "npc")
+    ap.appear(cid, sid, "pcs", pid, "default", "player")
     playstate.write_state(croot, ch, playstate.compose_body(
         "Wary.", "", "Winifred is working for the Guild."))
     assert "working for the Guild" not in _state_section(cid, sid)
@@ -2111,16 +2047,6 @@ def test_a_suspicion_naming_the_player_through_the_macro_is_withheld(monkeypatch
     expands it to the present player's, and the private suspicion arrives at the
     model reading like any other. The filter runs first, so the filter has to
     know the macro."""
-    from grimoire.store import (
-        appearances,
-        campaigns,
-        characters,
-        context,
-        pcs,
-        playstate,
-        scenes,
-        worlds,
-    )
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2128,8 +2054,8 @@ def test_a_suspicion_naming_the_player_through_the_macro_is_withheld(monkeypatch
                                      characters.blank_card("Seraphine"))[0]
     pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ch, "main", "npc")
-    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    ap.appear(cid, sid, "characters", ch, "main", "npc")
+    ap.appear(cid, sid, "pcs", pid, "default", "player")
     playstate.write_state(croot, ch, playstate.compose_body(
         "Wary.", "", "{{user}} is hiding the ledger.\n\nThe Guild sold the manifest."))
     section = _state_section(cid, sid)
@@ -2142,7 +2068,6 @@ def test_a_suspicion_naming_the_player_through_the_macro_is_withheld(monkeypatch
 
 
 def test_an_npc_whose_only_state_is_a_withheld_suspicion_drops_out(monkeypatch, tmp_path):
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "", "", "Winifred is lying."))
@@ -2151,7 +2076,6 @@ def test_an_npc_whose_only_state_is_a_withheld_suspicion_drops_out(monkeypatch, 
 
 
 def test_a_pcless_scene_gets_full_disclosure(monkeypatch, tmp_path):
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path, pcless=True)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "", "Winifred is lying about the crates."))
@@ -2164,7 +2088,6 @@ def test_the_absorb_snapshot_is_not_filtered(monkeypatch, tmp_path):
     """Absorb rewrites stored state from the snapshot. Filtering it there would
     make the model rewrite `suspects` from a version with lines missing and
     silently erase them on save."""
-    from grimoire.store import absorb, playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "", "Winifred is lying about the crates."))
@@ -2177,7 +2100,6 @@ def test_the_filter_uses_the_npc_s_own_name_not_the_card_s(monkeypatch, tmp_path
     prompt's other sections use carries the locked CARD's name. A version rename
     can make the two disagree, and if the filter read the card's, the NPC's own
     interiority would be withheld as if it were about somebody else."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2187,7 +2109,7 @@ def test_the_filter_uses_the_npc_s_own_name_not_the_card_s(monkeypatch, tmp_path
     card["data"]["name"] = "The Woman on the Pier"      # the card drifts from the meta name
     characters.update_version(croot, ch, "main", card)
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    ap.appear(cid, sid, "characters", ch, "main", "npc")
     playstate.write_state(croot, ch, playstate.compose_body(
         "", "", "Seraphine thinks she is being followed."))
     assert "Seraphine thinks she is being followed." in _state_section(cid, sid)
@@ -2197,7 +2119,6 @@ def test_a_multiline_suspicion_is_withheld_whole(monkeypatch, tmp_path):
     """The unit is the ENTRY, not the physical line. Dropping only the line that
     names the present actor publishes the half carrying the actual secret — the
     filter defeated by a line break."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2212,7 +2133,6 @@ def test_a_multiline_suspicion_is_withheld_whole(monkeypatch, tmp_path):
 
 
 def test_an_indented_or_bulleted_continuation_follows_its_entry(monkeypatch, tmp_path):
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2228,7 +2148,6 @@ def test_an_indented_or_bulleted_continuation_follows_its_entry(monkeypatch, tmp
 def test_a_new_entry_after_a_dropped_one_is_not_swept_up(monkeypatch, tmp_path):
     """`dropping` has to reset on the next entry, or one named suspicion silently
     becomes all-or-nothing for everything below it."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "", "", "Winifred is lying.\n\nThe Guild is watching the pier.\n\n"
@@ -2244,7 +2163,6 @@ def test_an_entry_naming_a_present_actor_only_later_is_withheld_whole(monkeypatc
     """A streaming filter can drop a line but cannot take back one it already
     kept, so an entry that names the actor in its SECOND line published its
     first. Entries are judged whole."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2261,7 +2179,6 @@ def test_an_entry_naming_a_present_actor_only_later_is_withheld_whole(monkeypatc
 def test_a_blank_line_does_not_merge_two_entries(monkeypatch, tmp_path):
     """Paragraph spacing separates suspicions; a blank line must not let a named
     entry swallow the paragraph after it."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "", "", "Winifred is lying.\n\nThe Guild is watching the pier."))
@@ -2275,7 +2192,6 @@ def test_a_suspicion_naming_the_card_name_is_withheld(monkeypatch, tmp_path):
     what the description section, the transcript and the cast UI show — so it is
     what another NPC's stored suspicion is likely to call them. Matching only
     the meta name left that hole open."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2287,8 +2203,8 @@ def test_a_suspicion_naming_the_card_name_is_withheld(monkeypatch, tmp_path):
     win = characters.create_character(croot, "Winifred", "main",
                                       characters.blank_card("Winifred"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", sera, "main", "npc")
-    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    ap.appear(cid, sid, "characters", sera, "main", "npc")
+    ap.appear(cid, sid, "characters", win, "main", "npc")
     playstate.write_state(croot, win, playstate.compose_body(
         "Impatient.", "", "The Woman on the Pier is hiding the ledger."))
     assert "hiding the ledger" not in _state_section(cid, sid)
@@ -2297,7 +2213,6 @@ def test_a_suspicion_naming_the_card_name_is_withheld(monkeypatch, tmp_path):
 def test_a_suspicion_naming_a_present_player_s_persona_is_withheld(monkeypatch, tmp_path):
     """Players reach the filter through their persona name; that alias has to be
     matched too."""
-    from grimoire.store import appearances, campaigns, characters, pcs, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2305,8 +2220,8 @@ def test_a_suspicion_naming_a_present_player_s_persona_is_withheld(monkeypatch, 
                                      characters.blank_card("Seraphine"))[0]
     pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ch, "main", "npc")
-    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    ap.appear(cid, sid, "characters", ch, "main", "npc")
+    ap.appear(cid, sid, "pcs", pid, "default", "player")
     playstate.write_state(croot, ch, playstate.compose_body(
         "Wary.", "", "Winifred is working for the Guild."))
     assert "working for the Guild" not in _state_section(cid, sid)
@@ -2316,7 +2231,6 @@ def test_a_capitalized_continuation_stays_with_its_entry(monkeypatch, tmp_path):
     """A paragraph is one entry. A whitelist of "words that continue a sentence"
     leaked three times; "At" is not a pronoun, so the continuation read as a
     fresh statement and survived while the line naming her was dropped."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "", "Winifred is lying.\nAt midnight, she plans to steal the crates."))
@@ -2327,7 +2241,6 @@ def test_a_capitalized_continuation_stays_with_its_entry(monkeypatch, tmp_path):
 
 def test_a_bullet_keeps_finer_granularity_than_the_paragraph(monkeypatch, tmp_path):
     """The cost of paragraph grouping is granularity; a bullet buys it back."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "", "- Winifred is lying.\n- Mara sold the manifest."))
@@ -2340,7 +2253,6 @@ def test_an_epithet_card_name_does_not_match_every_line(monkeypatch, tmp_path):
     """`The Woman on the Pier` once contributed the alias "The", so every
     suspicion containing the word "the" was read as naming her and withheld.
     Hiding almost all of an NPC's state is worse than the leak it was avoiding."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2352,8 +2264,8 @@ def test_an_epithet_card_name_does_not_match_every_line(monkeypatch, tmp_path):
     win = characters.create_character(croot, "Winifred", "main",
                                       characters.blank_card("Winifred"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", sera, "main", "npc")
-    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    ap.appear(cid, sid, "characters", sera, "main", "npc")
+    ap.appear(cid, sid, "characters", win, "main", "npc")
     playstate.write_state(croot, win, playstate.compose_body(
         "Impatient.", "", "Mara keeps the tally in the back room."))
     # unrelated, and contains "the" three times
@@ -2367,7 +2279,6 @@ def test_a_one_word_name_that_is_an_ordinary_word_does_not_match_prose(monkeypat
     disappears: the `The`-matches-everything bug again, reached without an
     epithet. Case is the signal already in the text, so no list of ambiguous
     names has to be right."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2376,8 +2287,8 @@ def test_a_one_word_name_that_is_an_ordinary_word_does_not_match_prose(monkeypat
     win = characters.create_character(croot, "Winifred", "main",
                                       characters.blank_card("Winifred"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", will, "main", "npc")
-    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    ap.appear(cid, sid, "characters", will, "main", "npc")
+    ap.appear(cid, sid, "characters", win, "main", "npc")
     playstate.write_state(croot, win, playstate.compose_body(
         "Impatient.", "", "Mara will steal the crates.\n\nWill is lying about the tally."))
     section = _state_section(cid, sid)
@@ -2390,7 +2301,6 @@ def test_a_name_in_a_script_without_word_separators_is_matched(monkeypatch, tmp_
     written without spaces both neighbours are word characters — so the boundary
     never matched and the filter did nothing whatsoever for a campaign not
     written in a spaced script. Such a form is matched as a plain substring."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2402,8 +2312,8 @@ def test_a_name_in_a_script_without_word_separators_is_matched(monkeypatch, tmp_
     win = characters.create_character(croot, "Winifred", "main",
                                       characters.blank_card("Winifred"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ming, "main", "npc")
-    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    ap.appear(cid, sid, "characters", ming, "main", "npc")
+    ap.appear(cid, sid, "characters", win, "main", "npc")
     playstate.write_state(croot, win, playstate.compose_body(
         "Impatient.", "", "李明藏着账本。\n\nThe Guild sold the manifest."))
     section = _state_section(cid, sid)
@@ -2416,7 +2326,6 @@ def test_two_actors_sharing_a_given_name_keep_their_own_interiority(monkeypatch,
     between the derived aliases: `Mara Chen` and `Mara Vance` both shorten to
     `Mara`, so subtracting stored names alone left it in `others` and the
     owner's own line was withheld as if it named the other actor."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2425,8 +2334,8 @@ def test_two_actors_sharing_a_given_name_keep_their_own_interiority(monkeypatch,
     vance = characters.create_character(croot, "Mara Vance", "main",
                                         characters.blank_card("Mara Vance"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", chen, "main", "npc")
-    appearances.appear(cid, sid, "characters", vance, "main", "npc")
+    ap.appear(cid, sid, "characters", chen, "main", "npc")
+    ap.appear(cid, sid, "characters", vance, "main", "npc")
     playstate.write_state(croot, chen, playstate.compose_body(
         "Uneasy.", "",
         "Mara Chen fears she made a mistake.\n\nMara Vance is lying about the tally."))
@@ -2441,7 +2350,6 @@ def test_a_shared_alias_collides_across_capitalization(monkeypatch, tmp_path):
     `Mara` are one form to the matcher — and subtracting exact strings left the
     other actor's `Mara` in `others`, withholding the owner's own line for
     exactly the pair the exception exists for."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2450,8 +2358,8 @@ def test_a_shared_alias_collides_across_capitalization(monkeypatch, tmp_path):
     vance = characters.create_character(croot, "Mara Vance", "main",
                                         characters.blank_card("Mara Vance"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", chen, "main", "npc")
-    appearances.appear(cid, sid, "characters", vance, "main", "npc")
+    ap.appear(cid, sid, "characters", chen, "main", "npc")
+    ap.appear(cid, sid, "characters", vance, "main", "npc")
     playstate.write_state(croot, chen, playstate.compose_body(
         "Uneasy.", "",
         "Mara made a mistake.\n\nMara Vance is lying about the tally."))
@@ -2464,7 +2372,6 @@ def test_a_suspicion_naming_an_honorific_card_by_given_name_is_withheld(monkeypa
     """`Dr Mara Vance` used to yield no short alias at all, because the head was
     an honorific — so the card was matched only in full and prose naming her the
     way prose actually does reached the player-facing prompt."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2476,8 +2383,8 @@ def test_a_suspicion_naming_an_honorific_card_by_given_name_is_withheld(monkeypa
     win = characters.create_character(croot, "Winifred", "main",
                                       characters.blank_card("Winifred"))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", mara, "main", "npc")
-    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    ap.appear(cid, sid, "characters", mara, "main", "npc")
+    ap.appear(cid, sid, "characters", win, "main", "npc")
     playstate.write_state(croot, win, playstate.compose_body(
         "Impatient.", "", "Mara is hiding the ledger.\n\nThe Guild sold the manifest."))
     section = _state_section(cid, sid)
@@ -2486,7 +2393,6 @@ def test_a_suspicion_naming_an_honorific_card_by_given_name_is_withheld(monkeypa
 
 
 def test_the_short_alias_is_only_derived_from_a_personal_name():
-    from grimoire.store.context import world_state
     assert world_state._short_alias("Winifred Vance") == "Winifred"
     assert world_state._short_alias("Seraphine Vale") == "Seraphine"
     assert world_state._short_alias("Mara") == ""                    # nothing to shorten
@@ -2519,7 +2425,6 @@ def test_a_four_token_personal_name_still_yields_its_given_name():
     A given name, a middle name and two surnames is an ordinary personal name,
     and capping at three meant the card matched only in full while prose said
     "Winifred is hiding the ledger". What rejects an epithet is the ARTICLE."""
-    from grimoire.store.context import world_state
     assert world_state._short_alias("Winifred Mara Saltmarch Vale") == "Winifred"
     assert world_state._short_alias("Dr. Winifred Mara Saltmarch Vale") == "Winifred"
     # ...and an epithet is still rejected at any length. Lower-cased, by the
@@ -2533,7 +2438,6 @@ def test_a_four_token_personal_name_still_yields_its_given_name():
 def test_a_suspicion_naming_the_given_name_of_a_long_named_actor_is_withheld(
         monkeypatch, tmp_path):
     """End to end: the alias has to reach the filter, not merely exist."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2543,8 +2447,8 @@ def test_a_suspicion_naming_the_given_name_of_a_long_named_actor_is_withheld(
     named = characters.create_character(croot, long_name, "main",
                                         characters.blank_card(long_name))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
-    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    ap.appear(cid, sid, "characters", watcher, "main", "npc")
+    ap.appear(cid, sid, "characters", named, "main", "npc")
     playstate.write_state(croot, watcher, playstate.compose_body(
         "Wary.", "", "Winifred is hiding the ledger.\n\nThe Guild watches the pier."))
     section = _state_section(cid, sid)
@@ -2558,7 +2462,6 @@ def test_a_bullet_under_a_named_heading_goes_with_the_heading(monkeypatch, tmp_p
     survived — publishing the private half of a suspicion whose subject was
     withheld one line above. Same leak `_entries` exists to close, arriving
     through the list marker instead of the line break."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2578,7 +2481,6 @@ def test_a_heading_that_names_nobody_does_not_cost_its_other_bullets(monkeypatch
     innocuous `Suspicions:` to every bullet under it, so one named suspicion
     would cost the whole list — and an unnamed heading is exactly where entry
     granularity is worth keeping."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2594,7 +2496,6 @@ def test_a_heading_that_names_nobody_does_not_cost_its_other_bullets(monkeypatch
 def test_a_nested_bullet_goes_with_the_bullet_that_heads_it(monkeypatch, tmp_path):
     """The chain is walked, not just one level: a sub-bullet under a named
     bullet is as private as the bullet above it."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2611,7 +2512,6 @@ def test_a_lowercase_particle_does_not_disqualify_a_personal_name():
     """Nobiliary and patronymic particles are lower-case by convention INSIDE a
     name. Requiring every token to be capitalized rejected those names whole, so
     the card matched only in full while prose said the given name."""
-    from grimoire.store.context import world_state
     assert world_state._short_alias("Winifred van Saltmarch") == "Winifred"
     assert world_state._short_alias("Mara de la Vance") == "Mara"
     assert world_state._short_alias("Dr. Seraphine von Realm") == "Seraphine"
@@ -2625,7 +2525,6 @@ def test_a_lowercase_particle_does_not_disqualify_a_personal_name():
 
 def test_a_suspicion_naming_the_given_name_of_a_particled_actor_is_withheld(
         monkeypatch, tmp_path):
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2635,8 +2534,8 @@ def test_a_suspicion_naming_the_given_name_of_a_particled_actor_is_withheld(
     named = characters.create_character(croot, particled, "main",
                                         characters.blank_card(particled))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
-    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    ap.appear(cid, sid, "characters", watcher, "main", "npc")
+    ap.appear(cid, sid, "characters", named, "main", "npc")
     playstate.write_state(croot, watcher, playstate.compose_body(
         "Wary.", "", "Winifred is hiding the ledger.\n\nThe Guild watches the pier."))
     section = _state_section(cid, sid)
@@ -2649,7 +2548,6 @@ def test_an_emphasized_heading_still_governs_its_bullets(monkeypatch, tmp_path):
     is conventionally written. A bare `endswith(":")` saw the closing `**`,
     called it an ordinary line, and left the bullets ungoverned — so the subject
     was withheld and the detail under it published."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2669,7 +2567,6 @@ def test_returning_to_the_outer_level_keeps_the_outer_heading(monkeypatch, tmp_p
     to the heading it never left, so the last bullet — a suspicion about a
     present actor, written without her name because the heading carried it —
     came back ungoverned and reached the prompt."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2689,7 +2586,6 @@ def test_a_sibling_sub_list_does_not_inherit_the_previous_sub_heading(monkeypatc
     """The pop is by indentation, so a sub-heading governs its own children and
     stops there — an unnamed heading's bullets are not withheld because the
     sub-heading beside it named someone."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2706,7 +2602,6 @@ def test_a_sibling_sub_list_does_not_inherit_the_previous_sub_heading(monkeypatc
 def test_the_surname_is_a_form_too():
     """Prose refers to a character by surname as readily as by given name, and a
     form set holding only the full name and the given name matched neither."""
-    from grimoire.store.context import world_state
     assert world_state._surname_alias("Dr. Mara Vance") == "Vance"
     assert world_state._surname_alias("Winifred Mara Saltmarch Vale") == "Vale"
     assert world_state._surname_alias("Winifred van Saltmarch") == "Saltmarch"
@@ -2717,7 +2612,6 @@ def test_the_surname_is_a_form_too():
 
 
 def test_a_suspicion_naming_only_the_surname_is_withheld(monkeypatch, tmp_path):
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -2726,8 +2620,8 @@ def test_a_suspicion_naming_only_the_surname_is_withheld(monkeypatch, tmp_path):
                                           characters.blank_card("Seraphine"))[0]
     named = characters.create_character(croot, full, "main", characters.blank_card(full))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
-    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    ap.appear(cid, sid, "characters", watcher, "main", "npc")
+    ap.appear(cid, sid, "characters", named, "main", "npc")
     playstate.write_state(croot, watcher, playstate.compose_body(
         "Wary.", "", "Vance is hiding the ledger.\n\nThe Guild watches the pier."))
     section = _state_section(cid, sid)
@@ -2740,7 +2634,6 @@ def test_a_punctuated_initial_is_still_not_an_alias():
     conventional `J. Smith` through as the alias `J.` — the initial guard,
     defeated by the punctuation that marks it as an initial. Every capitalized
     `J.` in another NPC's suspicion then withheld the whole entry."""
-    from grimoire.store.context import world_state
     assert world_state._short_alias("J. Smith") == ""
     assert world_state._short_alias("Dr. J. Smith") == ""
     assert world_state._short_alias("J Smith") == ""
@@ -2751,7 +2644,6 @@ def test_a_markdown_heading_governs_the_bullets_under_it(monkeypatch, tmp_path):
     """`## Winifred` carries no colon, and — unlike a colon heading — it is
     conventionally separated from its own list by a blank line, so it has to
     survive the blank that ends an ordinary paragraph."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2772,7 +2664,6 @@ def test_an_indented_plain_heading_is_popped_on_the_way_out(monkeypatch, tmp_pat
     indented `Nested:` stayed open after the list returned to the outer level,
     so a bullet that belongs to the outer heading was withheld because the
     nested one named someone."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2790,7 +2681,6 @@ def test_a_setext_heading_governs_the_bullets_under_it(monkeypatch, tmp_path):
     """The other standard markdown heading: the title is an ordinary line and the
     line BELOW it makes it a heading, so it is the one form not recognizable from
     its own line. The title was withheld and the bullets under it were not."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2810,7 +2700,6 @@ def test_a_horizontal_rule_is_not_read_as_a_heading(monkeypatch, tmp_path):
     """`---` after a blank line underlines nothing. Treating the blank as a
     heading would govern the whole list below it by an entry that names nobody —
     harmless here, but it would make the rule look like it did something."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2828,7 +2717,6 @@ def test_a_nested_bullet_goes_with_its_parent_without_a_colon(monkeypatch, tmp_p
     readily as with a colon. Requiring one left the subjectless child ungoverned
     — a bullet governs what is indented under it because that is what indenting
     under it means."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2848,7 +2736,6 @@ def test_a_malformed_card_name_costs_only_its_own_actor(monkeypatch, tmp_path):
     list — and adding that to a set raises TypeError, which escaped into
     `_character_states`' outer catch and emptied the state block for EVERY actor
     in the scene. The failure policy here is per actor."""
-    from grimoire.store import characters, playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     card = characters.read_card(croot, ids["Winifred"], "main")
     card["data"]["name"] = ["Winifred", "The Harbourmaster's Daughter"]   # not a string
@@ -2868,7 +2755,6 @@ def test_an_uncased_script_still_yields_its_name_parts():
     the `\\b` failure again: not a missed edge, an entire class of campaign for
     which the filter did nothing. What marks an epithet is an explicitly LOWER
     case token, and an uncased one is neither."""
-    from grimoire.store.context import world_state
     assert world_state._short_alias("ليلى حسن") == "ليلى"
     assert world_state._surname_alias("ליאורה כהן") == "כהן"
     # A single CJK character stays out, and does not need to be in: the
@@ -2886,7 +2772,6 @@ def test_an_indented_continuation_stays_under_its_bullet(monkeypatch, tmp_path):
     indented inside it — ordinary markdown. Popping the governor at the blank
     made that paragraph independent: the named bullet withheld, and the
     continuation, which has no subject of its own, published."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2905,7 +2790,6 @@ def test_a_name_suffix_is_stepped_over_when_choosing_the_surname():
     """Taking the last token blindly made `Jr` the alias and left `Vance` — the
     name prose actually uses — matching nothing. The family name is the last
     token that IS one."""
-    from grimoire.store.context import world_state
     assert world_state._surname_alias("Mara Vance Jr.") == "Vance"
     assert world_state._surname_alias("Dr. Mara Vance III") == "Vance"
     assert world_state._forms({"Mara Vance Jr."}) == {"Mara Vance Jr.", "Mara", "Vance"}
@@ -2920,8 +2804,6 @@ def test_an_all_upper_case_mention_is_recognized(monkeypatch, tmp_path):
     the ledger` — a shape headings and imported prose produce, and one where the
     writer is plainly naming her. The guard the ordinary-word rule needs is
     `will` from `Will`; upper case is on the far side of it."""
-    from grimoire.store import playstate
-    from grimoire.store.context import world_state
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -2941,8 +2823,6 @@ def test_a_given_name_behind_an_unlisted_title_is_a_form(monkeypatch, tmp_path):
     the head as the given name made `Professor` the alias of `Professor Mara
     Vance` while `Mara` — the name prose uses — matched nothing. The token after
     the head is a name either way, so it is taken without deciding which."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
-    from grimoire.store.context import world_state
     assert world_state._forms({"Professor Mara Vance"}) == {
         "Professor Mara Vance", "Professor", "Mara", "Vance"}
     # A two-token name has nothing between its ends, and a name whose second
@@ -2960,8 +2840,8 @@ def test_a_given_name_behind_an_unlisted_title_is_a_form(monkeypatch, tmp_path):
     named = characters.create_character(croot, titled, "main",
                                         characters.blank_card(titled))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
-    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    ap.appear(cid, sid, "characters", watcher, "main", "npc")
+    ap.appear(cid, sid, "characters", named, "main", "npc")
     playstate.write_state(croot, watcher, playstate.compose_body(
         "Wary.", "", "Mara is hiding the ledger.\n\nThe Guild watches the pier."))
     section = _state_section(cid, sid)
@@ -2975,8 +2855,6 @@ def test_an_elided_particle_still_yields_both_ends_of_the_name(monkeypatch, tmp_
     end was derived and the suspicion went to the prompt. The apostrophe is the
     signal, and the name behind it is a form in its own right because prose
     drops the particle as readily as it keeps it."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
-    from grimoire.store.context import world_state
     assert world_state._short_alias("Jean d'Ormesson") == "Jean"
     assert world_state._surname_alias("Jean d'Ormesson") == "d'Ormesson"
     assert world_state._forms({"Jean d'Ormesson"}) == {
@@ -2997,8 +2875,8 @@ def test_an_elided_particle_still_yields_both_ends_of_the_name(monkeypatch, tmp_
     named = characters.create_character(croot, elided, "main",
                                         characters.blank_card(elided))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
-    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    ap.appear(cid, sid, "characters", watcher, "main", "npc")
+    ap.appear(cid, sid, "characters", named, "main", "npc")
     playstate.write_state(croot, watcher, playstate.compose_body(
         "Wary.", "",
         "Jean is hiding the ledger.\n\nOrmesson sold the manifest.\n\n"
@@ -3014,7 +2892,6 @@ def test_a_colon_heading_survives_the_blank_before_its_list(monkeypatch, tmp_pat
     it tight. Popping the governor at the blank withheld the heading that names
     her and published the subjectless bullet under it — the governor leak again,
     reached through the blank line instead of the syntax."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -3032,7 +2909,6 @@ def test_a_blockquoted_list_is_still_a_list(monkeypatch, tmp_path):
     """A blockquote is a wrapper, not a syntax of its own. Classifying the raw
     line saw `>` where the bullet is, called it an ordinary paragraph, popped the
     heading that named her, and published the subjectless detail underneath."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -3053,7 +2929,6 @@ def test_a_quote_nested_in_a_list_stays_under_its_parent(monkeypatch, tmp_path):
     bullet. Measuring the indent only inside the quote put the child at column
     zero, where the same-indent pop took the parent out — the named bullet
     withheld and the subjectless one under it published."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -3071,7 +2946,6 @@ def test_leaving_a_blockquote_ends_what_was_inside_it(monkeypatch, tmp_path):
     line does not mark. Without it the outer text read as a continuation of the
     quoted paragraph, or stayed governed by a heading opened inside the quote —
     either way an unrelated statement was withheld with the entry naming her."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     for body in (
         "> Winifred is lying.\n"
@@ -3095,7 +2969,6 @@ def test_entering_a_deeper_quote_does_not_break_the_paragraph(monkeypatch, tmp_p
     entry gave the subjectless continuation its own verdict — it names nobody, so
     it survived while the line naming her was withheld. The multiline leak again,
     reached through the quote marker instead of the line break."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     for body in (
         "> Winifred is lying.\n"
@@ -3115,7 +2988,6 @@ def test_an_indented_heading_stays_under_its_list_item(monkeypatch, tmp_path):
     """A heading indented inside a list item is part of that item. Popping every
     non-ATX governor regardless of indent severed the named parent, so the
     bullets under `Plans` were governed only by a heading that names nobody."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -3143,8 +3015,6 @@ def test_stacked_unrecognized_titles_still_yield_the_given_name(monkeypatch, tmp
     rejects meant a second title the honorific set does not list stopped the
     walk: `Professor Reverend Mara Vance` yielded `Reverend` and lost `Mara`.
     Titles stack, and how many is no more knowable than which."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
-    from grimoire.store.context import world_state
     assert world_state._forms({"Professor Reverend Mara Vance"}) == {
         "Professor Reverend Mara Vance", "Professor", "Reverend", "Mara", "Vance"}
 
@@ -3157,8 +3027,8 @@ def test_stacked_unrecognized_titles_still_yield_the_given_name(monkeypatch, tmp
     named = characters.create_character(croot, stacked, "main",
                                         characters.blank_card(stacked))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
-    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    ap.appear(cid, sid, "characters", watcher, "main", "npc")
+    ap.appear(cid, sid, "characters", named, "main", "npc")
     playstate.write_state(croot, watcher, playstate.compose_body(
         "Wary.", "", "Mara is hiding the ledger.\n\nThe Guild watches the pier."))
     section = _state_section(cid, sid)
@@ -3171,7 +3041,6 @@ def test_a_top_level_heading_with_leading_spaces_is_not_nested(monkeypatch, tmp_
     one because a later column-zero bullet is "less indented" withheld the line
     that names her and published the subjectless bullet under it — what makes a
     heading nested is the open LIST it sits inside, not its column."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -3196,7 +3065,6 @@ def test_a_colon_heading_with_leading_spaces_governs_a_top_level_list(monkeypatc
     Ranking `  Winifred:` by its raw column made a following column-zero bullet
     look like a return to an outer level, popping the heading that names her and
     leaving the subjectless bullet ungoverned."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -3222,7 +3090,6 @@ def test_a_paragraph_after_the_blank_is_not_governed(monkeypatch, tmp_path):
     paragraph below one is a new statement, which is the case the pop was
     written for — without this the fix above becomes the all-or-nothing
     behaviour `_entries` exists to avoid."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "",
@@ -3239,8 +3106,6 @@ def test_a_quoted_nickname_is_matched_without_its_quotes(monkeypatch, tmp_path):
     lands on exactly that token — so keeping the marks made the form `"Red"` and
     `_mentions` then required the suspicion to quote her too. The name is what
     is inside the marks."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
-    from grimoire.store.context import world_state
     assert world_state._forms({'Mara "Red" Vance'}) == {
         'Mara "Red" Vance', "Mara", "Red", "Vance"}
     assert world_state._forms({"Mara (Red) Vance"}) == {
@@ -3258,8 +3123,8 @@ def test_a_quoted_nickname_is_matched_without_its_quotes(monkeypatch, tmp_path):
     named = characters.create_character(croot, nicknamed, "main",
                                         characters.blank_card(nicknamed))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
-    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    ap.appear(cid, sid, "characters", watcher, "main", "npc")
+    ap.appear(cid, sid, "characters", named, "main", "npc")
     playstate.write_state(croot, watcher, playstate.compose_body(
         "Wary.", "", "Red is hiding the ledger.\n\nThe Guild watches the pier."))
     section = _state_section(cid, sid)
@@ -3272,8 +3137,6 @@ def test_a_stacked_title_does_not_consume_the_given_name_slot(monkeypatch, tmp_p
     with titles stacked the interior one is still a title — and stopping on it
     yielded no given-name form at all, which is the same leak the second-token
     rule was written to close, one token further in."""
-    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
-    from grimoire.store.context import world_state
     assert world_state._interior_aliases("Professor Dr. Mara Vance") == {"Mara"}
     assert world_state._interior_aliases("Professor J. Mara Vance") == {"Mara"}  # nor an initial
     assert world_state._interior_aliases("Professor Dr. Vance") == set()   # nothing between
@@ -3292,8 +3155,8 @@ def test_a_stacked_title_does_not_consume_the_given_name_slot(monkeypatch, tmp_p
     named = characters.create_character(croot, stacked, "main",
                                         characters.blank_card(stacked))[0]
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
-    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    ap.appear(cid, sid, "characters", watcher, "main", "npc")
+    ap.appear(cid, sid, "characters", named, "main", "npc")
     playstate.write_state(croot, watcher, playstate.compose_body(
         "Wary.", "", "Mara is hiding the ledger.\n\nThe Guild watches the pier."))
     section = _state_section(cid, sid)
@@ -3305,7 +3168,6 @@ def test_a_suspicion_naming_a_player_s_container_name_is_withheld(monkeypatch, t
     """A PC's container name and its locked persona name can differ. Taking only
     the persona left a suspicion written against the canonical PC name unmatched
     — the asymmetry with the character branch was an oversight."""
-    from grimoire.store import appearances, campaigns, characters, pcs, playstate, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     croot = campaigns.campaign_root(cid)
@@ -3315,8 +3177,8 @@ def test_a_suspicion_naming_a_player_s_container_name_is_withheld(monkeypatch, t
     persona["name"] = "The Harbourmaster's Daughter"     # persona drifts from the PC name
     pid, vid = pcs.create_pc(croot, "Winifred", [], persona=persona)
     sid = scenes.create_scene(cid, "Now")
-    appearances.appear(cid, sid, "characters", ch, "main", "npc")
-    appearances.appear(cid, sid, "pcs", pid, vid, "player")
+    ap.appear(cid, sid, "characters", ch, "main", "npc")
+    ap.appear(cid, sid, "pcs", pid, vid, "player")
     playstate.write_state(croot, ch, playstate.compose_body(
         "Wary.", "", "Winifred is working for the Guild."))
     assert "working for the Guild" not in _state_section(cid, sid)
@@ -3345,7 +3207,6 @@ def test_archive_recalls_an_old_scene_by_keyword(monkeypatch, tmp_path):
     """The scene has fallen out of the recap window, so nothing else in the
     prompt can reach it -- a keyword in the scan window is the only way back."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="1")
     _absorbed(cid, "000--b--newer", ["clinic"], summary="They met at the clinic.")
     _absorbed(cid, "000--a--older", ["saltmarch"],
@@ -3361,7 +3222,6 @@ def test_archive_recalls_an_old_scene_by_keyword(monkeypatch, tmp_path):
 
 def test_archive_stays_silent_without_a_keyword_hit(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")  # nothing in the recap window at all
     _absorbed(cid, "000--a--older", ["saltmarch"], summary="The crossing went badly.")
     scenes.append_message(cid, sid, "user", "Nothing relevant here.")
@@ -3376,7 +3236,6 @@ def test_archive_never_duplicates_the_recap_window(monkeypatch, tmp_path):
     """A scene the recap already shows must not come back a second time under
     a heading that calls it a recalled memory."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="5")
     _absorbed(cid, "000--a--older", ["saltmarch"], one_line="Saltmarch went badly.",
               summary="The Saltmarch crossing went badly.")
@@ -3391,7 +3250,6 @@ def test_archive_excludes_the_scene_being_played(monkeypatch, tmp_path):
     recalling it while its own transcript is in the history would narrate the
     present as a past event."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     _absorbed(cid, sid, ["saltmarch"], summary="This very scene, as history.")
     _absorbed(cid, "000--a--older", ["saltmarch"], summary="A genuinely earlier scene.")
@@ -3408,7 +3266,6 @@ def test_archive_never_recalls_a_scene_later_than_the_one_being_played(monkeypat
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)   # sid sorts first (ordinal prefix)
     later = scenes.create_scene(cid, "Later")
     latest = scenes.create_scene(cid, "Latest")
-    from grimoire.store import config
     config.write_config(recap_depth="1")                # only `latest` is in the recap
     _absorbed(cid, later, ["saltmarch"], summary="The Saltmarch crossing is still ahead.")
     _absorbed(cid, latest, ["saltmarch"], summary="Long after the crossing.")
@@ -3427,7 +3284,6 @@ def test_archive_keyless_record_is_never_always_on(monkeypatch, tmp_path):
     """Unlike a keyless lore entry: every absorbed scene would qualify and the
     section would grow without bound as the campaign runs."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     _absorbed(cid, "000--a--keyless", [], summary="Something happened once.")
     _absorbed(cid, "000--b--keyed", ["saltmarch"], summary="The crossing went badly.")
@@ -3439,7 +3295,6 @@ def test_archive_keyless_record_is_never_always_on(monkeypatch, tmp_path):
 
 def test_archive_matches_whole_words_only(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     _absorbed(cid, "000--a--pac", ["pac"], summary="The Pac accord.")
     _absorbed(cid, "000--b--pact", ["pact"], summary="The Pact itself.")
@@ -3451,7 +3306,6 @@ def test_archive_matches_whole_words_only(monkeypatch, tmp_path):
 
 def test_archive_caps_at_archive_depth_newest_first(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0", archive_depth="2")
     for n in (1, 2, 3, 4):
         _absorbed(cid, f"000--0{n}--scene", ["saltmarch"], summary=f"Crossing number {n}.")
@@ -3464,7 +3318,6 @@ def test_archive_caps_at_archive_depth_newest_first(monkeypatch, tmp_path):
 
 def test_archive_depth_zero_disables_retrieval(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0", archive_depth="0")
     _absorbed(cid, "000--a--older", ["saltmarch"], summary="The crossing went badly.")
     scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
@@ -3484,7 +3337,6 @@ def test_archive_tolerates_a_garbled_chronicle(monkeypatch, tmp_path):
 
 def test_archive_falls_back_to_one_line_without_a_summary(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     chronicle.absorb(cid, {"id": "000--a--older", "one_line": "The crossing went badly.",
                            "summary": "", "keywords": ["saltmarch"]})
@@ -3601,7 +3453,6 @@ def test_pack_reports_dropped_sections_rather_than_deleting_them(monkeypatch, tm
 
 def test_budget_tokens_reads_config_and_tolerates_nonsense(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import config
     assert context.budget_tokens() == 0                  # default: unbounded
     config.write_config(context_budget="4000")
     assert context.budget_tokens() == 4000
@@ -3615,7 +3466,6 @@ def test_a_budget_actually_shrinks_the_prompt(monkeypatch, tmp_path):
     """End to end through build_messages: the same scene, with and without a
     budget, and the budgeted prompt is the smaller one."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0", system_prompt="Never speak for the PC.")
     characters.create_character(campaigns.campaign_root(cid), "Seraphine", "default",
                                 _npc_card("Seraphine", description="A keeper of the Saltmarch road."))
@@ -3639,7 +3489,6 @@ def test_context_sections_reports_tiers_and_drops(monkeypatch, tmp_path):
     """The inspector's view and the prompt come off one render + one pack, so a
     section shown as kept is a section that was sent."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     _absorbed(cid, "000--a--older", ["saltmarch"], summary="The Saltmarch crossing went badly.")
     scenes.append_message(cid, sid, "user", "The Saltmarch road again. " * 40)
@@ -3667,7 +3516,6 @@ def test_a_budget_trims_the_history_but_keeps_the_latest_turns(monkeypatch, tmp_
     _project_history merges consecutive same-role turns, and it is the merged
     list build_messages sends."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     for n in range(8):
         scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
@@ -3699,7 +3547,6 @@ def test_every_appended_message_is_charged_to_the_budget(monkeypatch, tmp_path):
     back over the ceiling -- reintroducing the provider-side truncation the
     packer exists to prevent."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     _absorbed(cid, "000--a--older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
     for n in range(6):
@@ -3737,7 +3584,6 @@ def test_an_unreserved_append_is_what_overruns(monkeypatch, tmp_path):
     never told about overruns, which is what makes `appended` load-bearing
     rather than tidy."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     _absorbed(cid, "000--a--older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
     for n in range(6):
@@ -3776,7 +3622,6 @@ def test_the_real_prompt_fits_the_budget_it_was_packed_to(monkeypatch, tmp_path)
     """The invariant the packer exists for, measured on the messages that ship
     rather than on the packer's own arithmetic."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     _absorbed(cid, "000--older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
     for n in range(8):
@@ -3851,7 +3696,6 @@ def test_the_breakdown_total_is_the_cost_of_the_real_request(monkeypatch, tmp_pa
     """Not the sum of the rows: joins and per-string rounding do not commute."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     _heuristic(monkeypatch)
-    from grimoire.store import config, styles
     for n in range(6):
         scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
                               f"Turn {n} on the Saltmarch road.")
@@ -3882,7 +3726,6 @@ def test_archive_ignores_a_string_keywords_field(monkeypatch, tmp_path):
     array gets persisted as one entry per CHARACTER, and a key of "a" whole-word
     matches ordinary prose — recalling unrelated scenes at random."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     chronicle.absorb(cid, {"id": "000--a--letters", "one_line": "Nonsense.",
                            "summary": "Should never be recalled.",
@@ -3918,7 +3761,6 @@ def test_trimmed_history_counts_toward_the_dropped_total(monkeypatch, tmp_path):
     dropped-token total taken from the section rows would be zero and the
     inspector would say nothing about the cut it just made."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     for n in range(10):
         scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
@@ -3938,7 +3780,6 @@ def test_a_director_note_seeds_archive_retrieval(monkeypatch, tmp_path):
     seed the scan window, naming an old scene in a director note cannot recall
     it — the opener already seeds retrieval with its ephemeral prompt."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import config
     config.write_config(recap_depth="0")
     _absorbed(cid, "000--a--older", ["saltmarch"], summary="The Saltmarch crossing went badly.")
     scenes.append_message(cid, sid, "user", "Nothing relevant here.")
@@ -4191,8 +4032,6 @@ def test_the_note_and_its_provenance_come_from_one_read(monkeypatch, tmp_path):
 def test_read_record_agrees_with_the_single_field_readers():
     """`read`/`judged_anchor` stay as the one-field convenience calls, so the
     snapshot must not drift away from what they return."""
-    import tempfile
-    from pathlib import Path
     with tempfile.TemporaryDirectory() as d:
         croot = Path(d)
         voice_drift.write(croot, "winifred", "She hedged.", "abc123")
@@ -4299,7 +4138,6 @@ def test_indentation_is_measured_in_columns_not_characters(monkeypatch, tmp_path
     child bullet written with a tab counted as shallower than its space-indented
     parent, so the parent naming her was popped and the subjectless child was
     left ungoverned."""
-    from grimoire.store import playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
         "Wary.", "", "Notes:\n  - Winifred\n\t- is hiding the ledger"))
@@ -4312,14 +4150,13 @@ def test_a_name_soft_wrapped_across_a_line_break_is_still_matched(monkeypatch, t
     only thing that can match her — and a multi-word form is only ever found
     within one line. Wrapped across the break it appeared in neither, and the
     whole private suspicion survived into the prompt."""
-    from grimoire.store import appearances, characters, playstate
     cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
     # An epithet-shaped name: `_forms` derives no short alias from it, so the
     # whole string is the only form she has.
     epithet = "The Woman on the Pier"
     wid = characters.create_character(croot, epithet, "main",
                                       characters.blank_card(epithet))[0]
-    appearances.appear(cid, sid, "characters", wid, "main", "npc")
+    ap.appear(cid, sid, "characters", wid, "main", "npc")
     for body in (
         "The Woman on the\nPier is hiding the ledger.",
         # Under markdown the continuation carries its own indent, and joining
@@ -4338,7 +4175,6 @@ def test_a_name_soft_wrapped_across_a_line_break_is_still_matched(monkeypatch, t
 def test_section_ids_are_unique(monkeypatch, tmp_path):
     """The layout keys off identity, and a label cannot supply one: labels are
     user-editable from #29 onward, so two rows may legitimately share a string."""
-    from grimoire.store.context import assemble
     ids = [s.id for s in assemble.SECTIONS]
     assert len(ids) == len(set(ids))
     assert all(i and i.replace("_", "").isalnum() for i in ids)
@@ -4363,7 +4199,6 @@ def test_every_breakdown_row_carries_an_id(monkeypatch, tmp_path):
 def _layout_scene(monkeypatch, tmp_path):
     """A scene whose World info and Response budget sections are both non-empty,
     so a reorder and a drop are both observable."""
-    from grimoire.store import config
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Seraphine", "default",
                                 _npc_card("Seraphine", description="keeper"))
@@ -4390,7 +4225,6 @@ def _full_layout(**overrides):
 
 
 def test_layout_reorders_and_drops_sections_in_the_real_prompt(monkeypatch, tmp_path):
-    from grimoire.store import config
     cid, sid = _layout_scene(monkeypatch, tmp_path)
     before = [r["id"] for r in context.context_sections(cid, sid)]
     assert "world_info" in before and "response_budget" in before
@@ -4413,7 +4247,6 @@ def test_layout_reorders_and_drops_sections_in_the_real_prompt(monkeypatch, tmp_
 def test_relabelling_changes_the_row_name_and_nothing_else(monkeypatch, tmp_path):
     """The label is the inspector's row name; the text the model reads is the
     template's. Relabelling must not touch a byte of the prompt."""
-    from grimoire.store import config
     cid, sid = _layout_scene(monkeypatch, tmp_path)
     before = context.build_messages(cid, sid)
 
@@ -4428,7 +4261,6 @@ def test_relabelling_changes_the_row_name_and_nothing_else(monkeypatch, tmp_path
 def test_a_layout_that_predates_a_section_still_renders_it(monkeypatch, tmp_path):
     """The upgrade rule, end to end: a layout naming only two sections must not
     silently drop the twenty-eight it has never heard of."""
-    from grimoire.store import config
     cid, sid = _layout_scene(monkeypatch, tmp_path)
     context.layout.write_layout([{"id": "response_budget"}, {"id": "world_info"}])
     config.write_config(prompt_layout_enabled="on")
@@ -4458,7 +4290,6 @@ def _group_scene(monkeypatch, tmp_path, names=("Seraphine", "Mara", "Winifred"))
 
 
 def test_the_speaker_section_appears_only_when_turned_on(monkeypatch, tmp_path):
-    from grimoire.store import config
     cid, sid = _group_scene(monkeypatch, tmp_path)
     assert "active_speaker" not in [r["id"] for r in context.context_sections(cid, sid)]
 
@@ -4470,14 +4301,12 @@ def test_the_speaker_section_appears_only_when_turned_on(monkeypatch, tmp_path):
 
 
 def test_no_speaker_section_in_a_two_hander(monkeypatch, tmp_path):
-    from grimoire.store import config
     cid, sid = _group_scene(monkeypatch, tmp_path, names=("Seraphine",))
     config.write_config(speaker_turn_taking="on")
     assert "active_speaker" not in [r["id"] for r in context.context_sections(cid, sid)]
 
 
 def test_the_speaker_section_sits_after_character_state(monkeypatch, tmp_path):
-    from grimoire.store import config
     cid, sid = _group_scene(monkeypatch, tmp_path)
     config.write_config(speaker_turn_taking="on")
     ids = [s.id for s in context.SECTIONS]
@@ -4487,7 +4316,6 @@ def test_the_speaker_section_sits_after_character_state(monkeypatch, tmp_path):
 
 
 def test_the_speaker_section_names_the_named_npc(monkeypatch, tmp_path):
-    from grimoire.store import config
     cid, sid = _group_scene(monkeypatch, tmp_path)
     config.write_config(speaker_turn_taking="on")
     scenes.append_message(cid, sid, "user", "Winifred, what did you see?")
@@ -4518,7 +4346,6 @@ def test_both_layers_off_change_nothing(monkeypatch, tmp_path):
 def test_a_director_note_naming_an_npc_nominates_them(monkeypatch, tmp_path):
     """The note is the turn's real input and is never persisted — the same
     reason it already seeds world-info activation."""
-    from grimoire.store import config
     cid, sid = _group_scene(monkeypatch, tmp_path)
     config.write_config(speaker_turn_taking="on")
     messages = context.build_director_messages(cid, sid, "Winifred breaks the silence.")
@@ -4526,7 +4353,6 @@ def test_a_director_note_naming_an_npc_nominates_them(monkeypatch, tmp_path):
 
 
 def test_an_opener_prompt_naming_an_npc_nominates_them(monkeypatch, tmp_path):
-    from grimoire.store import config
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     for name in ("Seraphine", "Mara", "Winifred"):
         characters.create_character(worlds.world_root(wid), name, "default",
@@ -4541,7 +4367,6 @@ def test_a_layout_with_every_section_off_sends_no_system_message(monkeypatch, tm
     """Reachable: nothing stops a reader switching all thirty off. The turn must
     still be a valid request — a system message that is only blank lines is the
     failure to avoid."""
-    from grimoire.store import config
     cid, sid = _group_scene(monkeypatch, tmp_path)
     context.layout.write_layout([{"id": s.id, "label": "", "enabled": False}
                                  for s in context.SECTIONS])
@@ -4556,7 +4381,6 @@ def test_the_packer_drops_by_tier_not_by_the_reader_s_order(monkeypatch, tmp_pat
     """Reordering moves a section within the message; it does not change what
     gives way when the message will not fit. Lock-in survives at the bottom of
     a reversed layout exactly as it does at the top of the catalog."""
-    from grimoire.store import config
     cid, sid = _group_scene(monkeypatch, tmp_path)
     context.layout.write_layout([{"id": s.id, "label": "", "enabled": True}
                                  for s in reversed(context.SECTIONS)])
@@ -4831,8 +4655,6 @@ def test_an_anchor_reaches_the_assembled_prompt(monkeypatch, tmp_path):
 def test_headings_survive_a_layout_that_disables_and_reorders(monkeypatch, tmp_path):
     """Each section owns its heading, so no arrangement can strand one. The
     off-scene directory's shared-macro approach fails exactly here (#423)."""
-    from grimoire.store import config
-    from grimoire.store.context import layout as ctx_layout
     _, cid, sid = _voice_campaign(monkeypatch, tmp_path, npcs=[
         ("Mara", {"mes_example": "Mara: Fine."}, "Clipped."),
         ("Winifred", {}, "Dry."),

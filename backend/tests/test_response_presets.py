@@ -3,8 +3,10 @@ from fastapi import HTTPException
 
 from grimoire.routes.common import _turn_override
 from grimoire.routes.models import ChatTurn
+from grimoire.store import campaigns, response_targets, scenes, styles, worlds
 from grimoire.store import response_presets as rp
-from grimoire.store import response_targets
+from grimoire.store.campaigns import read as campaigns_read
+from grimoire.store.paths import slugify
 
 
 def test_response_targets_default_and_reject_nonpositive_writes(client):
@@ -126,7 +128,6 @@ def test_style_none_sentinel_clears(tmp_path, monkeypatch):
 def test_the_clear_sentinel_cannot_collide_with_a_style_id(tmp_path, monkeypatch):
     """slugify reserves nothing, so a plain "none" sentinel IS a reachable
     style id — U+2063-prefixed like scenes.ROLL_SPEAKER, it cannot be."""
-    from grimoire.store.paths import slugify
     assert rp.STYLE_CLEAR.startswith("⁣")
     assert slugify("None") == "none" != rp.STYLE_CLEAR
 
@@ -134,7 +135,6 @@ def test_the_clear_sentinel_cannot_collide_with_a_style_id(tmp_path, monkeypatch
 def test_a_style_actually_called_none_is_applied_not_a_clear(tmp_path, monkeypatch):
     """A user style named "None" slugs to `none`; referencing it must apply it,
     not silently clear the style the record was meant to select."""
-    from grimoire.store import styles
     _isolate(tmp_path, monkeypatch)
     assert styles.create_style("None") == "none"
     _write(tmp_path / "home" / "response_presets", "nihil",
@@ -482,7 +482,6 @@ def test_duplicate_makes_an_editable_copy(tmp_path, monkeypatch):
 
 
 def _campaign_fixture(tmp_path, monkeypatch):
-    from grimoire.store import campaigns, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch", wid)
@@ -492,7 +491,6 @@ def _campaign_fixture(tmp_path, monkeypatch):
 def test_usage_reports_indirectly_affected_scopes(tmp_path, monkeypatch):
     """A campaign-level preset changes every scene that inherits it. Reporting
     only scopes that NAME the preset understates the blast radius."""
-    from grimoire.store import campaigns, scenes
     cid, sid = _campaign_fixture(tmp_path, monkeypatch)
     for n in range(3):
         scenes.create_scene(cid, f"Scene {n}")
@@ -509,7 +507,6 @@ def test_usage_shows_post_deletion_values_not_a_blanket_standard(tmp_path, monke
     """Deletion RE-RESOLVES; a scene may inherit a campaign preset rather than
     falling back to standard. A false preview before an irreversible delete is
     worse than none."""
-    from grimoire.store import campaigns, scenes
     cid, sid = _campaign_fixture(tmp_path, monkeypatch)
     campaigns.set_campaign_response(cid, {"response_preset": "cinematic"})
     pid = rp.create_preset("Scene Only", length_preset="terse")
@@ -622,7 +619,6 @@ def test_usage_reports_an_unreadable_scene_as_unevaluated(tmp_path, monkeypatch)
     """A skipped scope must be REPORTED. A partial list rendered as a complete
     one tells the user 'nothing else changes' when the scan failed partway,
     immediately before an irreversible delete."""
-    from grimoire.store import campaigns, scenes
     cid, _sid = _campaign_fixture(tmp_path, monkeypatch)
     pid = rp.create_preset("Slow Burn", length_preset="cinematic")
     campaigns.set_campaign_response(cid, {"response_preset": pid})
@@ -640,7 +636,6 @@ def test_usage_reports_an_unreadable_scene_as_unevaluated(tmp_path, monkeypatch)
 def test_usage_reports_an_unreadable_campaign_as_unevaluated(tmp_path, monkeypatch):
     """A campaign whose record cannot be read (permissions, a concurrent
     delete) is reported, not quietly omitted from the impact list."""
-    from grimoire.store.campaigns import read as campaigns_read
     cid, _sid = _campaign_fixture(tmp_path, monkeypatch)
     pid = rp.create_preset("Slow Burn", length_preset="cinematic")
 

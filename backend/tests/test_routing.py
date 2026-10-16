@@ -11,8 +11,12 @@ store).
 
 from __future__ import annotations
 
+import ast
+import pathlib as pl
+
 import pytest
 
+import grimoire.store.routing as mod
 from grimoire.store import routing
 
 # --- the registry itself ---
@@ -62,10 +66,7 @@ def test_resolution_does_not_consult_the_store():
     and a substring check catches whichever one the author of the check thought
     of.
     """
-    import ast
-    import pathlib as pl
 
-    import grimoire.store.routing as mod
 
     src = pl.Path(mod.__file__ or "")
     assert src.name == "routing.py"

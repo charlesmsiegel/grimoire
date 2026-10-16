@@ -24,7 +24,7 @@ from grimoire import llm, llm_sampling, routes, wire
 from grimoire.store import inference_keys as keys
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import capabilities, limits, migrate
+from grimoire.store.inference import capabilities, legacy_plan, limits, migrate
 from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference import resolve as inf
 from grimoire.store.inference.capabilities import Cap
@@ -417,8 +417,6 @@ def test_an_unreadable_connection_file_reads_as_missing(at_state, monkeypatch):
 def _uncounted_planner(monkeypatch) -> None:
     """The planner's own reads (`legacy_plan.lookup("soft")`) through the real
     reader, so a test counting `read_connection_raw` counts the resolver's."""
-    from grimoire.store.inference import legacy_plan
-
     real = store.llm_connections.read_connection_raw
 
     def soft(conn_id: str):

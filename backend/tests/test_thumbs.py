@@ -14,7 +14,7 @@ import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 
 from grimoire.routes.common import THUMB_BUCKETS, THUMB_W
-from grimoire.store import assets, thumbs
+from grimoire.store import assets, image_store, thumbs
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -923,7 +923,6 @@ def test_thumbnail_shared_across_placements(client, tmp_path):
 def test_a_blob_key_names_no_path_and_costs_no_stat(client, tmp_path):
     wid, ids = _two_characters_with_one_picture(client, _png_bytes())
     paths = [assets.image_path(tmp_path / "worlds" / wid, cid, "default", "avatar") for cid in ids]
-    from grimoire.store import image_store
     assert all(image_store.blob_sha_of(p) for p in paths)
     assert thumbs._key(paths[0], None, 256, tmp_path) == thumbs._key(paths[1], None, 256, tmp_path)
     assert thumbs._key(paths[0], None, 256, tmp_path) != thumbs._key(paths[0], None, 320, tmp_path)
@@ -959,7 +958,6 @@ def _damage(blob, how):
 def test_no_thumbnail_is_made_from_a_damaged_blob(tmp_path, monkeypatch):
     """Even when what the blob now holds decodes -- another picture altogether
     -- its name no longer says what it is, so the sha-keyed entry is not made."""
-    from grimoire.store import image_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     obj = image_store.ingest(_png_bytes(), "png")
     blob = image_store.blob_path(obj.blob_sha256, "png")
@@ -999,7 +997,6 @@ def test_a_made_thumbnail_is_served_without_hashing_its_source(client, tmp_path,
     """A thumbnail keyed by the blob's sha was made from intact bytes, so it
     is served as is: neither a later damage nor the hash that would find it
     stands between the request and the thumbnail."""
-    from grimoire.store import image_store
     base = _avatar_route(client)
     listing = base.rsplit("/", 1)[0]
     sha = client.get(listing).json()[0]["v"]

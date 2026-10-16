@@ -10,32 +10,44 @@ space, text the cache lacks, under the producer's own task.
 
 from __future__ import annotations
 
+import hashlib
+import importlib
 import json
 import os
+import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
-from grimoire import embeddings
+import grimoire.store as store
+from grimoire import embeddings, routes
+from grimoire.main import create_app
 from grimoire.store import (
     cache_sync,
+    campaign_images,
     campaigns,
     compiled,
     config,
     entities,
+    image_descriptions,
+    image_store,
     llm_connections,
+    locks,
     scenes,
     semsearch,
     usage,
     vectors,
     worlds,
 )
-from grimoire.store.context import art, semantic
+from grimoire.store.context import art, layout, semantic
+from grimoire.store.inference import settings as inference_settings
 from tests import cache_sync_fixtures as fx
 from tests.inference_fixtures import embedding
-from tests.llm_fakes import FakeEmbeddings
+from tests.llm_fakes import FakeEmbeddings, FakeOpenRouter
 
 cache = fx.cache
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -105,8 +117,6 @@ def _rel(home, path):
 
 def _png(rgb: bytes) -> bytes:
     """A 1x1 PNG of one colour: distinct pixels, so a distinct image object."""
-    import struct
-    import zlib
 
     def chunk(kind: bytes, body: bytes) -> bytes:
         return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
@@ -134,7 +144,6 @@ def test_recall_records_a_row_naming_its_projection_and_instance(home, fake):
     [row] = _rows_at(home, path)
     assert row.kind == f"vector:{semantic.PROJECTION}:{compiled.space_digest(_space())}"
     assert json.loads(row.instance) == {"campaign": cid, "entity": ["lore", eid]}
-    import hashlib
     assert row.built_from == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -212,7 +221,6 @@ def test_with_embedding_off_nothing_is_sent(home, fake):
     eid, path = _lore(home, wid)
     _recall(wid, cid, eid)
     config.write_config(semantic_recall_depth="0")
-    from grimoire.store.inference import settings as inference_settings
     inference_settings.write("global", "", {"roles": {"embedding": {"selection": None}}},
                              confirm_embedding=True)
     entities.update_entity(worlds.world_root(wid), "lore", eid, body="Edited with embedding off.")
@@ -479,15 +487,7 @@ def test_a_turn_parks_recall_history_and_its_handoff_records_it(monkeypatch, tmp
     """A turn embeds recall's candidates under its campaign lock, where 03's
     cache takes no SQL: the row waits, and the turn's write-set handoff --
     off the loop, outside every lock -- records it."""
-    import importlib
 
-    from fastapi.testclient import TestClient
-
-    import grimoire.store as store
-    from grimoire import routes
-    from grimoire.main import create_app
-    from grimoire.store import locks
-    from tests.llm_fakes import FakeOpenRouter
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     importlib.reload(store)
@@ -528,8 +528,6 @@ def test_parked_history_for_a_source_edited_since_is_dropped(home, fake, monkeyp
 
 
 def test_the_art_catalog_names_the_image_object(home):
-    from grimoire.store import campaign_images, image_descriptions, image_store
-
     _wid, cid = _realm()
     png = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02"
            b"\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01"
@@ -630,8 +628,6 @@ def test_write_through_defers_recall_when_recall_is_off(home, fake):
 
 
 def test_the_art_catalog_is_off_where_the_prompt_layout_switches_its_section_off(home):
-    from grimoire.store.context import layout
-
     assert cache_sync._art_on()
     layout.write_layout([{"id": "available_art", "label": "", "enabled": False}])
     assert cache_sync._art_on()                  # a stored layout is a bypass until switched on
@@ -765,8 +761,6 @@ def test_every_document_holding_a_passage_records_its_own_history(home, fake):
 
 
 def test_every_image_object_sharing_a_description_records_its_own_history(home):
-    from grimoire.store import campaign_images, image_descriptions
-
     _configure()
     _wid, cid = _realm()
     for name, colour in (("coastline", b"\x00\x00\x00"), ("harbour", b"\xff\xff\xff")):
@@ -778,7 +772,6 @@ def test_every_image_object_sharing_a_description_records_its_own_history(home):
     texts = [art.embed_space.clip(c["description"], art.DOC_BYTES) for c in cands]
     assert len(set(texts)) == 1
     art._save_warmed({"space": _space()}, cands, texts, texts[:1], [[1.0, 0.0]], {}, cid)
-    from grimoire.store import image_store
     for cand in cands:
         assert _rows_at(home, image_store.object_path(cand["image_id"]))
 

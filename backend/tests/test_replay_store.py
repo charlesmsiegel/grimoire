@@ -10,7 +10,18 @@ to happen BEFORE the cut rather than after it.
 
 import pytest
 
-from grimoire.store import campaigns, chronicle, replay, scene_refs, scenes, worlds
+from grimoire.store import (
+    alternates,
+    campaigns,
+    cascade,
+    chronicle,
+    commits,
+    config,
+    replay,
+    scene_refs,
+    scenes,
+    worlds,
+)
 from grimoire.store.scenes import serialize as scenes_serialize
 from grimoire.store.scenes import turns as scenes_turns
 
@@ -152,7 +163,6 @@ def test_the_preview_counts_the_model_turns_it_would_redo(cid, sid):
 
 
 def test_the_preview_nudges_a_fork_past_the_threshold(cid, sid, monkeypatch):
-    from grimoire.store import config
     assert replay.preview(cid, sid, 1)["fork"] is False
     monkeypatch.setattr(config, "replay_fork_threshold", lambda: 1)
     assert replay.preview(cid, sid, 1)["fork"] is True
@@ -370,7 +380,6 @@ def test_restoring_fences_a_review_opened_mid_walk(cid, sid):
     """The cut un-absorbs the scene, so a review CAN be opened while the walk is
     running — and its token would still be valid over a transcript the restore
     is about to replace."""
-    from grimoire.store import commits
     replay.begin(cid, sid, 1)
     before = commits.scene_epoch(cid, sid)
     scenes.append_reply(cid, sid, [{"speaker": None, "content": "a take nobody kept"}])
@@ -383,7 +392,6 @@ def test_the_discarded_replays_variants_go_with_it(cid, sid):
     it, so the only set standing when a cancel truncates is one parked on the
     reply the cancel is discarding. Left behind, it would offer that discarded
     take as an alternate of the original reply the restore puts back."""
-    from grimoire.store import alternates
     replay.begin(cid, sid, 1)
     scenes.append_reply(cid, sid, [{"speaker": None, "content": "the first take"}])
     alternates.archive(cid, sid, "")                     # ... and reroll it
@@ -400,7 +408,6 @@ def test_a_cancel_survives_a_transcript_somebody_else_shortened(cid, sid):
     """`mark` is this store's memory of a transcript the gutter's cut can shorten
     without ever hearing about the replay. Past the end it would raise out of the
     one call whose whole job is to be the way back."""
-    from grimoire.store import cascade
     replay.begin(cid, sid, 1)
     scenes.append_reply(cid, sid, [{"speaker": None, "content": "a fresh reply"}])
     replay.accept(cid)                        # mark now sits past the cut

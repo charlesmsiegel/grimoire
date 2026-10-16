@@ -2,7 +2,7 @@
 
 import pytest
 
-from grimoire.store import campaigns, group_proposals, group_refs, locks
+from grimoire.store import campaigns, group_proposals, group_refs, locks, revision
 from tests.test_commits_store import _campaign
 from tests.test_group_membership_store import _enable_case_sensitive
 from tests.test_locks_store import _probe
@@ -130,7 +130,6 @@ def test_a_lease_write_bumps_the_campaign_revision_and_a_reread_does_not(scope):
     """The absorb start is @computes_only, so the middleware stamps nothing for
     it: a capture that writes a lease must move the revision itself, and one
     that only re-reads the same lease must not."""
-    from grimoire.store import revision
     cid, root, world, identity = scope
     before = revision.current(cid)
     with locks.world_lifecycle_lock(root.parent.parent, world):

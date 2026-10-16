@@ -19,17 +19,18 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import json
 from copy import deepcopy
 
 import pytest
 
 import grimoire.store as store
-from grimoire import llm, llm_usage, wire
+from grimoire import llm, llm_reasoning, llm_usage, wire
 from grimoire.llm import LLMClient
 from grimoire.routes.common import require_inference
 from grimoire.store import inference_keys as keys
-from grimoire.store import llm_connections, usage
+from grimoire.store import llm_connections, usage, usage_rollup
 from grimoire.store.inference import resolve
 from grimoire.store.inference.cascade import Selection
 from tests.llm_fakes import RefusingProvider, ScriptedProvider
@@ -354,7 +355,6 @@ def test_a_meter_files_the_hop_its_target_carried(tmp_path, monkeypatch):
 def test_every_account_field_reaches_the_row():
     """An account field the facade stamps but `Meter.done` does not file would
     be dropped silently: each is in `Meter.SERVED` and a `record` parameter."""
-    import inspect
     assert set(llm_usage.ACCOUNT_FIELDS) <= set(usage.Meter.SERVED)
     params = inspect.signature(usage.record).parameters
     assert all(field in params for field in llm_usage.ACCOUNT_FIELDS)
@@ -420,8 +420,6 @@ def test_a_meter_files_its_run_fields(home):
 
 
 def test_a_run_row_folds_into_the_rollup_as_any_row(home):
-    from grimoire.store import usage_rollup
-
     usage.record(task="chat", campaign="saltmarch", model=MODEL_A, cost_usd=1.0)
     usage.record(task="chat", campaign="saltmarch", model=MODEL_A, cost_usd=2.0,
                  run_id="run-1", loop_turn=1, tool_calls=1)
@@ -457,8 +455,6 @@ def test_a_run_meter_that_sent_nothing_files_no_row(home):
 
 
 def test_sent_ignores_only_the_pre_send_keys():
-    from grimoire import llm_reasoning
-
     assert usage.sent({}) is False
     assert usage.sent({usage.RUN_KEY: "run-1"}) is False
     assert usage.sent({usage.RUN_KEY: "run-1",

@@ -13,6 +13,7 @@ from grimoire.store import (
     overlay,
     pcs,
     scenes,
+    sync,
     taglines,
     worlds,
 )
@@ -99,7 +100,6 @@ def test_leave_on_actor_not_cast_is_a_silent_no_op(monkeypatch, tmp_path):
 
 
 def test_leave_narrates_once_scene_has_messages(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")
@@ -120,7 +120,6 @@ def test_appear_narrates_first_time_join_into_a_messaged_scene(monkeypatch, tmp_
     """The Task 4 case: adding a brand-new character to a scene that's already
     underway (e.g. via the sidebar's new "+ Add" control) must narrate, exactly
     like a rejoin does. This is the fresh-lock branch, not the rejoin branch."""
-    from grimoire.store import scenes
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     scenes.append_message(cid, sid, "user", "hi")
@@ -133,7 +132,6 @@ def test_appear_narrates_first_time_join_into_a_messaged_scene(monkeypatch, tmp_
 
 
 def test_appear_narrates_join_once_scene_has_messages(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     # fresh lock, empty scene: silent (matches CastPanel's pre-scene setup today)
@@ -154,7 +152,6 @@ def test_appear_narrates_join_once_scene_has_messages(monkeypatch, tmp_path):
 
 
 def test_appear_rejoin_same_scene_is_a_noop_no_duplicate_narration(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     scenes.append_message(cid, sid, "user", "hi")
@@ -168,7 +165,6 @@ def test_appear_narrate_false_suppresses_narration(monkeypatch, tmp_path):
     """ingest_scene.build_scene's use case: the scene's transcript is written
     first, then cast is registered -- narration must be fully suppressed even
     though the scene already has messages."""
-    from grimoire.store import scenes
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     scenes.append_message(cid, sid, "assistant", "*The study is silent.*")
@@ -250,7 +246,6 @@ def test_appear_raises_when_actor_in_neither_world_nor_campaign(monkeypatch, tmp
 
 
 def test_sync_ignores_campaign_local_pc(monkeypatch, tmp_path):
-    from grimoire.store import sync
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)

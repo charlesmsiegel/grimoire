@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from grimoire.store import atomic
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".claude" / "skills" /
                       "populate-world-content" / "scripts"))
 import populate_world_content as pwc
@@ -860,9 +862,6 @@ def test_verify_manifest_catches_dangling_plotmap_target(monkeypatch, tmp_path):
 
 def test_verify_manifest_catches_dangling_plotmap_source(monkeypatch, tmp_path):
     """Test that plotmap edge sources (keys) are checked for dangling refs."""
-    import json
-
-    from grimoire.store import atomic
 
     wid, root = _world(monkeypatch, tmp_path)
     # Directly write a plotmap with a source key that doesn't correspond to a real greeting

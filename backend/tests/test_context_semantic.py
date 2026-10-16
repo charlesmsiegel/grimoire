@@ -9,8 +9,11 @@ Two halves, deliberately kept apart:
   that every failure it can meet degrades to keyword-only.
 """
 
+import hashlib
+import json
 import struct
 
+import httpx
 import pytest
 
 from grimoire import embeddings
@@ -30,7 +33,7 @@ from grimoire.store import (
 )
 from grimoire.store import context as ctx
 from grimoire.store.context import semantic, world_state
-from grimoire.store.inference import providers
+from grimoire.store.inference import facts, providers
 from grimoire.store.inference import settings as inference_settings
 from tests.inference_fixtures import embedding, legacy_store
 
@@ -1036,8 +1039,6 @@ def test_recall_sends_its_query_as_a_query(store, provider):
 def test_no_block_reads_todays_vectors(store, provider):
     """No re-embed on upgrade: with no `embedding` block the vector a recall
     writes is at today's key, and a later recall sends only its query."""
-    import hashlib
-
     conn = configure()
     rev = llm_connections.read_connection_raw(conn)["rev"]
     e = entry("Near")
@@ -1055,11 +1056,7 @@ def test_prefix_options_end_to_end(store, monkeypatch):
     the query prefixed as a query and the entry as a document; the entry's
     vector is cached under the options space, keyed by its own text; the
     query is never cached."""
-    import json
 
-    import httpx
-
-    from grimoire.store.inference import facts
 
     conn = configure(threshold="0.0")
     facts.state(conn, "embed-1", embedding={
@@ -1093,11 +1090,7 @@ def test_a_width_ignoring_endpoint_costs_one_request_per_turn(store, monkeypatch
     """01h-S3: an endpoint that ignores a requested `dimensions` answers
     `missing_key`/`dimensions_mismatch`, which recall never retries -- one
     request and one error row a turn, not two."""
-    import json
 
-    import httpx
-
-    from grimoire.store.inference import facts
 
     seen = []
 

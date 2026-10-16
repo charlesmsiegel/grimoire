@@ -1,10 +1,15 @@
 """Scene tracker field definitions: the built-in set, the world -> campaign ->
 scene layering, validation, and the layer routes."""
 
+import json
+import logging
+
 import pytest
 
 from grimoire import store
 from grimoire.store import campaigns, scenes, worlds
+from grimoire.store.scenes import identity as scenes_identity
+from grimoire.store.scenes import paths as scenes_paths
 from grimoire.store.tracker import fields, paths
 
 
@@ -64,8 +69,6 @@ def test_scene_layer_may_not_redefine(home):
 
 
 def test_a_rejected_scene_layer_leaves_the_scene_file_alone(home):
-    from grimoire.store.scenes import identity as scenes_identity
-    from grimoire.store.scenes import paths as scenes_paths
     _, cid, sid = home
     # Strip the identity create_scene minted (test-only raw rewrite), so the
     # write has something to mint.
@@ -140,8 +143,6 @@ def test_changing_an_enum_to_text_drops_its_options(home):
 
 
 def test_garbled_layer_reads_empty(home, caplog):
-    import logging
-
     _, cid, _ = home
     p = paths.campaign_layer_path(cid)
     with caplog.at_level(logging.WARNING, logger="grimoire.store.tracker.fields"):
@@ -245,8 +246,6 @@ def test_a_stored_addition_a_release_made_built_in_costs_only_itself(home, caplo
     that later ships `attention` as a built-in must not take the layer's other
     fields and switches down with it. Only the shadowed addition goes (as
     `apply_layer` would skip it anyway), and the log names it."""
-    import json
-    import logging
 
     wid, cid, sid = home
     if layer == "world":
@@ -311,8 +310,6 @@ def test_options_a_campaign_set_on_its_worlds_enum_survive_a_read(home):
 def test_a_world_edit_costs_a_campaign_only_the_entries_it_invalidated(home, caplog):
     """A world edited after the campaign layer was written can make one of the
     campaign's entries invalid. That entry goes, logged; the rest stays."""
-    import logging
-
     wid, cid, sid = home
     fields.write_world_layer(wid, {**POSE_ENUM, "fields": [
         {"key": "gait", "label": "Gait", "type": "text", "aware": "present", "hint": ""}]})
@@ -339,8 +336,6 @@ def test_a_world_edit_costs_a_campaign_only_the_entries_it_invalidated(home, cap
 
 
 def test_a_campaign_edit_costs_a_scene_only_the_addition_it_shadowed(home, caplog):
-    import logging
-
     _, cid, sid = home
     fields.write_scene_layer(cid, sid, {"off": ["pose"], "fields": [
         {"key": "rage", "label": "Rage", "type": "text", "aware": "self", "hint": ""},
@@ -355,8 +350,6 @@ def test_a_campaign_edit_costs_a_scene_only_the_addition_it_shadowed(home, caplo
 
 
 def test_one_malformed_entry_costs_only_itself(home):
-    import json
-
     _, cid, _ = home
     p = paths.campaign_layer_path(cid)
     p.parent.mkdir(parents=True, exist_ok=True)

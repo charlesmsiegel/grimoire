@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from grimoire import llm, tool_calls, wire
+from grimoire import claude_agent, llm, tool_calls, wire
 from grimoire.llm import LLMClient
 from grimoire.tool_calls import Collector
 from tests.llm_fakes import Cut, SSEProvider, anthropic_tool_sse, openai_tool_sse
@@ -296,7 +296,6 @@ def test_what_reads_as_tools_refused(said, refused):
 async def test_an_sdk_too_old_for_tools_is_coded_and_not_observed(monkeypatch):
     """An installed claude-agent-sdk without the tool API refuses an offer of
     tools (`claude_agent._tool_options`), coded as the refusal it is."""
-    from grimoire import claude_agent
     monkeypatch.setattr(claude_agent, "query", lambda **kw: None)
     monkeypatch.setattr(claude_agent, "_SDK_IMPORT_ERROR", None)
     monkeypatch.setattr(claude_agent, "create_sdk_mcp_server", None)

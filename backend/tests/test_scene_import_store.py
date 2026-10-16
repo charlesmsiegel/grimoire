@@ -8,6 +8,9 @@ does is a write.
 
 from __future__ import annotations
 
+import io
+import zipfile
+
 import pytest
 
 from grimoire.store import (
@@ -16,6 +19,7 @@ from grimoire.store import (
     characters,
     clock,
     entities,
+    export,
     overlay,
     pcs,
     scene_import,
@@ -525,8 +529,6 @@ def test_a_friendly_date_needs_a_window(monkeypatch, tmp_path):
 def test_a_bundle_chapter_round_trips_through_the_exporter(monkeypatch, tmp_path):
     """The one claim that covers the whole format at once: export a scene, feed
     the chapter file back in, and get the same transcript."""
-    from grimoire.store import export
-
     wid, cid = _campaign(monkeypatch, tmp_path)
     _character(wid, "Mara")
     sid = scenes.create_scene(cid, "The Long Quay")
@@ -552,10 +554,7 @@ def test_a_bundle_chapter_round_trips_through_the_exporter(monkeypatch, tmp_path
 # ---- a post hidden from context survives the round trip ----
 
 def test_markdown_export_reimports_excluded(monkeypatch, tmp_path):
-    import io
-    import zipfile
 
-    from grimoire.store import export
 
     _wid, cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "The Pier")
@@ -583,10 +582,7 @@ def test_a_visible_post_that_opens_with_the_marker_text_round_trips_visible(
     """A post whose first line is literally the marker is escaped on export and
     unescaped on import, so it is not read back as hidden (codex review, PR
     #458) -- and an escape a post really opened with survives as well."""
-    import io
-    import zipfile
 
-    from grimoire.store import export
 
     _wid, cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "The Pier")

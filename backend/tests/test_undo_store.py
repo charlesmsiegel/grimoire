@@ -20,7 +20,9 @@ import pytest
 from grimoire.store import (
     absorb,
     appearances,
+    audit,
     campaigns,
+    changes,
     characters,
     commitments,
     dossiers,
@@ -31,11 +33,15 @@ from grimoire.store import (
     overlay,
     playstate,
     plot,
+    provenance,
     relationships,
     scenes,
+    sheets,
     undo,
+    voice_drift,
     worlds,
 )
+from grimoire.store.absorb import conflicts
 
 
 @pytest.fixture
@@ -85,7 +91,6 @@ def test_lore_edit_is_journalled_with_a_reversal(cid, sid):
 
 
 def test_undoing_a_lore_edit_puts_the_body_back(cid, sid):
-    from grimoire.store import overlay
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "new body")], sid)
     undo.undo(cid, "j1")
@@ -120,7 +125,6 @@ def test_undo_stamps_the_entry_and_journals_the_reversal(cid, sid):
 
 
 def test_undoing_the_undo_is_redo(cid, sid):
-    from grimoire.store import overlay
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "new body")], sid)
     undo.undo(cid, "j1")
@@ -144,7 +148,6 @@ def test_an_unknown_entry_is_refused(cid):
 def test_a_record_that_moved_since_refuses_the_undo(cid, sid):
     """The whole point of the compare-and-swap: the reader asked to take back one
     edit, not to discard what landed on the record afterwards."""
-    from grimoire.store import overlay
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "new body")], sid)
     overlay.update_entity(cid, "lore", "pact", body="somebody else's edit")
@@ -154,7 +157,6 @@ def test_a_record_that_moved_since_refuses_the_undo(cid, sid):
 
 
 def test_a_deleted_record_refuses_the_undo(cid, sid):
-    from grimoire.store import overlay
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "new body")], sid)
     overlay.delete_entity(cid, "lore", "pact")
@@ -332,7 +334,6 @@ def test_every_declined_kind_has_a_reason(cid):
 # --- hand edits made outside the absorb pipeline ----------------------------
 
 def test_journalled_records_a_hand_edit(cid):
-    from grimoire.store import overlay
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     target = {"w": "entity", "kind": "lore", "id": "pact"}
     with undo.journalled(cid, target, kind="lore",
@@ -359,7 +360,6 @@ def test_journalled_records_nothing_when_the_write_raises(cid):
 def test_journalled_never_sinks_the_write_it_wraps(cid, monkeypatch):
     """The edit has already landed by the time the append runs, so a journal
     failure has to cost the history rather than the edit."""
-    from grimoire.store import overlay
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     monkeypatch.setattr(journal, "append",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
@@ -375,7 +375,6 @@ def test_journalled_never_sinks_the_write_it_wraps(cid, monkeypatch):
 def test_undo_repoints_the_rolling_delta(cid, sid):
     """`changes.json` means "how this record last moved"; after a reversal it
     last moved back."""
-    from grimoire.store import changes
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "new body")], sid)
     assert changes.read(cid)["lore/pact"]["fields"][0]["after"] == "new body"
@@ -385,7 +384,6 @@ def test_undo_repoints_the_rolling_delta(cid, sid):
 
 
 def test_undo_of_a_non_browsable_kind_leaves_the_rolling_delta_alone(cid, sid):
-    from grimoire.store import changes
     absorb.apply_edits(cid, [_plot_edit("It moved.")], sid)
     undo.undo(cid, "j1")
     assert changes.read(cid) == {}
@@ -397,7 +395,6 @@ def test_voice_drift_round_trips_note_and_provenance(cid, sid):
     """The one writer whose value is a pair: a note and the anchor fingerprint it
     was judged against. Restoring the note alone would leave a live corrective
     citing whichever anchor happened to be recorded."""
-    from grimoire.store import voice_drift
     croot = campaigns.campaign_root(cid)
     aid = _cast(cid, sid)
     target = {"w": "voice_drift", "id": aid}
@@ -416,7 +413,6 @@ def test_voice_drift_round_trips_note_and_provenance(cid, sid):
 def test_a_sheet_edit_is_journalled_without_a_reversal(scene_with_sheeted_cast):
     """Every applied edit lands in the history, including the kinds that cannot
     be taken back through it."""
-    from grimoire.store import audit, sheets
     cid, sid = scene_with_sheeted_cast
     live = sheets.read(cid, "characters", "mara")["fields"]["hp"]
     edits, _ = audit.materialize(cid, sid, {"warnings": [], "dropped": [], "sheet_deltas": [
@@ -435,7 +431,6 @@ def test_a_sheet_edit_is_journalled_without_a_reversal(scene_with_sheeted_cast):
 def test_journalled_skips_a_write_that_moved_nothing(cid):
     """An entity PUT that only touched `keys` still writes; a row with an empty
     diff and a no-op Undo button in front of the reader is not the record of it."""
-    from grimoire.store import overlay
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     with undo.journalled(cid, {"w": "entity", "kind": "lore", "id": "pact"},
                          kind="lore", ref={"kind": "lore", "id": "pact"},
@@ -457,7 +452,6 @@ def test_undo_clears_the_provenance_marker(cid, sid):
     value back, and the quote that justified the edit does not justify it —
     there is no earlier citation to fall back to, so uncited is the honest
     state."""
-    from grimoire.store import provenance
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_cited_lore_edit("old body", "new body")], sid)
     assert provenance.read(cid)["lore/pact#body"]["quote"] == "The pact is broken."
@@ -468,7 +462,6 @@ def test_undo_clears_the_provenance_marker(cid, sid):
 def test_undo_clears_the_marker_for_a_kind_the_delta_never_covered(cid, sid):
     """Provenance covers every kind, so the clearing has to as well — a plot
     beat is cited and is not browsable."""
-    from grimoire.store import provenance
     edit = {**_plot_edit("It moved."),
             "review": {"quote": "The map moved.", "speaker": "Mara",
                        "certainty": 0.8, "authority": "stated", "band": "high"}}
@@ -479,7 +472,6 @@ def test_undo_clears_the_marker_for_a_kind_the_delta_never_covered(cid, sid):
 
 
 def test_undo_leaves_another_records_marker_alone(cid, sid):
-    from grimoire.store import provenance
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "lore", "Pact", body="old body")
     entities.create_entity(croot, "lore", "Tithe", body="old tithe")
@@ -498,7 +490,6 @@ def test_a_commitment_whose_id_was_reallocated_carries_no_reversal(cid, sid):
     a different, unresolved commitment already holds. The snapshot was taken from
     that other record, so it describes a commitment this edit never touched —
     offering it as the reversal would revert somebody else's promise."""
-    from grimoire.store.absorb import conflicts
     commitments.set_movement(cid, "pay-mara", "Pay Mara", "promise", "open", None,
                              "He promised.", "s0")
     # Staged as NEW (`before` empty) against an id the slug collided with, and
@@ -525,7 +516,6 @@ def test_a_plot_thread_whose_id_was_reallocated_carries_no_reversal(cid, sid):
     """The plot twin of the commitment test above: a row staged as NEW whose id
     a different thread now holds is written to a fresh id, so the snapshot taken
     from the held thread is no reversal of anything this edit wrote."""
-    from grimoire.store.absorb import conflicts
     plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s0")
     edit = {"id": "plot:the-map", "kind": "plot",
             "target": {"kind": "plot", "id": "the-map"},
@@ -555,7 +545,6 @@ def test_undo_will_not_conjure_a_flag_for_a_deleted_character(cid, sid):
     and leaves {"note": "", "anchor": ""}, which is exactly what a missing file
     reads as -- so the compare-and-swap passes for a character deleted since.
     """
-    from grimoire.store import voice_drift
     croot = campaigns.campaign_root(cid)
     aid = _cast(cid, sid)
     fp = voice_drift.anchor_fingerprint("terse and dry", "")

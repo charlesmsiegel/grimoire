@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import io
 import os
 import threading
 import zipfile
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from PIL import Image
 
-from grimoire.store import backups, campaigns, config, default_prompts, entities, locks, worlds
+from grimoire.store import (
+    assets,
+    backups,
+    campaigns,
+    config,
+    default_prompts,
+    entities,
+    locks,
+    worlds,
+)
 
 
 def home(monkeypatch, tmp_path):
@@ -721,9 +732,6 @@ def test_a_backup_takes_the_backup_lock(monkeypatch, tmp_path):
 # ---- the content-addressed image store ------------------------------------
 
 def _png() -> bytes:
-    import io
-
-    from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (200, 30, 30)).save(buf, "PNG")
     return buf.getvalue()
@@ -731,7 +739,6 @@ def _png() -> bytes:
 
 def _avatar_store(root):
     """One character version whose avatar went through the real upload path."""
-    from grimoire.store import assets
     assets.put_image(root, "seraphine", "v1", "avatar", _png(), ".png")
     return assets.version_dir(root, "seraphine", "v1")
 
@@ -770,7 +777,6 @@ def test_image_backup_leaves_the_derived_cache_out(monkeypatch, tmp_path):
 
 def test_image_backup_restores_a_resolvable_upload(monkeypatch, tmp_path):
     """Unzip the image-only archive into a fresh home: the placement resolves."""
-    from grimoire.store import assets
     root = tmp_path / "live"
     home(monkeypatch, root)
     version = _avatar_store(root)

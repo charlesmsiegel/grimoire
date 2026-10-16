@@ -14,10 +14,11 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from grimoire import store
+from grimoire import routes, store
 from grimoire.main import create_app
 from tests import review_runs
 from tests.inference_fixtures import put_settings
+from tests.llm_fakes import FakeOpenRouter, FakeOpenRouterComplete
 
 
 @pytest.fixture
@@ -257,8 +258,6 @@ def test_a_re_absorbed_retcon_badges_what_the_later_scene_answered(client):
     and the one thing none of them proves — that the badge survives the round
     trip through `materialize`'s real staged rows.
     """
-    from grimoire import routes
-    from tests.llm_fakes import FakeOpenRouterComplete
 
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
@@ -310,8 +309,6 @@ def test_a_re_absorbed_retcon_badges_what_the_later_scene_answered(client):
 def test_the_ordinary_end_of_scene_review_badges_nothing(client):
     """Absorbing the newest scene has no later scene to disagree with, which is
     why the pass is unconditional rather than a mode the caller asks for."""
-    from grimoire import routes
-    from tests.llm_fakes import FakeOpenRouterComplete
 
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
@@ -330,8 +327,6 @@ def test_a_replay_turn_detaches_like_any_other(client, scene):
     because only this suite has the staged session it needs."""
     cid, sid = scene
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    from grimoire import routes
-    from tests.llm_fakes import FakeOpenRouter
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["a reply"])
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 1})
 

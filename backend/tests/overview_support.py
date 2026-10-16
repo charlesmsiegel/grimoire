@@ -14,15 +14,18 @@ an in-process memo can be exercised without sleeping (spec 04 section 9.1).
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 
-from grimoire.store import statcache
+from grimoire.store import characters, compiled, statcache
+from grimoire.store.scenes import read as scenes_read
 
 
 @dataclass
@@ -86,8 +89,6 @@ def clock_forward(monkeypatch, seconds: float = 30.0) -> None:
 def clear_memos() -> None:
     """Forget every in-process memo the overview reads go through, as a
     process restart would."""
-    from grimoire.store import characters
-    from grimoire.store.scenes import read as scenes_read
     statcache._cache.clear()
     scenes_read._SCENE_POOL.clear()
     characters._IDENTITY_POOL.clear()
@@ -102,7 +103,6 @@ def register_overview_kinds(monkeypatch, *names: str) -> None:
     """Register overview candidate kinds in the compiled registry for a test,
     whatever the measured registration in `compiled.KINDS` says, so the
     persisted layer is exercised either way. No names: all four."""
-    from grimoire.store import compiled
     chosen = names or tuple(compiled.OVERVIEW_CANDIDATES)
     kinds = dict(compiled.KINDS)
     for name in chosen:
@@ -115,7 +115,6 @@ def register_overview_kinds(monkeypatch, *names: str) -> None:
 
 
 def unregister_overview_kinds(monkeypatch) -> None:
-    from grimoire.store import compiled
     monkeypatch.setattr(compiled, "KINDS", {k: v for k, v in compiled.KINDS.items()
                                             if k not in compiled.OVERVIEW_CANDIDATES})
 
@@ -124,7 +123,6 @@ def cache_clock_forward(monkeypatch, seconds: float = 30.0) -> None:
     """Move the compiled layer's filesystem clock past `PERSIST_WINDOW_NS`,
     so a source just written is old enough to be recorded (spec 03 section 5;
     POSIX ctime cannot be backdated, the `migrations._clock` precedent)."""
-    from grimoire.store import compiled
     real = compiled.filesystem_clock
 
     def ahead(root):
@@ -138,7 +136,6 @@ def cache_clock_forward(monkeypatch, seconds: float = 30.0) -> None:
 def restart() -> None:
     """What a process restart forgets: the compiled layer's handles and every
     in-process memo. The cache file itself is kept."""
-    from grimoire.store import compiled
     compiled.close()
     clear_memos()
 
@@ -147,8 +144,6 @@ def restart() -> None:
 def database_locked(home: os.PathLike | str) -> Iterator[None]:
     """Hold every compiled cache file of `home` under an exclusive SQLite
     transaction from another connection: lookups miss, flushes store nothing."""
-    import sqlite3
-    from pathlib import Path
     conns = []
     for path in sorted(Path(home, ".cache", "compiled").glob("*.sqlite")):
         conn = sqlite3.connect(path, timeout=0, isolation_level=None)

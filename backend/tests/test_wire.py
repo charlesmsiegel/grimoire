@@ -11,6 +11,7 @@ import sys
 import pytest
 
 from grimoire import llm_usage, wire
+from grimoire.store.inference import resolved
 
 from . import wire_kit
 
@@ -110,7 +111,6 @@ def test_wire_imports_nothing_from_the_package():
 
 # ---- 01i: the model's size ----
 def test_a_target_built_by_hand_has_unknown_limits():
-    from grimoire.store.inference import resolved
     unknown = wire.Limits(wire.Limit(None, "unknown"), wire.Limit(None, "unknown"))
     assert wire_kit.target().limits == unknown == wire.Limits()
     assert resolved.UNBUILT.limits == unknown

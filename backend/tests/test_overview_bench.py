@@ -17,12 +17,14 @@ from __future__ import annotations
 import json
 import os
 import stat
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from grimoire.store import paths
+from grimoire.store import overview, paths
+from grimoire.store.overview import read as overview_read
 from scripts import bench_overview, synth_library
 from tests.overview_support import audited
 
@@ -132,7 +134,6 @@ def test_shell_and_todo_share_one_continuity_computation(bench):
 
 
 def test_no_closed_scene_transcript_is_read_in_any_state(bench, monkeypatch):
-    from grimoire.store.overview import read as overview_read
     asked: list[str] = []
     real = overview_read._turns
     monkeypatch.setattr(overview_read, "_turns",
@@ -141,7 +142,6 @@ def test_no_closed_scene_transcript_is_read_in_any_state(bench, monkeypatch):
         state()
         for endpoint in bench_overview.ENDPOINTS:
             bench.get(endpoint)
-    from grimoire.store import overview
     largest = bench.largest_campaign()
     closed = {r["sid"] for r in overview.scene_summary(largest)["rows"] if r["done"]}
     assert closed and not closed & set(asked)
@@ -204,7 +204,6 @@ def test_harness_refuses_a_library_holding_a_hard_link(tmp_path):
 
 
 def test_the_large_profiles_hold_scenes_past_the_admission_size():
-    from grimoire.store.overview import read as overview_read
     assert synth_library.LONG_SCENE_BYTES > overview_read.SCENE_TURNS_PERSIST_MIN_BYTES
     assert synth_library.PROFILES["medium"]["long_scenes"] >= 1
     assert synth_library.PROFILES["large"]["long_scenes"] >= 1
@@ -235,7 +234,6 @@ def test_the_generator_refuses_a_non_empty_target(tmp_path):
 def test_the_generator_marks_and_backdates(library):
     marker = json.loads((library / synth_library.SYNTHETIC_MARKER).read_text(encoding="utf-8"))
     assert (marker["profile"], marker["seed"]) == ("small", 11)
-    import time
     newest = max(p.stat().st_mtime_ns for p in library.rglob("*"))
     assert newest < time.time_ns() - 60 * 1_000_000_000
 

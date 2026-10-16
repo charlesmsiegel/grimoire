@@ -3,13 +3,17 @@
 import asyncio
 import json
 import random
+from contextlib import aclosing
 from itertools import pairwise
 from types import SimpleNamespace
+
+import pytest
 
 from grimoire import routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns, streaming
 from grimoire.store import group_play
+from grimoire.store.appearances import paths as appearance_paths
 from tests import wire_kit
 from tests.llm_fakes import FakeLLM, decision_reply
 
@@ -308,16 +312,12 @@ def test_directed_with_saved_defaults_keeps_full_roster(client):
 def _legacy_presence(cid, sid, ref):
     """Drop `ref`'s presence interval for the scene, as cast that predates
     intervals has none, so the round is what must anchor it."""
-    from grimoire.store.appearances import paths as appearance_paths
-
     data = appearance_paths.record(cid)
     data[ref.replace(":", "/", 1)].get("presence", {}).pop(sid, None)
     appearance_paths._write(cid, data)
 
 
 def _presence(cid, sid, ref):
-    from grimoire.store.appearances import paths as appearance_paths
-
     return appearance_paths.record(cid)[ref.replace(":", "/", 1)].get("presence", {}).get(sid)
 
 
@@ -435,8 +435,6 @@ def test_repeat_without_extra_rounds_is_not_a_selection_option(client, monkeypat
 
 
 def test_stop_zeroes_remaining_rounds_and_retry_starts_none(client):
-    import pytest
-
     cid, sid, base = seed(client)
     group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=2)
     round_record = store.responses.new_round(
@@ -470,8 +468,6 @@ def test_stop_zeroes_remaining_rounds_and_retry_starts_none(client):
 
 
 def test_stop_mid_round_retry_generates_only_the_interrupted_reply(client):
-    import pytest
-
     cid, sid, base = seed(client)
     response = client.post(f"/api/campaigns/{cid}/characters", json={"name": "Seraphine"})
     assert response.status_code == 200, response.text
@@ -568,8 +564,6 @@ def test_follow_on_round_keeps_the_original_post(client):
 
 
 def test_stop_in_directed_retry_ignores_the_interrupted_handoff(client):
-    import pytest
-
     cid, sid, base = seed(client)
     round_record = store.responses.new_round(
         cid, sid, eligible=character_turns.roster(cid, sid), automatic=True, post=None,
@@ -627,8 +621,6 @@ def test_stop_at_round_start_of_a_selector_round_leaves_nothing_to_retry(client)
 
 
 def test_stop_at_round_start_of_a_planned_round_leaves_nothing_to_retry(client):
-    from contextlib import aclosing
-
     cid, sid, base = seed(client)
     group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=1)
     round_record = store.responses.new_round(

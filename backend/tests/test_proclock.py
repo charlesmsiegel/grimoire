@@ -5,6 +5,7 @@ demonstrate that a second *process* is excluded. The child prints HELD only
 after it owns the lock, so the parent never races the handshake.
 """
 
+import errno as _errno
 import os
 import subprocess
 import sys
@@ -293,8 +294,6 @@ def test_posix_eacces_from_the_lock_call_counts_as_contention(tmp_path, monkeypa
     """Some platforms -- and any libc emulating flock over fcntl -- report an
     already-held lock as EACCES. Treating it as permanent would turn ordinary
     contention into a 500 instead of a 409."""
-    import errno as _errno
-
     lock = proclock.lock_path(tmp_path, "t", "eacces")
     monkeypatch.setattr(proclock, "fcntl", type("F", (), {
         "LOCK_EX": 2, "LOCK_NB": 4, "LOCK_UN": 8,

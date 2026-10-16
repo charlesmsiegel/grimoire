@@ -328,7 +328,6 @@ def test_appendix_actors_and_visited_locations(monkeypatch, tmp_path):
     # players come before NPCs in the spine
     spine_docs = [n for n in names if n.startswith("text/actor-")]
     assert spine_docs.index("text/actor-pcs-elara.xhtml") >= 0
-    import xml.etree.ElementTree as ET
     opf = ET.fromstring(z.read("package.opf"))
     hrefs = [i.get("href") for i in opf.findall(".//opf:item", OPF_NS)]
     a = hrefs.index("text/actor-pcs-elara.xhtml")

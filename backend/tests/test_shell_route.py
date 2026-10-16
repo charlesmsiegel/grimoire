@@ -17,6 +17,7 @@ worth holding to the code rather than to a docstring:
 
 from __future__ import annotations
 
+import base64
 import importlib
 from datetime import UTC, datetime, timedelta
 
@@ -220,8 +221,6 @@ def test_images_undescribed_is_null_when_the_world_cannot_be_read(client, campai
 
 def _png() -> bytes:
     """A real 2x2 PNG. `assets.put_image` sniffs the bytes for the extension."""
-    import base64
-
     return base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGNgYGD4"
         "z8DAwMDAAAANHQEDeuUOPQAAAABJRU5ErkJggg==")

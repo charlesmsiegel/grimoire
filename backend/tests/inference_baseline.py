@@ -50,6 +50,7 @@ from grimoire import routes, wire
 from grimoire.main import create_app
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from grimoire.store.inference import migrate
 from grimoire.store.inference import resolve as inference
 from tests import wire_kit
 from tests.inference_fixtures import legacy_store
@@ -258,8 +259,6 @@ def migrate_state(state: str):
     """`migrate.ensure()` on a store `STATES[state]` built: for a state in
     `UNREADABLE`, the refused first run is checked and the file removed before
     the run that switches. Returns the last run's status."""
-    from grimoire.store.inference import migrate
-
     got = migrate.ensure()
     if state in UNREADABLE:
         conn_id = UNREADABLE[state]

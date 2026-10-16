@@ -19,9 +19,11 @@ import contextlib
 import importlib
 import pkgutil
 
+import fastapi.routing
 import pytest
 from fastapi import APIRouter
 
+import grimoire.routes as pkg
 from grimoire import routes
 from grimoire.main import app
 from grimoire.routes import entities, router
@@ -277,8 +279,6 @@ def test_the_generic_entity_routes_are_included_last():
 def test_every_domain_router_is_composed():
     """A module that nobody includes contributes no routes and no other test
     fails — so walk the package and check each router made it in."""
-    import grimoire.routes as pkg
-
     composed = {(frozenset(m), p) for m, p in _table() if p.startswith("/api")}
     found = 0
     for info in pkgutil.iter_modules(pkg.__path__):
@@ -343,8 +343,6 @@ def test_a_first_request_analyses_only_the_domains_it_walks(client, monkeypatch)
     in this process analysed, so the counts would measure the test order --
     which xdist varies -- rather than FastAPI. On CI, a worker whose earlier
     tests had warmed most of the later routes counted (46, 110)."""
-    import fastapi.routing
-
     if route_memo.active():
         monkeypatch.setattr(fastapi.routing, route_memo.TARGET, route_memo.original())
     calls: list[int] = []

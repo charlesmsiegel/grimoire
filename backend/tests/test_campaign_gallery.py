@@ -9,7 +9,7 @@ no world sweep can see it.
 from fastapi.testclient import TestClient
 
 from grimoire.main import app
-from grimoire.store import assets, campaigns, characters, entities, overlay, worlds
+from grimoire.store import appearances, assets, campaigns, characters, entities, overlay, worlds
 
 client = TestClient(app)
 
@@ -130,7 +130,6 @@ def test_an_unknown_campaign_is_a_404(monkeypatch, tmp_path):
 def test_a_purged_versions_image_is_served_through_the_campaign_route(monkeypatch, tmp_path):
     """`base_versions` addresses a version the campaign no longer holds through
     the campaign route; that route must answer with the world's bytes."""
-    from grimoire.store import appearances
     home(monkeypatch, tmp_path)
     wid, wroot, aid, vid = _world_with_hero()
     other = characters.create_version(wroot, aid, "dark", characters.blank_card("Hero"))
@@ -144,7 +143,6 @@ def test_a_purged_versions_image_is_served_through_the_campaign_route(monkeypatc
 
 
 def test_a_stale_campaign_file_under_a_purged_version_wins_and_is_what_was_advertised(monkeypatch, tmp_path):
-    from grimoire.store import appearances
     home(monkeypatch, tmp_path)
     wid, wroot, aid, vid = _world_with_hero()
     other = characters.create_version(wroot, aid, "dark", characters.blank_card("Hero"))

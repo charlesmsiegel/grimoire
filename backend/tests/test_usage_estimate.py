@@ -27,7 +27,16 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 
-from grimoire import content_parts, llm, llm_capture, llm_reasoning, llm_usage, tool_calls, wire
+from grimoire import (
+    content_parts,
+    llm,
+    llm_capture,
+    llm_reasoning,
+    llm_usage,
+    routes,
+    tool_calls,
+    wire,
+)
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
@@ -581,7 +590,6 @@ def test_note_helpers_are_no_ops_without_a_holder_or_an_estimate():
 
 # ---- the seams ----
 def test_build_llm_wires_a_late_bound_counter(monkeypatch):
-    from grimoire import routes
     client = routes.common.build_llm()
     monkeypatch.setattr(tokens, "count_tokens", lambda text: 4242)
     assert client._count_tokens("anything") == 4242

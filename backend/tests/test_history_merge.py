@@ -1,6 +1,7 @@
 """Round-aware admitted-only RRF, full-item callbacks and legacy scene keys."""
 
 import json
+from dataclasses import replace
 
 from grimoire.store import config
 from grimoire.store.history import coverage, model
@@ -112,7 +113,6 @@ def test_merging_two_exhausted_semantic_rounds_stays_exhausted(cid):
     """A round that evaluated every eligible document with semantic `ok`
     reached `exhausted`; merging two such rounds must not regress to `thin`
     and send a planner widening over a live set already scored."""
-    from dataclasses import replace
     config.write_config(history_recall_depth="3")
     both = [candidate("001--saltmarch", ("lexical", "semantic")),
             candidate("002--saltmarch", ("lexical", "semantic"))]

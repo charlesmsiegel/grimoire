@@ -1,6 +1,7 @@
 import json
 
-from grimoire.store import campaigns, weather, worlds
+from grimoire.store import calendars, campaign_climate, campaigns, entities, scenes, weather, worlds
+from grimoire.store.weather import overrides
 
 SPLIT_YEAR = {
     "id": "split-year", "name": "Split Year", "persistence": 0.5,
@@ -21,7 +22,6 @@ def setup(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Chronicle", "realm")
-    from grimoire.store import entities
     lid = entities.create_entity(campaigns.campaign_root(cid), "locations", "Saltmarch Docks")
     return cid, lid
 
@@ -30,7 +30,6 @@ def use_split_year(tmp_path, cid):
     (tmp_path / "climates").mkdir(exist_ok=True)
     (tmp_path / "climates" / "split-year.json").write_text(
         json.dumps(SPLIT_YEAR), encoding="utf-8")
-    from grimoire.store import campaign_climate
     campaign_climate.write_default(cid, "split-year")
 
 
@@ -145,7 +144,6 @@ def test_locations_in_one_zone_share_weather(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Chronicle", "realm")
-    from grimoire.store import entities
     root = campaigns.campaign_root(cid)
     a = entities.create_entity(root, "locations", "Saltmarch Docks",
                                fields={"weather_zone": "saltmarch"})
@@ -158,12 +156,10 @@ def test_locations_in_one_zone_share_weather(monkeypatch, tmp_path):
 # ---- override resolution ----
 
 def provider_of(cid):
-    from grimoire.store import calendars
     return calendars.get_provider(calendars.read_calendar(campaigns.campaign_root(cid))["primary"])
 
 
 def test_a_manual_override_replaces_only_the_axis_it_sets(monkeypatch, tmp_path):
-    from grimoire.store.weather import overrides
     cid, lid = setup(monkeypatch, tmp_path)
     base = weather.current_weather(cid, lid, "2026-06-14T09:00")
     overrides.put(cid, provider_of(cid), lid, "2026-06-14", None, {"condition": "blizzard"})
@@ -174,7 +170,6 @@ def test_a_manual_override_replaces_only_the_axis_it_sets(monkeypatch, tmp_path)
 
 
 def test_per_axis_provenance_is_reported(monkeypatch, tmp_path):
-    from grimoire.store.weather import overrides
     cid, lid = setup(monkeypatch, tmp_path)
     overrides.put(cid, provider_of(cid), lid, "2026-06-14", None, {"condition": "blizzard"})
     got = weather.resolve(cid, lid, "2026-06-14T09:00")
@@ -183,7 +178,6 @@ def test_per_axis_provenance_is_reported(monkeypatch, tmp_path):
 
 
 def test_an_extractor_override_is_marked_as_such(monkeypatch, tmp_path):
-    from grimoire.store.weather import overrides
     cid, lid = setup(monkeypatch, tmp_path)
     overrides.put(cid, provider_of(cid), lid, "2026-06-14", None, {"condition": "rain"},
                   source="extractor")
@@ -191,7 +185,6 @@ def test_an_extractor_override_is_marked_as_such(monkeypatch, tmp_path):
 
 
 def test_suppress_returns_an_axis_to_the_procedural_value(monkeypatch, tmp_path):
-    from grimoire.store.weather import overrides
     cid, lid = setup(monkeypatch, tmp_path)
     base = weather.current_weather(cid, lid, "2026-06-14T09:00")
     p = provider_of(cid)
@@ -203,7 +196,6 @@ def test_suppress_returns_an_axis_to_the_procedural_value(monkeypatch, tmp_path)
 
 
 def test_an_override_outside_its_span_does_not_apply(monkeypatch, tmp_path):
-    from grimoire.store.weather import overrides
     cid, lid = setup(monkeypatch, tmp_path)
     base = weather.current_weather(cid, lid, "2026-06-20T09:00")
     overrides.put(cid, provider_of(cid), lid, "2026-06-14", "2026-06-16", {"condition": "blizzard"})
@@ -221,7 +213,6 @@ def test_current_weather_keeps_its_narrow_shape(monkeypatch, tmp_path):
 
 def test_sweep_reports_only_changed_axes(monkeypatch, tmp_path):
     cid, lid = setup(monkeypatch, tmp_path)
-    from grimoire.store import scenes
     sid = scenes.create_scene(cid, "Arrival")
     scenes.set_location(cid, sid, lid)
     rows = weather.sweep(cid, sid, "2026-06-14T09:00", "2026-09-14T09:00")
@@ -236,7 +227,6 @@ def test_sweep_reports_only_changed_axes(monkeypatch, tmp_path):
 
 def test_sweep_is_empty_when_nothing_changed(monkeypatch, tmp_path):
     cid, lid = setup(monkeypatch, tmp_path)
-    from grimoire.store import scenes
     sid = scenes.create_scene(cid, "Arrival")
     scenes.set_location(cid, sid, lid)
     assert weather.sweep(cid, sid, "2026-06-14T09:00", "2026-06-14T09:00") == []
@@ -246,7 +236,6 @@ def test_sweep_covers_every_distinct_location_the_scene_visited(monkeypatch, tmp
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Chronicle", "realm")
-    from grimoire.store import entities, scenes
     root = campaigns.campaign_root(cid)
     a = entities.create_entity(root, "locations", "Saltmarch Docks")
     b = entities.create_entity(root, "locations", "Winifred Hall")
@@ -261,7 +250,6 @@ def test_sweep_covers_every_distinct_location_the_scene_visited(monkeypatch, tmp
 
 def test_sweep_without_a_previous_moment_reports_nothing(monkeypatch, tmp_path):
     cid, lid = setup(monkeypatch, tmp_path)
-    from grimoire.store import scenes
     sid = scenes.create_scene(cid, "Arrival")
     scenes.set_location(cid, sid, lid)
     assert weather.sweep(cid, sid, None, "2026-06-14T09:00") == []

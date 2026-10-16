@@ -1,10 +1,27 @@
 """Confidence routing of absorb proposals (#110) and the speaker authority that
 weights it (#112)."""
 
+import ast
+import pathlib
+
 import pytest
 
-from grimoire.store import absorb, appearances, campaigns, characters, entities, pcs, scenes, worlds
+from grimoire.store import (
+    absorb,
+    appearances,
+    campaigns,
+    characters,
+    commitments,
+    entities,
+    groupstate,
+    pcs,
+    playstate,
+    relationships,
+    scenes,
+    worlds,
+)
 from grimoire.store.absorb import routing
+from grimoire.store.appearances import cast as appearances_cast
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -327,7 +344,6 @@ def test_lore_is_not_a_character(monkeypatch, tmp_path):
 # ------------------------------------------------ what materialize does with it
 
 def _materialized(cid, sid, parsed):
-    from grimoire.store import absorb
     return {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
 
 
@@ -335,7 +351,6 @@ def test_every_staged_row_carries_a_review_block(monkeypatch, tmp_path):
     """A row without one is indistinguishable from the dossier/voice/sheet rows
     staged elsewhere, which the panel pre-approves — so a section that forgot to
     stamp would quietly opt itself out of routing."""
-    from grimoire.store import commitments, entities, groupstate, playstate, relationships
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, sera, mara, win = _scene(cid, wroot)
     croot = campaigns.campaign_root(cid)
@@ -380,7 +395,6 @@ def test_a_state_edit_cited_to_its_own_character_outranks_one_cited_to_another(
         monkeypatch, tmp_path):
     """The end-to-end shape of #112: the same quote, the same certainty, two
     different speakers, and the tier follows whose record is being rewritten."""
-    from grimoire.store import playstate
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, sera, mara, win = _scene(cid, wroot)
     croot = campaigns.campaign_root(cid)
@@ -428,8 +442,6 @@ def test_apply_never_sees_the_review_block(monkeypatch, tmp_path):
     checkbox state, never permission. Asserted against the module graph rather
     than by reading, because the failure is silent — an `apply` that started
     consulting a band would let a model's self-report gate a write."""
-    import ast
-    import pathlib
     src = pathlib.Path(absorb.apply.__file__).read_text(encoding="utf-8")
     tree = ast.parse(src)
     imported = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
@@ -445,7 +457,6 @@ def test_a_review_block_is_not_permission_to_write(monkeypatch, tmp_path):
     """The behavioural half of the same claim: a `low` row that a reviewer ticks
     anyway applies exactly like any other. Routing must not become a second,
     invisible approval gate on the save path."""
-    from grimoire.store import entities
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
     entities.create_entity(wroot, "lore", "The Ledger", "It lists bribes.", keys="ledger")
@@ -465,7 +476,6 @@ def test_a_malformed_card_name_does_not_take_the_absorb_down(monkeypatch, tmp_pa
     A mapping-valued name reaches the index unhashable, and this runs after the
     extraction call was paid for — so one bad card must cost that actor's
     resolution, not the whole review."""
-    from grimoire.store.appearances import cast as appearances_cast
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, sera, _, _ = _scene(cid, wroot)
     healthy = routing.speaker_index(cid, sid)
@@ -717,7 +727,6 @@ def test_the_index_is_built_from_the_transcript_the_model_was_shown(monkeypatch,
 
 def test_materialize_judges_against_the_snapshot_it_is_given(monkeypatch, tmp_path):
     """The same guarantee at the seam the route actually uses."""
-    from grimoire.store import playstate
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, sera, _, _ = _scene(cid, wroot)
     playstate.write_state(campaigns.campaign_root(cid), sera, "Wary.")

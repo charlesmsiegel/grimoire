@@ -6,9 +6,13 @@ import time
 
 import pytest
 
+from grimoire import store
 from grimoire.store import locks, search, statcache, tokens
+from grimoire.store.campaigns import read as campaign_read
+from grimoire.store.worlds import read as world_read
 from tests import frozen_copy
 from tests import test_compiled as cache_tests
+from tests.fixtures.frozen_campaign import sweep
 from tests.test_token_counting import _Enc
 
 cache = cache_tests.cache
@@ -129,10 +133,6 @@ def test_short_encoder_body_retains_outer_memo_without_creating_sql(cache, root,
 
 
 def test_frozen_copy_readers_match_cold_warm_off_restart(cache, tmp_path, monkeypatch):
-    from grimoire import store
-    from grimoire.store.campaigns import read as campaign_read
-    from grimoire.store.worlds import read as world_read
-    from tests.fixtures.frozen_campaign import sweep
     original = frozen_copy.digest()
     root = frozen_copy.copy_home(tmp_path / 'Realm')
     monkeypatch.setenv('GRIMOIRE_HOME', str(root))
@@ -174,8 +174,6 @@ def test_frozen_copy_readers_match_cold_warm_off_restart(cache, tmp_path, monkey
 
 @pytest.mark.parametrize('label', ['world', 'campaign'])
 def test_live_shelf_row_memo_detects_restored_mtime_and_declares_dirname(root, monkeypatch, label):
-    from grimoire.store.campaigns import read as campaign_read
-    from grimoire.store.worlds import read as world_read
     reader = world_read._world_row if label == 'world' else campaign_read._campaign_row
     path = root / (label + '.md')
     path.write_bytes(b'---\nname: Mara\n---\nRealm')

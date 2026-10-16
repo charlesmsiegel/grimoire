@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import pytest
 
+import grimoire.routes.config as config_mod
+import grimoire.routes.scenes as scenes_mod
 import grimoire.store as store
 from grimoire.routes import runs as runs_mod
 
@@ -315,8 +317,6 @@ def test_the_rollback_retires_the_marker_before_it_removes_the_post(monkeypatch,
     discards the only copy of what the player typed. Forgetting first leaves a
     duplicate they can see and delete.
     """
-    import grimoire.routes.scenes as scenes_mod
-
     order: list[str] = []
     real_forget = store.attempts.forget
 
@@ -373,7 +373,6 @@ def test_a_send_cannot_reserve_while_the_storage_root_is_moving(client, tmp_path
         return real_set(path)
 
     dest = tmp_path / "moved"
-    import grimoire.routes.config as config_mod
     config_mod.store.set_data_dir = racing_set
     try:
         r = client.put("/api/config/data-dir", json={"data_dir": str(dest)})

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from grimoire import decisions, store
+from grimoire.llm_errors import LLMError
 from grimoire.routes import history_recall
 from grimoire.store import routing
 from grimoire.store.history import model
@@ -295,7 +296,6 @@ def test_the_registered_case_replays(monkeypatch, tmp_path, recording):
 
 
 def test_a_failed_check_still_reports_the_rows_it_filed(cid):
-    from grimoire.llm_errors import LLMError
     sid, *_ = setup(cid)
     fake = FakeLLM([[check(False)]], error=LLMError("network", "connection reset"))
     said, source, step = asyncio.run(history_recall._sufficiency(

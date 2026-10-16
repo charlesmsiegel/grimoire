@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store.calendars import CalendarError, get_provider
+from grimoire.store.calendars import CalendarError, age, get_provider, is_anniversary
 
 
 def heb(region=""):
@@ -91,7 +91,6 @@ def test_age_and_anniversary_across_tishrei_and_adar():
     p = get_provider(heb())
     # born 10 Tishrei 5750; year rolls at Rosh Hashanah
     birth = "5750-Tishrei-10"
-    from grimoire.store.calendars import age, is_anniversary
     assert age(p, birth, "5786-Tishrei-09") == 35
     assert age(p, birth, "5786-Tishrei-10") == 36
     assert is_anniversary(p, birth, "5786-Tishrei-10") is True

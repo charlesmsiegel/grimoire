@@ -9,6 +9,8 @@ post-processing pipeline" half of the issue's title.
 
 from __future__ import annotations
 
+import time
+
 import grimoire.store as store
 from grimoire import routes
 from tests import review_runs
@@ -188,7 +190,6 @@ def test_a_long_import_does_not_hold_the_campaign_lock_per_post(client):
 
     So the fixture uses realistic post lengths and sets a date. Without both,
     this guard reports green through two of the three."""
-    import time
     _wid, cid = _campaign(client)
     body = "She set the ledger down and looked at the tide for a while. " * 12  # ~700 chars
     msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"{body} {i}"}

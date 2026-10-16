@@ -33,6 +33,7 @@ from grimoire.store import (
 )
 from grimoire.store.appearances import transitions
 from grimoire.store.continuity import doc as continuity_doc
+from grimoire.store.inference import embed as inference_embed
 from grimoire.store.searchdocs import rolling, scene, slices
 
 
@@ -483,7 +484,6 @@ def test_a_membership_edit_moves_the_key_and_meta_not_the_text(cid, monkeypatch)
     before = doc(cid, sid)
     assert before.meta["groups"] == []
     sent = []
-    from grimoire.store.inference import embed as inference_embed
     monkeypatch.setattr(inference_embed, "embed_sync", lambda *a, **k: sent.append(a))
     entities.update_entity(campaigns.campaign_root(cid), "groups", gid,
                            fields={"members": f"characters:{aid}"})

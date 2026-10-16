@@ -171,7 +171,6 @@ async def test_strict_mode_transforms_payload_before_sending():
     [c async for c in client.stream(
         [{"role": "system", "content": "Be terse."}, {"role": "user", "content": "Hi"}],
         "m", "k", "https://custom.example.com/v1", strict=True)]
-    import json
     body = json.loads(captured["body"])
     assert body["messages"] == [{"role": "user", "content": "Be terse.\n\nHi"}]
 
@@ -186,7 +185,6 @@ async def test_no_tools_field_in_payload():
     client = make_client(handler)
     [c async for c in client.stream([{"role": "user", "content": "hi"}], "m", "k",
                                      "https://custom.example.com/v1")]
-    import json
     assert "tools" not in json.loads(captured["body"])
 
 
@@ -335,7 +333,6 @@ async def test_no_usage_option_is_sent_to_an_arbitrary_endpoint():
 
 
 async def test_sampling_is_merged_into_the_request_body():
-    import json
     seen = {}
 
     def handler(request):

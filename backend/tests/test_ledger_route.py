@@ -18,7 +18,9 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
+from grimoire.routes.campaigns import LEDGER_RECENT
 from grimoire.store.continuity import doc as continuity_doc
+from grimoire.store.continuity import effective
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC, _plugin, _primary
 
 
@@ -88,7 +90,6 @@ def test_chronicle_is_newest_first_and_labelled_with_the_scene_title(client):
 
 
 def test_the_chronicle_section_is_capped(client):
-    from grimoire.routes.campaigns import LEDGER_RECENT
     cid = _campaign(client)
     for i in range(LEDGER_RECENT + 5):
         sid = store.scenes.create_scene(cid, f"Night {i}")
@@ -164,7 +165,6 @@ def test_a_row_whose_scene_id_is_not_a_string_still_lists(client, bad_id):
     """The row's OWN id is the third place a wrong shape arrives, and the one the
     document-level checks do not reach: the projections run outside `_tolerant`,
     so an unhashable `last_scene` reached `scenes_by_id.get` and 500'd."""
-    import json
     cid = _campaign(client)
     (store.campaigns.campaign_root(cid) / "commitments.json").write_text(
         json.dumps({"x": {"title": "A promise", "kind": "promise", "status": "open",
@@ -191,7 +191,6 @@ def test_a_record_with_non_string_fields_still_renders_as_a_row(client):
     the route's tolerant boundary never fires and the object reaches
     `LedgerPanel`, where React refuses to render it and the panel goes blank.
     The projection is where the types have to be made true."""
-    import json
     cid = _campaign(client)
     (store.campaigns.campaign_root(cid) / "commitments.json").write_text(json.dumps(
         {"x": {"title": {}, "kind": [], "status": "open", "due": {"a": 1},
@@ -216,7 +215,6 @@ def test_a_thread_with_non_string_fields_still_renders_as_a_row(client):
     """Same contract as the commitment above, on the section that reaches the
     same panel through a different store. `open_threads` is `plot.py`'s
     projection and does not coerce, so the route does."""
-    import json
     cid = _campaign(client)
     (store.campaigns.campaign_root(cid) / "plot.json").write_text(json.dumps(
         {"t": {"title": {}, "status": [], "beats": [{"scene": "s1", "text": "x"}],
@@ -233,7 +231,6 @@ def test_one_unsortable_chronicle_id_does_not_cost_the_other_facts(client):
     """The recent slice is taken by sorting on the record ids, and comparing a
     list to a string raises — inside `_tolerant`, which empties the WHOLE
     section. One hand-edited row must not take every good fact with it."""
-    import json
     cid = _campaign(client)
     (store.campaigns.campaign_root(cid) / "chronicle.json").write_text(json.dumps({
         "s1": {"id": "s1", "one_line": "First.", "date": ""},
@@ -250,7 +247,6 @@ def test_a_scene_label_with_a_non_string_date_still_renders(client):
     chronicle entry reaches the panel as `[object Object]`. The recent-facts
     projection coerces its own copy; this nested one feeds the plot and
     commitment sections and was missed."""
-    import json
     cid = _campaign(client)
     store.commitments.set_movement(cid, "x", "A promise", "promise", "open",
                                    "", "Sworn.", "s1")
@@ -263,7 +259,6 @@ def test_a_scene_label_with_a_non_string_date_still_renders(client):
 
 
 def test_a_record_that_is_not_a_dict_is_skipped(client):
-    import json
     cid = _campaign(client)
     (store.campaigns.campaign_root(cid) / "commitments.json").write_text(
         json.dumps({"broken": [], "good": {"title": "A promise", "kind": "promise",
@@ -753,7 +748,6 @@ def test_a_continuity_side_failure_falls_back_to_the_physical_rows(client, monke
     def _boom(*a, **kw):
         raise RuntimeError("continuity is broken")
 
-    from grimoire.store.continuity import effective
     monkeypatch.setattr(effective, "live_canon", _boom)
     monkeypatch.setattr(continuity_doc, "read", lambda cid: {"aliases": {"x": {}}})
     body = _ledger(client, cid)

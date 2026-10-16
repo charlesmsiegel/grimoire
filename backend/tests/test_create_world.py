@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from grimoire.store import modules, overlay
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import create_world
 
@@ -231,7 +233,6 @@ def test_validation_refuses(home, over, needle):
 def test_actor_name_taken_in_a_campaign_is_refused(home):
     wid = _apply(_plan())["world"]
     cid = campaigns.create_campaign("Silver Oath", wid)
-    from grimoire.store import overlay
     overlay.create_character(cid, "Old Bram")
     problems = create_world.validate_plan(
         {"world": "Saltmarch", "characters": [{"name": "Old Bram"}]},
@@ -406,7 +407,6 @@ def test_check_warns_about_an_owner_that_is_never_present(home):
 
 
 def test_an_invalid_user_module_is_refused_before_any_write(home):
-    from grimoire.store import modules
     mid = modules.create_module("Broken Pack")
     (home / "modules" / mid / "sheets.json").write_text("{not json", encoding="utf-8")
     assert modules.load_pack(mid)["errors"]

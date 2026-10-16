@@ -14,6 +14,7 @@ import json
 import threading
 import time
 import zlib
+from pathlib import Path
 
 import pytest
 
@@ -45,6 +46,7 @@ from grimoire.store.continuity import (
     review,
     similarity,
 )
+from grimoire.store.inference import facts
 from tests.inference_fixtures import embedding
 from tests.llm_fakes import FakeEmbeddings
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
@@ -1832,8 +1834,6 @@ def test_no_block_keeps_the_sweeps_basis_byte_identical(cid, s0):
 
 
 def test_stated_options_salt_the_sweep_with_the_options_space(cid, s0):
-    from grimoire.store.inference import facts
-
     _configure()
     _ledger(cid, s0)
     facts.state(_embedding_conn(), "embed-1", embedding=NOMIC_BLOCK)
@@ -1841,8 +1841,6 @@ def test_stated_options_salt_the_sweep_with_the_options_space(cid, s0):
 
 
 def _hold_facts(monkeypatch, conn):
-    from pathlib import Path
-
     path = llm_connections.facts_path(conn)
     real = Path.read_text
 
@@ -1859,8 +1857,6 @@ def test_an_options_problem_carries_the_old_basis_forward(cid, s0, monkeypatch, 
     """While the role's facts cannot be judged it names no space -- and the
     sweep neither re-salts its basis with none nor persists the option-less
     space: the stored basis, its space included, is carried forward whole."""
-    from grimoire.store.inference import facts
-
     _configure()
     _ledger(cid, s0)
     _recover(cid, s0)

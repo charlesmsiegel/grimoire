@@ -10,6 +10,7 @@ tie-break, and a scene whose HEAD has a bad byte degrading instead of 500ing.
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 
 import pytest
@@ -264,7 +265,6 @@ def test_warm_overview_reads_never_open_a_closed_scene(client, world, monkeypatc
 def test_a_same_size_head_rewrite_with_mtime_restored_is_seen(client, world, monkeypatch):
     """The summary's stamps carry ctime, and the fold re-reads a head whose
     stamp moved while the head memo's signature did not (spec 04 section 3.4)."""
-    import os
     clock_forward(monkeypatch)
     cid = _campaign(client, world, "A Long Run")
     sid = _scene(cid, "Saltmarch Gate")
@@ -286,7 +286,6 @@ def test_a_head_rewritten_before_the_first_fold_is_not_believed(client, world, m
     """`list_scenes` filled the head memo; the head is then rewritten in place
     with its mtime restored; the FIRST overview fold in the process must not
     take the memo's stale row and pin it under the file's new ctime."""
-    import os
     clock_forward(monkeypatch)
     cid = _campaign(client, world, "A Long Run")
     sid = _scene(cid, "Saltmarch Gate")

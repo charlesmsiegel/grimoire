@@ -22,6 +22,8 @@ import types
 
 import pytest
 
+import grimoire.main
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ENTRY = ROOT / "android" / "app" / "src" / "main" / "python" / "android_entry.py"
 
@@ -224,7 +226,6 @@ def test_the_server_runs_the_module_level_app_on_the_reported_socket(
     and building a second meant analysing every route again for nothing."""
     import uvicorn
 
-    import grimoire.main
 
     class _Registry:
         sink = None
