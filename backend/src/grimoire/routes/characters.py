@@ -48,6 +48,7 @@ from .models import (
     AvatarFocus,
     CharacterBirthdate,
     CharacterCreate,
+    CharacterTags,
     CharacterTextParse,
     CharacterTextRefine,
     ChubImportBody,
@@ -206,6 +207,23 @@ def put_world_character_birthdate(wid: str, cid: str, body: CharacterBirthdate):
         store.characters.set_birthdate(_world_root_or_404(wid), cid, body.birthdate)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
+    return {"ok": True}
+
+
+@router.put("/worlds/{wid}/characters/{cid}/tags")
+def put_world_character_tags(wid: str, cid: str, body: CharacterTags):
+    """The tags this character carries when cast as the player (#18). Ids from
+    the world's vocabulary, checked under the same actor lock the PC route
+    holds, so a tag deleted mid-save cannot be written onto a character."""
+    root = _world_root_or_404(wid)
+    try:
+        with store.locks.world_actor_lock(wid):
+            for t in body.tags:
+                if not store.tags.has_tag(root, t):
+                    raise HTTPException(status_code=400, detail=f"unknown tag: {t}")
+            store.characters.set_tags(root, cid, body.tags)
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     return {"ok": True}
 
 

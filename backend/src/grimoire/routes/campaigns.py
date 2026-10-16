@@ -68,6 +68,7 @@ from .models import (
     CampaignClimate,
     CharacterBirthdate,
     CharacterCreate,
+    CharacterTags,
     CopyFromGreeting,
     DefaultVersion,
     ForkCampaign,
@@ -2314,6 +2315,21 @@ def put_campaign_character_birthdate(cid: str, char: str, body: CharacterBirthda
         with store.locks.campaign_lock(cid):
             root = store.overlay.ensure_actor_writable(cid, "characters", char)
             store.characters.set_birthdate(root, char, body.birthdate)
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    return {"ok": True}
+
+
+@router.put("/campaigns/{cid}/characters/{char}/tags")
+def put_campaign_character_tags(cid: str, char: str, body: CharacterTags):
+    """This campaign's own tags for the character when cast as the player (#18).
+    Free strings, as a campaign PC's are: the world-vocabulary check belongs to
+    the world route. Materializes the copy play reads, so the world is left alone."""
+    _campaign_root_or_404(cid)
+    try:
+        with store.locks.campaign_lock(cid):
+            root = store.overlay.ensure_actor_writable(cid, "characters", char)
+            store.characters.set_tags(root, char, body.tags)
     except store.characters.CharacterNotFound as exc:
         raise HTTPException(status_code=404, detail="character not found") from exc
     return {"ok": True}
