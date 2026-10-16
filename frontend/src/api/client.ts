@@ -2331,6 +2331,21 @@ export const api = {
       request<{ run: RunHandle }>(
         "POST", `${entityBase(scope)}/characters/${cid}/voice-anchor/generate`,
         undefined, { attempt, signal }), { signal }),
+  /** The campaign's own capsule for a character (#62). Campaign-only: a
+   *  campaign-local character has no world tagline to read or write. Saved by
+   *  PUT on Save, never by the draft below. */
+  getCampaignCharacterTagline: (cid: string, char: string) =>
+    request<{ tagline: string }>("GET", `/api/campaigns/${cid}/characters/${char}/tagline`),
+  setCampaignCharacterTagline: (cid: string, char: string, tagline: string) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/characters/${char}/tagline`, { tagline }),
+  /** A drafted capsule and tag list, read from the card and the character's
+   *  first scene. Preview only, like every draft: the answer is the form's to
+   *  keep or discard. */
+  generateCampaignCapsule: (cid: string, char: string, signal?: AbortSignal) =>
+    draftRun<{ capsule: string; tags: string[] }>(draftScopeOf({ kind: "campaign", id: cid }), (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/campaigns/${cid}/characters/${char}/capsule/generate`,
+        undefined, { attempt, signal }), { signal }),
   createVersion: (scope: EntityScope, cid: string, body: { name: string; card: Card }) =>
     request<{ version: string }>("POST", `${entityBase(scope)}/characters/${cid}/versions`, body),
   updateVersion: (scope: EntityScope, cid: string, vid: string, card: Card) =>
