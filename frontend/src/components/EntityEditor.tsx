@@ -390,19 +390,24 @@ function RefField({ spec, options, value, onChange, unresolvedHint, optionsCompl
   );
 }
 
-export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, sectionPath, recordHref, onOpenOwner, onReclassified, module = null }: {
+export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = false, newOwner, sectionPath, newHref, recordHref, onOpenOwner, onReclassified, module = null }: {
   wid: string;
   kind: EntityKind;
   scope?: EntityScope;
-  /** The record the URL names, or null for the section's own screen — which
-   *  is the blank new-record form this editor already opens on. */
+  /** The record the URL names, or null for the section's own screen. That
+   *  screen is the browse grid, unless `isNew` says it is the blank form. */
   selected?: string | null;
+  /** The blank new-record form, asked for by `?new=1` (or `?owner=` on Lore).
+   *  With no record named, this is what separates the form from the grid. */
+  isNew?: boolean;
   /** An owner to pre-fill a blank form with (`characters:seraphine`), from
    *  `?owner=`. Only ever set when `selected` is null: it belongs to the form,
    *  not to a record that has owners of its own. */
   newOwner?: string;
-  /** This section's own address, for `+ New`. */
+  /** This section's own address: the browse grid, and where Back goes. */
   sectionPath: string;
+  /** The blank form's address (`?new=1`), for `+ New`. */
+  newHref: string;
   /** ...and one record's, for a rail row. A CALLBACK rather than a string this
    *  file concatenates onto `sectionPath`: `sectionHref` is the only thing
    *  allowed to build these paths, and an id containing a slash or a space is
@@ -684,7 +689,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
         .catch((err: unknown) => { if (req === readReq.current) setError(errorText(err)); });
     } else resetForm(newOwner);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, newOwner, kind, scope.kind, scope.id]);
+  }, [selected, isNew, newOwner, kind, scope.kind, scope.id]);
 
   function resetForm(owner = "") {
     setEditing(null);
@@ -1102,7 +1107,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     const at: EntityScope = { kind: scopeKind, id: scopeId };
     const row = (e: EntitySummary) => (
       <Link key={e.id}
-            className={"row" + (e.has_image ? " loc-row" : "") + (editing === e.id ? " active" : "")}
+            className={"row loc-row" + (editing === e.id ? " active" : "")}
             to={recordHref(e.id)}>
         {e.has_image && (
           // The 220px rail, or the whole width once the editor stacks on a
@@ -1262,77 +1267,87 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     return [[a.key, a.label, `${v}${unit}`] as [string, string, string]];
   });
 
+  // Apply-to-all is a sweep over the whole library, so it is reachable from a
+  // record too: the rail that used to hold it is gone from a record's screen.
+  const adoptAllControls = kind === "lore" ? (
+    <>
+      <button className="subtle adopt-all" onClick={() => { void applyAdoptAll(); }}
+              disabled={adoptBusy || adoptAllBlocked}
+              title={adoptAllBlocked
+                ? "Save or cancel the edit in progress first -- applying re-reads the record"
+                : undefined}>
+        Apply imported settings to all
+      </button>
+      {adoptAllNote && <div className="field-hint" role="status">{adoptAllNote}</div>}
+    </>
+  ) : null;
+
+  // The browse grid is the section root with nothing open: no record named, no
+  // blank form asked for, and neither the wizard nor a template preview up.
+  // The wizard only draws with a module; a wizard flag left behind without one
+  // must not take the grid away for a blank form nobody asked for.
+  const browsing = selected == null && !isNew && !(wizardOpen && module) && !contentPreview;
+
   return (
     <div className="editor">
-      {/* A rail, where the design has a full-width grid of image cards with
-          browse and record as separate states -- the shape `CharacterGrid`
-          already uses, for the reason the design gives: a world can hold
-          hundreds of records.
-          Left as a rail on purpose, and filed rather than decided (#437).
-          Everything the design's card carries is on the row below already
-          (image, name, secrecy, owners, tokens) and the search and live count
-          are above it, so what differs is the shape -- and the shape is where
-          the design and `CLAUDE.md`'s list/detail rule disagree. That rule
-          names this file as canonical and says an editor inside another page
-          brings its own `.editor-list` rail; `CharacterGrid`'s grid is
-          already the unacknowledged exception. Which of the two the convention
-          should describe is a decision with an owner, not an implementation
-          detail to settle here. */}
-      <div className="editor-list">
-        <Link className="primary new" to={sectionPath}>+ New {label}</Link>
-        {/* Adoption is per record on the banner, and here for the whole
-            library: a world's worth of imported entries is not something to
-            walk one at a time. It sweeps every kind, which is why it lives
-            on the one rail an import fills, not on each. */}
-        {kind === "lore" && (
-          <>
-            <button className="subtle adopt-all" onClick={() => { void applyAdoptAll(); }}
-                    disabled={adoptBusy || adoptAllBlocked}
-                    title={adoptAllBlocked
-                      ? "Save or cancel the edit in progress first -- applying re-reads the record"
-                      : undefined}>
-              Apply imported settings to all
-            </button>
-            {adoptAllNote && <div className="field-hint" role="status">{adoptAllNote}</div>}
-          </>
-        )}
-        {/* Shown once there is enough to lose something in. Below that the
-            filter is a control that costs a row and saves nothing. */}
-        {items.length > 8 && (
-          <>
-            <input className="rail-search" type="search" value={query}
-                   aria-label={`Search ${kind}`} placeholder={`Search ${kind}…`}
-                   onChange={(e) => setQuery(e.target.value)} />
-            <div className="rail-count">
-              {shown.length === items.length
-                ? `${items.length} ${label}${items.length === 1 ? "" : "s"}`
-                : `${shown.length} of ${items.length}`}
-            </div>
-          </>
-        )}
-        {module && Object.values(module.sheets.sheet_types).some((st) => st.kind === kind) && (
-          <button className="subtle" onClick={() => art.transition(() => { resetForm(); setWizardOpen(true); })}>
-            + New {label} with sheet…
-          </button>
-        )}
-        {rail}
-        {/* Three different answers, and they must not share one line: nothing
-            here yet, nothing MATCHING here, and a filter narrowing a real set. */}
-        {items.length === 0 && <div className="editor-empty">No {kind} yet.</div>}
-        {items.length > 0 && shown.length === 0 && (
-          <div className="editor-empty">Nothing matches “{query}”.</div>
-        )}
-        {module?.content.filter((c) => c.kind === kind).map((c) => (
-          <button key={`content-${c.id}`} className="row content-row"
-                  onClick={() => art.transition(() => { void selectContent(c.id); })}>
-            <span className="row-name">{c.name}</span>
-            <span className="chip">template</span>
-          </button>
-        ))}
-      </div>
-
-      <div className="editor-body">
-        <RecordArtViewer controller={art} />
+      {/* Two states, not one layout (#437): the section root is the browse grid
+          of cards, and a record or the blank form takes the whole width with a
+          Back link. The grid is the roster; `GreetingEditor`'s rail stays for a
+          handful. */}
+      {browsing ? (
+        <div className="entity-browse">
+          <div className="entity-browse-head">
+            <Link className="primary new" to={newHref}>+ New {label}</Link>
+            {/* Adoption is per record on the banner, and here for the whole
+                library: a world's worth of imported entries is not something to
+                walk one at a time. It sweeps every kind, which is why it lives
+                on the one rail an import fills, not on each. */}
+          {adoptAllControls}
+            {/* Shown once there is enough to lose something in. Below that the
+                filter is a control that costs a row and saves nothing. */}
+            {items.length > 8 && (
+              <>
+                <input className="rail-search" type="search" value={query}
+                       aria-label={`Search ${kind}`} placeholder={`Search ${kind}…`}
+                       onChange={(e) => setQuery(e.target.value)} />
+                <div className="rail-count">
+                  {shown.length === items.length
+                    ? `${items.length} ${label}${items.length === 1 ? "" : "s"}`
+                    : `${shown.length} of ${items.length}`}
+                </div>
+              </>
+            )}
+            {module && Object.values(module.sheets.sheet_types).some((st) => st.kind === kind) && (
+              <button className="subtle" onClick={() => art.transition(() => { resetForm(); setWizardOpen(true); })}>
+                + New {label} with sheet…
+              </button>
+            )}
+          </div>
+          {/* Three different answers, and they must not share one line: nothing
+              here yet, nothing MATCHING here, and a filter narrowing a real set. */}
+          {items.length === 0 && <div className="editor-empty">No {kind} yet.</div>}
+          {items.length > 0 && shown.length === 0 && (
+            <div className="editor-empty">Nothing matches “{query}”.</div>
+          )}
+          <div className="entity-grid">
+            {rail}
+            {module?.content.filter((c) => c.kind === kind).map((c) => (
+              <button key={`content-${c.id}`} className="row content-row"
+                      onClick={() => art.transition(() => { void selectContent(c.id); })}>
+                <span className="row-name">{c.name}</span>
+                <span className="chip">template</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="editor-body">
+          <div className="entity-record-bar">
+          <Link className="subtle entity-back" to={sectionPath}
+                onClick={() => { setWizardOpen(false); setContentPreview(null); }}>← Back to the list</Link>
+            {adoptAllControls}
+          </div>
+          <RecordArtViewer controller={art} />
         {error && <div className="banner">{error}</div>}
         {groupNeedsReload && (
           <div className="banner">
@@ -1680,7 +1695,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
             </div>
           </div>
         )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

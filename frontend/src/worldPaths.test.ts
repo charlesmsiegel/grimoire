@@ -5,6 +5,23 @@ import {
 const W = { kind: "world" as const, id: "realm" };
 const C = { kind: "campaign" as const, id: "run" };
 
+describe("sectionHref: the blank form of an entity section (#437)", () => {
+  test("the form is addressed by ?new=1 on the section, not by a segment", () => {
+    expect(sectionHref(W, { kind: "section", at: "items", new: true })).toBe("/worlds/realm/items?new=1");
+    expect(sectionHref(C, { kind: "section", at: "locations", new: true })).toBe("/campaigns/run/world/locations?new=1");
+  });
+
+  test("Lore's pre-owned form keeps its owner beside the flag", () => {
+    expect(sectionHref(W, { kind: "section", at: "lore", new: true, newOwner: "characters:mara" }))
+      .toBe("/worlds/realm/lore?owner=characters%3Amara&new=1");
+  });
+
+  test("a section with no entity form refuses the flag rather than minting a dead address", () => {
+    expect(() => sectionHref(W, { kind: "section", at: "tags", new: true } as never)).toThrow(/no new-entry form/);
+    expect(() => sectionHref(W, { kind: "section", at: "characters", new: true } as never)).toThrow(/no new-entry form/);
+  });
+});
+
 describe("sectionHref", () => {
   test("a section's own screen, both shapes", () => {
     expect(sectionHref(W, { kind: "section", at: "items" })).toBe("/worlds/realm/items");

@@ -1354,6 +1354,34 @@ a.chip { text-decoration: none; text-align: center; }
   .editor-list { width: auto; position: static; max-height: 44vh; }
 }
 
+/* The browse state of a record section (#437): a roster is a grid of cards, and
+   the record rail above is for a handful. The same header controls the rail
+   carried (search, count, the adopt sweep) sit above it, unchanged in shape.
+   Three columns, as `.char-grid`, so a roster and a character grid read alike. */
+.entity-browse { flex: 1; min-width: 0; }
+.entity-browse-head { margin-bottom: 14px; }
+.entity-browse-head .new { display: inline-block; margin-bottom: 8px; }
+.entity-browse .rail-search {
+  width: 100%; max-width: 320px; box-sizing: border-box; margin-bottom: 8px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--rule);
+  padding: 6px 8px; font-family: var(--fm); font-size: 11px;
+}
+.entity-grid { --entity-cols: 3; display: grid; grid-template-columns: repeat(var(--entity-cols), minmax(0, 1fr)); gap: 18px; }
+/* Lore's owner groups: each is a full-width band holding its own grid, so the
+   heading spans the row and the cards keep the column count of their parent. */
+.entity-grid .rail-group { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(var(--entity-cols), minmax(0, 1fr)); gap: 18px; }
+.entity-grid .rail-group-head { grid-column: 1 / -1; }
+.entity-record-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
+.entity-record-bar .entity-back { margin-bottom: 0; }
+.entity-grid a.row { text-decoration: none; }
+.entity-back { display: inline-block; margin-bottom: 12px; text-decoration: none; }
+@media (max-width: 720px) {
+  .entity-grid { --entity-cols: 2; }
+}
+@media (max-width: 420px) {
+  .entity-grid { --entity-cols: 1; }
+}
+
 /* shared read-only detail view: rendered body + metadata sidebar (list/detail pattern) */
 .detail-view { display: flex; gap: 20px; align-items: flex-start; }
 .detail-main { flex: 1; min-width: 0; }

@@ -22,7 +22,7 @@ import { WorldOverview } from "../components/WorldOverview";
 import { WorldPushPanel } from "../components/WorldPushPanel";
 import { ImagesView } from "../components/ImagesView";
 import {
-  defaultSection, legacyTarget, parseWorldTail, sectionHref, sectionIndex,
+  defaultSection, legacyTarget, NEW_FORM_SECTIONS, parseWorldTail, sectionHref, sectionIndex,
   type RecordSection, type Section,
 } from "../worldPaths";
 
@@ -182,6 +182,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
    *  blank form. Read nowhere else, so it cannot ride along to Items or sit
    *  beside a record that already has owners of its own. */
   const newOwner = section === "lore" && !rid ? (params.get("owner") ?? "") : "";
+  /** The blank form on a record section's root. The root itself is the browse
+   *  grid (#437); `?new=1` asks for the form, and a Lore `?owner=` does too,
+   *  pre-owned. Read on the entity sections only: `new` means nothing to a
+   *  section that has no form of that kind. */
+  const newForm = !rid && NEW_FORM_SECTIONS.includes(section)
+    && (params.get("new") === "1" || newOwner !== "");
   /** The campaign shape's world, which only its campaign read can say. */
   const [campaignWid, setCampaignWid] = useState("");
   /** That read failed, so there is no world to show -- which has to say so
@@ -757,6 +763,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations"
                                           selected={section === "locations" ? rid : null}
                                           sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "locations" })}
+                          newHref={sectionHref(scopeForPaths, { kind: "section", at: "locations", new: true })}
+                          isNew={newForm}
                                           recordHref={(r) => sectionHref(scopeForPaths,
                                                                          { kind: "record", at: "locations", rid: r })}
                                           onReclassified={openEntity} onOpenOwner={openOwner}
@@ -775,6 +783,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                           selected={section === "lore" ? rid : null}
                           newOwner={newOwner}
                           sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "lore" })}
+                          newHref={sectionHref(scopeForPaths, { kind: "section", at: "lore", new: true })}
+                          isNew={newForm}
                           recordHref={(r) => sectionHref(scopeForPaths,
                                                          { kind: "record", at: "lore", rid: r })}
                           onReclassified={openEntity} onOpenOwner={openOwner} module={moduleCtx} />
@@ -783,6 +793,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {section === "items" && <EntityEditor wid={wid} scope={scope} kind="items"
                                           selected={section === "items" ? rid : null}
                                           sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "items" })}
+                          newHref={sectionHref(scopeForPaths, { kind: "section", at: "items", new: true })}
+                          isNew={newForm}
                                           recordHref={(r) => sectionHref(scopeForPaths,
                                                                          { kind: "record", at: "items", rid: r })}
                                           onReclassified={openEntity}
@@ -790,6 +802,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {section === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups"
                                           selected={section === "groups" ? rid : null}
                                           sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "groups" })}
+                          newHref={sectionHref(scopeForPaths, { kind: "section", at: "groups", new: true })}
+                          isNew={newForm}
                                           recordHref={(r) => sectionHref(scopeForPaths,
                                                                          { kind: "record", at: "groups", rid: r })}
                                           onReclassified={openEntity}
@@ -797,6 +811,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {section === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures"
                                           selected={section === "creatures" ? rid : null}
                                           sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "creatures" })}
+                          newHref={sectionHref(scopeForPaths, { kind: "section", at: "creatures", new: true })}
+                          isNew={newForm}
                                           recordHref={(r) => sectionHref(scopeForPaths,
                                                                          { kind: "record", at: "creatures", rid: r })}
                                           onReclassified={openEntity}
