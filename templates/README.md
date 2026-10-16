@@ -953,6 +953,14 @@ Run it after renaming/moving a template, changing a template's variables, or
 touching the prompt-building code in `backend/src/`. The regular test suite
 (`backend/.venv/Scripts/python.exe -m pytest backend -q`) covers the rest.
 
+It also holds its own reach: every `.j2` here is rendered by one of its checks
+(an include counts), or named in its `UNRENDERED` table with the reason no check
+renders it. A new template therefore fails it until it has one or the other,
+and an entry a check has since reached fails it until it is taken out.
+`backend/tests/test_verify_templates.py` tests the harness itself: that it
+passes without making fewer comparisons than its floor, and that a builder
+drifting from its template, or a template nothing renders, fails it.
+
 ### `epub/` — not prompts: campaign EPUB export pages
 
 The one non-LLM family. `store/epub.py` renders these (its own jinja2
