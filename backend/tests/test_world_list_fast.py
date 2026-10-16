@@ -122,8 +122,8 @@ def _reference_list_in(d: Path) -> list[dict]:
     for p in sorted(d.iterdir()):
         if p.is_file() and assets.norm_ext(p.suffix) and assets._addressable_name(p.stem):
             cur = best.get(p.stem)
-            if cur is None or ((assets._mtime_ns(p), p.name)
-                               > (assets._mtime_ns(cur), cur.name)):
+            if cur is None or ((assets.mtime_ns(p), p.name)
+                               > (assets.mtime_ns(cur), cur.name)):
                 best[p.stem] = p
     out = []
     for name in sorted(best):

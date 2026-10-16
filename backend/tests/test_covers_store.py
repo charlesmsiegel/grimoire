@@ -118,7 +118,7 @@ def test_cover_version_survives_a_vanishing_file(cid, monkeypatch):
     `image_version` only proves `cover_version`'s `except OSError` fires, not
     that it survives the actual race the spec describes (the file vanishing
     between `cover_path`'s resolution and the `stat()` call inside
-    `image_version`). `_mtime_ns`, which `cover_path` -> `path_in` uses to rank
+    `image_version`). `mtime_ns`, which `cover_path` -> `path_in` uses to rank
     siblings, already swallows a stat failure on its own (that's what lets
     resolution tolerate a concurrent unlink at all), so patching every
     `Path.stat` call still lets resolution succeed and only trips the

@@ -99,7 +99,7 @@ def test_a_file_that_vanishes_mid_scan_is_dropped_not_raised(tmp_path, monkeypat
     """The listing stats each file it just saw in the directory, and `put_in`
     unlinks a stale sibling right after publishing the new one -- so a
     concurrent reader can genuinely scan a path that is gone by the stat.
-    `_mtime_ns` already tolerates it; the token stat has to as well, or one
+    `mtime_ns` already tolerates it; the token stat has to as well, or one
     vanishing file 500s a route that lists every character.
     """
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"a", "png")
