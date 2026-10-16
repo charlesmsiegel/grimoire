@@ -2057,6 +2057,19 @@ def _history_rows(p: dict, count, notes: frozenset[int] = frozenset(),
     return rows
 
 
+#: #128: why each source in a cast section is in the prompt. Every source in one
+#: of these sections is a character, and the section names the fact that put it
+#: there -- seated in this scene's cast, or on the off-scene directory's tier 2
+#: or 3 -- so the reason is read off the section, never inferred per entry. It
+#: rides the inspector row only: `_source_row` is what reaches JSON, and no
+#: prompt text is built from it.
+_CAST_REASONS = {
+    "character_descriptions": {"type": "cast"},
+    "off_scene_cast_active": {"type": "off_scene", "tier": "active"},
+    "off_scene_cast_known": {"type": "off_scene", "tier": "known"},
+}
+
+
 def _source_row(section: dict) -> dict:
     """#131: only frozen text and labels reach JSON; cuts stay inspectable."""
     sources = section.get("sources")
@@ -2065,8 +2078,10 @@ def _source_row(section: dict) -> dict:
     shed = set(section.get("shed_refs") or ())
     current = sources if section.get("dropped") else section.get("source_slices", sources)
     kept = {s["id"]: s for s in current}
+    reason = _CAST_REASONS.get(section.get("id", ""))
     return {"sources": [{**(s if s.get("ref") in shed else kept[s["id"]]),
-                         "shed": s.get("ref") in shed}
+                         "shed": s.get("ref") in shed,
+                         **({"reason": deepcopy(reason)} if reason else {})}
                         for s in sources if s.get("ref") in shed or s["id"] in kept]}
 
 

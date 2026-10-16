@@ -323,3 +323,27 @@ def test_relationship_labels_keep_names_that_contain_the_separator():
         "Captain: Mara → Seraphine: trust 4"], capture_source=capture.mark)
     _, sources = capture.finish(capture.unmark(text))
     assert [s["label"] for s in sources] == ["Captain: Mara → Seraphine: trust 4"]
+
+
+#: #128: why each cast source is in the prompt. A seated NPC is in the scene's
+#: cast; an off-scene character is either active elsewhere in the campaign or
+#: merely known to the world. The reason is the section's own fact, read off the
+#: row, never a heuristic, and it never reaches the text sent to the model.
+@pytest.mark.parametrize("section, reason", [
+    ("character_descriptions", {"type": "cast"}),
+    ("off_scene_cast_active", {"type": "off_scene", "tier": "active"}),
+    ("off_scene_cast_known", {"type": "off_scene", "tier": "known"}),
+])
+def test_cast_sources_say_why_they_are_in_the_prompt(scene, section, reason):
+    cid, sid, _ = scene
+    row = _rows(cid, sid)[section]
+    assert row["sources"]
+    assert [s["reason"] for s in row["sources"]] == [reason] * len(row["sources"])
+    assert not any("reason" in line for line in row["text"].splitlines())
+    json.dumps(row)
+
+
+def test_lore_sources_are_not_given_a_cast_reason(scene):
+    cid, sid, _ = scene
+    row = _rows(cid, sid)["world_info"]
+    assert all("reason" not in s for s in row["sources"])
