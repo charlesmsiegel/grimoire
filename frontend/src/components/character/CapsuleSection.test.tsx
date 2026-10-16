@@ -194,3 +194,21 @@ test("an error from a draft discarded by a version switch is not reported", asyn
 
   expect(onError).not.toHaveBeenCalled();
 });
+
+test("an error from a save the section was discarded during is not reported", async () => {
+  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
+  let fail: (e: unknown) => void = () => {};
+  (api.setCampaignCharacterTagline as any).mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+  const onError = vi.fn();
+  const { unmount } = mount({ onError });
+  await screen.findByText("Old.");
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Capsule"), { target: { value: "New." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  unmount();
+  fail(new Error("provider failed"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(onError).not.toHaveBeenCalled();
+});

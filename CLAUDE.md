@@ -338,24 +338,25 @@ subscriber. **Thirty-six handlers** start detached runs, in five classes:
   streams: each answers **202** with a run to poll and persists its result to
   `store/pending_reviews.py`, because a review's value is a payload nobody has
   written down and losing it costs the longest generation in the app.
-- `draft` — `post_opener`, plus the seventeen computing previews: scene
+- `draft` — `post_opener`, plus the eighteen computing previews: scene
   suggestions and intent, the five image-description drafts (a campaign
   library, a world library, a character version, an entity and a PC), both voice
-  anchors, taglines, both scenario parses, character-from-passage, optional
-  character-text refinement, the
+  anchors, taglines, the campaign capsule for an emergent character
+  (`post_campaign_capsule_generate`, #62), both scenario parses,
+  character-from-passage, optional character-text refinement, the
   model-catalog refresh, and the model test (`post_connection_test`, which
   refuses without `confirm: true` before anything is sent, and sends each probe
   once through `LLMClient.single`), and the history question
   (`post_history_question`, roadmap 12's E3, a tool loop whose answer is held
   on the run -- `run_draft(pass_run=True)`, since the loop runs under the run's
-  id). The seventeen answer **202** and hand back a result held on the run and reaped;
+  id). The eighteen answer **202** and hand back a result held on the run and reaped;
   `post_opener` streams and buffers its frames like a turn. **A draft declares
   no exclusion key** — it neither holds a scene nor is refused by one, which is
   what stops a tagline preview from being able to refuse a chat, and its result
   is deliberately *not* durable: a sentence nobody has agreed to yet is
   regenerable, and storing it would be a second store to keep consistent.
 
-  All seventeen go through **one contract** rather than seventeen variants —
+  All eighteen go through **one contract** rather than eighteen variants —
   `runs.run_draft` on the route side (the two scenario parses reserve through
   `runs.reserve_draft`, which it wraps), `common.draft_completion` for the call
   (the catalog refresh and the model test excepted, which list or probe rather

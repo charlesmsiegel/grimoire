@@ -85,7 +85,8 @@ export function CapsuleSection(
       }
       if (live.current) setEditing(false);
     } catch (err: unknown) {
-      onError(err);
+      // Not reported once the section is gone: a version switch discards it.
+      if (live.current) onError(err);
     } finally {
       if (live.current) setSaving(false);
     }

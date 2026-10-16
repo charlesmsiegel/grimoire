@@ -2321,6 +2321,16 @@ def get_campaign_character_tagline(cid: str, char: str):
     return {"tagline": store.overlay.tagline(cid, char)}
 
 
+def _shown_capsule(cid: str, char: str) -> str:
+    """The capsule the campaign shows once a save has landed. The write is
+    already published when this reads, so an unreadable library sentence answers
+    blank rather than failing a save that happened."""
+    try:
+        return store.overlay.tagline(cid, char)
+    except (OSError, ValueError):
+        return ""
+
+
 @router.put("/campaigns/{cid}/characters/{char}/tagline")
 def put_campaign_character_tagline(cid: str, char: str, body: TaglineSave):
     """Write the campaign's own capsule for a character.
@@ -2342,9 +2352,7 @@ def put_campaign_character_tagline(cid: str, char: str, body: TaglineSave):
         except store.characters.CharacterNotFound as exc:
             raise HTTPException(status_code=404, detail="character not found") from exc
         store.overlay.set_tagline(cid, char, body.tagline)
-        # The sentence the campaign now shows: a blank copy of an inherited one
-        # lets the library's show through, and the editor should say so.
-        shown = store.overlay.tagline(cid, char)
+        shown = _shown_capsule(cid, char)
     return {"ok": True, "tagline": shown}
 
 

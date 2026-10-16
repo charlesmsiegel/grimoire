@@ -341,3 +341,21 @@ def test_an_unreadable_campaign_record_still_searches_the_inherited_capsule(clie
     hits = search.search("snowleopardgirl", scope="campaign", root=cid)["hits"]
 
     assert [(h["id"], h["name"]) for h in hits] == [(aid, aid)]
+
+
+def test_a_blank_capsule_save_succeeds_even_when_the_library_sentence_is_unreadable(client):
+    """The blank is written before the answer is read, so an unreadable library
+    sentence must not turn a landed save into a failed request."""
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    aid = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Seraphine", "version_name": "main"}).json()["character"]
+    client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline", json={"tagline": "Its own."})
+    world_line = store.taglines.tagline_path(store.worlds.world_root(wid), aid)
+    world_line.write_bytes(b"\xff\xfe\x00 not text")
+
+    resp = client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline", json={"tagline": ""})
+
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    assert store.taglines.read(store.overlay.croot_of(cid), aid) == ""

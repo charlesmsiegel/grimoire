@@ -61,14 +61,13 @@ _TAGS_LABEL = "tags:"
 
 
 def build_capsule_prompt(card_data: dict, transcript: str = "") -> list[dict]:
-    """The capsule-and-tags prompt: the tagline's card, plus an excerpt of the
-    first scene the character appears in when there is one (#62)."""
-    user = prompts.render("tagline/user.j2", card=card_data)
+    """The capsule-and-tags prompt: the character's card, plus an excerpt of the
+    first scene the character appears in when there is one (#62). Both messages
+    are templates of their own under capsule/, one folder per call."""
     excerpt = transcript.strip()[:CAPSULE_SOURCE_CHARS]
-    if excerpt:
-        user = f"{user.rstrip()}\n\nThe first scene this character appears in:\n{excerpt}"
-    return [{"role": "system", "content": prompts.render("tagline/capsule_system.j2")},
-            {"role": "user", "content": user}]
+    return [{"role": "system", "content": prompts.render("capsule/system.j2")},
+            {"role": "user", "content": prompts.render("capsule/user.j2", card=card_data,
+                                                       excerpt=excerpt)}]
 
 
 def parse_capsule_output(text: str) -> dict:
