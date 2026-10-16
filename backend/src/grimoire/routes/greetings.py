@@ -246,10 +246,10 @@ def post_world_greetings_import(wid: str, body: ImportGreetings):
     root = _world_root_or_404(wid)
     try:
         gids = store.greetings.import_from_character(root, body.character, body.version)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     return {"greetings": gids}
 
 
@@ -258,8 +258,8 @@ def get_world_greeting(wid: str, gid: str):
     root = _world_root_or_404(wid)
     try:
         g = store.greetings.read_greeting_rev(root, gid)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as exc:
+        raise HTTPException(status_code=404, detail="greeting not found") from exc
     plotmap = store.greetings.read_plotmap(root)
     g["edges"] = store.greetings.edges_of(plotmap, gid)
     g["predecessors"] = store.greetings.predecessors_of(plotmap, gid)
@@ -283,8 +283,8 @@ def put_world_greeting(wid: str, gid: str, body: GreetingUpdate):
                                         sequence=(body.sequence if _provided(body, "sequence")
                                                   else store.greetings.UNSET),
                                         optional=body.optional)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as exc:
+        raise HTTPException(status_code=404, detail="greeting not found") from exc
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found") from None
     except store.characters.VersionNotFound:
@@ -297,8 +297,8 @@ def put_world_greeting_edges(wid: str, gid: str, body: Edges):
     root = _world_root_or_404(wid)
     try:
         store.greetings.read_greeting(root, gid)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as exc:
+        raise HTTPException(status_code=404, detail="greeting not found") from exc
     store.greetings.set_edges(root, gid, body.leads_to, body.excludes)
     return {"ok": True}
 
@@ -316,9 +316,9 @@ def delete_world_greeting(wid: str, gid: str):
         absent = False
         try:
             store.greetings.delete_greeting(root, gid)
-        except store.greetings.GreetingNotFound:
+        except store.greetings.GreetingNotFound as exc:
             absent = True
-            raise HTTPException(status_code=404, detail="greeting not found")
+            raise HTTPException(status_code=404, detail="greeting not found") from exc
         finally:
             if not absent:
                 store.overlay.forget_world_record(root, "greetings", gid, cids=cids)
@@ -329,8 +329,8 @@ def delete_world_greeting(wid: str, gid: str):
 def _greeting_or_404(root, gid: str) -> None:
     try:
         store.greetings.read_greeting(root, gid)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as exc:
+        raise HTTPException(status_code=404, detail="greeting not found") from exc
 
 
 @router.get("/worlds/{wid}/greetings/{gid}/subjects")
@@ -433,10 +433,10 @@ def post_copy_image_from_greeting(wid: str, cid: str, vid: str, body: CopyFromGr
     root = _world_char_version_or_404(wid, cid, vid)
     try:
         stored = store.image_subjects.copy_to_character(root, body.gid, body.name, cid, vid, body.slot)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="source image not found")
+    except FileNotFoundError as err:
+        raise HTTPException(status_code=404, detail="source image not found") from err
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     p = store.assets.image_path(root, cid, vid, stored)
     return {"name": stored, "ext": p.suffix.lstrip(".").lower() if p else ""}
 
@@ -447,10 +447,10 @@ def get_available_greetings(cid: str, after: str | None = None):
     _campaign_root_or_404(cid)
     try:
         return store.playing.available_greetings(cid, after=after)
-    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
-        raise HTTPException(status_code=404, detail="scene not found")
+        raise HTTPException(status_code=404, detail="scene not found") from exc
 
 
 @router.get("/campaigns/{cid}/greetings")
@@ -483,8 +483,8 @@ def get_campaign_greeting(cid: str, gid: str):
     _campaign_root_or_404(cid)
     try:
         g = store.overlay.read_greeting_rev(cid, gid)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as exc:
+        raise HTTPException(status_code=404, detail="greeting not found") from exc
     plotmap = store.overlay.read_plotmap(cid)
     g["edges"] = store.greetings.edges_of(plotmap, gid)
     g["predecessors"] = store.greetings.predecessors_of(plotmap, gid)
@@ -506,8 +506,8 @@ def put_campaign_greeting(cid: str, gid: str, body: GreetingUpdate):
                                      sequence=(body.sequence if _provided(body, "sequence")
                                                else store.greetings.UNSET),
                                      optional=body.optional)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as exc:
+        raise HTTPException(status_code=404, detail="greeting not found") from exc
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found") from None
     except store.characters.VersionNotFound:
@@ -520,8 +520,8 @@ def put_campaign_greeting_edges(cid: str, gid: str, body: Edges):
     _campaign_root_or_404(cid)
     try:
         store.overlay.read_greeting(cid, gid)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as exc:
+        raise HTTPException(status_code=404, detail="greeting not found") from exc
     store.overlay.set_edges(cid, gid, body.leads_to, body.excludes)
     return {"ok": True}
 
@@ -531,8 +531,8 @@ def delete_campaign_greeting(cid: str, gid: str):
     _campaign_root_or_404(cid)
     try:
         store.overlay.delete_greeting(cid, gid)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as exc:
+        raise HTTPException(status_code=404, detail="greeting not found") from exc
     return {"ok": True}
 
 
@@ -541,10 +541,10 @@ def post_campaign_greeting_mark(cid: str, gid: str, body: MarkBody):
     _campaign_root_or_404(cid)
     try:
         store.playing.mark_greeting(cid, gid, body.status)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as err:
+        raise HTTPException(status_code=404, detail="greeting not found") from err
     except store.playing.PlayError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -562,10 +562,10 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, reques
             new_sid = store.playing.start_from_greeting(cid, sid, body.greeting,
                                                         seed_location=body.seed_location,
                                                         seed=body.seed)
-    except store.greetings.GreetingNotFound:
-        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.greetings.GreetingNotFound as err:
+        raise HTTPException(status_code=404, detail="greeting not found") from err
     except (store.playing.PlayError, store.appearances.AppearError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     # `new_sid`: starting from a greeting may rename the scene.
     _track_opening(request.app, cid, new_sid, client)
     return {"ok": True, "id": new_sid}

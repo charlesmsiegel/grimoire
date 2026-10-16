@@ -92,7 +92,7 @@ def put_weather(cid: str, body: WeatherOverride):
             end = store.weather.overrides.ordinal_of(
                 list(store.weather.overrides.resolve_endpoint(provider, body.end, end=True)))
     except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
-        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}") from e
     if body.blocks is not None and body.blocks < 1:
         # max(1, ...) would turn an empty selection into a one-block override
         # and report success for it.
@@ -177,7 +177,7 @@ def _weather_bounds(provider, body) -> None:
             hi = store.weather.overrides.ordinal_of(
                 list(store.weather.overrides.resolve_endpoint(provider, body.end, end=True)))
     except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
-        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}") from e
     if hi is not None and hi <= lo:
         raise HTTPException(status_code=400, detail="the range ends before it starts")
 
@@ -187,7 +187,7 @@ def _weather_provider(cid: str):
         cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
         return store.calendars.get_provider(cfg["primary"])
     except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
-        raise HTTPException(status_code=400, detail=f"unreadable calendar: {e}")
+        raise HTTPException(status_code=400, detail=f"unreadable calendar: {e}") from e
 
 
 @router.post("/campaigns/{cid}/weather/clear")
@@ -209,9 +209,9 @@ def post_weather_clear(cid: str, body: WeatherRange):
                                           body.end, axes=_weather_axes(body.axes),
                                           blocks=body.blocks)
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}") from e
     except store.weather.overrides.OverrideWriteError as e:
-        raise HTTPException(status_code=500, detail=f"could not write weather: {e}")
+        raise HTTPException(status_code=500, detail=f"could not write weather: {e}") from e
     return {"cleared": n}
 
 
@@ -231,9 +231,9 @@ def post_weather_resume(cid: str, body: WeatherRange):
                                            body.end, axes=_weather_axes(body.axes),
                                            blocks=body.blocks)
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}") from e
     except store.weather.overrides.OverrideWriteError as e:
-        raise HTTPException(status_code=500, detail=f"could not write weather: {e}")
+        raise HTTPException(status_code=500, detail=f"could not write weather: {e}") from e
     return {"resumed": n}
 
 
@@ -272,7 +272,7 @@ def put_weather_span(cid: str, storage_key: str, span_id: str, body: WeatherOver
             end = store.weather.overrides.ordinal_of(
                 list(store.weather.overrides.resolve_endpoint(provider, body.end, end=True)))
     except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
-        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}") from e
     if end is not None and end <= start:
         raise HTTPException(status_code=400, detail="the override range ends before it starts")
     try:
@@ -280,7 +280,7 @@ def put_weather_span(cid: str, storage_key: str, span_id: str, body: WeatherOver
             cid, storage_key, span_id, from_ordinal=start, to_ordinal=end,
             native=body.start, axes=axes, note=body.note or "", suppress=body.suppress)
     except store.weather.overrides.OverrideWriteError as e:
-        raise HTTPException(status_code=500, detail=f"could not write weather: {e}")
+        raise HTTPException(status_code=500, detail=f"could not write weather: {e}") from e
     if got is None:
         raise HTTPException(status_code=404, detail="override not found")
     return got

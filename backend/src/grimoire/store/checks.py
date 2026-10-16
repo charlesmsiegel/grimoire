@@ -160,7 +160,7 @@ def resolve_check(cid: str, check_id: str, actor_ref: str, difficulty: int | Non
             try:
                 return str(int(expressions.evaluate(m.group(1), scope)))
             except expressions.ExpressionError as e:
-                raise CheckError(f"check formula: {e}")
+                raise CheckError(f"check formula: {e}") from e
 
         roll_template = check.get("roll", "")
         roll_template = roll_template if isinstance(roll_template, str) else ""
@@ -168,7 +168,7 @@ def resolve_check(cid: str, check_id: str, actor_ref: str, difficulty: int | Non
         try:
             result = dice.roll(notation, seed)
         except dice.DiceError as e:
-            raise CheckError(f"bad roll notation {notation!r}: {e}")
+            raise CheckError(f"bad roll notation {notation!r}: {e}") from e
 
         tier, tier_warnings = evaluate_tier(check, defaults, roll_scope(result))
         tier = tier or result.get("outcome")

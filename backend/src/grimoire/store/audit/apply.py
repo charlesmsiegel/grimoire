@@ -26,8 +26,8 @@ def parse_output(text: str) -> dict:
     raw = text[start:end + 1] if start != -1 and end > start else ""
     try:
         obj = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        raise AuditParseError("no JSON object in the audit reply")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise AuditParseError("no JSON object in the audit reply") from exc
     if not isinstance(obj, dict):
         raise AuditParseError("audit reply is not a JSON object")
     if not isinstance(obj.get("warnings"), list) or not isinstance(obj.get("sheet_deltas"), list):

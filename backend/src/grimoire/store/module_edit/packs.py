@@ -146,7 +146,7 @@ def import_module(path: Path) -> str:
         try:
             z = zipfile.ZipFile(path)
         except (zipfile.BadZipFile, OSError) as e:
-            raise modules_pack.ModuleError(f"not a zip archive: {e}")
+            raise modules_pack.ModuleError(f"not a zip archive: {e}") from e
         with z:
             src_root, infos = _check_archive(z)
             # Every member was validated above; this only chooses among them.

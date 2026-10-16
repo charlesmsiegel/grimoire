@@ -576,7 +576,7 @@ def put_data_dir(update: DataDirUpdate, request: Request):
                                 detail={"detail": str(exc), "kind": "group_identity"}) from exc
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400,
-                                detail={"detail": str(exc), "kind": "data_dir"})
+                                detail={"detail": str(exc), "kind": "data_dir"}) from exc
     # The log's size cache is keyed by absolute path, so a root that moved
     # leaves byte counts charged against files the new tree does not have --
     # which would cap a fresh log at the old one's size (`logs.forget_file_sizes`).
@@ -620,7 +620,7 @@ def get_backups():
         # Not an empty list: "no restore points" and "could not look" send a
         # reader in opposite directions, and this one is read right before
         # somebody decides whether they are covered.
-        raise HTTPException(status_code=500, detail=f"could not list backups: {exc}")
+        raise HTTPException(status_code=500, detail=f"could not list backups: {exc}") from exc
 
 
 @router.post("/backups")
@@ -642,7 +642,7 @@ def post_backup(request: Request):
         with runs.maintenance_excluded(request.app):
             made = store.backups.create_backup()
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"could not write a backup: {exc}")
+        raise HTTPException(status_code=500, detail=f"could not write a backup: {exc}") from exc
     swept: list[str] = []
     retention_error = None
     try:
@@ -691,7 +691,7 @@ def get_store_conflicts():
     try:
         return store.external.scan()
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"could not scan the store: {exc}")
+        raise HTTPException(status_code=500, detail=f"could not scan the store: {exc}") from exc
 
 
 # ---- llm connections ----
@@ -920,8 +920,8 @@ def post_connection(body: ConnectionCreate):
 def get_connection(id: str, registry: health.ProviderHealth = Depends(get_health)):
     try:
         conn = _with_effective(_picker_models(store.llm_connections.read_connection(id)))
-    except store.llm_connections.ConnectionNotFound:
-        raise HTTPException(status_code=404, detail="connection not found")
+    except store.llm_connections.ConnectionNotFound as exc:
+        raise HTTPException(status_code=404, detail="connection not found") from exc
     # The editor shows this beside the key it is about, which is the one place
     # a reader can act on it. Riding on the detail read rather than a route of
     # its own because it is never wanted without the rest: the panel that would
@@ -1019,8 +1019,8 @@ def put_connection(id: str, body: ConnectionUpdate,
         fresh = store.llm_connections.read_connection(id)
         return {**_with_effective(_picker_models(fresh)), "health": registry.status(id, fresh["rev"]),
                 "sampling": _connection_sampling(id)}
-    except store.llm_connections.ConnectionNotFound:
-        raise HTTPException(status_code=404, detail="connection not found")
+    except store.llm_connections.ConnectionNotFound as err:
+        raise HTTPException(status_code=404, detail="connection not found") from err
 
 
 @router.delete("/llm-connections/{id}")
@@ -1028,8 +1028,8 @@ def delete_connection_route(id: str, registry: health.ProviderHealth = Depends(g
     refuse_newer()
     try:
         store.llm_connections.delete_connection(id)
-    except store.llm_connections.ConnectionNotFound:
-        raise HTTPException(status_code=404, detail="connection not found")
+    except store.llm_connections.ConnectionNotFound as err:
+        raise HTTPException(status_code=404, detail="connection not found") from err
     except retired.RecordUnreadableError as exc:
         # The retirement record, read before anything is written, cannot be
         # read: nothing was written -- no reference cleared, no file removed.
@@ -1075,8 +1075,8 @@ def post_connection_models_refresh(
     refuse_newer()
     try:
         conn = store.llm_connections.read_connection_raw(id)
-    except store.llm_connections.ConnectionNotFound:
-        raise HTTPException(status_code=404, detail="connection not found")
+    except store.llm_connections.ConnectionNotFound as err:
+        raise HTTPException(status_code=404, detail="connection not found") from err
     if conn["kind"] not in llm.LISTABLE_KINDS:
         raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
     rev = conn["rev"]
@@ -1669,8 +1669,8 @@ def post_style(body: StyleCreate):
 def get_style(sid: str):
     try:
         return store.styles.read_style(sid)
-    except store.styles.StyleNotFound:
-        raise HTTPException(status_code=404, detail="style not found")
+    except store.styles.StyleNotFound as exc:
+        raise HTTPException(status_code=404, detail="style not found") from exc
 
 
 @router.put("/styles/{sid}")
@@ -1678,10 +1678,10 @@ def put_style(sid: str, body: StyleUpdate):
     try:
         store.styles.update_style(sid, name=body.name, description=body.description,
                                   tags=body.tags, body=body.body)
-    except store.styles.StyleNotFound:
-        raise HTTPException(status_code=404, detail="style not found")
-    except store.styles.BuiltInStyleImmutable:
-        raise HTTPException(status_code=400, detail="built-in styles can't be edited — duplicate it first")
+    except store.styles.StyleNotFound as exc:
+        raise HTTPException(status_code=404, detail="style not found") from exc
+    except store.styles.BuiltInStyleImmutable as exc:
+        raise HTTPException(status_code=400, detail="built-in styles can't be edited — duplicate it first") from exc
     return {"ok": True}
 
 
@@ -1689,10 +1689,10 @@ def put_style(sid: str, body: StyleUpdate):
 def delete_style(sid: str):
     try:
         store.styles.delete_style(sid)
-    except store.styles.StyleNotFound:
-        raise HTTPException(status_code=404, detail="style not found")
-    except store.styles.BuiltInStyleImmutable:
-        raise HTTPException(status_code=400, detail="built-in styles can't be deleted")
+    except store.styles.StyleNotFound as exc:
+        raise HTTPException(status_code=404, detail="style not found") from exc
+    except store.styles.BuiltInStyleImmutable as exc:
+        raise HTTPException(status_code=400, detail="built-in styles can't be deleted") from exc
     return {"ok": True}
 
 
@@ -1700,8 +1700,8 @@ def delete_style(sid: str):
 def post_style_duplicate(sid: str):
     try:
         return {"id": store.styles.duplicate_style(sid)}
-    except store.styles.StyleNotFound:
-        raise HTTPException(status_code=404, detail="style not found")
+    except store.styles.StyleNotFound as exc:
+        raise HTTPException(status_code=404, detail="style not found") from exc
 
 
 # ---- phase-specific response controls ----
@@ -2212,9 +2212,9 @@ def put_climate(climate_id: str, body: dict):
     try:
         return {"climate": store.climates.save(doc)}
     except store.climates.ClimateError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"could not write climate: {e}")
+        raise HTTPException(status_code=500, detail=f"could not write climate: {e}") from e
 
 
 def _climate_referrers(climate_id: str) -> dict:
@@ -2253,7 +2253,7 @@ def get_climate_referrers(climate_id: str):
     try:
         return _climate_referrers(climate_id)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"could not scan campaigns: {e}")
+        raise HTTPException(status_code=500, detail=f"could not scan campaigns: {e}") from e
 
 
 @router.delete("/climates/{climate_id}")
@@ -2262,11 +2262,11 @@ def delete_climate(climate_id: str):
     try:
         referrers = _climate_referrers(climate_id)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"could not scan campaigns: {e}")
+        raise HTTPException(status_code=500, detail=f"could not scan campaigns: {e}") from e
     try:
         removed = store.climates.remove(climate_id)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"could not delete climate: {e}")
+        raise HTTPException(status_code=500, detail=f"could not delete climate: {e}") from e
     if not removed:
         raise HTTPException(status_code=404, detail="no custom climate to delete")
     return {"ok": True, "reverted_to_preset": store.climates.is_builtin(climate_id),

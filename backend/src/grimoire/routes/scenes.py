@@ -120,8 +120,8 @@ def get_scenes(cid: str, limit: int | None = None, offset: int | None = None):
     limit, offset = _page_window(limit, offset)
     try:
         return _page_of(store.scenes.list_scenes(cid), limit, offset)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
 
 
 @router.post("/campaigns/{cid}/scenes")
@@ -156,8 +156,8 @@ def post_scene(cid: str, body: NewScene, request: Request):
             return {"id": store.scenes.create_scene(cid, title, body.suggested_date,
                                                     pcless=body.pcless, model=model,
                                                     focus=body.focus)}
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as err:
+        raise HTTPException(status_code=404, detail="campaign not found") from err
     except OSError as exc:
         # The boundary read failed, so nobody knows whether this create would
         # repad -- and `create_would_repad` now says so rather than answering
@@ -352,8 +352,8 @@ def post_scene_suggestions(cid: str, request: Request,
         after=after, offscreen=offscreen, direction=direction, rank=rank)
     try:
         store.campaigns.read_campaign(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     resolved = require_inference("suggestions", cid)
     snapshot = store.suggest.build_snapshot(cid, offscreen=req.offscreen)
     controls = _controls_or_refuse(cid, snapshot, req)
@@ -430,8 +430,8 @@ def post_scene_intent(cid: str, body: SceneIntent, request: Request,
     returns; the confirm form is what decides whether any of it is written."""
     try:
         store.campaigns.read_campaign(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="empty scene description")
     resolved = require_inference("intent", cid)
@@ -569,10 +569,10 @@ def put_scene_idea(cid: str, lid: str, body: SceneIdeaStatus):
                 store.scene_ideas.DISMISSED: "skipped"}[body.status]
         try:
             store.playing.mark_greeting(cid, gid, mark)
-        except store.greetings.GreetingNotFound:
-            raise HTTPException(status_code=404, detail="greeting not found")
+        except store.greetings.GreetingNotFound as err:
+            raise HTTPException(status_code=404, detail="greeting not found") from err
         except store.playing.PlayError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True}
     if not store.scene_ideas.set_status(cid, lid, body.status, body.scene):
         raise HTTPException(status_code=404, detail="idea not found")
@@ -602,10 +602,10 @@ def get_scene(cid: str, sid: str, limit: int | None = None, before: int | None =
         if limit is None:
             return _with_actor_refs(cid, sid, store.scenes.read_scene(cid, sid))
         return _with_actor_refs(cid, sid, store.scenes.read_scene_window(cid, sid, limit, before))
-    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
-        raise HTTPException(status_code=404, detail="scene not found")
+        raise HTTPException(status_code=404, detail="scene not found") from exc
 
 
 def _with_actor_refs(cid: str, sid: str, scene: dict) -> dict:
@@ -764,10 +764,10 @@ def put_scene(cid: str, sid: str, body: RenameScene, request: Request):
     try:
         with runs.scene_held_free(request.app, cid, sid):
             new_sid = store.scenes.rename_scene(cid, sid, title)
-    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
-        raise HTTPException(status_code=404, detail="scene not found")
+        raise HTTPException(status_code=404, detail="scene not found") from exc
     return {"id": new_sid, "title": title}
 
 
@@ -782,10 +782,10 @@ def delete_scene(cid: str, sid: str, request: Request):
             # Read while the transcript that carries it is certainly there.
             identity = store.scenes.scene_identity(cid, sid)
             store.scenes.delete_scene(cid, sid)
-    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
-        raise HTTPException(status_code=404, detail="scene not found")
+        raise HTTPException(status_code=404, detail="scene not found") from exc
     # The store phase's record, keyed by that identity. Here rather than in
     # `lifecycle.delete_scene` beside the tracker's, because `store.regex`
     # imports `store.scenes` and the reverse edge would close a cycle. After the
@@ -1628,8 +1628,8 @@ def get_scene_alternates(cid: str, sid: str):
         # transcript rather than an ordinary rename or delete. A read for a
         # scene that is not there is a 404 however late it finds out.
         state = store.alternates.state(cid, sid)
-    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
-        raise HTTPException(status_code=404, detail="scene not found")
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
     return {"active": state["active"],
             "alternates": [_alternate(r) for r in state["runs"]]}
 
@@ -1696,18 +1696,18 @@ def post_scene_alternate(cid: str, sid: str, vid: str, request: Request):
             # The run swapped out leaves its `post_id`s behind: the sidecar
             # keeps a variant's words, never its ids.
             streaming._prune_rewrites(cid, sid)
-        except store.alternates.AlternateNotFound:
+        except store.alternates.AlternateNotFound as exc:
             # Reachable despite the check above only if that heal appended a
             # roll line and moved the slot -- in which case the transcript now
             # ends on a roll and there is nothing to swap.
-            raise HTTPException(status_code=404, detail="alternate not found")
-        except store.scenes.TurnSizesDesynced:
+            raise HTTPException(status_code=404, detail="alternate not found") from exc
+        except store.scenes.TurnSizesDesynced as exc:
             # Same refusal regenerate makes, for the same reason: boundaries that
             # do not fit the transcript cannot authorize replacing a run.
             raise HTTPException(
                 status_code=400,
                 detail="this scene's recorded turn boundaries no longer match its "
-                       "transcript — delete the last reply manually to swap alternates")
+                       "transcript — delete the last reply manually to swap alternates") from exc
         except BaseException:
             # `promote` is TWO transcript writes — drop the live run, append the
             # chosen one — and failing between them is a third window: the slot
@@ -5095,8 +5095,8 @@ def _actor_version(cid: str, kind: str, aid: str, version: str | None) -> str:
             else:
                 version = store.pcs.read_pc(
                     store.overlay.pc_root(cid, aid), aid)["meta"]["default_version"]
-    except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
-        raise HTTPException(status_code=404, detail="actor not found")
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound) as exc:
+        raise HTTPException(status_code=404, detail="actor not found") from exc
     if store.appearances.locked_version(cid, kind, aid) is None and store.appearances.actor_hash(
             store.overlay.actor_root(cid, kind, aid), kind, aid, version) is None:
         raise HTTPException(status_code=404, detail="actor or version not found in campaign")
@@ -5122,7 +5122,7 @@ def post_scene_cast(cid: str, sid: str, body: Appear, request: Request):
         with runs.scene_held_open(request.app, cid, sid):
             _seat_cast_member(cid, sid, body)
     except store.appearances.AppearError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -5203,7 +5203,7 @@ def post_emergent_cast(cid: str, sid: str, body: EmergentCast, request: Request)
         # tombstones only. So a re-used slug can meet its own stale record and
         # be refused for the role or version that record still holds. 409 says
         # that; letting it out says 500.
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"character": char, "version": version, "name": name}
 
 
@@ -5265,8 +5265,8 @@ def put_scene_location(cid: str, sid: str, body: SceneLocation, request: Request
         # from.
         with runs.scene_held_open(request.app, cid, sid):
             result = store.scenes.set_location(cid, sid, body.location)
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="location not found")
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="location not found") from exc
     return {"ok": True, **result}
 
 
@@ -5321,7 +5321,7 @@ def put_scene_datetime(cid: str, sid: str, body: SceneDatetime, request: Request
         with runs.scene_held_open(request.app, cid, sid):
             result = store.scenes.set_datetime(cid, sid, body.datetime)
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     # Reconcile the campaign clock (#100) with the moment this scene just took:
     # forward only, so a flashback cannot drag the campaign's present backwards.
     # Called from the route rather than from `set_datetime`, which keeps `scenes`
@@ -5357,8 +5357,8 @@ def get_scene_response(cid: str, sid: str):
     scene = _require_scene(cid, sid)
     try:
         campaign_meta = store.campaigns.read_campaign(cid)["meta"]
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     cfg = store.read_config()
     return _response_body(scene["meta"], campaign_meta, cfg, scene["meta"])
 
@@ -5597,8 +5597,8 @@ def get_cast_casefile(cid: str, sid: str, kind: str, id: str):
     try:
         built = store.casefile.build(cid, sid, kind, id)
     except (store.appearances.AppearError, store.characters.CharacterNotFound,
-            store.characters.VersionNotFound, store.pcs.PCNotFound, store.pcs.PCVersionNotFound):
-        raise HTTPException(status_code=404, detail="actor not found")
+            store.characters.VersionNotFound, store.pcs.PCNotFound, store.pcs.PCVersionNotFound) as exc:
+        raise HTTPException(status_code=404, detail="actor not found") from exc
     return _with_avatar_v(cid, built)
 
 
@@ -5610,8 +5610,8 @@ def get_cast_detail(cid: str, sid: str, kind: str, id: str):
     try:
         detail = store.appearances.cast_detail(cid, sid, kind, id)
     except (store.appearances.AppearError, store.characters.CharacterNotFound,
-            store.characters.VersionNotFound, store.pcs.PCNotFound, store.pcs.PCVersionNotFound):
-        raise HTTPException(status_code=404, detail="actor not found")
+            store.characters.VersionNotFound, store.pcs.PCNotFound, store.pcs.PCVersionNotFound) as exc:
+        raise HTTPException(status_code=404, detail="actor not found") from exc
     return _with_avatar_v(cid, detail)
 
 
@@ -5666,10 +5666,10 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
             # spec's "nothing re-runs automatically"), and in this hold so no
             # reader sees the new text beside unflagged records. Fail-soft.
             tracker_routes.after_text_edit(cid, sid, index)
-    except IndexError:
-        raise HTTPException(status_code=400, detail="message index out of range")
-    except store.scenes.RollMessageImmutable:
-        raise HTTPException(status_code=400, detail="a dice roll's transcript line can't be edited")
+    except IndexError as err:
+        raise HTTPException(status_code=400, detail="message index out of range") from err
+    except store.scenes.RollMessageImmutable as err:
+        raise HTTPException(status_code=400, detail="a dice roll's transcript line can't be edited") from err
     return {"ok": True}
 
 
@@ -5854,10 +5854,10 @@ def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request)
             tracker_routes.after_cut(cid, sid)
             streaming._prune_rewrites(cid, sid)
             return report
-    except IndexError:
-        raise HTTPException(status_code=400, detail="message index out of range")
-    except (store.SceneNotFound, store.CampaignNotFound):
-        raise HTTPException(status_code=404, detail="scene not found")
+    except IndexError as exc:
+        raise HTTPException(status_code=400, detail="message index out of range") from exc
+    except (store.SceneNotFound, store.CampaignNotFound) as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/messages/{index}/retcon")
@@ -5903,13 +5903,13 @@ def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage,
             # record is stale and every later one was built on it.
             tracker_routes.after_text_edit(cid, sid, index)
             return report
-    except IndexError:
-        raise HTTPException(status_code=400, detail="message index out of range")
-    except store.scenes.RollMessageImmutable:
+    except IndexError as exc:
+        raise HTTPException(status_code=400, detail="message index out of range") from exc
+    except store.scenes.RollMessageImmutable as exc:
         raise HTTPException(status_code=400,
-                            detail="a dice roll's transcript line can't be edited")
-    except (store.SceneNotFound, store.CampaignNotFound):
-        raise HTTPException(status_code=404, detail="scene not found")
+                            detail="a dice roll's transcript line can't be edited") from exc
+    except (store.SceneNotFound, store.CampaignNotFound) as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
 
 
 def _replay_session(cid: str, sid: str) -> dict:
@@ -5945,10 +5945,10 @@ def get_replay_preview(cid: str, sid: str, index: int):
     _require_scene(cid, sid)
     try:
         return store.replay.preview(cid, sid, index)
-    except IndexError:
-        raise HTTPException(status_code=400, detail="message index out of range")
-    except (store.SceneNotFound, store.CampaignNotFound):
-        raise HTTPException(status_code=404, detail="scene not found")
+    except IndexError as exc:
+        raise HTTPException(status_code=400, detail="message index out of range") from exc
+    except (store.SceneNotFound, store.CampaignNotFound) as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/replay")
@@ -5993,16 +5993,16 @@ def post_replay(cid: str, sid: str, body: ReplayStart, request: Request):
             # for any cut (a restore brings the posts back untracked, Retry).
             tracker_routes.after_cut(cid, sid)
             return report
-    except IndexError:
-        raise HTTPException(status_code=400, detail="message index out of range")
+    except IndexError as err:
+        raise HTTPException(status_code=400, detail="message index out of range") from err
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
-                            detail={"detail": str(exc), "kind": "replay_refused"})
+                            detail={"detail": str(exc), "kind": "replay_refused"}) from exc
     except store.branch.BranchRefused as exc:
         raise HTTPException(status_code=409,
                             detail={"kind": exc.kind, "detail": exc.detail}) from exc
-    except (store.SceneNotFound, store.CampaignNotFound):
-        raise HTTPException(status_code=404, detail="scene not found")
+    except (store.SceneNotFound, store.CampaignNotFound) as err:
+        raise HTTPException(status_code=404, detail="scene not found") from err
 
 
 def _replay_in_branch(cid: str, sid: str, index: int) -> dict:
@@ -6065,7 +6065,7 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
         session = store.replay.state(cid)
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
-                            detail={"detail": str(exc), "kind": "replay_refused"})
+                            detail={"detail": str(exc), "kind": "replay_refused"}) from exc
     if session is None or session["next"] != "generation":
         raise HTTPException(status_code=409,
                             detail={"detail": "this replay has no model turn left to run",
@@ -6115,9 +6115,9 @@ def post_replay_accept(cid: str, sid: str, request: Request):
             streaming._prune_rewrites(cid, sid)
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
-                            detail={"detail": str(exc), "kind": "replay_refused"})
-    except (store.SceneNotFound, store.CampaignNotFound):
-        raise HTTPException(status_code=404, detail="scene not found")
+                            detail={"detail": str(exc), "kind": "replay_refused"}) from exc
+    except (store.SceneNotFound, store.CampaignNotFound) as err:
+        raise HTTPException(status_code=404, detail="scene not found") from err
     return store.replay.state(cid) if session else None
 
 
@@ -6148,6 +6148,6 @@ def post_replay_cancel(cid: str, sid: str, request: Request,
             return report
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
-                            detail={"detail": str(exc), "kind": "replay_refused"})
-    except (store.SceneNotFound, store.CampaignNotFound):
-        raise HTTPException(status_code=404, detail="scene not found")
+                            detail={"detail": str(exc), "kind": "replay_refused"}) from exc
+    except (store.SceneNotFound, store.CampaignNotFound) as err:
+        raise HTTPException(status_code=404, detail="scene not found") from err

@@ -42,28 +42,28 @@ def get_module(mid: str):
     try:
         with store.module_edit.locked():
             return store.modules.load_pack(mid)
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
 
 
 @router.delete("/modules/{mid}")
 def delete_module(mid: str):
     try:
         store.module_edit.delete_module(mid)
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
-    except store.modules.ModuleError:
-        raise HTTPException(status_code=400, detail="built-in modules cannot be deleted")
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
+    except store.modules.ModuleError as exc:
+        raise HTTPException(status_code=400, detail="built-in modules cannot be deleted") from exc
     return {"ok": True}
 
 
 def _module_edit_call(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
     except store.modules.ModuleError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/modules/{mid}/duplicate")
@@ -125,8 +125,8 @@ def get_module_rule(mid: str, slug: str):
     with store.module_edit.locked():
         try:
             rule = store.modules.read_rule(mid, slug)
-        except store.modules.ModuleNotFound:
-            raise HTTPException(status_code=404, detail="module not found")
+        except store.modules.ModuleNotFound as exc:
+            raise HTTPException(status_code=404, detail="module not found") from exc
         if rule is None:
             raise HTTPException(status_code=404, detail="rule not found")
         return rule
@@ -205,7 +205,7 @@ def get_module_content(mid: str, kind: str, id: str):
     try:
         with store.module_edit.locked():
             return store.modules.read_content(mid, kind, id)
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
-    except store.modules.ContentNotFound:
-        raise HTTPException(status_code=404, detail="content not found")
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
+    except store.modules.ContentNotFound as exc:
+        raise HTTPException(status_code=404, detail="content not found") from exc

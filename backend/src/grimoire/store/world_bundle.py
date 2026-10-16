@@ -630,7 +630,7 @@ def _read_manifest(z: zipfile.ZipFile, infos: list[zipfile.ZipInfo]) -> dict:
         manifest = json.loads(z.read(MANIFEST_NAME))
     except (ValueError, OSError, RuntimeError, NotImplementedError,
             zipfile.BadZipFile) as e:
-        raise BundleError(f"unreadable {MANIFEST_NAME}: {e}")
+        raise BundleError(f"unreadable {MANIFEST_NAME}: {e}") from e
     if not isinstance(manifest, dict):
         raise BundleError(f"{MANIFEST_NAME} is not an object")
     if manifest.get("kind") != "world":
@@ -1035,7 +1035,7 @@ def _world_name(staging: Path, manifest: dict) -> str:
     try:
         text = (staging / "world.md").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
-        raise BundleError(f"unreadable {WORLD_PREFIX}/world.md: {e}")
+        raise BundleError(f"unreadable {WORLD_PREFIX}/world.md: {e}") from e
     meta, _body = parse_frontmatter(text)
     for candidate in (meta.get("name"), manifest.get("name"), manifest.get("world_id")):
         if isinstance(candidate, str) and candidate.strip():
@@ -1049,7 +1049,7 @@ def import_bundle(path: Path) -> str:
     try:
         z = zipfile.ZipFile(path)
     except (zipfile.BadZipFile, OSError) as e:
-        raise BundleError(f"not a zip archive: {e}")
+        raise BundleError(f"not a zip archive: {e}") from e
     with z:
         infos = ziputil.scan(z, max_members=MAX_MEMBERS,
                              max_uncompressed=MAX_UNCOMPRESSED, err=BundleError)

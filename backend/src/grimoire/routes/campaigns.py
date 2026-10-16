@@ -132,8 +132,8 @@ def get_group_state(cid: str, gid: str):
         raise HTTPException(status_code=404, detail="campaign not found")
     try:
         store.overlay.read_entity(cid, "groups", gid)
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="group not found")
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="group not found") from exc
     st = store.groupstate.read_state(store.campaigns.campaign_root(cid), gid)
     if st is None:
         return {**dict.fromkeys(store.groupstate.FIELDS, ""), "updated": ""}
@@ -146,8 +146,8 @@ def put_group_state(cid: str, gid: str, body: GroupStateSave):
         raise HTTPException(status_code=404, detail="campaign not found")
     try:
         store.overlay.read_entity(cid, "groups", gid)
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="group not found")
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="group not found") from exc
     values = {"goals": body.goals, "resources": body.resources, "focus": body.focus,
               "public_perception": body.public_perception, "secrets": body.secrets}
     name = _record_name(cid, "groups", gid) or gid
@@ -179,9 +179,9 @@ def put_campaign_climate(cid: str, body: CampaignClimate):
     try:
         store.campaign_climate.write_default(cid, body.default_climate)
     except store.climates.ClimateError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"could not write climate: {e}")
+        raise HTTPException(status_code=500, detail=f"could not write climate: {e}") from e
     return {"ok": True, "default_climate": body.default_climate}
 
 
@@ -226,7 +226,7 @@ def put_calendar_config(cid: str, body: CalendarConfig):
     try:
         store.calendars.validate_calendar(cfg)
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     store.calendars.write_calendar(root, cfg)
     return {"ok": True}
 
@@ -301,7 +301,7 @@ def post_advance_preview(cid: str, body: AdvanceTime):
         return {"digest": store.clock.preview(cid, to=body.to, days=body.days),
                 "revision": token}
     except (store.clock.ClockError, store.calendars.CalendarError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/campaigns/{cid}/advance")
@@ -320,7 +320,7 @@ def post_advance(cid: str, body: AdvanceTime):
         result = store.clock.advance(cid, to=body.to, days=body.days, reason=body.reason,
                                      expect_revision=body.expect_revision)
     except (store.clock.ClockError, store.calendars.CalendarError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except store.RevisionMismatchError as e:
         # A refusal in the shape the client already handles for `scene_busy` and
         # `runs_in_flight`: a `kind` it can branch on, a sentence it can show,
@@ -396,9 +396,9 @@ def post_campaign_event(cid: str, body: ScheduledEventCreate):
     try:
         eid = store.events.create(cid, body.name, body.date, body.note)
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except store.events.EventError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"ok": True, "id": eid}
 
 
@@ -409,9 +409,9 @@ def put_campaign_event(cid: str, eid: str, body: ScheduledEventEdit):
         found = store.events.update(cid, eid, name=body.name, date=body.date,
                                     note=body.note)
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except store.events.EventError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if not found:
         raise HTTPException(status_code=404, detail="event not found")
     return {"ok": True}
@@ -424,7 +424,7 @@ def post_campaign_event_unfire(cid: str, eid: str):
     try:
         found = store.events.unfire(cid, eid)
     except store.events.EventError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if not found:
         raise HTTPException(status_code=404, detail="event not found")
     return {"ok": True}
@@ -564,7 +564,7 @@ def get_calendar_months(cid: str, year: int):
     try:
         return {"months": store.calendars.get_provider(cfg["primary"]).months(year)}
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/campaigns")
@@ -575,14 +575,14 @@ def post_campaign(body: NewCampaign):
                                               body.module, body.climate)
         store.config.mark_setup_done()   # see routes/worlds.post_world (#194)
         return {"id": cid}
-    except store.worlds.WorldNotFound:
-        raise HTTPException(status_code=400, detail="world not found")
+    except store.worlds.WorldNotFound as exc:
+        raise HTTPException(status_code=400, detail="world not found") from exc
     except store.calendars.CalendarError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except store.climates.ClimateError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
 
 
 @router.get("/campaigns/{cid}")
@@ -590,8 +590,8 @@ def get_campaign(cid: str):
     try:
         store.campaigns.ensure_campaign_slim(cid)
         out = store.campaigns.read_campaign(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     # embedded so the frontend needn't chain a world fetch after this one
     wid = out["meta"].get("world", "")
     out["meta"]["world_name"] = store.worlds.world_name(wid) or wid
@@ -605,8 +605,8 @@ def get_campaign(cid: str):
 def export_campaign_epub(cid: str):
     try:
         blob, filename = store.epub.build_epub(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return Response(content=blob, media_type="application/epub+zip",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -615,8 +615,8 @@ def export_campaign_epub(cid: str):
 def export_campaign_markdown(cid: str):
     try:
         blob, filename = store.export.build_markdown_bundle(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return Response(content=blob, media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -625,8 +625,8 @@ def export_campaign_markdown(cid: str):
 def export_campaign_html(cid: str):
     try:
         blob, filename = store.export.build_html(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return Response(content=blob, media_type="text/html",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -635,8 +635,8 @@ def export_campaign_html(cid: str):
 def export_campaign_text(cid: str):
     try:
         blob, filename = store.export.build_text(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return Response(content=blob, media_type="text/plain",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -645,8 +645,8 @@ def export_campaign_text(cid: str):
 def export_campaign_json(cid: str):
     try:
         blob, filename = store.export.build_json(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return Response(content=blob, media_type="application/json",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -686,16 +686,16 @@ async def put_campaign_cover(cid: str, file: UploadFile = File(...)):
         # as `cover.png` cannot be served (or manifested in the EPUB) as PNG.
         ext = store.covers.validate(data)
     except store.covers.CoverTooLarge as exc:
-        raise HTTPException(status_code=413, detail=str(exc))
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except store.covers.CoverInvalid as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         stored = store.covers.put_cover(cid, data, ext)
     except ValueError as exc:
         # Nothing `validate` returns is an extension `put_in` refuses today, so
         # this is unreachable from here -- kept because what is storable is the
         # store's decision to make, not this route's to assume.
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ext": stored, "v": store.covers.cover_version(cid),
             **image_id_field(store.covers.cover_image_id(cid))}
 
@@ -705,11 +705,11 @@ def delete_campaign_cover(cid: str):
     _campaign_root_or_404(cid)
     try:
         store.covers.delete_cover(cid)
-    except OSError:
+    except OSError as exc:
         # `delete_cover` confirms the removal rather than swallowing a failed
         # unlink, so this is a cover that is genuinely still there -- a held
         # file on Windows, a read-only store. Reporting 200 would be a lie.
-        raise HTTPException(status_code=500, detail="cover could not be removed")
+        raise HTTPException(status_code=500, detail="cover could not be removed") from exc
     return {"ok": True}
 
 
@@ -923,7 +923,7 @@ async def put_campaign_library_image(cid: str, name: str, file: UploadFile = Fil
     try:
         store.image_library.validate_size(data)
     except store.image_library.ImageTooLarge as exc:
-        raise HTTPException(status_code=413, detail=str(exc))
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     ext = _upload_image_ext(data)  # the bytes name the type, not `file.filename` (#321)
     try:
         stored = store.campaign_images.put_image(cid, name, data, ext)
@@ -932,7 +932,7 @@ async def put_campaign_library_image(cid: str, name: str, file: UploadFile = Fil
         # The distinction is the caller's to act on: one is "pick another name",
         # the other is "that name is not usable at all".
         code = 409 if "belongs to the world" in str(exc) else 400
-        raise HTTPException(status_code=code, detail=str(exc))
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
     # `v` so the client can build the immutable `?v=` URL without a second round
     # trip. Taken from the placement `image_id` comes from, so the two describe
     # the same upload; only with no placement (a legacy file) does it resolve
@@ -972,11 +972,11 @@ def delete_campaign_library_image(cid: str, name: str):
     # still applies its own name rules.
     try:
         store.campaign_images.delete_image(cid, name)
-    except OSError:
+    except OSError as exc:
         # `delete_image` confirms the removal rather than swallowing a failed
         # unlink, so this is a file that is genuinely still there -- held by a
         # sync client on Windows, or a read-only store. 200 would be a lie.
-        raise HTTPException(status_code=500, detail="image could not be removed")
+        raise HTTPException(status_code=500, detail="image could not be removed") from exc
     return {"ok": True}
 
 
@@ -987,8 +987,8 @@ def put_campaign(cid: str, body: NameBody):
         raise HTTPException(status_code=400, detail="name is required")
     try:
         store.campaigns.rename_campaign(cid, name)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return {"id": cid, "name": name}
 
 
@@ -1027,10 +1027,10 @@ def post_campaign_fork(cid: str, body: ForkCampaign, request: Request):
                                             from_index=body.from_index)
     except IndexError as e:                     # a `from_index` outside the scene
         raise HTTPException(status_code=400, detail="message index out of range") from e
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
-    except store.SceneNotFound:
-        raise HTTPException(status_code=404, detail="scene not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+    except store.SceneNotFound as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
     except ValueError as e:     # a key past `fork.KEY_LIMIT`, a `from_index` without a scene
         raise HTTPException(status_code=400, detail=str(e)) from e
     except store.fork.ForkContentionError as e:
@@ -1067,8 +1067,8 @@ def delete_campaign(cid: str, request: Request):
                         intent = compiled.prepare_delete(root)
                         prepared = True
                         store.campaigns.delete_campaign(cid)
-                    except store.campaigns.CampaignNotFound:
-                        raise HTTPException(status_code=404, detail="campaign not found")
+                    except store.campaigns.CampaignNotFound as exc:
+                        raise HTTPException(status_code=404, detail="campaign not found") from exc
                     # Its "not carried over" notes on `/models` go too: a
                     # replacement under this slug must not be shown a loss
                     # that happened here. Best effort, pinned to this library.
@@ -1094,8 +1094,8 @@ def delete_campaign(cid: str, request: Request):
 def get_campaign_response(cid: str):
     try:
         campaign_meta = store.campaigns.read_campaign(cid)["meta"]
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     cfg = store.read_config()
     return _response_body({}, campaign_meta, cfg, campaign_meta)
 
@@ -1105,8 +1105,8 @@ def put_campaign_response(cid: str, body: ResponseSettings):
     fields = {k: v for k, v in _dump(body).items() if v is not None}
     try:
         _write_response(lambda f: store.campaigns.set_campaign_response(cid, f), fields)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return {"ok": True}
 
 
@@ -1116,8 +1116,8 @@ def get_incoming(cid: str):
     try:
         store.campaigns.ensure_campaign_slim(cid)
         return store.sync.incoming(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
 
 
 @router.post("/campaigns/{cid}/incoming/accept")
@@ -1125,8 +1125,8 @@ def post_accept(cid: str, body: RefList):
     try:
         store.campaigns.ensure_campaign_slim(cid)
         store.sync.accept(cid, [_dump(r) for r in body.refs])
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return {"ok": True}
 
 
@@ -1135,8 +1135,8 @@ def post_reject(cid: str, body: RefList):
     try:
         store.campaigns.ensure_campaign_slim(cid)
         store.sync.reject(cid, [_dump(r) for r in body.refs])
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     return {"ok": True}
 
 
@@ -1333,15 +1333,15 @@ def post_journal_undo(cid: str, jid: str):
     _campaign_root_or_404(cid)
     try:
         written = store.undo.undo(cid, jid)
-    except store.undo.EntryNotFound:
+    except store.undo.EntryNotFound as err:
         raise HTTPException(status_code=404, detail="that change is not in this "
-                                                    "campaign's history")
-    except store.undo.AlreadyUndone:
-        raise HTTPException(status_code=409, detail="that change has already been undone")
+                                                    "campaign's history") from err
+    except store.undo.AlreadyUndone as err:
+        raise HTTPException(status_code=409, detail="that change has already been undone") from err
     except store.undo.NotUndoable as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except store.undo.UndoConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
     try:
         chron = store.chronicle.read_chronicle(cid)
@@ -1877,8 +1877,8 @@ def _pin_posts(cid: str, sid: str) -> int:
         return 0
     try:
         return len(store.scenes.read_scene(cid, sid)["messages"])
-    except store.SceneNotFound:
-        raise HTTPException(status_code=404, detail="scene not found")
+    except store.SceneNotFound as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
 
 
 @router.get("/campaigns/{cid}/pins")
@@ -1911,7 +1911,7 @@ def post_pin(cid: str, body: PinRule):
         rec = store.pins.set_rule(cid, body.ref, body.mode, scope=body.scope, sid=body.sid,
                                   ttl_posts=body.ttl_posts, posts=posts)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "pin": _pin_row(cid, rec, _pc_name_reader(cid))}
 
 
@@ -1924,7 +1924,7 @@ def delete_pin(cid: str, ref: str, scope: str = "scene", sid: str = ""):
     try:
         removed = store.pins.remove(cid, ref, scope=scope, sid=sid)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not removed:
         raise HTTPException(status_code=404, detail="pin not found")
     return {"ok": True}
@@ -2017,10 +2017,10 @@ def _campaign_char_version_or_404(cid: str, char: str, vid: str):
     root = _campaign_root_or_404(cid)
     try:
         store.characters.require_version(store.overlay.char_root(cid, char), char, vid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     return root
 
 
@@ -2038,7 +2038,7 @@ async def put_campaign_image(cid: str, char: str, vid: str, name: str, file: Upl
     try:
         stored = store.assets.put_image(root, char, vid, name, data, ext)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"name": name, "ext": stored,
             **image_id_field(store.assets.image_id(root, char, vid, name))}
 
@@ -2098,10 +2098,10 @@ def post_copy_campaign_image_from_greeting(cid: str, char: str, vid: str, body: 
         # above; `root` is only the destination the copy writes to
         stored = store.image_subjects.copy_to_character(root, body.gid, body.name, char, vid, body.slot,
                                                          src_root=src_root, taken_names=taken_names)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="source image not found")
+    except FileNotFoundError as err:
+        raise HTTPException(status_code=404, detail="source image not found") from err
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     # overlay-ok: reads back the file copy_to_character just wrote campaign-side,
     # only to report its extension — the overlay union would answer a different
     # question (which image wins), not "what did this call just store"
@@ -2165,8 +2165,8 @@ def get_campaign_character(cid: str, char: str):
     _campaign_root_or_404(cid)
     try:
         return store.overlay.read_character(cid, char)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
 
 
 @router.get("/campaigns/{cid}/characters/{char}/voice-anchor")
@@ -2182,8 +2182,8 @@ def get_campaign_voice_anchor(cid: str, char: str):
     _campaign_root_or_404(cid)
     try:
         store.characters.read_character(store.overlay.char_root(cid, char), char)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     return {"voice_anchor": store.overlay.voice_anchor_record(cid, char)["text"]}
 
 
@@ -2197,8 +2197,8 @@ def put_campaign_voice_anchor(cid: str, char: str, body: VoiceAnchorSave):
     _campaign_root_or_404(cid)
     try:
         store.characters.read_character(store.overlay.char_root(cid, char), char)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     store.overlay.set_voice_anchor(cid, char, body.voice_anchor)
     return {"ok": True}
 
@@ -2218,8 +2218,8 @@ def post_campaign_voice_anchor_generate(
     try:
         ch = store.characters.read_character(root, char)
         card = store.characters.read_card(root, char, ch["meta"]["default_version"])
-    except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
-        raise HTTPException(status_code=404, detail="character not found")
+    except (store.characters.CharacterNotFound, store.characters.VersionNotFound) as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     # See the world-side route: `{}` and `{"data": ["speech"]}` are both
     # supported card state, and the template renders "(none)" per field.
     data = card.get("data")
@@ -2369,10 +2369,10 @@ def put_campaign_character(cid: str, char: str, body: DefaultVersion):
                                              actor_ref=f"characters:{char}")
             root = store.overlay.ensure_actor_writable(cid, "characters", char)
             store.characters.set_default_version(root, char, body.default_version)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
+    except store.characters.VersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
@@ -2424,8 +2424,8 @@ def put_campaign_character_name(cid: str, char: str, body: NameBody):
             store.characters.set_name(root, char, name)
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
     return {"ok": True}
 
 
@@ -2472,8 +2472,8 @@ def post_campaign_character_version(cid: str, char: str, body: VersionCreate):
             vid = store.characters.create_version(root, char, body.name, body.card)
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
     return {"version": vid}
 
 
@@ -2489,10 +2489,10 @@ def put_campaign_character_version(cid: str, char: str, vid: str, body: VersionU
             store.characters.update_version(root, char, vid, body.card)
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
+    except store.characters.VersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     return {"ok": True}
 
 
@@ -2502,12 +2502,12 @@ def delete_campaign_character_version(cid: str, char: str, vid: str):
     try:
         root = store.overlay.ensure_actor_writable(cid, "characters", char)
         store.characters.delete_version(root, char, vid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
+    except store.characters.VersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -2519,8 +2519,8 @@ def get_campaign_pc(cid: str, pid: str):
         # resolve whole-directory, but images overlay per file, so a
         # materialized PC can still be wearing an avatar only the world has (#219)
         return store.overlay.read_pc(cid, pid)
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCNotFound as exc:
+        raise HTTPException(status_code=404, detail="pc not found") from exc
 
 
 @router.put("/campaigns/{cid}/pcs/{pid}")
@@ -2552,10 +2552,10 @@ def put_campaign_pc(cid: str, pid: str, body: PCUpdate):
                 store.pcs.set_default_version(root, pid, body.default_version)
             if body.tags is not None:
                 store.pcs.set_tags(root, pid, body.tags)
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
-    except store.pcs.PCVersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.pcs.PCNotFound as err:
+        raise HTTPException(status_code=404, detail="pc not found") from err
+    except store.pcs.PCVersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
@@ -2575,8 +2575,8 @@ def post_campaign_pc_version(cid: str, pid: str, body: PersonaVersionCreate):
             vid = store.pcs.create_version(root, pid, body.name, body.persona)
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCNotFound as err:
+        raise HTTPException(status_code=404, detail="pc not found") from err
     return {"version": vid}
 
 
@@ -2592,10 +2592,10 @@ def put_campaign_pc_version(cid: str, pid: str, vid: str, body: PersonaVersionUp
             store.pcs.update_version(root, pid, vid, body.persona)
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
-    except store.pcs.PCVersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.pcs.PCNotFound as err:
+        raise HTTPException(status_code=404, detail="pc not found") from err
+    except store.pcs.PCVersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     return {"ok": True}
 
 
@@ -2650,12 +2650,12 @@ def delete_campaign_pc_version(cid: str, pid: str, vid: str):
     try:
         root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
         store.pcs.delete_version(root, pid, vid)
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
-    except store.pcs.PCVersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.pcs.PCNotFound as err:
+        raise HTTPException(status_code=404, detail="pc not found") from err
+    except store.pcs.PCVersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -2678,10 +2678,10 @@ def _campaign_pc_version_or_404(cid: str, pid: str, vid: str):
     root = _campaign_root_or_404(cid)
     try:
         store.pcs.require_version(store.overlay.pc_root(cid, pid), pid, vid)
-    except store.pcs.PCNotFound:
-        raise HTTPException(status_code=404, detail="pc not found")
-    except store.pcs.PCVersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.pcs.PCNotFound as exc:
+        raise HTTPException(status_code=404, detail="pc not found") from exc
+    except store.pcs.PCVersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     return root
 
 
@@ -2719,7 +2719,7 @@ async def put_campaign_pc_image(cid: str, pid: str, vid: str, name: str,
         stored = store.assets.put_image(root, pid, vid, name, data, ext,
                                         base=store.pcs.ASSET_BASE)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"name": name, "ext": stored,
             **image_id_field(store.assets.image_id(root, pid, vid, name,
                                                    base=store.pcs.ASSET_BASE))}
@@ -2797,7 +2797,7 @@ def post_import_version(cid: str, kind: str, aid: str, body: PickBody):
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except store.appearances.AppearError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -2806,16 +2806,16 @@ def post_campaign_instantiate(cid: str, kind: str, mid: str, content_id: str):
     _campaign_root_or_404(cid)
     try:
         content = store.modules.read_content(mid, kind, content_id)
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
-    except store.modules.ContentNotFound:
-        raise HTTPException(status_code=404, detail="content not found")
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
+    except store.modules.ContentNotFound as exc:
+        raise HTTPException(status_code=404, detail="content not found") from exc
     try:
         eid = store.overlay.create_entity(cid, kind, content["name"], content["body"],
                                           content.get("keys", ""), "",
                                           fields=_content_fields(kind, content))
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
     if content.get("sheet_type"):
         try:
             store.sheets.write(cid, kind, eid, content["sheet_type"], content.get("fields"),
@@ -2826,5 +2826,5 @@ def post_campaign_instantiate(cid: str, kind: str, mid: str, content_id: str):
             # campaign file cleanly (no tombstone) -- roll it back so a failed
             # instantiate leaves no sheetless orphan.
             store.overlay.delete_entity(cid, kind, eid)
-            raise HTTPException(status_code=_sheet_failure_status(e), detail=str(e))
+            raise HTTPException(status_code=_sheet_failure_status(e), detail=str(e)) from e
     return {"id": eid}

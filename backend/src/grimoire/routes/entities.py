@@ -56,8 +56,8 @@ router = APIRouter()
 def _entity_list(root, kind: str):
     try:
         items = store.entities.list_entities(root, kind)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
     for it in items:
         p = store.assets.image_path(root, it["id"], "default", store.assets.AVATAR, base=kind)
         it["has_image"] = p is not None
@@ -116,17 +116,17 @@ def _entity_create(root, kind: str, body: EntityCreate):
     try:
         return {"id": store.entities.create_entity(root, kind, body.name, body.body, body.keys, body.owners,
                                                     fields=body.fields, secrecy=body.secrecy)}
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
 
 
 def _entity_read(root, kind: str, eid: str):
     try:
         return store.entities.read_entity_rev(root, kind, eid)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="entity not found")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="entity not found") from exc
 
 
 def _entity_update(root, kind: str, eid: str, body: EntityUpdate):
@@ -145,20 +145,20 @@ def _entity_update(root, kind: str, eid: str, body: EntityUpdate):
         store.entities.update_entity(root, kind, eid, name=body.name, body=body.body,
                                      keys=body.keys, owners=body.owners, fields=body.fields,
                                      secrecy=body.secrecy)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="entity not found")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="entity not found") from exc
     return {"ok": True}
 
 
 def _entity_delete(root, kind: str, eid: str):
     try:
         store.entities.delete_entity(root, kind, eid)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="entity not found")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="entity not found") from exc
     return {"ok": True}
 
 
@@ -167,8 +167,8 @@ def _entity_delete(root, kind: str, eid: str):
 def _campaign_entity_list(cid: str, kind: str):
     try:
         items = store.overlay.list_entities(cid, kind)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
     for it in items:
         root = store.overlay.image_root(cid, it["id"], "default", store.assets.AVATAR, base=kind)
         p = store.assets.image_path(root, it["id"], "default", store.assets.AVATAR, base=kind)
@@ -184,8 +184,8 @@ def _campaign_entity_create(cid: str, kind: str, body: EntityCreate):
     try:
         return {"id": store.overlay.create_entity(cid, kind, body.name, body.body, body.keys, body.owners,
                                                    fields=body.fields, secrecy=body.secrecy)}
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
 
 
 def _campaign_entity_read(cid: str, kind: str, eid: str):
@@ -194,10 +194,10 @@ def _campaign_entity_read(cid: str, kind: str, eid: str):
             record, context = store.overlay.read_group_membership(cid, eid)
             return {**record, "membership_context": _dump(context)}
         return store.overlay.read_entity_rev(cid, kind, eid)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="entity not found")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="entity not found") from exc
 
 
 def _checked_group_bindings(kind: str, body: EntityUpdate) -> frozenset[tuple[str, str]]:
@@ -245,20 +245,20 @@ def _campaign_entity_update(cid: str, kind: str, eid: str, body: EntityUpdate):
                                             keys=body.keys, owners=body.owners,
                                             fields=body.fields, secrecy=body.secrecy,
                                             reviewed_slots=bindings)
-        except store.entities.UnknownKind:
-            raise HTTPException(status_code=404, detail="unknown kind")
-        except store.entities.EntityNotFound:
-            raise HTTPException(status_code=404, detail="entity not found")
+        except store.entities.UnknownKind as exc:
+            raise HTTPException(status_code=404, detail="unknown kind") from exc
+        except store.entities.EntityNotFound as exc:
+            raise HTTPException(status_code=404, detail="entity not found") from exc
         return {"ok": True}
 
 
 def _campaign_entity_delete(cid: str, kind: str, eid: str):
     try:
         store.overlay.delete_entity(cid, kind, eid)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="entity not found")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="entity not found") from exc
     return {"ok": True}
 
 
@@ -511,10 +511,10 @@ def _world_entity_or_404(wid: str, kind: str, eid: str):
     root = _world_root_or_404(wid)
     try:
         store.entities.require_entity(root, kind, eid)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="entity not found")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="entity not found") from exc
     return root
 
 
@@ -533,10 +533,10 @@ def _campaign_entity_or_404(cid: str, kind: str, eid: str):
     root = _campaign_root_or_404(cid)
     try:
         store.entities.require_entity(store.overlay.entity_root(cid, kind, eid), kind, eid)
-    except store.entities.UnknownKind:
-        raise HTTPException(status_code=404, detail="unknown kind")
-    except store.entities.EntityNotFound:
-        raise HTTPException(status_code=404, detail="entity not found")
+    except store.entities.UnknownKind as exc:
+        raise HTTPException(status_code=404, detail="unknown kind") from exc
+    except store.entities.EntityNotFound as exc:
+        raise HTTPException(status_code=404, detail="entity not found") from exc
     return root
 
 
@@ -551,7 +551,7 @@ async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFi
     try:
         stored = store.assets.put_image(root, eid, "default", name, data, ext, base=kind)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"name": name, "ext": stored,
             **image_id_field(store.assets.image_id(root, eid, "default", name, base=kind))}
 
@@ -562,11 +562,11 @@ def _entity_image_promote(root, kind: str, eid: str, name: str):
     except store.assets.ImageNotYetAvailableError as exc:
         # placed, not arrived (mid-sync): absent here for now, and says why
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="image not found")
+    except FileNotFoundError as err:
+        raise HTTPException(status_code=404, detail="image not found") from err
     except ValueError as exc:
         # an externally-placed file whose extension we never accepted for upload
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 

@@ -160,8 +160,8 @@ def post_character_refine_text(
 def get_world_character(wid: str, cid: str):
     try:
         return store.characters.read_character(_world_root_or_404(wid), cid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
 
 
 @router.put("/worlds/{wid}/characters/{cid}")
@@ -174,10 +174,10 @@ def put_world_character(wid: str, cid: str, body: DefaultVersion):
                                              scope="world", scope_id=wid,
                                              actor_ref=f"characters:{cid}")
             store.characters.set_default_version(root, cid, body.default_version)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
+    except store.characters.VersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
@@ -196,8 +196,8 @@ def put_world_character_name(wid: str, cid: str, body: NameBody):
         raise HTTPException(409, detail=str(exc)) from exc
     try:
         store.characters.set_name(_world_root_or_404(wid), cid, name)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
     return {"ok": True}
 
 
@@ -205,8 +205,8 @@ def put_world_character_name(wid: str, cid: str, body: NameBody):
 def put_world_character_birthdate(wid: str, cid: str, body: CharacterBirthdate):
     try:
         store.characters.set_birthdate(_world_root_or_404(wid), cid, body.birthdate)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     return {"ok": True}
 
 
@@ -235,10 +235,10 @@ def post_world_character_chub_source(wid: str, cid: str, vid: str, body: ChubSou
         raise HTTPException(status_code=400, detail="not a valid URL")
     try:
         store.characters.set_chub_source(root, cid, vid, url)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     return {"chub_source": url}
 
 
@@ -247,10 +247,10 @@ def delete_world_character_chub_source(wid: str, cid: str, vid: str):
     root = _world_root_or_404(wid)
     try:
         store.characters.clear_chub_source(root, cid, vid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     return {"chub_source": ""}
 
 
@@ -259,12 +259,12 @@ def post_world_character_chub_gallery(wid: str, cid: str, vid: str):
     root = _world_root_or_404(wid)
     try:
         node = store.characters.resolve_chub_node(root, cid, vid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
-    except store.chub.ChubFetchError:
-        raise HTTPException(status_code=404, detail="could not fetch from chub.ai")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
+    except store.chub.ChubFetchError as exc:
+        raise HTTPException(status_code=404, detail="could not fetch from chub.ai") from exc
 
     def event_stream():
         for ev in store.characters.download_chub_gallery_stream(root, cid, vid, node):
@@ -278,12 +278,12 @@ def post_world_character_chub_lorebooks(wid: str, cid: str, vid: str):
     root = _world_root_or_404(wid)
     try:
         return store.characters.download_chub_lorebooks(root, cid, vid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
-    except store.chub.ChubFetchError:
-        raise HTTPException(status_code=404, detail="could not fetch from chub.ai")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
+    except store.chub.ChubFetchError as exc:
+        raise HTTPException(status_code=404, detail="could not fetch from chub.ai") from exc
 
 
 @router.delete("/worlds/{wid}/characters/{cid}")
@@ -292,8 +292,8 @@ def delete_world_character(wid: str, cid: str):
     with store.overlay.world_identity_change(root, record=("characters", cid)) as cids:
         try:
             store.characters.delete_character(root, cid)
-        except store.characters.CharacterNotFound:
-            raise HTTPException(status_code=404, detail="character not found")
+        except store.characters.CharacterNotFound as exc:
+            raise HTTPException(status_code=404, detail="character not found") from exc
         store.overlay.forget_world_record(root, "characters", cid, cids=cids)   # #225
         return {"ok": True}
 
@@ -308,8 +308,8 @@ def post_world_version(wid: str, cid: str, body: VersionCreate):
         raise HTTPException(409, detail=str(exc)) from exc
     try:
         vid = store.characters.create_version(_world_root_or_404(wid), cid, body.name, body.card)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
     return {"version": vid}
 
 
@@ -323,10 +323,10 @@ def put_world_version(wid: str, cid: str, vid: str, body: VersionUpdate):
         raise HTTPException(409, detail=str(exc)) from exc
     try:
         store.characters.update_version(_world_root_or_404(wid), cid, vid, body.card)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
+    except store.characters.VersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     return {"ok": True}
 
 
@@ -334,12 +334,12 @@ def put_world_version(wid: str, cid: str, vid: str, body: VersionUpdate):
 def delete_world_version(wid: str, cid: str, vid: str):
     try:
         store.characters.delete_version(_world_root_or_404(wid), cid, vid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
+    except store.characters.VersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -348,8 +348,8 @@ def get_character_tagline(wid: str, cid: str):
     root = _world_root_or_404(wid)
     try:
         store.characters.read_character(root, cid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     return {"tagline": store.taglines.read(root, cid)}
 
 
@@ -358,8 +358,8 @@ def put_character_tagline(wid: str, cid: str, body: TaglineSave):
     root = _world_root_or_404(wid)
     try:
         store.characters.read_character(root, cid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     store.taglines.write(root, cid, body.tagline)
     return {"ok": True}
 
@@ -380,8 +380,8 @@ def post_character_tagline_generate(
     resolved = require_inference("tagline")
     try:
         ch = store.characters.read_character(root, cid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
     messages = store.taglines.build_prompt(_card_data(card))
 
@@ -600,8 +600,8 @@ def get_character_voice_anchor(wid: str, cid: str):
     root = _world_root_or_404(wid)
     try:
         store.characters.read_character(root, cid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     return {"voice_anchor": store.voice_anchors.read(root, cid)}
 
 
@@ -615,8 +615,8 @@ def put_character_voice_anchor(wid: str, cid: str, body: VoiceAnchorSave):
     root = _world_root_or_404(wid)
     try:
         store.characters.read_character(root, cid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     store.voice_anchors.write(root, cid, body.voice_anchor)
     return {"ok": True}
 
@@ -635,8 +635,8 @@ def post_character_voice_anchor_generate(
     resolved = require_inference("voice-anchor")
     try:
         ch = store.characters.read_character(root, cid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
     messages = store.voice_anchors.build_prompt(_card_data(card))
 
@@ -677,9 +677,9 @@ async def post_character_import(wid: str, file: UploadFile = File(...),
                                                 version_name=version_name,
                                                 validate_name=_import_name_check(wid, into))
     except store.cards.CardParseError as exc:
-        raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+        raise HTTPException(status_code=400, detail=f"could not parse card: {exc}") from exc
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
     return {"character": cid, "version": vid}
 
 
@@ -691,12 +691,12 @@ def post_character_import_chub(wid: str, body: ChubImportBody):
                                                  into_vid=body.into_version,
                                                  version_name=body.version_name,
                                                  validate_name=_import_name_check(wid, body.into))
-    except store.chub.ChubParseError:
-        raise HTTPException(status_code=400, detail="not a valid URL")
-    except store.chub.ChubFetchError:
-        raise HTTPException(status_code=404, detail="could not fetch a character card from that URL")
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
+    except store.chub.ChubParseError as exc:
+        raise HTTPException(status_code=400, detail="not a valid URL") from exc
+    except store.chub.ChubFetchError as exc:
+        raise HTTPException(status_code=404, detail="could not fetch a character card from that URL") from exc
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
 
 
 @router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/export")
@@ -706,10 +706,10 @@ def get_character_export(wid: str, cid: str, vid: str, format: str = "json"):
         raise HTTPException(status_code=400, detail="unknown format")
     try:
         blob, filename = store.characters.export_card(root, cid, vid, format)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     # Named like the campaign exports: the frontend offers these as plain
     # download links, and without the header the browser saves them as "export".
     return Response(content=blob, media_type=_EXPORT_MEDIA[format],
@@ -721,10 +721,10 @@ def post_character_localize(wid: str, cid: str, vid: str):
     root = _world_root_or_404(wid)
     try:
         card = store.characters.read_card(root, cid, vid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as err:
+        raise HTTPException(status_code=404, detail="character not found") from err
+    except store.characters.VersionNotFound as err:
+        raise HTTPException(status_code=404, detail="version not found") from err
 
     def event_stream():
         # localize_card rewrites `card` in place field-by-field; save whenever any
@@ -759,10 +759,10 @@ def post_character_lorebook_import(wid: str, cid: str, vid: str):
     root = _world_root_or_404(wid)
     try:
         card = store.characters.read_card(root, cid, vid)
-    except store.characters.CharacterNotFound:
-        raise HTTPException(status_code=404, detail="character not found")
-    except store.characters.VersionNotFound:
-        raise HTTPException(status_code=404, detail="version not found")
+    except store.characters.CharacterNotFound as exc:
+        raise HTTPException(status_code=404, detail="character not found") from exc
+    except store.characters.VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
     book = card.get("data", {}).get("character_book") or {}
     created = store.lorebook.commit(root, store.lorebook.from_character_book(book))
     return {"created": created}
@@ -1265,7 +1265,7 @@ async def put_world_image(wid: str, cid: str, vid: str, name: str, file: UploadF
     try:
         stored = store.assets.put_image(root, cid, vid, name, data, ext)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"name": name, "ext": stored,
             **image_id_field(store.assets.image_id(root, cid, vid, name))}
 

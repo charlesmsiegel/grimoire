@@ -34,7 +34,7 @@ def _advancement_cost(sheets_def: dict, type_id: str, field_key: str,
     try:
         cost = expressions.evaluate(expr, {**scope, **derived, "new": new})
     except expressions.ExpressionError as e:
-        raise SheetError(f"advancement cost for {field_key!r}: {e}")
+        raise SheetError(f"advancement cost for {field_key!r}: {e}") from e
     if not isinstance(cost, int) or isinstance(cost, bool) or cost <= 0:
         raise SheetError(f"advancement cost for {field_key!r} must be a positive integer, got {cost!r}")
     return cost
@@ -52,7 +52,7 @@ def advance(cid: str, kind: str, eid: str, field_key: str) -> dict:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
-            raise SheetError(f"unreadable sheet file: {e}")
+            raise SheetError(f"unreadable sheet file: {e}") from e
         sheet_type = data.get("sheet_type") if isinstance(data, dict) else None
         fields = data.get("fields") if isinstance(data, dict) and isinstance(data.get("fields"), dict) else {}
         sheets_def = modules_pack.load_pack(mid)["sheets"]

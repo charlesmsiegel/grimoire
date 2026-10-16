@@ -42,7 +42,7 @@ def post_scene_roll(cid: str, sid: str, body: RollBody, request: Request):
     try:
         result = store.dice.roll(body.notation)
     except store.dice.DiceError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     # Collapse newlines so a hostile label can't fake a blank-line boundary
     # followed by a marker like "**You:**" and get split into a forged
     # message by scenes._markers on the next read.
@@ -362,7 +362,7 @@ def post_scene_check(cid: str, sid: str, body: CheckBody, request: Request):
         resolution = store.checks.resolve_check(
             cid, body.check, body.actor, body.difficulty, body.modifier or 0)
     except store.checks.CheckError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     # One lock across both writes, for the same reason as post_scene_roll above
     # (#234): a 409 landing between them strands a durable roll outside the
     # transcript and the retry logs a duplicate.
@@ -393,18 +393,18 @@ def get_rolls(cid: str):
 def post_roll_replay(cid: str, rid: str):
     try:
         return {"ok": True, **store.rolls.replay(cid, rid)}
-    except (store.rolls.RollNotFound, store.campaigns.CampaignNotFound):
+    except (store.rolls.RollNotFound, store.campaigns.CampaignNotFound) as exc:
         # rolls.json is under campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500
-        raise HTTPException(status_code=404, detail="roll not found")
+        raise HTTPException(status_code=404, detail="roll not found") from exc
 
 
 @router.get("/campaigns/{cid}/module")
 def get_campaign_module(cid: str):
     try:
         meta = store.campaigns.read_campaign(cid)["meta"]
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
     setting = (meta.get("module") or "").strip()
     resolved = store.modules.resolve(cid)
     source = None
@@ -432,10 +432,10 @@ def put_campaign_module(cid: str, body: ModuleSetting):
                 # deliberately wrong in; the 404s below are raised by the same
                 # writes and cost the same.
                 store.revision.bump(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
-    except store.modules.ModuleNotFound:
-        raise HTTPException(status_code=404, detail="module not found")
+    except store.campaigns.CampaignNotFound as exc:
+        raise HTTPException(status_code=404, detail="campaign not found") from exc
+    except store.modules.ModuleNotFound as exc:
+        raise HTTPException(status_code=404, detail="module not found") from exc
     return {"ok": True}
 
 
@@ -486,9 +486,9 @@ def put_campaign_sheet(cid: str, kind: str, eid: str, body: SheetBody):
     try:
         store.sheets.write(cid, kind, eid, body.sheet_type, body.fields, expected=body.expected)
     except store.sheets.SheetConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except store.sheets.SheetError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"ok": True}
 
 
@@ -498,7 +498,7 @@ def delete_campaign_sheet(cid: str, kind: str, eid: str, gen: str | None = None)
     try:
         return {"ok": store.sheets.delete(cid, kind, eid, expected_gen=gen)}
     except store.sheets.SheetConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.put("/campaigns/{cid}/sheets/{kind}/{eid}/creation")
@@ -507,12 +507,12 @@ def put_campaign_sheet_creation(cid: str, kind: str, eid: str, body: SheetCreati
     try:
         store.sheets.write_creation(cid, kind, eid, body.sheet_type, body.spends,
                                     expected=body.expected)
-    except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound):
-        raise HTTPException(status_code=404, detail=f"{kind} not found")
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound) as exc:
+        raise HTTPException(status_code=404, detail=f"{kind} not found") from exc
     except store.sheets.SheetConflict as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except store.sheets.SheetError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"sheet": store.sheets.read(cid, kind, eid)}
 
 
@@ -521,7 +521,7 @@ def post_sheet_advance(cid: str, kind: str, eid: str, body: SheetAdvanceBody):
     _campaign_root_or_404(cid)
     try:
         return {"sheet": store.sheets.advance(cid, kind, eid, body.field)}
-    except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound):
-        raise HTTPException(status_code=404, detail=f"{kind} not found")
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound) as exc:
+        raise HTTPException(status_code=404, detail=f"{kind} not found") from exc
     except store.sheets.SheetError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
