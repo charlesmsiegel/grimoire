@@ -416,6 +416,18 @@ def _actor_docs(root: Path) -> Iterator[dict]:
             if side is not None and side[1]:
                 yield _row(kind, cid, "", name, side[1], side[2])
 
+    # A campaign's capsule on an inherited character is written without a card or
+    # a character.md of its own (`overlay.set_tagline`), so the loop above never
+    # sees it. Search reads only what is on disk, and the card and name belong to
+    # the library, so the capsule is indexed alone under the character's id.
+    for tag_path in sorted((root / "characters").glob("*/tagline.md")):
+        cid = tag_path.parent.name
+        if not safe_id(cid) or (tag_path.parent / "character.md").exists():
+            continue
+        tag = _doc(_markdown_doc, tag_path)
+        if tag is not None and tag[2]:
+            yield _row("characters", cid, "", cid, tag[2], tag[2])
+
 
 def _pc_docs(root: Path) -> Iterator[dict]:
     """PC personas, one document per version.

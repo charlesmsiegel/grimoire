@@ -2273,7 +2273,7 @@ def post_campaign_capsule_generate(
     the tags through the version PUT, both on Save.
     """
     _campaign_root_or_404(cid)
-    resolved = require_inference("tagline")
+    resolved = require_inference("capsule", cid)
     root = store.overlay.char_root(cid, char)
     try:
         ch = store.characters.read_character(root, char)
@@ -2288,10 +2288,10 @@ def post_campaign_capsule_generate(
 
     async def work():
         return await draft_completion(
-            client, resolved, messages, "tagline",
+            client, resolved, messages, "capsule",
             store.taglines.parse_capsule_output, cid=cid)
 
-    return runs.run_draft(request.app, runs.campaign_subject(cid), "tagline",
+    return runs.run_draft(request.app, runs.campaign_subject(cid), "capsule",
                           x_grimoire_attempt, work)
 
 

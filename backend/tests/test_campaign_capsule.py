@@ -228,3 +228,41 @@ def test_generate_reads_the_first_scene_after_the_character_has_left_it(client):
 
     assert resp.status_code == 200
     assert MARKER in fake.messages[-1]["content"]
+
+
+def test_a_campaign_override_governs_its_capsule_draft(client):
+    """The draft is a campaign-specific prompt, so the campaign's own model
+    settings must apply to it -- the tagline route is campaign-scoped for this
+    reason, while its world call sites (no campaign) are unaffected."""
+    from grimoire.store.inference import settings as inference_settings
+
+    cid = _campaign(client)
+    aid, _ = _emergent(client, cid)
+    inference_settings.write("campaign", cid, {"roles": {"fast": {"selection": {
+        "provider": "openrouter", "model": "vendor/capsule-fast"}}}})
+    fake = _answers(client, "Capsule: A gate-warden.\nTags: loyal")
+
+    resp = draft_post(client, f"/api/campaigns/{cid}/characters/{aid}/capsule/generate")
+
+    assert resp.status_code == 200
+    assert fake.target.model == "vendor/capsule-fast"
+
+
+def test_a_campaign_capsule_on_an_inherited_character_is_searchable(client):
+    """The campaign's capsule is written beside the character without a card of
+    its own, and search reads only what is on disk, so the capsule must be
+    indexed by itself or the words the campaign wrote about the character would
+    never find it."""
+    from grimoire.store import search
+
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    aid = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Seraphine", "version_name": "main"}).json()["character"]
+    client.put(f"/api/campaigns/{cid}/characters/{aid}/tagline",
+               json={"tagline": "A snowleopardgirl who keeps the tide ledger."})
+
+    hits = search.search("snowleopardgirl", scope="campaign", root=cid)["hits"]
+
+    assert [(h["kind"], h["id"]) for h in hits] == [("characters", aid)]

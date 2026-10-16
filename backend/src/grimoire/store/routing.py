@@ -309,6 +309,11 @@ ROUTES: tuple[Route, ...] = (
     Route("tagline", "Character taglines",
           "The one-line tagline drafted for a character version.", ("tagline",), False,
           default_role="fast"),
+    Route("capsule", "Campaign capsules",
+          "The one-line capsule and tags drafted for an emergent character in a campaign, "
+          "from its card and its first scene (#62). A campaign's own model settings apply "
+          "to it, as its prompt is the campaign's.",
+          ("capsule",), True, default_role="fast", legacy=NO_LEGACY),
     Route("scenario", "Scenario drafts",
           "The scene roster read out of an imported character card.", ("scenario",), False,
           default_role="fast"),
