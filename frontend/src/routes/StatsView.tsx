@@ -47,11 +47,12 @@ const TAIL_REOPEN_MS = 1500;
  *  milliseconds, because that is the resolution the number has; past a second
  *  the digits stop meaning anything and one decimal of seconds is the honest
  *  precision. */
-function duration(ms: number): string {
-  // "0ms", not a dash. A dash reads as "nothing was measured", and zero here
-  // is a measurement: a sub-millisecond call, or a row whose duration the
-  // ledger could not parse. The `calls` count beside every one of these is
-  // what says whether there was anything to measure at all.
+function duration(ms: number | null): string {
+  // A dash is "nothing was measured": a bucket none of whose calls was timed,
+  // which the server sends as null. "0ms" is a measurement -- a sub-millisecond
+  // call -- and never stands in for one: a row whose duration the ledger could
+  // not read is left out of the latencies and counted as untimed instead.
+  if (ms === null) return "—";
   if (ms < 1000) return `${Math.max(0, ms)}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   const minutes = Math.floor(ms / 60_000);
@@ -110,7 +111,14 @@ function BucketTable(
                       measured over everything. */}
                   {b.sampled && <span className="field-hint"> sampled</span>}
                 </td>
-                <td>{b.calls}</td>
+                <td>
+                  {b.calls}
+                  {/* Counted as calls, left out of the latencies beside them:
+                      say so, or the percentiles read as over every call. */}
+                  {b.unparsed_durations > 0 && (
+                    <span className="field-hint"> · {b.unparsed_durations} untimed</span>
+                  )}
+                </td>
                 <td className={b.errors ? "stats-bad" : undefined}>
                   {b.errors ? `${b.errors} · ${percent(b.error_rate)}` : "—"}
                 </td>
@@ -134,12 +142,14 @@ function BucketTable(
  *  the packaged desktop and Android bundles carry for one panel. */
 function Trend(
   { rows, heading, format }: {
-    rows: { key: string; value: number; note?: string }[];
+    rows: { key: string; value: number | null; note?: string }[];
     heading: string;
     format: (value: number) => string;
   },
 ) {
-  const peak = Math.max(1, ...rows.map((r) => r.value));
+  // A null value is a day nothing could be measured on: no bar, and a dash
+  // where the figure would be.
+  const peak = Math.max(1, ...rows.map((r) => r.value ?? 0));
   if (rows.length === 0) return null;
   return (
     <section className="stats-block">
@@ -150,9 +160,11 @@ function Trend(
             <span className="stats-trend-day">{r.key}</span>
             <span className="stats-trend-track">
               <span className="stats-trend-bar"
-                    style={{ width: `${Math.round((r.value / peak) * 100)}%` }} />
+                    style={{ width: `${Math.round(((r.value ?? 0) / peak) * 100)}%` }} />
             </span>
-            <span className="stats-trend-value">{format(r.value)}</span>
+            <span className="stats-trend-value">
+              {r.value === null ? "—" : format(r.value)}
+            </span>
             {r.note && <span className="field-hint">{r.note}</span>}
           </li>
         ))}

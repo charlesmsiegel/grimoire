@@ -163,18 +163,37 @@ def test_a_rename_row_is_not_a_call_that_took_no_time(home):
     assert out["totals"]["p50"] == 400
 
 
-def test_a_hand_edited_duration_costs_its_own_row_and_not_the_report(home):
-    _call(400)
-    usage.record(task="chat", duration_ms=0, status="ok", ts=f"{_today()}T10:00:00Z")
-    # A ledger a human edited: a string where the milliseconds belong.
+def _hand_edited(home, task: str, duration: str, status: str = "ok") -> None:
+    """A ledger a human edited: `duration` written where the milliseconds belong."""
     ledger = home / "usage" / f"{_today()[:7]}.jsonl"
     with ledger.open("a", encoding="utf-8") as fh:
-        fh.write(f'{{"ts": "{_today()}T10:00:00Z", "kind": "llm", "task": "chat", '
-                 '"duration_ms": "ages", "status": "ok"}\n')
+        fh.write(f'{{"ts": "{_today()}T10:00:00Z", "kind": "llm", "task": "{task}", '
+                 f'"duration_ms": {duration}, "status": "{status}"}}\n')
 
-    out = metrics.performance(30)
-    assert out["totals"]["calls"] == 3
-    assert out["totals"]["max"] == 400             # the junk counted as 0, not as a crash
+
+def test_a_hand_edited_duration_costs_its_own_row_and_not_the_report(home):
+    """The garbled row is still a call, and still a failure when it failed,
+    but it is no latency: out of the distribution and counted beside it,
+    never a call that took 0 ms dragging the median down."""
+    _call(400)
+    usage.record(task="chat", duration_ms=0, status="ok", ts=f"{_today()}T10:00:00Z")
+    _hand_edited(home, "chat", '"ages"', status="error")
+
+    out = metrics.performance(30)["totals"]
+    assert (out["calls"], out["errors"], out["unparsed_durations"]) == (3, 1, 1)
+    assert (out["min"], out["p50"], out["max"]) == (0, 200, 400)   # 0 and 400, nothing else
+
+
+def test_a_bucket_with_no_readable_duration_has_no_distribution(home):
+    _call(400)
+    _hand_edited(home, "dossier", "null")
+    _hand_edited(home, "dossier", "true")
+
+    dossier = next(b for b in metrics.performance(30)["by_task"] if b["key"] == "dossier")
+    assert dossier["calls"] == 2 and dossier["unparsed_durations"] == 2
+    assert [dossier[k] for k in ("p50", "p90", "p99", "min", "max")] == [None] * 5
+    chat = next(b for b in metrics.performance(30)["by_task"] if b["key"] == "chat")
+    assert chat["unparsed_durations"] == 0 and chat["p50"] == 400
 
 
 def test_a_call_belonging_to_no_task_is_bucketed_rather_than_dropped(home):
@@ -199,12 +218,14 @@ def test_a_silly_window_is_clamped_rather_than_refused(home):
     assert metrics.performance(0)["days"] == 1
 
 
-def test_an_empty_store_reports_zeroes_rather_than_failing(home):
+def test_an_empty_store_reports_no_calls_rather_than_failing(home):
+    """Counts are 0 -- nothing was called -- and the latencies are None:
+    nothing was timed, and a 0 ms median would say otherwise."""
     out = metrics.performance(30)
 
     assert out["totals"] == {"key": "", "calls": 0, "errors": 0, "error_rate": 0.0,
-                             "sampled": False, "p50": 0, "p90": 0, "p99": 0,
-                             "min": 0, "max": 0}
+                             "sampled": False, "unparsed_durations": 0, "p50": None,
+                             "p90": None, "p99": None, "min": None, "max": None}
     assert out["by_task"] == [] and out["by_day"] == []
 
 

@@ -3659,8 +3659,13 @@ export type PerfBucket = {
   /** True when the window held more calls than one distribution keeps, so the
    *  percentiles are over a sample. Both tails are preserved. */
   sampled: boolean;
-  p50: number; p90: number; p99: number;
-  min: number; max: number;
+  /** Calls whose duration the ledger could not read (a hand-edited row): still
+   *  counted in `calls`, never in the latencies, which are over the rest. */
+  unparsed_durations: number;
+  /** Null when no call in the bucket was timed -- none at all, or only
+   *  unparsed ones: there is no latency to report, and 0 would be one. */
+  p50: number | null; p90: number | null; p99: number | null;
+  min: number | null; max: number | null;
 };
 
 export type Stats = {
