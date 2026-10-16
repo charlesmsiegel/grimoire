@@ -68,7 +68,7 @@ def test_a_library_ref_cannot_be_confused_with_a_record_or_asset_ref():
     ref = overlay.library_ref("map")
     assert ref == "assets/library/map"
     assert len(ref.split("/")) == 3
-    assert len(overlay._asset_ref("characters", "seraphine", "default",
+    assert len(overlay.asset_ref("characters", "seraphine", "default",
                                   "avatar").split("/")) == 5
 
 

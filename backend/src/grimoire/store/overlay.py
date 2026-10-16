@@ -464,7 +464,7 @@ def _undetach(cid: str, ref: str, *, source_refs: RecordIdentityRefs | None = No
 
 # ---- flat records (locations / lore; greetings + plotmap join in Task 2) ----
 
-def _flat_ref(kind: str, eid: str) -> str:
+def flat_ref(kind: str, eid: str) -> str:
     return f"{kind}/{eid}"
 
 
@@ -700,7 +700,7 @@ def _copy_slots_down(kind: str, rid: str, src_v: Path, dst_v: Path, gone: set[st
     vid = src_v.name
 
     def tombstoned(name: str) -> bool:
-        return _asset_ref(kind, rid, vid, name) in gone
+        return asset_ref(kind, rid, vid, name) in gone
 
     assets.copy_slots(src_v, dst_v, skip=tombstoned)
 
@@ -722,7 +722,7 @@ def _tombstoned_asset(kind: str, rid: str, rel: Path, gone: set[str]) -> bool:
     """Does a per-asset tombstone hide `rel`, a file directly in
     `assets/<vid>/` that is not an image slot (`_image_slot_file` answered
     first)? Such a file -- one of an extension never accepted, say -- is
-    still named by its stem, and `_asset_ref` keys the tombstone on (base, id,
+    still named by its stem, and `asset_ref` keys the tombstone on (base, id,
     vid, name) without the extension, because deleting an image and uploading
     a different format of it is the same slot.
 
@@ -732,7 +732,7 @@ def _tombstoned_asset(kind: str, rid: str, rel: Path, gone: set[str]) -> bool:
     parts = rel.parts
     if parts[:1] != ("assets",) or len(parts) != 3:
         return False
-    return _asset_ref(kind, rid, parts[1], Path(parts[2]).stem) in gone
+    return asset_ref(kind, rid, parts[1], Path(parts[2]).stem) in gone
 
 
 def _put_base(cid: str, ref: str, base: str) -> None:
@@ -890,7 +890,7 @@ def _materialize_flat(cid: str, kind: str, eid: str, *,
             # Hash the ORIGINAL selected bytes, not the prepared edit or a second
             # World read. Otherwise the edit could look like its own common base,
             # or a World race could hide an update (the earlier Codex review).
-            with _recorded_base(cid, _flat_ref(kind, eid), entities.content_hash(text), dst):
+            with _recorded_base(cid, flat_ref(kind, eid), entities.content_hash(text), dst):
                 atomic.write_text(dst, final)
             if source_identity is not None and owned_identity is not None:
                 group_proposals.retained_copy(cid, croot, copy_refs, source_identity, owned_identity)
@@ -938,7 +938,7 @@ def list_entities(cid: str, kind: str, *, v: View | None = None) -> list[dict]:
     mine = entities.list_entities(v.croot, kind)
     have = {e["id"] for e in mine}
     inherited = [e for e in entities.list_entities(v.wroot, kind)
-                 if e["id"] not in have and _flat_ref(kind, e["id"]) not in v.gone]
+                 if e["id"] not in have and flat_ref(kind, e["id"]) not in v.gone]
     return sorted(mine + inherited, key=lambda e: e["id"])
 
 
@@ -1010,7 +1010,7 @@ def read_entity(cid: str, kind: str, eid: str, *, v: View | None = None) -> dict
     try:
         return entities.read_entity(v.croot, kind, eid)
     except entities.EntityNotFound:
-        if _flat_ref(kind, eid) in v.gone:
+        if flat_ref(kind, eid) in v.gone:
             raise
         return entities.read_entity(v.wroot, kind, eid)
 
@@ -1024,7 +1024,7 @@ def entity_source(cid: str, kind: str, eid: str, *, v: View | None = None) -> Pa
     try:
         return entities.require_entity(v.croot, kind, eid)
     except entities.EntityNotFound:
-        if _flat_ref(kind, eid) in v.gone:
+        if flat_ref(kind, eid) in v.gone:
             return None
     try:
         return entities.require_entity(v.wroot, kind, eid)
@@ -1037,7 +1037,7 @@ def read_entity_rev(cid: str, kind: str, eid: str) -> dict:
     try:
         return entities.read_entity_rev(croot_of(cid), kind, eid)
     except entities.EntityNotFound:
-        if _flat_ref(kind, eid) in deleted(cid):
+        if flat_ref(kind, eid) in deleted(cid):
             raise
         return entities.read_entity_rev(wroot_of(cid), kind, eid)
 
@@ -1094,7 +1094,7 @@ def entity_rev(cid: str, kind: str, eid: str) -> str | None:
     h = entities.entity_hash(croot_of(cid), kind, eid)
     if h is not None:
         return h
-    if _flat_ref(kind, eid) in deleted(cid):
+    if flat_ref(kind, eid) in deleted(cid):
         return None
     return entities.entity_hash(wroot_of(cid), kind, eid)
 
@@ -1115,7 +1115,7 @@ def entity_root(cid: str, kind: str, eid: str) -> Path:
     # `require_entity` raise keeps both answers the same 404.
     if kind in entities.ENTITY_KINDS and safe_id(eid) and _flat_path(croot, kind, eid).exists():
         return croot
-    if _flat_ref(kind, eid) in deleted(cid):
+    if flat_ref(kind, eid) in deleted(cid):
         return croot
     return wroot_of(cid)
 
@@ -1130,7 +1130,7 @@ def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = ""
         # leaves assets this campaign would inherit through the overlay the
         # moment it claimed the slug (Codex review)
         return (_flat_path(wroot, kind, eid).exists() or _record_dir(wroot, kind, eid).is_dir()
-                or _flat_ref(kind, eid) in gone)
+                or flat_ref(kind, eid) in gone)
 
     eid = entities.create_entity(croot_of(cid), kind, name, body, keys, owners,
                                  sd_prompt=sd_prompt, taken=taken, fields=fields,
@@ -1182,7 +1182,7 @@ def would_inherit(cid: str, kind: str, eid: str) -> bool:
     tombstone -- which permanently hides whatever stranger now holds that id in
     the world, the exact outcome `_inherits_world` exists to prevent.
     """
-    return (_inherits_world(cid, _flat_ref(kind, eid))
+    return (_inherits_world(cid, flat_ref(kind, eid))
             and _flat_path(wroot_of(cid), kind, eid).exists())
 
 
@@ -1193,7 +1193,7 @@ def delete_entity(cid: str, kind: str, eid: str) -> None:
         if kind == "groups":
             knowledge.require_readable(cid)
         eid = _canonical_record_id(cid, kind, eid)
-        ref = _flat_ref(kind, eid)
+        ref = flat_ref(kind, eid)
         source_refs = capture_record_refs(cid, ref)
         in_world = would_inherit(cid, kind, eid)
         with revision.stamp_on_failure(cid):
@@ -1254,7 +1254,7 @@ def record_is_marked(cid: str, kind: str, eid: str, marks: set[str], *,
     A same-read View may supply its captured roots so matching a tombstone
     cannot resolve another World halfway through that read's diagnostics.
     """
-    if _flat_ref(kind, eid) in marks:
+    if flat_ref(kind, eid) in marks:
         return True
     if (kind not in INHERITED_KINDS and kind != "plotmap") or not safe_id(eid):
         return False
@@ -1411,7 +1411,7 @@ def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
     if new_kind not in entities.ENTITY_KINDS:
         raise entities.UnknownKind(new_kind)
     if kind == new_kind:
-        raise entities.SameKindError(_flat_ref(kind, eid))
+        raise entities.SameKindError(flat_ref(kind, eid))
     with locks.campaign_lock(cid):
         _, gone = require_identity_ledgers(cid)
         croot, wroot = croot_of(cid), wroot_of(cid)
@@ -1425,7 +1425,7 @@ def reclassify_entity(cid: str, kind: str, eid: str, new_kind: str,
             # (which `create_entity` already counts, for #225's reason)
             return (_flat_path(wroot, new_kind, c).exists()
                     or _record_dir(wroot, new_kind, c).is_dir()
-                    or _flat_ref(new_kind, c) in gone)
+                    or flat_ref(new_kind, c) in gone)
 
         with revision.stamp_on_failure(cid):
             group_proposals.require_readable(croot)
@@ -1588,7 +1588,7 @@ def list_greetings(cid: str) -> list[dict]:
     have = {g["id"] for g in mine}
     gone = deleted(cid)
     inherited = [g for g in greetings.list_greetings(wroot_of(cid))
-                 if g["id"] not in have and _flat_ref("greetings", g["id"]) not in gone]
+                 if g["id"] not in have and flat_ref("greetings", g["id"]) not in gone]
     out = mine + inherited
     out.sort(key=lambda m: natural_key(m["name"]))
     return out
@@ -1599,7 +1599,7 @@ def read_greeting(cid: str, gid: str, *, v: View | None = None) -> dict:
     try:
         return greetings.read_greeting(v.croot, gid)
     except greetings.GreetingNotFound:
-        if _flat_ref("greetings", gid) in v.gone:
+        if flat_ref("greetings", gid) in v.gone:
             raise
         return greetings.read_greeting(v.wroot, gid)
 
@@ -1614,7 +1614,7 @@ def read_greeting_rev(cid: str, gid: str) -> dict:
     try:
         return greetings.read_greeting_rev(croot_of(cid), gid)
     except greetings.GreetingNotFound:
-        if _flat_ref("greetings", gid) in deleted(cid):
+        if flat_ref("greetings", gid) in deleted(cid):
             raise
         return greetings.read_greeting_rev(wroot_of(cid), gid)
 
@@ -1629,7 +1629,7 @@ def create_greeting(cid: str, name: str, character: str, version: str, body: str
     def taken(gid: str) -> bool:
         return (_flat_path(wroot, "greetings", gid).exists()
                 or _record_dir(wroot, "greetings", gid).is_dir()
-                or _flat_ref("greetings", gid) in gone)
+                or flat_ref("greetings", gid) in gone)
 
     # #137: bake {{char}} here, not inside greetings.create_greeting -- a thin
     # campaign's character commonly still lives only in the world, and
@@ -1676,7 +1676,7 @@ def delete_greeting(cid: str, gid: str) -> None:
     with locks.campaign_lock(cid):
         require_identity_ledgers(cid)
         gid = _canonical_record_id(cid, "greetings", gid)
-        ref = _flat_ref("greetings", gid)
+        ref = flat_ref("greetings", gid)
         source_refs = capture_record_refs(cid, ref)
         in_world = _inherits_world(cid, ref) and _flat_path(wroot_of(cid), "greetings", gid).exists()
         if in_world:
@@ -1756,7 +1756,7 @@ def actor_root(cid: str, kind: str, aid: str, *, v: View | None = None) -> Path:
     croot = v.croot
     if (croot / kind / aid / _actor_meta(kind)).exists():
         return croot
-    if _flat_ref(kind, aid) in v.gone:
+    if flat_ref(kind, aid) in v.gone:
         return croot
     return v.wroot
 
@@ -1778,7 +1778,7 @@ def materialize_actor(cid: str, kind: str, aid: str) -> None:
     # one read of the world actor: the base and the bytes it covers, so the two
     # cannot disagree even if the world moves mid-copy (Codex review)
     taken = (characters.snapshot if kind == "characters" else pcs.snapshot)(wroot, aid)
-    if taken is None or _flat_ref(kind, aid) in deleted(cid):
+    if taken is None or flat_ref(kind, aid) in deleted(cid):
         raise _actor_not_found(kind, aid)
     base, files = taken
     meta_name = _actor_meta(kind)
@@ -1796,7 +1796,7 @@ def materialize_actor(cid: str, kind: str, aid: str) -> None:
         # ...and the same for history: a campaign copy's edit trail is residue
         # once the copy is gone, and must not reappear on the fresh one (#67).
         pcs.forget_history(croot, aid)
-    with _recorded_base(cid, _flat_ref(kind, aid), base, dst / meta_name):
+    with _recorded_base(cid, flat_ref(kind, aid), base, dst / meta_name):
         # the meta is the single commit point, so it goes last -- `snapshot`
         # puts it first, and for a PC it is an *.md sibling of the versions
         for name, text in files:
@@ -1884,7 +1884,7 @@ def _patch_char_item(v: View, item: dict) -> dict:
     """
     aid, vid = item["id"], item["default_version"]
     mine = characters.version_facts(v.croot, aid, vid, crop=True)
-    detached = _flat_ref("characters", aid) in v.off
+    detached = flat_ref("characters", aid) in v.off
     theirs = None if detached else characters.version_facts(v.wroot, aid, vid)
     # `list_images`' union, over names: the campaign's, then each world name
     # the campaign holds no file for and has not tombstoned. The avatar's
@@ -1895,7 +1895,7 @@ def _patch_char_item(v: View, item: dict) -> dict:
     avatar_v = mine["avatar_v"]
     if theirs is not None:
         inherited = [n for n in theirs["names"]
-                     if n not in names and _asset_ref("characters", aid, vid, n) not in v.gone]
+                     if n not in names and asset_ref("characters", aid, vid, n) not in v.gone]
         if assets.AVATAR in inherited:
             avatar_v = theirs["avatar_v"]
         names.update(inherited)
@@ -1904,7 +1904,7 @@ def _patch_char_item(v: View, item: dict) -> dict:
     # or a `focus.json`), or a tombstone over the world's avatar -- or is
     # detached.
     focus = (mine["focus"] if (theirs is None or mine["avatar_file"] or mine["focus_file"]
-                               or _asset_ref("characters", aid, vid, assets.AVATAR) in v.gone)
+                               or asset_ref("characters", aid, vid, assets.AVATAR) in v.gone)
              else theirs["focus"])
     return {**item,
             "has_avatar": assets.AVATAR in names,
@@ -1927,7 +1927,7 @@ def list_characters(cid: str) -> list[dict]:
     have = {c["id"] for c in mine}
     world_rows = characters.list_characters(v.wroot)
     inherited = [c for c in world_rows
-                 if c["id"] not in have and _flat_ref("characters", c["id"]) not in v.gone]
+                 if c["id"] not in have and flat_ref("characters", c["id"]) not in v.gone]
     rows = [_patch_char_item(v, c) for c in mine + inherited]
 
     # `has_voice_anchor` is resolved from what the two scans ALREADY read, not
@@ -1968,7 +1968,7 @@ def _anchor_presence(v: View, ids: list[str], world_has) -> dict[str, bool]:
         if aid in campaign_side:
             rec = voice_anchors.read_record(v.croot, aid)
             out[aid] = bool(rec["text"])    # tombstone reads as none
-        elif _flat_ref("characters", aid) in v.off:
+        elif flat_ref("characters", aid) in v.off:
             out[aid] = False
         else:
             out[aid] = world_has(aid)
@@ -2003,7 +2003,7 @@ def list_pcs(cid: str) -> list[dict]:
     mine = pcs.list_pcs(v.croot)
     have = {p["id"] for p in mine}
     inherited = [p for p in pcs.list_pcs(v.wroot)
-                 if p["id"] not in have and _flat_ref("pcs", p["id"]) not in v.gone]
+                 if p["id"] not in have and flat_ref("pcs", p["id"]) not in v.gone]
     return sorted([_patch_pc_item(v, p) for p in mine + inherited], key=lambda p: p["id"])
 
 
@@ -2026,7 +2026,7 @@ def _roster_union(v: View, kind: str, mine: list, theirs: list, key=lambda r: r)
     and `list_entities` each build. `key` reads the id off a row, for rows
     that are dicts rather than bare ids."""
     have = {key(r) for r in mine}
-    inherited = [r for r in theirs if key(r) not in have and _flat_ref(kind, key(r)) not in v.gone]
+    inherited = [r for r in theirs if key(r) not in have and flat_ref(kind, key(r)) not in v.gone]
     return sorted(mine + inherited, key=key)
 
 
@@ -2157,7 +2157,7 @@ def _mark_campaign_owned(cid: str, kind: str, aid: str) -> None:
     base. A promoted character does have a world record behind her, and leaving
     her detached would cut her off from the very library she was just added to.
     """
-    add_detached(cid, _flat_ref(kind, aid))
+    add_detached(cid, flat_ref(kind, aid))
 
 
 def create_character(cid: str, name: str, version_name: str = "default",
@@ -2174,7 +2174,7 @@ def create_character(cid: str, name: str, version_name: str = "default",
 
         def taken(aid: str) -> bool:
             return ((wroot / "characters" / aid).is_dir()
-                    or _flat_ref("characters", aid) in gone)
+                    or flat_ref("characters", aid) in gone)
 
         made = characters.create_character(croot_of(cid), name, version_name, card, taken=taken)
         _mark_campaign_owned(cid, "characters", made[0])
@@ -2210,7 +2210,7 @@ def delete_actor(cid: str, kind: str, aid: str) -> None:
             knowledge.require_readable(cid)
             journal.require_readable(cid)
         aid = _canonical_record_id(cid, kind, aid)
-        ref = _flat_ref(kind, aid)
+        ref = flat_ref(kind, aid)
         source_refs = capture_record_refs(cid, ref)
         in_world = _inherits_world(cid, ref) and _record_present(wroot_of(cid), kind, aid)
         mine = _record_dir(croot_of(cid), kind, aid)
@@ -2237,7 +2237,7 @@ def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default
         wroot = wroot_of(cid)
 
         def taken(pid: str) -> bool:
-            return (wroot / "pcs" / pid).is_dir() or _flat_ref("pcs", pid) in gone
+            return (wroot / "pcs" / pid).is_dir() or flat_ref("pcs", pid) in gone
 
         made = pcs.create_pc(croot_of(cid), name, tags, version_name, persona, taken=taken)
         _mark_campaign_owned(cid, "pcs", made[0])
@@ -2246,7 +2246,7 @@ def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default
 
 # ---- assets: per-file union, campaign wins ----
 
-def _asset_ref(base: str, aid: str, vid: str, name: str) -> str:
+def asset_ref(base: str, aid: str, vid: str, name: str) -> str:
     return f"assets/{base}/{aid}/{vid}/{name}"
 
 
@@ -2265,11 +2265,11 @@ def _image_halves(cid: str, aid: str, vid: str, base: str,
     Split for the description reads, which answer the two halves by different
     rules and must not list (or scan the placements of) either side twice."""
     mine = assets.list_images(v.croot, aid, vid, base)
-    if _flat_ref(base, aid) in v.off:
+    if flat_ref(base, aid) in v.off:
         return mine, []
     have = {i["name"] for i in mine}
     inherited = [i for i in assets.list_images(v.wroot, aid, vid, base)
-                 if i["name"] not in have and _asset_ref(base, aid, vid, i["name"]) not in v.gone]
+                 if i["name"] not in have and asset_ref(base, aid, vid, i["name"]) not in v.gone]
     return mine, inherited
 
 
@@ -2287,8 +2287,8 @@ def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters"
     # A per-asset tombstone or a whole-record tombstone (the record was deleted
     # campaign-side; only its <base>/<aid> ref is written) both hide the image:
     # return croot so the serve route 404s instead of falling through to the world.
-    if (_asset_ref(base, aid, vid, name) in v.gone or _flat_ref(base, aid) in v.gone
-            or _flat_ref(base, aid) in v.off):
+    if (asset_ref(base, aid, vid, name) in v.gone or flat_ref(base, aid) in v.gone
+            or flat_ref(base, aid) in v.off):
         return croot
     return v.wroot
 
@@ -2325,8 +2325,8 @@ def avatar_v(cid: str, aid: str, vid: str, base: str = "characters",
     mine = token(v.croot, True)
     if mine is not None:
         return mine
-    if (_asset_ref(base, aid, vid, assets.AVATAR) in v.gone or _flat_ref(base, aid) in v.gone
-            or _flat_ref(base, aid) in v.off):
+    if (asset_ref(base, aid, vid, assets.AVATAR) in v.gone or flat_ref(base, aid) in v.gone
+            or flat_ref(base, aid) in v.off):
         return None
     return token(v.wroot, False)
 
@@ -2343,8 +2343,8 @@ def read_focus(cid: str, aid: str, vid: str, base: str = "characters",
     croot = v.croot
     if (assets.image_path(croot, aid, vid, assets.AVATAR, base) is not None
             or assets.owns_focus(croot, aid, vid, base)
-            or _asset_ref(base, aid, vid, assets.AVATAR) in v.gone
-            or _flat_ref(base, aid) in v.off):
+            or asset_ref(base, aid, vid, assets.AVATAR) in v.gone
+            or flat_ref(base, aid) in v.off):
         return assets.read_focus(croot, aid, vid, base)
     return assets.read_focus(v.wroot, aid, vid, base)
 
@@ -2505,7 +2505,7 @@ def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "character
         require_identity_ledgers(cid)
         assets.delete_image(croot_of(cid), aid, vid, name, base)   # no-op when absent
         if assets.image_path(wroot_of(cid), aid, vid, name, base) is not None:
-            add_deleted(cid, _asset_ref(base, aid, vid, name))
+            add_deleted(cid, asset_ref(base, aid, vid, name))
 
 
 def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
@@ -2533,7 +2533,7 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
         _check_promote_arrived(cid, aid, vid, name, base, inherits, cdir, wdir)
         for n in (name, assets.AVATAR):
             if not (inherits and assets.image_path(croot, aid, vid, n, base) is None
-                    and _asset_ref(base, aid, vid, n) not in gone):
+                    and asset_ref(base, aid, vid, n) not in gone):
                 continue
             # Belt and braces for the check above: never link over an
             # image-bearing campaign placement, arrived or not. An image-less
@@ -2582,7 +2582,7 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
         # promotion moves the image out of the gallery instead of duplicating it.
         if (inherits and assets.image_path(croot, aid, vid, name, base) is None
                 and assets.image_path(wroot, aid, vid, name, base) is not None):
-            add_deleted(cid, _asset_ref(base, aid, vid, name))
+            add_deleted(cid, asset_ref(base, aid, vid, name))
 
 
 def _check_promote_arrived(cid: str, aid: str, vid: str, name: str, base: str,
@@ -2602,7 +2602,7 @@ def _check_promote_arrived(cid: str, aid: str, vid: str, name: str, base: str,
     gone = deleted(cid)
 
     def inherited(n: str) -> bool:
-        if not inherits or _asset_ref(base, aid, vid, n) in gone:
+        if not inherits or asset_ref(base, aid, vid, n) in gone:
             return False
         held = image_refs.read(cdir, n)
         return (held is None or held.image is None) and assets.path_in(cdir, n) is None
@@ -2654,7 +2654,7 @@ def base_versions(cid: str, char_id: str, *, v: View | None = None) -> list[dict
     longer holds the character.
     """
     v = _view(cid, v)
-    ref = _flat_ref("characters", char_id)
+    ref = flat_ref("characters", char_id)
     if ref in v.gone or ref in v.off:
         return []
     wroot = v.wroot
@@ -2710,7 +2710,7 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, base: str = "characters
     file under cannot normally carry one.
     """
     v = _view(cid, v)
-    ref = _flat_ref(base, char_id)
+    ref = flat_ref(base, char_id)
     gone = v.gone
     if ref in gone or ref in v.off:
         return []
@@ -2730,7 +2730,7 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, base: str = "characters
     mine_ids, legacy_files, all_files = _held_pictures(croot, char_id, vid, mine_rows, base)
     out = []
     for i in assets.list_images(wroot, char_id, vid, base):
-        if i["name"] not in held or _asset_ref(base, char_id, vid, i["name"]) in gone:
+        if i["name"] not in held or asset_ref(base, char_id, vid, i["name"]) in gone:
             continue
         if i.get("image_id") and i["image_id"] in mine_ids:
             continue   # the same picture, however it is named or stored
@@ -2867,7 +2867,7 @@ def pc_revision(cid: str, pid: str, vid: str, rid: str) -> dict:
 def tagline(cid: str, char_id: str, *, v: View | None = None) -> str:
     v = _view(cid, v)
     mine = taglines.read(v.croot, char_id)
-    if mine or _flat_ref("characters", char_id) in v.off:
+    if mine or flat_ref("characters", char_id) in v.off:
         return mine
     return taglines.read(v.wroot, char_id)
 
@@ -2902,7 +2902,7 @@ def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
     findings judged against the world's should stop applying here.
     """
     croot = croot_of(cid)
-    inherited = ("" if _flat_ref("characters", char_id) in detached(cid)
+    inherited = ("" if flat_ref("characters", char_id) in detached(cid)
                  else voice_anchors.read(wroot_of(cid), char_id))
     mine = voice_anchors.read_record(croot, char_id)
     if not text.strip():
@@ -2954,7 +2954,7 @@ def voice_anchor_record(cid: str, char_id: str, *, v: View | None = None) -> dic
     exists nowhere."""
     v = _view(cid, v)
     mine = voice_anchors.read_record(v.croot, char_id)
-    if mine["disabled"] or _flat_ref("characters", char_id) in v.off:
+    if mine["disabled"] or flat_ref("characters", char_id) in v.off:
         return mine   # campaign opt-out, or a world id-mate that is a stranger
     return mine if mine["text"] else voice_anchors.read_record(v.wroot, char_id)
 
@@ -3263,7 +3263,7 @@ def _forget_in_campaign(cid: str, kind: str, rid: str, wroot: Path) -> None:
         if not worlds_paths.references_world(world, wroot):
             return
         _, gone = require_identity_ledgers(cid)
-        croot, ref = croot_of(cid), _flat_ref(kind, rid)
+        croot, ref = croot_of(cid), flat_ref(kind, rid)
         if _record_present(croot, kind, rid):
             # The campaign owns a copy. It keeps it -- and stops sharing an identity
             # with whatever claims the slug next, in BOTH directions the id reaches:

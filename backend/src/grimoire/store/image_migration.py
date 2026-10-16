@@ -15,7 +15,7 @@ through `image_store`'s `root=` keyword -- never from `paths.home()` asked
 again, so a data-dir move mid-plan cannot splice two trees into one plan.
 
 **What is planned.** One file per logical name per directory (the one
-`assets._legacy_path` serves today); everything else is left untouched and
+`assets.legacy_path` serves today); everything else is left untouched and
 reported with its path and the reason:
 
 - the inventory's own refusals (`Occurrence.untouched`): other siblings of a

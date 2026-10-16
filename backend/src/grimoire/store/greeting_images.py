@@ -86,7 +86,7 @@ def local_image(root: Path, url: str) -> tuple[Path, str | None] | None:
     member = _member_route(url)
     if member is not None:
         try:
-            found = image_collections.resolve_member(*member)
+            found = image_collections.member(*member)
             return (found.path, found.image_id) if found is not None else None
         except _MEMBER_MISSING:
             return None
@@ -240,7 +240,7 @@ def _member_target(wid: str, collection_id: str, index: int) -> Target:
     """`local_target` for member `index`: a format-2 member is its object
     (resolved, as `image_collections.available` resolves one), a format-1
     member the world-library slot its name places."""
-    found = image_collections.resolve_member(wid, collection_id, index)
+    found = image_collections.member(wid, collection_id, index)
     if found is None:
         return None
     if found.name is None:

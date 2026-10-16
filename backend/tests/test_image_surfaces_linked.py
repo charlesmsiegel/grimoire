@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from grimoire.store import image_surfaces
+from grimoire.store import image_migration, image_refs, image_surfaces
 
 
 def test_linked_fails_closed_when_a_component_cannot_be_inspected(tmp_path, monkeypatch):
@@ -39,8 +39,6 @@ def test_linked_slot_asks_about_the_placement_folder_and_file(tmp_path, monkeypa
     """A junctioned `image-refs/` folder is a link the migration must refuse,
     and `linked` is the one check that knows about junctions, so the placement
     folder and file go through it rather than through `is_symlink()` (#478)."""
-    from grimoire.store import image_migration, image_refs
-
     root = tmp_path / "root"
     d = root / "worlds" / "w" / "images"
     d.mkdir(parents=True)
