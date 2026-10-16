@@ -598,7 +598,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       // switching versions discards it rather than saving its tags onto the next.
       <CapsuleSection key={`capsule:${scope.id}:${eid}:${vid}`}
                       campaignId={scope.id} cid={eid} vid={vid} card={card}
-                      onSaved={() => { void refresh(); }} onError={setError} />
+                      onSaveTags={(tags) => saveField({ tags })} onError={setError} />
     )}
 
     <VoiceAnchorSection key={`${scope.kind}:${scope.id}:${eid}`}

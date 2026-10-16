@@ -266,3 +266,22 @@ def test_a_campaign_capsule_on_an_inherited_character_is_searchable(client):
     hits = search.search("snowleopardgirl", scope="campaign", root=cid)["hits"]
 
     assert [(h["kind"], h["id"]) for h in hits] == [("characters", aid)]
+
+
+def test_the_excerpt_starts_at_the_entrance_not_the_scene_head(client):
+    """A character who walks on after more than the excerpt's worth of scene
+    still gets the entrance: the excerpt is taken from where they arrived."""
+    cid = _campaign(client)
+    aid, vid = _emergent(client, cid)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "The gate"}).json()["id"]
+    for _ in range(6):
+        store.scenes.append_message(cid, sid, "user", "filler " * 300)
+    store.scenes.append_message(cid, sid, "user", MARKER)   # the introducing turn
+    store.appearances.transitions.appear(cid, sid, "characters", aid, vid, "npc")
+    store.scenes.append_message(cid, sid, "user", "filler " * 300)
+    fake = _answers(client, "Capsule: A gate-warden.\nTags: loyal")
+
+    resp = draft_post(client, f"/api/campaigns/{cid}/characters/{aid}/capsule/generate")
+
+    assert resp.status_code == 200
+    assert MARKER in fake.messages[-1]["content"]

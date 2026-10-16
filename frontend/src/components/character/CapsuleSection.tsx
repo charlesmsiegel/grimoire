@@ -7,8 +7,9 @@ import { ColumnSection } from "../PageShell";
  *
  *  Campaign scope only: an emergent character has no world copy to describe,
  *  so both live on the campaign's side. The capsule is a sidecar, saved by PUT;
- *  the tags are the card's own free-text list, so saving them writes the version
- *  -- the same write the card tab makes.
+ *  the tags are the card's own free-text list, so saving them goes through the
+ *  page's whole-card save, which shares its lock and reload with every other
+ *  card write.
  *
  *  A generated draft fills the two fields and touches nothing until Save. Save
  *  is refused until the stored capsule has been read, for the reason the voice
@@ -18,13 +19,13 @@ import { ColumnSection } from "../PageShell";
  *  Mounted keyed on (campaign, character), so switching character remounts it.
  */
 export function CapsuleSection(
-  { campaignId, cid, vid, card, onSaved, onError }: {
+  { campaignId, cid, vid, card, onSaveTags, onError }: {
     campaignId: string;
     cid: string;
     vid: string;
     card: Card;
-    /** Called once something was written, so the page re-reads the card. */
-    onSaved: () => void;
+    /** The page's whole-card tags save; false when it did not write (busy). */
+    onSaveTags: (tags: string[]) => Promise<boolean>;
     onError: (err: unknown) => void;
   },
 ) {
@@ -72,25 +73,21 @@ export function CapsuleSection(
     const nextTags = parseTags(tagsText);
     const tagsChanged = !sameList(nextTags, currentTags);
     setSaving(true);
-    let wrote = false;
     try {
       if (nextCapsule !== stored.current) {
         await api.setCampaignCharacterTagline(campaignId, cid, nextCapsule);
-        wrote = true;
         stored.current = nextCapsule;
         if (live.current) setCapsule(nextCapsule);
       }
       if (tagsChanged) {
-        await api.updateVersion({ kind: "campaign", id: campaignId }, cid, vid,
-                                { ...card, data: { ...card.data, tags: nextTags } });
-        wrote = true;
+        // A refused save (the page is busy) leaves the draft open to retry.
+        if (!(await onSaveTags(nextTags))) return;
       }
       if (live.current) setEditing(false);
     } catch (err: unknown) {
       onError(err);
     } finally {
       if (live.current) setSaving(false);
-      if (wrote) onSaved();
     }
   }
 
@@ -108,7 +105,9 @@ export function CapsuleSection(
         return;
       }
       setText(r.capsule);
-      setTagsText(r.tags.join(", "));
+      // A draft with no tags line keeps the card's tags, rather than proposing
+      // to clear them.
+      setTagsText((r.tags.length ? r.tags : currentTags).join(", "));
       setEditing(true);
     } catch (err: unknown) {
       onError(err);

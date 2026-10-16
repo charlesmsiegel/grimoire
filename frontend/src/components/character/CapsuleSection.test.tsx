@@ -12,7 +12,6 @@ vi.mock("../../api/client", async () => ({
     getCampaignCharacterTagline: vi.fn(),
     setCampaignCharacterTagline: vi.fn(),
     generateCampaignCapsule: vi.fn(),
-    updateVersion: vi.fn(),
   },
 }));
 
@@ -22,10 +21,13 @@ function card(tags?: string[]): Card {
   return { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara", tags } };
 }
 
-function mount(opts: { tags?: string[]; onSaved?: () => void; onError?: (e: unknown) => void } = {}) {
+function mount(opts: {
+  tags?: string[]; onSaveTags?: (tags: string[]) => Promise<boolean>; onError?: (e: unknown) => void;
+} = {}) {
   return render(
     <CapsuleSection campaignId="run" cid="mara" vid="default" card={card(opts.tags)}
-                    onSaved={opts.onSaved ?? vi.fn()} onError={opts.onError ?? vi.fn()} />,
+                    onSaveTags={opts.onSaveTags ?? vi.fn().mockResolvedValue(true)}
+                    onError={opts.onError ?? vi.fn()} />,
   );
 }
 
@@ -42,7 +44,8 @@ test("Generate fills the draft and writes nothing until Save", async () => {
   (api.generateCampaignCapsule as any).mockResolvedValue({
     capsule: "A gate-warden who keeps every promise.", tags: ["loyal", "wary"],
   });
-  mount();
+  const onSaveTags = vi.fn().mockResolvedValue(true);
+  mount({ onSaveTags });
   await screen.findByText("No capsule yet.");
 
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));
@@ -51,15 +54,14 @@ test("Generate fills the draft and writes nothing until Save", async () => {
   expect(screen.getByDisplayValue("loyal, wary")).toBeTruthy();
   expect(api.generateCampaignCapsule).toHaveBeenCalledWith("run", "mara", "default");
   expect(api.setCampaignCharacterTagline).not.toHaveBeenCalled();
-  expect(api.updateVersion).not.toHaveBeenCalled();
+  expect(onSaveTags).not.toHaveBeenCalled();
 });
 
 test("Save writes the capsule and, when they changed, the tags onto the card", async () => {
   (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
   (api.setCampaignCharacterTagline as any).mockResolvedValue({ ok: true });
-  (api.updateVersion as any).mockResolvedValue({ ok: true });
-  const onSaved = vi.fn();
-  mount({ tags: ["loyal"], onSaved });
+  const onSaveTags = vi.fn().mockResolvedValue(true);
+  mount({ tags: ["loyal"], onSaveTags });
   await screen.findByText("Old.");
 
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -67,18 +69,15 @@ test("Save writes the capsule and, when they changed, the tags onto the card", a
   fireEvent.change(screen.getByLabelText("Tags"), { target: { value: "loyal, Iron Gate" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  await waitFor(() => expect(onSaveTags).toHaveBeenCalledWith(["loyal", "Iron Gate"]));
   expect(api.setCampaignCharacterTagline).toHaveBeenCalledWith("run", "mara", "New.");
-  expect(api.updateVersion).toHaveBeenCalledWith(
-    { kind: "campaign", id: "run" }, "mara", "default",
-    expect.objectContaining({ data: expect.objectContaining({ tags: ["loyal", "Iron Gate"] }) }),
-  );
 });
 
 test("Save leaves the card alone when only the capsule changed", async () => {
   (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
   (api.setCampaignCharacterTagline as any).mockResolvedValue({ ok: true });
-  mount({ tags: ["loyal"] });
+  const onSaveTags = vi.fn().mockResolvedValue(true);
+  mount({ tags: ["loyal"], onSaveTags });
   await screen.findByText("Old.");
 
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -86,7 +85,7 @@ test("Save leaves the card alone when only the capsule changed", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   await waitFor(() => expect(api.setCampaignCharacterTagline).toHaveBeenCalled());
-  expect(api.updateVersion).not.toHaveBeenCalled();
+  expect(onSaveTags).not.toHaveBeenCalled();
 });
 
 test("Cancel discards the draft and restores what was stored", async () => {
@@ -133,4 +132,35 @@ test("Edit is disabled while a draft is being generated, so a late result cannot
 
   expect(await screen.findByRole("button", { name: "Generating…" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+});
+
+test("a draft with no tags line keeps the card's tags rather than clearing them", async () => {
+  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "" });
+  (api.generateCampaignCapsule as any).mockResolvedValue({ capsule: "A gate-warden.", tags: [] });
+  const onSaveTags = vi.fn().mockResolvedValue(true);
+  mount({ tags: ["loyal", "wary"], onSaveTags });
+  await screen.findByText("No capsule yet.");
+
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+  expect(await screen.findByDisplayValue("loyal, wary")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setCampaignCharacterTagline).toHaveBeenCalled());
+  expect(onSaveTags).not.toHaveBeenCalled();
+});
+
+test("a refused tags save leaves the draft open rather than reporting it written", async () => {
+  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
+  (api.setCampaignCharacterTagline as any).mockResolvedValue({ ok: true });
+  const onSaveTags = vi.fn().mockResolvedValue(false);
+  mount({ tags: ["loyal"], onSaveTags });
+  await screen.findByText("Old.");
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Tags"), { target: { value: "loyal, Iron Gate" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => expect(onSaveTags).toHaveBeenCalled());
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  expect(screen.getByLabelText("Tags")).toBeTruthy();
 });

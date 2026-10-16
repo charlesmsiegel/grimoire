@@ -49,9 +49,9 @@ def parse_output(text: str) -> str:
 
 
 #: The campaign-side capsule (#62) reads a character's first scene as well as
-#: the card, because an emergent NPC's card is nearly empty. The head of the
-#: scene is what is sent: a bounded prefix, not the whole transcript, and the
-#: character may be introduced later than that prefix reaches.
+#: the card, because an emergent NPC's card is nearly empty. What is sent is the
+#: excerpt from the character's entrance (the caller starts it there): a bounded
+#: prefix of that, not the whole transcript.
 CAPSULE_SOURCE_CHARS = 4000
 TAGS_MAX = 8
 TAG_MAX_CHARS = 40

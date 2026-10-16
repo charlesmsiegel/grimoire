@@ -2234,6 +2234,11 @@ def post_campaign_voice_anchor_generate(
                           x_grimoire_attempt, work)
 
 
+#: Messages before a recorded placement that the capsule excerpt includes: the
+#: turn that introduced the character lands before the placement is written.
+_ENTRANCE_LEAD = 2
+
+
 def _first_scene_transcript(cid: str, char: str) -> str:
     """The transcript of the first scene `char` was placed in, as the prompt
     reads it, or "" when the character has never appeared in one (#62).
@@ -2247,7 +2252,8 @@ def _first_scene_transcript(cid: str, char: str) -> str:
     # but keeps its interval under `presence`, and the scene a character walked
     # on in is the one this reads even after they have walked off it. Records
     # written before `presence` existed fall back to `scenes`.
-    scenes = list(rec.get("presence") or {}) or list(rec.get("scenes") or [])
+    presence = rec.get("presence") or {}
+    scenes = list(presence) or list(rec.get("scenes") or [])
     if not scenes:
         return ""
     sid = scenes[0]
@@ -2255,8 +2261,15 @@ def _first_scene_transcript(cid: str, char: str) -> str:
         messages = store.scenes.read_scene(cid, sid)["messages"]
     except store.SceneNotFound:
         return ""
+    # The interval's `start` is the message count when the character was placed,
+    # which is after the turn that introduced them, so the excerpt begins a
+    # couple of messages earlier. A scene that runs long before they walk on still
+    # gives the model the entrance and what follows it.
+    arrived = [i.get("start") for i in presence.get(sid) or [] if i.get("start") is not None]
+    begin = max(0, min(arrived, default=0) - _ENTRANCE_LEAD)
     shown = store.regex.view.view(messages, cid=cid, phase="prompt")
-    return store.chronicle.transcript_text(shown, store.appearances.player_label(cid, sid))
+    return store.chronicle.transcript_text(shown[begin:],
+                                           store.appearances.player_label(cid, sid))
 
 
 @router.post("/campaigns/{cid}/characters/{char}/capsule/generate", status_code=202)
