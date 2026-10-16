@@ -391,6 +391,22 @@ test("picking a section swaps main and leaves the index standing", async () => {
   }
 });
 
+test("a record section opens on its browse grid, and ?new=1 is the blank form (#437)", async () => {
+  lastPath = ""; lastSearch = "";
+  const at = (path: string) => (
+    <MemoryRouter initialEntries={[path]}>
+      <PathSpy />
+      <Routes><Route path="/worlds/:wid/*" element={<WorldView />} /></Routes>
+    </MemoryRouter>);
+  const grid = render(at("/worlds/w/locations"));
+  expect(await screen.findByRole("link", { name: /\+ New location/ }))
+    .toHaveAttribute("href", "/worlds/w/locations?new=1");
+  expect(screen.queryByRole("button", { name: "Create location" })).not.toBeInTheDocument();
+  grid.unmount();
+  render(at("/worlds/w/locations?new=1"));
+  expect(await screen.findByRole("button", { name: "Create location" })).toBeInTheDocument();
+});
+
 test("the Output processing row counts the world's own rules and opens their editor", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");

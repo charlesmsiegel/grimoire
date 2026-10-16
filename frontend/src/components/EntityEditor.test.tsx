@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { MemoryRouter, useLocation, useParams, createMemoryRouter, RouterProvider } from "react-router-dom";
+import { MemoryRouter, useLocation, useParams, useSearchParams, createMemoryRouter, RouterProvider } from "react-router-dom";
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { artChanged } from "../appEvents";
 import { EntityEditor } from "./EntityEditor";
@@ -166,7 +166,7 @@ function Wrap(props: Partial<Props> & { kind: Props["kind"]; wid: string }) {
   return (
     <MemoryRouter>
       <PathSpy />
-      <EntityEditor sectionPath="/section" recordHref={(r) => `/section/${r}`} {...props} />
+      <EntityEditor sectionPath="/section" newHref="/section?new=1" isNew recordHref={(r) => `/section/${r}`} {...props} />
     </MemoryRouter>
   );
 }
@@ -174,6 +174,11 @@ function Wrap(props: Partial<Props> & { kind: Props["kind"]; wid: string }) {
 const DEFAULTS = {
   wid: "realm", scope: { kind: "world" as const, id: "realm" },
   sectionPath: "/worlds/realm/items",
+  // The shared defaults open the blank form on the root, as the editor did
+  // before the root became the browse grid (#437). A test about the grid
+  // says `isNew={false}`.
+  isNew: true,
+  newHref: "/worlds/realm/items?new=1",
   recordHref: (r: string) => `/worlds/realm/items/${r}`,
 };
 const editorWith = (p: Partial<Props> & { kind: Props["kind"] }) => (
@@ -251,8 +256,8 @@ test("editing an entity saves with updated keys", async () => {
 });
 
 test("creates a lore entry with a selected owner", async () => {
-  render(<Wrap wid="w" kind="lore" />);
-  await screen.findByRole("link", { name: /\+ new lore entry/i });
+  render(<Wrap isNew wid="w" kind="lore" />);
+  await screen.findByLabelText("Name");
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Exile" } });
   fireEvent.click(await screen.findByLabelText("Tanaka")); // owner checkbox
   fireEvent.click(screen.getByRole("button", { name: /create lore entry/i }));
@@ -274,8 +279,8 @@ test("owners picker offers items, groups and creatures", async () => {
   };
   (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
     Promise.resolve(byKind[kind] ?? []));
-  render(<Wrap wid="w" kind="lore" />);
-  await screen.findByRole("link", { name: /\+ new lore entry/i });
+  render(<Wrap isNew wid="w" kind="lore" />);
+  await screen.findByLabelText("Name");
   for (const label of ["Tanaka", "Quay", "Lantern", "Dock Union", "Gull"]) {
     expect(await screen.findByLabelText(label)).toBeInTheDocument();
   }
@@ -295,9 +300,9 @@ test("groups the rail by owner with an Unowned group", async () => {
       { id: "a", name: "Owned A", owners: "characters:tanaka" },
       { id: "b", name: "World B" },
     ]));
-  const { container } = render(<Wrap wid="w" kind="lore" />);
+  const { container } = render(<Wrap isNew={false} wid="w" kind="lore" />);
   expect(await screen.findByText("Unowned (world)")).toBeInTheDocument();
-  const rail = container.querySelector(".editor-list") as HTMLElement;
+  const rail = container.querySelector(".entity-grid") as HTMLElement;
   // "Owned A" sits under the Tanaka group; "World B" under Unowned
   const tanakaGroup = within(rail).getByText("Tanaka").closest(".rail-group") as HTMLElement;
   expect(within(tanakaGroup).getByText("Owned A")).toBeInTheDocument();
@@ -345,7 +350,7 @@ test("location rail rows show the primary image when one exists", async () => {
     { id: "warehouse", name: "Warehouse Nine", has_image: true },
     { id: "reeds", name: "The Reeds", has_image: false },
   ]);
-  const { container } = render(<Wrap wid="w" kind="locations" />);
+  const { container } = render(<Wrap isNew={false} wid="w" kind="locations" />);
   await screen.findByText("Warehouse Nine");
   expect(container.querySelectorAll(".loc-row-img")).toHaveLength(1);
 });
@@ -410,7 +415,7 @@ test("lore rows stack owner avatars; owners without avatars are omitted", async 
     Promise.resolve(kind === "locations" ? [] : [
       { id: "smuggling", name: "Smuggling", owners: "characters:maren, characters:hedde" },
     ]));
-  const { container } = render(<Wrap wid="w" kind="lore" />);
+  const { container } = render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findAllByText("Smuggling");
   await waitFor(() => expect(container.querySelectorAll(".owner-stack-img")).toHaveLength(2));
   expect(container.querySelector(".owner-stack-img")).toHaveAttribute("title", "Maren");
@@ -432,6 +437,24 @@ test("lore detail owner chips include an avatar or initials", async () => {
   render(<Wrap wid="w" kind="lore" selected="smuggling" />);
   await screen.findByText("quiet boats");
   expect(await screen.findByText("MV")).toBeInTheDocument(); // initials inside the owner chip
+});
+
+test("deleting the open record returns to the grid rather than a blank form under its id", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  lastPath = "";
+  render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+  await waitFor(() => expect(lastPath).toBe("/section"));
+});
+
+test("a failed listing on the browse grid says so instead of reading as an empty library", async () => {
+  (api.listEntities as any).mockRejectedValue(new Error("network down"));
+  renderEditor({ kind: "items", isNew: false });
+  expect(await screen.findByText(/network down/)).toBeInTheDocument();
+  expect(screen.queryByText("No item yet.")).not.toBeInTheDocument();
 });
 
 test("deletes after confirm", async () => {
@@ -464,7 +487,7 @@ test("new kinds render the list/detail pattern with their own label", async () =
     Promise.resolve(kind === "groups" ? [{ id: "salt-circle", name: "Salt Circle" }] : []));
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "salt-circle", name: "Salt Circle" }, body: "A quiet **cabal**" });
-  const { container, rerender } = render(<Wrap wid="w" kind="groups" />);
+  const { container, rerender } = render(<Wrap isNew={false} wid="w" kind="groups" />);
   expect(await screen.findByRole("link", { name: /\+ new group/i })).toBeInTheDocument();
   rerender(<Wrap wid="w" kind="groups" selected="salt-circle" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "groups", "salt-circle"));
@@ -477,11 +500,38 @@ test("new kinds render the list/detail pattern with their own label", async () =
 test("an item uses the common Art shelf while retaining its rail preview", async () => {
   vi.mocked(api.listEntities).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch", has_image: true }]);
   vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target, [artImage(target)]));
-  const { container } = renderEditor({ kind: "items", selected: "saltmarch" });
+  renderEditor({ kind: "items", selected: "saltmarch" });
   fireEvent.click(await screen.findByRole("tab", { name: "Art 1" }));
   expect(screen.getByRole("button", { name: "View Primary image" })).toBeInTheDocument();
-  expect(container.querySelector(".loc-row-img")).not.toBeNull();
   expect(api.listEntityImages).not.toHaveBeenCalled();
+});
+
+test("a wizard left open after its module goes away shows the grid, not a blank form", async () => {
+  const module = {
+    id: "m", source: "builtin", manifest: { id: "m", name: "M" },
+    sheets: { groups: {}, sheet_types: { w: { kind: "items" } } }, checks: {}, rules: [],
+    content: [], errors: [],
+  } as any;
+  (api.listEntities as any).mockResolvedValue([{ id: "bare", name: "Bare" }]);
+  const { rerender } = renderEditor({ kind: "items", isNew: false, module });
+  fireEvent.click(await screen.findByRole("button", { name: /with sheet/ }));
+  rerender(editorWith({ kind: "items", isNew: false, module: null }));
+  expect(await screen.findByRole("link", { name: /Bare/ })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Create item/ })).not.toBeInTheDocument();
+});
+
+test("a browse card is a card whether or not its record has an image", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "bare", name: "Bare" }]);
+  const { container } = renderEditor({ kind: "lore", isNew: false });
+  await screen.findByRole("link", { name: /Bare/ });
+  expect(container.querySelector(".entity-grid .row.loc-row")).not.toBeNull();
+});
+
+test("a browse card carries its record's image", async () => {
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch", has_image: true }]);
+  const { container } = renderEditor({ kind: "items", isNew: false });
+  await screen.findByRole("link", { name: /Saltmarch/ });
+  expect(container.querySelector(".entity-grid .loc-row-img")).not.toBeNull();
 });
 
 test("typed fields render in the form and are sent on create", async () => {
@@ -539,7 +589,7 @@ test("merges module content into the rail as templates and previews on click", a
     kind: "items", id: "lantern", name: "Lantern of Winnowing", body: "A soft lantern.",
     keys: "", sheet_type: null, fields: {},
   });
-  render(<Wrap wid="w1" kind="items" module={module} />);
+  render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   await screen.findByText("Sword");
   const templateRow = await screen.findByText("Lantern of Winnowing");
   fireEvent.click(templateRow);
@@ -569,7 +619,7 @@ test("instantiate creates a real record and navigates to its own address", async
     keys: "", sheet_type: null, fields: {},
   });
   lastPath = "";
-  render(<Wrap wid="w1" kind="items" module={module} />);
+  render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   fireEvent.click(await screen.findByText("Lantern of Winnowing"));
   fireEvent.click(await screen.findByText("Instantiate"));
   await waitFor(() => expect(api.instantiateContent).toHaveBeenCalledWith(
@@ -590,7 +640,7 @@ test("a route change to a pre-owned form clears a stale content preview", async 
     keys: "", sheet_type: null, fields: {},
   });
   const { rerender } = render(
-    <Wrap wid="w" kind="lore" module={module} selected={null} />
+    <Wrap wid="w" kind="lore" module={module} selected={null} isNew={false} />
   );
   // First, click the template to populate contentPreview
   fireEvent.click(await screen.findByText("Salt Pact"));
@@ -619,7 +669,7 @@ it("shows a wizard trigger only when the module has a sheet type for this kind, 
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "items", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
   } as any;
-  render(<Wrap wid="w1" kind="items" module={module} />);
+  render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   const trigger = await screen.findByText("+ New item with sheet…");
   fireEvent.click(trigger);
   await screen.findByText("New item (with sheet)");
@@ -634,7 +684,7 @@ it("wires the wizard's deleteRecord to api.deleteEntity so a failed sheet write 
   } as any;
   (api.createEntity as any).mockResolvedValue({ id: "e1" });
   (api.putSheetCreation as any).mockRejectedValue({ detail: "nope" });
-  render(<Wrap wid="w1" kind="items" module={module} />);
+  render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   fireEvent.click(await screen.findByText("+ New item with sheet…"));
   await screen.findByText("New item (with sheet)");
 
@@ -662,7 +712,7 @@ test("the sheet wizard navigates to the new record's own address on Create", asy
   // to restate its own success rather than inherit that failure.
   (api.putSheetCreation as any).mockResolvedValue({ sheet: null });
   lastPath = "";
-  render(<Wrap wid="w1" kind="items" module={module} />);
+  render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   fireEvent.click(await screen.findByText("+ New item with sheet…"));
   await screen.findByText("New item (with sheet)");
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Sword" } });
@@ -680,7 +730,7 @@ it("hides the wizard trigger when the module has no sheet type for this kind", a
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
   } as any;
-  render(<Wrap wid="w1" kind="items" module={module} />);
+  render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   await screen.findByText("+ New item");
   expect(screen.queryByText("+ New item with sheet…")).not.toBeInTheDocument();
 });
@@ -737,9 +787,9 @@ test("the rail badges non-public rows only", async () => {
       { id: "b", name: "Twist", secrecy: "secret" },
       { id: "c", name: "Note", secrecy: "gm-only" },
     ]));
-  const { container } = render(<Wrap wid="w" kind="lore" />);
+  const { container } = render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findByText("Twist");
-  const rail = container.querySelector(".editor-list") as HTMLElement;
+  const rail = container.querySelector(".entity-grid") as HTMLElement;
   expect(within(rail).getByText("Secret")).toBeInTheDocument();
   expect(within(rail).getByText("GM-only")).toBeInTheDocument();
   expect(within(rail).queryByText("Public")).toBeNull();
@@ -812,7 +862,7 @@ test("rail rows carry the record's token count", async () => {
     { id: "salt", name: "Salt", tokens: 1240 },
     { id: "brine", name: "Brine", tokens: 7 },
   ]);
-  const { container } = render(<Wrap wid="w" kind="lore" />);
+  const { container } = render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findByText("Salt");
   const counts = Array.from(container.querySelectorAll(".row-tokens")).map((n) => n.textContent);
   expect(counts).toEqual(["1,240", "7"]);
@@ -827,11 +877,11 @@ test("a zero-token record still shows its count, in the rail and the detail", as
   (api.listEntities as any).mockResolvedValue([{ id: "stub", name: "Stub", tokens: 0 }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "stub", name: "Stub" }, body: "", tokens: 0 });
+  const browse = render(<Wrap wid="w" kind="lore" isNew={false} />);
+  await within(browse.container.querySelector(".entity-grid") as HTMLElement).findByText("Stub");
+  expect(browse.container.querySelector(".row-tokens")!.textContent).toBe("0");
+  browse.unmount();
   const { container } = render(<Wrap wid="w" kind="lore" selected="stub" />);
-  // Selection is immediate now (a prop, not a click), so the rail row and the
-  // detail view both show "Stub" from the start -- scope the wait to the rail.
-  await within(container.querySelector(".editor-list") as HTMLElement).findByText("Stub");
-  expect(container.querySelector(".row-tokens")!.textContent).toBe("0");
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(container.querySelector(".token-badge")!.textContent).toBe("0 tokens");
 });
@@ -839,7 +889,7 @@ test("a zero-token record still shows its count, in the rail and the detail", as
 test("a row with no token count renders no badge", async () => {
   // a payload from before the field existed must not render "undefined" or 0
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  const { container } = render(<Wrap wid="w" kind="lore" />);
+  const { container } = render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findByText("Salt");
   expect(container.querySelector(".row-tokens")).toBeNull();
 });
@@ -893,16 +943,18 @@ test("a GM-only record's count is marked as never charged, not as a live cost", 
   (api.listEntities as any).mockResolvedValue([{ id: "vault", name: "Vault", tokens: 88, secrecy: "gm-only" }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "vault", name: "Vault", secrecy: "gm-only" }, body: "Behind the seawall.", tokens: 88 });
-  const { container } = render(<Wrap wid="w" kind="lore" selected="vault" />);
+  const browse = render(<Wrap wid="w" kind="lore" isNew={false} />);
   // by role, not by text: the same mock feeds `loreOwnerOptions`, so "Vault"
   // is also an owner checkbox label further down the form
   await screen.findByRole("link", { name: /Vault.*88 tokens/ });
-  expect(container.querySelector(".row-tokens")!.className).toContain("never-charged");
+  expect(browse.container.querySelector(".row-tokens")!.className).toContain("never-charged");
   // Struck-through text does not announce as struck, so the name has to say it.
   // The row also carries #49's own GM-only tag, hence the gap in the middle --
   // asserted loosely so that tag's wording stays that feature's business.
   expect(screen.getByRole("link", { name: /Vault.*88 tokens, never charged/ })).toBeInTheDocument();
+  browse.unmount();
 
+  const { container } = render(<Wrap wid="w" kind="lore" selected="vault" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(container.querySelector(".token-badge")!.className).toContain("never-charged");
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -913,10 +965,12 @@ test("a public record's count carries no never-charged marking", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 88 }]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 88 });
-  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  const browse = render(<Wrap wid="w" kind="lore" isNew={false} />);
   await screen.findByRole("link", { name: /Salt.*88 tokens/ });
+  expect(browse.container.querySelector(".row-tokens")!.className).not.toContain("never-charged");
+  browse.unmount();
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
-  expect(container.querySelector(".row-tokens")!.className).not.toContain("never-charged");
   expect(container.querySelector(".token-badge")!.className).not.toContain("never-charged");
 });
 
@@ -1115,7 +1169,7 @@ test("a long roster can be filtered, and says how much of it is showing", async 
     secrecy: "public", tokens: 10,
   }));
   (api.listEntities as any).mockResolvedValue(many);
-  render(<Wrap wid="w" kind="lore" />);
+  render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findByText("Record 0");
   expect(screen.getByText(/12 lores?/)).toBeInTheDocument();
 
@@ -1125,7 +1179,7 @@ test("a long roster can be filtered, and says how much of it is showing", async 
   expect(screen.getByText("1 of 12")).toBeInTheDocument();
   // Scoped to the rail: the filter narrows what you can NAVIGATE to, and must
   // not close whatever record is already open in the body beside it.
-  const rail = document.querySelector(".editor-list")!;
+  const rail = document.querySelector(".entity-browse")!;
   expect(within(rail as HTMLElement).queryByText("Record 0")).not.toBeInTheDocument();
   expect(within(rail as HTMLElement).getByText("Record 3")).toBeInTheDocument();
 });
@@ -1135,7 +1189,7 @@ test("a filter matching nothing is not an empty world", async () => {
     id: `e${i}`, name: `Record ${i}`, secrecy: "public", tokens: 10,
   }));
   (api.listEntities as any).mockResolvedValue(many);
-  render(<Wrap wid="w" kind="lore" />);
+  render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findByText("Record 0");
   fireEvent.change(screen.getByLabelText(/search lore/i), { target: { value: "zzz" } });
   expect(screen.getByText(/nothing matches/i)).toBeInTheDocument();
@@ -1658,7 +1712,7 @@ describe("selecting from the route", () => {
   });
 
 test("a record row is a link to that record's address", async () => {
-  renderEditor({ kind: "items", selected: null });
+  renderEditor({ kind: "items", selected: null, isNew: false });
   const row = await screen.findByRole("link", { name: /Salt Pact/ });
   expect(row).toHaveAttribute("href", "/worlds/realm/items/the-salt-pact");
 });
@@ -1674,16 +1728,22 @@ test("leaving a record for the section root does not get reopened by its own lat
   const slow = deferred();
   (api.readEntity as any).mockImplementationOnce(() => slow.promise);
   const { rerender } = renderEditor({ kind: "items", selected: "the-salt-pact" });
-  rerender(editorWith({ kind: "items", selected: null }));
+  rerender(editorWith({ kind: "items", selected: null, isNew: false }));
   slow.resolve(entityFixture("the-salt-pact", "The Salt Pact"));
   await screen.findByRole("link", { name: /New item/ });
   expect(screen.queryByRole("heading", { name: "The Salt Pact" })).toBeNull();
 });
 
-test("+ New is a link back to the section root", async () => {
+test("a record's Back link returns to the section root, the browse grid", async () => {
   renderEditor({ kind: "items", selected: "the-salt-pact" });
-  expect(await screen.findByRole("link", { name: /New item/ }))
+  expect(await screen.findByRole("link", { name: /Back to the list/ }))
     .toHaveAttribute("href", "/worlds/realm/items");
+});
+
+test("+ New on the grid links to the blank form, not the root", async () => {
+  renderEditor({ kind: "items", isNew: false });
+  expect(await screen.findByRole("link", { name: /New item/ }))
+    .toHaveAttribute("href", "/worlds/realm/items?new=1");
 });
 
 test("the selected record opens read-only", async () => {
@@ -1926,14 +1986,14 @@ test("Apply imported settings to all sits beside + New on the lore rail only", a
     applied: [{ kind: "lore", id: "a", fields: { sticky: "2" } },
               { kind: "items", id: "b", fields: { priority: "5" } }],
     skipped: [{ kind: "lore", id: "c", reason: "unreadable st_extensions" }] });
-  const { unmount } = render(<Wrap wid="w" kind="lore" />);
+  const { unmount } = render(<Wrap isNew={false} wid="w" kind="lore" />);
   const before = (api.listEntities as any).mock.calls.length;
   fireEvent.click(await screen.findByRole("button", { name: "Apply imported settings to all" }));
   await screen.findByText("Applied to 2 entries; 1 skipped");
   expect(api.adoptStAll).toHaveBeenCalledWith({ kind: "world", id: "w" });
   expect((api.listEntities as any).mock.calls.length).toBeGreaterThan(before);
   unmount();
-  render(<Wrap wid="w" kind="items" />);
+  render(<Wrap isNew={false} wid="w" kind="items" />);
   await screen.findByText("No items yet.");
   expect(screen.queryByRole("button", { name: "Apply imported settings to all" })).toBeNull();
 });
@@ -1984,7 +2044,7 @@ test("adopt-all over a viewed record applies and re-reads it", async () => {
 test("a second click while an adopt is in flight does nothing", async () => {
   let land!: (v: { applied: []; skipped: [] }) => void;
   (api.adoptStAll as any).mockReturnValue(new Promise((r) => { land = r; }));
-  render(<Wrap wid="w" kind="lore" />);
+  render(<Wrap isNew={false} wid="w" kind="lore" />);
   const all = await screen.findByRole("button", { name: "Apply imported settings to all" });
   fireEvent.click(all);
   await waitFor(() => expect(all).toBeDisabled());
@@ -2065,10 +2125,10 @@ test("the adopt-all status line goes when another record is opened", async () =>
 });
 
 test("the adopt-all status line goes when the scope changes", async () => {
-  const { rerender } = render(<Wrap wid="w" kind="lore" />);
+  const { rerender } = render(<Wrap isNew={false} wid="w" kind="lore" />);
   fireEvent.click(await screen.findByRole("button", { name: "Apply imported settings to all" }));
   await screen.findByText("Applied to 0 entries; 0 skipped");
-  rerender(<Wrap wid="other" kind="lore" scope={{ kind: "world", id: "other" }} />);
+  rerender(<Wrap isNew={false} wid="other" kind="lore" scope={{ kind: "world", id: "other" }} />);
   await waitFor(() => expect(screen.queryByText("Applied to 0 entries; 0 skipped")).toBeNull());
 });
 
@@ -2118,7 +2178,7 @@ describe("an adopt that completes after the scope has changed", () => {
     fireEvent.click(within(banner).getByRole("button", { name: /^apply$/i }));
     await waitFor(() => expect(api.adoptSt).toHaveBeenCalled());
 
-    rerender(<Wrap wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
+    rerender(<Wrap isNew={false} wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
     await screen.findByText("Realm Hall", ROW);
     const reads = (api.readEntity as any).mock.calls.length;
     landed.resolve({ applied: { sticky: "2" } });
@@ -2144,7 +2204,7 @@ describe("an adopt that completes after the scope has changed", () => {
     const banner = await screen.findByRole("status", { name: /imported settings/i });
     fireEvent.click(within(banner).getByRole("button", { name: /^apply$/i }));
     await waitFor(() => expect(api.adoptSt).toHaveBeenCalled());
-    rerender(<Wrap wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
+    rerender(<Wrap isNew={false} wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
     await screen.findByText("Realm Hall", ROW);
     landed.reject(new Error("boom"));
     await new Promise((r) => setTimeout(r, 0));
@@ -2156,11 +2216,11 @@ describe("an adopt that completes after the scope has changed", () => {
     const landed = deferred<{ applied: never[]; skipped: never[] }>();
     (api.adoptStAll as any).mockReturnValue(landed.promise);
     const { rerender } = render(
-      <Wrap wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" />);
+      <Wrap isNew={false} wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" />);
     fireEvent.click(await screen.findByRole("button", { name: "Apply imported settings to all" }));
     await waitFor(() => expect(api.adoptStAll).toHaveBeenCalled());
 
-    rerender(<Wrap wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
+    rerender(<Wrap isNew={false} wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
     await screen.findByText("Realm Hall", ROW);
     // The old request no longer holds the new scope's button.
     await waitFor(() => expect(
@@ -2228,7 +2288,7 @@ test("refusing Art navigation preserves the selected entity and its draft", asyn
   function AddressedEntity() {
     const { rid } = useParams();
     return <><PathSpy /><EntityEditor {...DEFAULTS} kind="locations" selected={rid}
-      sectionPath="/worlds/realm/locations" recordHref={(id) => "/worlds/realm/locations/" + id} /></>;
+      sectionPath="/worlds/realm/locations" newHref="/worlds/realm/locations?new=1" recordHref={(id) => "/worlds/realm/locations/" + id} /></>;
   }
   const router = createMemoryRouter([{ path: "/worlds/realm/locations/:rid",
     element: <ArtNavigationProvider><AddressedEntity /></ArtNavigationProvider> }],
@@ -2238,14 +2298,14 @@ test("refusing Art navigation preserves the selected entity and its draft", asyn
   fireEvent.click(screen.getByRole("button", { name: "Description of avatar" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Description of avatar" }), { target: { value: "Unsaved" } });
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-  fireEvent.click(screen.getByRole("link", { name: "Realm" }));
+  fireEvent.click(screen.getByRole("link", { name: /Back to the list/ }));
   await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
   expect(lastPath).toBe("/worlds/realm/locations/saltmarch?tab=art");
   expect(screen.getByRole("textbox", { name: "Description of avatar" })).toHaveValue("Unsaved");
   confirm.mockRestore(); router.dispose(); vi.unstubAllGlobals();
 });
 
-test("saving entity crop updates its header and rail focus together", async () => {
+test("saving entity crop updates its header", async () => {
   vi.mocked(api.listEntities).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch", has_image: true, image_focus: 20 }]);
   vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target, [artImage(target, "avatar", { focus: 20 })]));
   vi.mocked(api.setRecordArtFocus).mockImplementation(async () => {
@@ -2256,13 +2316,11 @@ test("saving entity crop updates its header and rail focus together", async () =
   const { container } = renderEditor({ kind: "locations", selected: "saltmarch" });
   fireEvent.click(await screen.findByRole("tab", { name: "Art 1" }));
   expect(container.querySelector(".record-art-preview img")).toHaveStyle({ objectPosition: "20% 20%" });
-  expect(container.querySelector(".loc-row-img")).toHaveStyle({ objectPosition: "20% 20%" });
   fireEvent.click(screen.getByRole("button", { name: "Manage art" }));
   fireEvent.click(screen.getByRole("button", { name: "Adjust primary crop" }));
   fireEvent.change(screen.getByLabelText("Crop position"), { target: { value: "75" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(container.querySelector(".record-art-preview img")).toHaveStyle({ objectPosition: "75% 75%" }));
-  expect(container.querySelector(".loc-row-img")).toHaveStyle({ objectPosition: "75% 75%" });
 });
 
 
@@ -2328,6 +2386,16 @@ test("reclassification guards an Art draft before its own confirmation and write
   expect(screen.getByRole("textbox", { name: "Description of avatar" })).toHaveValue("Unsaved");
   confirm.mockRestore();
 });
+test("removing the open record from the library returns to the grid", async () => {
+  vi.mocked(api.demoteFromLibrary).mockResolvedValue(undefined as any);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  lastPath = "";
+  render(<Wrap wid="w" kind="locations" selected="saltmarch" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Remove from library/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Remove and copy down" }));
+  await waitFor(() => expect(lastPath).toBe("/section"));
+});
+
 test("library removal refuses to discard an Art draft before deleting the record", async () => {
   vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target));
   vi.mocked(api.demoteFromLibrary).mockImplementation(() => new Promise(() => {}));
@@ -2350,8 +2418,9 @@ test("Art invalidation fresh-reads rail summaries and refuses an older initial l
   let finishOld!: (rows: Awaited<ReturnType<typeof api.listEntities>>) => void;
   vi.mocked(api.listEntities).mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
   vi.mocked(api.readEntity).mockResolvedValue({ meta: { id: "saltmarch", name: "Saltmarch" }, body: "At Saltmarch.", rev: "r1" });
-  const { container } = renderEditor({ kind: "locations", selected: "saltmarch" });
-  await screen.findByRole("tab", { name: /^Art/ });
+  const { container } = renderEditor({ kind: "locations", isNew: false });
+  // The first listing is held open above, so the grid has nothing to draw yet.
+  await waitFor(() => expect(api.listEntities).toHaveBeenCalled());
   vi.mocked(api.listEntities).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch", has_image: true, image_focus: 75 }]);
   act(artChanged);
   await waitFor(() => expect(api.listEntities).toHaveBeenLastCalledWith({ kind: "world", id: "realm" }, "locations", true));
@@ -2597,8 +2666,10 @@ describe("spec 07 group reference consent", () => {
     const base = "/campaigns/saltmarch/groups";
     function AddressedGroup() {
       const { rid } = useParams();
+      const [params] = useSearchParams();
       return <EntityEditor {...DEFAULTS} kind="groups" scope={scope} selected={rid ?? null}
-        sectionPath={base} recordHref={(id) => `${base}/${id}`} />;
+        isNew={params.get("new") === "1"}
+        sectionPath={base} newHref={`${base}?new=1`} recordHref={(id) => `${base}/${id}`} />;
     }
     const router = createMemoryRouter([{ path: base, element: <AddressedGroup /> },
       { path: `${base}/:rid`, element: <AddressedGroup /> }], { initialEntries: [base] });
@@ -2610,8 +2681,9 @@ describe("spec 07 group reference consent", () => {
     vi.mocked(api.readEntity).mockResolvedValue(record(context(false)));
     const done = routed();
     try {
-      // The section root is the blank form: + New's destination.
-      expect(await screen.findByRole("button", { name: "Create group" })).toBeInTheDocument();
+      // The section root is the browse grid; the blank form is its `+ New`.
+      expect(await screen.findByRole("link", { name: "Salt Circle" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Create group" })).not.toBeInTheDocument();
       fireEvent.click(await screen.findByRole("link", { name: "Salt Circle" }));
       await screen.findByRole("heading", { name: "Salt Circle" });
       expect(document.querySelector("textarea")).toBeNull();
@@ -2619,7 +2691,8 @@ describe("spec 07 group reference consent", () => {
       const section = screen.getByRole("heading", { name: "Members" }).closest(".side-section") as HTMLElement;
       expect(within(section).getByRole("button", { name: "Mara" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /^edit$/i })).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("link", { name: "+ New group" }));
+      fireEvent.click(screen.getByRole("link", { name: /Back to the list/ }));
+      fireEvent.click(await screen.findByRole("link", { name: "+ New group" }));
       expect(await screen.findByRole("button", { name: "Create group" })).toBeInTheDocument();
       expect(screen.getByLabelText("Body")).toHaveValue("");
       expect(screen.getByRole("group", { name: "Members" })).toBeInTheDocument();

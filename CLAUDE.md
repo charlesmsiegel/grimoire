@@ -58,9 +58,19 @@ structurally. That boundary holds in both directions:
 ## Frontend: the list/detail page pattern
 
 **Build every record-list page with this pattern.** A page that manages a list of
-records (greetings, lore, locations, characters, …) is a two-pane editor with a
-read-only detail view and an explicit edit step. Canonical implementations:
-`components/GreetingEditor.tsx` and `components/EntityEditor.tsx`.
+records (greetings, lore, locations, characters, …) is an editor with a browse
+surface, a read-only detail view and an explicit edit step. Canonical
+implementations: `components/EntityEditor.tsx` (a roster, as a grid) and
+`components/GreetingEditor.tsx` (a handful, as a rail); `CharacterGrid.tsx` is the
+grid for characters.
+
+**A roster browses as a grid; a handful browses as a rail.** The section's root,
+with no record named and no form asked for, is the browse surface. A roster
+(locations, lore, items, groups, creatures, characters) is a grid of cards, because
+a world can hold hundreds of records and the grid gets the full width. A handful
+(greetings) is a `.editor-list` rail beside its body. The shape follows the size of
+the roster, not the kind: a hundred records in a 220px rail has misread the page,
+and so has a grid for three. (#437)
 
 **The rail navigates the app. A column indexes the page.** `components/AppRail.tsx`
 is the app's navigation: two tiers (the app, and the campaign that is open) in
@@ -93,25 +103,31 @@ last navigation rather than the library's age — and an aggregate it could not
 bring up to date is `partial`, which the card says could not be totalled
 rather than drawing `$0.00`.
 
-**Where a record rail goes depends on whether the page owns the screen.** An
+**Where the browse surface goes depends on whether the page owns the screen.** An
 editor that sits *inside* another page — a library section, a world tab, a
-campaign panel — brings its own `.editor-list` rail, as below. A page that IS
-the screen (the ledger, `routes/SheetsView.tsx`) puts its records in
-`ColumnSection`s in the context column and the detail in main. Building an
-`.editor` rail beside that column is still a misread of the page — the modes,
-the read-only-by-default rule and the explicit edit step are the same either
-way.
+campaign panel — brings its own browse surface, as below. A page that IS the
+screen (the ledger, `routes/SheetsView.tsx`) puts its records in `ColumnSection`s
+in the context column and the detail in main. Building an `.editor` surface beside
+that column is still a misread of the page — the modes, the read-only-by-default
+rule and the explicit edit step are the same either way.
 
-**Structure** — `.editor` containing:
-- `.editor-list` — the rail. A `+ New …` button plus one `.row` button per record
-  (its name). The rail is `position: sticky` and `overflow-y: auto`, so it scrolls
-  **independently** of the page.
-- `.editor-body` — shows either the read-only view or the form.
+**Structure** — two states, one address each:
+- **Browse** (the section root, nothing named, no form asked for): `.entity-browse`,
+  holding a head with a `+ New …` link (to the form's own address, `?new=1`), the
+  search and count, then `.entity-grid` — one `.row` card per record (its image and
+  name). Lore's owner groups are full-width bands inside the grid.
+- **Record or form**: `.editor-body`, the full width, with a **Back to the list**
+  link (to the section root) above it.
+- A handful browses as a rail instead: `.editor` containing `.editor-list` (a `+ New …`
+  button plus one `.row` per record, `position: sticky`, `overflow-y: auto`) beside
+  `.editor-body`. Greetings, PCs, climates and the other small lists do this; only
+  the rosters above take the grid.
 
-**Modes** — a `mode: "view" | "edit"` state:
-- Clicking a row loads the record and opens it in **`view`** (read-only) — records
+**Modes** — a `mode: "view" | "edit"` state, within the record or form state:
+- Opening a card or rail row loads the record in **`view`** (read-only) — records
   are never editable by default.
-- `+ New …` opens the **form** directly (`edit`, with no record selected).
+- `+ New …` opens the **form** at its own address (`?new=1`; Lore's `?owner=` pre-owns
+  it). The section root is never the form: a bare address is the browse grid.
 - An **Edit** button (top of the sidebar) switches a viewed record into the form.
 - Save returns to `view` (re-select the record); Cancel returns to `view`.
 
@@ -125,9 +141,10 @@ way.
   `chip` buttons that navigate to that record; plain attributes render as
   non-clickable `<span class="chip on">` or `.field-hint` text.
 
-**Tests** — cover: clicking a row shows the read-only view (rendered body, no
-`textarea`) with its sidebar; **Edit** reveals the form; `+ New` opens the form
-directly. See `GreetingEditor.test.tsx` / `EntityEditor.test.tsx`.
+**Tests** — cover: clicking a card or row shows the read-only view (rendered body,
+no `textarea`) with its sidebar; **Edit** reveals the form; `+ New` links to the
+form's address and opens the form there; **Back to the list** returns to the grid.
+See `GreetingEditor.test.tsx` / `EntityEditor.test.tsx`.
 
 ## Frontend: keyboard bindings go in the registry, never on `window`
 
