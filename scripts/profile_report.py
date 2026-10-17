@@ -66,17 +66,22 @@ def module_of(nodeid: str) -> str:
     return nodeid.split("::", 1)[0]
 
 
-def concentration(seconds: list[float], shares=(0.01, 0.05, 0.10)) -> dict[str, float]:
+def concentration(seconds: list[float],
+                  shares=(0.01, 0.05, 0.10)) -> dict[str, float | None]:
     """The fraction of all node time held by the slowest `share` of nodes.
 
     Rounded *up* to at least one node, so a small suite still reports its
-    slowest node rather than an empty slice.
+    slowest node rather than an empty slice. With no node timed there is no
+    time to hold a share of, so each share is None -- never 0%, which would
+    read as a suite whose time was evenly spread.
     """
     ordered = sorted(seconds, reverse=True)
+    if not ordered:
+        return {f"top_{share:.0%}": None for share in shares}
     whole = sum(ordered) or 1.0
-    out = {}
+    out: dict[str, float | None] = {}
     for share in shares:
-        n = max(1, -(-len(ordered) * share // 1)) if ordered else 0
+        n = max(1, -(-len(ordered) * share // 1))
         out[f"top_{share:.0%}"] = sum(ordered[: int(n)]) / whole
     return out
 
@@ -119,7 +124,9 @@ def summarize(doc: dict, top: int = 100) -> dict:
         "node_seconds": sum(node_seconds),
         "phase_seconds": {p: sum(rec.get(f"{p}_s", 0.0) for rec in tests.values())
                           for p in PHASES},
-        "median_node_s": statistics.median(node_seconds) if node_seconds else 0.0,
+        # None, not 0.0, for a profile no node reported in (a run stopped at
+        # collection): a median of nothing is unmeasured, not instant.
+        "median_node_s": statistics.median(node_seconds) if node_seconds else None,
         "concentration": concentration(node_seconds),
         "top_total": ranked(total),
         "top_call": ranked(lambda r: r.get("call_s", 0.0)),
@@ -256,16 +263,21 @@ def _print_budget(doc: dict, ref: dict, found: list, window: list[float]) -> Non
     print(f"\n{len(found)} finding(s); this step never fails the job.")
 
 
+def _ms(seconds: float | None) -> str:
+    return "n/a" if seconds is None else f"{seconds * 1000:.1f}ms"
+
+
 def _print_summary(s: dict, top: int) -> None:
     h = s["header"]
     print(f"python {h.get('python')}  sha {h.get('git_sha')}  coverage {h.get('coverage')}  "
           f"workers {h.get('workers')} ({h.get('distribution')})  exit {h.get('exitstatus')}")
     print(f"wall {h.get('wall_s', 0):.1f}s  collect {h.get('collect_s')}  "
           f"nodes {s['nodes']}  node-seconds {s['node_seconds']:.1f}  "
-          f"median node {s['median_node_s'] * 1000:.1f}ms")
+          f"median node {_ms(s['median_node_s'])}")
     print("outcomes:", ", ".join(f"{k} {v}" for k, v in s["outcomes"].items()))
     print("phases:", ", ".join(f"{p} {v:.1f}s" for p, v in s["phase_seconds"].items()))
-    print("concentration:", ", ".join(f"{k} {v:.1%}" for k, v in s["concentration"].items()))
+    print("concentration:", ", ".join(f"{k} {'n/a' if v is None else f'{v:.1%}'}"
+                                      for k, v in s["concentration"].items()))
     for title, key in (("total", "top_total"), ("call", "top_call"),
                        ("setup", "top_setup"), ("teardown", "top_teardown")):
         print(f"\ntop {min(top, len(s[key]))} by {title}:")

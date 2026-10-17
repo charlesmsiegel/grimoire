@@ -17,7 +17,7 @@ import { api } from "../api/client";
 import StatsView from "./StatsView";
 
 const bucket = (over: Record<string, unknown> = {}) => ({
-  key: "chat", calls: 4, errors: 0, error_rate: 0, sampled: false,
+  key: "chat", calls: 4, errors: 0, error_rate: 0, sampled: false, unparsed_durations: 0,
   p50: 250, p90: 380, p99: 400, min: 100, max: 400, ...over,
 });
 
@@ -133,6 +133,31 @@ it("breaks latency down by task and by model", async () => {
   // Seconds past a second, milliseconds under one: the trailing digits of
   // 9000ms mean nothing to a reader.
   expect(within(byTask).getAllByText("9.0s").length).toBeGreaterThan(0);
+});
+
+it("draws a dash, never 0ms, where no call was timed, and counts the untimed", async () => {
+  const untimed = { p50: null, p90: null, p99: null, min: null, max: null };
+  vi.mocked(api.getStats).mockResolvedValue({ ...structuredClone(STATS),
+    by_task: [bucket(), bucket({ key: "dossier", calls: 2, unparsed_durations: 2, ...untimed })],
+    by_day: [bucket({ key: "2026-08-21", calls: 2, unparsed_durations: 2, ...untimed })],
+    totals: bucket({ key: "", calls: 6, unparsed_durations: 2 }),
+  } as never);
+  view();
+  await screen.findByRole("heading", { name: "Performance" });
+
+  // The headline's percentiles and each day's median are over the timed calls
+  // only, so both say how many were left out, as the table rows do.
+  expect(screen.getByText("Calls", { selector: "dt" }).closest("div"))
+    .toHaveTextContent("6 · 2 untimed");
+
+  const row = within(screen.getByText("By task").parentElement!).getByText("dossier")
+    .closest("tr")!;
+  expect(row).toHaveTextContent("2 · 2 untimed");
+  expect(within(row).getAllByText("—")).toHaveLength(5);   // Failed, then p50 to Slowest
+  expect(row).not.toHaveTextContent("0ms");
+  const trend = screen.getByRole("heading", { name: "Median latency by day" }).parentElement!;
+  expect(within(trend).getByText("—")).toBeInTheDocument();
+  expect(trend).toHaveTextContent("2 calls · 2 untimed");
 });
 
 it("shows a failure rate against the calls that succeeded", async () => {

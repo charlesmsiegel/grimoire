@@ -38,7 +38,7 @@ import contextlib
 import statistics
 import time
 import uuid
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -597,27 +597,40 @@ def _not_on(run: PlayRun) -> bool:
 # --- what is reported for the user to judge ---------------------------------------
 
 
-def latency(run: PlayRun) -> tuple[int, int]:
+def _summed_ms(rows: Sequence[dict], tasks: Iterable[str]) -> int | None:
+    """The rows under `tasks`, their `duration_ms` summed -- or None when one
+    of them carries none. A call nobody timed did not take no time, which is
+    `costs.py`'s rule for money and tokens, here for milliseconds. No row
+    under `tasks` at all is a real 0: nothing ran, so nothing was added."""
+    durations = [r.get("duration_ms") for r in rows if r.get("task") in tasks]
+    if any(ms is None for ms in durations):
+        return None
+    return sum(int(ms) for ms in durations)
+
+
+def latency(run: PlayRun) -> tuple[int | None, int | None]:
     """`(added pre-generation ms, generation ms)` for one run, summed from
     its rows' own durations: the speaker pick and the turn decisions before
-    the first token, and the contributions."""
-    pre = sum(int(r.get("duration_ms") or 0) for r in run.rows
-              if r.get("task") in PRE_GENERATION_TASKS)
-    gen = sum(int(r.get("duration_ms") or 0) for r in run.rows
-              if r.get("task") in ("chat", "continuation"))
-    return pre, gen
+    the first token, and the contributions. Either side is None when a row
+    it sums was never timed."""
+    return (_summed_ms(run.rows, PRE_GENERATION_TASKS),
+            _summed_ms(run.rows, ("chat", "continuation")))
 
 
 def summary(graded: Sequence[Graded]) -> list[str]:
     """Per configuration: added latency (median and maximum), stance
     diversity, speaker spread on open fixtures, departures and addressed
     overrides, and the mean mass on the intended speaker. Never a money
-    figure: those are the run file's, per task and per column (01a-C1)."""
+    figure: those are the run file's, per task and per column (01a-C1).
+
+    A median or a mean says how many runs or picks it is over, and reads
+    "n/a" over none -- never 0, which an off configuration's mass would
+    otherwise print as though it had been measured and found wanting."""
     lines = []
     for conf_id in sorted({g.run.config.id for g in graded}, key=lambda c: int(c[1:])):
         runs = [g.run for g in graded if g.run.config.id == conf_id]
         conf = runs[0].config
-        pres = [latency(r)[0] for r in runs]
+        pres = [ms for ms in (latency(r)[0] for r in runs) if ms is not None]
         stances = {i.get("stance") for r in runs for i in
                    (x.get("intent") for x in r.replies) if i and i.get("stance")}
         open_speakers = {s for r in runs if r.fixture.intended == ANY for s in r.speakers[:1]}
@@ -629,8 +642,9 @@ def summary(graded: Sequence[Graded]) -> list[str]:
                   for r in runs if r.picks and r.fixture.intended not in (None, ANY)]
         axes = " ".join(f"{k}={v}" for k, v in conf.axes().items())
         lines.append(f"{conf_id} {axes}")
-        lines.append(f"  added pre-generation ms: median "
-                     f"{statistics.median(pres) if pres else 0:.0f}, max {max(pres, default=0)}")
+        lines.append("  added pre-generation ms: " + (
+            f"median {statistics.median(pres):.0f}, max {max(pres)} over {len(pres)} run(s)"
+            if pres else "n/a (no run timed)"))
         lines.append(f"  stance diversity: {sorted(stances)}")
         lines.append(f"  open-fixture spread: {len(open_speakers)} distinct opener(s)")
         tools = [x["tool"] for r in runs for x in r.replies if x.get("tool")]
@@ -641,8 +655,9 @@ def summary(graded: Sequence[Graded]) -> list[str]:
             lines.append(f"  tool calls: {called}/{len(offered)} offered; declined after "
                          f"text: {declined}/{len(offered)}")
         lines.append(f"  departures: {departures}/{len(picks)}; addressed overrides: "
-                     f"{overrides}/{len(picks)}; mean mass on intended: "
-                     f"{statistics.mean(masses) if masses else 0:.3f}")
+                     f"{overrides}/{len(picks)}; mean mass on intended: " + (
+                         f"{statistics.mean(masses):.3f} over {len(masses)} addressed pick(s)"
+                         if masses else "n/a (no addressed pick)"))
     return lines
 
 

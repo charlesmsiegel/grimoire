@@ -16,6 +16,7 @@
     backend/.venv/Scripts/python.exe evals/run.py --live --play intent \
         --scene openrouter/vendor/model --decision openrouter/vendor/decider  # a play gate
     backend/.venv/Scripts/python.exe evals/run.py --embed         # embedding rankings, replay
+    backend/.venv/Scripts/python.exe evals/run.py --continuity-floors  # candidate floors, offline
     backend/.venv/Scripts/python.exe evals/run.py --live --embed \
         --embed-options '{"input": "prefix", "document_prefix": "passage: "}'  # an A/B
 
@@ -47,6 +48,8 @@ sys.path.append(str(REPO / "backend"))
 
 from evals import cases as case_mod  # noqa: E402
 from evals import costs, escalation, gate, play, runfile, runner  # noqa: E402
+from evals.continuity_floors import corpus as floors_corpus  # noqa: E402
+from evals.continuity_floors import metrics as floors_metrics  # noqa: E402
 from evals.embed import corpus as embed_corpus  # noqa: E402
 from evals.embed import harness as embed_harness  # noqa: E402
 from evals.embed import metrics as embed_metrics  # noqa: E402
@@ -88,6 +91,43 @@ def temp_home():
             else:
                 os.environ["GRIMOIRE_HOME"] = previous
             shutil.rmtree(path, ignore_errors=True)
+
+
+def run_continuity_floors(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """`--continuity-floors`: the continuity candidate filter's floors over
+    the labelled pair corpus (evals/continuity_floors/). Offline and
+    deterministic -- the token and 3-gram signals need no model -- and a
+    report, never a gate: it changes no floor, and exits 0 on a corpus that
+    keeps its rules."""
+    clash = [flag for flag, on in (("--live", args.live), ("--record", args.record),
+                                   ("--case", bool(args.case)), ("--gate", args.gate),
+                                   ("--provider", bool(args.provider)),
+                                   ("--model", bool(args.model)),
+                                   ("--decide-backend", args.decide_backend is not None),
+                                   ("--repeat", args.repeat is not None),
+                                   ("--out", bool(args.out)),
+                                   ("--compare", bool(args.compare)),
+                                   ("--escalation", bool(args.escalation)),
+                                   ("--escalation-sweep", args.escalation_sweep),
+                                   ("--embed", args.embed or bool(args.embed_options)),
+                                   ("--play", bool(args.play)),
+                                   ("--scene", bool(args.scene)),
+                                   ("--decision", bool(args.decision)),
+                                   ("--history", args.history),
+                                   ("--epistemic", args.epistemic),
+                                   ("--investigate", bool(args.investigate)))
+             if on]
+    if clash:
+        ap.error(f"--continuity-floors is offline and measures its own corpus; "
+                 f"it takes no {', '.join(clash)}")
+    corpus = floors_corpus.load()
+    broken = floors_corpus.problems(corpus)
+    if broken:
+        print(runner.ascii_safe("continuity floors: the corpus breaks its rules:\n  "
+                                + "\n  ".join(broken)), file=sys.stderr)
+        return 2
+    print(runner.ascii_safe(floors_metrics.report(corpus)))
+    return 0
 
 
 def run_gate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
@@ -769,8 +809,12 @@ def run_investigate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> in
                    runfile.config("c2", "investigation", {"arm": "investigation"})]
         doc = runfile.build(results, configs, run_id=args.run_id, started=started)
         doc["investigation"] = {"mode": "live" if args.live else "offline",
-                                "margin": investigation_cases.MARGIN, "records": records,
+                                "margin": investigation_cases.MARGIN,
+                                "sign_alpha": investigation_cases.SIGN_ALPHA,
+                                "records": records,
                                 "aggregate": investigation_runner.aggregate(records),
+                                "paired": {m: investigation_runner.paired(records, m)
+                                           for m in modes},
                                 "gate": verdict}
         runfile.write(Path(args.out), doc)
         print(runner.ascii_safe(f"wrote {args.out}"))
@@ -780,8 +824,11 @@ def run_investigate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> in
 def _other_mode(args: argparse.Namespace):
     """The mode that is not a case run, when one is asked for: the embedding
     evals (`--embed`, or `--embed-options`, which it refuses alone), the
-    decide gate, a comparison, or the escalation sweep. None for a case run."""
-    for asked, mode in ((bool(args.investigate), run_investigate),
+    decide gate, a comparison, or the escalation sweep. None for a case run.
+    The continuity floors come first, so that mode is the one to refuse any
+    flag beside it."""
+    for asked, mode in ((args.continuity_floors, run_continuity_floors),
+                        (bool(args.investigate), run_investigate),
                         (args.epistemic, run_epistemic), (args.history, run_history),
                         (bool(args.play), run_play),
                         (args.embed or bool(args.embed_options), run_embed),
@@ -834,6 +881,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--embed", action="store_true",
                     help="rank the embedding corpus (evals/embed/): recall@k and MRR "
                          "against a lexical baseline; replay offline, or --live")
+    ap.add_argument("--continuity-floors", action="store_true",
+                    help="measure the continuity candidate floors on a labelled pair "
+                         "corpus (evals/continuity_floors/); offline, never a call")
     ap.add_argument("--embed-options", action="append", metavar="JSON",
                     help="with --live --embed, also rank under this embedding options "
                          "block (repeatable), in memory: nothing is written")

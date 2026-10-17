@@ -560,6 +560,10 @@ the seeding, the graders and the gate.
   - departures (selected is not the answer) and addressed overrides;
   - the mean mass on the intended speaker, over the weights actually drawn;
   - the money per task, per column, in the case lines and the run file.
+
+  Each median and mean says how many runs or picks it is over, and over none
+  reads n/a, never 0: an off configuration draws nothing, and a call with no
+  duration was not timed rather than instant.
 - **The leak check** (`play.leaks`) is the one feature grader that reads
   offline. `test_play_gate.py` holds it, with the rest of the harness,
   against a scripted fake.
@@ -619,6 +623,70 @@ backend\.venv\Scripts\python.exe evals\run.py --live --embed --embed-options "{\
 What it cannot show: whether a real library retrieves well. A synthetic
 corpus is evidence for a choice of model or options; the recall thresholds
 stay "tune against the inspector".
+
+## Continuity candidate floors
+
+`--continuity-floors` asks which record pairs clear the continuity candidate
+floors -- absorb's duplicate check and the reconcile sweep ask about nothing
+else, so a pair under the floors is never examined and leaves no trace. Clearing
+them is necessary to reach the judge, not sufficient: both callers then keep
+only a record's best few (the identity check the top `IDENTITY_TOP_K` of the
+proposed record, `similarity.nearest`; the sweep a pair in the top
+`RECONCILE_TOP_K` of either end, per type, `reconcile._top_k`). It lives in
+`evals/continuity_floors/`:
+
+- **The corpus** (`corpus.json`) is invented pairs of ledger records, placeholder
+  names only, each labelled with the answer the reconcile judge should give in
+  its own vocabulary: `duplicate`, `continuation`, `subthread`, `related` or
+  `pays_off` (a pair the filter should let through) or `distinct` (one it
+  should not). It keeps the embedding corpus's two rules, with that corpus's
+  `content_words`: a `paraphrase` duplicate shares no content word, and every
+  `distinct` pair is a `decoy` that shares some. `corpus.problems` holds both,
+  that every shape is present, and that every answer the judge can give about
+  each kind of pair has one -- read off `reconcile.DECISIONS`, so a word the
+  judge gains is a gap it names.
+- **The filter is production's**: `similarity.subject`, `lexical` and
+  `admitted_by`, with no embedding, so the semantic clause never admits.
+  Each pair is scored **alone** (no shared actor, so only the lexical clause,
+  `TOKEN_FLOOR` and `CHAR_FLOOR`, decides) and in a **shared cast** (both
+  records involve the player's character, as nearly every pair in a campaign
+  does, so the structural clause on `WEAK_TOKEN` and `WEAK_CHAR` can admit
+  too).
+- **The pair figures are admission rates.** Each pair is scored as its own
+  two-record ledger, where a record has one neighbour and no top-k binds, so
+  there what clears the floors is what reaches the judge. In a crowded ledger
+  the top-k can only drop a pair that cleared them: recall there is at most the
+  pair figure, and precision moves with the ranking.
+- **A crowd** (`crowds` in `corpus.json`) is one such ledger: a hub record with
+  more neighbours of its kind than `IDENTITY_TOP_K`, each hub pair labelled and
+  held to the pair rules. It is scored through production's own selections --
+  `similarity.nearest` from the hub, and `reconcile._score_pairs` with
+  `_top_k` over the whole crowd -- so the report shows, per answer, what clears
+  the floors, what the identity check shows the judge and what the sweep
+  keeps, plus the unlabelled pairs between neighbours the sweep keeps beside
+  them. The one crowd shows the two parting: in a shared cast the identity
+  check's top three take two decoys over a continuation and a subthread that
+  cleared the floors too, while the sweep, keeping either end's top three,
+  drops none of its pairs.
+- **The report** gives recall (the positives let through) and precision (the
+  positives among what was let through), with their counts, per answer, the
+  misses and the decoys let through, at the floors in force -- then a sweep of
+  each condition's two floors, two steps of 0.05 either side, then the crowds.
+  A share of nothing reads n/a. `test_continuity_floors_evals.py` runs it in
+  `pytest backend` and pins the figures at the floors in force, so a change to
+  a floor or a signal says what it did to them.
+
+```sh
+backend/.venv/bin/python evals/run.py --continuity-floors
+backend\.venv\Scripts\python.exe evals\run.py --continuity-floors
+```
+
+What it cannot show: how often a real ledger holds each kind of pair, so its
+figures are the floors' behaviour on the kinds it holds, not a library's
+recall; how crowded a real ledger is, so how often the top-k drops a pair the
+floors let through (a crowd shows that it can, not how often); and
+`COSINE_FLOOR`, which needs a real embedding model. It changes no floor -- each
+stays "to be tuned against real prompts later".
 
 ## The epistemic leakage suite (roadmap 11)
 
@@ -754,6 +822,14 @@ point:
 - the `--investigate <mode> --live --out FILE` table, with the models it ran on;
 - that C beats B on that entry point's correctness by at least the margin stated
   in advance, `evals/investigation/cases.MARGIN` (0.20);
+- that C also wins enough of the cases the two arms disagree on -- each case
+  paired with itself across the arms, a case that ran more than once counted
+  once, ties dropped -- to pass a one-sided exact sign test at
+  `cases.SIGN_ALPHA` (0.05), stated beside the margin and as far in advance.
+  A margin of rates can be met by one case changing hands; this cannot. It
+  takes at least five cases won, so `question` (E3), whose corpus has two,
+  cannot be adopted until its corpus grows -- offline included, where it
+  reports FAIL with the count;
 - that neither leakage line is worse in C than in B, and the hidden route is
   clean;
 - the cost (the three money columns, never added), latency and

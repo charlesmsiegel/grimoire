@@ -100,8 +100,8 @@ class _Series:
 
     Past `MAX_SAMPLES` this switches to **reservoir sampling** (Vitter's R):
     each later value replaces a uniformly-chosen slot with probability
-    `MAX_SAMPLES/n`, which leaves the kept values a uniform sample of
-    everything seen. The obvious alternatives are both wrong in ways that
+    `MAX_SAMPLES/n`, n the durations seen so far, which leaves the kept values
+    a uniform sample of every duration seen. The obvious alternatives are both wrong in ways that
     matter here -- keeping the first N reports the percentiles of whenever the
     window started, which for a 30-day window is a month-old answer presented
     as today's, and always overwriting one fixed slot (which is what this did
@@ -112,45 +112,61 @@ class _Series:
     two numbers a sample is least likely to hold and the two a reader is most
     likely to act on -- "Slowest" understating the worst call in the window
     would be a reading that quietly excuses the thing being investigated.
+
+    A call whose duration could not be read (`_duration` says None) is still a
+    call -- it counts toward `calls` and, when it failed, `errors` -- but it is
+    no latency, so it stays out of the distribution and is counted in
+    `unparsed` instead. Read as 0 ms, it was a fast call nobody made.
     """
 
     def __init__(self) -> None:
         self.values: list[int] = []
         self.calls = 0
         self.errors = 0
+        self.unparsed = 0
         self.sampled = False
         self.low: int | None = None
         self.high: int | None = None
         self._rng = random.Random(SAMPLE_SEED)
 
-    def add(self, ms: int, failed: bool) -> None:
+    def add(self, ms: int | None, failed: bool) -> None:
         self.calls += 1
         if failed:
             self.errors += 1
+        if ms is None:
+            self.unparsed += 1
+            return
         self.low = ms if self.low is None else min(self.low, ms)
         self.high = ms if self.high is None else max(self.high, ms)
         if len(self.values) < MAX_SAMPLES:
             self.values.append(ms)
             return
         self.sampled = True
-        # `randrange(self.calls)` over the count SEEN, not over the reservoir:
-        # that is what makes the keep probability MAX_SAMPLES/n rather than 1.
-        slot = self._rng.randrange(self.calls)
+        # `randrange(n)` over the durations SEEN, not over the reservoir: that
+        # is what makes the keep probability MAX_SAMPLES/n rather than 1. And
+        # n is the timed calls, not `calls`: an untimed row never entered the
+        # reservoir, so counting it would thin every later timed value's keep
+        # probability and tilt the sample towards the start of the window.
+        slot = self._rng.randrange(self.calls - self.unparsed)
         if slot < MAX_SAMPLES:
             self.values[slot] = ms
 
     def report(self, key: str) -> dict:
         out = {"key": key, "calls": self.calls, "errors": self.errors,
                "error_rate": round(self.errors / self.calls, 4) if self.calls else 0.0,
-               "sampled": self.sampled}
+               "sampled": self.sampled, "unparsed_durations": self.unparsed}
+        if not self.values:
+            # No call here carried a duration to measure -- no call at all, or
+            # only rows whose duration would not read -- so there is no
+            # distribution to report: None, never a 0 ms that would read as
+            # calls that took no time.
+            out.update({f"p{q}": None for q in PERCENTILES}, min=None, max=None)
+            return out
         out.update(percentiles(self.values))
         # The exact ends win over the sample's, always -- see the class
         # docstring. Equal when nothing was sampled, so this is a no-op on
         # every real library.
-        # `is not None`, not `or`: a bucket whose fastest call genuinely took
-        # 0ms is not a bucket with no data, and `or` cannot tell them apart.
-        out["min"] = self.low if self.low is not None else 0
-        out["max"] = self.high if self.high is not None else 0
+        out["min"], out["max"] = self.low, self.high
         return out
 
 
@@ -225,7 +241,7 @@ def performance(days: int = DEFAULT_DAYS, campaign: str = "") -> dict:
     by_campaign: dict[str, _Series] = {}
     attempts: dict[str, dict[str, int]] = {}
     for row in usage.calls(span, campaign, since=since, until=until):
-        ms = _int(row.get("duration_ms"))
+        ms = _duration(row.get("duration_ms"))
         failed = row.get("status") == "error"
         overall.add(ms, failed)
         _label_series(by_task, row.get("task"), MAX_BUCKETS).add(ms, failed)
@@ -295,12 +311,14 @@ def _ranked(buckets: dict[str, _Series]) -> list[dict]:
                   key=lambda b: (-b["calls"], b["key"]))
 
 
-def _int(value: object) -> int:
-    """A duration from a row, defensively. A row is a line from a file a human
-    can edit; a string where a number belongs costs that row's contribution to
-    the distribution, not the report."""
+def _duration(value: object) -> int | None:
+    """A duration from a row, defensively, or None when the row has none to
+    give. A row is a line from a file a human can edit; a string where a
+    number belongs -- or a missing, non-finite or boolean one -- costs that
+    row's place in the distribution (`_Series.unparsed` counts it), not the
+    report, and is never read as a call that took 0 ms."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0
+        return None
     if value != value or value in (float("inf"), float("-inf")):
-        return 0
+        return None
     return int(max(0, value))

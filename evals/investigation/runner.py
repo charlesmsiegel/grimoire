@@ -17,9 +17,10 @@ runs as the entry points run it (`investigation.investigate_with_decide`):
 with the decide tool and its capture, and live under the budget's own wall.
 
 The gate (spec 10.4) is per entry point: the investigation arm beats its
-incumbent on correctness by `cases.MARGIN`, and neither leakage line is
-worse. Offline it is reported, never a reason to change a default: turning
-a switch on is a later PR that attaches a passing LIVE table
+incumbent on correctness by `cases.MARGIN`, wins enough of the cases the arms
+disagree on to pass a sign test at `cases.SIGN_ALPHA`, and neither leakage
+line is worse. Offline it is reported, never a reason to change a default:
+turning a switch on is a later PR that attaches a passing LIVE table
 (`evals/README.md`, "Investigation").
 """
 
@@ -28,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import time
 import uuid
 from dataclasses import replace
@@ -433,13 +435,42 @@ def short(records: list[dict], mode: str) -> list[str]:
                    if r["mode"] == mode and r.get("scenes", 0) < cases.LONG_HISTORY})
 
 
+def sign_test(won: int, lost: int) -> float:
+    """The one-sided exact sign test: how likely the challenger is to win
+    `won` or more of the `won + lost` cases the arms disagree on, were each
+    of those cases decided by an even coin. 1.0 when they disagree on none --
+    a tie everywhere is no evidence either way."""
+    n = won + lost
+    return sum(math.comb(n, k) for k in range(won, n + 1)) / 2 ** n
+
+
+def paired(records: list[dict], mode: str) -> dict:
+    """The cases of `mode`, each against itself across the arms: how many the
+    challenger got right more often than its incumbent (`won`), less often
+    (`lost`) and as often (`tied`), and `sign_test`'s `p` over the first two.
+    A case is the unit, so repeats of one case would be one observation
+    rather than several; a case one arm never ran is the coverage check's,
+    and is not counted here."""
+    incumbent, challenger = cases.ARMS[mode]
+    won = lost = tied = 0
+    for case_id in sorted({r["case"] for r in records if r["mode"] == mode}):
+        b = [r for r in records if r["case"] == case_id and r["arm"] == incumbent]
+        c = [r for r in records if r["case"] == case_id and r["arm"] == challenger]
+        if not b or not c:
+            continue
+        lead = _rate(c) - _rate(b)
+        won, lost, tied = won + (lead > 0), lost + (lead < 0), tied + (lead == 0)
+    return {"won": won, "lost": lost, "tied": tied, "p": sign_test(won, lost)}
+
+
 def gate(records: list[dict]) -> dict[str, bool]:
     """Per entry point (spec 10.4): the investigation arm beats its incumbent
-    by `cases.MARGIN` on correctness, with no leakage line worse and no
-    error in either arm -- a raise, or a run that came back failed or
-    refused -- over a run that covered every one of spec 10.2's items for
-    it (`cases.COVERAGE`), each in a long history (`cases.LONG_HISTORY`). E1
-    is absent until 12-S6, and so cannot pass."""
+    by `cases.MARGIN` on correctness and wins enough of the cases they
+    disagree on to pass the sign test at `cases.SIGN_ALPHA`, with no leakage
+    line worse and no error in either arm -- a raise, or a run that came back
+    failed or refused -- over a run that covered every one of spec 10.2's
+    items for it (`cases.COVERAGE`), each in a long history
+    (`cases.LONG_HISTORY`). E1 is absent until 12-S6, and so cannot pass."""
     totals = aggregate(records)
     out: dict[str, bool] = {"rp": False}
     for mode, (incumbent, challenger) in cases.ARMS.items():
@@ -450,6 +481,7 @@ def gate(records: list[dict]) -> dict[str, bool]:
         # An incumbent that errored is no baseline: its abstentions would be
         # the margin. Both arms must have run clean for a comparison to stand.
         out[mode] = (c["correct"] - b["correct"] >= cases.MARGIN
+                     and paired(records, mode)["p"] <= cases.SIGN_ALPHA
                      and c["text_leaks"] <= b["text_leaks"] and c["steered"] <= b["steered"]
                      and c["hidden_route_failures"] == 0
                      and c["errors"] == 0 and b["errors"] == 0)
@@ -467,8 +499,11 @@ def summary(records: list[dict], *, live: bool) -> str:
     lines.append("rp (E1): absent until 12-S6 -- no arm, no leakage line, cannot pass")
     for mode in cases.ARMS:
         missing, brief = sorted(uncovered(records, mode)), short(records, mode)
+        pair = paired(records, mode)
         lines.append(f"{mode}: {'PASS' if verdict[mode] else 'FAIL'} "
-                     f"(margin {cases.MARGIN:.2f} over its incumbent)"
+                     f"(margin {cases.MARGIN:.2f} over its incumbent; cases won "
+                     f"{pair['won']}, lost {pair['lost']}, tied {pair['tied']}: sign test "
+                     f"p={pair['p']:.3f}, at most {cases.SIGN_ALPHA:.2f})"
                      + (f"; corpus items not run: {', '.join(missing)}" if missing else "")
                      + (f"; under {cases.LONG_HISTORY} scenes: {', '.join(brief)}"
                         if brief else ""))

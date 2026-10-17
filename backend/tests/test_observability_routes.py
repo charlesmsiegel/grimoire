@@ -32,11 +32,11 @@ def _today() -> str:
 
 
 # ---- GET /stats (#154) ----
-def test_stats_answers_an_untouched_library_with_zeroes_not_a_404(client):
+def test_stats_answers_an_untouched_library_with_no_calls_not_a_404(client):
     body = client.get("/api/stats").json()
 
     assert body["totals"]["calls"] == 0
-    assert body["totals"]["p50"] == 0
+    assert body["totals"]["p50"] is None          # nothing was timed, so no median
     assert body["by_task"] == []
     assert body["percentiles"] == [50, 90, 99]
 

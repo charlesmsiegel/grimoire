@@ -99,8 +99,11 @@ def cache_written(block: dict) -> int | None:
     provider that sends the breakdown alone -- summing both would report every
     cache write twice.
 
-    A split whose every entry is unusable answers None rather than 0, the rule
-    `tokens` sets: "nobody counted" and "wrote nothing" are different claims.
+    A split with any entry that is not a count answers None, the rule `tokens`
+    sets: "nobody counted" and "wrote nothing" are different claims, and so
+    are "wrote this much" and "wrote at least this much". The tiers that did
+    read are not the whole write, and their sum filed as `cache_write_tokens`
+    would pass for it. An empty split said nothing, and is None too.
     """
     flat = tokens(block.get("cache_creation_input_tokens"))
     if flat is not None:
@@ -108,8 +111,10 @@ def cache_written(block: dict) -> int | None:
     split = block.get("cache_creation")
     if not isinstance(split, dict):
         return None
-    counted = [n for n in (tokens(v) for v in split.values()) if n is not None]
-    return sum(counted) if counted else None
+    counted = [tokens(v) for v in split.values()]
+    if not counted or None in counted:
+        return None
+    return sum(n for n in counted if n is not None)
 
 
 def cache_read(block: dict) -> int | None:
