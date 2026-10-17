@@ -22,13 +22,27 @@ if str(REPO) not in sys.path:
 from evals import run as eval_run  # noqa: E402
 from evals.continuity_floors import corpus as floors_corpus  # noqa: E402
 from evals.continuity_floors import metrics  # noqa: E402
-from grimoire.store.continuity import similarity  # noqa: E402
+from grimoire.store.continuity import reconcile, similarity  # noqa: E402
 
 CORPUS = floors_corpus.load()
 
 
 def test_the_corpus_keeps_its_rules():
     assert floors_corpus.problems(CORPUS) == []
+
+
+def test_every_answer_the_judge_can_give_about_a_pair_has_one():
+    """Read off the judge's own vocabularies, not the corpus's list of them:
+    a word the judge can answer about a pair -- `subthread` between two
+    threads, say -- with no pair labelled so is a kind of pair whose fate at
+    the floors nobody measures. `uncertain` is the one word that labels no
+    pair."""
+    present = {(floors_corpus.VOCABULARY[(p.a["record"], p.b["record"])], p.relation)
+               for p in CORPUS.pairs}
+    for vocabulary in set(floors_corpus.VOCABULARY.values()):
+        for word in reconcile.DECISIONS[vocabulary]:
+            if word != "uncertain":
+                assert (vocabulary, word) in present, f"no {vocabulary} pair is {word!r}"
 
 
 def test_the_rules_catch_a_paraphrase_that_shares_a_word_and_a_decoy_that_shares_none():
@@ -43,7 +57,7 @@ def test_the_rules_catch_a_paraphrase_that_shares_a_word_and_a_decoy_that_shares
             "'office']") in found
     assert "decoy-harbour-tavern: a decoy pair shares no word" in found
     assert "pay-ferry-fare: 'continuation' is not an answer about cross" in found
-    assert "no pair is 'pays_off'" in found
+    assert "no cross pair is 'pays_off'" in found
 
 
 def test_the_floors_in_force_measure_what_they_measured():
@@ -53,9 +67,9 @@ def test_the_floors_in_force_measure_what_they_measured():
     assert (similarity.TOKEN_FLOOR, similarity.CHAR_FLOOR,
             similarity.WEAK_TOKEN, similarity.WEAK_CHAR) == (0.25, 0.35, 0.1, 0.15)
     alone = metrics.measure(CORPUS, "alone")
-    assert (alone.found, alone.kept) == ((4, 25), (4, 9))
+    assert (alone.found, alone.kept) == ((4, 28), (4, 9))
     cast = metrics.measure(CORPUS, "shared cast")
-    assert (cast.found, cast.kept) == ((18, 25), (18, 28))
+    assert (cast.found, cast.kept) == ((21, 28), (21, 31))
 
 
 def test_a_paraphrase_reaches_the_judge_on_no_lexical_evidence():
@@ -97,9 +111,9 @@ def test_a_share_of_nothing_reads_na_never_zero():
 def test_the_cli_prints_the_report(capsys):
     assert eval_run.main(["--continuity-floors"]) == 0
     out = capsys.readouterr().out
-    assert "alone: recall 0.16 (4/25), precision 0.44 (4/9)" in out
-    assert "shared cast: recall 0.72 (18/25), precision 0.64 (18/28)" in out
-    assert "*0.16/0.44" in out and "*0.72/0.64" in out
+    assert "alone: recall 0.14 (4/28), precision 0.44 (4/9)" in out
+    assert "shared cast: recall 0.75 (21/28), precision 0.68 (21/31)" in out
+    assert "*0.14/0.44" in out and "*0.75/0.68" in out
 
 
 @pytest.mark.parametrize("argv", [["--live"], ["--embed"], ["--out", "x.json"],

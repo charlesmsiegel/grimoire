@@ -633,12 +633,14 @@ leaves no trace. It lives in `evals/continuity_floors/`:
 
 - **The corpus** (`corpus.json`) is invented pairs of ledger records, placeholder
   names only, each labelled with the answer the reconcile judge should give in
-  its own vocabulary: `duplicate`, `continuation`, `related` or `pays_off` (a
-  pair the filter should let through) or `distinct` (one it should not). It
-  keeps the embedding corpus's two rules, with that corpus's `content_words`:
-  a `paraphrase` duplicate shares no content word, and every `distinct` pair
-  is a `decoy` that shares some. `corpus.problems` holds both, and that every
-  answer and shape is present.
+  its own vocabulary: `duplicate`, `continuation`, `subthread`, `related` or
+  `pays_off` (a pair the filter should let through) or `distinct` (one it
+  should not). It keeps the embedding corpus's two rules, with that corpus's
+  `content_words`: a `paraphrase` duplicate shares no content word, and every
+  `distinct` pair is a `decoy` that shares some. `corpus.problems` holds both,
+  that every shape is present, and that every answer the judge can give about
+  each kind of pair has one -- read off `reconcile.DECISIONS`, so a word the
+  judge gains is a gap it names.
 - **The filter is production's**: `similarity.subject`, `lexical` and
   `admitted_by`, with no embedding, so the semantic clause never admits.
   Each pair is scored **alone** (no shared actor, so only the lexical clause,

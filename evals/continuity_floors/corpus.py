@@ -2,11 +2,15 @@
 
 Each pair is two ledger records -- two plot threads, two commitments, or one
 of each -- and the answer the reconcile judge should give about them, in its
-own words (`reconcile.DECISIONS`): `duplicate`, `continuation`, `related` or
-`pays_off`, each a pair the candidate filter should let through to the judge,
-or `distinct`, one it should not. Records are written as a ledger stores them
-and read through production's own identity text (`similarity.subject`), so
-the corpus says nothing about the text a signal is computed from.
+own words (`reconcile.DECISIONS`): `duplicate`, `continuation`, `subthread`,
+`related` or `pays_off`, each a pair the candidate filter should let through
+to the judge, or `distinct`, one it should not. Every answer the judge can
+give about each kind of pair is carried by at least one pair, read off
+`reconcile.DECISIONS` itself (`ANSWERS`), so a word the judge gains is a gap
+`problems` names rather than a kind of pair nobody measures. Records are
+written as a ledger stores them and read through production's own identity
+text (`similarity.subject`), so the corpus says nothing about the text a
+signal is computed from.
 
 Two rules, the embedding corpus's own (`evals/embed/corpus.py`, whose
 `content_words` this reuses), make the measurement say something. A
@@ -41,8 +45,20 @@ VOCABULARY = {("thread", "thread"): "same_thread",
               ("commitment", "commitment"): "same_commitment",
               ("thread", "commitment"): "cross", ("commitment", "thread"): "cross"}
 
-#: The answers the corpus must carry, so no shape of pair goes unmeasured.
-RELATIONS = ("duplicate", "continuation", "related", "pays_off", NEGATIVE)
+#: The judge's non-answer, the one word of its vocabularies that labels no
+#: pair: a pair it would be right about is one the filter cannot be scored on.
+UNANSWERED = "uncertain"
+
+#: The answers the judge can give about each vocabulary of pair, read off
+#: `reconcile.DECISIONS` rather than restated, so the corpus must carry every
+#: one and no kind of pair goes unmeasured.
+ANSWERS: dict[str, tuple[str, ...]] = {
+    vocabulary: tuple(word for word in reconcile.DECISIONS[vocabulary] if word != UNANSWERED)
+    for vocabulary in dict.fromkeys(VOCABULARY.values())}
+
+#: Every answer once, the positives in the judge's order and the negative last.
+RELATIONS = (*dict.fromkeys(word for words in ANSWERS.values() for word in words
+                            if word != NEGATIVE), NEGATIVE)
 
 #: The shapes a pair may take, by whether it is a positive.
 SHAPES = {True: ("reworded", "paraphrase"), False: ("decoy",)}
@@ -107,7 +123,7 @@ def _label_problems(pair: Pair) -> list[str]:
     if vocabulary is None:
         return []
     out = []
-    if pair.relation not in reconcile.DECISIONS[vocabulary] or pair.relation == "uncertain":
+    if pair.relation not in ANSWERS[vocabulary]:
         out.append(f"{pair.id}: {pair.relation!r} is not an answer about {vocabulary}")
     if pair.shape not in SHAPES[pair.positive]:
         out.append(f"{pair.id}: a {'positive' if pair.positive else 'negative'} pair "
@@ -134,8 +150,10 @@ def problems(corpus: Corpus) -> list[str]:
     for pair in corpus.pairs:
         record = _record_problems(pair)
         out += record or [*_label_problems(pair), *_word_problems(pair)]
-    out += [f"no pair is {relation!r}" for relation in RELATIONS
-            if relation not in {p.relation for p in corpus.pairs}]
+    present = {(VOCABULARY.get((p.a.get("record"), p.b.get("record"))), p.relation)
+               for p in corpus.pairs}
+    out += [f"no {vocabulary} pair is {word!r}" for vocabulary, words in ANSWERS.items()
+            for word in words if (vocabulary, word) not in present]
     out += [f"no pair is a {shape}" for shape in (*SHAPES[True], *SHAPES[False])
             if shape not in {p.shape for p in corpus.pairs}]
     return out
