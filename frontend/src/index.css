@@ -7,6 +7,10 @@ body {
   background: var(--bg, #e7e1d4);
   color: var(--ink, #1a1712);
   font-family: var(--fb, Georgia, serif);
+  /* The marks the browser draws itself -- a checkbox's tick, a radio's dot, a
+     range's track -- in the accent rather than the UA's blue. Inherited, so
+     this one declaration reaches every one of them. */
+  accent-color: var(--accent);
 }
 /* per-theme background overlay (Manuscript wash / Astral starfield) */
 body::before {
@@ -14,6 +18,30 @@ body::before {
   pointer-events: none; background: var(--fx, none);
 }
 #root { position: relative; z-index: 1; display: flex; flex-direction: column; }
+
+/* ---- form controls and links: what an undressed one falls back to ---- */
+/* A control does not inherit type. The UA gives every button, input, select
+   and textarea a small system face of its own (13.3px, Arial on Linux), so
+   each one a rule forgot to dress rendered in a font the app never chose:
+   the new-scene chooser's cards, the Scenes filter, a response's actions. A
+   rule that sets its own face and size still wins; this only decides what is
+   left when nothing does. The face and the size only, not the whole `font`:
+   a dressed control that names its face but not its line-height (`.subtle`)
+   would otherwise take the line-height of whatever prose it sits in. */
+button, input, select, textarea { font-family: inherit; font-size: inherit; }
+/* The same floor for the box. `:where` holds it at zero specificity, so every
+   dressed control -- `.field`, `.config-field`, `.picker`, `.rail-search`, the
+   composer's -- keeps whatever it sets, and only an undressed one (a report's
+   scope select, the ledger's inline editor) stops being a browser box. Square,
+   as `.field` is: a radius here would round every dressed control that never
+   asked for one. Text entry only -- a checkbox, radio, range or file input
+   keeps its native mark, which `accent-color` on `body` colours. */
+:where(select, textarea, input:not([type]), input[type="text"], input[type="search"],
+       input[type="number"], input[type="password"], input[type="url"],
+       input[type="email"], input[type="tel"]) {
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line-strong); padding: 5px 8px;
+}
 
 /* visually hidden but accessible (labels whose section heading already shows the text) */
 .sr-only {
@@ -485,7 +513,7 @@ body::before {
 }
 .palette-key { font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; color: var(--accent); }
 .palette-input input {
-  flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  flex: 1; min-width: 0; background: transparent; border: 0; outline: none; padding: 0;
   color: var(--ink); font-family: var(--fm); font-size: 14px; letter-spacing: 0.02em;
 }
 .palette-hint {
@@ -981,7 +1009,12 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   width: 4.5em; flex: none; background: var(--surface); color: var(--ink);
   border: 1px solid var(--line-strong); border-radius: 3px; padding: 5px 8px;
   font-family: var(--fm); font-size: 12px; min-height: 34px; text-align: right;
+  /* No spinner: the box is sized to three digits and right-aligned, so the
+     UA's arrows sat on top of the figure. The arrow keys still step it. */
+  appearance: textfield; -moz-appearance: textfield;
 }
+.response-target-input::-webkit-inner-spin-button,
+.response-target-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .response-target-input:focus { border-color: var(--accent); outline: none; }
 /* #83: the composer's Speak/Direct toggle. Segmented rather than a checkbox —
    the two are alternatives, and naming both is what teaches the second one. */
@@ -1148,7 +1181,7 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
 .config textarea { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--rule); padding: 10px 12px; font-family: var(--fb); font-size: 15px; resize: vertical; }
 .config .mono-input, .config input.mono-input { font-family: var(--fm); font-size: 13px; }
 .config .checkbox-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.config input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+.config input[type="checkbox"] { width: 18px; height: 18px; }
 .save-flash { color: var(--accent); font-family: var(--fm); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; }
 .config-msg.err { color: var(--banner-ink); font-family: var(--fm); font-size: 10.5px; }
 /* Light / Dark / System, and every other pick-one-of-n strip (the composer's
@@ -1176,9 +1209,10 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
   display: flex; align-items: center; gap: 6px; width: 100%;
   border: 1px solid var(--rule-soft); padding: 8px 10px; margin-bottom: 6px;
   background: var(--surface); color: var(--ink);
-  /* A <button> takes the browser's own UA font by default; an <a> inherits
-     the page's. Pinned here so every `.row` agrees regardless of which tag
-     renders it, instead of the tag silently deciding. */
+  /* A <button> and an <a> used to disagree on the face (the UA's own against
+     the page's) until the control floor at the top of this file; it stays
+     pinned so every `.row` reads the same wherever it sits, instead of its
+     container silently deciding. */
   font-family: var(--fb);
 }
 /* The rail row is a Link now (EntityEditor, GreetingEditor, PCEditor), not a
@@ -1282,9 +1316,12 @@ pre.regex-code { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10p
 .field .field-caption { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
 /* `password` and `number` are here because the API-key field is one: matching
    only [type="text"] left it at the browser's intrinsic ~185px, which is wider
-   than the whole column on a phone and scrolled /connections sideways. */
-.field input[type="text"], .field input[type="password"], .field input[type="number"],
-.field textarea, .field select {
+   than the whole column on a phone and scrolled /connections sideways. An
+   input with no `type` at all is a text input too (the climate, module and
+   module-content editors write them that way), and matching only the spelled
+   type left every one of those a browser box inside a dressed form. */
+.field input:not([type]), .field input[type="text"], .field input[type="password"],
+.field input[type="number"], .field textarea, .field select {
   width: 100%; background: var(--surface); color: var(--ink);
   border: 1px solid var(--rule);
   padding: 8px; font-family: var(--fb); font-size: 17px;
@@ -2025,7 +2062,7 @@ a.shelf-promote { text-decoration: none; text-align: center; }
   border-right: 1px solid var(--rule); padding: 7px 10px; font-family: var(--fm); font-size: 12px;
 }
 .check-pop input[type="number"] { width: 60px; }
-.msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; padding: 0; }
+.msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
 .msg-edit:hover { color: var(--accent); }
 .msg-edit:disabled { opacity: 0.4; cursor: default; }
 /* The cascade cut (#75) takes this post and every one after it, so its hover
@@ -2426,7 +2463,7 @@ a.shelf-promote { text-decoration: none; text-align: center; }
    app, so these stay local until a second one earns promoting them. */
 .chooser .radio-group { display: flex; flex-direction: column; gap: 4px; }
 .chooser .radio-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.chooser .radio-row input[type="radio"] { flex: none; width: auto; margin: 0; accent-color: var(--accent); }
+.chooser .radio-row input[type="radio"] { flex: none; width: auto; margin: 0; }
 /* Story pressure (capstone §16.2): a disclosure under Direction. The body is
    bounded and scrolls on its own, so a campaign with many drivers cannot push
    Suggest and the cards off a phone screen (the chooser is 92vw and 80vh). The
@@ -3271,7 +3308,7 @@ a.column-back { text-decoration: none; }
   font-family: var(--fb); font-size: 15px; color: var(--ink);
 }
 .config-page .checkbox-row input[type="checkbox"] {
-  width: 18px; height: 18px; accent-color: var(--accent);
+  width: 18px; height: 18px;
 }
 .config-page .field-hint { max-width: 62ch; line-height: 1.5; }
 
@@ -3321,7 +3358,7 @@ a.column-back { text-decoration: none; }
 .prompt-layout-row.off .prompt-layout-label,
 .prompt-layout-row.off .prompt-layout-tier { opacity: 0.55; }
 .prompt-layout-row input[type="checkbox"] {
-  flex: none; width: 18px; height: 18px; accent-color: var(--accent);
+  flex: none; width: 18px; height: 18px;
 }
 .prompt-layout-label {
   flex: 1 1 auto; min-width: 0; padding: 6px 8px;
@@ -3672,7 +3709,7 @@ a.column-back { text-decoration: none; }
   text-transform: uppercase;
 }
 .ledger-toggle:hover { color: var(--ink); }
-.ledger-toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
+.ledger-toggle input { width: 18px; height: 18px; }
 /* Same slot, a different control: the relationship timeline narrows by pair on
    the SERVER (the route caps what it returns), so this is a read selector
    rather than a view toggle. Sized to the column it sits under. */
