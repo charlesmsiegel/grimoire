@@ -100,8 +100,8 @@ class _Series:
 
     Past `MAX_SAMPLES` this switches to **reservoir sampling** (Vitter's R):
     each later value replaces a uniformly-chosen slot with probability
-    `MAX_SAMPLES/n`, which leaves the kept values a uniform sample of
-    everything seen. The obvious alternatives are both wrong in ways that
+    `MAX_SAMPLES/n`, n the durations seen so far, which leaves the kept values
+    a uniform sample of every duration seen. The obvious alternatives are both wrong in ways that
     matter here -- keeping the first N reports the percentiles of whenever the
     window started, which for a 30-day window is a month-old answer presented
     as today's, and always overwriting one fixed slot (which is what this did
@@ -142,9 +142,12 @@ class _Series:
             self.values.append(ms)
             return
         self.sampled = True
-        # `randrange(self.calls)` over the count SEEN, not over the reservoir:
-        # that is what makes the keep probability MAX_SAMPLES/n rather than 1.
-        slot = self._rng.randrange(self.calls)
+        # `randrange(n)` over the durations SEEN, not over the reservoir: that
+        # is what makes the keep probability MAX_SAMPLES/n rather than 1. And
+        # n is the timed calls, not `calls`: an untimed row never entered the
+        # reservoir, so counting it would thin every later timed value's keep
+        # probability and tilt the sample towards the start of the window.
+        slot = self._rng.randrange(self.calls - self.unparsed)
         if slot < MAX_SAMPLES:
             self.values[slot] = ms
 

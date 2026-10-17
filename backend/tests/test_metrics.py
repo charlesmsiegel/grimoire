@@ -244,6 +244,25 @@ def test_past_the_cap_the_distribution_is_sampled_and_says_so(home, monkeypatch)
     assert report["max"] == 30
 
 
+def test_an_untimed_row_does_not_thin_the_sample_of_the_timed_ones(home, monkeypatch):
+    """The reservoir's n is the durations it has seen, not the calls: an
+    untimed row is no latency, so it must not lower the keep probability of
+    every timed value after it. Fed the same timed values from the same seed,
+    a bucket that also held untimed rows keeps exactly the same sample."""
+    monkeypatch.setattr(metrics, "MAX_SAMPLES", 10)
+    timed, crowded = metrics._Series(), metrics._Series()
+    for _ in range(25):
+        crowded.add(None, failed=False)
+    for ms in range(1, 61):
+        timed.add(ms, failed=False)
+        crowded.add(ms, failed=False)
+        if ms % 3 == 0:
+            crowded.add(None, failed=True)
+
+    assert crowded.calls == timed.calls + 45 and crowded.unparsed == 45
+    assert crowded.values == timed.values
+
+
 def test_under_the_cap_nothing_claims_to_have_been_sampled(home):
     _call(100)
 
