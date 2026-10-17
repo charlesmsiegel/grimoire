@@ -140,9 +140,15 @@ it("draws a dash, never 0ms, where no call was timed, and counts the untimed", a
   vi.mocked(api.getStats).mockResolvedValue({ ...structuredClone(STATS),
     by_task: [bucket(), bucket({ key: "dossier", calls: 2, unparsed_durations: 2, ...untimed })],
     by_day: [bucket({ key: "2026-08-21", calls: 2, unparsed_durations: 2, ...untimed })],
+    totals: bucket({ key: "", calls: 6, unparsed_durations: 2 }),
   } as never);
   view();
   await screen.findByRole("heading", { name: "Performance" });
+
+  // The headline's percentiles and each day's median are over the timed calls
+  // only, so both say how many were left out, as the table rows do.
+  expect(screen.getByText("Calls", { selector: "dt" }).closest("div"))
+    .toHaveTextContent("6 · 2 untimed");
 
   const row = within(screen.getByText("By task").parentElement!).getByText("dossier")
     .closest("tr")!;
@@ -151,6 +157,7 @@ it("draws a dash, never 0ms, where no call was timed, and counts the untimed", a
   expect(row).not.toHaveTextContent("0ms");
   const trend = screen.getByRole("heading", { name: "Median latency by day" }).parentElement!;
   expect(within(trend).getByText("—")).toBeInTheDocument();
+  expect(trend).toHaveTextContent("2 calls · 2 untimed");
 });
 
 it("shows a failure rate against the calls that succeeded", async () => {

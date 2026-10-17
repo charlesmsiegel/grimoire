@@ -538,7 +538,17 @@ export default function StatsView({ cid = null }: { cid?: string | null }) {
             ? <p className="column-empty">Reading the ledger…</p>
             : <>
                 <dl className="stats-cards">
-                  <div><dt>Calls</dt><dd>{stats.totals.calls}</dd></div>
+                  <div>
+                    <dt>Calls</dt>
+                    <dd>
+                      {stats.totals.calls}
+                      {/* The percentiles beside this card are over the timed
+                          calls only, as each table row says of its own. */}
+                      {stats.totals.unparsed_durations > 0 && (
+                        <span className="field-hint"> · {stats.totals.unparsed_durations} untimed</span>
+                      )}
+                    </dd>
+                  </div>
                   <div><dt>Median</dt><dd>{duration(stats.totals.p50)}</dd></div>
                   <div><dt>p90</dt><dd>{duration(stats.totals.p90)}</dd></div>
                   <div><dt>p99</dt><dd>{duration(stats.totals.p99)}</dd></div>
@@ -562,7 +572,8 @@ export default function StatsView({ cid = null }: { cid?: string | null }) {
                 <Trend heading="Median latency by day" format={duration}
                        rows={stats.by_day.map((d) => ({
                          key: d.key, value: d.p50,
-                         note: `${d.calls} call${d.calls === 1 ? "" : "s"}`,
+                         note: `${d.calls} call${d.calls === 1 ? "" : "s"}`
+                           + (d.unparsed_durations > 0 ? ` · ${d.unparsed_durations} untimed` : ""),
                        }))} />
                 <Trend heading="Manual rerolls by day" format={(n) => String(n)}
                   rows={stats.by_day.map((d) => ({
