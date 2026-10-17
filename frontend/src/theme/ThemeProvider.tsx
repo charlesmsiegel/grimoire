@@ -27,6 +27,13 @@ function applyTheme(mode: ThemeMode, prefersDark: boolean): ThemeName {
   for (const [key, value] of Object.entries(theme.tokens)) {
     root.style.setProperty(key, value);
   }
+  // The tokens reach everything the stylesheet dresses; `color-scheme` is what
+  // reaches the rest. The browser paints its own parts -- a select's option
+  // list, a date or file picker, a scrollbar, the frame of any control no rule
+  // has styled yet -- in the scheme the page declares, and a page that declares
+  // none is light: every one of them came up as a white box on the dark desk.
+  // A look's name is the scheme it is, so it is spelled once.
+  root.style.colorScheme = theme.name;
   // Two attributes, because two questions get asked: `data-theme` is the look
   // (what CSS and a screenshot see), `data-theme-mode` is the choice (what the
   // segmented control highlights, which is `system` even while it renders dark).

@@ -7,6 +7,10 @@ body {
   background: var(--bg, #e7e1d4);
   color: var(--ink, #1a1712);
   font-family: var(--fb, Georgia, serif);
+  /* The marks the browser draws itself -- a checkbox's tick, a radio's dot, a
+     range's track -- in the accent rather than the UA's blue. Inherited, so
+     this one declaration reaches every one of them. */
+  accent-color: var(--accent);
 }
 /* per-theme background overlay (Manuscript wash / Astral starfield) */
 body::before {
@@ -14,6 +18,35 @@ body::before {
   pointer-events: none; background: var(--fx, none);
 }
 #root { position: relative; z-index: 1; display: flex; flex-direction: column; }
+
+/* ---- form controls and links: what an undressed one falls back to ---- */
+/* A control does not inherit type. The UA gives every button, input, select
+   and textarea a small system face of its own (13.3px, Arial on Linux), so
+   each one a rule forgot to dress rendered in a font the app never chose:
+   the new-scene chooser's cards, the Scenes filter, a response's actions. A
+   rule that sets its own face and size still wins; this only decides what is
+   left when nothing does. The face and the size only, not the whole `font`:
+   a dressed control that names its face but not its line-height (`.subtle`)
+   would otherwise take the line-height of whatever prose it sits in. */
+button, input, select, textarea { font-family: inherit; font-size: inherit; }
+/* The same floor for the box. `:where` holds it at zero specificity, so every
+   dressed control -- `.field`, `.config-field`, `.picker`, `.rail-search`, the
+   composer's -- keeps whatever it sets, and only an undressed one (a report's
+   scope select, the ledger's inline editor) stops being a browser box. Square,
+   as `.field` is: a radius here would round every dressed control that never
+   asked for one. Text entry only -- a checkbox, radio, range or file input
+   keeps its native mark, which `accent-color` on `body` colours. */
+:where(select, textarea, input:not([type]), input[type="text"], input[type="search"],
+       input[type="number"], input[type="password"], input[type="url"],
+       input[type="email"], input[type="tel"]) {
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line-strong); padding: 5px 8px;
+}
+/* A link nothing else here describes is prose -- a "Settings →" in a hint, a
+   "Back to the campaign" -- and the UA's blue belongs to neither look (in the
+   dark one it is dark blue on near-black). Every styled link sets its own
+   colour, so this reaches only the ones that were rendering blue. */
+a { color: var(--accent); }
 
 /* visually hidden but accessible (labels whose section heading already shows the text) */
 .sr-only {
@@ -85,7 +118,17 @@ body::before {
   padding: 11px 20px; cursor: pointer; border: 1px solid var(--rule);
 }
 .btn-accent { background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-glow); }
-.btn-accent:disabled { background: var(--disabled); color: var(--bg); box-shadow: none; cursor: default; }
+/* Every accent-filled button that cannot be pressed right now, in one look:
+   the accent goes and the label stays legible (4.3:1 and up in both looks).
+   These used to be `--bg` ink on the `--disabled` fill -- under 2:1, so
+   "Create" all but vanished in the dark -- while `.primary` had no disabled
+   look at all and the settings bar's Save only faded, which over the dark
+   desk's bright accent still read as live. */
+.btn-accent:disabled, button.primary:disabled, .column-primary:disabled,
+.inputbar .send:disabled, .config-bar .btn-accent:disabled {
+  background: var(--track); color: var(--muted); border-color: var(--line);
+  box-shadow: none; cursor: default;
+}
 .btn-chrome { background: var(--chrome); color: var(--chrome-text); }
 .btn-outline { background: transparent; color: var(--ink); }
 .btn-outline:hover, .btn-chrome:hover { box-shadow: var(--shadow-glow); }
@@ -147,6 +190,12 @@ body::before {
 .world-card .row-actions { position: absolute; top: 10px; right: 10px; opacity: 0; }
 .world-card:hover .row-actions, .world-card:focus-within .row-actions { opacity: 1; }
 .world-card .row-rename { margin: 20px; width: calc(100% - 40px); }
+/* Half a phone is narrower than a world card's own actions: four 44px targets
+   (the phone floor, further down) against a ~170px card ran off its left edge
+   and over the cover, and a 30px name already overran it. One to a row. */
+@media (max-width: 640px) {
+  .world-grid { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ---- campaign world-copy banner ---- */
 .fork-banner {
@@ -365,7 +414,6 @@ body::before {
   transition: background-color 140ms ease-out;
 }
 .column-primary:hover:not(:disabled) { background: var(--accent-strong); }
-.column-primary:disabled { background: var(--disabled); color: var(--panel); cursor: default; box-shadow: none; }
 
 .column-link {
   display: flex; align-items: center; justify-content: space-between;
@@ -485,7 +533,7 @@ body::before {
 }
 .palette-key { font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; color: var(--accent); }
 .palette-input input {
-  flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  flex: 1; min-width: 0; background: transparent; border: 0; outline: none; padding: 0;
   color: var(--ink); font-family: var(--fm); font-size: 14px; letter-spacing: 0.02em;
 }
 .palette-hint {
@@ -567,8 +615,8 @@ body::before {
 .shortcuts-row.off .shortcuts-keys { color: var(--muted); border-color: var(--line); opacity: .6; }
 
 /* ---- focus: every interactive element, one ring ---- */
-button:focus-visible, a:focus-visible, input:focus-visible,
-select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
@@ -981,7 +1029,12 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   width: 4.5em; flex: none; background: var(--surface); color: var(--ink);
   border: 1px solid var(--line-strong); border-radius: 3px; padding: 5px 8px;
   font-family: var(--fm); font-size: 12px; min-height: 34px; text-align: right;
+  /* No spinner: the box is sized to three digits and right-aligned, so the
+     UA's arrows sat on top of the figure. The arrow keys still step it. */
+  appearance: textfield; -moz-appearance: textfield;
 }
+.response-target-input::-webkit-inner-spin-button,
+.response-target-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .response-target-input:focus { border-color: var(--accent); outline: none; }
 /* #83: the composer's Speak/Direct toggle. Segmented rather than a checkbox —
    the two are alternatives, and naming both is what teaches the second one. */
@@ -1072,7 +1125,6 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   transition: background-color 140ms ease-out;
 }
 .inputbar .send:hover:not(:disabled) { background: var(--accent-strong); }
-.inputbar .send:disabled { background: var(--disabled); color: var(--panel); cursor: default; }
 /* Stack the run actions in one column so adding Stop does not squeeze the
    text box on a phone. Continue stays visible throughout speaker selection. */
 .composer-run-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
@@ -1148,7 +1200,7 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
 .config textarea { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--rule); padding: 10px 12px; font-family: var(--fb); font-size: 15px; resize: vertical; }
 .config .mono-input, .config input.mono-input { font-family: var(--fm); font-size: 13px; }
 .config .checkbox-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.config input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+.config input[type="checkbox"] { width: 18px; height: 18px; }
 .save-flash { color: var(--accent); font-family: var(--fm); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; }
 .config-msg.err { color: var(--banner-ink); font-family: var(--fm); font-size: 10.5px; }
 /* Light / Dark / System, and every other pick-one-of-n strip (the composer's
@@ -1176,9 +1228,10 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
   display: flex; align-items: center; gap: 6px; width: 100%;
   border: 1px solid var(--rule-soft); padding: 8px 10px; margin-bottom: 6px;
   background: var(--surface); color: var(--ink);
-  /* A <button> takes the browser's own UA font by default; an <a> inherits
-     the page's. Pinned here so every `.row` agrees regardless of which tag
-     renders it, instead of the tag silently deciding. */
+  /* A <button> and an <a> used to disagree on the face (the UA's own against
+     the page's) until the control floor at the top of this file; it stays
+     pinned so every `.row` reads the same wherever it sits, instead of its
+     container silently deciding. */
   font-family: var(--fb);
 }
 /* The rail row is a Link now (EntityEditor, GreetingEditor, PCEditor), not a
@@ -1240,8 +1293,17 @@ pre.regex-code { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10p
 .row-done { flex: none; margin-left: auto; color: var(--accent); font-size: 11px; }
 .row-subtitle { display: block; font-family: var(--fm); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .row-actions { display: flex; gap: 2px; flex: none; }
-.row-actions button { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
-.row-actions button:hover:not(:disabled) { color: var(--accent); }
+/* A row's actions are mostly a single glyph (✎ ⑂ ✕, ↑ ↓), and a 13px glyph
+   with no box of its own is a 19×13 target. 28px square is the floor here;
+   the 720px sweep below takes it to 44. The world card's export is a download
+   link among the buttons, so it is dressed as one of them rather than left an
+   underlined link glyph. */
+.row-actions button, .row-actions a {
+  background: transparent; border: none; color: var(--muted); cursor: pointer;
+  padding: 0 4px; font-size: 13px; line-height: 1; min-width: 28px; min-height: 28px;
+}
+.row-actions a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.row-actions button:hover:not(:disabled), .row-actions a:hover { color: var(--accent); }
 /* The world card's Fork is the first disabled button to appear in a
    row-actions strip; without these it would keep lighting up on hover
    while ignoring the click. */
@@ -1282,9 +1344,12 @@ pre.regex-code { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10p
 .field .field-caption { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
 /* `password` and `number` are here because the API-key field is one: matching
    only [type="text"] left it at the browser's intrinsic ~185px, which is wider
-   than the whole column on a phone and scrolled /connections sideways. */
-.field input[type="text"], .field input[type="password"], .field input[type="number"],
-.field textarea, .field select {
+   than the whole column on a phone and scrolled /connections sideways. An
+   input with no `type` at all is a text input too (the climate, module and
+   module-content editors write them that way), and matching only the spelled
+   type left every one of those a browser box inside a dressed form. */
+.field input:not([type]), .field input[type="text"], .field input[type="password"],
+.field input[type="number"], .field textarea, .field select {
   width: 100%; background: var(--surface); color: var(--ink);
   border: 1px solid var(--rule);
   padding: 8px; font-family: var(--fb); font-size: 17px;
@@ -1306,6 +1371,9 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 }
 .chip.on { background: var(--accent); color: var(--on-accent); border-color: var(--rule); }
 .chip.solid { background: var(--chrome); color: var(--chrome-text); border-color: var(--chrome); }
+/* A chip that cannot be pressed right now has to look it: the wizard's
+   greeting chips carry their reason only in a tooltip, and read as live. */
+button.chip:disabled { opacity: 0.45; cursor: default; }
 /* `.chip` sets no `text-decoration`, which every `<button class="chip">` and
    `<span class="chip">` badge already renders without one — an `<a
    class="chip">` (the unlinked-version row) is the one tag here whose UA
@@ -1325,14 +1393,19 @@ a.chip { text-decoration: none; text-align: center; }
 .editor-list { width: 220px; flex: none; position: sticky; top: 12px;
   max-height: calc(100vh - 24px - 52px); overflow-y: auto; }
 .editor-list .new { width: 100%; margin-bottom: 8px; position: sticky; top: 0; z-index: 1; }
-/* Rail filters. `box-sizing` is load-bearing on the search box: the rail is a
-   fixed 220px and the input carries padding and a border, so content-box would
-   put it over the edge and give the whole page a sideways scroll. */
-.editor-list .rail-search {
-  width: 100%; box-sizing: border-box; margin-bottom: 8px;
+/* A list's search box, wherever the list is: a greetings rail, a roster's
+   browse head, the Scenes list. The look lives here and each home adds only
+   its own width -- it used to be spelled out under `.editor-list` and again
+   under `.entity-browse`, so the Scenes filter, which sits in neither, was
+   the one left a browser box. */
+.rail-search {
   background: var(--surface); color: var(--ink); border: 1px solid var(--rule);
   padding: 6px 8px; font-family: var(--fm); font-size: 11px;
 }
+/* Rail filters. `box-sizing` is load-bearing on the search box: the rail is a
+   fixed 220px and the input carries padding and a border, so content-box would
+   put it over the edge and give the whole page a sideways scroll. */
+.editor-list .rail-search { width: 100%; box-sizing: border-box; margin-bottom: 8px; }
 .editor-list .rail-filters { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
 .editor-list .rail-filters .chip { cursor: pointer; font-size: 9.5px; padding: 2px 7px; }
 /* An unlit chip is a mark being hidden, so it has to read as off rather than
@@ -1361,11 +1434,7 @@ a.chip { text-decoration: none; text-align: center; }
 .entity-browse { flex: 1; min-width: 0; }
 .entity-browse-head { margin-bottom: 14px; }
 .entity-browse-head .new { display: inline-block; margin-bottom: 8px; }
-.entity-browse .rail-search {
-  width: 100%; max-width: 320px; box-sizing: border-box; margin-bottom: 8px;
-  background: var(--surface); color: var(--ink); border: 1px solid var(--rule);
-  padding: 6px 8px; font-family: var(--fm); font-size: 11px;
-}
+.entity-browse .rail-search { width: 100%; max-width: 320px; box-sizing: border-box; margin-bottom: 8px; }
 .entity-grid { --entity-cols: 3; display: grid; grid-template-columns: repeat(var(--entity-cols), minmax(0, 1fr)); gap: 18px; }
 /* Lore's owner groups: each is a full-width band holding its own grid, so the
    heading spans the row and the cards keep the column count of their parent. */
@@ -2025,7 +2094,7 @@ a.shelf-promote { text-decoration: none; text-align: center; }
   border-right: 1px solid var(--rule); padding: 7px 10px; font-family: var(--fm); font-size: 12px;
 }
 .check-pop input[type="number"] { width: 60px; }
-.msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; padding: 0; }
+.msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
 .msg-edit:hover { color: var(--accent); }
 .msg-edit:disabled { opacity: 0.4; cursor: default; }
 /* The cascade cut (#75) takes this post and every one after it, so its hover
@@ -2426,7 +2495,7 @@ a.shelf-promote { text-decoration: none; text-align: center; }
    app, so these stay local until a second one earns promoting them. */
 .chooser .radio-group { display: flex; flex-direction: column; gap: 4px; }
 .chooser .radio-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.chooser .radio-row input[type="radio"] { flex: none; width: auto; margin: 0; accent-color: var(--accent); }
+.chooser .radio-row input[type="radio"] { flex: none; width: auto; margin: 0; }
 /* Story pressure (capstone §16.2): a disclosure under Direction. The body is
    bounded and scrolls on its own, so a campaign with many drivers cannot push
    Suggest and the cards off a phone screen (the chooser is 92vw and 80vh). The
@@ -3132,8 +3201,6 @@ a.column-back { text-decoration: none; }
   .mobile-art-preview { width: 96px; height: 96px; flex: none; padding: 0; display: grid; place-items: center; overflow: hidden; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-raised, var(--surface)); cursor: pointer; }
   .mobile-art-preview img { width: 100%; height: 100%; object-fit: cover; }
   .mobile-art-action { min-height: 44px; }
-  /* Nothing to hover with, so the quiet controls are simply always visible. */
-  .field-edit, .version-rename { color: var(--muted); }
 }
 
 /* ---- config (4b) ---- */
@@ -3271,7 +3338,7 @@ a.column-back { text-decoration: none; }
   font-family: var(--fb); font-size: 15px; color: var(--ink);
 }
 .config-page .checkbox-row input[type="checkbox"] {
-  width: 18px; height: 18px; accent-color: var(--accent);
+  width: 18px; height: 18px;
 }
 .config-page .field-hint { max-width: 62ch; line-height: 1.5; }
 
@@ -3321,7 +3388,7 @@ a.column-back { text-decoration: none; }
 .prompt-layout-row.off .prompt-layout-label,
 .prompt-layout-row.off .prompt-layout-tier { opacity: 0.55; }
 .prompt-layout-row input[type="checkbox"] {
-  flex: none; width: 18px; height: 18px; accent-color: var(--accent);
+  flex: none; width: 18px; height: 18px;
 }
 .prompt-layout-label {
   flex: 1 1 auto; min-width: 0; padding: 6px 8px;
@@ -3432,7 +3499,7 @@ a.column-back { text-decoration: none; }
 .config-bar .btn-outline:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .config-bar .btn-accent { border: 0; background: var(--accent); color: var(--on-accent); }
 .config-bar .btn-accent:hover:not(:disabled) { background: var(--accent-strong); }
-.config-bar button:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+.config-bar .btn-outline:disabled { opacity: 0.45; cursor: default; }
 
 /* Phone: three tracks do not fit, and the bar keeps its 44px targets. */
 @media (max-width: 720px) {
@@ -3672,7 +3739,7 @@ a.column-back { text-decoration: none; }
   text-transform: uppercase;
 }
 .ledger-toggle:hover { color: var(--ink); }
-.ledger-toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
+.ledger-toggle input { width: 18px; height: 18px; }
 /* Same slot, a different control: the relationship timeline narrows by pair on
    the SERVER (the route caps what it returns), so this is a read selector
    rather than a view toggle. Sized to the column it sits under. */
@@ -4398,7 +4465,7 @@ a.search-hit { text-decoration: none; color: inherit; }
 }
 .hub-primary {
   display: inline-flex; align-items: center; margin-top: 12px; min-height: 44px;
-  padding: 0 18px; border-radius: 3px; background: var(--accent);
+  padding: 0 18px; border: 0; border-radius: 3px; background: var(--accent);
   color: var(--on-accent); text-decoration: none;
   font-family: var(--fm, monospace); font-weight: 700; font-size: 11px;
   letter-spacing: 0.14em; text-transform: uppercase;
@@ -4915,19 +4982,46 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      padding and an 18px title, and put them on `--panel` with a rule under
      them so the head reads as chrome the content scrolls past rather than as
      the start of the content. */
-  .page-wide { padding: 0 0 18px; max-width: none; }
+  /* The body gutter is the page box's own padding, as it is `.page`'s below,
+     so a bordered child -- a card, a list, a button -- keeps its border inside
+     it. It used to be padding on every child instead, which put each boxed
+     child's border on the screen edge, padded a lone button's own label, and
+     (losing a specificity fight with its own exceptions) indented a section's
+     heading twice. The head is the one thing that bleeds back to the edge. */
+  .page-wide { padding: 0 14px 18px; max-width: none; }
   /* Every screen title, not only the ones that lead with an eyebrow: half the
      app's heads are `<eyebrow><title>` and half are a bare title, and at 26px
      against 18px the two read as different screens of different apps. */
   .screen-title { font-size: 18px; letter-spacing: 0.03em; line-height: 1.15; }
-  .page-wide > .eyebrow:first-child {
-    padding: 11px 14px 0; margin: 0; background: var(--panel);
+  /* Four head shapes share the panel: an eyebrow over a bare title, an
+     eyebrow over a title row with actions (Scenes' `.scenes-head`), a
+     `.shelf-head` holding both (below), and a bare title with no eyebrow at
+     all (the global Costs report). A shape missing here keeps the desktop's
+     4px top margin and reads as a different app's screen. */
+  .page-wide > .eyebrow:first-child,
+  .page-wide > .eyebrow:first-child + .screen-title,
+  .page-wide > .eyebrow:first-child + .scenes-head,
+  .page-wide > .screen-title:first-child,
+  .page-wide > .shelf-head:first-child {
+    margin: 0 -14px; padding-left: 14px; padding-right: 14px; background: var(--panel);
   }
-  .page-wide > .eyebrow:first-child + .screen-title {
-    font-size: 18px; letter-spacing: 0.03em; margin: 3px 0 0;
-    padding: 0 14px 11px; background: var(--panel);
+  .page-wide > .eyebrow:first-child { padding-top: 11px; }
+  /* Padding, not a margin, between the two: they are one panel, and a margin
+     there was a 3px seam of the page showing through it. */
+  .page-wide > .eyebrow:first-child + .screen-title,
+  .page-wide > .eyebrow:first-child + .scenes-head {
+    padding-top: 3px; padding-bottom: 11px; border-bottom: 1px solid var(--line);
+  }
+  .page-wide > .eyebrow:first-child + .screen-title { font-size: 18px; letter-spacing: 0.03em; }
+  .page-wide > .eyebrow:first-child + .scenes-head > .screen-title { margin-top: 0; }
+  .page-wide > .screen-title:first-child {
+    padding-top: 11px; padding-bottom: 11px; margin-bottom: 14px;
     border-bottom: 1px solid var(--line);
   }
+  /* A head with actions of its own (the ledger's "+ New fact", a report's
+     scope) is a `.shelf-head`, and it is the same panel: without this it sat
+     flush under the phone's index bar, its eyebrow touching the rule. */
+  .page-wide > .shelf-head:first-child { padding-top: 11px; padding-bottom: 11px; margin-bottom: 14px; }
   /* The `.page` layout, which the library family uses, gets the same treatment
      from its own two classes. A 64px display face is a desktop measure; the
      640px rule above already pulled the face to 40, which is still most of a
@@ -4940,13 +5034,6 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   .page-h1, .page-narrow .page-h1 {
     font-size: 20px; line-height: 1.15; letter-spacing: 0.04em;
   }
-
-  /* Everything after the head keeps the body gutter the head already has. */
-  .page-wide > *:not(.eyebrow):not(.screen-title) { padding-left: 14px; padding-right: 14px; }
-  .page-wide > .chore-list,
-  .page-wide > section > .chore-list { padding-left: 0; padding-right: 0; }
-  .page-wide > section { padding-left: 0; padding-right: 0; }
-  .page-wide > section > * { padding-left: 14px; padding-right: 14px; }
 
   /* ---- To do: a row becomes a card, and its actions stop competing ---- */
   /* Side by side, the fix and the ignore squeeze the sentence they are about
@@ -5124,7 +5211,7 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      it. Its rename/delete pair rides along for the same reason `.chore-fix`
      and `.chore-ignore` do: a row's attached actions are controls too. */
   .row-label { display: flex; align-items: center; min-height: 44px; }
-  .row-actions button { min-height: 44px; }
+  .row-actions button, .row-actions a { min-width: 44px; min-height: 44px; }
   /* The scene list's own ✕ owes the same floor; it is not in a `.row-actions`
      strip because it is a cell of the row's grid. */
   .scene-item-del { min-height: 44px; padding: 0 12px; }
@@ -5179,6 +5266,20 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   /* Collapsible section triggers — the character editor's own disclosures,
      the cast panel, the context/cost breakdowns' `<details>`. */
   summary { min-height: 44px; }
+}
+
+/* ---- nothing to hover with ---- */
+/* Some actions wait for the pointer: a world card's ✎ ⑂ ✕ and a post's gutter
+   icons fade in, and a field's Edit, a version's rename and a ledger row's
+   actions are transparent ink until their row is hovered. A touch screen has
+   no hover, so there they never appeared -- and an invisible button still
+   takes a tap, which for the gutter's "delete this and everything after" is
+   the worst of both. Where the device cannot hover they simply show. Keyed on
+   the input rather than the width (the field and version pair used to be
+   keyed on 720px): a narrow desktop window can hover, and a tablet is wide. */
+@media (hover: none) {
+  .world-card .row-actions, .gutter-icons { opacity: 1; }
+  .field-edit, .version-rename, .row-do { color: var(--muted); }
 }
 
 /* Collection navigation is local to the image occurrence, including in prose. */

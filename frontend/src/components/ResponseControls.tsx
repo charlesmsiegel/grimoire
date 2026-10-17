@@ -57,8 +57,8 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
     finally { setLoading(false); }
   }
   return <div className="response-controls">
-    {status === "incomplete" && <p className="subtle">Incomplete response</p>}
-    {contextChanged && <p className="subtle">Earlier context changed</p>}
+    {status === "incomplete" && <p className="field-hint">Incomplete response</p>}
+    {contextChanged && <p className="field-hint">Earlier context changed</p>}
     {/* Not a controlled `open`: the browser owns a disclosure's state, and
         this only follows it. The click handler reads the element as it is
         before its own toggle runs, so it sets what the element is about to
@@ -79,20 +79,20 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
           title="Continue this reply where it stops, as a new version of it"
           onClick={() => onExtend(responseId, guidance.trim(), route)}>Keep writing ▸</button>}
       </> : <>
-        <p className="subtle">Historical context is unavailable for this reply. Replay explicitly rebuilds from this point.</p>
+        <p className="field-hint">Historical context is unavailable for this reply. Replay explicitly rebuilds from this point.</p>
       </>}
       <button disabled={disabled} onClick={onReplay}>Replay from here</button>
       <button disabled={disabled} onClick={() => onDelete(responseId)}>Delete response</button>
       <button disabled={disabled || loading} onClick={() => void variants()}>Response variants</button>
       {onCreateCharacter && <button disabled={disabled} onClick={onCreateCharacter}>Create character from this passage</button>}
       {error !== null && <p role="alert"><ErrorNote err={error} /></p>}
-      {record?.approach && <p className="subtle">Approach: <span className="chip on">{record.approach}</span></p>}
+      {record?.approach && <p className="field-hint">Approach: <span className="chip on">{record.approach}</span></p>}
       {record?.variants.map((variant, index) => <div key={variant.id}>
         <Thinking content={variant.reasoning ?? ""} />
         <p>{variant.content}</p>
         {madeByLines(variant.made_by, settingsFor(variant.made_by, record))
-          .map((line) => <p key={line} className="subtle">{line}</p>)}
-        {variant.issue && <p className="subtle">Response issue: {variant.issue}</p>}
+          .map((line) => <p key={line} className="field-hint">{line}</p>)}
+        {variant.issue && <p className="field-hint">Response issue: {variant.issue}</p>}
         <button disabled={disabled || variant.status !== "complete" || record.active_variant === variant.id}
           onClick={() => { setRecord(null); onActivate(responseId, variant.id); }}>
           Use variant {index + 1}{variant.status === "incomplete" ? " (incomplete)" : ""}
