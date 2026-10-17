@@ -235,5 +235,27 @@
          "title": "Winifred will sell grain to the Realm",
          "beats": ["Winifred promised the Realm a winter's worth of grain."],
          "due": "first frost"}}
+ ],
+ "crowds": [
+  {"id": "crowd-harbour-ledger",
+   "hub": {"record": "thread", "title": "Find the harbour ledger",
+           "beats": ["Mara says the ledger went missing from the harbour office."]},
+   "spokes": [
+    {"id": "crowd-ledger-duplicate", "relation": "duplicate", "shape": "reworded",
+     "record": {"record": "thread", "title": "Recover the missing harbour ledger",
+                "beats": ["Seraphine searches the harbour office for the lost ledger."]}},
+    {"id": "crowd-ledger-continuation", "relation": "continuation", "shape": "reworded",
+     "record": {"record": "thread", "title": "Deliver the ledger to the guild",
+                "beats": ["With the ledger found, Mara must carry it to the Saltmarch guild."]}},
+    {"id": "crowd-ledger-subthread", "relation": "subthread", "shape": "reworded",
+     "record": {"record": "thread", "title": "Question the harbour clerks",
+                "beats": ["Seraphine asks each clerk who last saw the ledger."]}},
+    {"id": "crowd-ledger-tavern", "relation": "distinct", "shape": "decoy",
+     "record": {"record": "thread", "title": "Mara's harbour tavern",
+                "beats": ["Mara opens a tavern beside the harbour office with borrowed money."]}},
+    {"id": "crowd-ledger-paint", "relation": "distinct", "shape": "decoy",
+     "record": {"record": "thread", "title": "Repaint the harbour office",
+                "beats": ["Winifred wants the harbour office painted before the guild visits."]}}
+   ]}
  ]
 }

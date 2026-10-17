@@ -3,18 +3,30 @@
 The filter is production's own: each pair's records become
 `similarity.subject`s, `similarity.lexical` scores them, and
 `similarity.admitted_by` -- with the module's floors as they stand, or
-patched to a swept value for one call -- says whether the pair reaches the
-judge. Nothing is restated here, so a change to a floor, a signal or a clause
+patched to a swept value for one call -- says whether the pair clears the
+floors. Nothing is restated here, so a change to a floor, a signal or a clause
 moves these figures. No embedding is involved: `cosine` stays None, as it
 does on a store with no Embedding role, so the semantic clause never admits
 and `COSINE_FLOOR` is not measured; that takes a real model.
 
+**The pair figures are admission rates.** Clearing the floors is necessary to
+reach the judge, not sufficient: both callers then keep only a record's best
+few -- absorb's identity check the hub's top `IDENTITY_TOP_K`
+(`similarity.nearest`), the reconcile sweep a pair in the top
+`RECONCILE_TOP_K` of either end, per type (`reconcile._top_k`). A corpus pair
+is scored as its own two-record ledger, where each record has one neighbour
+and neither top-k binds, so for it the two are the same; in a crowded ledger
+the top-k can only drop a pair that cleared the floors, so recall there is at
+most this, and precision moves with whatever the ranking keeps. A crowd
+(`measure_crowd`) is one such ledger, scored through those two selections
+themselves.
+
 Recall is the share of the pairs the judge should see that the filter lets
 through (a miss costs a duplicate record nobody is asked about); precision is
 the share of what it lets through that the judge should see (a false
-positive costs a share of one `decide()` chunk). The corpus is synthetic, so
-these say how the floors treat the kinds of pair it holds -- not how often a
-real ledger holds each kind.
+positive costs a share of one `decide()` chunk -- or, in a crowd, can cost a
+positive its slot). The corpus is synthetic, so these say how the floors treat
+the kinds of pair it holds -- not how often a real ledger holds each kind.
 """
 
 from __future__ import annotations
@@ -24,9 +36,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from unittest.mock import patch
 
-from grimoire.store.continuity import similarity
+from grimoire.store.continuity import reconcile, similarity
 
-from .corpus import RELATIONS, Corpus
+from .corpus import RELATIONS, Corpus, Crowd
 
 #: The two conditions every pair is scored under. `alone`: its records share
 #: no actor, scene or event, so only the lexical clause can admit it, on
@@ -63,6 +75,38 @@ def admitted(scored: dict[str, dict], **floors: float) -> frozenset[str]:
             stack.enter_context(patch.object(similarity, name, value))
         return frozenset(pid for pid, sig in scored.items()
                          if similarity.admitted_by(sig) is not None)
+
+
+@dataclass(frozen=True)
+class CrowdMeasure:
+    """One crowd under one condition, as pair ids: what clears the floors,
+    what absorb's identity check shows the judge (`similarity.nearest` from
+    the hub), what the reconcile sweep keeps (`reconcile._score_pairs` and
+    `_top_k` over the whole crowd), and how many pairs between two
+    neighbours, which carry no label, the sweep keeps beside them."""
+
+    crowd: Crowd
+    admitted: frozenset[str]
+    identity: frozenset[str]
+    sweep: frozenset[str]
+    between: int
+
+
+def measure_crowd(crowd: Crowd, condition: str) -> CrowdMeasure:
+    """`crowd` under `condition`, at the floors in force, through production's
+    own selections rather than a copy of their ranking."""
+    hub, spokes = crowd.subjects(CONDITIONS[condition])
+    pair_of = {s.ref: p.id for s, p in zip(spokes, crowd.pairs, strict=True)}
+    cleared = frozenset(pair_of[s.ref] for s in spokes
+                        if similarity.admitted_by(similarity.lexical(hub, s)) is not None)
+    shown = frozenset(pair_of[s.ref] for s, _ in similarity.nearest(hub, spokes))
+    ledger = [hub, *spokes]
+    scored, _, finished, _, _ = reconcile._score_pairs(
+        [s.ref for s in ledger], ledger, {}, reconcile.RECONCILE_MAX_PAIRS, False)
+    kept = reconcile._top_k(scored, {s.ref: s for s in ledger}, finished)
+    swept = frozenset(pair_of[b if a == hub.ref else a] for a, b in kept if hub.ref in (a, b))
+    return CrowdMeasure(crowd, cleared, shown, swept,
+                        sum(hub.ref not in pair for pair in kept))
 
 
 @dataclass(frozen=True)
@@ -141,7 +185,8 @@ def _grid(corpus: Corpus, condition: str) -> list[str]:
     rows_name, cols_name = SWEPT[condition]
     scored = signals(corpus, condition)
     cols = sweep_values(cols_name)
-    lines = [f"sweep, {condition} (recall/precision; * marks the floors in force):",
+    lines = [(f"sweep, {condition} (recall/precision through the floors; * marks the "
+              "floors in force):"),
              f"  {rows_name:>12} \\ {cols_name:<10}" + "".join(f"{c:>12.2f}" for c in cols)]
     for row in sweep_values(rows_name):
         cells = []
@@ -155,21 +200,56 @@ def _grid(corpus: Corpus, condition: str) -> list[str]:
     return lines
 
 
+def _by_answer(crowd: Crowd, ids: frozenset[str]) -> str:
+    """`ids` among `crowd`'s pairs, per answer, in `RELATIONS` order."""
+    counts = []
+    for relation in RELATIONS:
+        pairs = [p.id for p in crowd.pairs if p.relation == relation]
+        if pairs:
+            counts.append(f"{relation} {sum(pid in ids for pid in pairs)}/{len(pairs)}")
+    return ", ".join(counts)
+
+
+def _crowd_lines(crowd: Crowd) -> list[str]:
+    lines = []
+    for condition in CONDITIONS:
+        m = measure_crowd(crowd, condition)
+        lines += [f"{crowd.id}, {condition} ({len(crowd.pairs)} neighbours):",
+                  f"  through the floors: {_by_answer(crowd, m.admitted)}",
+                  (f"  absorb's identity check (similarity.nearest, the hub's top "
+                   f"{similarity.IDENTITY_TOP_K}): {_by_answer(crowd, m.identity)}"),
+                  (f"  the reconcile sweep (reconcile._top_k, either end's top "
+                   f"{reconcile.RECONCILE_TOP_K}): {_by_answer(crowd, m.sweep)}; plus "
+                   f"{m.between} pairs between neighbours, unlabelled")]
+    return lines
+
+
 def report(corpus: Corpus) -> str:
     """The figures at the floors in force under each condition, what each
-    missed and let through, and a sweep of each condition's floors."""
+    missed and let through, a sweep of each condition's floors, and what the
+    top-k does to each crowd."""
     positives = [p for p in corpus.pairs if p.positive]
     lines = [("continuity candidate floors (offline; no embedding, so COSINE_FLOOR is "
               "not measured)"),
              (f"corpus: {len(corpus.pairs)} pairs, {len(positives)} the judge should see "
-              f"and {len(corpus.pairs) - len(positives)} it should not (decoys)"),
+              f"and {len(corpus.pairs) - len(positives)} it should not (decoys); "
+              f"{len(corpus.crowds)} crowd{'' if len(corpus.crowds) == 1 else 's'}"),
              "floors in force: " + ", ".join(
                  f"{name} {getattr(similarity, name):.2f}"
-                 for name in (*SWEPT["alone"], *SWEPT["shared cast"]))]
+                 for name in (*SWEPT["alone"], *SWEPT["shared cast"])),
+             ("pairs, each its own two-record ledger -- admission rates: one neighbour "
+              "a record, so no top-k binds and what clears the floors reaches the judge; "
+              "in a crowded ledger the top-k drops some of it (crowds, below)")]
     for condition in CONDITIONS:
         m = measure(corpus, condition)
-        lines += [f"{condition}: recall {_ratio(*m.found)}, precision {_ratio(*m.kept)}",
+        lines += [(f"{condition}, through the floors: recall {_ratio(*m.found)}, "
+                   f"precision {_ratio(*m.kept)}"),
                   *_lines(m)]
     for condition in CONDITIONS:
         lines += _grid(corpus, condition)
+    if corpus.crowds:
+        lines.append("crowds, one ledger each: a hub with more neighbours than the top-k "
+                     "keeps, scored through production's own selections")
+    for crowd in corpus.crowds:
+        lines += _crowd_lines(crowd)
     return "\n".join(lines)

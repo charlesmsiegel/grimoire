@@ -108,12 +108,52 @@ def test_a_share_of_nothing_reads_na_never_zero():
     assert metrics._ratio(*none_through.kept) == "n/a (none let through)"
 
 
+CROWD = next(c for c in CORPUS.crowds if c.id == "crowd-harbour-ledger")
+
+
+def test_a_crowded_record_shows_the_judge_only_its_top_k():
+    """Each corpus pair is its own two-record ledger, so no record has more
+    than one neighbour and production's top-k never binds: there, what clears
+    the floors is what reaches the judge. A crowd is one ledger holding a
+    record with more neighbours than the top-k keeps, scored through
+    production's own selections -- and there the two part. Absorb's identity
+    check ranks one way, from the hub, and shows the judge its best
+    `IDENTITY_TOP_K`: two decoys that clear the floors take the slots of a
+    continuation and a subthread that clear them too. The sweep keeps a pair
+    in the top k of either end, so every neighbour keeps its pair with the
+    hub -- and four pairs between neighbours, which no label covers, reach
+    the judge beside them."""
+    every = {p.id for p in CROWD.pairs}
+    alone = metrics.admitted(metrics.signals(floors_corpus.Corpus(CROWD.pairs), "shared cast"))
+    assert alone == every and len(every) > similarity.IDENTITY_TOP_K
+
+    m = metrics.measure_crowd(CROWD, "shared cast")
+    assert m.admitted == every
+    assert m.identity == {"crowd-ledger-duplicate", "crowd-ledger-tavern", "crowd-ledger-paint"}
+    assert m.sweep == every and m.between == 4
+
+
+def test_alone_the_crowd_is_no_crowd_and_the_top_k_drops_nothing():
+    m = metrics.measure_crowd(CROWD, "alone")
+    assert m.admitted == m.identity == m.sweep == {"crowd-ledger-duplicate"}
+    assert m.between == 0
+
+
+def test_a_crowd_the_top_k_cannot_bind_on_breaks_the_rules():
+    thin = replace(CROWD, pairs=CROWD.pairs[:similarity.IDENTITY_TOP_K])
+    found = floors_corpus.problems(replace(CORPUS, crowds=(thin,)))
+    assert found == [(f"crowd-harbour-ledger: {similarity.IDENTITY_TOP_K} neighbours of the "
+                      "hub's kind, so no top-k binds on it")]
+
+
 def test_the_cli_prints_the_report(capsys):
     assert eval_run.main(["--continuity-floors"]) == 0
     out = capsys.readouterr().out
-    assert "alone: recall 0.14 (4/28), precision 0.44 (4/9)" in out
-    assert "shared cast: recall 0.75 (21/28), precision 0.68 (21/31)" in out
+    assert "alone, through the floors: recall 0.14 (4/28), precision 0.44 (4/9)" in out
+    assert "shared cast, through the floors: recall 0.75 (21/28), precision 0.68 (21/31)" in out
     assert "*0.14/0.44" in out and "*0.75/0.68" in out
+    assert ("  absorb's identity check (similarity.nearest, the hub's top 3): duplicate 1/1, "
+            "continuation 0/1, subthread 0/1, distinct 2/2") in out
 
 
 @pytest.mark.parametrize("argv", [["--live"], ["--embed"], ["--out", "x.json"],

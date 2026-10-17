@@ -22,6 +22,14 @@ other positive is `reworded` and shares some words. Names are only the
 codebase's placeholders (Seraphine, Mara, Winifred, Realm, Saltmarch), and
 the size is structural -- every judge answer and both shapes present -- to
 be grown against real prompts later, never measured from a library.
+
+A pair is scored as its own two-record ledger, so each record has one
+neighbour and no top-k ever binds on it. A **crowd** is the other case: one
+ledger holding a hub record and more neighbours of its kind than
+`similarity.IDENTITY_TOP_K`, each hub-to-neighbour pair labelled and held to
+the pair rules, so the report can show what production's top-k does to the
+pairs that clear the floors (`metrics.measure_crowd`). Pairs between two
+neighbours carry no label: no rule asks for one, and the report counts them.
 """
 
 from __future__ import annotations
@@ -95,15 +103,38 @@ def _subject(ref: str, record: dict, actors: tuple[str, ...]) -> similarity.Subj
 
 
 @dataclass(frozen=True)
+class Crowd:
+    """One ledger: `hub` and its neighbours, each `(hub, neighbour)` a `Pair`
+    whose `a` is the hub."""
+
+    id: str
+    hub: dict
+    pairs: tuple[Pair, ...]
+
+    def subjects(self, actors: tuple[str, ...] = ()) -> tuple[similarity.Subject,
+                                                              list[similarity.Subject]]:
+        """The hub and each neighbour (in `pairs` order) as similarity sees
+        them, each involving `actors`: one subject for the hub, shared by
+        every pair, as a ledger holds it once."""
+        return (_subject(f"{self.id}-hub", self.hub, actors),
+                [_subject(f"{p.id}-b", p.b, actors) for p in self.pairs])
+
+
+@dataclass(frozen=True)
 class Corpus:
     pairs: tuple[Pair, ...]
+    crowds: tuple[Crowd, ...] = ()
 
 
 def load(path: Path = PATH) -> Corpus:
     """The corpus at `path`."""
     raw = json.loads(path.read_text(encoding="utf-8"))
     return Corpus(tuple(Pair(p["id"], p["relation"], p["shape"], p["a"], p["b"])
-                        for p in raw["pairs"]))
+                        for p in raw["pairs"]),
+                  tuple(Crowd(c["id"], c["hub"],
+                              tuple(Pair(s["id"], s["relation"], s["shape"], c["hub"],
+                                         s["record"]) for s in c["spokes"]))
+                        for c in raw.get("crowds", ())))
 
 
 def _record_problems(pair: Pair) -> list[str]:
@@ -143,13 +174,24 @@ def _word_problems(pair: Pair) -> list[str]:
     return []
 
 
+def _crowd_problems(crowd: Crowd) -> list[str]:
+    """A crowd no top-k binds on: it measures nothing a pair does not."""
+    kin = sum(p.b.get("record") == crowd.hub.get("record") for p in crowd.pairs)
+    if kin > similarity.IDENTITY_TOP_K:
+        return []
+    return [f"{crowd.id}: {kin} neighbours of the hub's kind, so no top-k binds on it"]
+
+
 def problems(corpus: Corpus) -> list[str]:
     """Everything that breaks the corpus's rules (the module docstring)."""
-    ids = [p.id for p in corpus.pairs]
+    crowded = [p for c in corpus.crowds for p in c.pairs]
+    ids = [p.id for p in (*corpus.pairs, *crowded)] + [c.id for c in corpus.crowds]
     out = ["pair ids repeat"] if len(set(ids)) != len(ids) else []
-    for pair in corpus.pairs:
+    for pair in (*corpus.pairs, *crowded):
         record = _record_problems(pair)
         out += record or [*_label_problems(pair), *_word_problems(pair)]
+    for crowd in corpus.crowds:
+        out += _crowd_problems(crowd)
     present = {(VOCABULARY.get((p.a.get("record"), p.b.get("record"))), p.relation)
                for p in corpus.pairs}
     out += [f"no {vocabulary} pair is {word!r}" for vocabulary, words in ANSWERS.items()
