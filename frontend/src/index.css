@@ -4993,16 +4993,29 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      app's heads are `<eyebrow><title>` and half are a bare title, and at 26px
      against 18px the two read as different screens of different apps. */
   .screen-title { font-size: 18px; letter-spacing: 0.03em; line-height: 1.15; }
+  /* Four head shapes share the panel: an eyebrow over a bare title, an
+     eyebrow over a title row with actions (Scenes' `.scenes-head`), a
+     `.shelf-head` holding both (below), and a bare title with no eyebrow at
+     all (the global Costs report). A shape missing here keeps the desktop's
+     4px top margin and reads as a different app's screen. */
   .page-wide > .eyebrow:first-child,
   .page-wide > .eyebrow:first-child + .screen-title,
+  .page-wide > .eyebrow:first-child + .scenes-head,
+  .page-wide > .screen-title:first-child,
   .page-wide > .shelf-head:first-child {
     margin: 0 -14px; padding-left: 14px; padding-right: 14px; background: var(--panel);
   }
   .page-wide > .eyebrow:first-child { padding-top: 11px; }
   /* Padding, not a margin, between the two: they are one panel, and a margin
      there was a 3px seam of the page showing through it. */
-  .page-wide > .eyebrow:first-child + .screen-title {
-    font-size: 18px; letter-spacing: 0.03em; padding-top: 3px; padding-bottom: 11px;
+  .page-wide > .eyebrow:first-child + .screen-title,
+  .page-wide > .eyebrow:first-child + .scenes-head {
+    padding-top: 3px; padding-bottom: 11px; border-bottom: 1px solid var(--line);
+  }
+  .page-wide > .eyebrow:first-child + .screen-title { font-size: 18px; letter-spacing: 0.03em; }
+  .page-wide > .eyebrow:first-child + .scenes-head > .screen-title { margin-top: 0; }
+  .page-wide > .screen-title:first-child {
+    padding-top: 11px; padding-bottom: 11px; margin-bottom: 14px;
     border-bottom: 1px solid var(--line);
   }
   /* A head with actions of its own (the ledger's "+ New fact", a report's
