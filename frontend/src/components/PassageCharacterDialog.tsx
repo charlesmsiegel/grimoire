@@ -66,8 +66,8 @@ export function PassageCharacterDialog({ cid, sid, responseId, sourceText, onClo
       <button disabled={busy || !name.trim() || !passage.trim()} onClick={() => void suggest()}>Draft description</button>
       <label>Description<textarea aria-label="Character description" rows={5} value={description} disabled={busy}
         onChange={(e) => setDescription(e.target.value)} /></label>
-      <p className="subtle">The draft is optional. Sparse evidence should leave a sparse card. Explicit authored facts and speech constraints take priority over inferred habits or example lines; review conflicting evidence in the character editor.</p>
-      {!evidence && name.trim() && passage.trim() && <p className="subtle">Reading dialogue evidence…</p>}
+      <p className="field-hint">The draft is optional. Sparse evidence should leave a sparse card. Explicit authored facts and speech constraints take priority over inferred habits or example lines; review conflicting evidence in the character editor.</p>
+      {!evidence && name.trim() && passage.trim() && <p className="field-hint">Reading dialogue evidence…</p>}
       {evidence && <>
         <label><input type="checkbox" checked={includeQuotes} disabled={busy}
           onChange={(e) => setIncludeQuotes(e.target.checked)} />Include evidenced dialogue examples</label>

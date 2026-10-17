@@ -202,8 +202,12 @@ describe("individual response controls", () => {
     expect(screen.getByText("Length: ~120 words, 3 paragraphs")).toBeInTheDocument();
     expect(screen.getByText("Length: ~60 words, 1 paragraph")).toBeInTheDocument();
     expect(screen.getByText("Style: noir")).toBeInTheDocument();
+    // A note under the text, not a button: `.subtle` is the quiet BUTTON
+    // skin, and on a <p> it drew each line as a bordered uppercase box.
+    expect(screen.getByText("Model: vendor/m")).toHaveClass("field-hint");
+    expect(screen.getByText("Model: vendor/m")).not.toHaveClass("subtle");
     // The variant with no `made_by` renders no provenance beside its text.
     const first = screen.getByText("First").parentElement as HTMLElement;
-    expect(first.querySelectorAll("p.subtle")).toHaveLength(0);
+    expect(first.querySelectorAll("p.field-hint")).toHaveLength(0);
   });
 });
