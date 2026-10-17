@@ -117,8 +117,12 @@ def test_the_cli_prints_the_report(capsys):
 
 
 @pytest.mark.parametrize("argv", [["--live"], ["--embed"], ["--out", "x.json"],
-                                  ["--investigate", "continuity"]])
-def test_the_cli_refuses_what_the_floors_do_not_take(argv):
+                                  ["--investigate", "continuity"],
+                                  ["--scene", "nonsense"], ["--decision", "ignored"]])
+def test_the_cli_refuses_what_the_floors_do_not_take(argv, capsys):
+    """A flag the floors would ignore is refused by name, never dropped: a
+    run that exits 0 beside it reads as though it had been honoured."""
     with pytest.raises(SystemExit) as exc:
         eval_run.main(["--continuity-floors", *argv])
     assert exc.value.code == 2
+    assert f"it takes no {argv[0]}" in capsys.readouterr().err

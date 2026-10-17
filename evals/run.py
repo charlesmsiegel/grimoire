@@ -110,7 +110,10 @@ def run_continuity_floors(ap: argparse.ArgumentParser, args: argparse.Namespace)
                                    ("--escalation", bool(args.escalation)),
                                    ("--escalation-sweep", args.escalation_sweep),
                                    ("--embed", args.embed or bool(args.embed_options)),
-                                   ("--play", bool(args.play)), ("--history", args.history),
+                                   ("--play", bool(args.play)),
+                                   ("--scene", bool(args.scene)),
+                                   ("--decision", bool(args.decision)),
+                                   ("--history", args.history),
                                    ("--epistemic", args.epistemic),
                                    ("--investigate", bool(args.investigate)))
              if on]
