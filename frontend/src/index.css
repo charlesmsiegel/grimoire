@@ -42,6 +42,11 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   background: var(--surface); color: var(--ink);
   border: 1px solid var(--line-strong); padding: 5px 8px;
 }
+/* A link nothing else here describes is prose -- a "Settings →" in a hint, a
+   "Back to the campaign" -- and the UA's blue belongs to neither look (in the
+   dark one it is dark blue on near-black). Every styled link sets its own
+   colour, so this reaches only the ones that were rendering blue. */
+a { color: var(--accent); }
 
 /* visually hidden but accessible (labels whose section heading already shows the text) */
 .sr-only {
