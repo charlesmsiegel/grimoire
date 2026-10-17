@@ -180,6 +180,12 @@ a { color: var(--accent); }
 .world-card .row-actions { position: absolute; top: 10px; right: 10px; opacity: 0; }
 .world-card:hover .row-actions, .world-card:focus-within .row-actions { opacity: 1; }
 .world-card .row-rename { margin: 20px; width: calc(100% - 40px); }
+/* Half a phone is narrower than a world card's own actions: four 44px targets
+   (the phone floor, further down) against a ~170px card ran off its left edge
+   and over the cover, and a 30px name already overran it. One to a row. */
+@media (max-width: 640px) {
+  .world-grid { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ---- campaign world-copy banner ---- */
 .fork-banner {
@@ -1279,8 +1285,17 @@ pre.regex-code { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10p
 .row-done { flex: none; margin-left: auto; color: var(--accent); font-size: 11px; }
 .row-subtitle { display: block; font-family: var(--fm); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .row-actions { display: flex; gap: 2px; flex: none; }
-.row-actions button { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
-.row-actions button:hover:not(:disabled) { color: var(--accent); }
+/* A row's actions are mostly a single glyph (✎ ⑂ ✕, ↑ ↓), and a 13px glyph
+   with no box of its own is a 19×13 target. 28px square is the floor here;
+   the 720px sweep below takes it to 44. The world card's export is a download
+   link among the buttons, so it is dressed as one of them rather than left an
+   underlined link glyph. */
+.row-actions button, .row-actions a {
+  background: transparent; border: none; color: var(--muted); cursor: pointer;
+  padding: 0 4px; font-size: 13px; line-height: 1; min-width: 28px; min-height: 28px;
+}
+.row-actions a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.row-actions button:hover:not(:disabled), .row-actions a:hover { color: var(--accent); }
 /* The world card's Fork is the first disabled button to appear in a
    row-actions strip; without these it would keep lighting up on hover
    while ignoring the click. */
@@ -3175,8 +3190,6 @@ a.column-back { text-decoration: none; }
   .mobile-art-preview { width: 96px; height: 96px; flex: none; padding: 0; display: grid; place-items: center; overflow: hidden; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-raised, var(--surface)); cursor: pointer; }
   .mobile-art-preview img { width: 100%; height: 100%; object-fit: cover; }
   .mobile-art-action { min-height: 44px; }
-  /* Nothing to hover with, so the quiet controls are simply always visible. */
-  .field-edit, .version-rename { color: var(--muted); }
 }
 
 /* ---- config (4b) ---- */
@@ -5167,7 +5180,7 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      it. Its rename/delete pair rides along for the same reason `.chore-fix`
      and `.chore-ignore` do: a row's attached actions are controls too. */
   .row-label { display: flex; align-items: center; min-height: 44px; }
-  .row-actions button { min-height: 44px; }
+  .row-actions button, .row-actions a { min-width: 44px; min-height: 44px; }
   /* The scene list's own ✕ owes the same floor; it is not in a `.row-actions`
      strip because it is a cell of the row's grid. */
   .scene-item-del { min-height: 44px; padding: 0 12px; }
@@ -5222,6 +5235,20 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   /* Collapsible section triggers — the character editor's own disclosures,
      the cast panel, the context/cost breakdowns' `<details>`. */
   summary { min-height: 44px; }
+}
+
+/* ---- nothing to hover with ---- */
+/* Some actions wait for the pointer: a world card's ✎ ⑂ ✕ and a post's gutter
+   icons fade in, and a field's Edit, a version's rename and a ledger row's
+   actions are transparent ink until their row is hovered. A touch screen has
+   no hover, so there they never appeared -- and an invisible button still
+   takes a tap, which for the gutter's "delete this and everything after" is
+   the worst of both. Where the device cannot hover they simply show. Keyed on
+   the input rather than the width (the field and version pair used to be
+   keyed on 720px): a narrow desktop window can hover, and a tablet is wide. */
+@media (hover: none) {
+  .world-card .row-actions, .gutter-icons { opacity: 1; }
+  .field-edit, .version-rename, .row-do { color: var(--muted); }
 }
 
 /* Collection navigation is local to the image occurrence, including in prose. */
