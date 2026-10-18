@@ -1082,7 +1082,7 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   text-transform: uppercase;
 }
 .inputbar {
-  display: flex; gap: 12px; padding: 12px 26px 18px; flex: none; position: relative;
+  display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 26px 18px; flex: none; position: relative;
   align-items: flex-end;
 }
 /* The meta strip is the composer's first row now, not a footnote under it: the
@@ -1214,7 +1214,10 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   /* `min-width: 0` overrides the flex default of `auto`, which is a textarea's
      intrinsic width (its `cols`) and refuses to shrink past it. Without it the
      bar carries that width into its own minimum and overflows the column. */
-  flex: 1; min-width: 0; min-height: 62px; background: var(--surface); color: var(--ink);
+  /* Reserve a readable writing width before the reply chips wrap below it.
+     A desktop play column can be narrow with side panels open, so this must
+     follow the available space rather than only the phone breakpoint. */
+  flex: 1 1 20rem; min-width: 0; min-height: 62px; background: var(--surface); color: var(--ink);
   border: 1px solid var(--line-strong); border-radius: 3px;
   padding: 12px 14px; font-family: var(--fb); font-weight: 300; font-size: 15.5px;
   line-height: 1.6; resize: none; outline: none;

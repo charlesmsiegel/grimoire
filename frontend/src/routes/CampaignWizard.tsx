@@ -73,7 +73,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
   const [pickedPC, setPickedPC] = useState<string | null>(null); // an existing world PC to play
 
   /** Why the typed name cannot be this campaign's PC, from the check Next
-   *  makes before leaving step 2; cleared by typing. */
+   *  makes before leaving step 2; belongs to that world's checked name. */
   const [nameRefusal, setNameRefusal] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const nameCheck = useRef({ generation: 0 });
@@ -134,6 +134,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     setWorldTags({});
     setWorldPCs([]);
     setPickedPC(null); // a pick belongs to one world
+    setNameRefusal(null); // a name refused in one world can be free in another
     // A draft tag that is one of the previous world's vocabulary IDs names
     // another tag here, so it cannot carry across. Free-form tags are not IDs
     // and stay (#68).
@@ -198,6 +199,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
    *  so it is not asked about. */
   async function leaveCharacterStep() {
     const request = ++nameCheck.current.generation;
+    setNameRefusal(null);
     if (pickedPC === null) {
       setChecking(true);
       let refusal: string | null = null;
@@ -555,20 +557,21 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
             {locations.map((loc, i) => (
               <div className="wizard-location" key={i}>
                 <input aria-label="Location name" type="text" placeholder="Location name…" value={loc.name}
-                       disabled={loc.made} onChange={(e) => setLoc(i, { name: e.target.value })} />
+                       disabled={busy || loc.made} onChange={(e) => setLoc(i, { name: e.target.value })} />
                 <textarea aria-label="Location description" rows={3} placeholder="Description…" value={loc.body}
-                          disabled={loc.made} onChange={(e) => setLoc(i, { body: e.target.value })} />
+                          disabled={busy || loc.made} onChange={(e) => setLoc(i, { body: e.target.value })} />
                 <input aria-label="Location keys" type="text" placeholder="Keys to match in play (comma-separated, optional)"
-                       value={loc.keys} disabled={loc.made} onChange={(e) => setLoc(i, { keys: e.target.value })} />
+                       value={loc.keys} disabled={busy || loc.made} onChange={(e) => setLoc(i, { keys: e.target.value })} />
                 {loc.made && <div className="field-hint">Saved to the campaign.</div>}
                 {locations.length > 1 && !loc.made && (
-                  <button className="subtle remove" onClick={() => setLocations(locations.filter((_, j) => j !== i))}>
+                  <button className="subtle remove" disabled={busy}
+                          onClick={() => setLocations(locations.filter((_, j) => j !== i))}>
                     Remove
                   </button>
                 )}
               </div>
             ))}
-            <button className="subtle wizard-add"
+            <button className="subtle wizard-add" disabled={busy}
                     onClick={() => setLocations([...locations, { name: "", body: "", keys: "" }])}>
               + Add another location
             </button>

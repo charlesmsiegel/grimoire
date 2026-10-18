@@ -312,6 +312,10 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setAbsorbing(false);
     setAdopting(false);
     setAbsorb(null);
+    // The adoption effect below runs before the cleared state renders. Scene
+    // ids can repeat across campaigns, so no activeId change will retry it if
+    // the old campaign's ref makes it skip this campaign's stored review.
+    hasReviewRef.current = false;
     setAbsorbSid(null);
     setGeneration(null);
     setStaleReview(null);

@@ -53,6 +53,14 @@ test("with nothing waiting anywhere the column says so", () => {
   expect(column().getByText(/no scene in this campaign is/i)).toBeInTheDocument();
 });
 
+test("the current scene stays in the waiting list until the shell confirms it is absent", () => {
+  page([{ sid: "s1", proposals: 4 }]);
+  const row = column().getByRole("link", { name: /The Tide Comes In/ });
+  expect(row).toHaveAttribute("href", "/campaigns/run/scenes/s1/wrap-up");
+  expect(within(row).getByLabelText("4 proposals")).toBeInTheDocument();
+  expect(column().queryByText(/no scene in this campaign is/i)).not.toBeInTheDocument();
+});
+
 test("before the shell has answered it claims nothing either way", () => {
   page(null);
   expect(column().getByText(/checking/i)).toBeInTheDocument();

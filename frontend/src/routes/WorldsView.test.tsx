@@ -170,8 +170,9 @@ test.each(["create", "fork"])("a superseded %s refresh keeps the action pending 
     fireEvent.change(input, { target: { value: "Realm" } });
     fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
   } else {
-    vi.spyOn(window, "prompt").mockReturnValue("Realm");
     fireEvent.click(screen.getByRole("button", { name: "Fork Saltmarch" }));
+    fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "Realm" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create fork" }));
   }
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1));
   act(() => { announceRunSettled(); });

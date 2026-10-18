@@ -994,6 +994,29 @@ test("+ New greeting clears the form after a create", async () => {
   expect(await screen.findByLabelText(/Name/)).toHaveValue("");
 });
 
+test.each(["List", "Plot map"])("same-form query: clicking the active %s view cannot retire a greeting create", async (view) => {
+  vi.mocked(api.listGreetings).mockResolvedValue([]);
+  let finish: () => void = () => {};
+  vi.mocked(api.createGreeting).mockImplementationOnce(() => new Promise((resolve) => {
+    finish = () => resolve({ id: "new-greeting" });
+  }));
+  vi.mocked(api.setEdges).mockResolvedValue({ ok: true });
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
+    meta: { id: "new-greeting", name: "Realm", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
+  }));
+  renderAtUrl("/worlds/w/greetings?new=1");
+  fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: /create greeting/i }));
+  if (view === "Plot map") fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
+  fireEvent.click(screen.getByRole("button", { name: view }));
+  if (view === "Plot map") fireEvent.click(screen.getByRole("button", { name: "List" }));
+  await act(async () => finish());
+  await waitFor(() => expect(lastPath).toBe("/worlds/w/greetings/new-greeting"));
+  await screen.findByRole("button", { name: /^edit$/i });
+  expect(api.createGreeting).toHaveBeenCalledTimes(1);
+});
+
 test("a ref chip naming a PC opens that PC, and picking PCs from the index clears it", async () => {
   // Two rules in one test because they are the same rule from both sides: a
   // chip carries a record to open, choosing the section from the column means

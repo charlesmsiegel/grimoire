@@ -34,7 +34,16 @@ export function useReviewAddress({ cid, activeId, wrapUp, review }: {
   // Which scene's review was on screen at the last pass, so a close is told
   // apart from arriving at another scene with a review still open elsewhere.
   const shownFor = useRef<string | null>(null);
+  const campaign = useRef(cid);
   useEffect(() => {
+    // The review hook resets on this same effect pass. Until that state update
+    // renders, a repeated scene id still describes the previous campaign's
+    // review, so it can neither open nor close this campaign's address.
+    if (campaign.current !== cid) {
+      campaign.current = cid;
+      shownFor.current = null;
+      return;
+    }
     // Closed: no review at all now, not merely this scene's no longer on top.
     const closedHere = shownFor.current !== null && shownFor.current === activeId
       && review.absorb === null;

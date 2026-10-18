@@ -1,5 +1,5 @@
 ﻿import type { ComponentProps } from "react";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { GreetingEditor } from "./GreetingEditor";
 
@@ -1285,7 +1285,7 @@ function SavingGreetingAddress(callbacks: Pick<Props, "onBusy" | "onChanged">) {
   const location = useLocation();
   const base = GREETINGS_DEFAULTS.sectionPath;
   const selected = location.pathname.startsWith(base + "/") ? location.pathname.slice(base.length + 1) : null;
-  return <><GreetingEditor {...GREETINGS_DEFAULTS} selected={selected} isNew={location.search === "?new=1"}
+  return <><GreetingEditor {...GREETINGS_DEFAULTS} selected={selected} isNew={new URLSearchParams(location.search).get("new") === "1"}
     {...callbacks} />
     <output aria-label="Address">{location.pathname + location.search}</output></>;
 }
@@ -1365,4 +1365,83 @@ test("review regression: a committed greeting refresh stays in its original scop
   expect(screen.getByLabelText("Name")).toHaveValue("");
   expect(api.setEdges).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "open", { leads_to: [], excludes: [] });
   expect(onChanged).not.toHaveBeenCalled();
+});
+
+function GreetingQueryAddress(callbacks: Pick<Props, "onBusy" | "onChanged">) {
+  const navigate = useNavigate();
+  const base = GREETINGS_DEFAULTS.sectionPath;
+  return <>
+    <button onClick={() => void navigate(`${base}?new=1&view=graph`)}>Plot map</button>
+    <button onClick={() => void navigate(`${base}?new=1`)}>List</button>
+    <button onClick={() => void navigate(`${base}?new=1`)}>Reopen form</button>
+    <SavingGreetingAddress {...callbacks} />
+  </>;
+}
+
+test.each([
+  ["write", false], ["write", true], ["refresh", false], ["refresh", true],
+] as const)("same-form query: greeting %s retains success/error after view changes, refused=%s", async (stage, refused) => {
+  const onBusy = vi.fn();
+  const onChanged = vi.fn();
+  render(<MemoryRouter initialEntries={["/worlds/realm/greetings?new=1"]}>
+    <GreetingQueryAddress onBusy={onBusy} onChanged={onChanged} /></MemoryRouter>);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Realm" } });
+  await waitFor(() => expect(api.listGreetings).toHaveBeenCalledTimes(1));
+  let finish: () => void = () => {};
+  if (stage === "write") {
+    vi.mocked(api.createGreeting).mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finish = () => refused ? reject(fail(503, "Greeting refused")) : resolve({ id: "open" });
+    }));
+  } else {
+    vi.mocked(api.listGreetings).mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finish = () => refused ? reject(fail(503, "Greeting refresh refused")) : resolve([]);
+    }));
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Create greeting" }));
+  await waitFor(() => expect(stage === "write" ? api.createGreeting : api.listGreetings).toHaveBeenCalledTimes(stage === "write" ? 1 : 2));
+  fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
+  expect(screen.getByLabelText("Address")).toHaveTextContent("?new=1&view=graph");
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
+  expect(screen.getByLabelText("Name")).toHaveValue("Realm");
+  expect(screen.getByRole("button", { name: "Create greeting" })).toBeDisabled();
+  await act(async () => finish());
+  if (refused) {
+    await screen.findByText(stage === "write" ? "Greeting refused" : "Greeting refresh refused");
+    expect(screen.getByLabelText("Name")).toHaveValue("Realm");
+    expect(screen.getByRole("button", { name: "Create greeting" })).toBeEnabled();
+    expect(screen.getByLabelText("Address")).toHaveTextContent("/worlds/realm/greetings?new=1");
+  } else {
+    await screen.findByRole("heading", { name: "Open" });
+    expect(screen.getByLabelText("Address")).toHaveTextContent("/worlds/realm/greetings/open");
+    expect(screen.queryByRole("button", { name: "Create greeting" })).not.toBeInTheDocument();
+  }
+  expect(api.createGreeting).toHaveBeenCalledTimes(1);
+  expect(onBusy.mock.calls.map(([busy]) => busy)).toEqual([true, false]);
+  expect(onChanged).toHaveBeenCalledTimes(refused ? 0 : 1);
+});
+
+test.each(["write", "refresh"])("same-form query control: an identical-address fresh greeting entry retires its %s", async (stage) => {
+  const onBusy = vi.fn();
+  render(<MemoryRouter initialEntries={["/worlds/realm/greetings?new=1"]}>
+    <GreetingQueryAddress onBusy={onBusy} /></MemoryRouter>);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Realm" } });
+  await waitFor(() => expect(api.listGreetings).toHaveBeenCalledTimes(1));
+  let finish: () => void = () => {};
+  if (stage === "write") {
+    vi.mocked(api.createGreeting).mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve({ id: "open" });
+    }));
+  } else {
+    vi.mocked(api.listGreetings).mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve([]);
+    }));
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Create greeting" }));
+  await waitFor(() => expect(stage === "write" ? api.createGreeting : api.listGreetings).toHaveBeenCalledTimes(stage === "write" ? 1 : 2));
+  fireEvent.click(screen.getByRole("button", { name: "Reopen form" }));
+  await act(async () => finish());
+  expect(screen.getByLabelText("Address")).toHaveTextContent("/worlds/realm/greetings?new=1");
+  expect(screen.getByLabelText("Name")).toHaveValue("Realm");
+  expect(screen.getByRole("button", { name: "Create greeting" })).toBeEnabled();
+  expect(onBusy.mock.calls.map(([busy]) => busy)).toEqual([true, false]);
 });

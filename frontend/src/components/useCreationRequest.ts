@@ -3,14 +3,21 @@ import { useLocation } from "react-router-dom";
 
 /** One form visit owns its navigation, error and busy completion after a save.
  * Cancelling cannot undo the server's write; it retires the form waiting for it.
- * A fresh router entry is a fresh visit, even when it names the same form. */
-export function useCreationRequest(form: string | null) {
+ * A fresh router entry is a fresh visit, even when it names the same form.
+ * Forms whose query also carries presentation (a tab or plot-map view) can
+ * retain a visit across query changes. Their form key must include any actual
+ * record/version selection; an identical-address fresh entry still retires. */
+export function useCreationRequest(form: string | null,
+                                   { keepOnQueryChange = false }: { keepOnQueryChange?: boolean } = {}) {
   const location = useLocation();
-  const visitRef = useRef({ route: location.key, form });
-  if (visitRef.current.route !== location.key || visitRef.current.form !== form) {
-    visitRef.current = { route: location.key, form };
+  const visitRef = useRef({ at: location, visit: { form } });
+  const previous = visitRef.current;
+  if (previous.at.key !== location.key || previous.visit.form !== form) {
+    const sameFormQuery = keepOnQueryChange && previous.visit.form === form
+      && previous.at.pathname === location.pathname && previous.at.search !== location.search;
+    visitRef.current = { at: location, visit: sameFormQuery ? previous.visit : { form } };
   }
-  const visit = visitRef.current;
+  const visit = visitRef.current.visit;
   const live = useRef<typeof visit | null>(null);
   const ticket = useRef(0);
   const busyRef = useRef(false);
@@ -31,7 +38,7 @@ export function useCreationRequest(form: string | null) {
     const mine = ++ticket.current;
     busyRef.current = true;
     setBusy(true);
-    const current = () => live.current === visit && visitRef.current === visit && ticket.current === mine;
+    const current = () => live.current === visit && visitRef.current.visit === visit && ticket.current === mine;
     return {
       current,
       finish: () => {
@@ -43,11 +50,11 @@ export function useCreationRequest(form: string | null) {
   function retire() {
     // An existing-record Cancel can fail to reload and leave the same form
     // open. Retire its old save now, without releasing a later form's latch.
-    if (live.current !== visit || visitRef.current !== visit) return;
+    if (live.current !== visit || visitRef.current.visit !== visit) return;
     ticket.current++;
     busyRef.current = false;
     setBusy(false);
   }
 
-  return { busy, begin, retire };
+  return { busy, begin, retire, visit };
 }

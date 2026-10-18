@@ -107,7 +107,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   const [rev, setRev] = useState<string | null>(null);
   const [stale, setStale] = useState<{ rev: string | null } | null>(null);
   const { begin: beginSave, retire: retireSave } = useCreationRequest(
-    selected || isNew ? `${scope.kind}:${scope.id}:${selected ?? "new"}` : null);
+    selected || isNew ? `${scope.kind}:${scope.id}:${selected ?? "new"}` : null, { keepOnQueryChange: true });
   /** Bumped by anything that means "the reader is looking at something else
    *  now", so an answer to an older question can tell that it is stale. */
   const intent = useRef(0);

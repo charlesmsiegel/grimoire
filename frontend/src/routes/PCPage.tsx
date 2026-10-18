@@ -53,12 +53,15 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   const [vid, setVid] = useState("");
   const [persona, setPersona] = useState<Persona>(BLANK);
   const [versionName, setVersionName] = useState<string | null>(null);
-  const { busy: creatingVersion, begin: beginVersion, retire: retireVersion } = useCreationRequest(
-    versionName === null ? null : "pc-version");
+  const addressedVersion = detail?.versions.find((v) => v.id === (wanted || detail.meta.default_version))
+    ?? detail?.versions[0];
+  const { busy: creatingVersion, begin: beginVersion, retire: retireVersion, visit: versionVisit } = useCreationRequest(
+    versionName === null ? null : `pc-version:${addressedVersion?.id ?? vid}`, { keepOnQueryChange: true });
   // A failed read after the write is recovery, not permission to create the
-  // uniquified version again. The returned id belongs only to this form visit.
-  const committedVersion = useRef<{ route: string; version: string } | null>(null);
-  if (committedVersion.current?.route !== location.key) committedVersion.current = null;
+  // uniquified version again. Tabs keep that form visit; Cancel, another
+  // source version or a fresh entry must not inherit its returned id.
+  const committedVersion = useRef<{ visit: typeof versionVisit; version: string } | null>(null);
+  if (committedVersion.current?.visit !== versionVisit) committedVersion.current = null;
   const [mode, setMode] = useState<"view" | "edit">(
     (location.state as { newPC?: boolean } | null)?.newPC ? "edit" : "view");
   // Creation is a one-shot instruction. Reopening this history entry later is
@@ -210,9 +213,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   // Browser navigation is guarded before this effect. Local controls guard
   // before either the URL or the version's form state changes.
   useEffect(() => {
-    if (!detail) return;
-    const resolved = detail.versions.find(v => v.id === (wanted || detail.meta.default_version)) ?? detail.versions[0];
-    if (resolved && resolved.id !== vid) installVersion(resolved.id);
+    if (addressedVersion && addressedVersion.id !== vid) installVersion(addressedVersion.id);
   }, [wanted, detail]); // eslint-disable-line react-hooks/exhaustive-deps
   function switchVersion(version: string) {
     art.transition(() => {
@@ -226,7 +227,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
       const next = new URLSearchParams(params);
       if (nextTab === "art") { next.set("tab", "art"); next.set("v", vid); }
       else { next.delete("tab"); setDetailTab(nextTab); }
-      setParams(next, { replace: true });
+      if (next.toString() !== params.toString()) setParams(next, { replace: true });
     });
   }
   async function run(action: () => Promise<unknown>, after?: () => Promise<void>) {
@@ -259,7 +260,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
           const version = committedVersion.current?.version
             ?? (await api.createPCVersion(scope, pid, { name, persona })).version;
           if (!request.current()) return;
-          committedVersion.current = { route: location.key, version };
+          committedVersion.current = { visit: versionVisit, version };
           await read(version, false, { current: request.current, installForm: () => {
             committedVersion.current = null;
             setVersionName(null);

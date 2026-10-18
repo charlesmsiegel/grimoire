@@ -621,3 +621,92 @@ test.each(["write", "read"])("review regression: Cancel retires a PC version bef
   expect(screen.queryByLabelText("Version name")).not.toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "Description" })).not.toBeInTheDocument();
 });
+
+test.each([
+  ["write", "Lore", false, "default"], ["write", "Art", false, "default"],
+  ["write", "Lore", true, "default"], ["write", "Art", true, "default"],
+  ["read", "Lore", false, "default"], ["read", "Art", false, "default"],
+  ["read", "Lore", true, "default"], ["read", "Art", true, "default"],
+  ["write", "Art", false, "missing"], ["read", "Art", false, "missing"],
+] as const)("same-form query: PC version %s retains ownership on %s, refused=%s, address=%s", async (stage, tab, refused, address) => {
+  renderPC(address === "missing" ? "/worlds/realm/pcs/mara?v=missing" : undefined);
+  fireEvent.click(await screen.findByRole("button", { name: "+ Version" }));
+  fireEvent.change(screen.getByLabelText("Version name"), { target: { value: "Realm" } });
+  const next = { ...DETAIL, versions: [...DETAIL.versions,
+    { ...DETAIL.versions[0], id: "realm", name: "Realm" }] };
+  let finish: () => void = () => {};
+  if (stage === "write") {
+    vi.mocked(api.createPCVersion).mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finish = () => refused ? reject(new ApiError(409, "Version refused")) : resolve({ version: "realm" });
+    }));
+    vi.mocked(api.readPC).mockResolvedValue(next);
+  } else {
+    vi.mocked(api.createPCVersion).mockResolvedValueOnce({ version: "realm" });
+    vi.mocked(api.readPC).mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finish = () => refused ? reject(new ApiError(503, "Version read refused")) : resolve(next);
+    }));
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Create version" }));
+  await waitFor(() => expect(stage === "write" ? api.createPCVersion : api.readPC).toHaveBeenCalledTimes(stage === "write" ? 1 : 2));
+  fireEvent.click(screen.getByRole("tab", { name: tab === "Art" ? /^Art/ : tab }));
+  expect(screen.getByRole("tab", { name: tab === "Art" ? /^Art/ : tab })).toHaveAttribute("aria-selected", "true");
+  const pendingAction = screen.getByRole("button", { name: stage === "write" ? "Create version" : "Retry loading version" });
+  expect(pendingAction).toBeDisabled();
+  expect(screen.getByLabelText("Version name")).toBeDisabled();
+  fireEvent.click(pendingAction);
+  expect(api.createPCVersion).toHaveBeenCalledTimes(1);
+  await act(async () => finish());
+  if (refused) {
+    await screen.findByText(stage === "write" ? "Version refused" : "Version read refused");
+    expect(screen.getByLabelText("Version name")).toHaveValue("Realm");
+    // A committed version survives another presentation change even after its
+    // failed confirming read: recovery must read it, never create it again.
+    fireEvent.click(screen.getByRole("tab", { name: "Persona" }));
+    vi.mocked(api.readPC).mockResolvedValue(next);
+    if (stage === "write") {
+      vi.mocked(api.createPCVersion).mockResolvedValueOnce({ version: "realm" });
+      expect(screen.getByLabelText("Version name")).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Create version" }));
+    } else {
+      expect(screen.getByLabelText("Version name")).toBeDisabled();
+      fireEvent.click(screen.getByRole("button", { name: "Retry loading version" }));
+    }
+    await waitFor(() => expect(screen.queryByLabelText("Version name")).not.toBeInTheDocument());
+  } else {
+    await waitFor(() => expect(screen.queryByLabelText("Version name")).not.toBeInTheDocument());
+  }
+  expect(screen.getByRole("combobox", { name: "Version" })).toHaveValue("realm");
+  expect(api.createPCVersion).toHaveBeenCalledTimes(refused && stage === "write" ? 2 : 1);
+});
+
+test.each(["write", "read"])("same-form query control: another PC source version retires its pending %s", async (stage) => {
+  const source = { ...DETAIL, versions: [...DETAIL.versions,
+    { ...DETAIL.versions[0], id: "saltmarch", name: "Saltmarch" }] };
+  const next = { ...source, versions: [...source.versions,
+    { ...DETAIL.versions[0], id: "realm", name: "Realm" }] };
+  vi.mocked(api.readPC).mockResolvedValue(source);
+  renderPC();
+  fireEvent.click(await screen.findByRole("button", { name: "+ Version" }));
+  fireEvent.change(screen.getByLabelText("Version name"), { target: { value: "Realm" } });
+  let finish: () => void = () => {};
+  if (stage === "write") {
+    vi.mocked(api.createPCVersion).mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve({ version: "realm" });
+    }));
+    vi.mocked(api.readPC).mockResolvedValue(next);
+  } else {
+    vi.mocked(api.createPCVersion).mockResolvedValueOnce({ version: "realm" });
+    vi.mocked(api.readPC).mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve(next);
+    }));
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Create version" }));
+  await waitFor(() => expect(stage === "write" ? api.createPCVersion : api.readPC).toHaveBeenCalledTimes(stage === "write" ? 1 : 2));
+  await act(async () => movePC("/worlds/realm/pcs/mara?v=saltmarch"));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Version" })).toHaveValue("saltmarch"));
+  await act(async () => finish());
+  expect(screen.getByRole("combobox", { name: "Version" })).toHaveValue("saltmarch");
+  expect(screen.getByLabelText("Version name")).toHaveValue("Realm");
+  expect(screen.getByRole("button", { name: "Create version" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Retry loading version" })).not.toBeInTheDocument();
+});

@@ -1957,7 +1957,7 @@ def _system_text(packed_sections: list[dict]) -> str:
 Appended = tuple[str, str, str]
 
 
-def compose_turn(cid: str, sid: str, *, turn: dict | None = None,
+def compose_turn(cid: str, sid: str, turn: dict | None = None,
                  appended: tuple[Appended, ...] = (),
                  describe: bool = True, model: str = "", actor_ref: str | None = None,
                  eligible_speakers: list[dict] | None = None,
@@ -2068,7 +2068,7 @@ def _plan_messages(text: str) -> tuple[dict, ...]:
 
 
 
-def build_messages(cid: str, sid: str, *, turn: dict | None = None,
+def build_messages(cid: str, sid: str, turn: dict | None = None,
                    appended: tuple[Appended, ...] = (), model: str = "",
                    images: int = 0) -> list[dict]:
     """`compose_turn` without the breakdown — see there.
@@ -2082,7 +2082,7 @@ def build_messages(cid: str, sid: str, *, turn: dict | None = None,
                         images=images)[0]
 
 
-def compose_director_turn(cid: str, sid: str, note: str, *, turn: dict | None = None,
+def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = None,
                           describe: bool = True, model: str = "", actor_ref: str | None = None,
                           eligible_speakers: list[dict] | None = None,
                           successor_by_decision: bool = False,
@@ -2129,7 +2129,7 @@ def compose_director_turn(cid: str, sid: str, note: str, *, turn: dict | None = 
 
 
 
-def build_director_messages(cid: str, sid: str, note: str, *, turn: dict | None = None,
+def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = None,
                             model: str = "", images: int = 0) -> list[dict]:
     """`compose_director_turn` without the breakdown — see there."""
     return compose_director_turn(cid, sid, note, turn=turn, describe=False, model=model,

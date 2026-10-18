@@ -830,6 +830,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                           const next = new URLSearchParams(params);
                           if (key === "graph") next.set("view", "graph");
                           else next.delete("view");
+                          if (next.toString() === params.toString()) return;
                           void navigate(location.pathname + (next.size ? `?${next}` : ""));
                         }}>{label}</button>
               ))}

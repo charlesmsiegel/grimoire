@@ -585,6 +585,64 @@ test("a location written before the failure is not written twice", async () => {
     .toEqual(["The Tavern", "The Quay", "The Quay"]);
 });
 
+test.each(["campaign", "location"])("location drafts cannot change while the %s write is pending and unlock after refusal", async (phase) => {
+  let refuse: (error: Error) => void = () => { throw new Error("write was not requested"); };
+  if (phase === "campaign") vi.mocked(api.createCampaign).mockReturnValueOnce(new Promise((_resolve, reject) => { refuse = reject; }));
+  else vi.mocked(api.createEntity).mockReturnValueOnce(new Promise((_resolve, reject) => { refuse = reject; }));
+  renderWizard();
+  await fillBackdropAndPC();
+  fireEvent.change(screen.getByLabelText(/location name/i), { target: { value: "Saltmarch" } });
+  fireEvent.click(screen.getByRole("button", { name: /add another location/i }));
+  fireEvent.change(screen.getAllByLabelText(/location name/i)[1], { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await waitFor(() => expect(phase === "campaign" ? api.createCampaign : api.createEntity).toHaveBeenCalled());
+  for (const field of screen.getAllByRole("textbox")) expect(field).toBeDisabled();
+  const add = screen.getByRole("button", { name: /add another location/i });
+  expect(add).toBeDisabled();
+  fireEvent.click(add);
+  for (const remove of screen.getAllByRole("button", { name: /^remove$/i })) {
+    expect(remove).toBeDisabled();
+    fireEvent.click(remove);
+  }
+  expect(screen.getAllByLabelText(/location name/i)).toHaveLength(2);
+  await act(async () => { refuse(new Error("write refused")); });
+  expect(await screen.findByText(/write refused/)).toBeInTheDocument();
+  for (const field of screen.getAllByRole("textbox")) expect(field).toBeEnabled();
+  expect(add).toBeEnabled();
+  expect(screen.getAllByLabelText(/location name/i)[0]).toHaveValue("Saltmarch");
+  expect(screen.getAllByLabelText(/location name/i)[1]).toHaveValue("Realm");
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await screen.findByRole("heading", { name: /opening/i });
+  expect(vi.mocked(api.createEntity).mock.calls.map((call) => call[2].name))
+    .toEqual(phase === "campaign" ? ["Saltmarch", "Realm"] : ["Saltmarch", "Saltmarch", "Realm"]);
+});
+
+test("a refusal from the previous world does not survive checking the same name in another world", async () => {
+  vi.mocked(api.listWorlds).mockResolvedValue([
+    { id: "w1", name: "Realm", created: "", updated: "", counts: {} },
+    { id: "w2", name: "Saltmarch", created: "", updated: "", counts: {} },
+  ]);
+  vi.mocked(api.checkCampaignPCName).mockResolvedValueOnce({ refusal: "Mara is already in Realm." });
+  let accept: (value: { refusal: string | null }) => void = () => { throw new Error("check was not requested"); };
+  vi.mocked(api.checkCampaignPCName).mockReturnValueOnce(new Promise((resolve) => { accept = resolve; }));
+  renderWizard();
+  await fillBackdropAndPC();
+  expect(screen.getByRole("alert")).toHaveTextContent("Mara is already in Realm.");
+  fireEvent.click(screen.getByRole("button", { name: /^back$/i }));
+  fireEvent.change(screen.getByLabelText(/^world$/i), { target: { value: "w2" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  expect(screen.getByLabelText(/character name/i)).toHaveValue("Mara");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  expect(api.checkCampaignPCName).toHaveBeenLastCalledWith("w2", "Mara");
+  await act(async () => { accept({ refusal: null }); });
+  await screen.findByRole("heading", { name: /starting locations/i });
+  fireEvent.click(screen.getByRole("button", { name: /^back$/i }));
+  expect(screen.getByLabelText(/character name/i)).toHaveValue("Mara");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(api.createCampaign).not.toHaveBeenCalled();
+});
+
 test("a PC name the world already holds is refused on step 2, before anything is written", async () => {
   vi.mocked(api.checkCampaignPCName).mockResolvedValue({
     refusal: "There is already a character called \"Mara\" in this world. A transcript "

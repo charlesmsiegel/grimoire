@@ -31,7 +31,10 @@ export default function NothingToWrapUp({ cid, campaignName, sid, sceneTitle, sc
   const { payload, failed, retry } = useCampaignShell(cid);
   const pending = payload?.campaign?.pending ?? null;
   const titleOf = new Map(scenes.map((s) => [s.id, s.title]));
-  const waiting = (pending ?? []).filter((p) => p.sid !== sid);
+  // The route's scene may still be waiting: its detail read can be pending or
+  // refused while the shell already knows about the stored review. Only the
+  // shell's next successful list can remove it from this column.
+  const waiting = pending ?? [];
   const column = (
     <ColumnSection label="Waiting for a review">
       {failed && (

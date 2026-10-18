@@ -29,13 +29,14 @@ vi.mock("../../api/models", () => ({ getModels: vi.fn() }));
 import { api } from "../../api/client";
 import type {
   AbsorbPhase, Dossiers, EditReview, IdentityCandidate, IdentityCheck, IdentityPhase, IdentitySignals,
-  SceneAbsorb, StagedEdit, VoiceCheck,
+  SceneAbsorb, ShellPayload, StagedEdit, VoiceCheck,
 } from "../../api/types";
 import {
-  absorbs, here, installCampaignMocks, ONE_SCENE, openScene, PHASES_NONE_CUT,
+  absorbs, Here, here, installCampaignMocks, ONE_SCENE, openScene, PHASES_NONE_CUT,
   playRoutes, renderCampaign, reviewResult, visited, withPalette,
 } from "../../testkit/campaignHarness";
 import { fixture, type DeepPartial } from "../../testkit/fixture";
+import { ShellPayloadProvider } from "../../shell/ShellPayloadContext";
 
 beforeEach(installCampaignMocks);
 
@@ -3829,6 +3830,87 @@ test("a run that landed without publishing does not open the older record", asyn
 
 
 // ---- the wrap-up's own address ----
+
+test.each(["scene", "wrap-up"])("another campaign's review cannot redirect the new campaign's %s address", async (address) => {
+  withScene();
+  let answer: (value: Awaited<ReturnType<typeof api.getScene>>) => void = () => {
+    throw new Error("new campaign scene was not requested");
+  };
+  vi.mocked(api.getScene).mockImplementation((cid) => cid === "run"
+    ? Promise.resolve({ meta: { id: "s1", title: "Old" }, messages: [] })
+    : new Promise((resolve) => { answer = resolve; }));
+  vi.mocked(api.pendingReview).mockImplementation(async (cid) => cid === "run"
+    ? { review: STORED_REVIEW, generation: "gen-stored", stale: null }
+    : { review: null, generation: null, stale: null });
+  const destination = `/campaigns/other/scenes/s1${address === "wrap-up" ? "/wrap-up" : ""}`;
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]} useTransitions={false}>
+    {withPalette(<><Here /><Link to={destination}>switch campaign</Link>{playRoutes()}</>)}
+  </MemoryRouter>);
+  await screen.findByDisplayValue("A stored summary.");
+  fireEvent.click(screen.getByRole("link", { name: "switch campaign" }));
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("other", "s1", { limit: 60 }));
+  expect(here()).toBe(destination);
+  if (address === "scene") expect(visited()).not.toContain("/campaigns/other/scenes/s1/wrap-up");
+  expect(screen.queryByDisplayValue("A stored summary.")).not.toBeInTheDocument();
+  await act(async () => { answer({ meta: { id: "s1", title: "Old" }, messages: [] }); });
+  expect(here()).toBe(destination);
+});
+
+test("the new campaign's own delayed stored review is adopted at its wrap-up address", async () => {
+  withScene();
+  let answer: (value: Awaited<ReturnType<typeof api.pendingReview>>) => void = () => {
+    throw new Error("new campaign review was not requested");
+  };
+  vi.mocked(api.pendingReview).mockImplementation((cid) => cid === "run"
+    ? Promise.resolve({ review: STORED_REVIEW, generation: "gen-stored", stale: null })
+    : new Promise((resolve) => { answer = resolve; }));
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]} useTransitions={false}>
+    {withPalette(<><Here /><Link to="/campaigns/other/scenes/s1">switch campaign</Link>{playRoutes()}</>)}
+  </MemoryRouter>);
+  await screen.findByDisplayValue("A stored summary.");
+  fireEvent.click(screen.getByRole("link", { name: "switch campaign" }));
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("other", "s1", { limit: 60 }));
+  expect(here()).toBe("/campaigns/other/scenes/s1");
+  await waitFor(() => expect(api.pendingReview).toHaveBeenCalledWith("other", "s1"));
+  await act(async () => {
+    answer({ review: { ...STORED_REVIEW, summary: "Mara waits in Saltmarch." }, generation: "gen-other", stale: null });
+  });
+  expect(await screen.findByDisplayValue("Mara waits in Saltmarch.")).toBeInTheDocument();
+  await waitFor(() => expect(here()).toBe("/campaigns/other/scenes/s1/wrap-up"));
+});
+
+test.each(["review", "missing", "failed"])("a warm current pending review stays reachable while its detail is pending then %s", async (outcome) => {
+  withScene();
+  let answer: (value: Awaited<ReturnType<typeof api.pendingReview>>) => void = () => {
+    throw new Error("review was not requested");
+  };
+  let refuse: (error: Error) => void = () => { throw new Error("review was not requested"); };
+  vi.mocked(api.pendingReview).mockReturnValue(new Promise((resolve, reject) => { answer = resolve; refuse = reject; }));
+  const page = (pending: { sid: string; proposals: number }[]) => (
+    <ShellPayloadProvider value={{ status: "ready", cid: "run", retry: () => {},
+      payload: fixture<ShellPayload>({ campaign: { id: "run", pending } }) }}>
+      <MemoryRouter initialEntries={["/campaigns/run/scenes/s1/wrap-up"]} useTransitions={false}>
+        {withPalette(<><Here />{playRoutes()}</>)}
+      </MemoryRouter>
+    </ShellPayloadProvider>
+  );
+  const view = render(page([{ sid: "s1", proposals: 2 }]));
+  await waitFor(() => expect(api.pendingReview).toHaveBeenCalledWith("run", "s1"));
+  const waiting = () => within(screen.getByRole("complementary", { name: /waiting reviews/i }));
+  expect(waiting().getByRole("link", { name: /Old/ })).toHaveAttribute("href", "/campaigns/run/scenes/s1/wrap-up");
+  expect(waiting().queryByText(/no scene in this campaign is/i)).not.toBeInTheDocument();
+  await act(async () => {
+    if (outcome === "failed") refuse(new Error("review detail unavailable"));
+    else answer({ review: outcome === "review" ? STORED_REVIEW : null,
+      generation: outcome === "review" ? "gen-stored" : null, stale: null });
+  });
+  if (outcome === "review") expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+  else {
+    expect(waiting().getByRole("link", { name: /Old/ })).toBeInTheDocument();
+    view.rerender(page([]));
+    expect(waiting().getByText(/no scene in this campaign is/i)).toBeInTheDocument();
+  }
+});
 
 test("the wrap-up url opens the review the scene is holding", async () => {
   // The rail's Wrap-up row and the hub's button both point here now. What the
