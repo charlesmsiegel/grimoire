@@ -79,7 +79,7 @@ def _meta_path(root: Path, cid: str) -> Path:
     return _char_dir(root, cid) / "character.md"
 
 
-def _card_path(root: Path, cid: str, vid: str) -> Path:
+def _card_path(root: Path, cid: str, vid: str | None) -> Path:
     return _char_dir(root, cid) / f"{vid}.json"
 
 
@@ -140,7 +140,7 @@ def create_version(root: Path, cid: str, version_name: str, card: dict) -> str:
     return vid
 
 
-def update_version(root: Path, cid: str, vid: str, card: dict) -> None:
+def update_version(root: Path, cid: str, vid: str | None, card: dict) -> None:
     p = require_version(root, cid, vid)
     cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
     atomic.write_text(p, _dumps(card))
@@ -230,7 +230,7 @@ def _version_ids_in(d: Path) -> list[str]:
     return sorted(p.stem for p in d.glob("*.json") if safe_id(p.stem))
 
 
-def require_version(root: Path, cid: str, vid: str) -> Path:
+def require_version(root: Path, cid: str, vid: str | None) -> Path:
     """Assert `cid`/`vid` name a real character version; return the card's path.
 
     Two stats and no read, which is the point: the image routes gate on this
@@ -239,7 +239,10 @@ def require_version(root: Path, cid: str, vid: str) -> Path:
 
     Raises the same two exceptions the lookups here already raised inline; this
     is the guard pair they were each repeating, named once -- the same shape
-    `pcs.require_version` is for the PC surface."""
+    `pcs.require_version` is for the PC surface. An unlocked appearance can
+    supply None: it is rejected as a version only AFTER character existence,
+    so a missing character keeps its own failure rather than being relabelled.
+    """
     _require_char(root, cid)
     p = _card_path(root, cid, vid)
     if not safe_id(vid) or not p.exists():
@@ -247,7 +250,7 @@ def require_version(root: Path, cid: str, vid: str) -> Path:
     return p
 
 
-def read_card(root: Path, cid: str, vid: str) -> dict:
+def read_card(root: Path, cid: str, vid: str | None) -> dict:
     return json.loads(require_version(root, cid, vid).read_text(encoding="utf-8"))
 
 

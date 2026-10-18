@@ -70,22 +70,6 @@
   "backend/src/grimoire/store/__init__.py": {
     "RUF022": 1
   },
-  "backend/src/grimoire/store/absorb/apply.py": {
-    "C901": 2,
-    "SIM105": 1
-  },
-  "backend/src/grimoire/store/absorb/conflicts.py": {
-    "C901": 1
-  },
-  "backend/src/grimoire/store/absorb/materializer.py": {
-    "C901": 1,
-    "SIM401": 2
-  },
-  "backend/src/grimoire/store/absorb/parse.py": {
-    "C901": 1,
-    "PERF401": 1,
-    "RUF005": 1
-  },
   "backend/src/grimoire/store/absorb/routing.py": {
     "RUF001": 3
   },

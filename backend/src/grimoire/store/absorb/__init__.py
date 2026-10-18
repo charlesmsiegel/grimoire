@@ -6,13 +6,12 @@ lives in the route layer and the prompt text in templates/absorb/.
 
 from __future__ import annotations
 
-# Submodules first, then names. The submodule line is listed in dependency
-# order (`prompt`/`parse`/`snapshots`/`routing`/`weather`/`conflicts` ->
-# `materializer` -> `apply` -> `publish`): each file imports only files named
-# before it.
+# Submodules first, then names. The record path's layers are
+# `prompt`/`parse`/`snapshots`/`routing`/`weather`/`conflicts` ->
+# `staging` -> `materializer` -> `writers` -> `apply` -> `publish`.
 # Python would resolve any other order too -- a submodule already in
 # `sys.modules` is bound whatever this line says -- so the order is a deliberate
-# reading aid, not a requirement: it states the package's internal layering in
+# reading aid, not a requirement: the list above states the internal layering in
 # one line.
 #
 # `weather.py` holds both halves of the narrated-weather path rather than
@@ -22,6 +21,10 @@ from __future__ import annotations
 # `conflicts.py` sits below both for the same reason from the other direction:
 # `materializer` stages a `before` and `apply` checks the store against it, so
 # the one definition of "what the record says now" has to be visible to each.
+# `writers.py` decides what actually landed; `apply.py` seals that result into
+# the Undo/log outcome and coordinates the positional crash-resume journal.
+# `staging.py` builds actor/entity proposals; `materializer` supplies the common
+# citation stamp and owns canonical continuity identities and their alternatives.
 #
 # `routing.py` is a leaf rather than part of `materializer`: it decides how much
 # weight a proposal has earned, `materializer` decides what a proposal IS, and
@@ -37,7 +40,9 @@ from . import (  # noqa: F401
                publish,
                routing,
                snapshots,
+               staging,
                weather,
+               writers,
 )
 from .apply import _BROWSABLE_KINDS, UNCONFIRMED, apply_edits  # noqa: F401
 from .conflicts import (  # noqa: F401

@@ -1,7 +1,10 @@
 """The generated wire contract preserves explicit clears and closes every object."""
 
+import inspect
 import json
 from pathlib import Path
+
+import pytest
 
 from grimoire import inference, model_schema, schemas
 from grimoire.store import absorb, groupstate, playstate
@@ -53,6 +56,17 @@ def test_system_prompt_embeds_the_same_model_generated_schema():
     messages = prompt.build_prompt("Mara joined.", {})
     assert schemas.render(schema) in messages[0]["content"]
     inference._check_structured(messages, schema)
+
+
+def test_prompt_snapshot_arguments_require_names():
+    """Textual snapshots must not silently bind to the wrong evidence section."""
+    with pytest.raises(TypeError, match="positional"):
+        inspect.signature(prompt.build_prompt).bind("Mara joined.", {}, "Realm")
+    with pytest.raises(TypeError, match="positional"):
+        prompt.build_prompt("Mara joined.", {}, "Realm")
+    # The named call still renders its evidence in the intended prompt section.
+    messages = prompt.build_prompt("Mara joined.", {}, plot_snapshot="Realm")
+    assert "Current plot threads:\nRealm" in messages[1]["content"]
 
 
 def test_nullable_current_state_keeps_existing_state_when_knowledge_changes(monkeypatch, tmp_path):

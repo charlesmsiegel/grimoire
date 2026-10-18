@@ -25,7 +25,7 @@ def extraction_schema() -> dict:
     return json.loads(_extraction_schema_json())
 
 
-def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = None,
+def build_prompt(transcript: str, facts: dict, *, state_snapshot: dict | None = None,
                  rel_snapshot: str | None = None, plot_snapshot: str | None = None,
                  group_snapshot: str | None = None,
                  commitment_snapshot: str | None = None,
@@ -35,7 +35,12 @@ def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = Non
     """`tracked_snapshot` is the scene tracker's final state as the narrator
     reads it (`tracker.view.lines_for` with no viewer): every value, private
     ones marked. Empty or None renders nothing, so a scene the tracker never
-    saw reads exactly as it did before there was a tracker."""
+    saw reads exactly as it did before there was a tracker.
+
+    Snapshots are named: their mostly textual values cannot identify which
+    section they belong to, so a positional swap would silently alter the
+    extraction's evidence instead of failing at the calling boundary.
+    """
     return [{"role": "system",
              "content": prompts.render("absorb/system.j2",
                                        steering=bool(steering_snapshot),

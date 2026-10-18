@@ -22,7 +22,7 @@ CITATION_TEXT = ("quote", "speaker")
 #: still ask for -- these fields live INSIDE the sections, so the derived
 #: top-level contract (`parse_output("{}")`) cannot see them, and a template edit
 #: that dropped the ask would otherwise go unnoticed until a live run.
-CITATION_FIELDS = CITATION_TEXT + ("certainty",)
+CITATION_FIELDS = (*CITATION_TEXT, "certainty")
 #: What a row opening a NEW plot thread or commitment may say about its own
 #: identity: why no listed record already covers it, and which listed ids it was
 #: weighed against and judged different business. Like `CITATION_FIELDS` these
@@ -183,55 +183,52 @@ def new_lore_kind(value) -> str:
     return value if isinstance(value, str) and value in NEW_LORE_KINDS else "lore"
 
 
-def parse_output(text: str) -> dict:
-    obj = extract_object(text) or {}
+def _str(e: dict, f: str) -> str:
+    """Normalize model text while collapsing null and absence to the same blank."""
+    # A JSON `null` is a present-but-empty value the model uses interchangeably with
+    # omitting the key (e.g. "no existing id, this is new"); str(e.get(f, "")) turns
+    # that null into the literal text "None" instead of "", corrupting ids/titles
+    # downstream. `.get(f) or ""` collapses null and absent to the same "".
+    return str(e.get(f) or "").strip()
 
-    def _str(e, f):
-        # A JSON `null` is a present-but-empty value the model uses interchangeably with
-        # omitting the key (e.g. "no existing id, this is new"); str(e.get(f, "")) turns
-        # that null into the literal text "None" instead of "", corrupting ids/titles
-        # downstream. `.get(f) or ""` collapses null and absent to the same "".
-        return str(e.get(f) or "").strip()
 
-    def _list(key, fields, cite=True):
-        out = []
-        for e in _rows(obj, key):
-            if isinstance(e, dict):
-                row = {f: _str(e, f) for f in fields}
-                out.append(row | _cite(e) if cite else row)
-        return out
-
-    # Preserve key PRESENCE for knowledge: a field the model omitted must be left
-    # untouched at materialize time (keep-on-omit), while an explicit "" clears it. So we
-    # only carry knows/suspects into the row when the model actually returned them.
-    cs_edits = []
-    for e in _rows(obj, "character_state_edits"):
-        if not isinstance(e, dict):
-            continue
-        row = {"id": _str(e, "id")}
-        for k in ("current_state", "knows", "suspects"):
-            if isinstance(e.get(k), str):
-                row[k] = _str(e, k)
-        cs_edits.append(row | _cite(e))
-
-    # Same key-presence rule as character_state_edits, for all five sections.
-    gs_edits = []
-    for e in _rows(obj, "group_state_edits"):
-        if not isinstance(e, dict):
-            continue
-        row = {"id": _str(e, "id")}
-        for k in groupstate.FIELDS:
-            if isinstance(e.get(k), str):
-                row[k] = _str(e, k)
-        gs_edits.append(row | _cite(e))
-
-    rel_deltas = []
-    for e in _rows(obj, "relationship_deltas"):
+def _list(obj: dict, key: str, fields: tuple[str, ...], *, cite: bool = True) -> list[dict]:
+    """Read textual rows, carrying citations only for sections that stage edits."""
+    out = []
+    for e in _rows(obj, key):
         if isinstance(e, dict):
-            rel_deltas.append({"from": _str(e, "from"), "to": _str(e, "to"),
-                               "trust": _int05(e.get("trust")), "affection": _int05(e.get("affection")),
-                               "tension": _int05(e.get("tension")), "note": _str(e, "note")} | _cite(e))
+            row = {f: _str(e, f) for f in fields}
+            out.append(row | _cite(e) if cite else row)
+    return out
 
+
+def _state_rows(obj: dict, key: str, fields: tuple[str, ...]) -> list[dict]:
+    """Preserve a state's omitted versus explicitly empty textual fields."""
+    # Preserve key PRESENCE for knowledge: a field the model omitted must be left
+    # untouched at materialize time (keep-on-omit), while an explicit "" clears it.
+    # The same rule applies to all five group-state sections.
+    out: list[dict] = []
+    for e in _rows(obj, key):
+        if not isinstance(e, dict):
+            continue
+        row = {"id": _str(e, "id")}
+        for field in fields:
+            if isinstance(e.get(field), str):
+                row[field] = _str(e, field)
+        out.append(row | _cite(e))
+    return out
+
+
+def _relationship_rows(obj: dict) -> list[dict]:
+    """Clamp relationship axes while retaining citations and directed actors."""
+    return [{"from": _str(e, "from"), "to": _str(e, "to"),
+             "trust": _int05(e.get("trust")), "affection": _int05(e.get("affection")),
+             "tension": _int05(e.get("tension")), "note": _str(e, "note")} | _cite(e)
+            for e in _rows(obj, "relationship_deltas") if isinstance(e, dict)]
+
+
+def _plot_rows(obj: dict) -> list[dict]:
+    """Normalize plot progression, whose omitted status means open."""
     plot_moves = []
     for e in _rows(obj, "plot_movements"):
         if isinstance(e, dict):
@@ -240,6 +237,11 @@ def parse_output(text: str) -> dict:
                                "status": status if status in plot.STATUSES else "open",
                                "beat": _str(e, "beat")} | _cite(e) | _identity(e))
 
+    return plot_moves
+
+
+def _commitment_rows(obj: dict) -> list[dict]:
+    """Keep omitted taxonomy and deadline fields distinct from clear instructions."""
     # An absent or unrecognized kind/status normalizes to "", NOT to a default.
     # `commitments.set_movement` reads a blank as "keep what is stored" and
     # supplies the defaults itself for a record it is creating, so a blank here
@@ -275,13 +277,23 @@ def parse_output(text: str) -> dict:
                 row["due"] = e["due"].strip()
             commitment_moves.append(row | _cite(e) | _identity(e))
 
-    new_characters = _list("new_characters",
+    return commitment_moves
+
+
+def _new_character_rows(obj: dict) -> list[dict]:
+    """Normalize the separate thin/sketched/established character confidence scale."""
+    new_characters = _list(obj, "new_characters",
                            ("name", "description", "history", "personality",
                             "mes_example", "evidence", "confidence",
                             "open_questions", "sd_prompt"))
     for e in new_characters:
         e["confidence"] = _confidence(e.get("confidence", ""))
 
+    return new_characters
+
+
+def _new_location_rows(obj: dict) -> list[dict]:
+    """Normalize location text and the optional current-setting intent."""
     new_locations = []
     for e in _rows(obj, "new_locations"):
         if not isinstance(e, dict):
@@ -291,9 +303,44 @@ def parse_output(text: str) -> dict:
             "sd_prompt": _str(e, "sd_prompt"), "current_setting": _truthy(e.get("current_setting")),
         } | _cite(e))
 
-    new_lore = _list("new_lore", ("name", "body", "keys", "kind"))
+    return new_locations
+
+
+def _new_lore_rows(obj: dict) -> list[dict]:
+    """Clamp proposed entity kinds to the one shared creation vocabulary."""
+    new_lore = _list(obj, "new_lore", ("name", "body", "keys", "kind"))
     for e in new_lore:
         e["kind"] = new_lore_kind(e["kind"].lower())
+
+    return new_lore
+
+
+def _membership_rows(obj: dict) -> list[dict]:
+    """Accept only complete textual join/leave proposals."""
+    return [row | _cite(e) for e in _rows(obj, "membership_changes")
+            if isinstance(e, dict) and all(isinstance(e.get(key), str) for key in ("group", "actor", "change"))
+            and (row := {key: e[key].strip().lower() if key == "change" else e[key].strip() for key in ("group", "actor", "change")})
+            and row["change"] in {"join", "leave"}]
+
+
+def parse_output(text: str) -> dict:
+    """Rebuild the fixed, ordered extraction contract from a model reply."""
+    obj = extract_object(text) or {}
+
+    cs_edits = _state_rows(obj, "character_state_edits", ("current_state", "knows", "suspects"))
+    gs_edits = _state_rows(obj, "group_state_edits", groupstate.FIELDS)
+
+    rel_deltas = _relationship_rows(obj)
+
+    plot_moves = _plot_rows(obj)
+
+    commitment_moves = _commitment_rows(obj)
+
+    new_characters = _new_character_rows(obj)
+
+    new_locations = _new_location_rows(obj)
+
+    new_lore = _new_lore_rows(obj)
 
     return {
         "one_line": str(obj.get("one_line", "")).strip(),
@@ -303,7 +350,7 @@ def parse_output(text: str) -> dict:
         # event is not one -- it never reaches `materialize`, and the client
         # sends the section straight back on save, so anything carried here is
         # written into timeline.md rather than reviewed.
-        "timeline_events": _list("timeline_events", ("date", "text"), cite=False),
+        "timeline_events": _list(obj, "timeline_events", ("date", "text"), cite=False),
         # The fact ledger (#114). `supersedes` is the id of a standing fact this
         # one replaces, and a row with a `supersedes` and no `text` retires that
         # fact outright -- so, unlike every other section here, a blank field is
@@ -315,17 +362,14 @@ def parse_output(text: str) -> dict:
         # Cited like every other staged section (the `cite` default): a fact
         # reaches the reviewer as a StagedEdit, so it is routed on the same
         # evidence as the rest.
-        "facts": _list("facts", ("text", "date", "supersedes")),
+        "facts": _list(obj, "facts", ("text", "date", "supersedes")),
         "character_state_edits": cs_edits,
         "group_state_edits": gs_edits,
-        "membership_changes": [row | _cite(e) for e in _rows(obj, "membership_changes")
-            if isinstance(e, dict) and all(isinstance(e.get(key), str) for key in ("group", "actor", "change"))
-            and (row := {key: e[key].strip().lower() if key == "change" else e[key].strip() for key in ("group", "actor", "change")})
-            and row["change"] in {"join", "leave"}],
-        "lore_edits": _list("lore_edits", ("id", "append")),
-        "authored_edits": _list("authored_edits", ("id", "field", "text")),
+        "membership_changes": _membership_rows(obj),
+        "lore_edits": _list(obj, "lore_edits", ("id", "append")),
+        "authored_edits": _list(obj, "authored_edits", ("id", "field", "text")),
         "relationship_deltas": rel_deltas,
-        "bond_changes": _list("bond_changes", ("a", "b", "type")),
+        "bond_changes": _list(obj, "bond_changes", ("a", "b", "type")),
         "plot_movements": plot_moves,
         "commitment_movements": commitment_moves,
         "new_characters": new_characters,
@@ -336,7 +380,7 @@ def parse_output(text: str) -> dict:
         # dropped on the floor here, and the materialize and apply branches in
         # materializer.py and apply.py become unreachable no matter how well
         # the prompt performs.
-        "weather_edits": _list("weather_edits",
+        "weather_edits": _list(obj, "weather_edits",
                                ("location", "condition", "temperature", "wind",
                                 "duration_blocks", "note")),
     }

@@ -3219,11 +3219,13 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
             player_label=player_label, shown=shown, groups=groups,
             messages=store.absorb.build_prompt(
                 transcript, facts,
-                store.absorb.state_snapshot(cid, sid),
-                store.absorb.relationships_snapshot(cid, sid),
-                store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid, facts.get("cast", ()), snapshot=groups.snapshot),
-                store.absorb.commitment_snapshot(cid), store.absorb.fact_snapshot(cid, sid),
-                store.absorb.steering_snapshot(cid, sid),
+                state_snapshot=store.absorb.state_snapshot(cid, sid),
+                rel_snapshot=store.absorb.relationships_snapshot(cid, sid),
+                plot_snapshot=store.absorb.plot_snapshot(cid),
+                group_snapshot=store.absorb.group_snapshot(cid, facts.get("cast", ()), snapshot=groups.snapshot),
+                commitment_snapshot=store.absorb.commitment_snapshot(cid),
+                fact_snapshot=store.absorb.fact_snapshot(cid, sid),
+                steering_snapshot=store.absorb.steering_snapshot(cid, sid),
                 tracked_snapshot=tracked),
             watermark=store.pending_reviews.watermark(scene["messages"]))
 

@@ -100,7 +100,7 @@ def test_steering_snapshot_reads_the_log(monkeypatch, tmp_path):
 def test_build_prompt_includes_facts_transcript_and_state():
     msgs = absorb.build_prompt("**You:** hi",
                                {"location": "The Crypt", "date": "2026-01-01", "cast": ["characters/seraphine"]},
-                               {"Seraphine": "Wary of the party."})
+                               state_snapshot={"Seraphine": "Wary of the party."})
     assert msgs[0]["role"] == "system"
     user = msgs[1]["content"]
     assert "The Crypt" in user and "seraphine" in user and "**You:** hi" in user

@@ -888,7 +888,9 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg, trk in (
          "— Hero was given until midnight.",
          "f1: The warehouse belongs to the Salt Circle. (the third night)",
          "- Seraphine was told about the tail at the Night Dock", TRACKED)):
-    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct, strg,
+    exp = absorb.build_prompt(transcript, facts, state_snapshot=st, rel_snapshot=rel,
+                              plot_snapshot=plt, group_snapshot=grp,
+                              commitment_snapshot=cmt, fact_snapshot=fct, steering_snapshot=strg,
                               tracked_snapshot=trk)
     check(f"absorb system ({label})", exp[0]["content"],
           render("absorb/system.j2", steering=bool(strg),
@@ -916,7 +918,8 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg, trk in (
         assert "Final tracked state" not in exp[1]["content"], \
             f"absorb user ({label}) renders a tracked-state block with no tracked state"
         assert exp[1]["content"] == absorb.build_prompt(
-            transcript, facts, st, rel, plt, grp, cmt, fct, strg,
+            transcript, facts, state_snapshot=st, rel_snapshot=rel, plot_snapshot=plt,
+            group_snapshot=grp, commitment_snapshot=cmt, fact_snapshot=fct, steering_snapshot=strg,
             tracked_snapshot=[])[1]["content"], \
             f"absorb user ({label}) changes with an empty tracked state"
     if grp:
@@ -2355,8 +2358,10 @@ cmt_snap = absorb.commitment_snapshot(cid)
 fct_snap = absorb.fact_snapshot(cid)
 steering.record(cid, sid, "Seraphine was told about the tail at the Night Dock")
 strg_snap = absorb.steering_snapshot(cid, sid)
-exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap, grp_snap, cmt_snap, fct_snap,
-                          strg_snap)
+exp = absorb.build_prompt(tr, facts, state_snapshot=st_snap, rel_snapshot=rel_snap,
+                          plot_snapshot=plot_snap, group_snapshot=grp_snap,
+                          commitment_snapshot=cmt_snap, fact_snapshot=fct_snap,
+                          steering_snapshot=strg_snap)
 check("absorb user (store)", exp[1]["content"],
       render("absorb/user.j2", facts=facts, state_snapshot=st_snap, rel_snapshot=rel_snap,
              plot_snapshot=plot_snap, group_snapshot=grp_snap,

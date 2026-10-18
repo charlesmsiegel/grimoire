@@ -12,27 +12,23 @@ from collections.abc import Callable
 from typing import NamedTuple
 
 from .. import (
-    characters,
     commitments,
     entities,
     errors,
     facts,
-    groupstate,
     overlay,
-    pcs,
-    playstate,
     plot,
-    relationships,
 )
-from ..appearances import cast as appearances_cast
-from ..appearances import paths as appearances_paths
-from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..continuity import effective as continuity_effective
 from ..paths import slugify
-from . import conflicts, membership, parse, routing, weather
+from . import conflicts, membership, parse, routing, staging, weather
 
-_CARD_FIELDS = ("description", "personality", "scenario")
+_CARD_FIELDS = staging._CARD_FIELDS
+APPEND_KINDS = staging.APPEND_KINDS
+_char_name = staging._char_name
+_actor_exists = staging._actor_exists
+_entity_target = staging._entity_target
 
 #: `continuity.identity.AS_NEW_KEY`: the private row key an accepted
 #: ``existing`` retarget carries its original row under, popped here to build
@@ -61,8 +57,7 @@ CLOSED_SINCE = "that record was closed while the review was being prepared"
 #: the same verdict the resolver guard gives, restated as `AS_NEW_KEY` is.
 MOVED_SINCE = "another row in this scene already moves that record"
 #: The noun a reviewer reads in "New <noun> — <name>", per kind a proposal creates.
-_NEW_RECORD_NOUNS = {"locations": "location", "lore": "lore entry", "items": "item",
-                     "groups": "group", "creatures": "creature"}
+_NEW_RECORD_NOUNS = staging._NEW_RECORD_NOUNS
 
 
 def record_taken(cid: str, kind: str, name: str) -> str | None:
@@ -83,83 +78,6 @@ def record_taken(cid: str, kind: str, name: str) -> str | None:
     except entities.EntityNotFound:
         return None
     return f"this campaign already has {noun} with the id {slugify(name)}"
-
-
-def _char_name(cid: str, char_id: str) -> str:
-    """Overlay-aware: a thin campaign's NPC is usually still inherited (never
-    materialized croot-side), so the display name must resolve across the union."""
-    try:
-        return characters.read_character(overlay.char_root(cid, char_id), char_id)["meta"].get("name", char_id)
-    except characters.CharacterNotFound:
-        return char_id
-
-
-def _actor_exists(cid: str, token: str) -> bool:
-    """Overlay-aware: a thin campaign's cast is mostly inherited (never
-    materialized croot-side), so existence must be checked across the union,
-    not just the campaign's own copy."""
-    kind, _, aid = token.partition(":")
-    try:
-        if kind == "pcs":
-            pcs.read_pc(overlay.pc_root(cid, aid), aid)
-        elif kind == "characters":
-            characters.read_character(overlay.char_root(cid, aid), aid)
-        else:
-            return False
-        return True
-    except (characters.CharacterNotFound, pcs.PCNotFound):
-        return False
-
-
-#: Every world record a `lore_edits` append may land on, in the order a BARE id
-#: is tried. All five of `entities.ENTITY_KINDS` (#224): a body append is the
-#: only edit that can evolve a record of any kind, and resolving just the two
-#: left items, groups and creatures unevolvable — a group could only ever move
-#: through its campaign-side state, and an item or creature was static from the
-#: day it was created.
-#:
-#: A fixed order rather than ENTITY_KINDS' own, because ids are per-kind
-#: directories: `lore/the-ledger` and `items/the-ledger` are two records, and a
-#: bare id has to pick one. Lore and locations lead in the order they were tried
-#: before the other three joined them, so an append that has been landing on a
-#: lore entry cannot start landing on a same-slugged location instead. The pick
-#: is not hidden from the reviewer either way — the staged label names the kind
-#: it resolved to.
-#:
-#: A model that means one of the others says so: `<kind>/<id>` (or `<kind>:<id>`,
-#: the form `group_state_edits` already accepts) resolves in that kind alone.
-#: `test_absorb_store.py` holds this tuple to ENTITY_KINDS, so a sixth kind
-#: cannot join the store and quietly arrive unevolvable the way these three did.
-APPEND_KINDS: tuple[str, ...] = ("lore", "locations", "items", "groups", "creatures")
-
-
-def _entity_target(cid: str, raw_id: str) -> tuple[str, str, dict] | None:
-    """`(kind, eid, record)` for a `lore_edits` id, or None when nothing answers.
-
-    A `<kind>/<id>`-qualified id is resolved in that kind ONLY. Falling back to
-    the bare scan when the named kind has no such record would answer a
-    question the model did not ask: it named a kind because the id alone is
-    ambiguous, so a miss there means the record it meant does not exist, not
-    that some other kind's same-slugged record will do.
-
-    The record comes back with the pair rather than being re-read by the
-    caller, because resolving is not free: a bare id that misses is up to five
-    overlay reads, and each croot miss reads the campaign's tombstone list
-    before falling through to the world.
-    """
-    kind, sep, rest = raw_id.partition("/")
-    if not sep:
-        kind, sep, rest = raw_id.partition(":")
-    if sep and rest and kind in APPEND_KINDS:
-        candidates: tuple[tuple[str, str], ...] = ((kind, rest),)
-    else:
-        candidates = tuple((k, raw_id) for k in APPEND_KINDS)
-    for k, eid in candidates:
-        try:
-            return k, eid, overlay.read_entity(cid, k, eid)
-        except entities.EntityNotFound:
-            continue
-    return None
 
 
 def _text(value) -> str:
@@ -840,352 +758,48 @@ def _fact_label(text: str, supersedes: str, date: str) -> str:
     return f"{label} — {date}" if date else label
 
 
-def _pc_name(cid: str, pid: str) -> str | None:
-    """The persona name at the version the campaign locked, or None when the PC
-    is not in the appearance record or its persona will not read -- which is
-    what a state edit for a PC requires, the way a character's requires its
-    card."""
-    vid = appearances_versions.locked_version(cid, "pcs", pid)
-    if vid is None:
+def _fact_predecessor(ledger: dict, sid: str, text: str, sup: str) -> tuple[str, dict | None] | None:
+    """Keep a live, scene-visible predecessor, or drop a mere restatement."""
+    prior = ledger.get(sup) if sup else None
+    if text and facts.is_active(prior) and facts.restates(prior, text):
+        # A RESTATEMENT, not a supersession -- see `facts.restates` for what
+        # it costs. The prompt says not to report one and the model does
+        # anyway, which is why this is in code rather than only in the
+        # prompt. Nothing about the world moved, so the row does not either.
+        #
+        # `apply` checks again rather than trusting this: the reviewer can
+        # edit the replacement text into a restatement after the row was
+        # staged, and that path never comes back through here.
+        #
+        # `text and` guards the BARE RETIREMENT, whose "" would otherwise
+        # match a stored fact whose own text reads as "" -- which `record`
+        # never writes but a hand-edited or malformed record supplies, and
+        # that is exactly the record most worth being able to retire.
         return None
-    try:
-        persona = pcs.read_persona(overlay.pc_root(cid, pid), pid, vid)
-    except (pcs.PCNotFound, pcs.PCVersionNotFound):
-        return None
-    name = persona.get("name")
-    return name.strip() if isinstance(name, str) and name.strip() else pid
+    if not facts.is_active(prior) or facts.recorded_after(prior, sid):
+        # A `supersedes` naming a fact that is retired, missing or malformed
+        # is dropped rather than obeyed. The snapshot offers only standing
+        # facts, so the model was never shown that record, and retiring an
+        # already-retired fact would overwrite the pointer saying what
+        # really replaced it.
+        #
+        # So is one recorded AFTER this scene, which `facts.record` will
+        # refuse to write (see `recorded_after`): the snapshot is scoped to
+        # this scene precisely so the model is not offered it, and a row
+        # that names one anyway has to be STAGED as what it will actually
+        # do. Left labelled a supersession, the reviewer approves a
+        # retirement that silently does not happen.
+        #
+        # The row's other half survives either way: what is left is an
+        # ordinary new fact, or -- when the row carried no text either --
+        # nothing, and it is dropped below.
+        sup, prior = "", None
+    return sup, prior
 
 
-def _character_state_edit(cid: str, kind: str, char_id: str, before: str, after: str,
-                          name: str | None = None) -> dict:
-    """A `character_state` row for a character or, with `kind="pcs"`, a player
-    character. The id keeps its old spelling for characters, so a review staged
-    before PCs had state still names the same row."""
-    eid = f"character_state:{char_id}" if kind == "characters" else f"character_state:pcs:{char_id}"
-    label = name or (_char_name(cid, char_id) if kind == "characters" else char_id)
-    return {"id": eid, "kind": "character_state",
-            "target": {"kind": kind, "id": char_id},
-            "label": f"{label} — current state",
-            "field": "current_state",
-            "before": before, "after": after, "authored": False}
-
-
-def materialize(cid: str, sid: str, parsed: dict,
-                messages: list[dict] | None = None,
-                player_label: str | None = None, *,
-                on_identity_error: Callable[[BaseException], None] | None = None,
-                membership_capture: membership.Capture | None = None,
-                ) -> list[dict]:
-    """Turn the parsed edit lists into before/after StagedEdits against the campaign
-    copies. Targets that don't exist are dropped (tolerated, not an error).
-
-    `messages` is the transcript the extraction call was SHOWN. Pass it whenever
-    the caller has it -- the citations are judged against it, and the scene can
-    move between rendering the prompt and this call (see `routing.speaker_index`).
-    `player_label` is the same snapshot one layer down: the name the prompt's
-    transcript put on the player's unstamped posts, which a rename landing
-    mid-call would otherwise change underneath the citations.
-
-    Rows the identity step examined carry `identity_check`; they are staged
-    with it (alternatives added), at band ``low`` when the check found a
-    possible duplicate or never answered. The two identity-only passes --
-    re-checking accepted targets, building alternatives -- run outside every
-    absorb phase boundary, so a defect in either stages the rows without it
-    rather than failing a paid-for extraction: it is recorded and reported
-    to `on_identity_error`, and the return shape is unchanged.
-    """
-    croot = campaigns_paths.campaign_root(cid)
+def _fact_edits(cid: str, sid: str, rows: list[dict], stamp: staging.Stamp) -> list[dict]:
+    """Stage the ledger's recordings and retirements without duplicate work."""
     out: list[dict] = []
-    # Once per absorb, not once per edit: every row is checked against the same
-    # transcript, and the index costs a scene read and a cast read.
-    index = routing.speaker_index(cid, sid, messages, player_label)
-
-    def _staged(edit: dict, row: dict, *subjects: str) -> dict:
-        """One StagedEdit, stamped with the review block the panel routes on.
-
-        Every `out.append` in this function goes through this rather than
-        writing the key itself. A row that skipped it would arrive at the
-        reviewer looking like the rows that genuinely have no citation to check
-        -- the dossier, voice and sheet proposals staged elsewhere -- and so be
-        pre-approved on the strength of a signal that was actually present and
-        simply dropped. `subjects` are the actors the record BELONGS to (see
-        `routing.authority`); a record that belongs to nobody passes none.
-
-        A row the identity step examined carries its `identity_check` onto
-        the edit (alternatives filled in later), and is forced to band
-        ``low`` when the check found a possible duplicate or never answered;
-        the citation's own score and quote are reported unchanged.
-        """
-        row = dict(row)
-        row.pop(AS_NEW_KEY, None)
-        edit["review"] = routing.review(index, row, subjects)
-        ic = row.get("identity_check")
-        if isinstance(ic, dict):
-            edit["identity_check"] = {**ic, "alternatives": []}
-            if ic.get("decision") in _LOW_DECISIONS:
-                edit["review"] = {**edit["review"], "band": "low"}
-        return edit
-
-    def _identity_failed(exc: BaseException) -> None:
-        errors.record_exception(exc, "continuity-identity", campaign=cid, scene=sid)
-        if on_identity_error is not None:
-            on_identity_error(exc)
-
-    for e in parsed.get("character_state_edits", []):
-        raw_id = e.get("id", "")
-        if not raw_id:
-            continue
-        # The model echoes ids from the "Present: <kind>/<id>, ..." context line (or,
-        # less reliably, a bare id) — strip any "characters/", "characters:", "pcs/" or
-        # "pcs:" prefix so every form resolves. A bare id is a character's. A PC keeps
-        # its current state only (Knows/Suspects stay non-player), filed under pcs/ so
-        # it is never misfiled under characters/ with the PC's id as a character slug.
-        kind, sep, rest = raw_id.partition("/")
-        if not sep:
-            kind, _, rest = raw_id.partition(":")
-        if kind not in ("characters", "pcs"):
-            kind, rest = "characters", raw_id
-        char_id = rest
-        name: str | None = None
-        if kind == "pcs":
-            name = _pc_name(cid, char_id)
-            if name is None:
-                continue
-        else:
-            try:
-                # overlay-aware: a thin campaign's NPC is usually still inherited
-                # (never appeared/materialized), and a state edit for it must not
-                # be silently dropped just because croot lacks the character dir
-                characters.read_character(overlay.char_root(cid, char_id), char_id)
-            except characters.CharacterNotFound:
-                continue
-        st = playstate.read_state(croot, char_id, kind)
-        if kind == "pcs":
-            cur_knows = cur_suspects = knows = suspects = ""
-        else:
-            cur_knows = st["knows"] if st else ""
-            cur_suspects = st["suspects"] if st else ""
-            # Keep-on-omit: an omitted knows/suspects preserves the stored value; an
-            # explicit "" clears it. Prevents an absorb that only touches
-            # current_state from silently erasing established knowledge.
-            knows = e["knows"] if "knows" in e else cur_knows
-            suspects = e["suspects"] if "suspects" in e else cur_suspects
-        after = playstate.compose_body(e.get("current_state", st["current_state"] if st else ""), knows, suspects)
-        before = playstate.compose_body(st["current_state"], cur_knows, cur_suspects) if st else ""
-        # Explicit empty strings clear even the last standing field (spec07).
-        # Raw parsing removes null/omitted state fields before this boundary,
-        # so a generated nullable contract cannot erase a snapshot by silence.
-        clears = any(field in e for field in ("current_state", "knows", "suspects")) and bool(before)
-        if not after and not clears:
-            continue
-        if before == after:
-            continue
-        out.append(_staged(_character_state_edit(cid, kind, char_id, before, after, name),
-                           e, f"{kind}:{char_id}"))
-
-    for e in parsed.get("group_state_edits", []):
-        raw_id = e.get("id", "")
-        if not raw_id:
-            continue
-        kind, sep, rest = raw_id.partition("/")
-        if not sep:
-            kind, _, rest = raw_id.partition(":")
-        gid = rest if kind == "groups" else raw_id
-        try:
-            name = overlay.read_entity(cid, "groups", gid)["meta"].get("name", gid)
-        except entities.EntityNotFound:
-            continue
-        st = groupstate.read_state(croot, gid)
-        cur = {k: (st[k] if st else "") for k in groupstate.FIELDS}
-        new = {k: (e[k] if k in e else cur[k]) for k in groupstate.FIELDS}
-        after = groupstate.compose_body(new)
-        before = groupstate.compose_body(cur) if st else ""
-        if before == after:
-            continue
-        out.append(_staged({"id": f"group_state:{gid}", "kind": "group_state",
-                            "target": {"kind": "groups", "id": gid},
-                            "label": f"{name} — group state", "field": "group_state",
-                            "before": before, "after": after, "authored": False}, e))
-
-    if membership_capture is not None:
-        # Spec 07 section 9.3. Every drop is tolerated, not an error: a group
-        # this review did not capture (or that is gm-only), an actor that is not
-        # a referenceable, existing character or PC, a no-op, a repeat.
-        seen_memberships = set()
-        # Only an actor on the scene's Present line can be proposed (9.7): the
-        # transcript can give evidence about nobody else.
-        present = {f"{a['kind']}:{a['id']}" for a in appearances_cast.scene_cast(cid, sid)}
-        for row in parsed.get("membership_changes", []):
-            ref = membership.group_ref(row.get("group"))
-            actor = membership.actor_ref(row.get("actor"))
-            if ref is None or ref not in membership_capture.leases or actor is None:
-                continue
-            if (actor not in membership_capture.actors or actor not in present
-                    or (ref, actor) in seen_memberships):
-                continue
-            seen_memberships.add((ref, actor))
-            roster = membership_capture.snapshot.index.groups[ref]
-            before = membership.PRESENT if actor in roster.members else membership.ABSENT
-            after = membership.PRESENT if row["change"] == "join" else membership.ABSENT
-            if before == after:
-                continue
-            gid = ref.partition(":")[2]
-            verb = "joins" if row["change"] == "join" else "leaves"
-            out.append(_staged({"id": f"membership:{gid}:{actor}", "kind": "membership",
-                "target": {"kind": "groups", "id": gid},
-                "label": f"{roster.name} — {relationships.actor_name(cid, actor)} {verb}",
-                "field": f"members:{actor}",
-                "before": before, "after": after, "authored": False,
-                "payload": {"group": gid, "actor": actor, "change": row["change"],
-                            "group_lifecycle_token": membership_capture.leases[ref].token}}, row, actor))
-
-    for e in parsed.get("lore_edits", []):
-        raw_id, append = e.get("id", ""), (e.get("append", "") or "").strip()
-        if not raw_id or not append:
-            continue
-        target = _entity_target(cid, raw_id)
-        if not target:
-            continue
-        kind, eid, ent = target
-        before = ent["body"].strip()
-        after = (before + "\n\n" + append).strip()
-        # The staged id carries the KIND as well as the record's, because two
-        # kinds can hold the same slug and a qualified id can reach both of them
-        # in one absorb. The reviewer's panel keys a row by this id (its React
-        # key, and the lookup that hangs a contradiction warning on it), so two
-        # rows sharing one would hand one record's warning to the other's row.
-        out.append(_staged({"id": f"lore:{kind}/{eid}", "kind": "lore",
-                            "target": {"kind": kind, "id": eid},
-                            "label": f"{ent['meta'].get('name', eid)} — {kind}", "field": "body",
-                            "before": before, "after": after, "authored": False}, e))
-
-    for e in parsed.get("authored_edits", []):
-        char_id, field, text = e.get("id", ""), e.get("field", ""), (e.get("text", "") or "").strip()
-        if not char_id or field not in _CARD_FIELDS or not text:
-            continue
-        vid = appearances_versions.locked_version(cid, "characters", char_id)
-        if not vid:
-            continue
-        try:
-            # locked_version returned a version, so the actor is in the appearance
-            # record and its card is materialized campaign-side
-            before = characters.read_card(appearances_paths.locked_actor_root(cid),
-                                          char_id, vid)["data"].get(field, "").strip()
-        except (characters.CharacterNotFound, characters.VersionNotFound):
-            continue
-        out.append(_staged({"id": f"authored:{char_id}:{field}", "kind": "authored",
-                            "target": {"kind": "characters", "id": char_id},
-                            "label": f"{_char_name(cid, char_id)} — {field} (card edit)",
-                            "field": field, "before": before, "after": text, "authored": True},
-                           e, f"characters:{char_id}"))
-
-    for e in parsed.get("relationship_deltas", []):
-        frm, to = e.get("from", ""), e.get("to", "")
-        if not _actor_exists(cid, frm) or not _actor_exists(cid, to):
-            continue
-        payload = {"from": frm, "to": to, "trust": e.get("trust", 0), "affection": e.get("affection", 0),
-                   "tension": e.get("tension", 0), "note": e.get("note", "")}
-        after = relationships._render_feeling(payload)
-        cur = relationships.get_feeling(cid, frm, to)
-        before = relationships._render_feeling(cur) if cur else ""
-        if before == after:
-            continue
-        # `frm` alone is the subject: the feeling is the FROM side's, so the TO
-        # side describing it is a third party's read of somebody else's heart.
-        out.append(_staged({"id": f"feeling:{relationships.feeling_key(frm, to)}",
-                            "kind": "relationship",
-                            "target": {"kind": "relationships",
-                                       "id": relationships.feeling_key(frm, to)},
-                            "label": f"{relationships.actor_name(cid, frm)} → {relationships.actor_name(cid, to)}",
-                            "field": "feeling", "before": before, "after": after,
-                            "authored": False, "payload": payload}, e, frm))
-
-    for e in parsed.get("bond_changes", []):
-        a_tok, b_tok, typ = e.get("a", ""), e.get("b", ""), (e.get("type", "") or "").strip()
-        if not typ or not _actor_exists(cid, a_tok) or not _actor_exists(cid, b_tok):
-            continue
-        cur = relationships.get_bond(cid, a_tok, b_tok)
-        before = cur["type"] if cur else ""
-        if before == typ:
-            continue
-        # Both ends are subjects, unlike a feeling: a bond is the pair's shared
-        # relationship type, so either of them naming it is first-hand.
-        out.append(_staged({"id": f"bond:{relationships.bond_key(a_tok, b_tok)}", "kind": "bond",
-                            "target": {"kind": "relationships",
-                                       "id": relationships.bond_key(a_tok, b_tok)},
-                            "label": f"{relationships.actor_name(cid, a_tok)} & {relationships.actor_name(cid, b_tok)}",
-                            "field": "bond", "before": before, "after": typ, "authored": False,
-                            "payload": {"a": a_tok, "b": b_tok, "type": typ}},
-                           e, a_tok, b_tok))
-
-    try:
-        threads = plot.read(cid)
-    except Exception:  # noqa: BLE001 — garbled plot.json: skip plot movements, don't 500
-        threads = {}
-    try:
-        owed = commitments.read(cid)
-    except Exception:  # noqa: BLE001 — garbled commitments.json: skip these, don't 500
-        owed = None
-    if not isinstance(owed, dict):
-        # `read` is a bare json.loads, so a commitments.json holding `[]` is
-        # valid JSON of the wrong shape: it raises nothing and `owed.get` below
-        # would then throw. That happens AFTER the extraction call, turning a
-        # paid-for absorb into a 500 rather than a dropped section.
-        owed = None
-    # An UNREADABLE store stages nothing, where an empty one stages normally.
-    # Falling back to {} conflates the two and every movement is staged as a new
-    # commitment -- a row whose `before` says "nothing is stored" when the truth
-    # is unknown, and whose save is worse than the lie: `apply_edits` hits the
-    # same broken read, its per-edit `except` swallows it, and the reviewer's
-    # panel closes on a 200 with the approved commitment gone and no failure
-    # reported. Staging nothing costs this section (the same price a garbled
-    # file already pays in `render_open` and the ledger) and cannot lose an
-    # approval, because there is no approval to lose.
-    #
-    # Which record each plot/commitment row stages onto, decided once for both
-    # sections by the same `assign_ids` the identity step asks -- so the two can
-    # never disagree about which slug collisions are honoured.
-    #
-    # A row naming a merged record's source is staged onto its live canonical
-    # (spec §7.2): the id, payload and `before` are the canonical's, the PHYSICAL
-    # record `apply` writes and `conflicts` re-reads at save time; the label
-    # keeps the source's title and says where the beat is going.
-    #
-    # An accepted identity retarget whose record stopped being live since the
-    # resolver answered is put back first, so it is assigned as the new row.
-    live = _live_canon(cid)
-    try:
-        parsed = _recheck_accepted(parsed, threads, owed, live)
-    except Exception as exc:  # noqa: BLE001 -- an identity-only pass; a defect stages the rows without it, never fails the absorb
-        _identity_failed(exc)
-    staged_titles: dict[str, dict[str, str]] = {}
-    assigned = assign_ids(threads, owed, parsed, live, staged_titles)
-    rows_by_edit: dict[str, dict] = {}   # plot/commitment edit id -> its parsed row
-    for i, e in enumerate(parsed.get("plot_movements", [])):
-        slot = assigned[("plot_movements", i)]
-        if slot is None:
-            continue  # blank beat, no usable id or title, or a second edit to one thread
-        edit = _plot_edit(sid, e, slot.id, threads, merged=slot.merged_from)
-        out.append(_staged(edit, e))
-        rows_by_edit[edit["id"]] = e
-
-    for i, e in enumerate(parsed.get("commitment_movements", []) if owed is not None else []):
-        slot = assigned[("commitment_movements", i)]
-        if slot is None:
-            continue  # blank beat, no usable id or title, or a second edit to one commitment
-        # `or {}` only for the type checker: this loop runs when `owed` is a dict.
-        edit = _commitment_edit(sid, e, slot.id, owed or {}, merged=slot.merged_from)
-        out.append(_staged(edit, e))
-        rows_by_edit[edit["id"]] = e
-
-    # The identity check's alternatives, once the whole batch is staged.
-    try:
-        _attach_alternatives(sid, out, rows_by_edit, threads, owed or {}, live,
-                             staged_titles["plot_movements"],
-                             staged_titles["commitment_movements"])
-    except Exception as exc:  # noqa: BLE001 -- an identity-only pass; a defect stages the rows without it, never fails the absorb
-        _identity_failed(exc)
-
     # The fact ledger (#114). One section and one edit kind covering two
     # operations, because a row does one thing to one record and only the row
     # can say which: text RECORDS a standing fact -- retiring the fact it names,
@@ -1200,49 +814,19 @@ def materialize(cid: str, sid: str, parsed: dict,
         ledger = None
     if not isinstance(ledger, dict):
         # An UNREADABLE ledger stages nothing, for the reason spelled out over
-        # `owed` above: falling back to {} would stage every supersession as an
+        # `owed` in materialize: falling back to {} would stage every supersession as an
         # ordinary new fact, hiding the retirement the reviewer approved behind
         # a row that claims to retire nothing.
-        ledger = None
+        return out
     retiring: set[str] = set()
     staged_texts: set[str] = set()   # folded text of the new facts THIS batch stages
-    for n, e in enumerate(parsed.get("facts", []) if ledger is not None else []):
+    for n, e in enumerate(rows):
         text, date = _text(e.get("text")), _text(e.get("date"))
         sup = _text(e.get("supersedes"))
-        prior = ledger.get(sup) if sup else None
-        if text and facts.is_active(prior) and facts.restates(prior, text):
-            # A RESTATEMENT, not a supersession -- see `facts.restates` for what
-            # it costs. The prompt says not to report one and the model does
-            # anyway, which is why this is in code rather than only in the
-            # prompt. Nothing about the world moved, so the row does not either.
-            #
-            # `apply` checks again rather than trusting this: the reviewer can
-            # edit the replacement text into a restatement after the row was
-            # staged, and that path never comes back through here.
-            #
-            # `text and` guards the BARE RETIREMENT, whose "" would otherwise
-            # match a stored fact whose own text reads as "" -- which `record`
-            # never writes but a hand-edited or malformed record supplies, and
-            # that is exactly the record most worth being able to retire.
+        predecessor = _fact_predecessor(ledger, sid, text, sup)
+        if predecessor is None:
             continue
-        if not facts.is_active(prior) or facts.recorded_after(prior, sid):
-            # A `supersedes` naming a fact that is retired, missing or malformed
-            # is dropped rather than obeyed. The snapshot offers only standing
-            # facts, so the model was never shown that record, and retiring an
-            # already-retired fact would overwrite the pointer saying what
-            # really replaced it.
-            #
-            # So is one recorded AFTER this scene, which `facts.record` will
-            # refuse to write (see `recorded_after`): the snapshot is scoped to
-            # this scene precisely so the model is not offered it, and a row
-            # that names one anyway has to be STAGED as what it will actually
-            # do. Left labelled a supersession, the reviewer approves a
-            # retirement that silently does not happen.
-            #
-            # The row's other half survives either way: what is left is an
-            # ordinary new fact, or -- when the row carried no text either --
-            # nothing, and it is dropped below.
-            sup, prior = "", None
+        sup, prior = predecessor
         if not text and not sup:
             continue
         if sup:
@@ -1284,7 +868,7 @@ def materialize(cid: str, sid: str, parsed: dict,
         # a StagedEdit, so it is routed on the same evidence as the rest. No
         # subjects -- a standing truth about the world belongs to nobody, so no
         # speaker can be first-hand about it (see `routing.authority`).
-        out.append(_staged({"id": f"fact:{sup}" if sup else f"fact:{sid}:{n}", "kind": "fact",
+        out.append(stamp({"id": f"fact:{sup}" if sup else f"fact:{sid}:{n}", "kind": "fact",
                     "target": {"kind": "facts", "id": sup},
                     "label": _fact_label(text, sup, date),
                     "field": "text",
@@ -1297,87 +881,165 @@ def materialize(cid: str, sid: str, parsed: dict,
                     "payload": {"text": text, "date": date, "supersedes": sup,
                                 "scene": sid}}, e))
 
-    # Names only, so the roster: the full listing's per-character image scan
-    # would be read here for nothing.
-    existing_char_names = {c["name"].strip().lower() for c in overlay.character_roster(cid)}
-    for e in parsed.get("new_characters", []):
-        name = (e.get("name", "") or "").strip()
-        description = (e.get("description", "") or "").strip()
-        if not name or not description:
-            continue
-        if name.lower() in existing_char_names:
-            continue
-        candidate_id = slugify(name)
-        try:
-            characters.read_character(overlay.char_root(cid, candidate_id), candidate_id)
-            continue  # id already taken -- treat as the same character
-        except characters.CharacterNotFound:
-            pass
-        # The reviewed description is the W++ block plus the generated history, so the
-        # staged diff shows the full text that lands in the card's description field.
-        history = (e.get("history", "") or "").strip()
-        after = f"{description}\n\n{history}" if history else description
-        # No subject: the person has no record yet, so nothing they said in the
-        # scene can be first-hand ABOUT a record. Their own lines still
-        # corroborate the citation, which is what separates a proposal drawn
-        # from dialogue from one drawn from nowhere.
-        out.append(_staged({"id": f"new_character:{candidate_id}", "kind": "new_character",
-                            "target": {"kind": "characters", "id": ""},
-                            "label": f"New character — {name}", "field": "description",
-                            "before": "", "after": after, "authored": False,
-                            "payload": {"name": name, "sd_prompt": e.get("sd_prompt", ""),
-                                        "personality": e.get("personality", ""),
-                                        "mes_example": e.get("mes_example", ""),
-                                        "evidence": e.get("evidence", ""),
-                                        "confidence": parse._confidence(e.get("confidence", "")),
-                                        "open_questions": e.get("open_questions", "")}}, e))
+    return out
 
-    for section_kind, parsed_key, prefix in (
-        ("locations", "new_locations", "new_location"),
-        ("lore", "new_lore", "new_lore"),
-    ):
-        # Only `new_lore` carries a kind of its own, and it is per ROW; the
-        # dedupe set below is therefore per kind, built the first time a row
-        # of that kind turns up.
-        existing: dict[str, set[str]] = {}
-        for e in parsed.get(parsed_key, []):
-            kind = section_kind
-            if prefix == "new_lore":
-                kind = parse.new_lore_kind(e.get("kind"))
-            label_noun = _NEW_RECORD_NOUNS[kind]
-            if kind not in existing:
-                existing[kind] = {ent["name"].strip().lower()
-                                  for ent in overlay.list_entities(cid, kind)}
-            name = (e.get("name", "") or "").strip()
-            body = (e.get("body", "") or "").strip()
-            if not name or not body:
-                continue
-            if name.lower() in existing[kind]:
-                continue
-            candidate_id = slugify(name)
-            try:
-                overlay.read_entity(cid, kind, candidate_id)
-                continue
-            except entities.EntityNotFound:
-                pass
-            payload = {"name": name, "keys": e.get("keys", "")}
-            if prefix == "new_lore":
-                payload["kind"] = kind
-            if kind == "locations":
-                payload["sd_prompt"] = e.get("sd_prompt", "")
-                payload["current_setting"] = e.get("current_setting", False)
-            # The dedupe is per kind, so an item and a lore entry may share a
-            # name -- and then a slug. The staged id carries the kind for every
-            # kind but `lore`, which keeps the bare shape reviews already hold.
-            staged_id = (f"{prefix}:{kind}/{candidate_id}"
-                         if prefix == "new_lore" and kind != "lore"
-                         else f"{prefix}:{candidate_id}")
-            out.append(_staged({"id": staged_id, "kind": prefix,
-                                "target": {"kind": kind, "id": ""},
-                                "label": f"New {label_noun} — {name}", "field": "body",
-                                "before": "", "after": body, "authored": False,
-                                "payload": payload}, e))
 
+def _continuity_records(cid: str) -> tuple[dict, dict | None]:
+    """Read threads and commitments, retaining unreadable versus empty."""
+    try:
+        threads = plot.read(cid)
+    except Exception:  # noqa: BLE001 — garbled plot.json: skip plot movements, don't 500
+        threads = {}
+    try:
+        owed = commitments.read(cid)
+    except Exception:  # noqa: BLE001 — garbled commitments.json: skip these, don't 500
+        owed = None
+    if not isinstance(owed, dict):
+        # `read` is a bare json.loads, so a commitments.json holding `[]` is
+        # valid JSON of the wrong shape: it raises nothing and `owed.get` below
+        # would then throw. That happens AFTER the extraction call, turning a
+        # paid-for absorb into a 500 rather than a dropped section.
+        owed = None
+    return threads, owed
+
+
+def _continuity_edits(cid: str, sid: str, parsed: dict, out: list[dict], *,
+                      stamp: staging.Stamp,
+                      identity_failed: Callable[[BaseException], None]) -> dict:
+    """Stage canonical continuity rows between the two identity-only barriers."""
+    threads, owed = _continuity_records(cid)
+    # An UNREADABLE store stages nothing, where an empty one stages normally.
+    # Falling back to {} conflates the two and every movement is staged as a new
+    # commitment -- a row whose `before` says "nothing is stored" when the truth
+    # is unknown, and whose save is worse than the lie: `apply_edits` hits the
+    # same broken read, its per-edit `except` swallows it, and the reviewer's
+    # panel closes on a 200 with the approved commitment gone and no failure
+    # reported. Staging nothing costs this section (the same price a garbled
+    # file already pays in `render_open` and the ledger) and cannot lose an
+    # approval, because there is no approval to lose.
+    #
+    # Which record each plot/commitment row stages onto, decided once for both
+    # sections by the same `assign_ids` the identity step asks -- so the two can
+    # never disagree about which slug collisions are honoured.
+    #
+    # A row naming a merged record's source is staged onto its live canonical
+    # (spec §7.2): the id, payload and `before` are the canonical's, the PHYSICAL
+    # record `apply` writes and `conflicts` re-reads at save time; the label
+    # keeps the source's title and says where the beat is going.
+    #
+    # An accepted identity retarget whose record stopped being live since the
+    # resolver answered is put back first, so it is assigned as the new row.
+    live = _live_canon(cid)
+    try:
+        parsed = _recheck_accepted(parsed, threads, owed, live)
+    except Exception as exc:  # noqa: BLE001 -- an identity-only pass; a defect stages the rows without it, never fails the absorb
+        identity_failed(exc)
+    staged_titles: dict[str, dict[str, str]] = {}
+    assigned = assign_ids(threads, owed, parsed, live, staged_titles)
+    rows_by_edit: dict[str, dict] = {}   # plot/commitment edit id -> its parsed row
+    for i, e in enumerate(parsed.get("plot_movements", [])):
+        slot = assigned[("plot_movements", i)]
+        if slot is None:
+            continue  # blank beat, no usable id or title, or a second edit to one thread
+        edit = _plot_edit(sid, e, slot.id, threads, merged=slot.merged_from)
+        out.append(stamp(edit, e))
+        rows_by_edit[edit["id"]] = e
+
+    for i, e in enumerate(parsed.get("commitment_movements", []) if owed is not None else []):
+        slot = assigned[("commitment_movements", i)]
+        if slot is None:
+            continue  # blank beat, no usable id or title, or a second edit to one commitment
+        # `or {}` only for the type checker: this loop runs when `owed` is a dict.
+        edit = _commitment_edit(sid, e, slot.id, owed or {}, merged=slot.merged_from)
+        out.append(stamp(edit, e))
+        rows_by_edit[edit["id"]] = e
+
+    # The identity check's alternatives, once the whole batch is staged.
+    try:
+        _attach_alternatives(sid, out, rows_by_edit, threads, owed or {}, live,
+                             staged_titles["plot_movements"],
+                             staged_titles["commitment_movements"])
+    except Exception as exc:  # noqa: BLE001 -- an identity-only pass; a defect stages the rows without it, never fails the absorb
+        identity_failed(exc)
+
+    return parsed
+
+
+def materialize(cid: str, sid: str, parsed: dict,
+                messages: list[dict] | None = None,
+                player_label: str | None = None, *,
+                on_identity_error: Callable[[BaseException], None] | None = None,
+                membership_capture: membership.Capture | None = None,
+                ) -> list[dict]:
+    """Turn the parsed edit lists into before/after StagedEdits against the campaign
+    copies. Targets that don't exist are dropped (tolerated, not an error).
+
+    `messages` is the transcript the extraction call was SHOWN. Pass it whenever
+    the caller has it -- the citations are judged against it, and the scene can
+    move between rendering the prompt and this call (see `routing.speaker_index`).
+    `player_label` is the same snapshot one layer down: the name the prompt's
+    transcript put on the player's unstamped posts, which a rename landing
+    mid-call would otherwise change underneath the citations.
+
+    Rows the identity step examined carry `identity_check`; they are staged
+    with it (alternatives added), at band ``low`` when the check found a
+    possible duplicate or never answered. The two identity-only passes --
+    re-checking accepted targets, building alternatives -- run outside every
+    absorb phase boundary, so a defect in either stages the rows without it
+    rather than failing a paid-for extraction: it is recorded and reported
+    to `on_identity_error`, and the return shape is unchanged.
+    """
+    croot = campaigns_paths.campaign_root(cid)
+    out: list[dict] = []
+    # Once per absorb, not once per edit: every row is checked against the same
+    # transcript, and the index costs a scene read and a cast read.
+    index = routing.speaker_index(cid, sid, messages, player_label)
+
+    def _staged(edit: dict, row: dict, *subjects: str) -> dict:
+        """One StagedEdit, stamped with the review block the panel routes on.
+
+        Every section builder receives this stamp rather than writing the key
+        itself. A row that skipped it would arrive at the
+        reviewer looking like the rows that genuinely have no citation to check
+        -- the dossier, voice and sheet proposals staged elsewhere -- and so be
+        pre-approved on the strength of a signal that was actually present and
+        simply dropped. `subjects` are the actors the record BELONGS to (see
+        `routing.authority`); a record that belongs to nobody passes none.
+
+        A row the identity step examined carries its `identity_check` onto
+        the edit (alternatives filled in later), and is forced to band
+        ``low`` when the check found a possible duplicate or never answered;
+        the citation's own score and quote are reported unchanged.
+        """
+        row = dict(row)
+        row.pop(AS_NEW_KEY, None)
+        edit["review"] = routing.review(index, row, subjects)
+        ic = row.get("identity_check")
+        if isinstance(ic, dict):
+            edit["identity_check"] = {**ic, "alternatives": []}
+            if ic.get("decision") in _LOW_DECISIONS:
+                edit["review"] = {**edit["review"], "band": "low"}
+        return edit
+
+    def _identity_failed(exc: BaseException) -> None:
+        errors.record_exception(exc, "continuity-identity", campaign=cid, scene=sid)
+        if on_identity_error is not None:
+            on_identity_error(exc)
+
+    out.extend(staging.character_states(cid, croot, parsed, _staged))
+    out.extend(staging.group_states(cid, croot, parsed, _staged))
+    out.extend(staging.memberships(cid, sid, parsed, membership_capture, _staged))
+    out.extend(staging.lore_appends(cid, parsed, _staged))
+    out.extend(staging.authored(cid, parsed, _staged))
+    out.extend(staging.feelings(cid, parsed, _staged))
+    out.extend(staging.bonds(cid, parsed, _staged))
+    parsed = _continuity_edits(cid, sid, parsed, out, stamp=_staged,
+                               identity_failed=_identity_failed)
+
+    out.extend(_fact_edits(cid, sid, parsed.get("facts", []), _staged))
+
+    out.extend(staging.new_characters(cid, parsed, _staged))
+    out.extend(staging.new_entities(cid, parsed, _staged))
     out.extend(weather._weather_edits(cid, sid, parsed, index))
     return out
 

@@ -147,10 +147,10 @@ async def run_absorb(cid: str, sid: str, client: LLMClient,
     facts = chronicle.scene_facts(cid, sid)
     transcript = chronicle.transcript_text(scene["messages"])
     messages = absorb.build_prompt(
-        transcript, facts, absorb.state_snapshot(cid, sid),
-        absorb.relationships_snapshot(cid, sid), absorb.plot_snapshot(cid),
-        # `group_snapshot` is the positional gap here, and stays unpassed: this
-        # pipeline predates group state, and starting to send it is a change to
+        transcript, facts, state_snapshot=absorb.state_snapshot(cid, sid),
+        rel_snapshot=absorb.relationships_snapshot(cid, sid), plot_snapshot=absorb.plot_snapshot(cid),
+        # `group_snapshot` stays unpassed: this pipeline predates group state,
+        # and starting to send it is a change to
         # what ingest extracts rather than a fix to this one. Commitments are
         # named so a later imported scene can resolve one an earlier import
         # opened instead of filing a duplicate.

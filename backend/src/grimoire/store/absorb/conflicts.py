@@ -56,6 +56,9 @@ conflict contract.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import NamedTuple
+
 from .. import (
     changes,
     characters,
@@ -241,6 +244,145 @@ def fact_line(rec: dict) -> str:
     return f"{head} — {text}" if text else head
 
 
+class _Reading(NamedTuple):
+    """The existing client-field defaults, captured inside the common read barrier.
+
+    This is a read request, never a conflict verdict: malformed values remain
+    guarded by current_value, and only the selected record reader interprets them.
+    """
+    cid: str
+    edit: dict
+    target: dict
+    tid: str
+    payload: dict
+
+
+def _read_character_state(reading: _Reading) -> str | None:
+    """Read actor state from the target kind, including PC storage."""
+    cid = reading.cid
+    target = reading.target
+    tid = reading.tid
+    # By the target's kind: a PC's state is its own file, and judging a
+    # PC edit against `characters/<id>` would call every one a conflict.
+    st = playstate.read_state(campaigns_paths.campaign_root(cid), tid,
+                              target.get("kind", "characters"))
+    if not st:
+        return ""
+    return playstate.compose_body(st["current_state"], st["knows"], st["suspects"])
+
+
+def _read_group_state(reading: _Reading) -> str | None:
+    """Compose the five stored group-state sections."""
+    cid = reading.cid
+    tid = reading.tid
+    st = groupstate.read_state(campaigns_paths.campaign_root(cid), tid)
+    if not st:
+        return ""
+    return groupstate.compose_body({k: st[k] for k in groupstate.FIELDS})
+
+
+def _read_membership(reading: _Reading) -> str | None:
+    """Read one explicit membership slot through its lifecycle guard."""
+    cid = reading.cid
+    edit = reading.edit
+    return membership.current(cid, edit)
+
+
+def _read_lore(reading: _Reading) -> str | None:
+    """Read the overlay record body that an append would replace."""
+    cid = reading.cid
+    target = reading.target
+    tid = reading.tid
+    return overlay.read_entity(cid, target.get("kind", ""), tid)["body"].strip()
+
+
+def _read_authored(reading: _Reading) -> str | None:
+    """Read the locked card field, declining unlocked actors."""
+    cid = reading.cid
+    edit = reading.edit
+    tid = reading.tid
+    vid = appearances_versions.locked_version(cid, "characters", tid)
+    if not vid:
+        return None   # unlocked actor: apply would not find a card either
+    card = characters.read_card(appearances_paths.locked_actor_root(cid), tid, vid)
+    return (card["data"].get(edit.get("field", ""), "") or "").strip()
+
+
+def _read_relationship(reading: _Reading) -> str | None:
+    """Render the actual directed feeling stored for the payload pair."""
+    cid = reading.cid
+    payload = reading.payload
+    cur = relationships.get_feeling(cid, payload.get("from", ""), payload.get("to", ""))
+    return relationships._render_feeling(cur) if cur else ""
+
+
+def _read_bond(reading: _Reading) -> str | None:
+    """Read the actual shared bond stored for the payload pair."""
+    cid = reading.cid
+    payload = reading.payload
+    cur = relationships.get_bond(cid, payload.get("a", ""), payload.get("b", ""))
+    return cur["type"] if cur else ""
+
+
+def _read_plot(reading: _Reading) -> str | None:
+    """Render the addressed plot record, or the empty uncreated record."""
+    cid = reading.cid
+    tid = reading.tid
+    cur = plot.read(cid).get(tid)
+    return plot_line(cur) if isinstance(cur, dict) else ""
+
+
+def _read_commitment(reading: _Reading) -> str | None:
+    """Render the full stored commitment fingerprint."""
+    cid = reading.cid
+    tid = reading.tid
+    cur = commitments.get(cid, tid)
+    return commitment_line(cur) if isinstance(cur, dict) else ""
+
+
+def _read_fact(reading: _Reading) -> str | None:
+    """Fingerprint only the fact being retired, never a targetless creation."""
+    cid = reading.cid
+    tid = reading.tid
+    # A fact row's target is the fact it RETIRES, and a row that retires
+    # nothing (an ordinary new fact, which overwrites no record) names
+    # none -- so there is nothing to have drifted, and no verdict, the
+    # same silence `new_lore` and the other creations keep by staying
+    # out of `_REASONS` entirely. This kind cannot: the same kind covers
+    # both, and only the row can say which it is.
+    if not tid:
+        return None
+    cur = facts.get(cid, tid)
+    return fact_line(cur) if isinstance(cur, dict) else ""
+
+
+def _read_weather(reading: _Reading) -> str | None:
+    """Read the chosen weather axis only when the moment is parseable."""
+    cid = reading.cid
+    edit = reading.edit
+    payload = reading.payload
+    now = weather_store.current_weather(cid, payload.get("location", ""),
+                                        payload.get("native"))
+    if now is None:
+        return None   # unparseable moment: the case the resolver declines
+    return now.get(edit.get("field", ""))
+
+
+_READERS: dict[str, Callable[[_Reading], str | None]] = {
+    "character_state": _read_character_state,
+    "group_state": _read_group_state,
+    "membership": _read_membership,
+    "lore": _read_lore,
+    "authored": _read_authored,
+    "relationship": _read_relationship,
+    "bond": _read_bond,
+    "plot": _read_plot,
+    "commitment": _read_commitment,
+    "fact": _read_fact,
+    "weather": _read_weather,
+}
+
+
 def current_value(cid: str, edit: dict) -> str | None:
     """What the edit's target says right now, or None when there is no verdict
     to give -- an unjudgeable kind, or a target that would not read."""
@@ -257,61 +399,12 @@ def current_value(cid: str, edit: dict) -> str | None:
         target = edit.get("target") or {}
         tid = target.get("id") or ""
         payload = edit.get("payload") or {}
-        if kind == "character_state":
-            # By the target's kind: a PC's state is its own file, and judging a
-            # PC edit against `characters/<id>` would call every one a conflict.
-            st = playstate.read_state(campaigns_paths.campaign_root(cid), tid,
-                                      target.get("kind", "characters"))
-            if not st:
-                return ""
-            return playstate.compose_body(st["current_state"], st["knows"], st["suspects"])
-        if kind == "group_state":
-            st = groupstate.read_state(campaigns_paths.campaign_root(cid), tid)
-            if not st:
-                return ""
-            return groupstate.compose_body({k: st[k] for k in groupstate.FIELDS})
-        if kind == "membership":
-            return membership.current(cid, edit)
-        if kind == "lore":
-            return overlay.read_entity(cid, target.get("kind", ""), tid)["body"].strip()
-        if kind == "authored":
-            vid = appearances_versions.locked_version(cid, "characters", tid)
-            if not vid:
-                return None   # unlocked actor: apply would not find a card either
-            card = characters.read_card(appearances_paths.locked_actor_root(cid), tid, vid)
-            return (card["data"].get(edit.get("field", ""), "") or "").strip()
-        if kind == "relationship":
-            cur = relationships.get_feeling(cid, payload.get("from", ""), payload.get("to", ""))
-            return relationships._render_feeling(cur) if cur else ""
-        if kind == "bond":
-            cur = relationships.get_bond(cid, payload.get("a", ""), payload.get("b", ""))
-            return cur["type"] if cur else ""
-        if kind == "plot":
-            cur = plot.read(cid).get(tid)
-            return plot_line(cur) if isinstance(cur, dict) else ""
-        if kind == "commitment":
-            cur = commitments.get(cid, tid)
-            return commitment_line(cur) if isinstance(cur, dict) else ""
-        if kind == "fact":
-            # A fact row's target is the fact it RETIRES, and a row that retires
-            # nothing (an ordinary new fact, which overwrites no record) names
-            # none -- so there is nothing to have drifted, and no verdict, the
-            # same silence `new_lore` and the other creations keep by staying
-            # out of `_REASONS` entirely. This kind cannot: the same kind covers
-            # both, and only the row can say which it is.
-            if not tid:
-                return None
-            cur = facts.get(cid, tid)
-            return fact_line(cur) if isinstance(cur, dict) else ""
-        if kind == "weather":
-            now = weather_store.current_weather(cid, payload.get("location", ""),
-                                                payload.get("native"))
-            if now is None:
-                return None   # unparseable moment: the case the resolver declines
-            return now.get(edit.get("field", ""))
+        if not isinstance(kind, str):
+            return None
+        reader = _READERS.get(kind)
+        return reader(_Reading(cid, edit, target, tid, payload)) if reader is not None else None
     except Exception:  # noqa: BLE001 -- an unreadable or malformed target proves
         return None                   # no contradiction
-    return None
 
 
 def target_key(edit: dict) -> tuple | None:

@@ -2120,15 +2120,15 @@ def _absorb_prompt(ctx: dict) -> list[dict]:
     cid, sid = ctx["cid"], ctx["sid"]
     transcript = chronicle.transcript_text(scenes.read_scene(cid, sid)["messages"])
     return absorb_store.build_prompt(transcript, chronicle.scene_facts(cid, sid),
-                                     absorb_store.state_snapshot(cid, sid),
-                                     absorb_store.relationships_snapshot(cid, sid),
-                                     absorb_store.plot_snapshot(cid),
-                                     absorb_store.group_snapshot(
+                                     state_snapshot=absorb_store.state_snapshot(cid, sid),
+                                     rel_snapshot=absorb_store.relationships_snapshot(cid, sid),
+                                     plot_snapshot=absorb_store.plot_snapshot(cid),
+                                     group_snapshot=absorb_store.group_snapshot(
                                          cid, chronicle.scene_facts(cid, sid).get("cast", ()),
                                          snapshot=ctx["membership_capture"].snapshot),
-                                     absorb_store.commitment_snapshot(cid),
-                                     absorb_store.fact_snapshot(cid),
-                                     absorb_store.steering_snapshot(cid, sid))
+                                     commitment_snapshot=absorb_store.commitment_snapshot(cid),
+                                     fact_snapshot=absorb_store.fact_snapshot(cid),
+                                     steering_snapshot=absorb_store.steering_snapshot(cid, sid))
 
 
 CASES: tuple[Case, ...] = (
