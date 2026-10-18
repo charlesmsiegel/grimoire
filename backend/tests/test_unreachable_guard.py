@@ -30,6 +30,8 @@ import ast
 import itertools
 import pathlib
 
+import pytest
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 ROOTS = (REPO / "backend" / "src" / "grimoire", REPO / "backend" / "scripts",
          REPO / "evals", REPO / "scripts")
@@ -46,15 +48,16 @@ def _blocks(tree: ast.AST):
 
 
 def _generator_marker(stmt: ast.stmt) -> bool:
-    return isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Yield)
+    return isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Yield) and stmt.value.value is None
 
 
 def unreachable(source: str) -> list[int]:
     """Line numbers of statements in `source` that follow a terminal one."""
     return sorted(after.lineno
                   for block in _blocks(ast.parse(source))
-                  for before, after in itertools.pairwise(block)
-                  if isinstance(before, TERMINAL) and not _generator_marker(after))
+                  for index, (before, after) in enumerate(itertools.pairwise(block), 1)
+                  if isinstance(before, TERMINAL)
+                  and not (index == len(block) - 1 and _generator_marker(after)))
 
 
 def test_no_statement_follows_a_terminal_one():
@@ -88,3 +91,12 @@ def test_the_guard_allows_the_generator_idiom():
         "    yield  # makes this a generator\n"
     )
     assert unreachable(fake) == []
+
+
+@pytest.mark.parametrize("value", ["'stale'", "None"])
+def test_the_guard_rejects_a_value_yield_after_a_terminal(value):
+    assert unreachable(f"def stream():\n    raise OSError\n    yield {value}\n") == [3]
+
+
+def test_the_guard_rejects_a_nonfinal_generator_marker():
+    assert unreachable("def stream():\n    raise OSError\n    yield\n    stale_call()\n") == [3]

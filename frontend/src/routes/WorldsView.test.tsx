@@ -1,8 +1,9 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import WorldsView from "./WorldsView";
 import type { WorldMeta } from "../api/types";
 import { INTENT_DWELL_MS, resetPrefetch } from "../api/prefetch";
+import { announceRunSettled, bumpMemoEpoch } from "../api/memoEpoch";
 
 const navigate = vi.fn();
 vi.mock("react-router-dom", async () => ({
@@ -109,6 +110,193 @@ test("a refused create says why, keeps the name, and refreshes nothing", async (
     /'Realm' could not be created: a world named Realm already exists/i);
   expect(screen.getByPlaceholderText(/world name/i)).toHaveValue("Realm");
   expect(api.listWorlds).toHaveBeenCalledTimes(BASE);
+});
+
+test.each(["Enter", "click"])("a pending create ignores another synchronous %s", async (again) => {
+  const creating = held<Awaited<ReturnType<typeof api.createWorld>>>();
+  vi.mocked(api.createWorld).mockReturnValue(creating.promise);
+  renderView();
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE));
+  const input = screen.getByLabelText("World name");
+  const button = screen.getByRole("button", { name: /^create$/i });
+  fireEvent.change(input, { target: { value: "Realm" } });
+
+  // Both handlers run before React paints the pending state: disabling the
+  // rendered controls alone cannot serialize these submissions.
+  act(() => {
+    fireEvent.keyDown(input, { key: "Enter" });
+    if (again === "Enter") fireEvent.keyDown(input, { key: "Enter" });
+    else fireEvent.click(button);
+  });
+  expect(api.createWorld).toHaveBeenCalledTimes(1);
+  expect(input).toBeDisabled();
+  expect(screen.getByRole("button", { name: /creating/i })).toBeDisabled();
+  await act(async () => { creating.resolve({ id: "realm" }); });
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1));
+  expect(input).toBeEnabled();
+  expect(input).toHaveValue("");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("a create stays pending until the successful world's list refresh settles", async () => {
+  const refreshed = held<WorldMeta[]>();
+  vi.mocked(api.listWorlds).mockImplementation((fresh) => fresh ? refreshed.promise : Promise.resolve([]));
+  renderView();
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE));
+  const input = screen.getByLabelText("World name");
+  fireEvent.change(input, { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledWith(true));
+
+  expect(input).toHaveValue("");
+  expect(input).toBeDisabled();
+  expect(screen.getByRole("button", { name: /creating/i })).toBeDisabled();
+  await act(async () => { refreshed.resolve([]); });
+  expect(input).toBeEnabled();
+  expect(screen.getByRole("button", { name: /^create$/i })).toBeDisabled();
+  expect(api.createWorld).toHaveBeenCalledTimes(1);
+});
+
+test("a refused pending create keeps its profile and releases the form for retry", async () => {
+  const creating = held<Awaited<ReturnType<typeof api.createWorld>>>();
+  vi.mocked(api.createWorld).mockReturnValueOnce(creating.promise);
+  renderView();
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE));
+  const input = screen.getByLabelText("World name");
+  const details = screen.getByRole("button", { name: "More details" });
+  fireEvent.change(input, { target: { value: "Realm" } });
+  fireEvent.click(details);
+  fireEvent.change(screen.getByLabelText("Genre"), { target: { value: "Gothic" } });
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  expect(input).toBeDisabled();
+  expect(details).toBeDisabled();
+  for (const label of ["Genre", "Tone", "Themes", "Description"]) {
+    expect(screen.getByLabelText(label)).toBeDisabled();
+  }
+
+  await act(async () => { creating.reject({ detail: "world id is already in use" }); });
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    /'Realm' could not be created: world id is already in use/i);
+  expect(input).toBeEnabled();
+  expect(input).toHaveValue("Realm");
+  expect(screen.getByLabelText("Genre")).toHaveValue("Gothic");
+  expect(screen.getByLabelText("Genre")).toBeEnabled();
+  expect(details).toBeEnabled();
+  expect(api.listWorlds).toHaveBeenCalledTimes(BASE);
+
+  vi.mocked(api.createWorld).mockResolvedValueOnce({ id: "realm" });
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1));
+  expect(api.createWorld).toHaveBeenCalledTimes(2);
+  expect(api.createWorld).toHaveBeenLastCalledWith("Realm", {
+    genre: "Gothic", tone: "", themes: [], description: "",
+  });
+  expect(input).toHaveValue("");
+  expect(screen.queryByLabelText("Genre")).not.toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("a failed refresh after creating a world confirms creation and retries only the read", async () => {
+  vi.mocked(api.listWorlds).mockImplementation((fresh) => fresh
+    ? Promise.reject(new Error("offline")) : Promise.resolve([]));
+  renderView();
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE));
+  const input = screen.getByLabelText("World name");
+  fireEvent.change(input, { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(/'Realm' was created, but the list could not be refreshed/i);
+  expect(alert).not.toHaveTextContent(/could not be created/i);
+  expect(input).toHaveValue("");
+  expect(input).toBeEnabled();
+
+  vi.mocked(api.listWorlds).mockResolvedValue([
+    { id: "realm", name: "Realm", created: "", updated: "", counts: {} },
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  expect(await screen.findByText("Realm")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(api.createWorld).toHaveBeenCalledTimes(1);
+});
+
+test.each(["create", "fork"])("a %s refresh warning retires after an automatic confirmed read", async (operation) => {
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
+  renderView();
+  await screen.findByText("Saltmarch");
+  vi.mocked(api.listWorlds).mockRejectedValue(new Error("offline"));
+  if (operation === "create") {
+    fireEvent.change(screen.getByLabelText("World name"), { target: { value: "Realm" } });
+    fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  } else {
+    vi.spyOn(window, "prompt").mockReturnValue("Realm");
+    fireEvent.click(screen.getByRole("button", { name: "Fork Saltmarch" }));
+  }
+  expect(await screen.findByRole("alert")).toHaveTextContent(/'Realm' was created, but the list could not be refreshed/i);
+
+  const recovered = held<WorldMeta[]>();
+  vi.mocked(api.listWorlds).mockReturnValue(recovered.promise);
+  act(() => { bumpMemoEpoch(); announceRunSettled(); });
+  expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+  await act(async () => { recovered.resolve([
+    ...ONE_WORLD, { id: "realm", name: "Realm", created: "", updated: "", counts: {} },
+  ]); });
+  expect(await screen.findByText("Realm")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+  // A later failed read is unrelated to the completed recovery and cannot
+  // resurrect the warning about the already confirmed creation.
+  vi.mocked(api.listWorlds).mockRejectedValue(new Error("offline again"));
+  act(() => { bumpMemoEpoch(); announceRunSettled(); });
+  await screen.findByRole("button", { name: /try again/i });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(operation === "create" ? api.createWorld : api.forkWorld).toHaveBeenCalledTimes(1);
+});
+
+test.each(["create", "fork"])("a batched %s recovery with unchanged list identity retires its warning", async (operation) => {
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
+  renderView();
+  await screen.findByText("Saltmarch");
+  const failed = held<WorldMeta[]>();
+  vi.mocked(api.listWorlds).mockReturnValue(failed.promise);
+  vi.spyOn(window, "prompt").mockReturnValue("Realm");
+  fireEvent.change(screen.getByLabelText("World name"), { target: { value: "Realm" } });
+
+  // Both outcomes land before React commits. The successful read reuses the
+  // previously confirmed array, so an effect keyed only by that array cannot
+  // notice that this creation's read warning also needs retiring.
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: operation === "create" ? /^create$/i : "Fork Saltmarch" }));
+    await Promise.resolve();
+    failed.reject(new Error("offline"));
+    await failed.promise.catch(() => {});
+    await Promise.resolve();
+    vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
+    bumpMemoEpoch();
+    announceRunSettled();
+    await Promise.resolve();
+  });
+  expect(screen.getByText("Saltmarch")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+  vi.mocked(api.listWorlds).mockRejectedValue(new Error("unrelated read failure"));
+  act(() => { bumpMemoEpoch(); announceRunSettled(); });
+  await screen.findByRole("button", { name: /try again/i });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(operation === "create" ? api.createWorld : api.forkWorld).toHaveBeenCalledTimes(1);
+});
+
+test("an automatic list recovery preserves a refused create and its draft", async () => {
+  vi.mocked(api.createWorld).mockRejectedValue(new Error("name refused"));
+  renderView();
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE));
+  fireEvent.change(screen.getByLabelText("World name"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(/could not be created: .*name refused/i);
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
+  act(() => { bumpMemoEpoch(); announceRunSettled(); });
+  await screen.findByText("Saltmarch");
+  expect(screen.getByRole("alert")).toHaveTextContent(/could not be created: .*name refused/i);
+  expect(screen.getByLabelText("World name")).toHaveValue("Realm");
 });
 
 test("create is disabled with no name", async () => {
@@ -514,8 +702,9 @@ test("a world can be created with its profile, and a card shows the genre", asyn
 /** A promise and the hand that settles it. */
 function held<T>() {
   let resolve: (v: T) => void = () => {};
-  const promise = new Promise<T>((res) => { resolve = res; });
-  return { promise, resolve };
+  let reject: (reason: unknown) => void = () => {};
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
 }
 
 test("a remembered grid paints on the first render, busy, with rename, fork and delete held", async () => {

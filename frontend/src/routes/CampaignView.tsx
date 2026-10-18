@@ -890,6 +890,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   }
 
   useEffect(() => {
+    // Scene ids repeat between campaigns. A previous campaign's list failure
+    // must go even when selecting this campaign keeps the same scene id (and
+    // therefore does not enter selectScene's scene-switch reset). Clear before
+    // issuing this campaign's reads, so their own failures remain visible.
+    setError(null);
     api.getCampaign(cid).then((c) => {
       setName(c.meta.name);
       setWorldName(c.meta.world_name ?? ""); // embedded: no second fetch
@@ -1613,11 +1618,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setLoadingOlder(true);
     const el = streamRef.current;
     const token = windowTokenRef.current;
+    const from = `older:${cid}:${id}:${token}`;
     try {
       const page = await api.getScene(cid, id, { limit: PAGE_SIZE, before: firstIndex });
       // the reader moved on (another scene, or a refresh that re-read the
       // window): this page describes a transcript that is no longer on screen
       if (windowTokenRef.current !== token) return;
+      // A different operation may have replaced this window's failure banner.
+      setError((current) => current?.from === from ? null : current);
       if (!page.messages.length) {
         setFirstIndex(0); // the transcript shrank under us; nothing older is left
         return;
@@ -1636,7 +1644,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // `readScene`'s report: a page for a window the reader has left says
       // nothing about the one on screen.
       if (windowTokenRef.current === token) {
-        setError({ text: `Older posts could not be loaded: ${errorText(err)}`, retryable: false });
+        setError({ text: `Older posts could not be loaded: ${errorText(err)}`, retryable: false, from });
       }
     } finally {
       loadingOlderRef.current = false;
@@ -2278,15 +2286,19 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     try {
       await api.deleteScene(cid, s.id);
     } catch (err: unknown) {
-      fail(err, false);   // nothing was deleted; generating is not its recovery
+      if (cidRef.current === cid) fail(err, false); // nothing was deleted; generating is not its recovery
       return;
     }
+    if (cidRef.current !== cid) return;
     try {
       await loadScenes();
     } catch (err: unknown) {
-      setError({ text: `Deleted, but the scene list could not be refreshed: ${errorText(err)}`,
-                 retryable: false });
+      if (cidRef.current === cid) {
+        setError({ text: `Deleted, but the scene list could not be refreshed: ${errorText(err)}`,
+                   retryable: false });
+      }
     }
+    if (cidRef.current !== cid) return;
     // Same reason as `renameScene`: the ledger resolves every thread,
     // commitment and fact against the scene list, so a deletion changes what
     // it returns. Bumped here rather than left to the refresh, because the two

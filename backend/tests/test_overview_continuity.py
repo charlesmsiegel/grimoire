@@ -14,6 +14,7 @@ import importlib
 import json
 import os
 import time as time_module
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,7 +22,7 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire.main import create_app
 from grimoire.routes import todo
-from grimoire.store import ledger_texts, overview, readstats
+from grimoire.store import ledger_texts, overview, readstats, statcache
 from grimoire.store.continuity import effective
 from grimoire.store.overview import kinds
 from tests.overview_support import audited, clear_memos, clock_forward
@@ -145,17 +146,65 @@ def test_each_file_edited_created_and_deleted_is_seen(cid, monkeypatch, name):
     assert counters.get("overview.computed.continuity_summary") == 0
     existed = path.exists()
     original = path.read_bytes() if existed else None
+    directory_mtime = path.parent.stat().st_mtime_ns
+
+    def namespace_changed():
+        # The artificial old clock treats new metadata as settled. Give
+        # namespace changes explicit ticks: native Windows directory stamps
+        # can collide during immediate delete/restore, which the production
+        # racy window would refuse to cache (the opposing test below).
+        nonlocal directory_mtime
+        current = path.parent.stat()
+        directory_mtime = max(directory_mtime, current.st_mtime_ns) + 1_000_000
+        os.utime(path.parent, ns=(current.st_atime_ns, directory_mtime))
+
     path.write_text("[]", encoding="utf-8")           # created or edited
+    if not existed:
+        namespace_changed()
     with readstats.collect() as counters:
         overview.continuity_summary(cid)
     assert counters.get("overview.computed.continuity_summary") == 1
     path.unlink()                                     # deleted
+    namespace_changed()
     with readstats.collect() as counters:
         overview.continuity_summary(cid)
     assert counters.get("overview.computed.continuity_summary") == 1
     if existed:
         path.write_bytes(original)
+        namespace_changed()
     assert overview.continuity_summary(cid) == before
+
+
+def test_a_recent_directory_stamp_cannot_cache_a_deleted_ledgers_absence(cid, monkeypatch):
+    _ledgers(cid)
+    path = kinds.continuity_paths(cid)["commitments"]
+    original = path.read_bytes()
+    real_stamp = statcache.stamp
+    parent = real_stamp(path.parent)
+    assert parent is not None
+    recent = time_module.time_ns()
+    fixed = (parent[0], recent, recent, parent[3], parent[4])
+
+    def coarse_parent(candidate):
+        return fixed if os.fspath(candidate) == os.fspath(path.parent) else real_stamp(candidate)
+
+    # Freeze both sides of the age comparison: this tests a recent native
+    # directory tick without relying on a slow CI worker finishing in a second.
+    monkeypatch.setattr(statcache, "time", SimpleNamespace(time_ns=lambda: recent))
+    monkeypatch.setattr(statcache, "stamp", coarse_parent)
+    before = overview.continuity_summary(cid)
+    assert (before["ledger_open"], before["owed"]) == (2, 1)
+    path.unlink()
+    with readstats.collect() as counters:
+        absent = overview.continuity_summary(cid)
+    assert (absent["ledger_open"], absent["owed"]) == (0, 0)
+    assert counters.get("overview.computed.continuity_summary") == 1
+
+    path.write_bytes(original)
+    assert statcache.stamp(path.parent) == fixed
+    with readstats.collect() as counters:
+        assert overview.continuity_summary(cid) == before
+    assert counters.get("overview.computed.continuity_summary") == 1
 
 
 def test_a_same_size_rewrite_with_mtime_restored_is_seen(cid, monkeypatch):

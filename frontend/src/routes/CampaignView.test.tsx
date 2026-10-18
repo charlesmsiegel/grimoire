@@ -29,7 +29,7 @@ function ShowState() {
 }
 
 import { api, ApiError } from "../api/client";
-import type { GroupSettings } from "../api/client";
+import type { GroupSettings, SceneMeta } from "../api/client";
 import { configChanged, onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER } from "../components/play/TranscriptPost";
@@ -1704,6 +1704,110 @@ test("declining the delete confirm does nothing", async () => {
   await screen.findByRole("heading", { name: /^Old$/ });
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   expect(api.deleteScene).not.toHaveBeenCalled();
+});
+
+const SCENES_WITH_DATE: SceneMeta[] = ONE_SCENE.map((scene) => ({ ...scene, date: "" }));
+
+test.each(["success", "list refusal", "scene refusal"])(
+  "a campaign switch retires the old list failure and preserves its own %s", async (outcome) => {
+    let runReads = 0;
+    vi.mocked(api.listScenes).mockImplementation((cid) => {
+      if (cid === "run" && ++runReads > 1) return Promise.reject(new Error("A list failed"));
+      if (cid === "other" && outcome === "list refusal") return Promise.reject(new Error("B list failed"));
+      return Promise.resolve(SCENES_WITH_DATE);
+    });
+    vi.mocked(api.getScene).mockImplementation((cid) => {
+      if (cid === "other" && outcome === "scene refusal") return Promise.reject(new Error("B scene failed"));
+      return Promise.resolve({ meta: { id: "s1", title: "Old" }, messages: [] });
+    });
+    render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
+      {withPalette(<><Here /><ShowState />
+        <Link to="/campaigns/other/scenes/s1" state={{ seedPrompt: "Mara at the gate" }}>switch campaign</Link>
+        {playRoutes()}</>)}
+    </MemoryRouter>);
+    await screen.findByTestId("cast-panel");
+    fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+    fireEvent.click(screen.getByText("stub-pick"));
+    expect(await screen.findByText(/A list failed/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "switch campaign" }));
+    await waitFor(() => expect(here()).toBe("/campaigns/other/scenes/s1"));
+    await waitFor(() => expect(api.listScenes).toHaveBeenCalledWith("other"));
+    if (outcome === "success") {
+      await waitFor(() => expect(screen.getByTestId("cast-panel")).toHaveTextContent("Mara at the gate"));
+    } else {
+      expect(await screen.findByText(outcome === "list refusal" ? /B list failed/ : /B scene failed/)).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/A list failed/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("hist-state")).toHaveTextContent("none");
+  },
+);
+
+test.each(["delete", "refresh"])("a late %s refusal cannot report in another campaign", async (phase) => {
+  let rejectPending: ((reason: Error) => void) | undefined;
+  let runReads = 0;
+  vi.mocked(api.listScenes).mockImplementation((cid) => {
+    if (cid === "run" && ++runReads > 1 && phase === "refresh") {
+      return new Promise((_, reject) => { rejectPending = reject; });
+    }
+    return Promise.resolve(SCENES_WITH_DATE);
+  });
+  vi.mocked(api.getScene).mockImplementation((cid) => Promise.resolve({
+    meta: { id: "s1", title: "Old" }, messages: [{ role: "assistant", content: `${cid} transcript` }],
+  }));
+  if (phase === "delete") {
+    vi.mocked(api.deleteScene).mockReturnValueOnce(new Promise((_, reject) => { rejectPending = reject; }));
+  }
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
+    {withPalette(<><Link to="/campaigns/other/scenes/s1">switch campaign</Link>{playRoutes()}</>)}
+  </MemoryRouter>);
+  await screen.findByText("run transcript");
+  fireEvent.click(screen.getByRole("button", { name: "Delete scene" }));
+  await waitFor(() => expect(rejectPending).toBeDefined());
+  fireEvent.click(screen.getByRole("link", { name: "switch campaign" }));
+  await screen.findByText("other transcript");
+  const usageReads = vi.mocked(api.getSceneUsage).mock.calls.length;
+  if (!rejectPending) throw new Error("the original request was never pending");
+  await act(async () => { rejectPending?.(new Error("original campaign refusal")); });
+  expect(screen.queryByText(/original campaign refusal/)).not.toBeInTheDocument();
+  expect(screen.getByText("other transcript")).toBeInTheDocument();
+  expect(api.getSceneUsage).toHaveBeenCalledTimes(usageReads);
+});
+
+test.each(["delete", "refresh"])("a late %s completion cannot refresh another campaign", async (phase) => {
+  let finishPending: (() => void) | undefined;
+  let runReads = 0;
+  vi.mocked(api.listScenes).mockImplementation((cid) => {
+    if (cid === "run" && ++runReads > 1 && phase === "refresh") {
+      return new Promise((resolve) => { finishPending = () => resolve([]); });
+    }
+    return Promise.resolve(SCENES_WITH_DATE);
+  });
+  vi.mocked(api.getScene).mockImplementation((cid) => Promise.resolve({
+    meta: { id: "s1", title: "Old" }, messages: [{ role: "assistant", content: `${cid} transcript` }],
+  }));
+  if (phase === "delete") {
+    vi.mocked(api.deleteScene).mockReturnValueOnce(new Promise((resolve) => {
+      finishPending = () => resolve({ ok: true });
+    }));
+  }
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
+    {withPalette(<><Link to="/campaigns/other/scenes/s1">switch campaign</Link>{playRoutes()}</>)}
+  </MemoryRouter>);
+  await screen.findByText("run transcript");
+  fireEvent.click(screen.getByRole("button", { name: "Delete scene" }));
+  await waitFor(() => expect(finishPending).toBeDefined());
+  fireEvent.click(screen.getByRole("link", { name: "switch campaign" }));
+  await screen.findByText("other transcript");
+  const sceneReads = vi.mocked(api.listScenes).mock.calls.length;
+  const usageReads = vi.mocked(api.getSceneUsage).mock.calls.length;
+  if (!finishPending) throw new Error("the original request was never pending");
+  await act(async () => { finishPending?.(); });
+  expect(screen.getByText("other transcript")).toBeInTheDocument();
+  expect(api.listScenes).toHaveBeenCalledTimes(sceneReads);
+  expect(api.getSceneUsage).toHaveBeenCalledTimes(usageReads);
 });
 
 test("an error shows a Retry button that retries the scene", async () => {
@@ -6406,6 +6510,53 @@ test("an older page that will not load says so", async () => {
   fireEvent.click(screen.getByRole("button", { name: /load 1 older post/i }));
   expect(await screen.findByText(/Older posts could not be loaded: store busy/)).toBeInTheDocument();
   expect(screen.getByText("newer post")).toBeInTheDocument();
+});
+
+test.each([false, true])("an older-page retry clears its failure, including an empty page: %s", async (empty) => {
+  vi.mocked(api.listScenes).mockResolvedValue(SCENES_WITH_DATE);
+  let attempts = 0;
+  vi.mocked(api.getScene).mockImplementation((_cid, _sid, window) => {
+    const meta = { id: "s1", title: "Old" };
+    if (window?.before === 1) {
+      if (++attempts === 1) return Promise.reject(new ApiError(503, "paging refusal", "busy"));
+      return Promise.resolve({ meta, messages: empty ? [] : [{ role: "user", content: "the opener" }],
+        offset: 0, total: 2, has_older: false });
+    }
+    return Promise.resolve({ meta, messages: [{ role: "assistant", content: "newer post" }],
+      offset: 1, total: 2, has_older: true });
+  });
+  renderCampaign();
+  await screen.findByText("newer post");
+  fireEvent.click(screen.getByRole("button", { name: /load 1 older post/i }));
+  await screen.findByText(/Older posts could not be loaded: paging refusal/);
+  fireEvent.click(screen.getByRole("button", { name: /load 1 older post/i }));
+  await waitFor(() => expect(screen.queryByText(/paging refusal/)).not.toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: /load 1 older post/i })).toBeNull();
+  if (!empty) expect(screen.getByText("the opener")).toBeInTheDocument();
+});
+
+test("an older-page retry preserves an unrelated delete refusal", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(SCENES_WITH_DATE);
+  let attempts = 0;
+  vi.mocked(api.getScene).mockImplementation((_cid, _sid, window) => {
+    const meta = { id: "s1", title: "Old" };
+    if (window?.before === 1) {
+      if (++attempts === 1) return Promise.reject(new ApiError(503, "paging refusal", "busy"));
+      return Promise.resolve({ meta, messages: [{ role: "user", content: "the opener" }], offset: 0 });
+    }
+    return Promise.resolve({ meta, messages: [{ role: "assistant", content: "newer post" }], offset: 1 });
+  });
+  vi.mocked(api.deleteScene).mockRejectedValue(new ApiError(409, "delete refusal", "scene_busy"));
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByText("newer post");
+  fireEvent.click(screen.getByRole("button", { name: /load 1 older post/i }));
+  await screen.findByText(/Older posts could not be loaded: paging refusal/);
+  fireEvent.click(screen.getByRole("button", { name: "Delete scene" }));
+  await screen.findByText("delete refusal");
+  fireEvent.click(screen.getByRole("button", { name: /load 1 older post/i }));
+  await screen.findByText("the opener");
+  expect(screen.getByText("delete refusal")).toBeInTheDocument();
 });
 
 test("no older-history button when the whole transcript is loaded", async () => {

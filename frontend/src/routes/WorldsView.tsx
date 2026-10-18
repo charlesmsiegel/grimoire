@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type WorldMeta } from "../api/client";
 import { errorText } from "../api/errors";
@@ -33,6 +33,10 @@ export default function WorldsView() {
   const { data: worlds, stale, failed, reload } = useRevalidated<WorldMeta[]>(
     "worlds", () => api.rememberedWorlds(), (fresh) => api.listWorlds(fresh));
   const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+  // A second submit can enter before React paints disabled controls. Keep
+  // the same guard through the refresh, while the new world is not yet shown.
+  const createPending = useRef(false);
   // The profile a new world can be given up front (#38). Behind a toggle, so
   // the one-line create stays one line for anybody who only wants a name.
   const [details, setDetails] = useState(false);
@@ -45,12 +49,25 @@ export default function WorldsView() {
   const [importing, setImporting] = useState(false);
   const [forking, setForking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A committed create/fork whose confirming read failed is a read warning,
+  // not a mutation refusal. An automatic run-settled reload can recover it
+  // without touching an unrelated refusal or the draft the player may retry.
+  const [createdReadWarning, setCreatedReadWarning] = useState<string | null>(null);
+  useEffect(() => {
+    // A failure and its recovery can be batched, with the recovery returning
+    // the very same array as the previous confirmed read. Watch the warning
+    // too, so that unchanged list identity cannot leave it parked for a later
+    // unrelated read failure to resurrect.
+    if (worlds !== undefined && createdReadWarning !== null) setCreatedReadWarning(null);
+  }, [worlds, createdReadWarning]);
+  const shownError = error ?? (failed ? createdReadWarning : null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [exports, setExports] = useState<WorldExport[]>([]);
   const exportSeq = useRef(0);
 
   function startExport(world: WorldMeta) {
     setError(null);
+    setCreatedReadWarning(null);
     const attempt = {
       id: ++exportSeq.current, url: api.exportWorldUrl(world.id), name: world.name,
     };
@@ -100,21 +117,32 @@ export default function WorldsView() {
 
   async function create() {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (!trimmed || createPending.current) return;
+    createPending.current = true;
+    setCreating(true);
     setError(null);
+    setCreatedReadWarning(null);
     try {
-      await (details ? api.createWorld(trimmed, profileOf(profile)) : api.createWorld(trimmed));
-    } catch (err) {
-      // Reported, not dropped: a refused create leaves the grid exactly as it
-      // was, so a silent one is indistinguishable from a click that never
-      // landed -- and the name stays typed for the retry.
-      setError(`'${trimmed}' could not be created: ${errorText(err)}`);
-      return;
+      try {
+        await (details ? api.createWorld(trimmed, profileOf(profile)) : api.createWorld(trimmed));
+      } catch (err) {
+        // Reported, not dropped: a refused create leaves the grid exactly as it
+        // was, so a silent one is indistinguishable from a click that never
+        // landed -- and the name stays typed for the retry.
+        setError(`'${trimmed}' could not be created: ${errorText(err)}`);
+        return;
+      }
+      setName("");
+      setProfile(EMPTY_DRAFT);
+      setDetails(false);
+      // The world exists after createWorld returns, even if the read fails.
+      // Calling that a failed create would invite another mutation on retry.
+      const refreshed = await reload();
+      if (!refreshed) setCreatedReadWarning(`'${trimmed}' was created, but the list could not be refreshed.`);
+    } finally {
+      createPending.current = false;
+      setCreating(false);
     }
-    setName("");
-    setProfile(EMPTY_DRAFT);
-    setDetails(false);
-    await reload();
   }
 
   async function rename() {
@@ -155,6 +183,7 @@ export default function WorldsView() {
     const name = window.prompt(`Fork '${w.name}' as?`, `${w.name} (fork)`)?.trim();
     if (!name) return;
     setError(null);
+    setCreatedReadWarning(null);
     setForking(w.id);
     try {
       await api.forkWorld(w.id, name);
@@ -179,7 +208,7 @@ export default function WorldsView() {
     // answer with a list the copy is not in -- no error, button re-enabled,
     // and the obvious retry makes a second copy (Codex review).
     const refreshed = await reload();
-    if (!refreshed) setError(`'${name}' was created, but the list could not be refreshed.`);
+    if (!refreshed) setCreatedReadWarning(`'${name}' was created, but the list could not be refreshed.`);
     // Held until the refresh settles, not released with the call: between the
     // two the grid does not yet show the copy, and a re-enabled button over a
     // stale grid is an invitation to fork twice.
@@ -194,6 +223,7 @@ export default function WorldsView() {
     e.target.value = ""; // allow re-picking the same file later
     if (!file) return;
     setError(null);
+    setCreatedReadWarning(null);
     setImporting(true);
     let imported: string;
     try {
@@ -221,12 +251,12 @@ export default function WorldsView() {
           <div className="joined">
             <input
               placeholder="World name…" aria-label="World name"
-              value={name} onChange={(e) => setName(e.target.value)}
+              value={name} disabled={creating} onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") void create(); }}
             />
             <button className="btn-accent" onClick={() => void create()}
-                    disabled={!name.trim()}>Create</button>
-            <button className="subtle" aria-expanded={details}
+                    disabled={creating || !name.trim()}>{creating ? "Creating…" : "Create"}</button>
+            <button className="subtle" aria-expanded={details} disabled={creating}
                     onClick={() => setDetails((d) => !d)}>{details ? "Fewer details" : "More details"}</button>
             <button className="subtle" disabled={importing} onClick={() => fileRef.current?.click()}>
               {importing ? "Importing…" : "Import"}
@@ -242,17 +272,17 @@ export default function WorldsView() {
           </div>
         </div>
         {details && <div className="form world-create-details">
-          <Field label="Genre"><input type="text" value={profile.genre}
+          <Field label="Genre"><input type="text" value={profile.genre} disabled={creating}
             onChange={(e) => setProfile({ ...profile, genre: e.target.value })} /></Field>
-          <Field label="Tone"><input type="text" value={profile.tone}
+          <Field label="Tone"><input type="text" value={profile.tone} disabled={creating}
             onChange={(e) => setProfile({ ...profile, tone: e.target.value })} /></Field>
           <Field label="Themes" hint="Comma-separated. They describe the world; they gate nothing.">
-            <input type="text" value={profile.themes} onChange={(e) => setProfile({ ...profile, themes: e.target.value })} />
+            <input type="text" value={profile.themes} disabled={creating} onChange={(e) => setProfile({ ...profile, themes: e.target.value })} />
           </Field>
-          <Field label="Description"><textarea rows={5} value={profile.description}
+          <Field label="Description"><textarea rows={5} value={profile.description} disabled={creating}
             onChange={(e) => setProfile({ ...profile, description: e.target.value })} /></Field>
         </div>}
-        {error && <div className="error" role="alert">{error}</div>}
+        {shownError && <div className="error" role="alert">{shownError}</div>}
         {exports.map((attempt) => (
           <iframe key={attempt.id} hidden title={`Export ${attempt.name} response`}
                   src={attempt.url} onLoad={(event) => exportLoaded(event.currentTarget, attempt)} />
@@ -260,7 +290,7 @@ export default function WorldsView() {
         {failed && (
           <div className="banner error-banner">
             The worlds could not be read.{" "}
-            <button className="subtle" onClick={() => { void reload(); }}>Try again</button>
+            <button className="subtle" onClick={() => { setError(null); void reload(); }}>Try again</button>
           </div>
         )}
         {/* "0 worlds" is a statement, so it waits for a read that landed;
