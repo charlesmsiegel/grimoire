@@ -1100,6 +1100,8 @@ test("Skip setup is offered beside the step's own Next, not only at the end", as
   await screen.findByRole("heading", { name: /^grimoire$/i });
   expect(screen.getByRole("button", { name: /skip setup/i })).toBeEnabled();
   expect(screen.getByRole("button", { name: /next/i })).toBeEnabled();
+  // ...and it names where the rest is done as the app names it.
+  expect(screen.getByText(/you can do all of this later from Settings\./)).toBeInTheDocument();
 });
 
 test("a Primary stored on a provider that cannot send starts on the one just saved", async () => {

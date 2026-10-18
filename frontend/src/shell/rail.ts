@@ -258,7 +258,10 @@ export const CAMPAIGN_ROWS: RailRow[] = [
   {
     id: "ledger", label: "Ledger & timeline", icon: "≡",
     to: (ctx) => campaignPath(ctx, "/ledger"),
-    match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/ledger`),
+    // Both halves of its name: the timeline is reached from the Ledger's
+    // column, and with only `/ledger` here nothing on the rail was lit there.
+    match: (p, ctx) => !!ctx.cid && (isUnder(p, `/campaigns/${ctx.cid}/ledger`)
+      || isUnder(p, `/campaigns/${ctx.cid}/timeline`)),
     tail: (s) => num(s?.campaign?.ledger_open),
     tailLabel: (s) => lbl(s?.campaign?.ledger_open, "open commitments"),
   },

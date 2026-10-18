@@ -3,6 +3,7 @@ import {
   api, type ErrorSummary, type LogLevel, type LogPage, type LogRow,
   type PerfBucket, type Stats,
 } from "../api/client";
+import { Link, useSearchParams } from "react-router-dom";
 import { errorText } from "../api/errors";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
@@ -252,7 +253,19 @@ function LogRows({ rows, empty }: { rows: LogRow[]; empty: string }) {
  *  are navigating, main says what you are reading.
  */
 export default function StatsView({ cid = null }: { cid?: string | null }) {
-  const [section, setSection] = useState<SectionKey>("performance");
+  // The section is the address's (`?section=errors`), as Settings' is: a
+  // reading worth a link -- "the debug log, filtered", from a bug report or
+  // another page -- needs one, and the back button should step between them.
+  // Performance is the bare address.
+  const [params, setParams] = useSearchParams();
+  const asked = params.get("section");
+  const section: SectionKey = SECTIONS.find((s) => s.key === asked)?.key ?? "performance";
+  const setSection = useCallback((key: SectionKey) => setParams((previous) => {
+    const next = new URLSearchParams(previous);
+    if (key === "performance") next.delete("section");
+    else next.set("section", key);
+    return next;
+  }), [setParams]);
   const [days, setDays] = useState(30);
   // Bumped to re-read everything. A scene turn is detached and deliberately
   // survives navigation (CLAUDE.md), so a player can arrive here while one is
@@ -439,7 +452,7 @@ export default function StatsView({ cid = null }: { cid?: string | null }) {
     SECTIONS.map((s) => ({
       id: `stats:${s.key}`, group: "ON THIS PAGE", label: s.label,
       meta: "readings", action: true, run: () => setSection(s.key),
-    })), []);
+    })), [setSection]);
   usePaletteSource(paletteSource);
 
   const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
@@ -498,9 +511,15 @@ export default function StatsView({ cid = null }: { cid?: string | null }) {
     </>
   );
 
-  const footer = (
-    <div className="stats-footer">
-      <label className="stats-window">
+  // What every reading is about -- whose campaign, how many days -- under the
+  // title, as the cost report keeps its scope and month. The window used to be
+  // pinned under the column, which on a phone is behind a toggle, so "No calls
+  // in this window" pointed at a control that was not on screen.
+  const controls = (
+    <div className="report-controls">
+      <ReportScopeSelector report="stats" cid={cid}
+                           suffix={section === "performance" ? "" : `?section=${section}`} />
+      <label className="report-scope">
         <span className="section-label">Window</span>
         <select value={days} onChange={(e) => setDays(Number(e.target.value))}
                 aria-label="How many days to report on">
@@ -512,7 +531,7 @@ export default function StatsView({ cid = null }: { cid?: string | null }) {
       {/* Every reading here is a snapshot of files that keep being written --
           by a detached turn that outlived the navigation to this page, most of
           all. This is the way to ask again without changing what you asked. */}
-      <button type="button" className="chip stats-refresh"
+      <button type="button" className="subtle stats-refresh"
               onClick={() => setReading((n) => n + 1)}>
         Refresh
       </button>
@@ -520,15 +539,15 @@ export default function StatsView({ cid = null }: { cid?: string | null }) {
   );
 
   return (
-    <PageShell column={column} footer={footer} columnLabel="Readings">
+    <PageShell column={column} columnLabel="Readings">
       <div className="page-wide view-anim">
         <div className="shelf-head">
           <div>
             <div className="eyebrow">{current.eyebrow}</div>
             <h1 className="screen-title">{current.label}</h1>
+            {controls}
           </div>
         </div>
-        <ReportScopeSelector report="stats" cid={cid} />
 
         {!scopeReady && <p className="column-empty">Checking campaign…</p>}
         {unavailable && <p className="empty-state">Campaign unavailable: {cid}</p>}
@@ -726,7 +745,8 @@ export default function StatsView({ cid = null }: { cid?: string | null }) {
             {configured && configured !== "debug" && (
               <p className="field-hint stats-threshold">
                 Recording at <strong>{configured}</strong> and above — anything quieter is
-                never written. Change it under Settings.
+                never written. Change it under{" "}
+                <Link to="/config?section=logging">Settings → Logging</Link>.
               </p>
             )}
 
@@ -753,7 +773,12 @@ export default function StatsView({ cid = null }: { cid?: string | null }) {
               </h2>
               {page === null
                 ? <p className="column-empty">Reading the log…</p>
-                : <LogRows rows={page.rows} empty="Nothing matches those filters." />}
+                : <LogRows rows={page.rows} empty={
+                    // With every filter at its default there is nothing to
+                    // blame a filter for: the window simply holds no lines.
+                    level === "debug" && !module && !settled
+                      ? "Nothing recorded in this window."
+                      : "Nothing matches those filters."} />}
             </section>
           </>
         )}

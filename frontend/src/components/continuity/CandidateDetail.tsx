@@ -324,7 +324,8 @@ export function CandidateDetail(props: Props) {
         )}
         <div className="form-actions continuity-actions">
           {actions().map((a) => (
-            <button key={a.key} type="button" disabled={off} onClick={a.run}>{a.label}</button>
+            <button key={a.key} type="button" className="btn-outline" disabled={off}
+                    onClick={a.run}>{a.label}</button>
           ))}
         </div>
         {kinds && <p className="field-hint continuity-kinds">{kinds}</p>}
@@ -362,7 +363,8 @@ export function CandidateDetail(props: Props) {
               </>
             )}
             <div className="form-actions">
-              <button type="button" disabled={busy || needsScene} onClick={applyForm}>Apply</button>
+              <button type="button" className="primary" disabled={busy || needsScene}
+                      onClick={applyForm}>Apply</button>
               <button type="button" className="subtle" disabled={busy}
                       onClick={() => setForm(null)}>Cancel</button>
             </div>
@@ -372,7 +374,7 @@ export function CandidateDetail(props: Props) {
           <div className="continuity-error" role="alert">
             <p>{error.text}</p>
             {error.action && (
-              <button type="button" disabled={busy} onClick={error.action.run}>
+              <button type="button" className="subtle" disabled={busy} onClick={error.action.run}>
                 {error.action.label}
               </button>
             )}

@@ -1,8 +1,10 @@
 import { render, screen, within, fireEvent, waitFor, act } from "@testing-library/react";
-import { MemoryRouter, useNavigate, useParams } from "react-router-dom";
+import { MemoryRouter, RouterProvider, createMemoryRouter, useNavigate, useParams } from "react-router-dom";
 import { Profiler, StrictMode, useEffect } from "react";
 import App from "./App";
+import { appRoutes } from "./router";
 import { configChanged, storeMovedElsewhere } from "./appEvents";
+import { RouterRequest } from "./testkit/routerRequest";
 
 vi.mock("./api/client", () => ({
   api: {
@@ -33,6 +35,7 @@ function widthOf(px: number) {
   Object.defineProperty(window, "innerWidth", { value: px, configurable: true, writable: true });
 }
 afterEach(() => widthOf(REAL_WIDTH));
+afterEach(() => vi.unstubAllGlobals());
 
 const campaignMounts: string[] = [];
 /** Every render of the play-view stub, so a test can see a route re-rendered
@@ -69,13 +72,20 @@ vi.mock("./routes/CampaignSettingsView", () => ({
   },
 }));
 
-// Its own suite drives the page; here only the routes that reach it matter.
-vi.mock("./routes/ProvidersView", () => ({
-  default: function ProvidersViewStub() {
-    const { id, "*": model } = useParams();
-    return <div data-testid="providers-view">{id ?? ""}|{model ?? ""}</div>;
-  },
-}));
+// Its own suite drives the page; here only the routes that reach it matter --
+// and what the page reads off them, so the stand-in reads the address through
+// the page's own `useProviderAddress` rather than a copy of it. A copy is how
+// `/providers/:id` came to open a model named after the whole address.
+vi.mock("./routes/ProvidersView", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./routes/ProvidersView")>();
+  return {
+    ...actual,
+    default: function ProvidersViewStub() {
+      const { id, model } = actual.useProviderAddress();
+      return <div data-testid="providers-view">{id}|{model}</div>;
+    },
+  };
+});
 
 vi.mock("./routes/ModelsView", () => ({
   default: function ModelsViewStub({ edit }: { edit?: boolean }) {
@@ -281,9 +291,18 @@ test("the library's card hub is gone — /library lands in a section", async () 
   expect(column().queryByRole("link", { name: /providers/i })).toBeNull();
 });
 
+/** Render the app the way `main.tsx` does: its routes are descendants of the
+ *  data router's `path: "*"`, which a bare `MemoryRouter` around `<App />`
+ *  leaves out -- and that outer splat is exactly what `useParams` merges into
+ *  a route with none of its own. */
+function renderThroughAppRoutes(at: string) {
+  vi.stubGlobal("Request", RouterRequest);
+  return render(<RouterProvider router={createMemoryRouter(appRoutes, { initialEntries: [at] })} />);
+}
+
 test("/connections redirects to /providers", async () => {
-  render(<MemoryRouter initialEntries={["/connections"]}><App /></MemoryRouter>);
-  expect(await screen.findByTestId("providers-view")).toHaveTextContent("|");
+  renderThroughAppRoutes("/connections");
+  expect(await screen.findByTestId("providers-view")).toHaveTextContent(/^\|$/);
 });
 
 test("the campaign settings route carries its campaign id", async () => {
@@ -292,9 +311,15 @@ test("the campaign settings route carries its campaign id", async () => {
 });
 
 test("a provider's model route keeps the slashes in the model id", async () => {
-  render(
-    <MemoryRouter initialEntries={["/providers/saltmarch/models/vendor/m"]}><App /></MemoryRouter>);
-  expect(await screen.findByTestId("providers-view")).toHaveTextContent("saltmarch|vendor/m");
+  renderThroughAppRoutes("/providers/saltmarch/models/vendor/m");
+  expect(await screen.findByTestId("providers-view")).toHaveTextContent(/^saltmarch\|vendor\/m$/);
+});
+
+test("a provider's own address opens the provider, not a model named after the address", async () => {
+  // Under the app's `path: "*"`, `useParams()["*"]` on `/providers/:id` is the
+  // outer splat, `providers/saltmarch`, and the page used to open that as a model.
+  renderThroughAppRoutes("/providers/saltmarch");
+  expect(await screen.findByTestId("providers-view")).toHaveTextContent(/^saltmarch\|$/);
 });
 
 test.each([
@@ -318,8 +343,8 @@ test.each([["/presets", ""], ["/presets/new", ""], ["/presets/import", ""], ["/p
   });
 
 test("/providers/new is not read as a provider id", async () => {
-  render(<MemoryRouter initialEntries={["/providers/new"]}><App /></MemoryRouter>);
-  expect(await screen.findByTestId("providers-view")).toHaveTextContent("|");
+  renderThroughAppRoutes("/providers/new");
+  expect(await screen.findByTestId("providers-view")).toHaveTextContent(/^\|$/);
 });
 
 test("the library column persists across a section change, keeping the lit row", async () => {

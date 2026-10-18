@@ -14,7 +14,9 @@ import {
 } from "../components/continuity/ContinuityReview";
 import { GROUP_LABELS } from "../components/continuity/labels";
 import { useContinuityReview } from "../components/continuity/useContinuityReview";
-import { LedgerRowEditor, type Draft } from "../components/ledger/LedgerRowEditor";
+import {
+  LedgerRowEditor, type Draft, type SceneOption,
+} from "../components/ledger/LedgerRowEditor";
 import {
   blankSpec, chronicleSpec, commitmentSpec, factSpec, relationshipSpec, threadSpec,
   type EditSpec,
@@ -72,9 +74,9 @@ const SECTIONS: { key: SectionKey; label: string; eyebrow: string;
   // retires and supersedes, and the person whose campaign it is may correct.
   { key: "facts", label: "Standing facts", eyebrow: "DATED TRUTHS · RETIRED BY PLAY, CORRECTED BY YOU",
     columns: ["ID", "FACT", "AS OF", "SCENE"] },
-  { key: "threads", label: "Threads", eyebrow: "OPEN AND ADVANCED · PLOT.JSON",
+  { key: "threads", label: "Threads", eyebrow: "OPEN AND ADVANCED · CLOSED BY PLAY OR BY YOU",
     columns: ["", "THREAD", "STATUS", "SCENE"] },
-  { key: "commitments", label: "Commitments", eyebrow: "WHAT IS STILL OWED · COMMITMENTS.JSON",
+  { key: "commitments", label: "Commitments", eyebrow: "WHAT IS STILL OWED · KEPT, BROKEN OR LAPSED",
     columns: ["", "COMMITMENT", "DUE", "SCENE"] },
   { key: "relationships", label: "Relationships", eyebrow: "FEELINGS AND BONDS · 0–5 METERS",
     columns: ["", "BETWEEN", "STANDING", "SINCE"] },
@@ -82,7 +84,10 @@ const SECTIONS: { key: SectionKey; label: string; eyebrow: string;
     columns: ["", "BETWEEN", "WAS", "SCENE"] },
   { key: "changes", label: "Recent changes", eyebrow: "WHAT THE LAST ABSORB MOVED",
     columns: ["", "RECORD", "FIELD", "SCENE"] },
-  { key: "timeline", label: "Timeline", eyebrow: "THE CHRONICLE, NEWEST FIRST",
+  // "Chronicle", not "Timeline": the campaign's Timeline is its own page (every
+  // scene in play order, linked from this column), and two "Timeline"s a click
+  // apart were two names for different things. The key keeps the address.
+  { key: "timeline", label: "Chronicle", eyebrow: "WHAT EACH SCENE ADDED, NEWEST FIRST",
     columns: ["", "WHAT HAPPENED", "DATE", "SCENE"] },
 ];
 
@@ -379,6 +384,21 @@ export default function LedgerView() {
    *  create does not look like editing whichever row shares its id ("" for a
    *  record that has none yet). */
   const [creating, setCreating] = useState<EditSpec | null>(null);
+  /** The campaign's scenes, for the editors' Scene picker, held with the
+   *  campaign they were read for. Read each time an editor opens, so a scene
+   *  played since the page loaded is on the list; until it lands, or if it
+   *  cannot be read, the field is the plain id box (`LedgerRowEditor`). */
+  const [scenes, setScenes] = useState<{ cid: string; list: SceneOption[] } | null>(null);
+  const editorOpen = creating !== null || openRow !== null;
+  useEffect(() => {
+    if (!editorOpen) return;
+    let live = true;
+    api.listScenes(cid)
+      .then((list) => { if (live) setScenes({ cid, list }); })
+      .catch(() => { if (live) setScenes(null); });
+    return () => { live = false; };
+  }, [cid, editorOpen]);
+  const sceneOptions = scenes && scenes.cid === cid ? scenes.list : null;
   const [busy, setBusy] = useState(false);
   /** A refusal from the server, shown inside the editor it belongs to — a 409
    *  on a fact somebody else already retired is about that row, and at the top
@@ -708,6 +728,13 @@ export default function LedgerView() {
             <span className="column-row-count">{counts ? counts[s.key] : "—"}</span>
           </button>
         ))}
+        {/* The other half of the rail row's "Ledger & timeline": the scenes in
+            play order, a page of its own. It was reachable only from the hub's
+            chronicle card. */}
+        <Link className="column-row" to={`/campaigns/${cid}/timeline`}>
+          <span className="column-row-label">Timeline</span>
+          <span className="column-row-count" aria-hidden>→</span>
+        </Link>
       </ColumnSection>
       <ColumnSection label="Who knows what">
         {section !== "knowledge" ? (
@@ -796,7 +823,9 @@ export default function LedgerView() {
                             onDeleted={() => {
                               bump();
                               navigate(ledgerHref(cid, { section: "knowledge" }));
-                            }} />
+                            }}
+                            onNew={() => navigate(ledgerHref(cid, { section: "knowledge", row: "new" }))}
+                            onLeave={() => navigate(ledgerHref(cid, { section: "knowledge" }))} />
         )}
         {activeGroup && (
           <ContinuityReview cid={cid} group={activeGroup} review={review}
@@ -827,6 +856,7 @@ export default function LedgerView() {
           <div className="ledger-create">
             <div className="eyebrow">New {tableSection && NEW_LABEL[tableSection]}</div>
             <LedgerRowEditor fields={creating.fields} initial={creating.initial}
+                             scenes={sceneOptions}
                              busy={busy} error={writeError?.text}
                              errorAction={writeError?.action}
                              onSave={(d) => save(creating, d)}
@@ -858,7 +888,7 @@ export default function LedgerView() {
 
         {rows.length > 0 && (
           <div className="ledger-table-wrap">
-            <table className="ledger-table" ref={tableRef}>
+            <table className="ledger-table ledger-records" ref={tableRef}>
               <colgroup>
                 <col className="ledger-col-id" />
                 <col />
@@ -887,7 +917,7 @@ export default function LedgerView() {
                           className={(r.retired ? "retired" : "") + (r.complete ? " complete" : "")
                             + (open ? " editing" : "") + (r.key === rowKey ? " highlighted" : "")}>
                         <td className={"ledger-mark" + (r.alert ? " alert" : "")}>{r.mark}</td>
-                        <td>
+                        <td className="ledger-main">
                           <div className="ledger-what">{r.what}</div>
                           {r.status && <span className="ledger-status">{r.status}</span>}
                           {r.note && <div className="ledger-note">{r.note}</div>}
@@ -933,6 +963,7 @@ export default function LedgerView() {
                           <td colSpan={5}>
                             <LedgerRowEditor
                               fields={r.edit.fields} initial={r.edit.initial}
+                              scenes={sceneOptions}
                               busy={busy} error={writeError?.text}
                               errorAction={writeError?.action}
                               onSave={(d) => save(r.edit!, d)}
@@ -963,9 +994,11 @@ export default function LedgerView() {
 
 /** Main for the Knowledge section: the statement the address names, the form
  *  for `new`, or what the section is for when nothing is chosen. */
-function KnowledgeSection({ cid, list, row, onSaved, onDeleted }: {
+function KnowledgeSection({ cid, list, row, onSaved, onDeleted, onNew, onLeave }: {
   cid: string; list: ReturnType<typeof useKnowledge>; row: string | null;
   onSaved: (kid: string) => void; onDeleted: () => void;
+  /** The blank form's address, and the section's own. */
+  onNew: () => void; onLeave: () => void;
 }) {
   const entry = list?.data?.entries.find((e) => e.id === row) ?? null;
   return (
@@ -975,6 +1008,12 @@ function KnowledgeSection({ cid, list, row, onSaved, onDeleted }: {
           <div className="eyebrow">WHO KNOWS WHAT · YOUR WORD BEATS ANYTHING DERIVED</div>
           <h1 className="screen-title">Knowledge</h1>
         </div>
+        {/* Where every other section of the ledger puts its + New: the
+            column's row is the same address, but on a phone the column is
+            behind a toggle. */}
+        <button className="subtle" type="button" disabled={row === "new"} onClick={onNew}>
+          + New statement
+        </button>
       </div>
       {list?.error && <p className="ledger-editor-error" role="status">{list.error}</p>}
       {list?.data && !list.data.intact && (
@@ -984,7 +1023,7 @@ function KnowledgeSection({ cid, list, row, onSaved, onDeleted }: {
       )}
       {row === "new" || entry ? (
         <KnowledgePane cid={cid} entry={entry} creating={row === "new"}
-                       onSaved={onSaved} onDeleted={onDeleted} />
+                       onSaved={onSaved} onDeleted={onDeleted} onCancelNew={onLeave} />
       ) : (
         <p className="empty-state">
           <span className="empty-what">

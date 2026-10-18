@@ -189,6 +189,7 @@ test("the theme control is pinned under the column and persists on pick", async 
   expect(setTheme).toHaveBeenCalledWith("dark");
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ theme: "dark" }));
   // ...and it is not an unsaved change, because it is not unsaved.
+  await open(/^Transcript/);
   expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
 });
 
@@ -212,7 +213,35 @@ test("the stored theme survives the collapse: codex is not an unsaved change", a
   // The store still holds `codex`; the picker shows LIGHT. Nothing has been
   // edited, so the count must not read the mapping as a pending edit.
   await screen.findByText("LIGHT");
+  await open(/^Transcript/);
   expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
+});
+
+test("a section that saves on its own shows the page's save bar only for edits elsewhere", async () => {
+  // Response targets writes its own record behind its own Save. The bar's
+  // Revert/Save could never act on it, and a disabled Save beside the
+  // picker's live one was two save models on one screen.
+  renderView();
+  await open(/^Response targets/);
+  expect(await screen.findByTestId("response-preset-picker")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^save$/i })).toBeNull();
+  expect(screen.queryByText(/unsaved change/i)).toBeNull();
+
+  // An edit held by another section still has its bar, wherever you are,
+  // and says where the edit is.
+  await open(/^Transcript/);
+  fireEvent.change(screen.getByLabelText(/your label/i), { target: { value: "Kestrel" } });
+  await open(/^Response targets/);
+  expect(screen.getByText("1 unsaved change in other sections")).toBeInTheDocument();
+  save();
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ user_label: "Kestrel" }));
+});
+
+test("the column says a zero context budget is no ceiling, not zero tokens", async () => {
+  renderView();
+  const row = await screen.findByRole("button", { name: /^Context/ });
+  expect(row).toHaveTextContent("no ceiling");
+  expect(row).not.toHaveTextContent("0 tok");
 });
 
 test("editing a field marks the draft dirty and writes nothing", async () => {

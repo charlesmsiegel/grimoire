@@ -497,6 +497,7 @@ test("a failed read says so and Retry reads again", async () => {
     .mockResolvedValueOnce(graphFixture());
   renderGraph();
   expect(await screen.findByText("The story graph could not be read.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Retry" })).toHaveClass("subtle");
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await screen.findByTestId("story-graph-drawing");
   expect(api.continuityGraph).toHaveBeenCalledTimes(2);
@@ -605,6 +606,17 @@ test("a pair finding names the record it pairs with", async () => {
   noTokens(d);
   fireEvent.click(chip(findings, "Mara's oath"));
   expect(param("node")).toBe("commitment:mara-s-oath");
+});
+
+test("a node's actions are one kind of control, the ledger link among them", async () => {
+  // "Focus next scene" and "Filter to this arc" were classless browser buttons
+  // beside an `.btn-outline` link.
+  await ready(at("thread:mara-s-map"));
+  const box = within(actions("Mara's map"));
+  for (const name of ["Focus next scene", "Filter to this arc"]) {
+    expect(box.getByRole("button", { name })).toHaveClass("btn-outline");
+  }
+  expect(box.getByRole("link", { name: "Open ledger entry" })).toHaveClass("btn-outline");
 });
 
 test("Focus next scene sends the drivers handoff", async () => {

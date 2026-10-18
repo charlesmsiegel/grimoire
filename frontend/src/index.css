@@ -144,7 +144,11 @@ input[type="file"]:not(:disabled)::file-selector-button:hover { color: var(--acc
 }
 .btn-chrome { background: var(--chrome); color: var(--chrome-text); }
 .btn-outline { background: transparent; color: var(--ink); }
-.btn-outline:hover, .btn-chrome:hover { box-shadow: var(--shadow-glow); }
+.btn-outline:hover:not(:disabled), .btn-chrome:hover:not(:disabled) { box-shadow: var(--shadow-glow); }
+.btn-outline:disabled { opacity: 0.45; cursor: default; }
+/* A link dressed as the button: the UA's underline drew it as a bold
+   underlined word in a box, beside buttons that wear no underline. */
+a.btn-outline { display: inline-block; text-align: center; text-decoration: none; }
 
 /* ---- joined control (input + button sharing one shadow) ---- */
 .joined { display: flex; box-shadow: var(--shadow-glow); }
@@ -430,6 +434,10 @@ a.column-count:hover { color: var(--ink); }
   transition: background-color 140ms ease-out;
 }
 .column-primary:hover:not(:disabled) { background: var(--accent-strong); }
+/* A second action under the primary one (Presets' Import…), on the same 16px
+   gutter and measure. Left to the flex row it wrapped to the column's own
+   edge, the one control in the column with no gutter at all. */
+.column-secondary { display: block; width: calc(100% - 32px); margin: -12px 16px 22px; }
 
 .column-link {
   display: flex; align-items: center; justify-content: space-between;
@@ -790,6 +798,10 @@ textarea:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
   margin: 0; padding: 0 16px 10px; color: var(--muted);
   font-family: var(--fb); font-weight: 300; font-size: 13px; line-height: 1.55;
 }
+/* A line of the column's own text -- a report's month and count, its pinned
+   footnote -- on the rows' 16px gutter. Left as a bare `.field-hint` it sat on
+   the column's edge, the one thing in it with no gutter. */
+.column-note { margin: 0; padding: 0 16px 6px; }
 /* A column section's own controls: its + New button, or a small form (the
    Providers page's "open a model by id") laid out on the rows' 16px gutter. */
 .column-actions { display: flex; align-items: center; gap: 8px; }
@@ -1667,7 +1679,11 @@ a.check-row { display: flex; align-items: center; text-decoration: none; }
 .subtle { background: transparent; color: var(--subtle); border: 1px solid var(--rule);
   padding: 6px 12px; cursor: pointer; font-family: var(--fm); font-size: 11px;
   letter-spacing: 0.06em; text-transform: uppercase; }
-.subtle:hover { color: var(--accent); border-color: var(--accent); }
+.subtle:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+/* A quiet button that cannot be pressed right now (the calendar's Cancel with
+   nothing to put back, a busy editor's Delete) still lit up on hover and
+   looked exactly like a live one. */
+.subtle:disabled { opacity: 0.45; cursor: default; }
 
 /* One card download per format (#10). The subheader has its own campaign-export
    menu in chrome colours; this one wears `.subtle`, since it sits among the
@@ -3453,14 +3469,20 @@ a.column-back { text-decoration: none; }
   transition: border-color 140ms ease-out;
 }
 .config-input:focus-within { border-color: var(--accent); }
-.config-field input[type="text"] {
+.config-field input[type="text"], .config-field input[type="number"] {
   flex: 1; min-width: 0; background: transparent; border: 0; padding: 0;
   color: var(--ink); font-family: var(--fb); font-size: 16px; line-height: 42px;
 }
+/* A count of days in a box sized for a word: the UA's spinner sat between the
+   figure and its unit. The arrow keys still step it. */
+.config-field input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.config-field input[type="number"]::-webkit-inner-spin-button,
+.config-field input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 /* The ring belongs on the box that looks like the control, and the box already
    takes it through :focus-within — two rings, one inside the other, is worse
    than either. */
-.config-field input[type="text"]:focus-visible { outline: none; }
+.config-field input[type="text"]:focus-visible,
+.config-field input[type="number"]:focus-visible { outline: none; }
 .config-unit {
   flex: none; font-family: var(--fm); font-size: 9px; letter-spacing: 0.18em;
   line-height: 1.45; text-transform: uppercase; color: var(--muted);
@@ -3516,16 +3538,60 @@ a.column-back { text-decoration: none; }
 }
 .config-page .field-hint { max-width: 62ch; line-height: 1.5; }
 
+/* Settings → Response targets uses the picker's shared field grid, with wider
+   columns on the settings prose's measure. The shared fields keep captions,
+   controls and inheritance together in the scene inspector and play view too. */
+.config-response .response-targets-picker {
+  max-width: 640px; margin: 20px 0 6px;
+}
+.config-response .response-targets-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}
+.config-response .response-targets-grid .field input,
+.config-response .response-targets-grid .field select {
+  min-height: 44px; font-size: 16px;
+}
+
+/* The calendar panel (`CalendarConfig`), wherever it is mounted: the world
+   Overview, the campaign hub, campaign Settings, the play view. It wears the
+   settings form's fields, held to the settings prose's measure so a 1100px
+   page does not spread four small controls across it. `auto-fit` rather than
+   the settings grid's three tracks: two to a row where the panel is wide, one
+   where it is not (a phone, or a narrow play view), with no breakpoint of its
+   own. Its actions sit under the fields they save rather than at the far edge. */
+.calendar-config { max-width: 640px; }
+.calendar-config .config-fields {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 0 0 18px;
+}
+.calendar-confirmed { margin: -6px 0 18px; }
+.calendar-confirmed .checkbox-row {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer;
+}
+.calendar-confirmed input[type="checkbox"] { width: 18px; height: 18px; margin: 0; }
+.calendar-confirmed .config-caption { margin-top: 0; }
+.calendar-config .form-actions { justify-content: flex-start; align-items: center; margin-top: 0; }
+
 /* #73: the effective value and its inheritance travel together, in the same
    measure as the settings prose. Long prompts and labels must wrap on phones. */
+.campaign-settings { max-width: 62ch; }
+/* Edit under the copy that says what it edits, and Save and Cancel under the
+   last field: at the measure the settings are read in, not at the far edge of
+   an 1100px page, where Edit floated some 500px from them. */
+.campaign-settings .form-actions { justify-content: flex-start; margin: 0 0 4px; }
+.campaign-settings > .form-actions:last-child { margin-top: 18px; }
 .campaign-setting {
-  max-width: 62ch; padding: 20px 0; border-bottom: 1px solid var(--line);
+  padding: 18px 0; border-bottom: 1px solid var(--line);
   overflow-wrap: anywhere;
 }
-.campaign-setting h3 { margin: 0 0 12px; }
-.campaign-setting .config-copy { color: var(--ink); }
+/* A setting's name is the settings form's caption, as every other Settings
+   section draws one, not the UA's bold h3. */
+.campaign-setting-name {
+  margin: 0 0 9px; font-family: var(--fm); font-weight: 400; font-size: 10px;
+  letter-spacing: 0.18em; line-height: 1.45; text-transform: uppercase; color: var(--muted);
+}
+.campaign-setting .config-copy { color: var(--ink); margin-bottom: 6px; }
+.campaign-setting .field-hint { margin: 2px 0 0; }
 .campaign-setting > .field { display: block; }
-.campaign-setting > .field > span { display: block; margin-bottom: 6px; }
 
 /* ---- the prompt layout editor (#29) ---- */
 .prompt-layout { margin: 20px 0 6px; }
@@ -3562,7 +3628,7 @@ a.column-back { text-decoration: none; }
 .prompt-layout-row.off .prompt-layout-label,
 .prompt-layout-row.off .prompt-layout-tier { opacity: 0.55; }
 .prompt-layout-row input[type="checkbox"] {
-  flex: none; width: 18px; height: 18px;
+  flex: none; width: 18px; height: 18px; margin: 0;
 }
 .prompt-layout-label {
   flex: 1 1 auto; min-width: 0; padding: 6px 8px;
@@ -3576,28 +3642,45 @@ a.column-back { text-decoration: none; }
   flex: none; font-family: var(--fm); font-size: 10px; letter-spacing: 0.14em;
   text-transform: uppercase;
 }
-.prompt-layout-row button {
+/* A row's ↑ and ↓. Named rather than dressed as "any button in a row", which
+   gave them no hover at all and no say in the phone's 44px floor. */
+.prompt-layout-move {
   flex: none; width: 32px; height: 32px; padding: 0;
-  background: transparent; color: var(--ink);
+  background: transparent; color: var(--ink); line-height: 1;
   border: 1px solid var(--line); border-radius: 3px; cursor: pointer;
+  transition: border-color 140ms ease-out, color 140ms ease-out;
 }
-.prompt-layout-row button:disabled { opacity: 0.3; cursor: default; }
+.prompt-layout-move:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.prompt-layout-move:disabled { opacity: 0.3; cursor: default; }
+/* Phone: a row's label, its tier and two arrows do not share 330px -- the
+   label was clipped to a word and a half, with arrows too small to aim at.
+   The label takes the first line, the tier and the arrows (44px) the second. */
+@media (max-width: 720px) {
+  .prompt-layout-row { flex-wrap: wrap; row-gap: 6px; padding: 8px 12px; }
+  .prompt-layout-label { flex-basis: calc(100% - 28px); box-sizing: border-box; }
+  .prompt-layout-tier { margin-left: 28px; margin-right: auto; }
+  .prompt-layout-move { width: 44px; height: 44px; }
+}
 /* ---- the backups list (#32) ---- */
 .backup-list {
-  list-style: none; margin: 20px 0 0; padding: 0; max-width: 62ch;
+  list-style: none; margin: 20px 0 14px; padding: 0; max-width: 62ch;
   border: 1px solid var(--line); border-radius: 3px; background: var(--surface);
 }
+/* The two backup buttons are a row with a gap, not two boxes touching. */
+.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+/* A filename and its date share a line where they fit and wrap where they do
+   not: a safety archive's name is twice an ordinary one's, and with the date
+   held to one line the row ran past the list's edge. */
 .backup-row {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
-  padding: 10px 14px; border-bottom: 1px solid var(--rule-soft);
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+  gap: 2px 16px; padding: 10px 14px; border-bottom: 1px solid var(--rule-soft);
 }
 .backup-row:last-child { border-bottom: none; }
 /* Monospace: these are filenames, and a column of them only reads as a series
    if the timestamps line up. */
-.backup-name { font-family: var(--fm); font-size: 13px; color: var(--ink); }
-.backup-meta {
-  font-family: var(--fm); font-size: 11px; color: var(--muted); white-space: nowrap;
-}
+.backup-name { min-width: 0; overflow-wrap: anywhere; font-family: var(--fm); font-size: 13px; color: var(--ink); }
+.backup-meta { font-family: var(--fm); font-size: 11px; color: var(--muted); }
+.backup-scope { flex-basis: 100%; font-family: var(--fm); font-size: 11px; color: var(--muted); }
 
 /* ---- Settings > Storage > Image store (stage 4) ---- */
 .image-store-card { margin-top: 28px; max-width: 62ch; }
@@ -3703,18 +3786,22 @@ a.column-back { text-decoration: none; }
   font-family: var(--fb); font-weight: 300; font-size: 15px; line-height: 1.6;
 }
 /* Numbered pips joined by a rule, not bordered cells: the cells read as things
-   to fill in, and the point of the line is that it is short. Five of them wrap
-   rather than push a phone-width page sideways. */
+   to fill in, and the point of the line is that it is short. One line across
+   the card's width, the rules taking what the labels leave: fixed 34px rules
+   made five labelled steps wider than the 512px card, and the fifth wrapped
+   onto a line of its own behind a dangling rule. */
 .first-run .wizard-steps {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 0; list-style: none;
+  display: flex; align-items: center; width: 100%; list-style: none;
   margin: 34px 0 26px; padding: 0; border: 0; background: none;
 }
 .first-run .wizard-step {
   display: flex; align-items: center; gap: 8px; padding: 0; border: 0;
   color: var(--muted);
 }
+.first-run .wizard-step + .wizard-step { flex: 1 1 auto; }
 .first-run .wizard-step + .wizard-step::before {
-  content: ""; width: 34px; height: 1px; background: var(--line); margin: 0 12px;
+  content: ""; flex: 1 1 auto; min-width: 12px; height: 1px; background: var(--line);
+  margin: 0 4px;
 }
 .first-run .wizard-step .num {
   display: inline-flex; align-items: center; justify-content: center;
@@ -3749,9 +3836,11 @@ a.column-back { text-decoration: none; }
   .first-run { padding: 5vh 16px 40px; }
   /* The rules between the pips are the first thing to go: the numbers still
      say where you are, and at this width the line pushes the last step off. */
-  .first-run .wizard-step + .wizard-step::before { width: 12px; margin: 0 6px; }
   .first-run .wizard-step .label { display: none; }
   .first-run .wizard-step.on .label { display: inline; }
+  /* The way out is a thumb's target too: as a line of 10px text it was 15px
+     tall. */
+  .first-run .wizard-skip .link { display: inline-flex; align-items: center; min-height: 44px; }
 }
 
 /* ---- 375px, per screen (4h) ---- */
@@ -3958,8 +4047,13 @@ a.column-back { text-decoration: none; }
   text-transform: none;
 }
 
-/* The table scrolls inside its own box rather than pushing the page sideways. */
-.ledger-table-wrap { overflow-x: auto; }
+/* The table scrolls inside its own box rather than pushing the page sideways.
+   `position: relative` is what makes that true of an `.sr-only` heading cell
+   (the actions column's "Actions"): absolutely positioned, it is laid out
+   against the nearest positioned ancestor, and with none inside the box it
+   escaped to the page and widened it, so the whole ledger scrolled sideways
+   on a phone. */
+.ledger-table-wrap { overflow-x: auto; position: relative; }
 .ledger-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .ledger-col-id { width: 40px; }
 .ledger-col-asof { width: 110px; }
@@ -4161,9 +4255,73 @@ a.column-back { text-decoration: none; }
 .ledger-create .eyebrow { margin-bottom: 8px; }
 
 @media (max-width: 720px) {
-  /* Nothing to hover with, so the row controls are simply always visible. */
-  .row-do { color: var(--muted); }
+  /* Nothing to hover with, so the row controls are simply always visible --
+     and a row's Close/Done/Retire and Edit are a thumb's targets here, not a
+     whisper beside a hovered row: 44px, and outlined so they read as buttons. */
+  .row-do {
+    color: var(--muted); min-height: 44px; min-width: 44px; padding: 0 12px;
+    border: 1px solid var(--rule); border-radius: 3px;
+  }
   .ledger-col-do { width: 92px; }
+
+  /* The ledger's own table, a card per row. Four columns and an actions
+     column at a 520px floor scrolled sideways inside a 362px box: the AS OF
+     and SCENE columns, every row's actions and the whole inline editor sat
+     past the right edge, with nothing on screen to say so. Stacked, a row is
+     its mark beside what it says, when and where under that, and its actions
+     under those -- and the editor below it gets the full width. The headings
+     stay in the markup for a screen reader; the cells say what they are. */
+  .ledger-table.ledger-records { display: block; min-width: 0; table-layout: auto; }
+  .ledger-records tbody { display: block; }
+  .ledger-records colgroup { display: none; }
+  .ledger-records thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+  }
+  .ledger-records tr {
+    display: grid; grid-template-columns: 30px minmax(0, 1fr) minmax(0, auto);
+    column-gap: 10px; row-gap: 6px; align-items: baseline;
+    padding: 14px 0; border-bottom: 1px solid var(--line);
+  }
+  .ledger-records tr:last-child, .ledger-records tr.editing { border-bottom: 0; }
+  .ledger-records td { display: block; padding: 0; border: 0; }
+  .ledger-records .ledger-mark { grid-column: 1; grid-row: 1 / span 2; }
+  .ledger-records .ledger-main { grid-column: 2 / -1; }
+  .ledger-records .ledger-asof { grid-column: 2; }
+  .ledger-records .ledger-scene { grid-column: 3; text-align: right; }
+  .ledger-records .ledger-do {
+    grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 8px;
+    text-align: left; white-space: normal; margin-top: 4px;
+  }
+  .ledger-records .ledger-do:empty { display: none; }
+  .ledger-records tr.highlighted td { background: none; }
+  .ledger-records tr.highlighted td:first-child { box-shadow: none; }
+  .ledger-records tr.highlighted { background: var(--surface); box-shadow: inset 2px 0 0 var(--accent); }
+  .ledger-records tr.ledger-editor-row {
+    display: block; padding: 0 0 16px; border-bottom: 1px solid var(--line);
+  }
+  .ledger-records tr.ledger-editor-row td { padding: 0; }
+  .ledger-editor { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+
+  /* Sheet coverage: the three counts keep a row of their own and the type
+     select drops under them, the full width. At the table's 520px floor the
+     CREATE AS column -- the page's one input -- was past the right edge, and
+     the bulk create beneath read it blind. Its heading goes with it: the
+     select names the kind it is for. A kind with no gap has no select and no
+     line. */
+  .ledger-table.sheets-plan { display: block; min-width: 0; table-layout: auto; }
+  .sheets-plan thead, .sheets-plan tbody { display: block; }
+  .sheets-plan tr {
+    display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 12px; border-bottom: 1px solid var(--line);
+  }
+  .sheets-plan tbody tr:last-child { border-bottom: 0; }
+  .sheets-plan th, .sheets-plan td { display: block; border-bottom: 0; }
+  .sheets-plan th:last-child, .sheets-plan .sheets-create-as.none { display: none; }
+  .sheets-plan .sheets-create-as { grid-column: 1 / -1; padding-top: 0; }
+  .sheets-plan .sheets-create-as select { width: 100%; }
+  /* The button and what it is waiting on, one under the other: side by side
+     they squeezed each note into a column a word wide. */
+  .sheets-actions { flex-direction: column; align-items: stretch; }
 }
 /* Why it is dimmed and not gone — the annotation naming the scene that ended
    it and the fact that replaced it. `--alert` is the token for "this changed",
@@ -4438,6 +4596,17 @@ a.search-hit { text-decoration: none; color: inherit; }
 .stats-trend-bar { display: block; height: 100%; background: var(--accent); }
 .stats-trend-value { width: 74px; flex: none; text-align: right; }
 .report-scope { display: inline-flex; align-items: center; gap: 10px; margin: 10px 0; }
+/* "Campaign" is the select's caption, not a section heading: without this it
+   wore `.section-label`'s accent, rule and 26px top margin, and sat underlined
+   and below the line of the select it names. */
+.report-scope .section-label { margin: 0; padding: 0; border: 0; color: var(--muted); }
+/* A report's scope and its month, on one line under the title where they fit
+   and wrapping where they do not. */
+.report-controls {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; margin-top: 12px;
+}
+.report-controls .report-scope { margin: 0; }
+.report-month { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .cost-trend-series { flex: 1; min-width: 0; display: grid; gap: 4px; }
 .cost-trend-series-row { display: flex; align-items: center; gap: 12px; }
 .cost-trend-series-row > .field-hint { width: 142px; flex: none; }
@@ -4481,10 +4650,7 @@ a.search-hit { text-decoration: none; color: inherit; }
 .stats-search input { width: 100%; }
 .stats-live { flex-direction: row !important; align-items: center; gap: 6px; }
 .stats-threshold { margin: 0 0 10px; }
-.stats-footer { display: flex; align-items: flex-end; gap: 10px; padding: 10px 16px; }
-.stats-window { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
 .stats-refresh { flex: none; }
-.stats-window .section-label { margin: 0; border-bottom: 0; padding-bottom: 0; }
 
 /* A log line. Fixed columns for everything but the message, so four hundred
    rows read as a table without being one — a real table would make every
@@ -5239,6 +5405,10 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   .page-wide > .screen-title:first-child {
     padding-top: 11px; padding-bottom: 11px; margin-bottom: 14px;
     border-bottom: 1px solid var(--line);
+    /* The same 14px a `.shelf-head` panel leaves under itself: the bleed
+       above zeroes the title's own margin, which put every Settings section's
+       first line of copy (and the calendar's first caption) against the rule. */
+    margin-bottom: 14px;
   }
   /* A head with actions of its own (the ledger's "+ New fact", a report's
      scope) is a `.shelf-head`, and it is the same panel: without this it sat
@@ -5438,6 +5608,9 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
      strip because it is a cell of the row's grid. */
   .scene-item-del { min-height: 44px; padding: 0 12px; }
   .hub-row-del { min-height: 44px; padding: 0 10px; }
+  /* A To do item's sentence is the button that opens what is behind its
+     count: drawn as a line of text, it was a 21px target. */
+  button.chore-what { min-height: 44px; align-items: center; }
   /* `.primary` is the one class every editor's Save/Create/Add button
      reaches for, in this file and in every editor that isn't in it. */
   .primary { min-height: 44px; }
@@ -5667,12 +5840,17 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
 .cap-badge.no { color: var(--alert); border-color: var(--alert); }
 .cap-badge.unknown { border-style: dashed; color: var(--muted); }
 .controls-readout { margin: 6px 0; padding-left: 18px; font-size: 13px; }
-/* The Inspector's Models section: rows stacked name-over-resolution, since
-   the column is too narrow for both on one line, and the opened record below. */
+/* A campaign's Models (the Inspector's section, and campaign Settings →
+   Models): rows stacked name-over-resolution, and the opened record below.
+   Stacked in both homes, not only the Inspector's: the row is an
+   `.inspector-row`, which spreads its two halves to the ends of the line, and
+   on the Settings page's full width that put "Primary" some 800px from the
+   model it resolves to. There the list keeps the settings prose's measure. */
 .campaign-models { display: flex; flex-direction: column; gap: 8px; }
+.config-page .campaign-models { max-width: 62ch; }
 .campaign-models-list { display: flex; flex-direction: column; }
-.inspector .campaign-models-row { flex-direction: column; align-items: flex-start; gap: 2px; }
-.inspector .campaign-models-row.active .inspector-name { color: var(--accent); }
+.campaign-models-row { flex-direction: column; align-items: flex-start; gap: 2px; }
+.campaign-models-row.active .inspector-name { color: var(--accent); }
 .campaign-models > .subtle { align-self: flex-start; }
 .campaign-models-detail { border-top: 1px solid var(--rule-soft); padding-top: 8px; }
 .campaign-models-detail h5 { margin: 0 0 6px; }
@@ -5727,6 +5905,12 @@ a.subtle, a.button { display: inline-flex; align-items: center; justify-content:
    ones on the Models page, which sit in no container that colours them. */
 .role-row-body a, .decision-tasks a, .models-overrides a,
 .models-actions > a:not(.button) { color: var(--accent); }
+@media (max-width: 720px) {
+  /* Set and Set rate are actions beside a readout, rather than prose links:
+     the short word alone was a 17px touch target on the Models page. */
+  .role-action { display: inline-flex; align-items: center; min-width: 44px;
+                 min-height: 44px; padding-inline: 6px; }
+}
 @media (max-width: 640px) {
   .role-row { grid-template-columns: 1fr; gap: 4px; }
   .model-select select { min-width: 0; width: 100%; }

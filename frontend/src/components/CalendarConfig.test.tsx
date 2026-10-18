@@ -268,3 +268,22 @@ test("exponent notation in the warn window is read as the number it is", async (
   await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, expect.objectContaining({ warn_days: 100 })));
 });
+
+test("each control is captioned on screen, and Cancel waits for something to put back", async () => {
+  // Bare inline labels ran the form together ("CalendarGregorian Holidays
+  // regionUS"); every control now sits under a caption of its own. And on a
+  // page whose other settings stay read-only until Edit, a Cancel that is
+  // live before anything changed reads as a form already open for editing.
+  render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} onDirtyChange={() => {}} />);
+  const region = await screen.findByLabelText("Holidays region");
+  for (const caption of ["Calendar", "Holidays region", "Stale after", "Warn ahead"]) {
+    expect(screen.getByText(caption, { selector: "label" })).toBeInTheDocument();
+  }
+  const cancel = screen.getByRole("button", { name: "Cancel" });
+  expect(cancel).toBeDisabled();
+  fireEvent.change(region, { target: { value: "GB" } });
+  expect(cancel).toBeEnabled();
+  fireEvent.click(cancel);
+  expect(region).toHaveValue("US");
+  expect(cancel).toBeDisabled();
+});

@@ -106,9 +106,19 @@ test("the column lists the seven sections with a live count each", async () => {
   expect(column().getByRole("button", { name: /commitments/i })).toHaveTextContent("1");
   expect(column().getByRole("button", { name: /relationships/i })).toHaveTextContent("1");
   expect(column().getByRole("button", { name: /recent changes/i })).toHaveTextContent("1");
-  expect(column().getByRole("button", { name: /timeline/i })).toHaveTextContent("1");
+  expect(column().getByRole("button", { name: /chronicle/i })).toHaveTextContent("1");
   expect(column().getByRole("button", { name: /relationship history/i }))
     .toHaveTextContent("3");
+});
+
+test("the column reaches the timeline page, and the chronicle is not a second Timeline", async () => {
+  // The rail row says "Ledger & timeline"; the timeline page was linked only
+  // from the hub, and the ledger's own chronicle section was also "Timeline".
+  renderLedger();
+  const link = await column().findByRole("link", { name: /^Timeline/ });
+  expect(link).toHaveAttribute("href", "/campaigns/run/timeline");
+  expect(column().getByRole("button", { name: /^Chronicle/ })).toBeInTheDocument();
+  expect(column().queryByRole("button", { name: /^Timeline/ })).toBeNull();
 });
 
 test("the campaign is named, and the way back to it is a link", async () => {
@@ -377,7 +387,7 @@ test("recent changes and the timeline come from their own reads", async () => {
   fireEvent.click(await column().findByRole("button", { name: /recent changes/i }));
   expect(await waitFor(() => rowFor(/Sister Mara/))).toHaveTextContent(/Current state/);
 
-  fireEvent.click(column().getByRole("button", { name: /timeline/i }));
+  fireEvent.click(column().getByRole("button", { name: /chronicle/i }));
   const beat = await waitFor(() => rowFor(/tide turned/));
   expect(cells(beat)[2]).toBe("3 Reaping");
   expect(cells(beat)[3]).toBe("The Long Tide");
@@ -674,6 +684,39 @@ test("a field the reader EMPTIED is sent blank, because blank is an instruction"
     .toHaveBeenCalledWith("run", "pay", { due: "" }));
 });
 
+test("a record's scene is picked from the campaign's scenes, by title", async () => {
+  // It was a text box holding the scene's id -- a filename nobody types
+  // correctly -- so correcting where the absorb filed something meant
+  // copying `009--…` out of somewhere else.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "004", title: "The Priory Door" }, { id: "009", title: "The Long Tide" },
+  ]);
+  await at(/Threads/, THREADS);
+  await openEditor(rowFor(/Who fired the warehouse/));
+  const picker = await screen.findByRole("combobox", { name: "Scene" });
+  expect(picker).toHaveValue("004");
+  expect(within(picker).getByRole("option", { name: "The Long Tide" })).toBeInTheDocument();
+  fireEvent.change(picker, { target: { value: "009" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.ledgerSaveThread)
+    .toHaveBeenCalledWith("run", "warehouse", { scene: "009" }));
+});
+
+test("a scene the list no longer has stays the record's value until another is picked",
+  async () => {
+    (api.listScenes as any).mockResolvedValue([{ id: "009", title: "The Long Tide" }]);
+    await at(/Threads/, THREADS);
+    await openEditor(rowFor(/Who fired the warehouse/));
+    expect(await screen.findByRole("combobox", { name: "Scene" })).toHaveValue("004");
+  });
+
+test("with no scene list to offer, the scene is still correctable by id", async () => {
+  (api.listScenes as any).mockRejectedValue(new Error("offline"));
+  await at(/Threads/, THREADS);
+  await openEditor(rowFor(/Who fired the warehouse/));
+  expect(screen.getByRole("textbox", { name: "Scene" })).toHaveValue("004");
+});
+
 test("a commitment is marked done from its row", async () => {
   await at(/Commitments/, OWED);
   fireEvent.click(within(rowFor(/Pay the Reeve/)).getByRole("button", { name: "Done" }));
@@ -796,7 +839,7 @@ test("+ New opens a blank of the same form the edit uses", async () => {
 test("the timeline line is editable and its row cannot be deleted", async () => {
   // The record belongs to a scene: dropping it is what un-absorbing that scene
   // means, not a ledger edit.
-  await at(/Timeline/, {
+  await at(/Chronicle/, {
     ...EMPTY,
     chronicle: [{ id: "004", title: "The Priory Door", date: "1 Reaping",
                   one_line: "They meet at the door" }],

@@ -148,10 +148,13 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
     ),
   }));
 
-  /** A disabled action's reason sits beneath it, where it is read. */
+  /** A disabled action's reason sits beneath it, where it is read. Every
+   *  action here wears `.btn-outline`, the one the ledger links beside them
+   *  already wore -- a classless button next to one was two kinds of control
+   *  for one row of actions. */
   const action = (label: string, enabled: boolean, hint: string, run: () => void) => (
     <>
-      <button type="button" disabled={!enabled} onClick={run}
+      <button type="button" className="btn-outline" disabled={!enabled} onClick={run}
               aria-describedby={enabled ? undefined : hintId}>
         {label}
       </button>
@@ -209,7 +212,8 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
           {target && <Link className="btn-outline" to={ledgerHref(cid, target)}>
             Open ledger entry
           </Link>}
-          <button type="button" onClick={() => onArc(arc === canon ? null : canon)}>
+          <button type="button" className="btn-outline"
+                  onClick={() => onArc(arc === canon ? null : canon)}>
             {arc === canon ? "Show the whole graph" : "Filter to this arc"}
           </button>
         </>

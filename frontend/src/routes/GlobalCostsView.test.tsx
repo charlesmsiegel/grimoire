@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import GlobalCostsView from "./GlobalCostsView";
+import { bound } from "../components/cost";
 
 vi.mock("../api/client", () => ({ api: {
   getMonthlyCosts: vi.fn(),
@@ -36,7 +37,9 @@ test("global Costs shows campaign rows and modelled activity in its projected tr
   expect(await screen.findByRole("link", { name: "Saltmarch" })).toHaveAttribute(
     "href", "/campaigns/saltmarch/costs?month=2026-09");
   expect(screen.getByText("Outside a campaign")).toBeInTheDocument();
-  expect(screen.getByText(/2026-09: 2026-09-01 through 2026-09-30 UTC/)).toBeInTheDocument();
+  // The window in the reader's calendar, as the campaign report prints it.
+  expect(screen.getByText(`2026-09: ${bound("2026-09-01")} through ${bound("2026-09-30")} (UTC)`))
+    .toBeInTheDocument();
   expect(screen.getAllByText(/Incomplete: 1 unpriced call/i).length).toBeGreaterThan(0);
   expect(screen.getAllByText("≈ $1.25").length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: "Previous month" }));
@@ -86,4 +89,21 @@ test("a campaign's estimate cells say when its token counts were estimated here"
   expect(cells[5].textContent).toBe("≈ $0.00");
   expect(cells[4].getAttribute("title")).toMatch(/2 calls with tokens estimated/);
   expect(cells[5].getAttribute("title")).toMatch(/2 calls with tokens estimated/);
+});
+
+test("an empty month says so once, without an estimated total or an alarm", async () => {
+  vi.mocked(api.getMonthlyCosts).mockResolvedValue({
+    month: "2026-09", since: "2026-09-01", until: "2026-09-30",
+    available_months: ["2026-09"],
+    totals: { ...zero }, campaigns: [], unassigned: { ...zero }, trend: [],
+  });
+  const { container } = render(<MemoryRouter initialEntries={["/costs?month=2026-09"]}><Routes>
+    <Route path="/costs" element={<GlobalCostsView />} />
+  </Routes></MemoryRouter>);
+  expect(await screen.findByText("No calls in this month.")).toBeInTheDocument();
+  expect(screen.queryByText(/^Estimated total ≈/)).toBeNull();
+  expect(screen.queryByText(/not reported/i)).toBeNull();
+  expect(container.querySelector(".money-figure")?.textContent).toBe("—");
+  // The month moves on quiet buttons, like the rest of the report's controls.
+  expect(screen.getByRole("button", { name: "Previous month" })).toHaveClass("subtle");
 });

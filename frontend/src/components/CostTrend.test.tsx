@@ -78,3 +78,12 @@ test("a month with no estimated counts carries no such note", () => {
     priced_calls: 1, subscription_calls: 0, modelled_calls: 0 } as never]} />);
   expect(screen.queryByText(/tokens estimated/)).toBeNull();
 });
+
+test("with nothing measured there is no empty chart under the sentence that says so", () => {
+  // The bordered chart box drew with no months in it: a grey bar beneath
+  // "No cost measurements yet", a track with nothing on it.
+  render(<CostTrend rows={[]} />);
+  expect(screen.getByText("No cost measurements yet.")).toBeInTheDocument();
+  expect(screen.queryByRole("list")).toBeNull();
+  expect(screen.queryByRole("img")).toBeNull();
+});

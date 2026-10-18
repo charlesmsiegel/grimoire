@@ -11,7 +11,7 @@ import {
 import { ErrorNote } from "../components/ErrorNote";
 import { Field } from "../components/Field";
 import { CapabilityBadges } from "../components/inference/CapabilityBadges";
-import { InferenceNav } from "../components/inference/InferenceNav";
+import { InferenceHead, InferenceNav } from "../components/inference/InferenceNav";
 import { InferenceBanner } from "../components/inference/InferenceBanner";
 import { migrationBanner, migrationLine } from "../components/inference/migration";
 import { TestCallDialog, useModelTests } from "../components/inference/TestCallDialog";
@@ -140,6 +140,23 @@ function catalogRows(answers: ModelCapabilities[]): CatalogRow[] {
   return [...rows.values()].sort((x, y) => x.id.localeCompare(y.id));
 }
 
+/** Which provider and which of its models the address names: `/providers/:id`
+ *  and `/providers/:id/models/<model>`, `""` for either that is absent.
+ *
+ *  The model is read off a match of its own route, never `useParams()["*"]`.
+ *  The app's routes are descendants of the data router's `path: "*"`
+ *  (`router.tsx`), so on `/providers/:id`, which has no splat of its own, the
+ *  splat `useParams` merges in is the OUTER one -- the whole address,
+ *  `providers/openrouter` -- and the page opened that as a model of that name.
+ *  A test that mounts these routes in a bare `MemoryRouter` never sees it,
+ *  which is why `App.test.tsx` reads this through `appRoutes`. Exported for
+ *  that test's stand-in, so it reads the address the way this page does. */
+export function useProviderAddress(): { id: string; model: string } {
+  const id = useParams().id ?? "";
+  const model = useMatch("/providers/:id/models/*")?.params["*"] ?? "";
+  return { id, model };
+}
+
 type ProviderForm = {
   /** "" is the preset's default: the record states none. */
   name: string; base_url: string; billing: "" | ProviderBilling; sampler_support: "" | "extended";
@@ -160,9 +177,7 @@ type ProviderForm = {
  *  refuses it without `confirm: true` anyway. A test call shows its preview
  *  before it can be run. */
 export default function ProvidersView() {
-  const params = useParams();
-  const id = params.id ?? "";
-  const model = params["*"] ?? "";
+  const { id, model } = useProviderAddress();
   const navigate = useNavigate();
 
   const [providers, setProviders] = useState<LLMConnection[]>([]);
@@ -487,14 +502,18 @@ export default function ProvidersView() {
 
   return (
     <PageShell column={column} columnLabel="Providers">
-      <div className="page view-anim">
-        <div className="page-head">
-          <h1 className="page-h1">Providers</h1>
-        </div>
+      <div className="page-wide view-anim">
+        <InferenceHead title="Providers" />
         <InferenceBanner status={banner} />
         {upgradeNote && <p className="field-hint">{upgradeNote}</p>}
         {listError != null && <div className="banner"><ErrorNote err={listError} /></div>}
         {error != null && <div className="banner"><ErrorNote err={error} /></div>}
+        {/* Record titles stay h3, as in every list/detail editor. The page
+            owns h1; name the intervening section for heading navigation,
+            without repeating the visible title over the record's own. */}
+        {(isNew || shown) && <h2 className="sr-only">
+          {model ? "Model facts" : isNew || mode === "edit" ? "Provider settings" : "Provider details"}
+        </h2>}
         {body}
       </div>
     </PageShell>

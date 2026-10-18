@@ -255,6 +255,22 @@ test("a bucket nobody priced does not render spend as $0.00", () => {
   expect(container.textContent).not.toMatch(/\$0\.00/);
 });
 
+test("a bucket with no calls in it is quiet: no alarm, and still no zero", () => {
+  // "Not reported", in the alert colour, is about calls whose price is
+  // missing. Over an empty month it read as an alarm about nothing -- and a
+  // figure would claim a total nobody measured, so every column is a dash.
+  const { container } = render(
+    <MoneyColumns bucket={{
+      calls: 0, priced_calls: 0, subscription_calls: 0, unpriced_calls: 0,
+      cost_usd: 0, estimated_usd: 0, modelled_usd: 0, modelled_calls: 0,
+    }} />);
+  const figures = [...container.querySelectorAll(".money-figure")].map((x) => x.textContent);
+  expect(figures).toEqual(["—", "—", "—"]);
+  expect(container.querySelector(".money-unpriced")).toBeNull();
+  expect(container.textContent).not.toMatch(/\$0\.00/);
+  expect(container.textContent).toMatch(/No calls, so nothing to price\./);
+});
+
 test("a post that sent images says how many in its title (#377)", () => {
   render(<PostCost bucket={{ ...ZERO, post: 0, rerolls: 0, calls: 1,
                              priced_calls: 1, cost_usd: 0.02, images: 2 }} />);
@@ -413,7 +429,7 @@ test("a post's title says how many calls ran on a subscription and were estimate
 test("MoneyColumns says how much of the modelled column ran on a subscription, and when tokens were estimated", () => {
   const { container } = render(
     <MoneyColumns bucket={{
-      priced_calls: 0, subscription_calls: 0, unpriced_calls: 0,
+      calls: 3, priced_calls: 0, subscription_calls: 0, unpriced_calls: 0,
       cost_usd: 0, estimated_usd: 0, modelled_usd: 0.3, modelled_calls: 3,
       modelled_subscription_calls: 2, estimated_token_calls: 1,
     }} />);
@@ -425,7 +441,7 @@ test("MoneyColumns says how much of the modelled column ran on a subscription, a
 test("MoneyColumns shows a zero-rated modelled column as an estimate of zero", () => {
   const { container } = render(
     <MoneyColumns bucket={{
-      priced_calls: 0, subscription_calls: 0, unpriced_calls: 0,
+      calls: 2, priced_calls: 0, subscription_calls: 0, unpriced_calls: 0,
       cost_usd: 0, estimated_usd: 0, modelled_usd: 0, modelled_calls: 2,
     }} />);
   const figures = [...container.querySelectorAll(".money-figure")].map((x) => x.textContent);

@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 vi.mock("../api/client", async () =>
   (await import("../testkit/ledgerMocks")).ledgerApiMock());
@@ -102,6 +102,65 @@ test("+ New opens the form directly, and a grant posts what was shown", async ()
     expect_digest: "", expect_shown: "", audience_name: "Mara",
   }));
 });
+
+test("+ New statement is in the head like every section's + New, and Cancel leaves the form",
+  async () => {
+    // It was only a row in the column, which on a phone is behind a toggle,
+    // and the blank form it opened had no way out but that column.
+    renderLedger("/campaigns/run/ledger/knowledge");
+    const head = await screen.findByRole("heading", { level: 1, name: "Knowledge" });
+    const shelf = within(head.closest(".shelf-head") as HTMLElement);
+    fireEvent.click(shelf.getByRole("button", { name: "+ New statement" }));
+    expect(await screen.findByRole("heading", { name: "New statement" })).toBeInTheDocument();
+    expect(screen.getByTestId("here")).toHaveTextContent("/campaigns/run/ledger/knowledge/new");
+    expect(shelf.getByRole("button", { name: "+ New statement" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "New statement" })).toBeNull());
+    expect(screen.getByTestId("here")).toHaveTextContent(/^\/campaigns\/run\/ledger\/knowledge$/);
+  });
+
+test.each(["saved", "refused"])("Cancel waits for a pending Knowledge creation to be %s",
+  async (outcome) => {
+    vi.mocked(api.listScenes).mockResolvedValue([
+      { id: "0001-pier", title: "The Pier", model: "", created: "", updated: "", date: "" },
+    ]);
+    vi.mocked(api.ledgerKnowledgeScene).mockResolvedValue({
+      sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
+      summary: "", one_line: "", keyless: 0, keyless_posts: [], posts: [],
+    });
+    let release: () => void = () => { throw new Error("The write has not started"); };
+    vi.mocked(api.ledgerCreateKnowledge).mockReturnValueOnce(new Promise((resolve, reject) => {
+      release = outcome === "saved" ? () => resolve({ id: "k-00000001" })
+        : () => reject(new Error("offline"));
+    }));
+    renderLedger("/campaigns/run/ledger/knowledge/new");
+    fireEvent.change(await screen.findByRole("combobox", { name: "Who" }),
+                     { target: { value: "*" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Scene" }),
+                     { target: { value: "0001-pier" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: "The whole scene" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add statement" }));
+    await waitFor(() => expect(api.ledgerCreateKnowledge).toHaveBeenCalledTimes(1));
+    try {
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      expect(cancel).toBeDisabled();
+      fireEvent.click(cancel);
+      expect(screen.getByTestId("here")).toHaveTextContent("/campaigns/run/ledger/knowledge/new");
+    } finally {
+      await act(async () => { release(); });
+    }
+    if (outcome === "saved") {
+      await waitFor(() => expect(screen.getByTestId("here"))
+        .toHaveTextContent("/campaigns/run/ledger/knowledge/k-00000001"));
+    } else {
+      expect(await screen.findByText("Error: offline")).toBeInTheDocument();
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      expect(cancel).toBeEnabled();
+      fireEvent.click(cancel);
+      await waitFor(() => expect(screen.getByTestId("here"))
+        .toHaveTextContent(/^\/campaigns\/run\/ledger\/knowledge$/));
+    }
+  });
 
 test("a stale statement says why and confirms against the text on screen", async () => {
   (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({

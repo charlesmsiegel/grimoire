@@ -5,7 +5,7 @@ import {
 } from "../api/client";
 import { errorText } from "../api/errors";
 import { InferenceBanner } from "../components/inference/InferenceBanner";
-import { InferenceNav } from "../components/inference/InferenceNav";
+import { InferenceHead, InferenceNav } from "../components/inference/InferenceNav";
 import type { ProviderModel } from "../components/inference/ProviderModelPicker";
 import { useInferenceSettings } from "../components/inference/useInferenceSettings";
 import { ColumnSection, PageShell } from "../components/PageShell";
@@ -116,7 +116,7 @@ export default function PresetsView() {
         <div className="column-actions">
           <button type="button" className="column-primary" disabled={newer}
                   onClick={() => navigate("/presets/new")}>+ New preset</button>
-          <button type="button" className="subtle" disabled={newer}
+          <button type="button" className="subtle column-secondary" disabled={newer}
                   onClick={() => navigate("/presets/import")}>Import…</button>
         </div>
         {presets?.length === 0 && <p className="column-empty">None yet.</p>}
@@ -157,8 +157,8 @@ export default function PresetsView() {
 
   return (
     <PageShell column={column} columnLabel="Presets">
-      <div className="page view-anim">
-        <div className="page-head"><h1 className="page-h1">Presets</h1></div>
+      <div className="page-wide view-anim">
+        <InferenceHead title="Presets" />
         <p className="config-copy">
           A preset is a named set of temperature, top-p, top-k, min-p, the three
           penalties, a token cap, stop strings and a reasoning effort — the

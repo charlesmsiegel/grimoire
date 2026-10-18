@@ -196,7 +196,8 @@ export default function StoryGraphView() {
     body = (
       <div>
         <p>The story graph could not be read.</p>
-        <button type="button" onClick={() => { setLoaded(null); setAttempt((a) => a + 1); }}>
+        <button type="button" className="subtle"
+                onClick={() => { setLoaded(null); setAttempt((a) => a + 1); }}>
           Retry
         </button>
       </div>
@@ -220,7 +221,8 @@ export default function StoryGraphView() {
             {arc && (
               <p className="sg-filter">
                 Filtered to {ix.byId.get(arc)?.label}
-                <button type="button" onClick={() => setQuery({ arc: null }, false)}>
+                <button type="button" className="subtle"
+                        onClick={() => setQuery({ arc: null }, false)}>
                   Show the whole graph
                 </button>
               </p>

@@ -126,18 +126,26 @@ function Where() {
   return <><div data-testid="where">{pathname + hash}</div><div data-testid="search">{search}</div></>;
 }
 
+/** The page's routes as the app mounts them: descendants of a `path: "*"`
+ *  (`router.tsx`), whose splat `useParams` merges into every route below it
+ *  that has none of its own. Mounted bare, `/providers/:id` read no model; in
+ *  the app it read the whole address as one. */
 function open(at = "/providers") {
   return render(
     <MemoryRouter initialEntries={[at]}>
       <Where />
       <Routes>
-        <Route path="/providers" element={<ProvidersView />} />
-        <Route path="/providers/new" element={<ProvidersView />} />
-        <Route path="/providers/:id" element={<ProvidersView />} />
-        <Route path="/providers/:id/models/*" element={<ProvidersView />} />
-        <Route path="/models" element={<div>the models page</div>} />
-        <Route path="/models/*" element={<div>the models page</div>} />
-        <Route path="/campaigns/:cid" element={<div>the campaign</div>} />
+        <Route path="*" element={
+          <Routes>
+            <Route path="/providers" element={<ProvidersView />} />
+            <Route path="/providers/new" element={<ProvidersView />} />
+            <Route path="/providers/:id" element={<ProvidersView />} />
+            <Route path="/providers/:id/models/*" element={<ProvidersView />} />
+            <Route path="/models" element={<div>the models page</div>} />
+            <Route path="/models/*" element={<div>the models page</div>} />
+            <Route path="/campaigns/:cid" element={<div>the campaign</div>} />
+          </Routes>
+        } />
       </Routes>
     </MemoryRouter>,
   );
@@ -145,6 +153,16 @@ function open(at = "/providers") {
 
 const column = () => within(screen.getByRole("complementary", { name: "Providers" }));
 const main = () => within(screen.getByRole("main"));
+
+test.each([
+  { at: "/providers/saltmarch", section: "Provider details", title: "Saltmarch Router" },
+  { at: "/providers/new", section: "Provider settings", title: "New provider" },
+  { at: "/providers/saltmarch/models/vendor%2Fm", section: "Model facts", title: "vendor/m" },
+])("$section gives the record title its parent heading", async ({ at, section, title }) => {
+  open(at);
+  await main().findByRole("heading", { name: title, level: 3 });
+  expect(main().getByRole("heading", { name: section, level: 2 })).toBeInTheDocument();
+});
 
 test("clicking a provider shows the read-only view with its sidebar", async () => {
   open();

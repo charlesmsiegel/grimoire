@@ -218,16 +218,24 @@ export default function SheetsView() {
     const rows = roster?.[kind] ?? [];
     const options = typesFor(module, kind);
     const missing = rows.filter(isMissing).length;
+    // One option needs no choosing; several with none chosen is what the
+    // report will call a skip, and so is none at all (`tally._bulk_type`).
+    const typed = options.length === 1 || (options.length > 1 && !!types[kind]);
     return {
       kind, rows, options, missing,
       sheeted: rows.filter((r) => r.sheeted).length,
-      // One option needs no choosing; several with none chosen is what the
-      // report will call a skip.
       needsChoice: missing > 0 && options.length > 1 && !types[kind],
+      creatable: typed ? missing : 0,
     };
   }), [kinds, roster, module, types]);
 
   const missingTotal = plan.reduce((n, p) => n + p.missing, 0);
+  /** What a press would actually create. The button counted every gap, so
+   *  "+ Create missing sheets (3)" with no type chosen for a two-type kind
+   *  sent `{"types": {}}` and came back "0 sheets created" and a skip -- a
+   *  button promising three that could only ever do nothing. */
+  const creatableTotal = plan.reduce((n, p) => n + p.creatable, 0);
+  const owedChoice = plan.filter((p) => p.needsChoice).map((p) => sheetKindLabel(p.kind));
 
   /** What this page contributes to ⌘K: a jump to each kind's first member
    *  still without a sheet. `usePaletteSource` only registers while this
@@ -461,7 +469,7 @@ export default function SheetsView() {
         {!rosterError && !selectedRow && module && roster !== null && kinds.length > 0 && (
           <>
             <div className="ledger-table-wrap">
-              <table className="ledger-table">
+              <table className="ledger-table sheets-plan">
                 <thead>
                   <tr>
                     <th scope="col">KIND</th>
@@ -476,7 +484,7 @@ export default function SheetsView() {
                       <td>{sheetKindLabel(kind)}</td>
                       <td>{sheeted}/{rows.length}</td>
                       <td className={missing ? "ledger-mark alert" : undefined}>{missing}</td>
-                      <td>
+                      <td className={"sheets-create-as" + (missing === 0 ? " none" : "")}>
                         {/* A kind with no gap gets no control: there is nothing
                             to create it AS. With two types and existing sheets
                             possibly of both, naming one of them here would be a
@@ -508,14 +516,21 @@ export default function SheetsView() {
               </table>
             </div>
 
-            <div className="form-actions">
+            <div className="form-actions sheets-actions">
               <button className="primary" onClick={() => { void createMissing(); }}
-                      disabled={busy || missingTotal === 0}>
+                      disabled={busy || creatableTotal === 0}>
                 {busy ? "Creating…"
-                      : `+ Create missing sheets${missingTotal ? ` (${missingTotal})` : ""}`}
+                      : `+ Create missing sheets${creatableTotal ? ` (${creatableTotal})` : ""}`}
               </button>
               {missingTotal === 0 && (
                 <span className="field-hint">Every cast member has a sheet.</span>
+              )}
+              {/* Why the button is not live, where it is not: the gaps are all
+                  in kinds still waiting on a type. */}
+              {missingTotal > 0 && creatableTotal === 0 && owedChoice.length > 0 && (
+                <span className="field-hint">
+                  Choose a sheet type for {andList(owedChoice)} to create their sheets.
+                </span>
               )}
               {/* The names, not just the count: the rail already marks each row,
                   but this is the one place the design puts them in the action

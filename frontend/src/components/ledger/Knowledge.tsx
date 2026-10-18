@@ -107,13 +107,16 @@ function formOf(e: KnowledgeEntry | null): Form {
   };
 }
 
-export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
+export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted, onCancelNew }: {
   cid: string;
   /** The statement on screen, or null with `creating`. */
   entry: KnowledgeEntry | null;
   creating: boolean;
   onSaved: (kid: string) => void;
   onDeleted: () => void;
+  /** Leave the blank form: there is no statement to go back to, so the owner
+   *  says where (the section's own address). */
+  onCancelNew: () => void;
 }) {
   const [mode, setMode] = useState<"view" | "edit">(creating ? "edit" : "view");
   const [form, setForm] = useState<Form>(() => formOf(entry));
@@ -455,11 +458,16 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted }: {
         {entry && (
           <button className="subtle" disabled={busy} onClick={() => remove(entry)}>Delete</button>
         )}
-        {entry && (
-          <button className="subtle" onClick={() => { setForm(original); setMode("view"); }}>
-            Cancel
-          </button>
-        )}
+        {/* Cancel on the blank form too: the other way out of it was a row in
+            the column, which on a phone is behind a toggle. */}
+        <button className="subtle" disabled={busy}
+                onClick={() => {
+                  if (!entry) { onCancelNew(); return; }
+                  setForm(original);
+                  setMode("view");
+                }}>
+          Cancel
+        </button>
         <button className="primary" disabled={busy || !ready} onClick={save}>
           {entry ? "Save statement" : "Add statement"}
         </button>

@@ -61,7 +61,7 @@ function WindowReadout({ limits, provider, model }:
     <span title={known ? `${limits.window.value!.toLocaleString("en-US")} tokens` : undefined}>
       {windowWords(limits.window)}
       {!known && provider && model && (
-        <> <Link to={modelLimitsPath(provider, model)}>Set</Link></>
+        <> <Link className="role-action" to={modelLimitsPath(provider, model)}>Set</Link></>
       )}
     </span>
   );
@@ -78,7 +78,7 @@ function RateLine({ rate, model, promptOnly = false, limits = null, provider = "
     <p className="field-hint">
       {words}
       {rate?.source === "none" && model && (
-        <> · <Link to={setRateHref(model)}>Set rate</Link></>
+        <> · <Link className="role-action" to={setRateHref(model)}>Set rate</Link></>
       )}
       {limits && (
         <>{words ? " · " : ""}<WindowReadout limits={limits} provider={provider} model={model} /></>
@@ -101,7 +101,7 @@ function FallbackWindow({ limits, provider, model }:
       <span title={known ? `${window.value!.toLocaleString("en-US")} tokens` : undefined}>
         {windowWords(window)}
         {!known && provider && model && (
-          <> <Link to={modelLimitsPath(provider, model)}>Set</Link></>
+          <> <Link className="role-action" to={modelLimitsPath(provider, model)}>Set</Link></>
         )}
       </span>
     </>

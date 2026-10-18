@@ -33,11 +33,17 @@ export default function ReportMonth({ month, available, onChange }: {
   month: string; available: string[]; onChange: (month: string) => void;
 }) {
   const options = [...new Set([...available, month])].sort().reverse();
-  return <nav aria-label="Cost month" className="stats-footer">
-    <button type="button" onClick={() => onChange(shiftMonth(month, -1))}>Previous month</button>
+  // A row of its own: it used to borrow the stats page's column footer, whose
+  // 16px side padding indented the month under every report head it sat in.
+  // And quiet `.subtle` buttons rather than the UA's, which stood 21px tall
+  // on a phone beside a 44px select.
+  return <nav aria-label="Cost month" className="report-month">
+    <button type="button" className="subtle"
+            onClick={() => onChange(shiftMonth(month, -1))}>Previous month</button>
     <select aria-label="Cost month" value={month} onChange={(e) => onChange(e.target.value)}>
       {options.map((value) => <option key={value} value={value}>{value}</option>)}
     </select>
-    <button type="button" onClick={() => onChange(shiftMonth(month, 1))}>Next month</button>
+    <button type="button" className="subtle"
+            onClick={() => onChange(shiftMonth(month, 1))}>Next month</button>
   </nav>;
 }

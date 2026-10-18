@@ -117,13 +117,15 @@ export function BackupsPanel({ dir }: { dir: string }) {
       <p className="field-hint">
         Archives are written to <code>{where}</code>.
       </p>
-      <button className="btn-accent" onClick={backUpNow} disabled={busy !== null}>
-        {busy === "full" ? "Backing up…" : "Back up now"}
-      </button>
-      <button className="btn-outline" onClick={() => { void backUpImages(); }}
-              disabled={busy !== null}>
-        {busy === "images" ? "Backing up images…" : "Back up images"}
-      </button>
+      <div className="backup-actions">
+        <button className="btn-accent" onClick={backUpNow} disabled={busy !== null}>
+          {busy === "full" ? "Backing up…" : "Back up now"}
+        </button>
+        <button className="btn-outline" onClick={() => { void backUpImages(); }}
+                disabled={busy !== null}>
+          {busy === "images" ? "Backing up images…" : "Back up images"}
+        </button>
+      </div>
       {msg && (
         <p role={msg.kind === "ok" ? undefined : "alert"}
            className={msg.kind === "ok" ? "config-msg save-flash" : "config-msg err"}>
@@ -138,10 +140,16 @@ export function BackupsPanel({ dir }: { dir: string }) {
           {rows.map((b) => (
             <li key={b.name} className="backup-row">
               <span className="backup-name">{b.name}</span>
-              {b.scope === "settings" && <span>Model settings safety archive (partial)</span>}
               <span className="backup-meta">
                 {new Date(b.created).toLocaleString()} · {formatSize(b.size)}
               </span>
+              {/* A line of its own under the name it qualifies, in the row's
+                  own small type: inline, in the page's body face, it wrapped a
+                  word a line beside the filename and pushed the date past the
+                  list's edge. */}
+              {b.scope === "settings" && (
+                <span className="backup-scope">Model settings safety archive (partial)</span>
+              )}
             </li>
           ))}
         </ul>

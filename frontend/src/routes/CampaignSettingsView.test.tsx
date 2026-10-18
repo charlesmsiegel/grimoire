@@ -4,17 +4,8 @@ import { ArtNavigationProvider } from "../components/art/ArtNavigationProvider";
 import { api, type CampaignSettings } from "../api/client";
 import { configChanged } from "../appEvents";
 import CampaignSettingsView from "./CampaignSettingsView";
+import { RouterRequest } from "../testkit/routerRequest";
 
-// Data-router navigation bridges jsdom's AbortSignal to Node's Request in
-// the same way as ArtNavigationProvider's own navigation tests.
-const NativeRequest = globalThis.Request;
-class TestRequest extends NativeRequest {
-  constructor(input: RequestInfo | URL, init?: RequestInit) {
-    const { signal, ...rest } = init ?? {};
-    super(input, rest);
-    if (signal) Object.defineProperty(this, "signal", { value: signal });
-  }
-}
 afterEach(() => vi.unstubAllGlobals());
 
 vi.mock("../api/client", () => ({ api: { getCampaignSettings: vi.fn(), putCampaignSettings: vi.fn() } }));
@@ -50,7 +41,7 @@ function open(section = "context") {
     {surface()}</MemoryRouter>);
 }
 beforeEach(() => {
-  vi.stubGlobal("Request", TestRequest);
+  vi.stubGlobal("Request", RouterRequest);
   vi.resetAllMocks();
   vi.mocked(api.getCampaignSettings).mockResolvedValue(view());
   vi.mocked(api.putCampaignSettings).mockImplementation(async (_cid, patch) => {
@@ -72,6 +63,18 @@ test("opens read-only effective and inherited values, then explicitly edits", as
   expect(screen.getByRole("checkbox", { name: "Override Context budget" })).not.toBeChecked();
   expect(screen.getByRole("textbox", { name: "Context budget" })).toBeDisabled();
   expect(screen.getByRole("link", { name: /Storage/ })).toHaveAttribute("href", "/config?section=storage");
+});
+
+test("each setting is headed one level under the page, and named once on screen", async () => {
+  // They were h3s straight under the page's h1, and the edit form repeated
+  // each name as a visible label under its own heading.
+  open();
+  const field = await screen.findByRole("group", { name: "Context budget" });
+  expect(screen.getByRole("heading", { level: 1, name: "Context & summaries" })).toBeInTheDocument();
+  expect(within(field).getByRole("heading", { level: 2, name: "Context budget" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(within(field).getAllByText("Context budget")
+    .filter((el) => !el.classList.contains("sr-only"))).toHaveLength(1);
 });
 
 test("section selection starts main at the top so the new heading stays visible", async () => {

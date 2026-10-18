@@ -148,7 +148,7 @@ function CampaignSettingsBody({ cid }: { cid: string }) {
       </>}</div>}
       {visited.has("models") && <div hidden={section !== "models"}><CampaignModels cid={cid} onDirtyChange={setModelsDirty} /></div>}
       {visited.has("calendar") && <div hidden={section !== "calendar"}><CalendarConfig scope={{ kind: "campaign", id: cid }} onDirtyChange={setCalendarDirty} /></div>}
-      {(section === "context" || section === "advanced") && <>
+      {(section === "context" || section === "advanced") && <div className="campaign-settings">
         <p className="config-copy">These values follow global settings until you choose an override for this campaign.</p>
         {!settings && !error && <p className="field-hint">Reading campaign settings…</p>}
         {settings && <>
@@ -158,13 +158,15 @@ function CampaignSettingsBody({ cid }: { cid: string }) {
             const own = opinion != null;
             const value = editing ? opinion ?? settings.inherited[key] : settings.effective[key];
             return <section className="campaign-setting" role="group" aria-label={label} key={key}>
-              <h3>{label}</h3>
+              {/* h2 under the page's h1, worn as the settings form's caption. */}
+              <h2 className="campaign-setting-name">{label}</h2>
               {editing ? <>
                 <label className="checkbox-row"><input type="checkbox" checked={own} disabled={saving}
                   aria-label={`Override ${label}`} onChange={(e) => setDraft((d) => ({ ...d,
                     [key]: e.target.checked ? settings.inherited[key] : null,
                   }))} /> Override for this campaign</label>
-                <label className="field"><span>{label}</span>
+                {/* The caption above already names it on screen. */}
+                <label className="field"><span className="sr-only">{label}</span>
                   {key === "system_prompt" ? <textarea rows={8} value={value} disabled={!own || saving}
                     onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))} />
                     : <input type="text" inputMode={section === "context" ? "numeric" : "text"}
@@ -179,10 +181,10 @@ function CampaignSettingsBody({ cid }: { cid: string }) {
             </section>;
           })}
         </>}
-      </>}
-      {editing && (section === "context" || section === "advanced") && <div className="form-actions">
-        <button className="primary" onClick={() => { void save(); }} disabled={!dirty || saving}>{saving ? "Saving…" : "Save"}</button>
-        <button className="subtle" onClick={cancel} disabled={saving}>Cancel</button>
+        {editing && <div className="form-actions">
+          <button className="primary" onClick={() => { void save(); }} disabled={!dirty || saving}>{saving ? "Saving…" : "Save"}</button>
+          <button className="subtle" onClick={cancel} disabled={saving}>Cancel</button>
+        </div>}
       </div>}
     </div>
   </PageShell>;

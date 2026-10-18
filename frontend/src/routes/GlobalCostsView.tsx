@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { MonthlyCosts } from "../api/types";
-import { MoneyColumns, about, estimatedTokensTitle, money } from "../components/cost";
+import { MoneyColumns, about, bound, estimatedTokensTitle, money } from "../components/cost";
 import CostTrend from "../components/CostTrend";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import ReportMonth, { useReportMonth } from "../components/ReportMonth";
@@ -22,32 +22,54 @@ export default function GlobalCostsView() {
     return () => { active = false; };
   }, [month, reading]);
   const rows = report?.campaigns ?? [];
+  // The column names what the page is about, as the campaign report's names
+  // its campaign; the page's own head names the report. Both used to say
+  // "Costs", one over the other.
   const column = <>
     <div className="ledger-ident">
-      <div className="eyebrow">All campaigns</div>
-      <h2 className="ledger-ident-name">Costs</h2>
+      <div className="eyebrow">What the library has cost</div>
+      <h2 className="ledger-ident-name">All campaigns</h2>
     </div>
     <ColumnSection label="Selected month">
-      <p className="field-hint">{month}</p>
-      <p className="field-hint">{report ? `${report.totals.calls} generation calls`
+      <p className="field-hint column-note">{month}</p>
+      <p className="field-hint column-note">{report ? `${report.totals.calls} generation calls`
         : failed ? "Ledger unreadable" : "Reading the ledger…"}</p>
     </ColumnSection>
   </>;
   return <PageShell column={column} columnLabel="Cost report">
     <div className="page-wide view-anim">
-      <h1 className="screen-title">Costs</h1>
-      <ReportScopeSelector report="costs" cid={null} suffix={`?month=${month}`} />
-      <ReportMonth month={month} available={report?.available_months ?? []} onChange={choose} />
-      <p className="field-hint">{month}: {report?.since ?? `${month}-01`} through {report?.until ?? "…"} UTC</p>
-      {failed && <p className="empty-state">Costs could not be read. <button onClick={() => setReading((n) => n + 1)}>Try again</button></p>}
+      {/* The campaign report's head, so the two pages a scope select moves
+          between read as one report at two scopes. */}
+      <div className="shelf-head">
+        <div>
+          <div className="eyebrow">Every campaign, month by month</div>
+          <h1 className="screen-title">Costs by campaign</h1>
+          <div className="report-controls">
+            <ReportScopeSelector report="costs" cid={null} suffix={`?month=${month}`} />
+            <ReportMonth month={month} available={report?.available_months ?? []} onChange={choose} />
+          </div>
+        </div>
+      </div>
+      {/* Days in the reader's own calendar, as the campaign report writes the
+          same window ("Ledger scanned from … to …"): one report, one date
+          format. The month itself keeps its `YYYY-MM` -- it is the key the
+          select and the address carry. */}
+      <p className="field-hint">
+        {month}: {bound(report?.since ?? `${month}-01`)} through {report ? bound(report.until) : "…"} (UTC)
+      </p>
+      {failed && <p className="empty-state">Costs could not be read. <button className="subtle" onClick={() => setReading((n) => n + 1)}>Try again</button></p>}
       {!failed && !report && <p className="column-empty">Reading the ledger…</p>}
       {report && <>
         <CostTrend rows={report.trend} />
-        <MoneyColumns bucket={report.totals} />
-        <p className="field-hint">Estimated total {report.totals.unpriced_calls > 0
-          && report.totals.estimated_total_usd === 0 ? "incomplete" : about(report.totals.estimated_total_usd)}
-          {report.totals.unpriced_calls > 0 && ` · Incomplete: ${report.totals.unpriced_calls} unpriced calls`}
-        </p>
+        <div className="costs-headline">
+          <MoneyColumns bucket={report.totals} />
+          {/* A projection over calls; with none there is nothing to project,
+              and "≈ $0.00" beside "No calls in this month" read as a figure. */}
+          {report.totals.calls > 0 && <p className="field-hint">Estimated total {report.totals.unpriced_calls > 0
+            && report.totals.estimated_total_usd === 0 ? "incomplete" : about(report.totals.estimated_total_usd)}
+            {report.totals.unpriced_calls > 0 && ` · Incomplete: ${report.totals.unpriced_calls} unpriced calls`}
+          </p>}
+        </div>
         {rows.length === 0 && report.unassigned.calls === 0 &&
           <p className="empty-state">No calls in this month.</p>}
         {(rows.length > 0 || report.unassigned.calls > 0) &&

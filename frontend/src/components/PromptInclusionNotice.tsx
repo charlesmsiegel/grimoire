@@ -18,6 +18,8 @@ export function PromptInclusionNotice({ sectionId }: { sectionId: string }) {
   return <div className="field-hint prompt-inclusion" role="status">
     {failed ? "Prompt inclusion is unknown: the prompt layout could not be read. "
       : "This section is disabled in the prompt layout and will not be included. "}
-    <Link to="/config">Prompt layout settings</Link>
+    {/* The section itself: a bare /config opens on Storage, a page away from
+        the switch this notice is about. */}
+    <Link to="/config?section=layout">Prompt layout settings</Link>
   </div>;
 }

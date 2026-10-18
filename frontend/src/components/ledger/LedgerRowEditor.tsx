@@ -11,7 +11,14 @@ import { useEffect, useRef, useState } from "react";
 export type Field =
   | { key: string; label: string; kind: "text" | "textarea"; hint?: string; placeholder?: string }
   | { key: string; label: string; kind: "select"; options: readonly string[]; hint?: string }
-  | { key: string; label: string; kind: "meter"; hint?: string };
+  | { key: string; label: string; kind: "meter"; hint?: string }
+  /** Which of the campaign's scenes a record is filed under, picked from
+   *  `scenes` by title -- the stored value is the scene's id, a filename
+   *  nobody types correctly. */
+  | { key: string; label: string; kind: "scene"; hint?: string };
+
+/** A scene as the picker offers it. */
+export type SceneOption = { id: string; title: string };
 
 export type Draft = Record<string, string>;
 
@@ -23,9 +30,13 @@ export type Draft = Record<string, string>;
  *  above it. A modal would cover exactly what the reader is checking against.
  */
 export function LedgerRowEditor(
-  { fields, initial, busy, error, errorAction, onSave, onCancel, onDelete, deleteLabel }: {
+  { fields, initial, scenes, busy, error, errorAction, onSave, onCancel, onDelete, deleteLabel }: {
     fields: readonly Field[];
     initial: Draft;
+    /** The campaign's scenes, for a `scene` field. Null while they are read,
+     *  or when they could not be: the field is then the plain id box it used
+     *  to be, so a correction never waits on a list. */
+    scenes?: readonly SceneOption[] | null;
     busy: boolean;
     /** A refusal from the server — a 409 on a fact already retired, say. Shown
      *  in the editor rather than at the top of the page, because that is where
@@ -67,6 +78,12 @@ export function LedgerRowEditor(
   useEffect(() => { first.current?.focus(); }, []);
 
   const set = (key: string, value: string) => setDraft((d) => ({ ...d, [key]: value }));
+  // Scene IDs are unique, titles are not: repeatedly accepting "New scene"
+  // must still leave the reader able to choose the record they mean.
+  const titleCounts = new Map<string, number>();
+  for (const scene of scenes ?? []) {
+    titleCounts.set(scene.title, (titleCounts.get(scene.title) ?? 0) + 1);
+  }
 
   return (
     <div className="ledger-editor">
@@ -86,6 +103,22 @@ export function LedgerRowEditor(
               onChange={(e) => set(f.key, e.target.value)}>
               {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
+          ) : f.kind === "scene" && scenes ? (
+            <select
+              aria-label={f.label} value={draft[f.key] ?? ""} disabled={busy}
+              onChange={(e) => set(f.key, e.target.value)}>
+              <option value="">No scene</option>
+              {scenes.map((s) => <option key={s.id} value={s.id}>
+                {s.title && (titleCounts.get(s.title) ?? 0) > 1
+                  ? `${s.title} (${s.id})` : s.title || s.id}
+              </option>)}
+              {/* A record filed under a scene the list no longer has (deleted,
+                  or renamed since the absorb wrote it) keeps that value until
+                  the reader picks another, rather than silently losing it. */}
+              {draft[f.key] && !scenes.some((s) => s.id === draft[f.key]) && (
+                <option value={draft[f.key]}>{draft[f.key]}</option>
+              )}
+            </select>
           ) : f.kind === "meter" ? (
             <input
               ref={i === 0 ? (first as React.RefObject<HTMLInputElement>) : undefined}
@@ -96,7 +129,7 @@ export function LedgerRowEditor(
             <input
               ref={i === 0 ? (first as React.RefObject<HTMLInputElement>) : undefined}
               type="text" aria-label={f.label} value={draft[f.key] ?? ""}
-              placeholder={f.placeholder} disabled={busy}
+              placeholder={f.kind === "text" ? f.placeholder : undefined} disabled={busy}
               onChange={(e) => set(f.key, e.target.value)}
               onKeyDown={(e) => {
                 // `busy` here as well as on the button: only the buttons were

@@ -43,7 +43,7 @@ const BEAT: Field = {
 };
 
 const SCENE: Field = {
-  key: "scene", label: "Scene", kind: "text",
+  key: "scene", label: "Scene", kind: "scene",
   hint: "The scene this is filed under. Correct it when the absorb guessed wrong.",
 };
 

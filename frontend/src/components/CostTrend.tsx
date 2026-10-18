@@ -68,7 +68,9 @@ export default function CostTrend({ rows }: { rows: MonthlyCosts["trend"] }) {
       </svg>
     </div>}
     {months.length === 0 && <p className="field-hint">No cost measurements yet.</p>}
-    <ol className="stats-trend cost-chart">
+    {/* Only with months to list: empty, the chart's bordered box drew as a
+        grey bar under "No cost measurements yet", a track with nothing on it. */}
+    {months.length > 0 && <ol className="stats-trend cost-chart">
       {[...months].reverse().map((row) => <li key={row.month}>
         <span className="stats-trend-day" data-testid="cost-trend-month">{row.month}</span>
         <span className="cost-trend-series">{series.map(({ key, label, color }) =>
@@ -85,6 +87,6 @@ export default function CostTrend({ rows }: { rows: MonthlyCosts["trend"] }) {
         {estimatedTokensLine(row) !== undefined &&
           <span className="field-hint">{estimatedTokensLine(row)}</span>}
       </li>)}
-    </ol>
+    </ol>}
   </section>;
 }

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -672,4 +672,47 @@ it("reports a stats read that failed instead of spinning forever", async () => {
   view();
 
   expect(await screen.findByText("Error: the ledger is unreadable")).toBeInTheDocument();
+});
+
+/** Where the router is, so a section's address can be read off the page. */
+function Where() {
+  const { pathname, search } = useLocation();
+  return <div data-testid="where">{pathname + search}</div>;
+}
+
+it("gives each section an address, and opens the one an address names", async () => {
+  // The section was component state: no link could open Errors or the debug
+  // log, and Back did not step between them.
+  render(<MemoryRouter initialEntries={["/stats?section=errors"]}><Where /><StatsView /></MemoryRouter>);
+  expect(await screen.findByRole("heading", { level: 1, name: "Errors" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
+  expect(await screen.findByRole("heading", { level: 1, name: "Debug log" })).toBeInTheDocument();
+  expect(screen.getByTestId("where")).toHaveTextContent("/stats?section=log");
+  fireEvent.click(screen.getByRole("button", { name: /Performance/ }));
+  expect(screen.getByTestId("where")).toHaveTextContent(/^\/stats$/);
+});
+
+it("keeps the window beside the title, not behind the column", async () => {
+  // Pinned under the column it was out of sight on a phone, where "No calls in
+  // this window" then pointed at nothing on screen.
+  view();
+  const main = within(await screen.findByRole("main"));
+  expect(main.getByLabelText("How many days to report on")).toBeInTheDocument();
+  expect(main.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+});
+
+it("links the recording threshold to the setting that moves it", async () => {
+  render(<MemoryRouter initialEntries={["/stats?section=log"]}><StatsView /></MemoryRouter>);
+  expect(await screen.findByRole("link", { name: "Settings → Logging" }))
+    .toHaveAttribute("href", "/config?section=logging");
+});
+
+it("an empty log with nothing filtered says nothing was recorded, not that filters hid it", async () => {
+  vi.mocked(api.getLogs).mockResolvedValue(
+    structuredClone({ ...PAGE, rows: [], total: 0, modules: [] }) as never);
+  render(<MemoryRouter initialEntries={["/stats?section=log"]}><StatsView /></MemoryRouter>);
+  expect(await screen.findByText("Nothing recorded in this window.")).toBeInTheDocument();
+  expect(screen.queryByText("Nothing matches those filters.")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Quietest level to show"), { target: { value: "error" } });
+  expect(await screen.findByText("Nothing matches those filters.")).toBeInTheDocument();
 });

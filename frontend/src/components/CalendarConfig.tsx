@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api, type CalendarConfig as Cfg, type CalendarScope } from "../api/client";
 
 const REGIONS = ["US", "GB", "CA", "AU", "IL", ""];
@@ -36,6 +36,7 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const isWorld = scope.kind === "world";
+  const uid = useId();
   const [cfg, setCfg] = useState<Cfg | null>(null);
   const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -175,32 +176,41 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
   return (
     <div className="calendar-config">
       {error && <div className="banner">{error}</div>}
-      <label>
-        Calendar
-        <select aria-label="Calendar" value={cfg.primary.provider}
-                onChange={(e) => setPrimary({ provider: e.target.value, region: e.target.value === "gregorian" ? "US" : "" })}>
-          {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-      </label>
-      {cfg.primary.provider === "gregorian" && (
-        <label>
-          Holidays region
-          <select aria-label="Holidays region" value={cfg.primary.region}
-                  onChange={(e) => setPrimary({ region: e.target.value })}>
-            {REGIONS.map((r) => <option key={r || "none"} value={r}>{r || "None"}</option>)}
+      {/* The settings form's own furniture (`.config-field`: a small-caps
+          caption over the control, its note under it), laid out once for the
+          four places this panel is mounted -- the world Overview, the campaign
+          hub, campaign Settings and the play view. Bare inline <label>s ran
+          the whole form together on one line, "CalendarGregorian Holidays
+          regionUS Stale after30". Each control keeps its `aria-label`, which
+          names it the same way whether or not the caption is on screen. */}
+      <div className="config-fields">
+        <div className="config-field">
+          <label htmlFor={`${uid}-calendar`}>Calendar</label>
+          <select id={`${uid}-calendar`} aria-label="Calendar" value={cfg.primary.provider}
+                  onChange={(e) => setPrimary({ provider: e.target.value, region: e.target.value === "gregorian" ? "US" : "" })}>
+            {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-        </label>
-      )}
-      {cfg.primary.provider === "hebrew" && (
-        <label>
-          Observance
-          <select aria-label="Observance" value={cfg.primary.region}
-                  onChange={(e) => setPrimary({ region: e.target.value })}>
-            <option value="">Diaspora</option>
-            <option value="IL">Israel</option>
-          </select>
-        </label>
-      )}
+        </div>
+        {cfg.primary.provider === "gregorian" && (
+          <div className="config-field">
+            <label htmlFor={`${uid}-region`}>Holidays region</label>
+            <select id={`${uid}-region`} aria-label="Holidays region" value={cfg.primary.region}
+                    onChange={(e) => setPrimary({ region: e.target.value })}>
+              {REGIONS.map((r) => <option key={r || "none"} value={r}>{r || "None"}</option>)}
+            </select>
+          </div>
+        )}
+        {cfg.primary.provider === "hebrew" && (
+          <div className="config-field">
+            <label htmlFor={`${uid}-region`}>Observance</label>
+            <select id={`${uid}-region`} aria-label="Observance" value={cfg.primary.region}
+                    onChange={(e) => setPrimary({ region: e.target.value })}>
+              <option value="">Diaspora</option>
+              <option value="IL">Israel</option>
+            </select>
+          </div>
+        )}
+      </div>
       {/* World scope only, and above the aging knob because it is the decision
           the world Overview's checklist points at. `confirmed` means "a person
           chose this calendar"; campaign-side that answer is given to the scene
@@ -209,8 +219,8 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
           `create_campaign` copies the whole file — this flag included — into
           every campaign started from this world. */}
       {isWorld && (
-        <>
-          <label>
+        <div className="calendar-confirmed">
+          <label className="checkbox-row">
             <input type="checkbox" aria-label="Confirmed" checked={cfg.confirmed}
                    onChange={(e) => {
                      setSaved(false);
@@ -218,78 +228,94 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
                    }} />
             Confirmed
           </label>
-          <div className="field-hint">
+          <p className="config-caption">
             Campaigns started from this world inherit this calendar and will not ask again.
-          </div>
-        </>
+          </p>
+        </div>
       )}
-      {/* The aging knob (#103), here because it is a fact about how the record
-          reckons time and this is where those live — calendar.json holds it
-          beside the calendars themselves. A world's copy is the default its
-          campaigns are created with, same as everything else in this file.
-          Empty means "no opinion" and saves as 0, which the store answers with
-          its own default rather than a threshold that would call every record
-          stale on the day it was written. */}
-      <label>
-        Stale after
-        <input type="number" aria-label="Stale after days" min={1}
-               value={cfg.stale_after_days || ""}
-               onChange={(e) => {
-                 setSaved(false);
-                 setCfg({ ...cfg!, stale_after_days: parseInt(e.target.value, 10) || 0 });
-               }} />
-      </label>
-      <div className="field-hint">
-        Days a thread or commitment may go untouched before the ledger calls it stale.
-        {isWorld && " Campaigns started from this world begin with this threshold."}
-      </div>
-      {/* The warn window (#106), beside the aging knob because it is the same
-          kind of fact: how far ahead this record reckons. Empty is "no opinion"
-          and saves as null, which the store answers with its own default; a
-          typed 0 is a real setting — no warnings in this campaign — which is why
-          the two cannot share `stale_after_days`' 0-means-unset convention.
+      <div className="config-fields">
+        {/* The aging knob (#103), here because it is a fact about how the
+            record reckons time and this is where those live — calendar.json
+            holds it beside the calendars themselves. A world's copy is the
+            default its campaigns are created with, same as everything else in
+            this file. Empty means "no opinion" and saves as 0, which the store
+            answers with its own default rather than a threshold that would
+            call every record stale on the day it was written. */}
+        <div className="config-field">
+          <label htmlFor={`${uid}-stale`}>Stale after</label>
+          <div className="config-input">
+            <input id={`${uid}-stale`} type="number" aria-label="Stale after days" min={1}
+                   value={cfg.stale_after_days || ""}
+                   onChange={(e) => {
+                     setSaved(false);
+                     setCfg({ ...cfg!, stale_after_days: parseInt(e.target.value, 10) || 0 });
+                   }} />
+            <span className="config-unit" aria-hidden>days</span>
+          </div>
+          <p className="config-caption">
+            Days a thread or commitment may go untouched before the ledger calls it stale.
+            {isWorld && " Campaigns started from this world begin with this threshold."}
+          </p>
+        </div>
+        {/* The warn window (#106), beside the aging knob because it is the
+            same kind of fact: how far ahead this record reckons. Empty is "no
+            opinion" and saves as null, which the store answers with its own
+            default; a typed 0 is a real setting — no warnings in this
+            campaign — which is why the two cannot share `stale_after_days`'
+            0-means-unset convention.
 
-          Clamped to the same ceiling the store enforces (`MAX_WARN_DAYS`).
-          Without it, typing 1000 leaves the form showing 1000 and reporting it
-          onward while the server has stored 365 — a control that lies about
-          what was saved, which is worse than one that refuses the input. */}
-      <label>
-        Warn ahead
-        <input type="number" aria-label="Warn ahead days" min={0} max={MAX_WARN_DAYS}
-               value={cfg.warn_days ?? ""}
-               onChange={(e) => {
-                 setSaved(false);
-                 const raw = e.target.value.trim();
-                 // `Number`, not `parseInt`: a number input accepts exponent
-                 // notation, and `parseInt("1e2", 10)` stops at the `e` and
-                 // answers 1 -- so typing a hundred days would silently save a
-                 // one-day window. Truncated rather than rounded, because the
-                 // store keeps whole days and that is what the old parse did
-                 // with "1.5". A blank stays `null` ("no opinion"); anything
-                 // unparseable becomes 0, which is a real setting here.
-                 const n = Number(raw);
-                 const days = Number.isFinite(n) ? Math.trunc(n) : 0;
-                 setCfg({ ...cfg, warn_days: raw === "" ? null
-                            : Math.min(MAX_WARN_DAYS, Math.max(0, days)) });
-               }} />
-      </label>
-      <div className="field-hint">
-        Days ahead of an upcoming holiday or scheduled event to warn you, once. 0 turns
-        the warnings off.
-        {isWorld && " Campaigns started from this world begin with this window."}
+            Clamped to the same ceiling the store enforces (`MAX_WARN_DAYS`).
+            Without it, typing 1000 leaves the form showing 1000 and reporting
+            it onward while the server has stored 365 — a control that lies
+            about what was saved, which is worse than one that refuses the
+            input. */}
+        <div className="config-field">
+          <label htmlFor={`${uid}-warn`}>Warn ahead</label>
+          <div className="config-input">
+            <input id={`${uid}-warn`} type="number" aria-label="Warn ahead days" min={0}
+                   max={MAX_WARN_DAYS} value={cfg.warn_days ?? ""}
+                   onChange={(e) => {
+                     setSaved(false);
+                     const raw = e.target.value.trim();
+                     // `Number`, not `parseInt`: a number input accepts exponent
+                     // notation, and `parseInt("1e2", 10)` stops at the `e` and
+                     // answers 1 -- so typing a hundred days would silently save a
+                     // one-day window. Truncated rather than rounded, because the
+                     // store keeps whole days and that is what the old parse did
+                     // with "1.5". A blank stays `null` ("no opinion"); anything
+                     // unparseable becomes 0, which is a real setting here.
+                     const n = Number(raw);
+                     const days = Number.isFinite(n) ? Math.trunc(n) : 0;
+                     setCfg({ ...cfg, warn_days: raw === "" ? null
+                                : Math.min(MAX_WARN_DAYS, Math.max(0, days)) });
+                   }} />
+            <span className="config-unit" aria-hidden>days</span>
+          </div>
+          <p className="config-caption">
+            Days ahead of an upcoming holiday or scheduled event to warn you, once. 0 turns
+            the warnings off.
+            {isWorld && " Campaigns started from this world begin with this window."}
+          </p>
+        </div>
       </div>
-      {/* World-side this panel sits beside Mechanics, which has a Save of its
-          own; "Save" twice in a row is ambiguous to anyone reading the page by
-          its controls. The visible text stays "Save" and the name only extends
-          it, so "click Save" still resolves (WCAG 2.5.3). */}
-      <button className="primary" onClick={() => { void save(); }} disabled={saving}
-              aria-label={isWorld ? "Save calendar" : undefined}>{saving ? "Saving..." : "Save"}</button>
-      {onDirtyChange && <button className="subtle" disabled={saving} onClick={() => {
-        setCfg(stored);
-        setSaved(false);
-        setError(null);
-      }}>Cancel</button>}
-      {saved && <span className="field-hint">Saved.</span>}
+      <div className="form-actions">
+        {/* World-side this panel sits beside Mechanics, which has a Save of its
+            own; "Save" twice in a row is ambiguous to anyone reading the page by
+            its controls. The visible text stays "Save" and the name only extends
+            it, so "click Save" still resolves (WCAG 2.5.3). */}
+        <button className="primary" onClick={() => { void save(); }} disabled={saving}
+                aria-label={isWorld ? "Save calendar" : undefined}>{saving ? "Saving..." : "Save"}</button>
+        {/* Live only once there is something to put back: on a page that holds
+            its other settings read-only until Edit, a Cancel that is pressable
+            before anything was touched reads as a form already open for
+            editing. */}
+        {onDirtyChange && <button className="subtle" disabled={saving || !dirty} onClick={() => {
+          setCfg(stored);
+          setSaved(false);
+          setError(null);
+        }}>Cancel</button>}
+        {saved && <span className="field-hint">Saved.</span>}
+      </div>
     </div>
   );
 }

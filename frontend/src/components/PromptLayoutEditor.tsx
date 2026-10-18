@@ -66,9 +66,11 @@ export function PromptLayoutEditor(
                    value={row.label} placeholder={row.default_label}
                    onChange={(e) => edit(row.id, { label: e.target.value })} />
             <span className="chip on prompt-layout-tier">{row.tier}</span>
-            <button type="button" aria-label={`Move ${row.default_label} up`}
+            <button type="button" className="prompt-layout-move"
+                    aria-label={`Move ${row.default_label} up`}
                     disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
-            <button type="button" aria-label={`Move ${row.default_label} down`}
+            <button type="button" className="prompt-layout-move"
+                    aria-label={`Move ${row.default_label} down`}
                     disabled={i === rows.length - 1} onClick={() => move(i, 1)}>↓</button>
           </li>
         ))}

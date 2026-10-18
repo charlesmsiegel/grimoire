@@ -393,7 +393,9 @@ export default function ConfigView() {
     switch (id) {
       case "logging": return draft?.log_level ?? "";
       case "backups": return draft?.backup_enabled === "on" ? "on" : "off";
-      case "context": return draft?.context_budget ? `${draft.context_budget} tok` : "";
+      // A budget of 0 is no ceiling at all, which "0 tok" read as the opposite.
+      case "context": return !draft?.context_budget ? ""
+        : Number(draft.context_budget) === 0 ? "no ceiling" : `${draft.context_budget} tok`;
       case "timeouts": return draft?.llm_timeout ? `${draft.llm_timeout}s` : "";
       case "storage": return config?.data_dir ? "set" : "";
       case "appearance": return theme.mode;
@@ -885,7 +887,7 @@ export default function ConfigView() {
               and lore owned by an absent character stays hidden either way. Set recalled entries
               to <code>0</code> to turn recall off. It needs the Embedding role.
             </p>
-            <h3>Historical recall</h3>
+            <h2 className="section-label">Historical recall</h2>
             <p className="config-copy">
               Recall bounded summaries and excerpts from earlier scenes. Set recalled scenes
               to <code>0</code> to turn it off. Embeddings are optional: structural relationships
@@ -1181,10 +1183,14 @@ export default function ConfigView() {
           <>
             <p className="config-copy">
               The default length and style every campaign inherits, and what a campaign,
-              a scene or a single turn overrides. This block writes its own record rather
-              than a config field, so — unlike everything else here — it saves as you set it.
+              a scene or a single turn overrides. Use Save response targets below to save
+              changes here.
             </p>
-            <ResponseTargetsPicker scope="global" />
+            {/* The wrapper is this page's: the picker is shared with the scene
+                inspector and the play view, which lay it out for themselves. */}
+            <div className="config-response">
+              <ResponseTargetsPicker scope="global" />
+            </div>
           </>
         )}
 
@@ -1292,28 +1298,38 @@ export default function ConfigView() {
           <p className="config-copy">
             One theme in two modes. <strong>System</strong> follows whatever the machine
             says it is right now, and changes with it; Light and Dark hold. The control is
-            pinned at the foot of the list beside this — it applies as you click it so you
-            can see what you are choosing, and like everything else here it is not written
-            to disk until you Save.
+            pinned at the foot of the list beside this, and a pick is applied and saved the
+            moment you make it, so you can see what you are choosing — there is nothing to
+            Save, and Revert leaves it alone.
           </p>
         )}
       </div>
 
-      <div className="config-bar">
-        <span className={"config-dirty" + (dirtyCount ? " on" : "")}>
-          {dirtyCount
-            ? `${dirtyCount} unsaved ${dirtyCount === 1 ? "change" : "changes"}`
-            : "No unsaved changes"}
-        </span>
-        <div className="config-bar-actions">
-          <button className="btn-outline" onClick={revert} disabled={!dirtyCount || busy}>
-            Revert
-          </button>
-          <button className="btn-accent" onClick={save} disabled={!dirtyCount || busy}>
-            {busy ? "Saving…" : "Save"}
-          </button>
+      {/* The bar saves this page's draft, and a section that owns none of it --
+          Storage, First-run setup, Response targets, Output processing,
+          Appearance -- saves on its own, through its own control. There the bar
+          is shown only while another section holds an edit, and says so:
+          a disabled Save beside a section's own Save was two save models on
+          one screen, and the one that could never act read as the one to
+          press. */}
+      {(current.fields.length > 0 || dirtyCount > 0) && (
+        <div className="config-bar">
+          <span className={"config-dirty" + (dirtyCount ? " on" : "")}>
+            {dirtyCount
+              ? `${dirtyCount} unsaved ${dirtyCount === 1 ? "change" : "changes"}`
+                + (current.fields.length ? "" : " in other sections")
+              : "No unsaved changes"}
+          </span>
+          <div className="config-bar-actions">
+            <button className="btn-outline" onClick={revert} disabled={!dirtyCount || busy}>
+              Revert
+            </button>
+            <button className="btn-accent" onClick={save} disabled={!dirtyCount || busy}>
+              {busy ? "Saving…" : "Save"}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </PageShell>
   );
 }

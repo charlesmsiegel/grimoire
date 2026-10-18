@@ -96,6 +96,13 @@ test("a deep Ledger address still lights the Ledger row", () => {
   expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/ledger/threads/mara%2Fmap")).toEqual(["ledger"]);
 });
 
+test("the timeline lights the row named for it", () => {
+  // "Ledger & timeline" lit only under /ledger, so on the timeline page the
+  // rail said the reader was nowhere.
+  expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/timeline")).toEqual(["ledger"]);
+  expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/timeline-of-my-own")).toEqual([]);
+});
+
 test("rows whose pages do not exist yet go nowhere", () => {
   // Not a wish-list: this is what keeps the rail from offering a destination
   // that is not there. Each id gets a route in its own slice.

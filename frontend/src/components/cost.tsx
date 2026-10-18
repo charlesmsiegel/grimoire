@@ -455,7 +455,7 @@ export function PostCost({ bucket }: { bucket: UsagePostBucket }) {
  *  six invented measurements on the wire; naming what is actually read costs
  *  one alias, and a `UsageBucket` still satisfies it structurally. */
 export type MoneySpread = Pick<UsageBucket,
-  "cost_usd" | "estimated_usd" | "modelled_usd"
+  "calls" | "cost_usd" | "estimated_usd" | "modelled_usd"
   | "priced_calls" | "subscription_calls" | "unpriced_calls"
   | "modelled_calls" | "modelled_subscription_calls" | "estimated_token_calls">;
 export function MoneyColumns({ bucket }: { bucket: MoneySpread }) {
@@ -468,6 +468,12 @@ export function MoneyColumns({ bucket }: { bucket: MoneySpread }) {
   // draws a dash rather than a zero nobody reported.
   const kinds = presentKinds(bucket);
   const modelledSubscription = n(bucket.modelled_subscription_calls);
+  // Nothing in the bucket at all: no call, so no price anybody failed to
+  // report. "Not reported" in the alert colour is for calls whose price is
+  // missing; over an empty month it read as an alarm about nothing. Every
+  // column draws a dash -- still not a zero -- and the note says why.
+  const empty = n(bucket.calls) === 0 && unpriced === 0 && !billedAny(bucket)
+    && !kinds.estimated && !kinds.modelled;
   return (
     <div className="money-columns">
       <div className="money-col spend">
@@ -477,8 +483,8 @@ export function MoneyColumns({ bucket }: { bucket: MoneySpread }) {
             The same test `bucketPrice` uses: a figure only when something was
             actually charged, or when there are billed calls behind a zero. */}
         <div className="money-figure">
-          {billedAny(bucket)
-            ? money(billed)
+          {billedAny(bucket) ? money(billed)
+            : empty ? "—"
             : <span className="money-unpriced">{UNPRICED}</span>}
         </div>
         <div className="money-hint">What a provider said it charged.</div>
@@ -502,7 +508,7 @@ export function MoneyColumns({ bucket }: { bucket: MoneySpread }) {
         </div>
       </div>
       <p className="money-note">
-        Never summed — three different claims about money.
+        {empty ? "No calls, so nothing to price." : "Never summed — three different claims about money."}
         {unpriced > 0 && (
           <>
             {" "}

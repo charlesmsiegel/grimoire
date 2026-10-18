@@ -857,7 +857,7 @@ export default function SetupWizard(
           <div className="wizard-body">
             <h3>Pick a look</h3>
             <p className="wizard-intro">
-              Applies as you click, and is changeable any time from Config.
+              Applies as you click, and is changeable any time from Settings.
             </p>
             <ThemePicker value={theme} onPick={(next) => { void pickTheme(next); }}
                          disabled={writing} />
@@ -927,7 +927,7 @@ export default function SetupWizard(
             <button className="link" onClick={() => { void finish("/"); }} disabled={writing}>
               Skip setup
             </button>
-            {" — you can do all of this later from Config."}
+            {" — you can do all of this later from Settings."}
           </p>
         )}
       </div>

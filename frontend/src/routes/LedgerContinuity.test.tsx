@@ -1281,6 +1281,8 @@ describe("the finding detail", () => {
   test("a closure reveals its form and sends the beat with its evidence scene", async () => {
     renderLedger(at(CLOSE_ME));
     const close = await (await sidebar()).findByRole("button", { name: "Close thread" });
+    // The app's buttons, not the browser's: an action, then its form's Apply.
+    expect(close).toHaveClass("btn-outline");
     expect(screen.queryByRole("textbox", { name: "Closing beat" })).toBeNull();
     fireEvent.click(close);
     const beat = screen.getByRole("textbox", { name: "Closing beat" });
@@ -1292,6 +1294,7 @@ describe("the finding detail", () => {
     expect(api.applyCandidate).not.toHaveBeenCalled();
     fireEvent.change(beat, { target: { value: "The crown is placed." } });
     fireEvent.change(select, { target: { value: "002--saltmarch-eve" } });
+    expect(screen.getByRole("button", { name: "Apply" })).toHaveClass("primary");
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
     expect(applied()[0][2]).toEqual({

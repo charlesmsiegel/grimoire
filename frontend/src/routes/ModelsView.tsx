@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, type InferenceSettings } from "../api/client";
 import { ErrorNote } from "../components/ErrorNote";
 import { InferenceBanner } from "../components/inference/InferenceBanner";
-import { InferenceNav } from "../components/inference/InferenceNav";
+import { InferenceHead, InferenceNav } from "../components/inference/InferenceNav";
 import { migrationBanner, migrationLine } from "../components/inference/migration";
 import { RetiredNotes } from "../components/inference/RetiredNotes";
 import { useInferenceSettings } from "../components/inference/useInferenceSettings";
@@ -98,8 +98,8 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
 
   return (
     <PageShell column={<InferenceNav current="models" />} columnLabel="Models">
-      <div className="page view-anim">
-        <div className="page-head"><h1 className="page-h1">Models</h1></div>
+      <div className="page-wide view-anim">
+        <InferenceHead title="Models" />
         <InferenceBanner status={banner} />
         {line && <p className="field-hint">{line}</p>}
         {settings && (

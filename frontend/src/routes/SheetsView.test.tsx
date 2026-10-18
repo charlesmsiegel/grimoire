@@ -95,6 +95,15 @@ const column = () => within(screen.getByRole("complementary", { name: "The cast"
 const railRow = (name: string) =>
   column().getByRole("button", { name: new RegExp(name) });
 
+/** Choose a type for the two-type kind, then press the bulk create: without
+ *  a choice the press could create nothing, and the button says so by being
+ *  disabled (see "a kind still owed a type ..."). */
+function createWithShifter() {
+  fireEvent.change(screen.getByLabelText("Sheet type for Characters"),
+                   { target: { value: "shifter" } });
+  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+}
+
 test("the rail is the cast, badged with who has a sheet and who does not", async () => {
   renderSheets();
   await screen.findByText("Sheet coverage");
@@ -197,11 +206,31 @@ test("a skipped kind is reported, not swallowed", async () => {
   renderSheets();
   await screen.findByText("Sheet coverage");
 
-  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  createWithShifter();
   await screen.findByText(/Characters skipped/);
   expect(screen.getByText(/this module has 2 sheet types for characters/))
     .toBeInTheDocument();
 });
+
+test("a kind still owed a type is not counted, and the button says what it is waiting on",
+  async () => {
+    // The button counted every gap: "+ Create missing sheets (1)" with no type
+    // chosen for a two-type kind posted `{}` and came back "0 sheets created"
+    // and a skip.
+    renderSheets();
+    await screen.findByText("Sheet coverage");
+    const button = screen.getByRole("button", { name: /Create missing sheets/ });
+    expect(button).toBeDisabled();
+    expect(button).toHaveTextContent(/^\+ Create missing sheets$/);
+    expect(screen.getByText("Choose a sheet type for Characters to create their sheets."))
+      .toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Sheet type for Characters"),
+                     { target: { value: "medium" } });
+    expect(button).toBeEnabled();
+    expect(button).toHaveTextContent("+ Create missing sheets (1)");
+    expect(screen.queryByText(/Choose a sheet type for/)).toBeNull();
+  });
 
 test("nothing missing leaves the bulk button disabled and offers no choice", async () => {
   (api.getCampaignSheetRoster as any).mockResolvedValue({
@@ -341,7 +370,7 @@ test("the bulk report survives a reload that empties or fails the roster", async
   renderSheets();
   await screen.findByText("Sheet coverage");
   (api.getCampaignSheetRoster as any).mockRejectedValue(new Error("gone"));
-  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  createWithShifter();
 
   await screen.findByText(/Characters skipped/);
   expect(screen.getByText(/The cast could not be read: gone/)).toBeInTheDocument();
@@ -369,7 +398,7 @@ test("a failed reload does not leave the stale cast and a live button on screen"
   renderSheets();
   await screen.findByRole("table");
   (api.getCampaignSheetRoster as any).mockRejectedValue(new Error("gone"));
-  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  createWithShifter();
 
   await screen.findByText(/The cast could not be read: gone/);
   expect(screen.queryByRole("table")).toBeNull();
@@ -385,11 +414,11 @@ test("a failed press does not leave the previous press's report up", async () =>
   });
   renderSheets();
   await screen.findByText("Sheet coverage");
-  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  createWithShifter();
   await screen.findByText("1 sheet created.");
 
   (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
-  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  createWithShifter();
   await screen.findByText("no module resolved");
   // The old report beside the error reads as a create that half-worked.
   expect(screen.queryByText("1 sheet created.")).toBeNull();
@@ -407,7 +436,7 @@ test("nothing from the campaign you left lands on the one you moved to", async (
     new Promise((resolve) => { releaseCreate = resolve; }));
   renderSheets();
   await screen.findByText("Sheet coverage");
-  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  createWithShifter();
 
   // The campaign we are leaving still owes us a roster read, and it will land
   // after the switch.
@@ -434,7 +463,7 @@ test("a create that fails for the campaign you left does not banner on this one"
   (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
   renderSheets();
   await screen.findByText("Sheet coverage");
-  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  createWithShifter();
   await screen.findByText("no module resolved");
 
   switchCampaign();
@@ -446,6 +475,6 @@ test("a failed create surfaces the reason rather than a silent no-op", async () 
   (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
   renderSheets();
   await screen.findByText("Sheet coverage");
-  fireEvent.click(screen.getByRole("button", { name: /Create missing sheets/ }));
+  createWithShifter();
   await screen.findByText("no module resolved");
 });

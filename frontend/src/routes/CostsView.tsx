@@ -162,7 +162,7 @@ export function CostsView() {
         {!failed && totals === undefined
           && <p className="column-empty">Reading the ledger…</p>}
         {!failed && totals !== undefined && (
-          <div className="ctx-tokens">
+          <div className="ctx-tokens column-note">
             {totals.calls.toLocaleString()}{" "}
             {totals.calls === 1 ? "generation" : "generations"}
             {" · "}{tokenTotal(totals)}
@@ -182,7 +182,7 @@ export function CostsView() {
   );
 
   const footer = (
-    <div className="field-hint">
+    <div className="field-hint column-note">
       {report && report.since
         ? <>Ledger scanned from {bound(report.since)} to {bound(report.until)}.</>
         : <>Costs come from what each provider reported, per call.</>}
@@ -203,9 +203,11 @@ export function CostsView() {
               {report && report.order !== sort && " · REORDERING…"}
             </div>
             <h1 className="screen-title">Costs by scene</h1>
-            <ReportScopeSelector report="costs" cid={cid} suffix={`?month=${month}`} />
-            <ReportMonth month={month} available={report?.available_months ?? [month]}
-              onChange={chooseMonth} />
+            <div className="report-controls">
+              <ReportScopeSelector report="costs" cid={cid} suffix={`?month=${month}`} />
+              <ReportMonth month={month} available={report?.available_months ?? [month]}
+                onChange={chooseMonth} />
+            </div>
           </div>
         </div>
 
@@ -272,7 +274,7 @@ export function CostsView() {
                       : ", and can be set after the upgrade to the new model settings"}.
                   {" "}Otherwise a pricing entry is matched on the model
                   string exactly: add one under{" "}
-                  <Link to="/config">Settings → Pricing</Link>, or a wildcard
+                  <Link to="/models#rates">Models → Token rates</Link>, or a wildcard
                   like <code>vendor/*</code>.
                 </p>
               </div>

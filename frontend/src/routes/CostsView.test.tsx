@@ -362,6 +362,10 @@ test("an unpriced model on two providers is two lines, each naming its provider"
   expect(within(items[2]).getByRole("link").getAttribute("href"))
     .toBe("/models#rates");
   expect(list.getByText(/own rates on its provider page/)).toBeInTheDocument();
+  // The table it points at is the Models page's, not a Settings section --
+  // there is no Pricing section, and a bare /config opened on Storage.
+  expect(list.getByRole("link", { name: "Models → Token rates" }))
+    .toHaveAttribute("href", "/models#rates");
   expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
   errors.mockRestore();
 });

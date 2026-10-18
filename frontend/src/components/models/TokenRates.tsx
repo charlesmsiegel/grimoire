@@ -30,7 +30,7 @@ export function TokenRates({ addModel, onSaved, onCancel }:
 
   return (
     <section id="rates" className="token-rates" aria-labelledby="rates-title">
-      <h3 id="rates-title">Token rates</h3>
+      <h2 id="rates-title" className="section-label">Token rates</h2>
       <p className="config-copy">
         Your fallback table, for models whose provider states no price. A model's own
         rates, set on its provider's page, come first.
