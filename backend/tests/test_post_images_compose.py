@@ -14,8 +14,8 @@ from PIL import Image
 from grimoire import content_parts as cp
 from grimoire import model_guidance
 from grimoire.model_guidance import PreparedMessages
-from grimoire.store import campaign_images, campaigns, context, scenes, worlds
-from grimoire.store.context import assemble
+from grimoire.store import authors_notes, campaign_images, campaigns, context, scenes, worlds
+from grimoire.store.context import assemble, macros
 from grimoire.store.scenes import serialize
 
 
@@ -170,6 +170,44 @@ def test_macros_expand_around_a_kept_image(cid):
     assert cp.as_text(list(rich)) == list(plain)
     assert not any("{{nonsense}}" in cp.text_of(m["content"]) for m in rich)
     assert any("Mara unrolls a map" in cp.text_of(m["content"]) for m in rich)
+
+
+def test_image_projection_keeps_note_placement_and_macro_draw_order(cid, monkeypatch):
+    """Image sentinels must survive the one history expansion, then disappear
+    into image parts. Reprojecting a segment per note would renumber the art;
+    expanding a second time would redraw the note or the posts."""
+    sid = _scene(cid, [
+        ("user", f"{{{{random:shore,pier}}}} ![a map]({_url(cid, 'coastline')})", None),
+        ("assistant", f"{{{{random:hall,quay}}}} ![the hall]({_url(cid, 'hall')})", None),
+        ("user", "{{random:lamp,moon}}", None),
+    ])
+    authors_notes.set_campaign(cid, {"text": "{{random:rain,sleet}}", "depth": 1, "every": 1})
+    draws = []
+
+    def choose(options):
+        draws.append(tuple(options))
+        return options[0]
+
+    monkeypatch.setattr(macros.random, "choice", choose)
+    plain, _ = context.compose_turn(cid, sid, images=0)
+    assert draws == [("shore", "pier"), ("hall", "quay"), ("rain", "sleet"), ("lamp", "moon")]
+    draws.clear()
+    rich, detail = context.compose_turn(cid, sid, images=2)
+    assert draws == [("shore", "pier"), ("hall", "quay"), ("rain", "sleet"), ("lamp", "moon")]
+    assert cp.as_text(list(rich)) == list(plain)
+    # A hand-derived conversation, including the carried narrator image and
+    # the note immediately before the final user post, not before its art.
+    assert list(rich)[1:] == [
+        {"role": "user", "content": [{"type": "text", "text": "shore a map"},
+                                          cp.ref(_url(cid, "coastline"), "a map", False)]},
+        {"role": "assistant", "content": "**Grimoire:** hall the hall"},
+        {"role": "system", "content": "[Author's note: rain]"},
+        {"role": "user", "content": [cp.ref(_url(cid, "hall"), "the hall", True),
+                                          {"type": "text", "text": "lamp"}]},
+    ]
+    assert "⟦img:" not in json.dumps(rich.snapshot(), ensure_ascii=False)
+    notes = next(row for row in detail["sections"] if row["id"] == "authors_note")
+    assert notes["notes"][0]["status"] == "applied"
 
 
 def test_a_play_decision_block_never_keeps_a_carrier_from_its_note():

@@ -448,6 +448,25 @@ def test_an_empty_retrieval_still_explains_itself_in_the_row(cid):
     assert all(s["id"] != "history_recall" for s in off_detail["sections"])
 
 
+def test_an_unrenderable_history_section_costs_the_section_not_the_turn(cid, monkeypatch, caplog):
+    sid = played(cid, text="Mara waits at the pier.")
+    view = _view(cid, sid, evidence(item(text="Seraphine hid the ledger.")))
+    assert "Seraphine hid the ledger." in str(assemble.compose_turn(cid, sid, history_view=view)[0])
+
+    def unreadable(*args, **kwargs):
+        raise ValueError("the recalled scene could not be rendered")
+
+    # At the renderer boundary: composition, view selection, and the current
+    # conversation stay real. Returning an empty part here would only prove
+    # the test's fake could omit it, not the compose's failure policy.
+    monkeypatch.setattr(history_section, "section", unreadable)
+    messages, detail = assemble.compose_turn(cid, sid, history_view=view)
+    assert "Seraphine hid the ledger." not in str(messages)
+    assert messages[-1] == {"role": "user", "content": "Mara waits at the pier."}
+    assert all(section["id"] != "history_recall" for section in detail["sections"])
+    assert "Recalled history section history_recall dropped from a compose" in caplog.text
+
+
 def test_compose_refits_to_the_selection_depth_not_the_setting(cid):
     """A query with `max_scenes` below the setting fits its items to
     `ceiling // max_scenes`; compose must re-fit them to that same share, not

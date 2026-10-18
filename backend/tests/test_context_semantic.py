@@ -12,6 +12,7 @@ Two halves, deliberately kept apart:
 import hashlib
 import json
 import struct
+import zlib
 
 import httpx
 import pytest
@@ -640,6 +641,27 @@ def test_a_corrupted_vector_cannot_outrank_a_real_hit(store, provider, rot):
     path = vectors._path(space(), semantic.entry_text(rotten))
     path.write_bytes(path.read_bytes()[:4] + struct.pack("<2f", *rot))
     assert [e["name"] for e in warm([rotten, good], "scene text")] == ["Good"]
+
+
+def test_an_out_of_range_cached_score_is_evicted_and_warmed_next_turn(store, provider):
+    """CRC checks reject ordinary corruption before scoring. A readable record
+    with a valid CRC but a non-unit vector still needs the score backstop, and
+    leaving it cached would withhold this entry on every following turn."""
+    configure(depth="1")
+    candidate = entry("Mara")
+    text = semantic.entry_text(candidate)
+    provider.mapping = {"scene text": QUERY, text: NEAR}
+    vectors.save(space(), text, NEAR)
+    path = vectors._path(space(), text)
+    payload = struct.pack("<2f", 2.0, 0.0)
+    path.write_bytes(struct.pack("<I", zlib.crc32(payload)) + payload)
+
+    assert semantic.recall([candidate], "scene text") == []
+    assert not path.exists()
+    assert provider.calls == [["scene text"]]  # a cache hit, so no warm request yet
+    assert [hit["name"] for hit in semantic.recall([candidate], "scene text")] == ["Mara"]
+    assert provider.calls[-1] == ["scene text", text]
+    assert path.exists()
 
 
 def test_a_cache_file_corrupted_in_place_cannot_outrank_a_real_hit(store, provider):
