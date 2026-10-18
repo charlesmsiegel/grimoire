@@ -298,17 +298,7 @@ def recall_scored(candidates: list[dict], recent_text: str, *,
     if cfg is None:
         return []
     texts = [entry_text(e) for e in candidates]
-    # Two reasons an entry is not a candidate, and they are different:
-    #
-    # - nothing to embed. An empty string is what some endpoints reject
-    #   outright, and it would fail the whole batch.
-    # - nothing to *render*. `recalled_lore.j2` emits the body alone, so an
-    #   entry with a name and keys but an empty body is perfectly scorable --
-    #   `entry_text` includes the name -- and contributes nothing if it wins.
-    #   Left in, it can take a slot from a lower-scoring entry that would have
-    #   said something, which at depth 1 means the whole recall.
-    scored_idx = [i for i, t in enumerate(texts)
-                  if t and str(candidates[i].get("body") or "").strip()]
+    scored_idx = _scorable(candidates, texts)
     if not scored_idx:
         return []
     query_text = _clip(recent_text.strip(), QUERY_BYTES, tail=True)
@@ -333,48 +323,87 @@ def recall_scored(candidates: list[dict], recent_text: str, *,
     consumers: dict[str, list[dict]] = {}
     for i in scored_idx:
         consumers.setdefault(texts[i], []).append(candidates[i])
-    for text, raw in zip(missing, got[1:]):
-        # One vector, and a history row for every entry that shares its text,
-        # so an edit to any of them finds it was embedded (spec 05). A second
-        # entry with no history to record does not write the vector again.
-        for n, candidate in enumerate(consumers[text]):
-            history = _history(campaign, candidate, text)
-            if n == 0 or history:
-                vectors.save(cfg["space"], text, raw, **history)
-        fresh = vectors.unit(raw)
-        if fresh is not None:
-            known[text] = fresh
+    for text, raw in zip(missing, got[1:], strict=True):
+        _save_warmed(cfg["space"], campaign, text, raw, consumers[text], known)
 
+    hits = sorted(_hits(cfg, query, known, texts, scored_idx))
+    return [(candidates[i], -neg) for neg, i in hits[:cfg["depth"]]]
+
+
+def _hits(cfg: dict, query: list[float], known: dict, texts: list[str],
+          scored_idx: list[int]) -> list[tuple[float, int]]:
+    """`(-score, index)` for every scorable candidate whose vector is known
+    and scores at least the threshold -- sort keys, most similar first."""
     hits = []
     for i in scored_idx:
         vector = known.get(texts[i])
-        if vector is None:
-            continue
-        if len(vector) != len(query):
-            # The endpoint now answers this model id at a different width than
-            # the cached vector was made at. Scoring the overlap would be
-            # arithmetic across two unrelated spaces — but skipping alone is
-            # not enough: a stale vector is still a cache *hit*, so it would
-            # never be re-embedded and its entry would drop out of recall
-            # permanently. Evicting it makes next turn a miss, which heals it.
-            vectors.forget(cfg["space"], texts[i])
-            continue
-        score = vectors.dot(query, vector)
-        # Both operands are unit vectors, so an honest cosine is in [-1, 1].
-        # Outside it means a cache file corrupted in place — which unpacks
-        # cleanly, so nothing earlier can catch it — and such a vector would
-        # otherwise outrank every genuine hit (a stray 1e20 component scores
-        # 1e20). One comparison per candidate, against a re-derived norm per
-        # candidate on the read path. See vectors.py.
-        if not -1.0 - SCORE_SLACK <= score <= 1.0 + SCORE_SLACK:
-            vectors.forget(cfg["space"], texts[i])
-            continue
-        if score >= cfg["threshold"]:
+        score = None if vector is None else _score(cfg["space"], query, vector, texts[i])
+        if score is not None and score >= cfg["threshold"]:
             # `i` breaks ties by the entry order `activate` was given, so the
             # same store always recalls the same entries in the same order.
             hits.append((-score, i))
-    hits.sort()
-    return [(candidates[i], -neg) for neg, i in hits[:cfg["depth"]]]
+    return hits
+
+
+def _scorable(candidates: list[dict], texts: list[str]) -> list[int]:
+    """The indices of the candidates recall may score, in order.
+
+    Two reasons an entry is not a candidate, and they are different:
+
+    - nothing to embed. An empty string is what some endpoints reject
+      outright, and it would fail the whole batch.
+    - nothing to *render*. `recalled_lore.j2` emits the body alone, so an
+      entry with a name and keys but an empty body is perfectly scorable --
+      `entry_text` includes the name -- and contributes nothing if it wins.
+      Left in, it can take a slot from a lower-scoring entry that would have
+      said something, which at depth 1 means the whole recall.
+    """
+    return [i for i, t in enumerate(texts)
+            if t and str(candidates[i].get("body") or "").strip()]
+
+
+def _save_warmed(space: str, campaign: str, text: str, raw: list[float],
+                 consumers: list[dict], known: dict) -> None:
+    """Keep one text this turn embedded: its vector in the cache, and in
+    `known` for scoring now. An empty `raw` -- a document `_embed` did not get
+    this turn -- has no direction, so the cache drops it and nothing scores it.
+
+    One vector, and a history row for every entry that shares its text, so an
+    edit to any of them finds it was embedded (spec 05). A second entry with no
+    history to record does not write the vector again.
+    """
+    for n, candidate in enumerate(consumers):
+        history = _history(campaign, candidate, text)
+        if n == 0 or history:
+            vectors.save(space, text, raw, **history)
+    fresh = vectors.unit(raw)
+    if fresh is not None:
+        known[text] = fresh
+
+
+def _score(space: str, query: list[float], vector: list[float], text: str) -> float | None:
+    """The cosine of a cached `vector` against the query, or None -- evicting
+    it from the cache -- when it cannot be scored honestly."""
+    if len(vector) != len(query):
+        # The endpoint now answers this model id at a different width than
+        # the cached vector was made at. Scoring the overlap would be
+        # arithmetic across two unrelated spaces — but skipping alone is
+        # not enough: a stale vector is still a cache *hit*, so it would
+        # never be re-embedded and its entry would drop out of recall
+        # permanently. Evicting it makes next turn a miss, which heals it.
+        vectors.forget(space, text)
+        return None
+    score = vectors.dot(query, vector)
+    # Both operands are unit vectors, so an honest cosine is in [-1, 1].
+    # Outside it means a cache file corrupted in place — which unpacks
+    # cleanly, so nothing earlier can catch it — and such a vector would
+    # otherwise outrank every genuine hit (a stray 1e20 component scores
+    # 1e20). One comparison per candidate, against a re-derived norm per
+    # candidate on the read path. See vectors.py.
+    if not -1.0 - SCORE_SLACK <= score <= 1.0 + SCORE_SLACK:
+        vectors.forget(space, text)
+        return None
+    return score
 
 
 def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = "",

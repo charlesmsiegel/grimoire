@@ -16,7 +16,7 @@ from grimoire.store import (
     styles,
     taglines,
 )
-from grimoire.store.context import assemble, world_state
+from grimoire.store.context import assemble, suspects
 from grimoire.store.context import layout as ctx_layout
 from grimoire.store.context import macros as context_macros
 
@@ -2393,31 +2393,31 @@ def test_a_suspicion_naming_an_honorific_card_by_given_name_is_withheld(monkeypa
 
 
 def test_the_short_alias_is_only_derived_from_a_personal_name():
-    assert world_state._short_alias("Winifred Vance") == "Winifred"
-    assert world_state._short_alias("Seraphine Vale") == "Seraphine"
-    assert world_state._short_alias("Mara") == ""                    # nothing to shorten
+    assert suspects._short_alias("Winifred Vance") == "Winifred"
+    assert suspects._short_alias("Seraphine Vale") == "Seraphine"
+    assert suspects._short_alias("Mara") == ""                    # nothing to shorten
     # An ARTICLE ends the search: what follows one is a common noun, and
     # deriving `Woman` here is the over-match that once emptied the block.
-    assert world_state._short_alias("The Woman on the Pier") == ""
-    assert world_state._short_alias("The Woman") == ""
+    assert suspects._short_alias("The Woman on the Pier") == ""
+    assert suspects._short_alias("The Woman") == ""
     # An HONORIFIC is stepped over: what follows a title is a name. These three
     # used to return "" — the honorific was treated as a dead end, so a card
     # named `Dr Mara Vance` was matched only in full and "Mara is hiding the
     # ledger" reached the prompt.
-    assert world_state._short_alias("Dr Mara Vance") == "Mara"
-    assert world_state._short_alias("Lady Winifred") == "Winifred"
-    assert world_state._short_alias("Dr Vance") == "Vance"
+    assert suspects._short_alias("Dr Mara Vance") == "Mara"
+    assert suspects._short_alias("Lady Winifred") == "Winifred"
+    assert suspects._short_alias("Dr Vance") == "Vance"
     # ...punctuated the conventional way too. Without stripping the period,
     # `Dr.` matched neither set and came back as the alias itself: it missed the
     # name it precedes and matched every line abbreviating a doctor.
-    assert world_state._short_alias("Dr. Mara Vance") == "Mara"
-    assert world_state._short_alias("St. Peter Vale") == "Peter"
+    assert suspects._short_alias("Dr. Mara Vance") == "Mara"
+    assert suspects._short_alias("St. Peter Vale") == "Peter"
     # Two characters is a name; one is an initial, and `J` would match every
     # capital J standing alone. Three used to be the floor as a proxy for "not a
     # short ordinary word" — a job `_mentions` now does with case.
-    assert world_state._short_alias("Jo Li") == "Jo"
-    assert world_state._short_alias("Dr. Li Chen") == "Li"
-    assert world_state._short_alias("J Smith") == ""
+    assert suspects._short_alias("Jo Li") == "Jo"
+    assert suspects._short_alias("Dr. Li Chen") == "Li"
+    assert suspects._short_alias("J Smith") == ""
 
 
 def test_a_four_token_personal_name_still_yields_its_given_name():
@@ -2425,14 +2425,14 @@ def test_a_four_token_personal_name_still_yields_its_given_name():
     A given name, a middle name and two surnames is an ordinary personal name,
     and capping at three meant the card matched only in full while prose said
     "Winifred is hiding the ledger". What rejects an epithet is the ARTICLE."""
-    assert world_state._short_alias("Winifred Mara Saltmarch Vale") == "Winifred"
-    assert world_state._short_alias("Dr. Winifred Mara Saltmarch Vale") == "Winifred"
+    assert suspects._short_alias("Winifred Mara Saltmarch Vale") == "Winifred"
+    assert suspects._short_alias("Dr. Winifred Mara Saltmarch Vale") == "Winifred"
     # ...and an epithet is still rejected at any length. Lower-cased, by the
     # capitalization rule; title-cased, by the article wherever it sits.
-    assert world_state._short_alias("The Woman on the Pier") == ""
-    assert world_state._short_alias("Woman Of The Pier") == ""
-    assert world_state._short_alias("Keeper Of The Flame") == ""
-    assert world_state._short_alias("Dr.") == ""            # a bare honorific names nobody
+    assert suspects._short_alias("The Woman on the Pier") == ""
+    assert suspects._short_alias("Woman Of The Pier") == ""
+    assert suspects._short_alias("Keeper Of The Flame") == ""
+    assert suspects._short_alias("Dr.") == ""            # a bare honorific names nobody
 
 
 def test_a_suspicion_naming_the_given_name_of_a_long_named_actor_is_withheld(
@@ -2512,15 +2512,15 @@ def test_a_lowercase_particle_does_not_disqualify_a_personal_name():
     """Nobiliary and patronymic particles are lower-case by convention INSIDE a
     name. Requiring every token to be capitalized rejected those names whole, so
     the card matched only in full while prose said the given name."""
-    assert world_state._short_alias("Winifred van Saltmarch") == "Winifred"
-    assert world_state._short_alias("Mara de la Vance") == "Mara"
-    assert world_state._short_alias("Dr. Seraphine von Realm") == "Seraphine"
+    assert suspects._short_alias("Winifred van Saltmarch") == "Winifred"
+    assert suspects._short_alias("Mara de la Vance") == "Mara"
+    assert suspects._short_alias("Dr. Seraphine von Realm") == "Seraphine"
     # The head is still required to be capitalized, so a particle can never
     # become the alias itself...
-    assert world_state._short_alias("van Saltmarch") == ""
+    assert suspects._short_alias("van Saltmarch") == ""
     # ...and the article rule is unchanged: `de la` passes, `the` does not.
-    assert world_state._short_alias("Woman of the Pier") == ""
-    assert world_state._short_alias("The Woman on the Pier") == ""
+    assert suspects._short_alias("Woman of the Pier") == ""
+    assert suspects._short_alias("The Woman on the Pier") == ""
 
 
 def test_a_suspicion_naming_the_given_name_of_a_particled_actor_is_withheld(
@@ -2602,13 +2602,13 @@ def test_a_sibling_sub_list_does_not_inherit_the_previous_sub_heading(monkeypatc
 def test_the_surname_is_a_form_too():
     """Prose refers to a character by surname as readily as by given name, and a
     form set holding only the full name and the given name matched neither."""
-    assert world_state._surname_alias("Dr. Mara Vance") == "Vance"
-    assert world_state._surname_alias("Winifred Mara Saltmarch Vale") == "Vale"
-    assert world_state._surname_alias("Winifred van Saltmarch") == "Saltmarch"
-    assert world_state._surname_alias("Mara") == ""              # nothing follows it
-    assert world_state._surname_alias("Dr Vance") == ""          # already the given form
-    assert world_state._surname_alias("The Woman on the Pier") == ""   # not a name at all
-    assert world_state._forms({"Dr. Mara Vance"}) == {"Dr. Mara Vance", "Mara", "Vance"}
+    assert suspects._surname_alias("Dr. Mara Vance") == "Vance"
+    assert suspects._surname_alias("Winifred Mara Saltmarch Vale") == "Vale"
+    assert suspects._surname_alias("Winifred van Saltmarch") == "Saltmarch"
+    assert suspects._surname_alias("Mara") == ""              # nothing follows it
+    assert suspects._surname_alias("Dr Vance") == ""          # already the given form
+    assert suspects._surname_alias("The Woman on the Pier") == ""   # not a name at all
+    assert suspects.forms({"Dr. Mara Vance"}) == {"Dr. Mara Vance", "Mara", "Vance"}
 
 
 def test_a_suspicion_naming_only_the_surname_is_withheld(monkeypatch, tmp_path):
@@ -2634,10 +2634,10 @@ def test_a_punctuated_initial_is_still_not_an_alias():
     conventional `J. Smith` through as the alias `J.` — the initial guard,
     defeated by the punctuation that marks it as an initial. Every capitalized
     `J.` in another NPC's suspicion then withheld the whole entry."""
-    assert world_state._short_alias("J. Smith") == ""
-    assert world_state._short_alias("Dr. J. Smith") == ""
-    assert world_state._short_alias("J Smith") == ""
-    assert world_state._surname_alias("J. Smith") == "Smith"   # the handle it does have
+    assert suspects._short_alias("J. Smith") == ""
+    assert suspects._short_alias("Dr. J. Smith") == ""
+    assert suspects._short_alias("J Smith") == ""
+    assert suspects._surname_alias("J. Smith") == "Smith"   # the handle it does have
 
 
 def test_a_markdown_heading_governs_the_bullets_under_it(monkeypatch, tmp_path):
@@ -2755,16 +2755,16 @@ def test_an_uncased_script_still_yields_its_name_parts():
     the `\\b` failure again: not a missed edge, an entire class of campaign for
     which the filter did nothing. What marks an epithet is an explicitly LOWER
     case token, and an uncased one is neither."""
-    assert world_state._short_alias("ليلى حسن") == "ليلى"
-    assert world_state._surname_alias("ליאורה כהן") == "כהן"
+    assert suspects._short_alias("ليلى حسن") == "ليلى"
+    assert suspects._surname_alias("ליאורה כהן") == "כהן"
     # A single CJK character stays out, and does not need to be in: the
     # one-character floor is the initial guard, and an unspaced `李明` is one
     # token that `_mentions` already matches in full.
-    assert world_state._short_alias("李 明") == ""
+    assert suspects._short_alias("李 明") == ""
     # The cased rules are unchanged, in both directions.
-    assert world_state._short_alias("Winifred Vance") == "Winifred"
-    assert world_state._short_alias("The Woman on the Pier") == ""
-    assert world_state._short_alias("Woman of the Pier") == ""
+    assert suspects._short_alias("Winifred Vance") == "Winifred"
+    assert suspects._short_alias("The Woman on the Pier") == ""
+    assert suspects._short_alias("Woman of the Pier") == ""
 
 
 def test_an_indented_continuation_stays_under_its_bullet(monkeypatch, tmp_path):
@@ -2790,13 +2790,13 @@ def test_a_name_suffix_is_stepped_over_when_choosing_the_surname():
     """Taking the last token blindly made `Jr` the alias and left `Vance` — the
     name prose actually uses — matching nothing. The family name is the last
     token that IS one."""
-    assert world_state._surname_alias("Mara Vance Jr.") == "Vance"
-    assert world_state._surname_alias("Dr. Mara Vance III") == "Vance"
-    assert world_state._forms({"Mara Vance Jr."}) == {"Mara Vance Jr.", "Mara", "Vance"}
+    assert suspects._surname_alias("Mara Vance Jr.") == "Vance"
+    assert suspects._surname_alias("Dr. Mara Vance III") == "Vance"
+    assert suspects.forms({"Mara Vance Jr."}) == {"Mara Vance Jr.", "Mara", "Vance"}
     # A name that is nothing but suffixes after its head yields none, the same
     # as one that ends in a particle.
-    assert world_state._surname_alias("Mara Jr.") == ""
-    assert world_state._surname_alias("Mara de") == ""
+    assert suspects._surname_alias("Mara Jr.") == ""
+    assert suspects._surname_alias("Mara de") == ""
 
 
 def test_an_all_upper_case_mention_is_recognized(monkeypatch, tmp_path):
@@ -2813,9 +2813,9 @@ def test_an_all_upper_case_mention_is_recognized(monkeypatch, tmp_path):
     assert "Mara sold the manifest." in section   # an absent character is untouched
     # The lower-case guard is intact in both directions, and an uncased form —
     # which `islower()` also answers False for — is unaffected.
-    assert world_state._mentions("Mara will steal the crates.", "Will") is False
-    assert world_state._mentions("WILL HAS THE LEDGER", "Will") is True
-    assert world_state._mentions("李明藏着账本", "李明") is True
+    assert suspects._mentions("Mara will steal the crates.", "Will") is False
+    assert suspects._mentions("WILL HAS THE LEDGER", "Will") is True
+    assert suspects._mentions("李明藏着账本", "李明") is True
 
 
 def test_a_given_name_behind_an_unlisted_title_is_a_form(monkeypatch, tmp_path):
@@ -2823,13 +2823,13 @@ def test_a_given_name_behind_an_unlisted_title_is_a_form(monkeypatch, tmp_path):
     the head as the given name made `Professor` the alias of `Professor Mara
     Vance` while `Mara` — the name prose uses — matched nothing. The token after
     the head is a name either way, so it is taken without deciding which."""
-    assert world_state._forms({"Professor Mara Vance"}) == {
+    assert suspects.forms({"Professor Mara Vance"}) == {
         "Professor Mara Vance", "Professor", "Mara", "Vance"}
     # A two-token name has nothing between its ends, and a name whose second
     # token is only a particle yields no form of its own.
-    assert world_state._interior_aliases("Mara Vance") == set()
-    assert world_state._interior_aliases("Mara de Vance") == set()
-    assert world_state._interior_aliases("The Woman on the Pier") == set()
+    assert suspects._interior_aliases("Mara Vance") == set()
+    assert suspects._interior_aliases("Mara de Vance") == set()
+    assert suspects._interior_aliases("The Woman on the Pier") == set()
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
@@ -2855,16 +2855,16 @@ def test_an_elided_particle_still_yields_both_ends_of_the_name(monkeypatch, tmp_
     end was derived and the suspicion went to the prompt. The apostrophe is the
     signal, and the name behind it is a form in its own right because prose
     drops the particle as readily as it keeps it."""
-    assert world_state._short_alias("Jean d'Ormesson") == "Jean"
-    assert world_state._surname_alias("Jean d'Ormesson") == "d'Ormesson"
-    assert world_state._forms({"Jean d'Ormesson"}) == {
+    assert suspects._short_alias("Jean d'Ormesson") == "Jean"
+    assert suspects._surname_alias("Jean d'Ormesson") == "d'Ormesson"
+    assert suspects.forms({"Jean d'Ormesson"}) == {
         "Jean d'Ormesson", "Jean", "d'Ormesson", "Ormesson"}
-    assert world_state._forms({"Mara dell'Acqua"}) == {
+    assert suspects.forms({"Mara dell'Acqua"}) == {
         "Mara dell'Acqua", "Mara", "dell'Acqua", "Acqua"}
     # An epithet is still an epithet: the article rejects it however it is
     # punctuated, and a bare lower-case token still has no apostrophe to save it.
-    assert world_state._name_tokens("The Woman o' the Pier") == []
-    assert world_state._name_tokens("Mara vance") == []
+    assert suspects._name_tokens("The Woman o' the Pier") == []
+    assert suspects._name_tokens("Mara vance") == []
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
@@ -3015,7 +3015,7 @@ def test_stacked_unrecognized_titles_still_yield_the_given_name(monkeypatch, tmp
     rejects meant a second title the honorific set does not list stopped the
     walk: `Professor Reverend Mara Vance` yielded `Reverend` and lost `Mara`.
     Titles stack, and how many is no more knowable than which."""
-    assert world_state._forms({"Professor Reverend Mara Vance"}) == {
+    assert suspects.forms({"Professor Reverend Mara Vance"}) == {
         "Professor Reverend Mara Vance", "Professor", "Reverend", "Mara", "Vance"}
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
@@ -3080,8 +3080,7 @@ def test_a_colon_heading_with_leading_spaces_governs_a_top_level_list(monkeypatc
     assert "Mara sold the manifest." in section
     # Real nesting still ranks by its indent: an indented `Plans:` inside a list
     # must not govern the outer bullet that follows it (round twenty).
-    from grimoire.store.context import world_state
-    assert world_state._visible_suspects(
+    assert suspects.visible(
         "Winifred:\n- Plans:\n  - steal it\n- knows the truth", {"Winifred"}) == ""
 
 
@@ -3106,13 +3105,13 @@ def test_a_quoted_nickname_is_matched_without_its_quotes(monkeypatch, tmp_path):
     lands on exactly that token — so keeping the marks made the form `"Red"` and
     `_mentions` then required the suspicion to quote her too. The name is what
     is inside the marks."""
-    assert world_state._forms({'Mara "Red" Vance'}) == {
+    assert suspects.forms({'Mara "Red" Vance'}) == {
         'Mara "Red" Vance', "Mara", "Red", "Vance"}
-    assert world_state._forms({"Mara (Red) Vance"}) == {
+    assert suspects.forms({"Mara (Red) Vance"}) == {
         "Mara (Red) Vance", "Mara", "Red", "Vance"}
     # Interior punctuation is untouched, which is what keeps the elided particle
     # whole while the quotes around a nickname come off.
-    assert world_state._surname_alias("Jean d'Ormesson") == "d'Ormesson"
+    assert suspects._surname_alias("Jean d'Ormesson") == "d'Ormesson"
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
@@ -3137,13 +3136,13 @@ def test_a_stacked_title_does_not_consume_the_given_name_slot(monkeypatch, tmp_p
     with titles stacked the interior one is still a title — and stopping on it
     yielded no given-name form at all, which is the same leak the second-token
     rule was written to close, one token further in."""
-    assert world_state._interior_aliases("Professor Dr. Mara Vance") == {"Mara"}
-    assert world_state._interior_aliases("Professor J. Mara Vance") == {"Mara"}  # nor an initial
-    assert world_state._interior_aliases("Professor Dr. Vance") == set()   # nothing between
+    assert suspects._interior_aliases("Professor Dr. Mara Vance") == {"Mara"}
+    assert suspects._interior_aliases("Professor J. Mara Vance") == {"Mara"}  # nor an initial
+    assert suspects._interior_aliases("Professor Dr. Vance") == set()   # nothing between
     # Titles STACK, and how many is not knowable either: every interior token
     # that is name-shaped is a form, so a second unrecognized one cannot stop
     # the walk short of the given name.
-    assert world_state._interior_aliases("Professor Reverend Mara Vance") == {
+    assert suspects._interior_aliases("Professor Reverend Mara Vance") == {
         "Reverend", "Mara"}
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))

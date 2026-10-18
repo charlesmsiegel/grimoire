@@ -140,24 +140,8 @@
   "backend/src/grimoire/store/config.py": {
     "RUF005": 1
   },
-  "backend/src/grimoire/store/context/assemble.py": {
-    "B905": 1,
-    "C901": 1
-  },
-  "backend/src/grimoire/store/context/mechanics.py": {
-    "C901": 1
-  },
   "backend/src/grimoire/store/context/pack.py": {
     "C901": 1
-  },
-  "backend/src/grimoire/store/context/semantic.py": {
-    "B905": 1,
-    "C901": 1
-  },
-  "backend/src/grimoire/store/context/world_state.py": {
-    "B905": 2,
-    "C901": 1,
-    "RUF001": 3
   },
   "backend/src/grimoire/store/covers.py": {
     "N818": 2

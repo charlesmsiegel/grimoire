@@ -193,21 +193,34 @@ class KeyIndex:
         keys = list(keys)
         start, end, seeded = self._bounds(upto, depth)
         if full:
-            best: tuple[str, int] | None = None
-            for key in keys:
-                self.hits(key)
-                slot = self._posts if seeded and self.hit(key, self._posts) else -1
-                if slot < 0 and self._last[key][end] >= start:
-                    slot = self._last[key][end]
-                if slot >= 0 and (best is None or slot > best[1]):
-                    best = key, slot
-            return best
+            return self._newest_from_bitmaps(keys, start, end, seeded)
+        return self._newest_by_walk(keys, start, end, seeded)
+
+    def _newest_by_walk(self, keys: list[str], start: int, end: int,
+                        seeded: bool) -> tuple[str, int] | None:
+        """`newest` by reading the window's slots newest first -- the seed's
+        before any post's -- searching only the slots it reaches."""
         slots = range(end - 1, start - 1, -1)
         for slot in ([self._posts, *slots] if seeded else slots):
             for key in keys:
                 if self.hit(key, slot):
                     return key, slot
         return None
+
+    def _newest_from_bitmaps(self, keys: list[str], start: int, end: int,
+                             seeded: bool) -> tuple[str, int] | None:
+        """`newest` off each key's whole bitmap and `last` table: the seed
+        slot if it is read and hit, else the key's newest post hit inside the
+        window; the newest of those across `keys`, the earlier key on a tie."""
+        best: tuple[str, int] | None = None
+        for key in keys:
+            self.hits(key)
+            slot = self._posts if seeded and self.hit(key, self._posts) else -1
+            if slot < 0 and self._last[key][end] >= start:
+                slot = self._last[key][end]
+            if slot >= 0 and (best is None or slot > best[1]):
+                best = key, slot
+        return best
 
     def boundaries(self) -> list[int]:
         """The boundaries a replay visits, in order, ending at the current one.
@@ -241,7 +254,7 @@ def _logic_ok(logic: str, found: int, total: int) -> bool:
 
 
 def _secondary(logic: str, keys: tuple[str, ...], idx: KeyIndex, upto: int,
-               depth: int, full: bool) -> tuple[bool, str | None]:
+               depth: int, *, full: bool) -> tuple[bool, str | None]:
     """Does the secondary rule pass, and which secondary key does it cite?"""
     found = [hit for k in keys if (hit := idx.newest([k], upto, depth, full=full))]
     newest = max(found, key=lambda h: h[1])[0] if found else None
@@ -267,7 +280,7 @@ def direct_match(entry: dict, idx: KeyIndex, upto: int, depth: int, *,
         return None
     secondary = None
     if c.secondary_keys:
-        ok, secondary = _secondary(c.key_logic, c.secondary_keys, idx, upto, d, full)
+        ok, secondary = _secondary(c.key_logic, c.secondary_keys, idx, upto, d, full=full)
         if not ok:
             return None
     return {"key": primary[0], "secondary": secondary, "slot": primary[1]}

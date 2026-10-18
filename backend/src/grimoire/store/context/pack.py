@@ -219,7 +219,7 @@ def _drop_images(hist: list[dict], hist_costs: list[int], room: int, count) -> i
 
 
 def pack(sections: list[dict], history: list[dict], reserved: int = 0,
-         budget: int | None = None, compose=None, count=None,
+         budget: int | None = None, *, compose=None, count=None,
          notes: frozenset[int] = frozenset()) -> dict:
     """Fit `sections` + `history` into `budget` tokens.
 
@@ -319,71 +319,91 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     is_note = [i in notes for i in range(len(history))][:len(hist)]
     hist_total = sum(hist_costs)
     total = reserved + sys_cost + hist_total
-    trimmed = 0
-    trimmed_tokens = 0
-    notes_trimmed = 0
+    trimmed_tokens = trimmed = notes_trimmed = 0
 
-    def shed(section: dict) -> None:
-        """Give `section` way one unit at a time until the prompt fits or only
-        protected units are left; with nothing left, drop it whole."""
-        units = section["shed"]["units"]
-        render = section["shed"]["render"]
-        kept = {u["ref"] for u in units}
-        original = section["text"]
-        gone: list[str] = []
-        for unit in sorted((u for u in units if not (u["keep"] or u["pinned"])),
-                           key=_shed_key):
-            if section.get("pinned") and kept == {unit["ref"]}:
-                break  # a pinned section is never dropped, whatever its units say
-            kept.discard(unit["ref"])
-            gone.append(unit["ref"])
-            if not kept:
-                # Restored so the inspector shows what was cut, as for any drop.
-                section["text"] = original
-                section["dropped"] = True
-                break
-            # #131: an inspector capture supplies text and current source
-            # slices from ONE render. Removed sources keep their original
-            # slices; survivors reflect the new section boundaries.
-            if describe := section["shed"].get("describe"):
-                section["text"], section["source_slices"] = describe(frozenset(kept))
-            else:
-                section["text"] = render(frozenset(kept))
-            if reserved + system_cost() + hist_total <= budget:
-                break
-        if gone:
-            section["shed_refs"] = gone
+    def fits() -> bool:
+        """Whether the prompt fits now, measured whole (see `costs`)."""
+        return reserved + system_cost() + hist_total <= budget
 
     for tier in DROP_ORDER:
         if total <= budget:
             break
-        for i in sorted((n for n, s in enumerate(packed)
-                         if s["tier"] == tier and not s["dropped"]
-                         and (s.get("shed") or not s.get("pinned"))),
-                        key=lambda n: (costs[n], n), reverse=True):
+        for i in _drop_candidates(packed, costs, tier):
             if total <= budget:
                 break
             if packed[i].get("shed"):
-                shed(packed[i])
+                _shed(packed[i], fits)
             else:
                 packed[i]["dropped"] = True
             sys_cost = system_cost()
             total = reserved + sys_cost + hist_total
         if tier == ARCHIVE:
-            while total > budget and is_note.count(False) > HISTORY_FLOOR:
-                # One conversation message per step, with any notes standing
-                # in front of it: a note goes out with the post it precedes.
-                while True:
-                    cost = hist_costs.pop(0)
-                    hist_total -= cost
-                    trimmed_tokens += cost
-                    hist.pop(0)
-                    trimmed += 1
-                    if not is_note.pop(0):
-                        break
-                    notes_trimmed += 1
-                total = reserved + sys_cost + hist_total
+            trimmed_tokens, trimmed, notes_trimmed = _trim_history(hist, hist_costs, is_note,
+                                                                   total - budget)
+            hist_total -= trimmed_tokens
+            total = reserved + sys_cost + hist_total
 
     return {"sections": packed, "history": hist, "history_trimmed": trimmed,
             "history_trimmed_tokens": trimmed_tokens, "images_dropped_tokens": images_dropped,
             "notes_trimmed": notes_trimmed}
+
+
+def _drop_candidates(packed: list[dict], costs: list[int], tier: str) -> list[int]:
+    """The indices of `tier`'s sections that may still give way, largest first
+    and the later of two the same size first. A pinned section is one only
+    when it can shed: its pin then protects the pinned unit, not the whole."""
+    return sorted((n for n, s in enumerate(packed)
+                   if s["tier"] == tier and not s["dropped"]
+                   and (s.get("shed") or not s.get("pinned"))),
+                  key=lambda n: (costs[n], n), reverse=True)
+
+
+def _shed(section: dict, fits) -> None:
+    """Give `section` way one unit at a time until `fits()` or only protected
+    units are left; with nothing left, drop it whole."""
+    units = section["shed"]["units"]
+    render = section["shed"]["render"]
+    kept = {u["ref"] for u in units}
+    original = section["text"]
+    gone: list[str] = []
+    for unit in sorted((u for u in units if not (u["keep"] or u["pinned"])),
+                       key=_shed_key):
+        if section.get("pinned") and kept == {unit["ref"]}:
+            break  # a pinned section is never dropped, whatever its units say
+        kept.discard(unit["ref"])
+        gone.append(unit["ref"])
+        if not kept:
+            # Restored so the inspector shows what was cut, as for any drop.
+            section["text"] = original
+            section["dropped"] = True
+            break
+        # #131: an inspector capture supplies text and current source
+        # slices from ONE render. Removed sources keep their original
+        # slices; survivors reflect the new section boundaries.
+        if describe := section["shed"].get("describe"):
+            section["text"], section["source_slices"] = describe(frozenset(kept))
+        else:
+            section["text"] = render(frozenset(kept))
+        if fits():
+            break
+    if gone:
+        section["shed_refs"] = gone
+
+
+def _trim_history(hist: list[dict], hist_costs: list[int], is_note: list[bool],
+                  excess: int) -> tuple[int, int, int]:
+    """Trim the history from the front until `excess` tokens are gone or only
+    `HISTORY_FLOOR` conversation messages are left -- one conversation message
+    per step, with any author's notes standing in front of it: a note goes out
+    with the post it precedes. In place on the three parallel lists; returns
+    the tokens, the messages (notes included) and the notes removed."""
+    tokens = messages = notes = 0
+    while tokens < excess and is_note.count(False) > HISTORY_FLOOR:
+        while True:
+            tokens += hist_costs.pop(0)
+            hist.pop(0)
+            messages += 1
+            if not is_note.pop(0):
+                break
+            notes += 1
+    return tokens, messages, notes

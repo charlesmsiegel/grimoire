@@ -155,8 +155,8 @@ def test_skipping_changes_no_byte_of_any_variant(saltmarch, monkeypatch):
     real = assemble._campaign_view
     gathered: list[dict] = []
 
-    def unguarded(*args, actor_scoped, excluded_refs):
-        view = real(*args, actor_scoped=False, excluded_refs=excluded_refs)
+    def unguarded(*args, **kwargs):
+        view = real(*args, **{**kwargs, "actor_scoped": False})
         gathered.append(view)
         return view
 

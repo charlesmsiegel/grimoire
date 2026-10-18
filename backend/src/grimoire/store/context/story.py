@@ -11,7 +11,7 @@ from __future__ import annotations
 import secrets
 
 from ... import prompts
-from .. import campaign_settings, chronicle, export, post_images, relationships
+from .. import campaign_settings, chronicle, config, export, post_images, relationships
 from ..scenes import serialize as scenes_serialize
 
 
@@ -138,7 +138,7 @@ def _recap_depth(depth: int | None = None, cid: str = "") -> int:
             return max(depth, 0)
         return campaign_settings.count(cid, "recap_depth")
     except (TypeError, ValueError):
-        return 5
+        return int(config.DEFAULT_RECAP_DEPTH)
 
 
 def _recap_ids(cid: str, depth: int | None = None) -> frozenset[str]:

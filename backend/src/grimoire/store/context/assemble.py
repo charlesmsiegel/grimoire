@@ -92,7 +92,7 @@ OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 log = logging.getLogger(__name__)
 
 
-def compose_opener(cid: str, sid: str, prompt: str,
+def compose_opener(cid: str, sid: str, prompt: str, *,
                    describe: bool = True, model: str = "",
                    actor_ref: str = "grimoire", prior: list[dict] | None = None,
                    adapt: bool = False) -> tuple[list[dict], dict | None]:
@@ -155,7 +155,7 @@ def build_opener_messages(cid: str, sid: str, prompt: str, model: str = "") -> l
     return compose_opener(cid, sid, prompt, describe=False, model=model)[0]
 
 
-def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
+def _assemble(cid: str, sid: str, *, wi_seed: str = "", full_recap: int = 0,
               turn: dict | None = None, actor_ref: str | None = None,
               eligible_speakers: list[dict] | None = None,
               successor_by_decision: bool = False,
@@ -233,17 +233,16 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     scene_cast = cast
     public_player_names = [a["name"] for a in cast if a["role"] == "player"]
     response_actor = None
-    if actor_ref is not None:
-        if actor_ref == "grimoire":
-            response_actor = {"ref": "grimoire", "name": "Grimoire"}
-        else:
-            selected = [a for a in cast if actor.ref(a) == actor_ref and a["role"] == "npc"]
-            if not selected:
-                raise ValueError("Assigned actor is not a present NPC")
-            response_actor = {"ref": actor_ref, "name": selected[0]["name"]}
-            history = actor.observed_history(cid, sid, actor_ref, history)
-            cast = selected
-    actor_scoped = actor_ref is not None and actor_ref != "grimoire"
+    if actor_ref == "grimoire":
+        response_actor = {"ref": "grimoire", "name": "Grimoire"}
+    elif actor_ref is not None:
+        cast = _assigned_npc(cast, actor_ref)
+        response_actor = {"ref": actor_ref, "name": cast[0]["name"]}
+        history = actor.observed_history(cid, sid, actor_ref, history)
+    # The NPC whose own call this is, or None for the narrator's.
+    npc_ref = actor_ref if actor_ref != "grimoire" else None
+    actor_scoped = npc_ref is not None
+    actor_name = response_actor["name"] if actor_scoped and response_actor else ""
     # The CONTENT inputs read only posts in context; a hidden post stays in
     # `history` because the index-based steps above (`pins.active`,
     # `actor.observed_history`) count it, and `_project_history` drops it itself.
@@ -256,48 +255,17 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     note_turn = 0 if opener else authors_note.note_turn(scene["messages"])
     applied_notes, skipped_notes = authors_note.applicable(
         authors_notes.read(cid), scenes_identity.scene_identity(cid, sid),
-        actor_ref if actor_scoped else None,
-        response_actor["name"] if actor_scoped and response_actor else "", note_turn)
+        npc_ref, actor_name, note_turn)
 
-    npc_cards: list[dict] = []
-    npc_ids: list[str] = []
-    for a in cast:
-        if a["role"] != "npc":
-            continue
-        vid = appearances_versions.locked_version(cid, a["kind"], a["id"])
-        try:
-            npc_cards.append(characters.read_card(aroot, a["id"], vid)["data"])
-        except (characters.CharacterNotFound, characters.VersionNotFound):
-            continue
-        # Appended only after the read SUCCEEDS, so the two lists stay aligned
-        # for the `zip` below -- an unreadable card drops out of both.
-        npc_ids.append(a["id"])
-
-    players: list[dict] = []
-    player_names: list[str] = public_player_names if actor_scoped else []
-    for a in cast:
-        if a["role"] != "player":
-            continue
-        vid = appearances_versions.locked_version(cid, a["kind"], a["id"])
-        try:
-            if a["kind"] == "pcs":
-                p = pcs.read_persona(aroot, a["id"], vid)
-                players.append({"kind": "pcs", **p})
-                player_names.append(p.get("name", a["id"]))
-            else:
-                data = characters.read_card(aroot, a["id"], vid)["data"]
-                players.append({"kind": "characters", **data})
-                player_names.append(data.get("name", a["id"]))
-        except (pcs.PCNotFound, pcs.PCVersionNotFound, characters.CharacterNotFound, characters.VersionNotFound):
-            continue
-
-
+    npc_cards, npc_ids = _npc_cards(cid, aroot, cast)
+    players, player_names = _players(cid, aroot, cast)
+    if actor_scoped:
+        # An NPC's own call keeps only that NPC in `cast`, so it read no player
+        # card above -- but `{{user}}` still names the players in the room.
+        player_names = [*public_player_names, *player_names]
     npc_names = [d.get("name", "") for d in npc_cards if d.get("name")]
     pcless = scene["meta"].get("pcless") == "true"
-    refs: list[dict] = []
-    ref_names: list[str] = []
-    if pcless:
-        refs, ref_names = cast_data._campaign_player_refs(cid, aroot)
+    refs, ref_names = cast_data._campaign_player_refs(cid, aroot) if pcless else ([], [])
     # {{char}} is not resolved here (#137): baked at creation time instead, see
     # scene_substitutions.
     subs = {"{{user}}": ", ".join(player_names or ref_names)}
@@ -318,53 +286,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     def _expanded(text: str) -> str:
         return macros.expand_macros(text, subs, cid, sid, datetime_subs=dt_subs) if text else text
 
-    # ONE resolved structure for every section that names a character:
-    # `character_descriptions`, `voice_policy`, `voice_anchors`,
-    # `voice_examples`. Built here rather than per-template because
-    # disambiguation and nameless handling must not be able to diverge between
-    # them, and because a template resolving an anchor would be doing store IO
-    # from a render.
-    #
-    # Nothing is filtered out HERE. Filtering is each template's business, per
-    # block: `named_npc_count` is what the voice policy renders on, and
-    # dropping the anchorless here would switch that policy off in exactly the
-    # case it exists for -- a cast with no anchors yet.
-    #
-    # "Here" is doing work: a present NPC whose card or locked version cannot be
-    # read already dropped out of `npc_cards` above, and cannot contribute a
-    # block it has no data for. That is the pre-existing filter, not a new one.
-    # A card is hand-editable and importable, so every one of these fields can
-    # arrive as a non-string -- `test_a_malformed_card_name_costs_only_its_own_actor`
-    # hand-edits `data.name` to a LIST. `_str` keeps a malformed field costing
-    # only its own block rather than raising out of the whole assembly, which is
-    # the same per-actor failure policy `_character_states` already applies.
-    def _str(card: dict, key: str) -> str:
-        v = card.get(key)
-        return v.strip() if isinstance(v, str) else ""
-
-    raw_names = [_str(d, "name") for d in npc_cards]
-    cast_blocks = []
-    #: Parallel to cast_blocks: each block's identity for source capture. Kept out
-    #: of the rows, which custom templates may serialise whole (#131).
-    cast_block_refs = []
-    # strict=True is doing real work: `npc_ids` is appended only after its card
-    # read succeeds, so the two lists staying aligned is an invariant rather
-    # than an assumption, and a silent truncation here would attach one
-    # character's anchor to another's name.
-    for shown, card, char_id in zip(cast_data.voice_safe_names(raw_names, player_names), npc_cards, npc_ids,
-                                    strict=True):
-        parts = [_str(card, "description"), _str(card, "personality"),
-                 _str(card, "scenario")]
-        anchor = overlay.voice_anchor_record(cid, char_id)["text"]
-        cast_block_refs.append(f"characters:{char_id}")
-        cast_blocks.append({
-            "name": shown,
-            "description": "\n".join(p for p in parts if p),
-            "anchor": voice_anchors.effective(_expanded(anchor)),
-            "example": actor.select_examples(_expanded(_str(card, "mes_example")),
-                                              voice_anchors.VOICE_EXAMPLE_CAP,
-                                              "\n".join(m["content"] for m in visible[-4:])),
-        })
+    cast_blocks, cast_block_refs = _cast_blocks(
+        cid, npc_cards, npc_ids, names=cast_data.voice_safe_names(
+            [_card_text(d, "name") for d in npc_cards], player_names),
+        recent="\n".join(m["content"] for m in visible[-4:]), expand=_expanded)
     # A COUNT, not a length: reading `len(cast_blocks)` at render time would let
     # a per-block filter move the policy's render condition.
     named_npc_count = sum(1 for b in cast_blocks if b["name"])
@@ -375,10 +300,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 
     cfg = campaign_settings.effective_config(cid)
     depth = config._whole(cfg.get("context_scan_depth"), config.DEFAULT_SCAN_DEPTH)
-    # depth 0 => no scan window (history[-0:] would be the WHOLE list, so guard it)
-    recent_text = "\n".join(m["content"] for m in visible[-depth:]) if depth else ""
-    if wi_seed:  # opener: the prompt stands in for the (absent) recent history
-        recent_text = (recent_text + "\n" + wi_seed).strip()
+    recent_text = _scan_window(visible, depth, wi_seed)
     # World info reads the same messages per post rather than joined, each at
     # its TRANSCRIPT index -- the unit a timed entry counts and an inspector
     # reason cites. An NPC call reads only what that NPC observed, and
@@ -401,39 +323,17 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # neither the setting block nor world info renders it, and it unlocks
     # nothing it owns. That is the only reading of "keep this out of the prompt"
     # that the prompt can actually honour.
-    loc_excluded = bool(current_loc) and f"locations:{current_loc}" in excluded_refs
-    current_setting = ""
-    current_setting_secret = False
-    exclude: frozenset = frozenset()
-    if current_loc and not loc_excluded:
-        try:
-            loc = overlay.read_entity(cid, "locations", current_loc)
-            exclude = frozenset({current_loc})
-            # The current location does NOT pass through `activate` -- it is
-            # excluded from world info precisely so it can render as the
-            # setting instead -- so the secrecy gate has to be applied here as
-            # well, or "gm-only never enters the prompt" is false for the one
-            # location the scene is actually standing in. Suppressing the block
-            # leaves the model to invent a setting, which is the right way to
-            # be wrong: the alternative is overriding the level the user set
-            # because we decided they needed the description more.
-            level = entities.normalize_secrecy(loc["meta"].get("secrecy"))
-            owners = [v.strip() for v in loc["meta"].get("owners", "").split(",") if v.strip()]
-            visible_setting = not actor_scoped or actor.knows(
-                {"secrecy": level, "owners": owners,
-                 "known_by": loc["meta"].get("known_by", "")}, actor_ref)
-            if level != entities.GM_ONLY and visible_setting:
-                current_setting = loc["body"].strip()
-                current_setting_secret = level == entities.SECRET
-        except entities.EntityNotFound:
-            pass  # referenced location was deleted — omit the setting block
+    setting_loc = (None if current_loc and f"locations:{current_loc}" in excluded_refs
+                   else current_loc)
+    current_setting, current_setting_secret, exclude = _current_setting(
+        cid, setting_loc, npc_ref)
     # The base present set and why each ref is in it (spec §7.3); the engine
     # grows it structurally and by activation. The whole scene's, on an NPC
     # call as on the narrator's (see `scene_cast`).
     present: dict[str, dict] = {f"{a['kind']}:{a['id']}": {"type": "cast", "via": None}
                                 for a in scene_cast}
-    if current_loc and not loc_excluded:
-        present[f"locations:{current_loc}"] = {"type": "current_location", "via": None}
+    if setting_loc:
+        present[f"locations:{setting_loc}"] = {"type": "current_location", "via": None}
 
     campaign_meta = campaigns_read.read_campaign(cid)["meta"]
     # One per-field cascade resolves BOTH the prose style and the length budget
@@ -446,50 +346,36 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     targets = response_targets.resolve(turn=turn or {}, scene_meta=scene["meta"],
                                        campaign_meta=campaign_meta, config=cfg)
     phase = "opening" if opening_narrator else "continuation"
-    try:
-        resolved_style = styles.read_style(budget["style_id"]) if budget["style_id"] else None
-    except (styles.StyleNotFound, OSError, UnicodeDecodeError):
-        # resolve() already skips ids that don't exist; this also covers a file
-        # that exists but can't be read, which must not break generation either.
-        resolved_style = None
+    style_name, style_body = _prose_style(budget["style_id"])
     activated_wi, recalled_wi, wi_result, wi_names = world_state._world_info(
         cid, posts, wi_seed, exclude=exclude, present=present, pinned_refs=pinned_refs,
         excluded_refs=excluded_refs, scan_depth=depth,
         recursion_depth=config.lore_recursion_depth(cfg),
-        current_location=current_loc if not loc_excluded else None, recall_text=recent_text,
-        actor_ref=actor_ref if actor_scoped else None, sid=sid)
+        current_location=setting_loc, recall_text=recent_text,
+        actor_ref=npc_ref, sid=sid)
     # A no-op since `_world_info` filters its candidates for the actor; kept so
     # what reaches an NPC's prompt does not rest on that one call site alone.
     if actor_scoped:
         activated_wi = actor.known_entries(activated_wi, actor_ref)
         recalled_wi = actor.known_entries(recalled_wi, actor_ref)
     wi_public, wi_secret = world_state.secrecy_split(activated_wi)
-    # The same entries again as the engine's hits, for what renders World info
-    # per entry (`_render_sections`) and the inspector rows: priority, match age
-    # and the reason each one is in. Matched by identity, so the actor filter
-    # above is honoured here too. `names` resolves every ref a reason can name
-    # -- a record listed this turn, activated or not, or someone in the room.
-    wi_ids = {id(e) for e in activated_wi}
-    recalled_ids = {id(e) for e in recalled_wi}
-    lore = {"world_info": [h for h in wi_result.keyword if id(h.entry) in wi_ids],
-            "recalled": [h for h in wi_result.recalled if id(h.entry) in recalled_ids],
-            "held_back": list(wi_result.held_back),
-            "names": {**wi_names, **{f"{m['kind']}:{m['id']}": str(m.get("name") or m["id"])
-                                     for m in scene_cast}}}
+    lore = _lore(wi_result, activated_wi, recalled_wi,
+                 {**wi_names, **{f"{m['kind']}:{m['id']}": str(m.get("name") or m["id"])
+                                 for m in scene_cast}})
     recalled_public, recalled_secret = world_state.secrecy_split(recalled_wi)
     mech = mechanics._mechanics(cid, sid, cast, recent_text)
+    candidates = eligible_speakers or []
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
         "response_actor": response_actor,
         "response_successor_by_decision": successor_by_decision,
         "perception_rider": config.perception_rider(),
         "response_roster": roster,
-        "response_candidates": [{"ref": e["ref"], "name": e["name"]}
-                                for e in (eligible_speakers or [])],
+        "response_candidates": [{"ref": e["ref"], "name": e["name"]} for e in candidates],
         # A candidate marked `responded` has already spoken this round, which
         # an automatic chain offers on purpose: naming them begins the next
         # round (`routes.character_turns._compose`). The handoff text says so.
-        "response_repeat": any(e.get("responded") for e in (eligible_speakers or [])),
+        "response_repeat": any(e.get("responded") for e in candidates),
         "global_system_prompt": cfg.get("system_prompt", ""),
         "world_default_prompt": standing["world"]["text"],
         "campaign_default_prompt": standing["text"],
@@ -498,8 +384,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # through the world like every record the campaign inherits. Public
         # framing, so not on the actor-scoped blanking list below.
         "world_overview": worlds_read.profile_of(campaigns_read.world_root_of(cid)),
-        "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
-        "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
+        "prose_style_name": style_name,
+        "prose_style_body": style_body,
         "budget": targets[phase],
         "npc_cards": npc_cards,
         "cast_blocks": cast_blocks,
@@ -527,10 +413,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         # The recap, archive, ledgers, calendar, relationship graph, group
         # state, off-scene cast and art catalogue are campaign-wide. Birthday
         # metadata is retrieved for the current question in either voice.
-        **_campaign_view(cid, sid, croot, cast, recent_text, birthday_text,
-                         full_recap, activated_wi,
-                         recalled_wi, current_loc if not loc_excluded else None,
-                         actor_scoped=actor_scoped, excluded_refs=excluded_refs),
+        **_campaign_view(cid, sid, croot=croot, cast=cast, recent_text=recent_text,
+                         birthday_text=birthday_text, full_recap=full_recap,
+                         activated_wi=activated_wi, recalled_wi=recalled_wi,
+                         art_loc=setting_loc, actor_scoped=actor_scoped,
+                         excluded_refs=excluded_refs),
         "weather": world_state._weather_data(cid, sid),
         "current_setting": current_setting,
         "current_setting_secret": current_setting_secret,
@@ -551,85 +438,23 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # for anyone else. Off is no section at all.
     history_on = (history_view is not None and history_settings.read(cfg) is not None
                   and _section_on("history_recall"))
-    history_parts = {}
-    if history_on and history_view is not None:
-        allowed = (history_section.ACTOR_SECTIONS if actor_scoped
-                   else history_section.NARRATOR_SECTIONS)
-        history_parts = {k: v for k, v in history_section.parts(
-            history_view, {actor.ref(a): a["name"] for a in scene_cast},
-            response_actor["name"] if actor_scoped and response_actor else "").items()
-            if k in allowed}
+    history_parts = (_history_parts(history_view, scene_cast, actor_name, actor_scoped=actor_scoped)
+                     if history_on and history_view is not None else {})
     for section_id, key in history_section.DATA_KEYS.items():
         data[key] = list(history_parts[section_id].items) if section_id in history_parts else []
-    data["history_actor_name"] = response_actor["name"] if actor_scoped and response_actor else ""
+    data["history_actor_name"] = actor_name
 
-    if actor_scoped:
-        # These fields have no actor attribution. In particular a recap or a
-        # group marked public does not make its private campaign state public.
-        #
-        # THE CONTRACT, and it stays even though `_campaign_view` no longer
-        # gathers most of these for an actor-scoped compose: that is an
-        # optimisation, and this is what an NPC's prompt is allowed to hold.
-        for key in ("story_entries", "archive_entries", "plot_lines", "commitment_lines",
-                    "group_states", "secret_group_states", "offscene_active", "offscene_known",
-                    "players", "refs", "ref_names", "available_art", "history_evidence",
-                    "history_withheld", "history_known", "history_suspected"):
-            data[key] = []
-        # An NPC's history is set again from the view's visible slices alone:
-        # whatever populated the keys above, nothing else reaches it.
-        for section_id in history_section.ACTOR_SECTIONS:
-            if section_id in history_parts:
-                data[history_section.DATA_KEYS[section_id]] = list(history_parts[section_id].items)
-        data["relationship_lines"] = actor.own_relationships(cid, actor_ref, roster)
-        data["speaker"] = None
-        data["today"] = None  # scheduled events have no knowledge attribution
-        data["mechanics_sheets"] = [s for s in data["mechanics_sheets"] if s.get("ref") == actor_ref]
-        data["mechanics_checks"] = [c for c in data["mechanics_checks"] if c.get("ref") == actor_ref]
+    if npc_ref is not None:
+        _scope_to_actor(data, cid, npc_ref, roster, history_parts)
 
-    # One assigned speaker per call makes whole-turn block limits irrelevant.
-    # Measure only that speaker's recent prose.
-    drift = (length_drift.measure_contributions(
-        visible, response_actor["name"], targets["continuation"])
-        if response_actor else None)
-    length_correction = (prompts.render("scene/length_correction.j2",
-                                        drift=drift,
-                                        budget=targets["continuation"])
-                         if drift else "")
-
-    voice_notes = cast_data._voice_notes(cid, croot, cast)
-    voice_correction = (prompts.render("scene/voice_correction.j2", voice_notes=voice_notes)
-                        if voice_notes else "")
-
-    post_history = prompts.render("scene/post_history.j2", npc_cards=npc_cards,
-                                  voice_correction=voice_correction,
-                                  length_correction=length_correction)
-    post_history = _expanded(post_history)
-
+    post_history = _expanded(_post_history(cid, croot, cast, npc_cards, response_actor,
+                                           visible=visible, budget=targets["continuation"]))
     # The notes go INTO the projected history, each its own system message at
     # its depth (`authors_note.inject`); their positions travel beside it in
     # `notes`, never on the wire. An opener sends no history, so its notes ride
     # in `before_post` instead (`compose_opener`).
-    in_history = [] if opener else applied_notes
-    if images > 0:
-        # The newest `images` pictures stay as references (#377): projected as
-        # sentinels, expanded like any other text, then split into parts.
-        image_table: dict[int, dict] = {}
-        nonce = ""
-
-        def project(messages: list[dict]) -> list[dict]:
-            nonlocal nonce
-            projected, table, nonce = story._project_history_refs(messages, images=images,
-                                                                  cid=cid)
-            image_table.update(table)
-            return projected
-
-        projected, positions = authors_note.inject(history, in_history, project)
-        sub_history = _split_refs([{"role": m["role"], "content": _expanded(m["content"])}
-                                   for m in projected], image_table, nonce)
-    else:
-        projected, positions = authors_note.inject(history, in_history)
-        sub_history = [{"role": m["role"], "content": _expanded(m["content"])}
-                       for m in projected]
+    sub_history, positions = _projected(cid, history, [] if opener else applied_notes,
+                                        images=images, expand=_expanded)
     notes = positions + [{**n, "index": None, "status": "skipped"} for n in skipped_notes]
     opener_notes = ([(n["level"], _expanded(authors_note.render(n))) for n in applied_notes]
                     if opener else [])
@@ -652,7 +477,289 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             "response_settings": {"style_id": budget["style_id"], "phase": phase,
                                   **targets[phase]},
             "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
-                                                current_loc if not loc_excluded else None, voiced_ids)}
+                                                setting_loc, voiced_ids)}
+
+
+def _scan_window(visible: list[dict], depth: int, seed: str) -> str:
+    """The last `depth` posts in context as one text, with this turn's
+    unsent `seed` after them: what semantic recall, the mechanics rules, the
+    archive and the art catalogue are matched against. World info reads the
+    same posts one by one instead (`posts` in `_assemble`)."""
+    # depth 0 => no scan window (history[-0:] would be the WHOLE list, so guard it)
+    recent_text = "\n".join(m["content"] for m in visible[-depth:]) if depth else ""
+    if seed:  # opener: the prompt stands in for the (absent) recent history
+        recent_text = (recent_text + "\n" + seed).strip()
+    return recent_text
+
+
+def _assigned_npc(cast: list[dict], actor_ref: str) -> list[dict]:
+    """The cast an NPC's own call keeps: the present NPC `actor_ref` names.
+    Raises when it names nobody on stage, or nobody who is an NPC."""
+    selected = [a for a in cast if actor.ref(a) == actor_ref and a["role"] == "npc"]
+    if not selected:
+        raise ValueError("Assigned actor is not a present NPC")
+    return selected
+
+
+def _npc_cards(cid: str, aroot, cast: list[dict]) -> tuple[list[dict], list[str]]:
+    """Each present NPC's card at its locked version, and beside it that NPC's
+    id. A card or version that cannot be read drops the NPC from both lists,
+    which is what keeps them aligned for the `zip`s in `_assemble`."""
+    npc_cards: list[dict] = []
+    npc_ids: list[str] = []
+    for a in cast:
+        if a["role"] != "npc":
+            continue
+        vid = appearances_versions.locked_version(cid, a["kind"], a["id"])
+        try:
+            npc_cards.append(characters.read_card(aroot, a["id"], vid)["data"])
+        except (characters.CharacterNotFound, characters.VersionNotFound):
+            continue
+        # Appended only after the read SUCCEEDS, so the two lists stay aligned
+        # for the `zip`s that pair them -- an unreadable card drops out of both.
+        npc_ids.append(a["id"])
+    return npc_cards, npc_ids
+
+
+def _players(cid: str, aroot, cast: list[dict]) -> tuple[list[dict], list[str]]:
+    """Each present player's persona (a PC) or card (a character played as
+    one) at its locked version, tagged with its kind, and the names they go
+    by. One that cannot be read is left out of both."""
+    players: list[dict] = []
+    names: list[str] = []
+    for a in cast:
+        if a["role"] != "player":
+            continue
+        vid = appearances_versions.locked_version(cid, a["kind"], a["id"])
+        try:
+            if a["kind"] == "pcs":
+                p = pcs.read_persona(aroot, a["id"], vid)
+                players.append({"kind": "pcs", **p})
+                names.append(p.get("name", a["id"]))
+            else:
+                data = characters.read_card(aroot, a["id"], vid)["data"]
+                players.append({"kind": "characters", **data})
+                names.append(data.get("name", a["id"]))
+        except (pcs.PCNotFound, pcs.PCVersionNotFound, characters.CharacterNotFound, characters.VersionNotFound):
+            continue
+    return players, names
+
+
+def _card_text(card: dict, key: str) -> str:
+    """A card field as stripped text, or "" when it is not a string.
+
+    A card is hand-editable and importable, so every one of these fields can
+    arrive as a non-string -- `test_a_malformed_card_name_costs_only_its_own_actor`
+    hand-edits `data.name` to a LIST. Reading through this keeps a malformed
+    field costing only its own block rather than raising out of the whole
+    assembly, which is the same per-actor failure policy `_character_states`
+    already applies.
+    """
+    v = card.get(key)
+    return v.strip() if isinstance(v, str) else ""
+
+
+def _cast_blocks(cid: str, npc_cards: list[dict], npc_ids: list[str], *,
+                 names: list[str], recent: str, expand) -> tuple[list[dict], list[str]]:
+    """ONE resolved structure for every section that names a character:
+    `character_descriptions`, `voice_policy`, `voice_anchors`,
+    `voice_examples` -- each NPC's shown name (`names`, already disambiguated
+    against the players), description, effective voice anchor and the example
+    dialogue chosen against `recent`, plus beside them each block's identity
+    for source capture. The identities are kept out of the rows, which custom
+    templates may serialise whole (#131).
+
+    Built here rather than per-template because disambiguation and nameless
+    handling must not be able to diverge between them, and because a template
+    resolving an anchor would be doing store IO from a render.
+
+    Nothing is filtered out HERE. Filtering is each template's business, per
+    block: `named_npc_count` is what the voice policy renders on, and dropping
+    the anchorless here would switch that policy off in exactly the case it
+    exists for -- a cast with no anchors yet.
+
+    "Here" is doing work: a present NPC whose card or locked version cannot be
+    read already dropped out of `npc_cards` (`_npc_cards`), and cannot
+    contribute a block it has no data for. That is the pre-existing filter, not
+    a new one.
+    """
+    blocks = []
+    block_refs = []
+    # strict=True is doing real work: `npc_ids` is appended only after its card
+    # read succeeds, so the two lists staying aligned is an invariant rather
+    # than an assumption, and a silent truncation here would attach one
+    # character's anchor to another's name.
+    for shown, card, char_id in zip(names, npc_cards, npc_ids, strict=True):
+        parts = [_card_text(card, "description"), _card_text(card, "personality"),
+                 _card_text(card, "scenario")]
+        anchor = overlay.voice_anchor_record(cid, char_id)["text"]
+        block_refs.append(f"characters:{char_id}")
+        blocks.append({
+            "name": shown,
+            "description": "\n".join(p for p in parts if p),
+            "anchor": voice_anchors.effective(expand(anchor)),
+            "example": actor.select_examples(expand(_card_text(card, "mes_example")),
+                                              voice_anchors.VOICE_EXAMPLE_CAP, recent),
+        })
+    return blocks, block_refs
+
+
+def _current_setting(cid: str, loc: str | None,
+                     actor_ref: str | None) -> tuple[str, bool, frozenset]:
+    """What renders as the Current setting: the scene's location's body, and
+    whether it is secret -- plus the location world info must then hold back,
+    which is the location itself once it has been read, rendered or not.
+
+    `loc` is None when the scene is nowhere or the reader excluded where it
+    is. A location deleted since the scene moved there omits the block and
+    holds nothing back. `actor_ref` names an NPC's own call, which sees the
+    setting only when it `actor.knows` the location.
+    """
+    if not loc:
+        return "", False, frozenset()
+    try:
+        record = overlay.read_entity(cid, "locations", loc)
+    except entities.EntityNotFound:
+        return "", False, frozenset()  # referenced location was deleted — omit the setting block
+    # The current location does NOT pass through `activate` -- it is
+    # excluded from world info precisely so it can render as the
+    # setting instead -- so the secrecy gate has to be applied here as
+    # well, or "gm-only never enters the prompt" is false for the one
+    # location the scene is actually standing in. Suppressing the block
+    # leaves the model to invent a setting, which is the right way to
+    # be wrong: the alternative is overriding the level the user set
+    # because we decided they needed the description more.
+    level = entities.normalize_secrecy(record["meta"].get("secrecy"))
+    owners = [v.strip() for v in record["meta"].get("owners", "").split(",") if v.strip()]
+    visible = actor_ref is None or actor.knows(
+        {"secrecy": level, "owners": owners,
+         "known_by": record["meta"].get("known_by", "")}, actor_ref)
+    if level == entities.GM_ONLY or not visible:
+        return "", False, frozenset({loc})
+    return record["body"].strip(), level == entities.SECRET, frozenset({loc})
+
+
+def _prose_style(style_id: str) -> tuple[str, str]:
+    """The resolved prose style's name and body, or two blanks for none.
+
+    resolve() already skips ids that don't exist; this also covers a file
+    that exists but can't be read, which must not break generation either.
+    """
+    if not style_id:
+        return "", ""
+    try:
+        style = styles.read_style(style_id)
+    except (styles.StyleNotFound, OSError, UnicodeDecodeError):
+        return "", ""
+    return style["meta"]["name"], style["body"].strip()
+
+
+def _lore(result: activation.Result, activated: list[dict], recalled: list[dict],
+          names: dict[str, str]) -> dict:
+    """The activated entries again as the engine's hits, for what renders
+    World info per entry (`_render_sections`) and the inspector rows:
+    priority, match age and the reason each one is in. Matched by identity, so
+    an actor filter applied to `activated` and `recalled` is honoured here too.
+    `names` resolves every ref a reason can name -- a record listed this turn,
+    activated or not, or someone in the room."""
+    activated_ids = {id(e) for e in activated}
+    recalled_ids = {id(e) for e in recalled}
+    return {"world_info": [h for h in result.keyword if id(h.entry) in activated_ids],
+            "recalled": [h for h in result.recalled if id(h.entry) in recalled_ids],
+            "held_back": list(result.held_back),
+            "names": names}
+
+
+def _history_parts(view: epistemic.EpistemicView, scene_cast: list[dict], actor_name: str,
+                   *, actor_scoped: bool) -> dict:
+    """The view's sections this reader may be shown: the narrator's two, or an
+    NPC's own two, each named for the people in the room."""
+    allowed = (history_section.ACTOR_SECTIONS if actor_scoped
+               else history_section.NARRATOR_SECTIONS)
+    return {k: v for k, v in history_section.parts(
+        view, {actor.ref(a): a["name"] for a in scene_cast}, actor_name).items()
+        if k in allowed}
+
+
+#: The template data an NPC's own prompt never holds. See `_scope_to_actor`.
+_NARRATOR_ONLY_KEYS = ("story_entries", "archive_entries", "plot_lines", "commitment_lines",
+                       "group_states", "secret_group_states", "offscene_active", "offscene_known",
+                       "players", "refs", "ref_names", "available_art", "history_evidence",
+                       "history_withheld", "history_known", "history_suspected")
+
+
+def _scope_to_actor(data: dict, cid: str, actor_ref: str, roster: list[dict],
+                    history_parts: dict) -> None:
+    """Take out of `data`, in place, what an assigned NPC's prompt may not hold.
+
+    These fields have no actor attribution. In particular a recap or a group
+    marked public does not make its private campaign state public.
+
+    THE CONTRACT, and it stays even though `_campaign_view` no longer gathers
+    most of these for an actor-scoped compose: that is an optimisation, and
+    this is what an NPC's prompt is allowed to hold.
+    """
+    for key in _NARRATOR_ONLY_KEYS:
+        data[key] = []
+    # An NPC's history is set again from the view's visible slices alone:
+    # whatever populated the keys above, nothing else reaches it.
+    for section_id in history_section.ACTOR_SECTIONS:
+        if section_id in history_parts:
+            data[history_section.DATA_KEYS[section_id]] = list(history_parts[section_id].items)
+    data["relationship_lines"] = actor.own_relationships(cid, actor_ref, roster)
+    data["speaker"] = None
+    data["today"] = None  # scheduled events have no knowledge attribution
+    data["mechanics_sheets"] = [s for s in data["mechanics_sheets"] if s.get("ref") == actor_ref]
+    data["mechanics_checks"] = [c for c in data["mechanics_checks"] if c.get("ref") == actor_ref]
+
+
+def _post_history(cid: str, croot, cast: list[dict], npc_cards: list[dict],
+                  response_actor: dict | None, *, visible: list[dict], budget: dict) -> str:
+    """The post-history block, before macro expansion: the cards' own
+    post-history instructions and the length and voice correctives.
+
+    One assigned speaker per call makes whole-turn block limits irrelevant, so
+    the length corrective measures only that speaker's recent prose against
+    the continuation `budget`, and a call with no assigned speaker gets none.
+    """
+    drift = (length_drift.measure_contributions(visible, response_actor["name"], budget)
+             if response_actor else None)
+    length_correction = (prompts.render("scene/length_correction.j2", drift=drift, budget=budget)
+                         if drift else "")
+    voice_notes = cast_data._voice_notes(cid, croot, cast)
+    voice_correction = (prompts.render("scene/voice_correction.j2", voice_notes=voice_notes)
+                        if voice_notes else "")
+    return prompts.render("scene/post_history.j2", npc_cards=npc_cards,
+                          voice_correction=voice_correction,
+                          length_correction=length_correction)
+
+
+def _projected(cid: str, history: list[dict], notes: list[dict], *, images: int,
+               expand) -> tuple[list[dict], list[dict]]:
+    """The history as it is sent -- projected, author's `notes` injected at
+    their depths, every message macro-expanded -- and the notes' positions in it.
+
+    With `images` above 0, the newest `images` pictures stay as references
+    (#377): projected as sentinels, expanded like any other text, then split
+    into parts.
+    """
+    if images <= 0:
+        projected, positions = authors_note.inject(history, notes)
+        return ([{"role": m["role"], "content": expand(m["content"])} for m in projected],
+                positions)
+    image_table: dict[int, dict] = {}
+    nonce = ""
+
+    def project(messages: list[dict]) -> list[dict]:
+        nonlocal nonce
+        projected, table, nonce = story._project_history_refs(messages, images=images, cid=cid)
+        image_table.update(table)
+        return projected
+
+    projected, positions = authors_note.inject(history, notes, project)
+    return (_split_refs([{"role": m["role"], "content": expand(m["content"])} for m in projected],
+                        image_table, nonce),
+            positions)
 
 
 def _parts_of(text: str, refs: dict[int, dict], sentinel) -> list:
@@ -756,10 +863,10 @@ def _tracker_lines(cid: str, sid: str, tracker: tuple[dict, list[dict], dict[str
         return []
 
 
-def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str,
+def _campaign_view(cid: str, sid: str, *, croot, cast: list[dict], recent_text: str,
                    birthday_text: str,
                    full_recap: int, activated_wi: list[dict], recalled_wi: list[dict],
-                   art_loc: str | None, *, actor_scoped: bool,
+                   art_loc: str | None, actor_scoped: bool,
                    excluded_refs: frozenset[str]) -> dict:
     """The template data only a campaign-wide voice is shown.
 
@@ -1377,35 +1484,21 @@ def _world_info_section(section: Section, data: dict, lore: dict, head: str,
                   **({"sources": sources} if sources else {})}
 
 
-def _expanded_section(section: Section, data: dict, body: str, head: str, lore: dict | None,
-                      expand, history_view=None, history_parts=None,
-                      history_omissions=None, cfg=None,
+def _expanded_section(section: Section, data: dict, body: str, head: str, expand, a: dict, *,
                       capture: source_text.Capture | None = None) -> tuple[str, dict]:
     """One rendered section's text after macro expansion, with `head` (already
     expanded) on the front, and any keys it adds to its section dict.
 
     World info is expanded piece by piece instead, so the packer can shed one
     entry at a time (spec §6) without re-drawing anything: see
-    `_world_info_section`. Recalled lore is expanded whole, as
-    every other section is, and only gains its inspector detail."""
-    part = (history_parts or {}).get(section.id) if history_view is not None else None
-    if part is not None:
-        # The first of a pair keeps its row when it carries nothing, so the
-        # inspector can say why; the second has nothing to say then.
-        if not part.items and section.id not in (history_section.NARRATOR_SECTIONS[0],
-                                                 history_section.ACTOR_SECTIONS[0]):
-            return "", {}
-        try:
-            return history_section.section(history_view.evidence, expand, tokens.count_tokens,
-                                           history_omissions or {},
-                                           config.read_config() if cfg is None else cfg, part)
-        except Exception:  # noqa: BLE001 -- recalled history is additive; it never costs the turn
-            # Per section: one that cannot render drops alone (spec 11 §6.4).
-            log.warning("Recalled history section %s dropped from a compose: it could not "
-                        "be rendered", section.id)
-            return "", {}
+    `_world_info_section`. Recalled history is fitted from its frozen view
+    (`_recalled_history`). Recalled lore is expanded whole, as every other
+    section is, and only gains its inspector detail."""
     if section.id in history_section.FRAMES:
-        return "", {}
+        return _recalled_history(section, a, expand)
+    # Absent from a hand-built `a`, which then renders World info whole (see
+    # `_render_sections`).
+    lore = a.get("lore")
     if lore is not None and section.id == _WORLD_INFO_SECTION:
         return _world_info_section(section, data, lore, head, expand, capture)
     if capture:
@@ -1418,6 +1511,31 @@ def _expanded_section(section: Section, data: dict, body: str, head: str, lore: 
     if lore is not None and section.id == _RECALLED_SECTION:
         extra["lore"] = _lore_detail(_template_order(lore["recalled"]), lore["names"])
     return text, extra
+
+
+def _recalled_history(section: Section, a: dict, expand) -> tuple[str, dict]:
+    """One of the recalled-history sections, fitted from the view `_assemble`
+    froze (`history_section.section`) -- or nothing, when that view has no
+    part for it or the part cannot be rendered."""
+    view = a.get("history_view")
+    part = (a.get("history_parts") or {}).get(section.id)
+    if view is None or part is None:
+        return "", {}
+    # The first of a pair keeps its row when it carries nothing, so the
+    # inspector can say why; the second has nothing to say then.
+    if not part.items and section.id not in (history_section.NARRATOR_SECTIONS[0],
+                                             history_section.ACTOR_SECTIONS[0]):
+        return "", {}
+    cfg = a.get("config")
+    try:
+        return history_section.section(view.evidence, expand, tokens.count_tokens,
+                                       a.get("history_omissions") or {},
+                                       config.read_config() if cfg is None else cfg, part)
+    except Exception:  # noqa: BLE001 -- recalled history is additive; it never costs the turn
+        # Per section: one that cannot render drops alone (spec 11 §6.4).
+        log.warning("Recalled history section %s dropped from a compose: it could not "
+                    "be rendered", section.id)
+        return "", {}
 
 
 def _source_data(section: Section, data: dict, lore: dict | None,
@@ -1468,7 +1586,7 @@ def _section_body(section: Section, data: dict, capture: source_text.Capture | N
     return plain, None, data
 
 
-def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
+def _render_sections(a: dict, cid: str, sid: str, *, opener: bool = False,
                      keep_guidance_slot: bool = False, describe_sources: bool = False
                      ) -> list[dict]:
     """Every applicable section, rendered and macro-expanded once, in order.
@@ -1513,11 +1631,7 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
     #: the rule below about contiguous runs rather than the whole message.
     last_heading = ""
     for section in layout.apply(SECTIONS):
-        if section.pcless_only and not data["pcless"]:
-            continue
-        if section.opener_only and not opener:
-            continue
-        if section.except_opener and opener:
+        if not _applies(section, pcless=data["pcless"], opener=opener):
             continue
         # Keep the enabled layout position without rendering a profile yet.
         # Empty guidance must not split a shared-heading run; a selected profile
@@ -1566,9 +1680,8 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
         head = ""
         if body and section.heading and section.heading != last_heading:
             head = expand(prompts.render(section.heading, **data)).strip()
-        text, extra = _expanded_section(section, section_data, body, head, lore, expand,
-                                        a.get("history_view"), a.get("history_parts"),
-                                        a.get("history_omissions"), a.get("config"), capture)
+        text, extra = _expanded_section(section, section_data, body, head, expand, a,
+                                        capture=capture)
         if not text:
             # `last_heading` stays put: an empty section breaks no run.
             out.extend(r for r in (_held_back_only(section, pinned, extra),) if r)
@@ -1583,6 +1696,15 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
     if not opener:
         actor.add_contract(out, data)
     return out
+
+
+def _applies(section: Section, *, pcless: bool, opener: bool) -> bool:
+    """Whether `section` belongs in this kind of prompt at all, by its three
+    selectors: a pcless-only section in a scene with no player character, an
+    opener-only one in an opener, and one the opener skips anywhere else."""
+    return not ((section.pcless_only and not pcless)
+                or (section.opener_only and not opener)
+                or (section.except_opener and opener))
 
 
 def _dedupe_runs(sections: list[dict]) -> None:
@@ -1835,7 +1957,7 @@ def _system_text(packed_sections: list[dict]) -> str:
 Appended = tuple[str, str, str]
 
 
-def compose_turn(cid: str, sid: str, turn: dict | None = None,
+def compose_turn(cid: str, sid: str, *, turn: dict | None = None,
                  appended: tuple[Appended, ...] = (),
                  describe: bool = True, model: str = "", actor_ref: str | None = None,
                  eligible_speakers: list[dict] | None = None,
@@ -1946,7 +2068,7 @@ def _plan_messages(text: str) -> tuple[dict, ...]:
 
 
 
-def build_messages(cid: str, sid: str, turn: dict | None = None,
+def build_messages(cid: str, sid: str, *, turn: dict | None = None,
                    appended: tuple[Appended, ...] = (), model: str = "",
                    images: int = 0) -> list[dict]:
     """`compose_turn` without the breakdown — see there.
@@ -1960,7 +2082,7 @@ def build_messages(cid: str, sid: str, turn: dict | None = None,
                         images=images)[0]
 
 
-def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = None,
+def compose_director_turn(cid: str, sid: str, note: str, *, turn: dict | None = None,
                           describe: bool = True, model: str = "", actor_ref: str | None = None,
                           eligible_speakers: list[dict] | None = None,
                           successor_by_decision: bool = False,
@@ -2007,7 +2129,7 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
 
 
 
-def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = None,
+def build_director_messages(cid: str, sid: str, note: str, *, turn: dict | None = None,
                             model: str = "", images: int = 0) -> list[dict]:
     """`compose_director_turn` without the breakdown — see there."""
     return compose_director_turn(cid, sid, note, turn=turn, describe=False, model=model,
@@ -2188,6 +2310,19 @@ def _notes_row(notes: list[dict], p: dict, count) -> tuple[dict, frozenset[int]]
     return row, frozenset(kept)
 
 
+def _conversation_rows(notes: list[dict], p: dict, count) -> list[dict]:
+    """The rows for what was sent inside the conversation: the history's
+    (`_history_rows`), and the Author's notes row (`_notes_row`) right after
+    the conversation row -- but only when a note is configured, so a campaign
+    with none describes its turns exactly as it did before notes existed."""
+    if not notes:
+        return _history_rows(p, count)
+    note_row, note_index = _notes_row(notes, p, count)
+    history_rows = _history_rows(p, count, note_index, p.get("notes_trimmed", 0))
+    at = next((n + 1 for n, r in enumerate(history_rows) if r["id"] == "history"), 0)
+    return [*history_rows[:at], note_row, *history_rows[at:]]
+
+
 def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
                count=None) -> dict:
     """The inspector's view of a turn, from an assemble/pack pair the caller
@@ -2234,16 +2369,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
 
     # Every history message, notes included: they are sent, so they cost.
     hist_tokens = sum(pack.message_cost(m["content"], count) for m in p["history"])
-    notes = a.get("notes") or []
-    if notes:
-        # Only when a note is configured, so a campaign with none describes
-        # its turns exactly as it did before notes existed.
-        note_row, note_index = _notes_row(notes, p, count)
-        history_rows = _history_rows(p, count, note_index, p.get("notes_trimmed", 0))
-        at = next((n + 1 for n, r in enumerate(history_rows) if r["id"] == "history"), 0)
-        rows += [*history_rows[:at], note_row, *history_rows[at:]]
-    else:
-        rows += _history_rows(p, count)
+    rows += _conversation_rows(a.get("notes") or [], p, count)
     if a["post_history"]:
         rows.append({"id": "post_history", "label": "Post-history instructions",
                      "text": a["post_history"], "pinned": False,
@@ -2258,7 +2384,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
     extra_tokens = [count(text) for _label, text in extra]
     rows += [{"id": f"appended_{n}", "label": label, "text": text, "tier": pack.LOCK_IN,
               "dropped": False, "trimmed": 0, "pinned": False, "tokens": cost}
-             for n, ((label, text), cost) in enumerate(zip(extra, extra_tokens))]
+             for n, ((label, text), cost) in enumerate(zip(extra, extra_tokens, strict=True))]
 
     kept = [s["text"] for s in p["sections"] if not s["dropped"]]
     total = (count(_compose_system(kept)) + hist_tokens

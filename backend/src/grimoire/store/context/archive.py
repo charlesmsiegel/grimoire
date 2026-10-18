@@ -55,34 +55,42 @@ def _archive_entries(cid: str, recent_text: str, exclude: frozenset[str] = froze
             depth = archive_depth(cid)
         if depth <= 0 or not recent_text.strip():
             return []
-        hits = []
-        for record in chronicle.read_chronicle(cid).values():
-            rid = str(record.get("id") or "")
-            if not rid or rid in exclude:
-                continue
-            if before and rid >= before:
-                continue  # a later scene is not "earlier" -- never frame it as history
-            # A list, or nothing. `absorb.parse` builds this field by iterating
-            # whatever the model returned, so a model that answers with a bare
-            # string instead of an array persists one character per "keyword" --
-            # and a key of "a" whole-word-matches ordinary prose, recalling
-            # unrelated scenes at random. The store is also hand-editable and
-            # may live in a synced folder, so the shape is checked here rather
-            # than assumed from upstream.
-            raw = record.get("keywords")
-            if not isinstance(raw, (list, tuple)):
-                continue
-            keys = [str(k).strip() for k in raw if str(k).strip()]
-            if not keys or not world_state.keyword_hit(keys, recent_text):
-                continue
-            # summary first: the archive's whole point is the detail the
-            # one-line recap dropped. one_line is the fallback for a record
-            # absorbed before summaries, or one whose summary came back empty.
-            text = str(record.get("summary") or record.get("one_line") or "").strip()
-            if not text:
-                continue
-            hits.append({"id": rid, "date": str(record.get("date") or "").strip(), "text": text})
+        hits = [hit for record in chronicle.read_chronicle(cid).values()
+                if (hit := _recalled(record, recent_text, exclude, before)) is not None]
         hits.sort(key=lambda h: h["id"], reverse=True)
         return hits[:depth]
     except Exception:  # noqa: BLE001 - corrupt chronicle.json / config: omit, don't crash
         return []
+
+
+def _recalled(record: dict, recent_text: str, exclude: frozenset[str],
+              before: str) -> dict | None:
+    """One chronicle record as an archive hit -- `{"id", "date", "text"}` --
+    or None when it is not one: unnamed, excluded, not earlier than `before`,
+    without usable keywords, not mentioned in `recent_text`, or with nothing
+    to say."""
+    rid = str(record.get("id") or "")
+    if not rid or rid in exclude:
+        return None
+    if before and rid >= before:
+        return None  # a later scene is not "earlier" -- never frame it as history
+    # A list, or nothing. `absorb.parse` builds this field by iterating
+    # whatever the model returned, so a model that answers with a bare
+    # string instead of an array persists one character per "keyword" --
+    # and a key of "a" whole-word-matches ordinary prose, recalling
+    # unrelated scenes at random. The store is also hand-editable and
+    # may live in a synced folder, so the shape is checked here rather
+    # than assumed from upstream.
+    raw = record.get("keywords")
+    if not isinstance(raw, (list, tuple)):
+        return None
+    keys = [str(k).strip() for k in raw if str(k).strip()]
+    if not keys or not world_state.keyword_hit(keys, recent_text):
+        return None
+    # summary first: the archive's whole point is the detail the
+    # one-line recap dropped. one_line is the fallback for a record
+    # absorbed before summaries, or one whose summary came back empty.
+    text = str(record.get("summary") or record.get("one_line") or "").strip()
+    if not text:
+        return None
+    return {"id": rid, "date": str(record.get("date") or "").strip(), "text": text}

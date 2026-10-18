@@ -85,12 +85,20 @@ def own_relationships(cid: str, actor_ref: str | None, roster: list[dict]) -> li
     return lines
 
 
+#: The most authored exchanges one character's example block keeps. A
+#: tuning value: the block is a sample of a voice rather than a record of it,
+#: and `cap` -- not this -- is what bounds its cost.
+EXAMPLE_EXCHANGES = 3
+
+
 def select_examples(text: str, cap: int, recent: str = "") -> str:
     """Keep whole authored exchanges, never a severed sentence or reply.
 
     The card format uses <START> to delimit exchanges. Undelimited text is
     one exchange. Large exchanges are skipped rather than sliced; smaller,
-    relevant exchanges can still fit. Ties retain authored order.
+    relevant exchanges can still fit. At most `EXAMPLE_EXCHANGES` are kept,
+    chosen most relevant to `recent` first and printed in authored order.
+    Ties retain authored order.
     """
     text = text.strip()
     if not text:
@@ -108,7 +116,7 @@ def select_examples(text: str, cap: int, recent: str = "") -> str:
         if used + cost <= cap:
             selected.append((index, block))
             used += cost
-        if len(selected) == 3:
+        if len(selected) == EXAMPLE_EXCHANGES:
             break
     return "\n\n".join(block for _, block in sorted(selected))
 

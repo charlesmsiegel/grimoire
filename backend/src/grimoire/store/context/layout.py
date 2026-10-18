@@ -160,9 +160,23 @@ def _ordered(catalog: list, stored: list) -> list[tuple]:
     implementation, because two would be free to disagree about where a section
     sits — and the editor claiming an order the renderer does not use is
     exactly the inspector/prompt split `SECTIONS` was restructured to remove.
+
+    Three passes, each placing one kind of section: the ones the layout
+    names, where it put them; the ones it never mentioned, beside their
+    catalog neighbour; and the coupled ones, behind their parent.
     """
     by_id = {s.id: s for s in catalog}
     order = [s.id for s in catalog]
+    out = _stored_sections(by_id, stored)
+    _place_newcomers(out, by_id, order)
+    _place_coupled(out, by_id, order)
+    return out
+
+
+def _stored_sections(by_id: dict, stored: list) -> list[tuple]:
+    """`(section, enabled)` for each catalog section `stored` names, in the
+    layout's order and under its label. An entry that is not a dict, names no
+    catalog section or repeats one already placed is skipped on its own."""
     out: list[tuple] = []
     seen: set[str] = set()
     for entry in stored:
@@ -174,33 +188,47 @@ def _ordered(catalog: list, stored: list) -> list[tuple]:
         seen.add(sid)
         out.append((by_id[sid]._replace(label=_clean_label(entry, by_id[sid].label)),
                     _entry_enabled(entry)))
+    return out
 
-    # Catalog sections the layout never mentioned, walked in catalog order so
-    # two consecutive newcomers keep their relative order: each is findable as
-    # the next one's predecessor once inserted.
-    #
-    # The anchor search reads `out`, which holds the DISABLED sections too, so
-    # a newcomer lands beside its catalog neighbour whether that neighbour is
-    # switched on or off. Searching only the enabled ones would make switching
-    # a section off silently move the next one up.
-    for sid in [s for s in order if s not in seen and s not in COUPLED]:
+
+def _position(out: list[tuple], sid: str) -> int | None:
+    """Where section `sid` sits in `out`, or None while it is not placed."""
+    return next((n for n, (s, _on) in enumerate(out) if s.id == sid), None)
+
+
+def _place_newcomers(out: list[tuple], by_id: dict, order: list[str]) -> None:
+    """Insert, enabled, every catalog section the layout never mentioned,
+    directly after the nearest catalog predecessor already in `out` (at the
+    top when there is none).
+
+    Walked in catalog order so two consecutive newcomers keep their relative
+    order: each is findable as the next one's predecessor once inserted.
+
+    The anchor search reads `out`, which holds the DISABLED sections too, so
+    a newcomer lands beside its catalog neighbour whether that neighbour is
+    switched on or off. Searching only the enabled ones would make switching
+    a section off silently move the next one up.
+    """
+    placed = {s.id for s, _on in out}
+    for sid in [s for s in order if s not in placed and s not in COUPLED]:
         idx = order.index(sid)
-        pos = 0
-        for prev in reversed(order[:idx]):
-            at = next((n for n, (s, _on) in enumerate(out) if s.id == prev), None)
-            if at is not None:
-                pos = at + 1
-                break
-        out.insert(pos, (by_id[sid], True))
+        anchor = next((at for prev in reversed(order[:idx])
+                       if (at := _position(out, prev)) is not None), None)
+        out.insert(0 if anchor is None else anchor + 1, (by_id[sid], True))
+
+
+def _place_coupled(out: list[tuple], by_id: dict, order: list[str]) -> None:
+    """Insert each coupled section directly behind its parent, and behind any
+    sibling already placed there, on exactly when the parent is. A parent the
+    layout does not hold takes its children with it."""
     for child in [s for s in order if s in COUPLED]:
-        at = next((n for n, (s, _on) in enumerate(out) if s.id == COUPLED[child]), None)
+        at = _position(out, COUPLED[child])
         if at is None:
             continue
         # After the parent and any sibling already placed behind it.
         while at + 1 < len(out) and COUPLED.get(out[at + 1][0].id) == COUPLED[child]:
             at += 1
         out.insert(at + 1, (by_id[child], out[at][1]))
-    return out
 
 
 def merge(catalog: list, stored: list) -> list:

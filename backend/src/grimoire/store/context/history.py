@@ -126,33 +126,13 @@ def parts(view: epistemic.EpistemicView, names: Mapping[str, str],
     detail = view.detail()
     rows = {id(c): row for c, row in zip(view.items, detail["items"], strict=True)}
     shown = view.visible_pairs()
-    out: dict[str, list] = {}
-    notes: dict[str, dict[str, dict]] = {}
     if view.perspective.actor is None:
         first, second = NARRATOR_SECTIONS
-        for origin, c in shown:
-            sid = second if c.state == "withheld" else first
-            item = replace(c.item, excerpts=_excerpts(c.slices), evidence_ids=())
-            out.setdefault(sid, []).append((origin, item))
-            if c.state == "attributed":
-                notes.setdefault(sid, {})[item.scene.key] = {
-                    "known_to": [names[r] for r in c.known_to if r in names],
-                    "suspected_by": [names[r] for r in c.suspected_by if r in names]}
+        out, notes = _narrator_items(shown, names)
         frame_vars: dict[str, object] = {}
     else:
         first, second = ACTOR_SECTIONS
-        for origin, c in shown:
-            for sid, kinds in ((first, ("witnessed", "known")), (second, ("suspected",))):
-                slices = [s for s in c.slices if s.access in kinds]
-                if not slices:
-                    continue
-                summary = next((s for s in slices if s.part == "summary"), None)
-                item = replace(c.item, summary=summary.text if summary else "",
-                               excerpts=_actor_excerpts(slices), evidence_ids=())
-                out.setdefault(sid, []).append((origin, item))
-                notes.setdefault(sid, {})[item.scene.key] = {
-                    "labels": _labels(slices),
-                    "summary_label": summary.access if summary else ""}
+        out, notes = _actor_items(shown)
         frame_vars = {"history_actor_name": actor_name}
     spent: dict = {}
     # The classification rides the first section's row alone, every item of
@@ -166,6 +146,51 @@ def parts(view: epistemic.EpistemicView, names: Mapping[str, str],
     return {sid: Part(sid, tuple(i for _c, i in out.get(sid, [])), notes.get(sid, {}),
                       FRAMES[sid], frame_vars, first_rows if sid == first else {}, spent)
             for sid in (first, second)}
+
+
+#: Per section id, its `(origin, item)` pairs and its items' notes by scene key.
+_Sorted = tuple[dict[str, list], dict[str, dict[str, dict]]]
+
+
+def _narrator_items(shown, names: Mapping[str, str]) -> _Sorted:
+    """The narrator's items, by section: a withheld item in
+    `history_narrator_only`, every other in `history_recall`, an attributed
+    one noted with who knows and who suspects it, names in present order."""
+    first, second = NARRATOR_SECTIONS
+    out: dict[str, list] = {}
+    notes: dict[str, dict[str, dict]] = {}
+    for origin, c in shown:
+        sid = second if c.state == "withheld" else first
+        item = replace(c.item, excerpts=_excerpts(c.slices), evidence_ids=())
+        out.setdefault(sid, []).append((origin, item))
+        if c.state == "attributed":
+            notes.setdefault(sid, {})[item.scene.key] = {
+                "known_to": [names[r] for r in c.known_to if r in names],
+                "suspected_by": [names[r] for r in c.suspected_by if r in names]}
+    return out, notes
+
+
+def _actor_items(shown) -> _Sorted:
+    """An NPC's items, by section: what it witnessed or knows of each item in
+    `history_known`, what it only suspects in `history_suspected` -- one item
+    in both when it has some of each -- each noted with its slices' access
+    labels."""
+    first, second = ACTOR_SECTIONS
+    out: dict[str, list] = {}
+    notes: dict[str, dict[str, dict]] = {}
+    for origin, c in shown:
+        for sid, kinds in ((first, ("witnessed", "known")), (second, ("suspected",))):
+            slices = [s for s in c.slices if s.access in kinds]
+            if not slices:
+                continue
+            summary = next((s for s in slices if s.part == "summary"), None)
+            item = replace(c.item, summary=summary.text if summary else "",
+                           excerpts=_actor_excerpts(slices), evidence_ids=())
+            out.setdefault(sid, []).append((origin, item))
+            notes.setdefault(sid, {})[item.scene.key] = {
+                "labels": _labels(slices),
+                "summary_label": summary.access if summary else ""}
+    return out, notes
 
 
 def summary_omissions(cid: str, sid: str, archive_scan_text: str, full_recap: int = 0) -> dict[str, str]:
@@ -356,19 +381,30 @@ def _retained(item: model.EvidenceItem, original: str, fitted: str,
         fitted = original[:cut].rstrip() + "\u2026"
     excerpts = []
     for e, excerpt in enumerate(item.excerpts):
-        posts = []
-        for p, post in enumerate(excerpt.posts):
-            start, end = spans.get(f"p{e}_{p}", (cut, cut))
-            text = original[start:min(end, cut)] if start < cut else ""
-            if text.strip():
-                posts.append(replace(post, text=text + ("\u2026" if end > cut else "")))
-        if posts:
-            start, end = spans[f"e{e}"]
-            text = original[start:min(end, cut)]
-            excerpts.append(model.Excerpt(tuple(posts), text + ("\u2026" if end > cut else "")))
+        kept = _surviving_excerpt(e, excerpt, original, spans, cut)
+        if kept is not None:
+            excerpts.append(kept)
     start, end = spans.get("s0", (0, 0))
     summary = item.summary if item.summary_omission else original[start:min(end, cut)].strip()
     return replace(item, summary=summary, excerpts=tuple(excerpts), evidence_ids=()), fitted
+
+
+def _surviving_excerpt(e: int, excerpt: model.Excerpt, original: str,
+                       spans: dict[str, tuple[int, int]], cut: int) -> model.Excerpt | None:
+    """Excerpt `e` of an item as far as the block survived to `cut`: the
+    posts with content before the cut, the last one ellipsised if the cut
+    fell inside it -- or None when no post's content made it."""
+    posts = []
+    for p, post in enumerate(excerpt.posts):
+        start, end = spans.get(f"p{e}_{p}", (cut, cut))
+        text = original[start:min(end, cut)] if start < cut else ""
+        if text.strip():
+            posts.append(replace(post, text=text + ("\u2026" if end > cut else "")))
+    if not posts:
+        return None
+    start, end = spans[f"e{e}"]
+    text = original[start:min(end, cut)]
+    return model.Excerpt(tuple(posts), text + ("\u2026" if end > cut else ""))
 
 
 def section(evidence: model.Evidence, expand, count, omissions: dict[str, str], cfg: dict,
@@ -383,22 +419,14 @@ def section(evidence: model.Evidence, expand, count, omissions: dict[str, str], 
         part = Part(NARRATOR_SECTIONS[0], evidence.items)
     notes = part.notes
     evidence = replace(evidence, items=part.items)
-    items = [replace(item, summary_omission=omissions.get(item.scene.sid, "")) for item in evidence.items]
-    items = [item for item in items if (item.summary and not item.summary_omission)
-             or any(excerpt.text for excerpt in item.excerpts)]
+    items = _renderable(evidence.items, omissions)
     blocks = {item.scene.key: _marked_item(item, notes.get(item.scene.key)) for item in items}
     order = [item.scene.key for item in items]
     render = _frame(blocks, order, expand, part.frame, part.frame_vars)
     boundaries, spans = {}, {}
     for key in order:
-        before, marker, after = blocks[key].partition("\x01")
-        blocks[key], spans[key] = _unmark(before + after)
-        boundaries[key] = len(_SPAN.sub("", before)) if marker else None
-    # The share retrieval fitted each item to: the selection's own depth when
-    # the evidence says it, else the setting's.
-    configured = settings.read(cfg)
-    depth = evidence.depth or (configured.depth if configured else len(items))
-    share = max(budget.MIN_ITEM_TOKENS, cap // max(depth, 1))
+        blocks[key], spans[key], boundaries[key] = _split_marks(blocks[key])
+    share = _share(evidence, cfg, cap, len(items))
     cap = part.room(cap)
     kept: set[str] = set()
     fitted = []
@@ -412,26 +440,78 @@ def section(evidence: model.Evidence, expand, count, omissions: dict[str, str], 
         usable = cap >= budget.MIN_ITEM_TOKENS and marks is not None
         block = _fit_block(original, fits, boundaries[key]) if usable else ""
         retained, block = _retained(item, original, block, marks) if block and marks else (item, "")
-        if block and (retained.excerpts or (retained.summary and not retained.summary_omission)) and fits(block):
+        if block and (retained.excerpts or _sends_summary(retained)) and fits(block):
             kept.add(key)
             fitted.append(replace(retained, tokens=count(block)))
         else:
             blocks[key] = ""
     detail = replace(evidence, items=tuple(fitted), ceiling=cap).detail()
     for row, item in zip(detail["items"], fitted, strict=True):
-        row["posts"] = [{"index": p.index, "key": p.key, "part": p.part,
-                         "speaker": p.speaker, "text": p.text}
-                        for excerpt in item.excerpts for p in excerpt.posts]
+        row["posts"] = _post_rows(item)
     part.spend(count(render(frozenset(kept))) if kept else 0)
     if part.rows:
         detail["epistemic"] = dict(part.rows)
-    detail["budget_from"] = ["config"]
-    if settings.integer(cfg.get("context_budget"), 0):
-        detail["budget_from"].append("context_budget")
-    if evidence.ceiling < budget.ceiling(cfg, None):
-        detail["budget_from"].append("context_window")
-    units = [{"ref": item.scene.key, "priority": len(fitted)-pos, "keep": False,
-              "pinned": False, "direct": True, "age": -1, "pos": pos}
-             for pos, item in enumerate(fitted)]
+    detail["budget_from"] = _budget_from(evidence, cfg)
     return render(frozenset(kept)), {"history": detail,
-            "shed": {"units": units, "render": render}}
+            "shed": {"units": _shed_units(fitted), "render": render}}
+
+
+def _split_marks(block: str) -> tuple[str, dict[str, tuple[int, int]] | None, int | None]:
+    """A `_marked_item` block taken apart after expansion: the block as it is
+    sent, the offsets of its marked parts (`_unmark`), and where its header
+    ends -- None for an item with no excerpt to mark the header against."""
+    before, marker, after = block.partition("\x01")
+    unmarked, spans = _unmark(before + after)
+    return unmarked, spans, (len(_SPAN.sub("", before)) if marker else None)
+
+
+def _post_rows(item: model.EvidenceItem) -> list[dict]:
+    """The inspector's rows for the posts a fitted item kept, in order."""
+    return [{"index": p.index, "key": p.key, "part": p.part,
+             "speaker": p.speaker, "text": p.text}
+            for excerpt in item.excerpts for p in excerpt.posts]
+
+
+def _sends_summary(item: model.EvidenceItem) -> bool:
+    """Whether the item's scene summary goes out with it: it has one, and no
+    enabled carrier (the archive or the recap) already shows it."""
+    return bool(item.summary) and not item.summary_omission
+
+
+def _renderable(items, omissions: dict[str, str]) -> list[model.EvidenceItem]:
+    """`items` with each one's summary omission applied, less any left with
+    nothing to send: no summary of its own and no excerpt text."""
+    marked = [replace(item, summary_omission=omissions.get(item.scene.sid, "")) for item in items]
+    return [item for item in marked
+            if _sends_summary(item) or any(excerpt.text for excerpt in item.excerpts)]
+
+
+def _share(evidence: model.Evidence, cfg: dict, cap: int, selected: int) -> int:
+    """The tokens one item may take: the ceiling split over the share
+    retrieval fitted each item to -- the selection's own depth when the
+    evidence says it, else the setting's, else the `selected` count -- and
+    never under `budget.MIN_ITEM_TOKENS`."""
+    configured = settings.read(cfg)
+    depth = evidence.depth or (configured.depth if configured else selected)
+    return max(budget.MIN_ITEM_TOKENS, cap // max(depth, 1))
+
+
+def _budget_from(evidence: model.Evidence, cfg: dict) -> list[str]:
+    """What the section's ceiling came from, for the inspector: the recall
+    budget setting always, the context budget whenever one is set, and the
+    model's window when the ceiling retrieval worked to is below what the
+    settings alone allow."""
+    out = ["config"]
+    if settings.integer(cfg.get("context_budget"), 0):
+        out.append("context_budget")
+    if evidence.ceiling < budget.ceiling(cfg, None):
+        out.append("context_window")
+    return out
+
+
+def _shed_units(fitted: list[model.EvidenceItem]) -> list[dict]:
+    """The packer's shed units for the fitted items: none kept or pinned, the
+    last one first to go."""
+    return [{"ref": item.scene.key, "priority": len(fitted)-pos, "keep": False,
+             "pinned": False, "direct": True, "age": -1, "pos": pos}
+            for pos, item in enumerate(fitted)]

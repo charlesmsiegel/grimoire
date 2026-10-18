@@ -448,21 +448,28 @@ def _r1(env: _Env, ref: str, m: dict, author: str | None) -> tuple[str, str] | N
     the post. Recency is not consulted -- a group nobody can expand cannot be
     ranked by date against one that can, so the withholding stands."""
     key, part = knowledge.post_key(m), knowledge.post_part(m)
-    match = knowledge.decide(env.src.entries or {}, actor=ref, scene=env.sc.identity,
+    entries = env.src.entries or {}
+    match = knowledge.decide(entries, actor=ref, scene=env.sc.identity,
                              post=(key, part), author=author, facts=env.sc.facts,
                              audiences=env.src.audiences or knowledge.Audiences({}, {}))
-    on_post = match is not None and \
-        (env.src.entries or {})[match.kid]["subject"]["kind"] == "posts"
-    ov = env.ov
-    if ov is not None and key and (key, part) in ov.blind \
-            and not (on_post and match is not None and match.basis == "override"):
-        return "unknown", "override_group"
-    if ov is not None and ov.blind_all and not on_post \
-            and not (match is not None and match.basis == "override"):
+    on_post = match is not None and entries[match.kid]["subject"]["kind"] == "posts"
+    if env.ov is not None and _group_withholds(env.ov, key, part, match, on_post=on_post):
         return "unknown", "override_group"
     if match is not None:
         return _STATUS[match.status], match.basis
     return None
+
+
+def _group_withholds(ov: _Overrides, key: str, part: str, match: knowledge.Match | None, *,
+                     on_post: bool) -> bool:
+    """Whether an unresolvable group's `unaware` withholds this post (R1's
+    stricter rule beside an override): one listing the post stands unless
+    `match` is an override on the post itself, and one over the whole scene
+    unless `match` is on the post or is an override at all."""
+    by_override = match is not None and match.basis == "override"
+    if key and (key, part) in ov.blind and not (on_post and by_override):
+        return True
+    return ov.blind_all and not on_post and not by_override
 
 
 def _intervals(entry: dict, sid: str) -> tuple[bool, list | None]:
@@ -754,9 +761,7 @@ def _classify_item(item: model.EvidenceItem, perspective: Perspective,
     indices = sorted({i for e in excerpts for _p, i in e if i is not None})
     per_ref = {ref: _classes(env, ref, indices) for ref in roster}
     state, known_to, suspected_by = _aggregate(per_ref, roster)
-    own = per_ref.get(perspective.actor) if perspective.actor else None
-    if perspective.actor is not None and own is None:
-        own = _classes(env, perspective.actor, indices)
+    own = _own_classes(env, perspective.actor, per_ref, indices)
     slices = _slices(item, sc, excerpts, own)
     if own is not None and decided:
         own = _answered(item.scene.key, own, slices, decided)
@@ -768,16 +773,36 @@ def _classify_item(item: model.EvidenceItem, perspective: Perspective,
         return Classified(item, tuple(slices), header, state, known_to, suspected_by,
                           by_ref=by_ref, sid=sc.sid)
     stood = _stood(env, perspective.actor) if perspective.actor else False
-    # 09's date is the scene's first moment and its location the scene's
-    # last: neither belongs to a post, so presence for part of the scene
-    # vouches for neither. Like the title, they ride a whole-scene grant.
-    header = {}
-    if own.scene[0] in VISIBLE:
-        header = {"date": item.date, "location": item.location}
-        if item.title == sc.title:
-            header["title"] = item.title
+    header = _actor_header(item, sc, own)
     return Classified(_redacted(item, header), tuple(slices), header, state, known_to,
                       suspected_by, by_ref=by_ref, sid=sc.sid, stood=stood)
+
+
+def _own_classes(env: _Env, actor: str | None, per_ref: Mapping[str, _Classes],
+                 indices: Sequence[int]) -> _Classes | None:
+    """The actor's own classes on the item -- out of the aggregate's when the
+    actor is in its roster, classified afresh otherwise -- or None for the
+    narrator, who has every re-matched post."""
+    own = per_ref.get(actor) if actor else None
+    if actor is not None and own is None:
+        own = _classes(env, actor, indices)
+    return own
+
+
+def _actor_header(item: model.EvidenceItem, sc: _Scene, own: _Classes) -> dict[str, str]:
+    """What an actor may hold of the item's header: nothing without a
+    whole-scene grant, and the title only while it is still the scene's.
+
+    09's date is the scene's first moment and its location the scene's
+    last: neither belongs to a post, so presence for part of the scene
+    vouches for neither. Like the title, they ride a whole-scene grant.
+    """
+    if own.scene[0] not in VISIBLE:
+        return {}
+    header = {"date": item.date, "location": item.location}
+    if item.title == sc.title:
+        header["title"] = item.title
+    return header
 
 
 # ---------------------------------------------------------------- entry point
@@ -830,15 +855,7 @@ def classify(perspective: Perspective, items: Sequence[model.EvidenceItem], *,
     roster = tuple(roster) or ((perspective.actor,) if perspective.actor
                                else perspective.present)
     cid = perspective.cid
-    reads: dict[str, _Scene | str] = {}
-    local = [item for item in items if _local(item, cid)]
-    src = None
-    if local:
-        with locks.best_effort_campaign_lock(cid) as held:
-            src = _read_source(cid, bool(held), perspective.present, perspective.sid)
-            for item in local:
-                if item.scene.key not in reads:
-                    reads[item.scene.key] = _read_scene(src, item.scene)
+    src, reads = _read_all(perspective, [item for item in items if _local(item, cid)])
     out = []
     for item in items:
         sc = reads.get(item.scene.key) if _local(item, cid) else _UNVERIFIABLE
@@ -855,6 +872,23 @@ def classify(perspective: Perspective, items: Sequence[model.EvidenceItem], *,
     shown = sum(1 for c in out for s in c.slices
                 if "decision" in s.basis and s.access in VISIBLE)
     return EpistemicView(perspective, tuple(out), decided=shown if decided else 0)
+
+
+def _read_all(perspective: Perspective, local: Sequence[model.EvidenceItem]
+              ) -> tuple[_Source | None, dict[str, _Scene | str]]:
+    """The campaign's shared sources and each local item's scene, by scene
+    key, read under one best-effort campaign hold -- or nothing read at all
+    when no item is local."""
+    reads: dict[str, _Scene | str] = {}
+    if not local:
+        return None, reads
+    cid = perspective.cid
+    with locks.best_effort_campaign_lock(cid) as held:
+        src = _read_source(cid, bool(held), perspective.present, perspective.sid)
+        for item in local:
+            if item.scene.key not in reads:
+                reads[item.scene.key] = _read_scene(src, item.scene)
+    return src, reads
 
 
 def classify_evidence(perspective: Perspective, evidence: model.Evidence) -> EpistemicView:
@@ -950,27 +984,36 @@ def _slice_of(r: dict) -> Slice:
                  tuple(_post_of(q) for q in r["source"]), tuple(dict(k) for k in keys))
 
 
-def _item_of(r: dict) -> Classified:
-    sid, identity, campaign = r["scene"]
+def _scene_ref_of(r) -> model.SceneRef:
+    sid, identity, campaign = r
     if not (isinstance(sid, str) and (identity is None or isinstance(identity, str))
             and isinstance(campaign, str)):
         raise ValueError("not a scene ref")
+    return model.SceneRef(sid, identity, campaign)
+
+
+def _header_of(r) -> dict:
+    if not isinstance(r, dict) or not all(isinstance(v, str) for v in r.values()):
+        raise ValueError("not a header")
+    return dict(r)
+
+
+def _item_of(r: dict) -> Classified:
+    scene = _scene_ref_of(r["scene"])
     for name in ("title", "date", "location", "summary", "summary_omission", "state", "sid"):
         if not isinstance(r[name], str):
             raise ValueError(f"not an item's {name}")
     item = model.EvidenceItem(
-        model.SceneRef(sid, identity, campaign), r["title"], date=r["date"],
+        scene, r["title"], date=r["date"],
         location=r["location"], summary=r["summary"],
         excerpts=tuple(model.Excerpt(tuple(_post_of(q) for q in e["posts"]), e["text"])
                        for e in r["excerpts"]),
         evidence_ids=_strings(r["evidence_ids"]), tokens=int(r["tokens"]),
         summary_omission=r["summary_omission"])
-    header = r["header"]
-    if not isinstance(header, dict) or not all(isinstance(v, str) for v in header.values()):
-        raise ValueError("not a header")
+    header = _header_of(r["header"])
     by_ref = {str(ref): {str(part): (str(cls[0]), str(cls[1])) for part, cls in parts.items()}
               for ref, parts in r["by_ref"].items()}
-    return Classified(item, tuple(_slice_of(s) for s in r["slices"]), dict(header),
+    return Classified(item, tuple(_slice_of(s) for s in r["slices"]), header,
                       r["state"], _strings(r["known_to"]), _strings(r["suspected_by"]),
                       admitted=r["admitted"] is True, by_ref=by_ref, sid=r["sid"],
                       stood=r["stood"] is True)

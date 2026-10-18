@@ -87,11 +87,6 @@
   "backend/src/grimoire/store/context/macros.py": {
     "arg-type": 2
   },
-  "backend/src/grimoire/store/context/world_state.py": {
-    "arg-type": 2,
-    "call-overload": 1,
-    "operator": 1
-  },
   "backend/src/grimoire/store/export.py": {
     "assignment": 1
   },

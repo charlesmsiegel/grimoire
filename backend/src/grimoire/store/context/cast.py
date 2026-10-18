@@ -151,7 +151,18 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
     present = {a["id"] for a in appearances_cast.scene_cast(cid, sid) if a["kind"] == "characters"}
     roster = appearances_cast.roster(cid)
     roster_ids = {a["id"] for a in roster if a["kind"] == "characters"}
+    active = _active_elsewhere(croot, roster, present)
+    known = _known_to_exist(cid, roster_ids | present)
+    # Asked only when it can bite: `_scope_known` reads a card per in-scene
+    # actor to rank the tail, and a campaign inside the ceiling has no tail.
+    limit = _known_limit()
+    if limit and len(known) > limit:
+        known = _scope_known(cid, sid, known, limit)
+    return active, known
 
+
+def _active_elsewhere(croot, roster: list[dict], present: set[str]) -> list[dict]:
+    """Tier 2: each roster NPC not in this scene that has a dossier, with it."""
     active: list[dict] = []
     for a in roster:
         if a["kind"] != "characters" or a["role"] != "npc" or a["id"] in present:
@@ -160,7 +171,13 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
         if body:
             active.append({"name": _char_name(croot, a["id"]), "dossier": body,
                            "ref": f"characters:{a['id']}"})
+    return active
 
+
+def _known_to_exist(cid: str, skip: set[str]) -> list[dict]:
+    """Tier 3, unbounded: every other world character with a tagline -- its
+    name, the tagline and its available versions. `skip` is the roster and
+    the scene's cast, who are in a tier of their own or on stage."""
     known: list[dict] = []
     # Ids off directory listings (`character_refs` no longer builds the full
     # row), and one overlay view for every candidate's tagline and root: tier
@@ -168,7 +185,7 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
     # re-read of the campaign's ledgers is paid per character per turn.
     v = overlay.view(cid)
     for char_id in overlay.character_refs(cid, v=v):
-        if char_id in roster_ids or char_id in present:
+        if char_id in skip:
             continue
         tag = overlay.tagline(cid, char_id, v=v)
         if not tag:
@@ -188,12 +205,7 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
         known.append({"id": char_id, "name": record["meta"]["name"],
                       "tagline": tag,
                       "versions": [ver["id"] for ver in record["versions"]]})
-    # Asked only when it can bite: `_scope_known` reads a card per in-scene
-    # actor to rank the tail, and a campaign inside the ceiling has no tail.
-    limit = _known_limit()
-    if limit and len(known) > limit:
-        known = _scope_known(cid, sid, known, limit)
-    return active, known
+    return known
 
 
 def _voice_notes(cid: str, croot, cast: list[dict]) -> list[dict]:
