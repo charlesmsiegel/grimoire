@@ -250,12 +250,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [sceneModel, setSceneModel] = useState<string | null>(null);
   const [sceneReady, setSceneReady] = useState<boolean | null>(null);
   const [sceneProblem, setSceneProblem] = useState<string | null>(null);
+  const [modelsRev, setModelsRev] = useState(0);
+  const [sceneReadFor, setSceneReadFor] = useState<{ cid: string; revision: number } | null>(null);
   // Whether a turn here has a model to answer it: the campaign's own scene
-  // route when that read has answered, the library's `ready` until it has.
+  // route after this campaign/config read has answered. An explicit failed
+  // read retains the library fallback, but a pending read cannot grant it.
   // The library's alone was wrong both ways -- a campaign whose own Primary
   // works read "no model is ready", and one whose override has no key read
   // ready until a send came back refused.
-  const canGenerate = sceneReady ?? ready;
+  const canGenerate = sceneReadFor?.cid === cid && sceneReadFor.revision === modelsRev
+    && (sceneReady ?? ready);
   // Focus mode: the scene bar and the scene head go with the app header and the
   // context column, leaving the transcript and the composer. Together they were
   // the ~300px above the first line of prose on a phone — the scene bar worst of
@@ -4853,7 +4857,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
              scene: absorb ? `Absorbing ${absorbTitle}`
                     : wrapUp ? `Wrap-up · ${sceneTitle}` : sceneTitle } : null);
 
-  const [modelsRev, setModelsRev] = useState(0);
   // Any model-settings write announces itself (the Inspector's Models section,
   // /models, /providers), and each can move what the scene route resolves to.
   useEffect(() => onConfigChanged(() => setModelsRev((n) => n + 1)), []);
@@ -4895,8 +4898,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       setSceneModel(scene?.resolves?.model || null);
       setSceneReady(scene ? scene.problem === null : null);
       setSceneProblem(scene?.problem ?? null);
+      setSceneReadFor({ cid, revision: modelsRev });
     }).catch(() => {
-      if (live) { setSceneModel(null); setSceneReady(null); setSceneProblem(null); }
+      if (live) {
+        setSceneModel(null); setSceneReady(null); setSceneProblem(null);
+        setSceneReadFor({ cid, revision: modelsRev });
+      }
     });
     return () => { live = false; };
   }, [cid, modelsRev]);
@@ -5526,7 +5533,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             )}
           </div>
           {proposal && activeId && (
-            <RollProposal key={proposal.id} record={proposal} busy={busy || rolling || !canGenerate}
+            <RollProposal key={proposal.id} record={proposal} busy={busy || rolling} generationDisabled={!canGenerate}
                           onResolve={resolve} />
           )}
           {activeId && (

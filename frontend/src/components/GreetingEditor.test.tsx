@@ -1317,16 +1317,54 @@ test.each([false, true])("review regression: a retired greeting create cannot re
 test("review regression: a refused greeting Cancel preserves its draft after the older save commits", async () => {
   let finish: () => void = () => {};
   vi.mocked(api.updateGreeting).mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ ok: true }); }));
+  const { rerender } = render(<Wrap scope={{ kind: "world", id: "realm" }} wid="realm" selected="open" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save greeting" }));
+  // A different record still retires the pending form. Return to a fresh
+  // visit to keep the refused-Cancel/late-save ownership control meaningful.
+  rerender(<Wrap scope={{ kind: "world", id: "realm" }} wid="realm" selected="saltmarch" />);
+  await screen.findByRole("button", { name: "Edit" });
+  rerender(<Wrap scope={{ kind: "world", id: "realm" }} wid="realm" selected="open" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
+  // Greeting writes also hold the plot-map latch across record selection.
+  // Its Cancel therefore becomes available only after that old write ends.
+  await act(async () => finish());
+  expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+  vi.mocked(api.readGreeting).mockRejectedValueOnce({ detail: "Cancel greeting refused" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await screen.findByText("Cancel greeting refused");
+  expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+  expect(screen.getByText("Cancel greeting refused")).toBeInTheDocument();
+});
+
+test.each([false, true])("Cancel waits for the greeting save before reading, refused=%s", async (refused) => {
+  let finish: () => void = () => {};
+  vi.mocked(api.updateGreeting).mockImplementationOnce(() => new Promise((resolve, reject) => {
+    finish = () => refused ? reject(fail(409, "Save refused")) : resolve({ ok: true });
+  }));
   render(<Wrap scope={{ kind: "world", id: "realm" }} wid="realm" selected="open" />);
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Save greeting" }));
-  vi.mocked(api.readGreeting).mockRejectedValueOnce({ detail: "Cancel greeting refused" });
-  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  await screen.findByText("Cancel greeting refused");
+  const reads = vi.mocked(api.readGreeting).mock.calls.length;
+  const cancel = screen.getByRole("button", { name: "Cancel" });
+  fireEvent.click(cancel);
+  await act(async () => {});
+  expect(api.readGreeting).toHaveBeenCalledTimes(reads);
+  expect(cancel).toBeDisabled();
+  if (!refused) vi.mocked(api.readGreeting).mockResolvedValue(fixture(greetingFixture("open", "Realm saved")));
   await act(async () => finish());
-  expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
-  expect(screen.getByText("Cancel greeting refused")).toBeInTheDocument();
+  if (refused) {
+    expect(await screen.findByText(/Save refused/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+    expect(cancel).toBeEnabled();
+    fireEvent.click(cancel);
+    expect(await screen.findByRole("heading", { name: "Open" })).toBeInTheDocument();
+  } else {
+    expect(await screen.findByRole("heading", { name: "Realm saved" })).toBeInTheDocument();
+  }
 });
 
 test("review regression: an owned greeting follow-up read cannot reclaim another selection", async () => {

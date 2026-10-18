@@ -2075,7 +2075,56 @@ test("a second click while an adopt is in flight does nothing", async () => {
   expect(api.adoptStAll).toHaveBeenCalledTimes(1);
   land({ applied: [], skipped: [] });
   await screen.findByText("Applied to 0 entries; 0 skipped");
-  expect(all).not.toBeDisabled();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Apply imported settings to all" })).toBeEnabled());
+});
+
+test.each([false, true])("the adoption preview keeps bulk Apply pending, refused=%s", async (refused) => {
+  const preview = deferred<Awaited<ReturnType<typeof api.previewAdoptStAll>>>();
+  vi.mocked(api.previewAdoptStAll).mockResolvedValueOnce({ pending: 1 }).mockReturnValueOnce(preview.promise);
+  vi.mocked(api.adoptStAll).mockResolvedValue({ applied: [{ kind: "lore", id: "salt", fields: { sticky: "2" } }], skipped: [] });
+  render(<Wrap isNew={false} wid="w" kind="lore" />);
+  const all = await screen.findByRole("button", { name: "Apply imported settings to all" });
+  fireEvent.click(all);
+  await screen.findByText("Applied to 1 entry; 0 skipped");
+  await waitFor(() => expect(api.previewAdoptStAll).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole("button", { name: "Apply imported settings to all" })).not.toBeInTheDocument();
+  expect(api.adoptStAll).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    if (refused) preview.reject(new Error("Preview unavailable"));
+    else preview.resolve({ pending: 0 });
+  });
+  expect(screen.queryByRole("button", { name: "Apply imported settings to all" })).not.toBeInTheDocument();
+  expect(screen.getByText("Applied to 1 entry; 0 skipped")).toBeInTheDocument();
+  expect(api.adoptStAll).toHaveBeenCalledTimes(1);
+});
+
+test("a successful bulk adoption retires its offer when the list refresh fails", async () => {
+  const listing = deferred<Awaited<ReturnType<typeof api.listEntities>>>();
+  vi.mocked(api.adoptStAll).mockResolvedValue({ applied: [{ kind: "lore", id: "salt", fields: { sticky: "2" } }], skipped: [] });
+  const { rerender } = render(<Wrap isNew={false} wid="w" kind="lore" />);
+  const all = await screen.findByRole("button", { name: "Apply imported settings to all" });
+  vi.mocked(api.listEntities).mockReturnValueOnce(listing.promise);
+  fireEvent.click(all);
+  await screen.findByText("Applied to 1 entry; 0 skipped");
+  await act(async () => { listing.reject(new Error("List refresh unavailable")); });
+  expect(await screen.findByText(/List refresh unavailable/)).toBeInTheDocument();
+  expect(screen.getByText("Applied to 1 entry; 0 skipped")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Apply imported settings to all" })).not.toBeInTheDocument();
+  expect(api.adoptStAll).toHaveBeenCalledTimes(1);
+  expect(api.previewAdoptStAll).toHaveBeenCalledTimes(1);
+
+  // Returning to the library may offer a sweep again only once a fresh
+  // preview has confirmed something pending, never from the retired count.
+  const confirmation = deferred<Awaited<ReturnType<typeof api.previewAdoptStAll>>>();
+  vi.mocked(api.previewAdoptStAll).mockReturnValueOnce(confirmation.promise);
+  rerender(<Wrap isNew={false} wid="w" kind="items" />);
+  await screen.findByText("No items yet.");
+  rerender(<Wrap isNew={false} wid="w" kind="lore" />);
+  await waitFor(() => expect(api.previewAdoptStAll).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole("button", { name: "Apply imported settings to all" })).not.toBeInTheDocument();
+  await act(async () => { confirmation.resolve({ pending: 1 }); });
+  expect(await screen.findByRole("button", { name: "Apply imported settings to all" })).toBeEnabled();
+  expect(api.adoptStAll).toHaveBeenCalledTimes(1);
 });
 
 test("the per-entry Apply waits on its request too", async () => {

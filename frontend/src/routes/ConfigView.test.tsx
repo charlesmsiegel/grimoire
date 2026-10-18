@@ -1,6 +1,7 @@
 import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import ConfigView from "./ConfigView";
+import { ThemeProvider } from "../theme/ThemeProvider";
 import { EMBEDDINGS_COPY } from "../components/inference/copy";
 
 vi.mock("../api/client", () => ({
@@ -15,10 +16,6 @@ vi.mock("../api/client", () => ({
     getPromptLayout: vi.fn(), putPromptLayout: vi.fn(),
     getPlayDecisionsInfo: vi.fn(),
   },
-}));
-const setTheme = vi.fn();
-vi.mock("../theme/ThemeProvider", () => ({
-  useTheme: () => ({ mode: "system", name: "light", setTheme }),
 }));
 vi.mock("../components/ResponseTargetsPicker", () => ({
   ResponseTargetsPicker: () => <div data-testid="response-preset-picker" />,
@@ -95,7 +92,7 @@ beforeEach(() => {
 function renderView() {
   render(
     <MemoryRouter>
-      <ConfigView />
+      <ThemeProvider initial={cfg.theme}><ConfigView /></ThemeProvider>
     </MemoryRouter>,
   );
 }
@@ -187,7 +184,7 @@ test("the theme control is pinned under the column and persists on pick", async 
   // app forgetting.
   renderView();
   fireEvent.click(await screen.findByText("DARK"));
-  expect(setTheme).toHaveBeenCalledWith("dark");
+  expect(document.documentElement.dataset.themeMode).toBe("dark");
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ theme: "dark" }));
   // ...and it is not an unsaved change, because it is not unsaved.
   await open(/^Transcript/);
@@ -203,10 +200,9 @@ test("a theme the store refuses is rolled back rather than left on screen", asyn
   await screen.findByText("LIGHT");
   fireEvent.click(screen.getByText("DARK"));
   // Applied first, so the pick can be seen...
-  expect(setTheme).toHaveBeenCalledWith("dark");
-  // ...then put back to what it was when the write is refused. The mocked
-  // provider holds `system`, which is what "what it was" means here.
-  await waitFor(() => expect(setTheme).toHaveBeenLastCalledWith("system"));
+  expect(document.documentElement.dataset.themeMode).toBe("dark");
+  // ...then put back to the stored legacy `codex` choice, which resolves to light.
+  await waitFor(() => expect(document.documentElement.dataset.themeMode).toBe("light"));
 });
 
 test("the stored theme survives the collapse: codex is not an unsaved change", async () => {
@@ -909,12 +905,12 @@ function renderAt(entry: string) {
   render(
     <MemoryRouter initialEntries={[entry]}>
       <Where />
-      <Routes>
+      <ThemeProvider initial={cfg.theme}><Routes>
         <Route path="/config" element={<><ConfigView /><Link to="/config?section=timeouts">to timeouts</Link></>} />
         <Route path="/models" element={<div>the models page</div>} />
         <Route path="/models/edit" element={<div>the models form</div>} />
         <Route path="/presets" element={<div>the presets page</div>} />
-      </Routes>
+      </Routes></ThemeProvider>
     </MemoryRouter>,
   );
 }

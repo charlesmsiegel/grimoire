@@ -64,22 +64,25 @@ export default function AppPaletteSource({ payload = null }: { payload?: ShellPa
       if (to) out.push({ id: `section:${to}`, group: "ELSEWHERE", label: row.label,
         meta: `app navigation · ${row.keywords ?? ""}`, to });
     }
+    // Campaign destinations are generic navigation too. Sharing the page's
+    // group would put them ahead of its cast/events whenever sources refresh,
+    // changing what Enter opens before the reader has typed a query.
     for (const row of CAMPAIGN_ROWS) {
       const to = row.to(ctx, payload);
-      if (to) out.push({ id: `campaign-page:${row.id}`, group: "IN THIS CAMPAIGN", label: row.label,
+      if (to) out.push({ id: `campaign-page:${row.id}`, group: "ELSEWHERE", label: row.label,
         meta: `${payload?.campaign?.name} · campaign navigation · ${row.keywords ?? ""}`, to });
     }
     const campaign = payload?.campaign;
     const campaignRoot = campaignPath(ctx);
     if (campaign && campaignRoot) {
       out.push(
-        { id: "campaign-page:timeline", group: "IN THIS CAMPAIGN", label: "Timeline",
+        { id: "campaign-page:timeline", group: "ELSEWHERE", label: "Timeline",
           meta: `${campaign.name} · dates and events`, to: `${campaignRoot}/timeline` },
-        { id: "campaign-page:knowledge", group: "IN THIS CAMPAIGN", label: "Knowledge",
+        { id: "campaign-page:knowledge", group: "ELSEWHERE", label: "Knowledge",
           meta: `${campaign.name} · who knows and suspects`, to: ledgerHref(campaign.id, { section: "knowledge" }) },
-        { id: "campaign-page:continuity", group: "IN THIS CAMPAIGN", label: "Continuity",
+        { id: "campaign-page:continuity", group: "ELSEWHERE", label: "Continuity",
           meta: `${campaign.name} · review findings`, to: ledgerHref(campaign.id, { section: "continuity", group: "overlaps" }) },
-        { id: "campaign-page:settings", group: "IN THIS CAMPAIGN", label: "Campaign settings",
+        { id: "campaign-page:settings", group: "ELSEWHERE", label: "Campaign settings",
           meta: campaign.name, to: `${campaignRoot}/settings` },
       );
     }

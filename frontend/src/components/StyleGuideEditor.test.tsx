@@ -159,6 +159,13 @@ test("review regression: a refused style Cancel preserves the draft after its ol
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Save style guide" }));
+  // Leave the pending write through navigation, then exercise Cancel on the
+  // fresh visit without reading ahead of that older server write.
+  fireEvent.click(screen.getByRole("link", { name: /Gothic Horror/ }));
+  await screen.findByText("Atmosphere first.");
+  fireEvent.click(screen.getByRole("link", { name: /Cozy Mystery/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
   vi.mocked(api.readStyle).mockRejectedValueOnce({ detail: "Cancel style refused" });
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await screen.findByText("Cancel style refused");
@@ -179,4 +186,34 @@ test("review regression: an owned style follow-up read cannot navigate after ano
   await act(async () => release({ meta: { id: "cozy-mystery", name: "Realm stale", description: "", tags: [], built_in: false }, body: "Old save body" }));
   expect(screen.getByText("Atmosphere first.")).toBeInTheDocument();
   expect(screen.getByLabelText("Address")).toHaveTextContent("id=gothic-horror");
+});
+
+test.each([false, true])("Cancel waits for the style save before reading, refused=%s", async (refused) => {
+  let finish: () => void = () => {};
+  vi.mocked(api.updateStyle).mockImplementationOnce(() => new Promise((resolve, reject) => {
+    finish = () => refused ? reject(new Error("Save refused")) : resolve({ ok: true });
+  }));
+  render(<StyleGuideEditor />, "/?id=cozy-mystery");
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save style guide" }));
+  const reads = vi.mocked(api.readStyle).mock.calls.length;
+  const cancel = screen.getByRole("button", { name: "Cancel" });
+  fireEvent.click(cancel);
+  await act(async () => {});
+  expect(api.readStyle).toHaveBeenCalledTimes(reads);
+  expect(cancel).toBeDisabled();
+  if (!refused) vi.mocked(api.readStyle).mockResolvedValue({
+    meta: { id: "cozy-mystery", name: "Realm saved", description: "", tags: [], built_in: false }, body: "Saved body.",
+  });
+  await act(async () => finish());
+  if (refused) {
+    expect(await screen.findByText(/Save refused/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+    expect(cancel).toBeEnabled();
+    fireEvent.click(cancel);
+    expect(await screen.findByRole("heading", { name: "Cozy Mystery" })).toBeInTheDocument();
+  } else {
+    expect(await screen.findByRole("heading", { name: "Realm saved" })).toBeInTheDocument();
+  }
 });

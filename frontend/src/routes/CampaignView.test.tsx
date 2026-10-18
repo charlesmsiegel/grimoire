@@ -206,6 +206,71 @@ test("the header's readiness is the scene route's problem", async () => {
   expect(shellReady()).toBe("false");
 });
 
+test.each(["ready", "unready", "failed"])(
+  "generation waits for a pending campaign readiness read that becomes %s", async (answer) => {
+    let land!: (view: InferenceSettings) => void;
+    let refuse!: (error: Error) => void;
+    vi.mocked(api.getCampaignInference).mockReturnValue(new Promise((resolve, reject) => {
+      land = resolve; refuse = reject;
+    }));
+    renderCampaign();
+    await screen.findByRole("heading", { name: /^Old$/ });
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "Mara waits." } });
+    const send = screen.getByRole("button", { name: /send/i });
+    expect(send).toBeDisabled();
+    fireEvent.click(send);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(api.chat).not.toHaveBeenCalled();
+    await act(async () => {
+      if (answer === "failed") refuse(new Error("offline"));
+      else land(campaignInference({ problem: answer === "unready" ? "No API key is set" : null }));
+    });
+    if (answer === "unready") expect(send).toBeDisabled();
+    else {
+      expect(send).toBeEnabled();
+      fireEvent.click(send);
+      await waitFor(() => expect(api.chat).toHaveBeenCalledTimes(1));
+    }
+  });
+
+test("generation waits for refreshed campaign readiness while its cached header model stays visible", async () => {
+  renderCampaign(undefined, { shell: true });
+  await waitFor(() => expect(shellModel()).toBe("campaign/model"));
+  const input = screen.getByRole("textbox");
+  fireEvent.change(input, { target: { value: "Mara waits." } });
+  expect(screen.getByRole("button", { name: /send/i })).toBeEnabled();
+  let land!: (view: InferenceSettings) => void;
+  vi.mocked(api.getCampaignInference).mockReturnValue(new Promise((resolve) => { land = resolve; }));
+  act(() => { configChanged(); });
+  const send = screen.getByRole("button", { name: /send/i });
+  expect(shellModel()).toBe("campaign/model");
+  expect(send).toBeDisabled();
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(api.chat).not.toHaveBeenCalled();
+  await act(async () => { land(campaignInference({ problem: "No API key is set" })); });
+  expect(send).toBeDisabled();
+});
+
+test("a new campaign cannot inherit the previous campaign's generation permission", async () => {
+  let land!: (view: InferenceSettings) => void;
+  vi.mocked(api.getCampaignInference).mockImplementation((cid) => cid === "run"
+    ? Promise.resolve(campaignInference()) : new Promise((resolve) => { land = resolve; }));
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
+    {withPalette(<><Link to="/campaigns/other/scenes/s1">switch campaign</Link>{playRoutes()}</>)}
+  </MemoryRouter>);
+  await screen.findByRole("heading", { name: /^Old$/ });
+  await waitFor(() => expect(screen.getByRole("button", { name: /continue ▶/i })).toBeEnabled());
+  fireEvent.click(screen.getByRole("link", { name: "switch campaign" }));
+  await waitFor(() => expect(api.getCampaignInference).toHaveBeenCalledWith("other"));
+  const generate = screen.getByRole("button", { name: /continue ▶/i });
+  expect(generate).toBeDisabled();
+  fireEvent.click(generate);
+  expect(api.chat).not.toHaveBeenCalled();
+  await act(async () => { land(campaignInference()); });
+  expect(generate).toBeEnabled();
+});
+
 test.each(["quick send", "reroll response", "keep writing", "generate variant"])(
   "campaign scene readiness blocks %s while stored response actions remain available", async (action) => {
     sceneRouteResolves(null, "The scene provider has no key");
@@ -273,6 +338,33 @@ test("campaign scene readiness keeps a roll proposal pending until narration can
   fireEvent.click(roll);
   expect(api.resolveProposal).not.toHaveBeenCalled();
   expect(roll).toBeInTheDocument();
+});
+
+test("an unready scene still lets a pending proposal's local edits be staged", async () => {
+  sceneRouteResolves(null, "The scene provider has no key");
+  vi.mocked(api.getRollProposal).mockResolvedValue({ record: {
+    id: "pr-1", status: "pending", payload: PROPOSAL_PAYLOAD, resolution: null,
+  } });
+  renderCampaign();
+  await screen.findByText(/No model is ready to generate/);
+  const modify = await screen.findByRole("button", { name: "Modify" });
+  expect(modify).toBeEnabled();
+  fireEvent.click(modify);
+  const difficulty = screen.getByLabelText("Difficulty");
+  expect(difficulty).toBeEnabled();
+  fireEvent.change(difficulty, { target: { value: "8" } });
+  expect(difficulty).toHaveValue(8);
+  expect(screen.getByRole("button", { name: "Roll it" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Decline" })).toBeDisabled();
+  expect(api.resolveProposal).not.toHaveBeenCalled();
+  sceneRouteResolves(null);
+  act(() => { configChanged(); });
+  const roll = screen.getByRole("button", { name: "Roll it" });
+  await waitFor(() => expect(roll).toBeEnabled());
+  fireEvent.click(roll);
+  await waitFor(() => expect(api.resolveProposal).toHaveBeenCalledWith(
+    "run", "s1", expect.objectContaining({ difficulty: 8 }), expect.any(Function),
+    expect.any(AbortSignal), expect.any(String), expect.any(Function)));
 });
 
 test.each(["auth", "missing_dependency"])("configuration failures %s offer no identical Retry", async (kind) => {

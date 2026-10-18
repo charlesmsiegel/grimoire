@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { ApiError, api } from "../api/client";
 import { normalizeMode, resolveTheme } from "./themes";
 import type { ThemeMode, ThemeName } from "./types";
 
@@ -9,6 +10,9 @@ type ThemeCtx = {
    *  answer when it is `system`. */
   name: ThemeName;
   setTheme: (mode: string) => void;
+  busy: boolean;
+  error: string | null;
+  pick: (mode: string) => Promise<void>;
 };
 const Ctx = createContext<ThemeCtx | null>(null);
 
@@ -45,6 +49,9 @@ function applyTheme(mode: ThemeMode, prefersDark: boolean): ThemeName {
 export function ThemeProvider({ initial, children }: { initial: string; children: ReactNode }) {
   const [mode, setMode] = useState<ThemeMode>(() => normalizeMode(initial));
   const [prefersDark, setPrefersDark] = useState(systemPrefersDark);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
 
   // Only meaningful under `system`, but subscribed unconditionally: the
   // listener is cheap, and re-subscribing on every mode change would mean the
@@ -72,9 +79,35 @@ export function ThemeProvider({ initial, children }: { initial: string; children
     applyTheme(normalizeMode(initial), systemPrefersDark()));
   useEffect(() => setName(applyTheme(mode, prefersDark)), [mode, prefersDark]);
 
-  const setTheme = (next: string) => setMode(normalizeMode(next));
+  const setTheme = useCallback((next: string) => setMode(normalizeMode(next)), []);
 
-  return <Ctx.Provider value={{ mode, name, setTheme }}>{children}</Ctx.Provider>;
+  const pick = useCallback(async (next: string) => {
+    // The header and pinned settings picker coexist. Their write, preview and
+    // rollback must have one owner, and the ref closes the same-event gap
+    // before React can disable both controls from the shared busy state.
+    if (inFlight.current) return;
+    inFlight.current = true;
+    const before = mode;
+    setTheme(next);
+    setBusy(true);
+    setError(null);
+    try {
+      const stored = await api.putConfig({ theme: next });
+      // Reconcile with what was actually stored rather than assuming: if the
+      // server normalized the value, the screen must agree with disk.
+      setTheme(stored.theme);
+    } catch (e) {
+      setTheme(before);
+      // `ApiError` carries the server's own words; anything else is a transport
+      // failure with nothing worth quoting.
+      setError(e instanceof ApiError && e.detail ? e.detail : "Could not save the theme");
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }, [mode, setTheme]);
+
+  return <Ctx.Provider value={{ mode, name, setTheme, busy, error, pick }}>{children}</Ctx.Provider>;
 }
 
 export function useTheme(): ThemeCtx {

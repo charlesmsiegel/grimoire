@@ -188,7 +188,11 @@ export function StyleGuideEditor() {
               {sid && !builtIn && (
                 <button className="subtle" onClick={() => remove(styles.find((s) => s.id === sid)!)}>Delete</button>
               )}
-              {sid ? <button className="subtle" onClick={() => { retireSave(); void select(sid).catch((err: unknown) => setError(errorText(err))); }}>Cancel</button>
+              {sid ? <button className="subtle" disabled={saving} onClick={() => {
+                // Reload only after the write settles, never the old bytes ahead of it.
+                if (saving) return;
+                retireSave(); void select(sid).catch((err: unknown) => setError(errorText(err)));
+              }}>Cancel</button>
                 : <Link className="subtle" to="?">Cancel</Link>}
               <button className="primary" onClick={save} disabled={saving || !form.name.trim()}>
                 {sid && !builtIn ? "Save style guide" : "Create style guide"}

@@ -356,6 +356,13 @@ test("review regression: a refused climate Cancel retires the old save without u
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  // Route selection still retires a pending save; existing-record Cancel now
+  // waits for it. Return to a new visit before exercising its reload refusal.
+  fireEvent.click(screen.getByRole("link", { name: /Fens/ }));
+  await screen.findByRole("button", { name: "Edit" });
+  fireEvent.click(screen.getByRole("link", { name: /Temperate Interior/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
   vi.mocked(api.readClimate).mockRejectedValueOnce({ detail: "Cancel climate refused" });
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await screen.findByText("Cancel climate refused");
@@ -383,4 +390,32 @@ test("review regression: an owned climate follow-up read cannot navigate after a
   await act(async () => release({ climate: CLIMATE, builtin: true, custom: false }));
   expect(screen.getByRole("heading", { name: "Fens" })).toBeInTheDocument();
   expect(screen.getByLabelText("Address")).toHaveTextContent("id=saltmarch-fens");
+});
+
+test.each([false, true])("Cancel waits for the climate save before reading, refused=%s", async (refused) => {
+  let finish: () => void = () => {};
+  vi.mocked(api.saveClimate).mockImplementationOnce(() => new Promise((resolve, reject) => {
+    finish = () => refused ? reject(new ApiError(409, "Save refused")) : resolve({ climate: CLIMATE });
+  }));
+  render(<ClimateEditor />, "/?id=temperate-interior");
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  const reads = vi.mocked(api.readClimate).mock.calls.length;
+  const cancel = screen.getByRole("button", { name: "Cancel" });
+  fireEvent.click(cancel);
+  await act(async () => {});
+  expect(api.readClimate).toHaveBeenCalledTimes(reads);
+  expect(cancel).toBeDisabled();
+  if (!refused) vi.mocked(api.readClimate).mockResolvedValue({ climate: { ...CLIMATE, name: "Realm saved" }, builtin: true, custom: true });
+  await act(async () => finish());
+  if (refused) {
+    expect(await screen.findByText("Save refused")).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+    expect(cancel).toBeEnabled();
+    fireEvent.click(cancel);
+    expect(await screen.findByRole("heading", { name: "Temperate Interior" })).toBeInTheDocument();
+  } else {
+    expect(await screen.findByRole("heading", { name: "Realm saved" })).toBeInTheDocument();
+  }
 });

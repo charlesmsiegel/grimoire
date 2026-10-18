@@ -866,7 +866,11 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
           <div className="form-actions">
             {gid && <button className="subtle" title={hold ?? undefined} disabled={!!hold || writing}
                             onClick={() => remove(greetings.find((g) => g.id === gid)!)}>Delete</button>}
-            {gid ? <button className="subtle" onClick={() => { retireSave(); void select(gid).catch((err: unknown) => setError(errorText(err))); }}>Cancel</button>
+            {gid ? <button className="subtle" disabled={writing} onClick={() => {
+              // Reload only after the write settles, never the old bytes ahead of it.
+              if (writes.current > 0) return;
+              retireSave(); void select(gid).catch((err: unknown) => setError(errorText(err)));
+            }}>Cancel</button>
               : <Link className="subtle" to={sectionPath}>Cancel</Link>}
             <button className="primary" onClick={() => save()} title={hold ?? undefined}
                     disabled={!form.name.trim() || (!!form.character && !form.version)

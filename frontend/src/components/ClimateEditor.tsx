@@ -418,7 +418,11 @@ export function ClimateEditor() {
 
             <div className="form-actions">
               <button className="primary" onClick={save} disabled={saving}>Save</button>
-              {id ? <button className="subtle" onClick={() => { retireSave(); void select(id).catch((err: unknown) => setError(errorText(err))); }}>Cancel</button>
+              {id ? <button className="subtle" disabled={saving} onClick={() => {
+                // Reload only after the write settles, never the old bytes ahead of it.
+                if (saving) return;
+                retireSave(); void select(id).catch((err: unknown) => setError(errorText(err)));
+              }}>Cancel</button>
                   : <Link className="subtle" to="?">Cancel</Link>}
             </div>
           </div>

@@ -53,6 +53,48 @@ test("problems auto-open modify with actor select", () => {
   expect(screen.getByText('Multiple actors named "Mara" — pick one.')).toBeTruthy();
 });
 
+test("generation unavailability leaves every local proposal field editable", () => {
+  const onResolve = vi.fn();
+  const view = render(<RollProposal record={REC_PROBLEMS} busy={false}
+    generationDisabled onResolve={onResolve} />);
+  for (const label of ["Actor", "Check", "Difficulty"]) {
+    expect(screen.getByLabelText(label)).toBeEnabled();
+  }
+  fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "characters:seraphine" } });
+  fireEvent.change(screen.getByLabelText("Check"), { target: { value: "perception" } });
+  fireEvent.change(screen.getByLabelText("Difficulty"), { target: { value: "8" } });
+  for (const name of ["Roll it", "Decline"]) {
+    const button = screen.getByRole("button", { name });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+  }
+  expect(screen.getByRole("button", { name: "Modify" })).toBeEnabled();
+  expect(onResolve).not.toHaveBeenCalled();
+  view.rerender(<RollProposal record={REC_PROBLEMS} busy={false} onResolve={onResolve} />);
+  fireEvent.click(screen.getByRole("button", { name: "Roll it" }));
+  expect(onResolve).toHaveBeenCalledWith({ proposal: REC_PROBLEMS.id, action: "accept",
+    actor: "characters:seraphine", check: "perception", difficulty: 8, modifier: 0 });
+});
+
+test.each(["resolved", "declined"] as const)("an unready %s proposal cannot continue narration", (status) => {
+  const onResolve = vi.fn();
+  render(<RollProposal record={{ ...REC, status }} busy={false} generationDisabled onResolve={onResolve} />);
+  const continueButton = screen.getByRole("button", { name: "Continue narration" });
+  expect(continueButton).toBeDisabled();
+  fireEvent.click(continueButton);
+  expect(onResolve).not.toHaveBeenCalled();
+});
+
+test("real busy still disables proposal editing and generation", () => {
+  render(<RollProposal record={REC_PROBLEMS} busy onResolve={vi.fn()} />);
+  for (const label of ["Actor", "Check", "Difficulty"]) {
+    expect(screen.getByLabelText(label)).toBeDisabled();
+  }
+  for (const name of ["Roll it", "Modify", "Decline"]) {
+    expect(screen.getByRole("button", { name })).toBeDisabled();
+  }
+});
+
 test("decline and resolved-continue", () => {
   const onResolve = vi.fn();
   const { unmount } = render(<RollProposal record={REC} busy={false} onResolve={onResolve} />);

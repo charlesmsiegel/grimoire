@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 // The header's theme toggle persists on click, so it reaches the api client.
@@ -11,6 +11,9 @@ import AppHeader from "./AppHeader";
 import { api } from "../api/client";
 import type { ProviderHealth, ShellPayload } from "../api/types";
 import { ThemeProvider } from "../theme/ThemeProvider";
+import { useThemeSetting } from "../theme/useThemeSetting";
+import { fixture } from "../testkit/fixture";
+import { ThemePicker } from "./ThemePicker";
 import { FocusProvider, useFocus } from "./focus";
 import { ShellStatusProvider, usePublishContextUsage, usePublishSceneModel,
          usePublishSceneSpend, usePublishShellContext } from "./ShellStatus";
@@ -183,7 +186,10 @@ test("outside a scene the pill says nothing about one", async () => {
 // The header's focus control PERSISTS on click, so a test that presses it
 // leaves `grimoire.focus` set for whatever runs next -- and the case below
 // asserts the mode starts off. `focus.test.tsx` clears for the same reason.
-beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); });
+beforeEach(() => {
+  localStorage.clear(); vi.clearAllMocks();
+  vi.mocked(api.putConfig).mockReset().mockResolvedValue(fixture({ theme: "dark" }));
+});
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 test("a dark system theme can switch directly to light", async () => {
@@ -205,6 +211,81 @@ test("a failed header theme write is visible and restores the previous look", as
   fireEvent.click(screen.getByRole("button", { name: "Switch to dark theme" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not save the theme");
   expect(document.documentElement.dataset.themeMode).toBe("light");
+});
+
+/** Configuration's pinned control shares the header's real provider. */
+function PinnedThemePicker() {
+  const theme = useThemeSetting();
+  return <ThemePicker value={theme.mode} disabled={theme.busy}
+    onPick={(mode) => { void theme.pick(mode); }} />;
+}
+
+function renderThemeControls() {
+  render(<MemoryRouter><ThemeProvider initial="light">
+    <AppHeader model="" connection="" ready={false} health={null}
+      railDrawer={false} onOpenRail={() => {}} />
+    <PinnedThemePicker />
+  </ThemeProvider></MemoryRouter>);
+  return within(screen.getByRole("group", { name: "Appearance" }));
+}
+
+test.each(["header", "picker"])("a deferred %s theme write holds both controls until refusal and retry", async (origin) => {
+  let refuse: (error: Error) => void = () => { throw new Error("write not requested"); };
+  vi.mocked(api.putConfig).mockReturnValueOnce(new Promise((_resolve, reject) => { refuse = reject; }))
+    .mockResolvedValueOnce(fixture({ theme: "system" }));
+  const picker = renderThemeControls();
+  fireEvent.click(origin === "header"
+    ? screen.getByRole("button", { name: "Switch to dark theme" })
+    : picker.getByRole("button", { name: /^dark$/i }));
+  expect(document.documentElement.dataset.themeMode).toBe("dark");
+  const header = screen.getByRole("button", { name: "Switch to light theme" });
+  expect(header).toBeDisabled();
+  for (const button of picker.getAllByRole("button")) expect(button).toBeDisabled();
+  fireEvent.click(origin === "header" ? picker.getByRole("button", { name: /^system$/i }) : header);
+  expect(api.putConfig).toHaveBeenCalledTimes(1);
+  await act(async () => { refuse(new Error("offline")); });
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not save the theme");
+  expect(document.documentElement.dataset.themeMode).toBe("light");
+  expect(picker.getByRole("button", { name: /^light$/i })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Switch to dark theme" })).toBeEnabled();
+  fireEvent.click(picker.getByRole("button", { name: /^system$/i }));
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(picker.getByRole("button", { name: /^system$/i })).toBeEnabled());
+  expect(document.documentElement.dataset.themeMode).toBe("system");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("two theme controls dispatched before React commits still issue only one write", async () => {
+  let accept: (value: Awaited<ReturnType<typeof api.putConfig>>) => void = () => {
+    throw new Error("write not requested");
+  };
+  vi.mocked(api.putConfig).mockReturnValueOnce(new Promise((resolve) => { accept = resolve; }));
+  const picker = renderThemeControls();
+  act(() => {
+    fireEvent.click(screen.getByRole("button", { name: "Switch to dark theme" }));
+    fireEvent.click(picker.getByRole("button", { name: /^light$/i }));
+  });
+  expect(api.putConfig).toHaveBeenCalledTimes(1);
+  expect(api.putConfig).toHaveBeenCalledWith({ theme: "dark" });
+  await act(async () => { accept(fixture({ theme: "dark" })); });
+  expect(document.documentElement.dataset.themeMode).toBe("dark");
+  expect(picker.getByRole("button", { name: /^dark$/i })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Switch to light theme" })).toBeEnabled();
+});
+
+test("both theme controls reconcile a successful stored value and its legacy normalization", async () => {
+  let accept: (value: Awaited<ReturnType<typeof api.putConfig>>) => void = () => {
+    throw new Error("write not requested");
+  };
+  vi.mocked(api.putConfig).mockReturnValueOnce(new Promise((resolve) => { accept = resolve; }));
+  const picker = renderThemeControls();
+  fireEvent.click(picker.getByRole("button", { name: /^dark$/i }));
+  expect(document.documentElement.dataset.themeMode).toBe("dark");
+  await act(async () => { accept(fixture({ theme: "codex" })); });
+  expect(document.documentElement.dataset.themeMode).toBe("light");
+  expect(picker.getByRole("button", { name: /^light$/i })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Switch to dark theme" })).toBeEnabled();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 test.each(["stats", "todo", "settings"])("the campaign %s page names its campaign in the header", (section) => {

@@ -105,6 +105,19 @@ test("a refusal of the model settings names the page that fixes it", () => {
   expect(setupFix({ detail: "cannot read images", kind: "incapable" })).toBe("/models");
 });
 
+test.each([
+  new ApiError(409, "No LLM connection selected", "missing_key"),
+  { detail: "No LLM connection selected", kind: "missing_key" },
+])("a missing selection is repaired in Models rather than provider credentials (%j)", (error) => {
+  expect(setupFix(error)).toBe("/models");
+  expect(isSetupFailure(error)).toBe(true);
+});
+
+test.each(["OpenRouter API key is not set", "No base URL configured"])(
+  "a provider configuration refusal still points to Providers (%s)", (detail) => {
+    expect(setupFix({ detail, kind: "missing_key" })).toBe("/providers");
+  });
+
 test("every other failure has no settings page to send the reader to", () => {
   expect(setupFix(new ApiError(502, "connection reset", "network"))).toBeNull();
   expect(setupFix(new ApiError(500, "boom"))).toBeNull();

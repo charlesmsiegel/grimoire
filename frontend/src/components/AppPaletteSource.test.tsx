@@ -1,10 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useCallback } from "react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import type { ShellCampaign, ShellPayload } from "../api/types";
 import AppPaletteSource from "./AppPaletteSource";
 import CommandPalette from "./CommandPalette";
-import { PaletteProvider, usePalette } from "./palette";
+import { PaletteProvider, usePalette, usePaletteSource, type PaletteItem } from "./palette";
 
 vi.mock("../api/client", () => ({ api: {
   listCampaigns: vi.fn().mockResolvedValue([]), listWorlds: vi.fn().mockResolvedValue([]),
@@ -26,9 +27,15 @@ function Controls() {
     <output aria-label="Destination">{location.pathname + location.search}</output></>;
 }
 
-function Harness({ held }: { held: ShellPayload | null }) {
+function PageOffers({ items }: { items: PaletteItem[] }) {
+  usePaletteSource(useCallback(() => items, [items]));
+  return null;
+}
+
+function Harness({ held, items }: { held: ShellPayload | null; items?: PaletteItem[] }) {
   return <MemoryRouter><PaletteProvider>
     <AppPaletteSource payload={held} />
+    {items && <PageOffers items={items} />}
     <Controls /><CommandPalette />
   </PaletteProvider></MemoryRouter>;
 }
@@ -38,6 +45,27 @@ function open(held: ShellPayload | null = payload) {
   fireEvent.click(screen.getByRole("button", { name: "Open palette" }));
   return screen.getByRole("combobox");
 }
+
+test.each(["IN THIS CAMPAIGN", "SCENES"])("page-owned %s rows stay first after their source refreshes", async (group) => {
+  const choose = vi.fn();
+  const offer: PaletteItem = { id: "page:mara", group, label: "Mara", run: choose };
+  const view = render(<Harness held={payload} items={[offer]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Open palette" }));
+  // Let the shell's lists land first, then refresh page-owned data. This puts
+  // its source after the shell even when the shell re-registered on its read.
+  await act(async () => { await Promise.resolve(); });
+  view.rerender(<Harness held={payload} items={[{ ...offer }]} />);
+  const first = screen.getAllByRole("option")[0];
+  expect(first).toHaveTextContent("Mara");
+  expect(first).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+  expect(choose).toHaveBeenCalledTimes(1);
+  expect(screen.getByLabelText("Destination")).toHaveTextContent(/^\/$/);
+  fireEvent.click(screen.getByRole("button", { name: "Open palette" }));
+  fireEvent.change(screen.getByRole("combobox"), { target: { value: "to do" } });
+  fireEvent.click(screen.getByRole("option", { name: /To do.*Saltmarch/ }));
+  expect(screen.getByLabelText("Destination")).toHaveTextContent("/campaigns/saltmarch/todo");
+});
 
 test.each([
   ["costs", "Costs", "/costs"],

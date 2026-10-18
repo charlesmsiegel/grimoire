@@ -27,8 +27,8 @@ function allChecks(available: Record<string, [string, string][]>): [string, stri
   return out;
 }
 
-export function RollProposal({ record, busy, onResolve }:
-  { record: ProposalRecord; busy: boolean; onResolve: (body: ResolveBody) => void }) {
+export function RollProposal({ record, busy, generationDisabled = false, onResolve }:
+  { record: ProposalRecord; busy: boolean; generationDisabled?: boolean; onResolve: (body: ResolveBody) => void }) {
   const { payload } = record;
   const hasProblems = payload.problems.length > 0;
   const [modifying, setModifying] = useState(hasProblems);
@@ -56,7 +56,7 @@ export function RollProposal({ record, busy, onResolve }:
           {declined ? "Roll declined, narration pending." : "Roll made, narration pending."}
         </p>
         <div className="form-actions">
-          <button className="primary" type="button" disabled={busy}
+          <button className="primary" type="button" disabled={busy || generationDisabled}
                   onClick={() => onResolve({ proposal: record.id,
                                              action: declined ? "decline" : "accept" })}>
             Continue narration
@@ -123,10 +123,10 @@ export function RollProposal({ record, busy, onResolve }:
         </div>
       )}
       <div className="form-actions">
-        <button className="primary" type="button" disabled={busy} onClick={rollIt}>Roll it</button>
+        <button className="primary" type="button" disabled={busy || generationDisabled} onClick={rollIt}>Roll it</button>
         <button className="subtle" type="button" disabled={busy}
                 onClick={() => setModifying((m) => !m)}>Modify</button>
-        <button className="subtle" type="button" disabled={busy} onClick={decline}>Decline</button>
+        <button className="subtle" type="button" disabled={busy || generationDisabled} onClick={decline}>Decline</button>
       </div>
     </div>
   );

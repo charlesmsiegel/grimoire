@@ -106,12 +106,16 @@ export function isSetupFailure(err: unknown): boolean {
  *  unable to do what its route needs). Retrying either is a second identical
  *  409, so a surface that offers Retry for a failed call offers the page that
  *  fixes these instead: Providers, where a key is set, or Models, where a
- *  model is chosen. */
+ *  model is chosen. The resolver's no-selection refusal shares `missing_key`
+ *  with credential failures, but choosing its route belongs to Models. */
 export function setupFix(err: unknown): "/providers" | "/models" | null {
   const kind = typeof err === "object" && err !== null
     ? (err as { kind?: unknown }).kind
     : undefined;
-  return kind === "missing_key" ? "/providers" : kind === "incapable" ? "/models" : null;
+  if (kind === "missing_key") {
+    return errorText(err) === "No LLM connection selected" ? "/models" : "/providers";
+  }
+  return kind === "incapable" ? "/models" : null;
 }
 
 /** Did the server say there is no such thing?

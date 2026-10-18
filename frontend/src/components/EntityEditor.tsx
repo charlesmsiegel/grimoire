@@ -529,7 +529,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     { fields: Record<string, string>; unmapped: string[]; inherited?: boolean } | null>(null);
   // The bulk button's one-line outcome.
   const [adoptAllNote, setAdoptAllNote] = useState<string | null>(null);
-  const [pendingAdoptions, setPendingAdoptions] = useState(0);
+  const [pendingAdoptions, setPendingAdoptions] = useState<number | null>(null);
   // An adopt request is out (this record's or the whole library's). Both
   // buttons wait on it: a second click would send the same write twice and, for
   // the bulk one, report the second run's "0 entries" over the first's outcome.
@@ -544,10 +544,14 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
         setItems(rows);
         // The bulk action spans every entity kind and only campaign-owned
         // records. The server owns both that scope and the import mapping.
-        if (kind === "lore") void api.previewAdoptStAll(scope)
+        if (kind === "lore") await api.previewAdoptStAll(scope)
           .then((r) => {
             if (gen === scopeGen.current && sequence === summaryReads.current) setPendingAdoptions(r.pending);
-          }).catch(() => {}); // an unavailable offer cannot stop browsing
+          }).catch(() => {
+            // An unknown offer cannot license repeating the last sweep. Keep
+            // browsing and its successful outcome, but retire the stale count.
+            if (gen === scopeGen.current && sequence === summaryReads.current) setPendingAdoptions(null);
+          });
       }
     } catch (err) {
       if (gen === scopeGen.current && sequence === summaryReads.current) throw err;
@@ -559,7 +563,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     readReq.current += 1;   // discard a record read still out for the old scope
     scopeGen.current += 1;  // ...and an adopt still out for it
     setAdoptBusy(false);    // that request no longer holds this scope's buttons
-    setPendingAdoptions(0);
+    setPendingAdoptions(null);
     const gen = scopeGen.current;
     void reload(false).catch((err: unknown) => { if (gen === scopeGen.current) setError(errorText(err)); });
     resetForm();
@@ -829,6 +833,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     try {
       const r = await api.adoptStAll(scope);
       if (gen !== scopeGen.current) return;   // the outcome is about another scope
+      // The committed sweep consumed this offer. A failed list read must not
+      // revive it before a fresh preview has confirmed anything still pending.
+      setPendingAdoptions(null);
       setAdoptAllNote(`Applied to ${r.applied.length} ${r.applied.length === 1 ? "entry" : "entries"}; `
         + `${r.skipped.length} skipped`);
       await reloadFor(gen);
@@ -1301,7 +1308,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
   // record too: the rail that used to hold it is gone from a record's screen.
   const adoptAllControls = kind === "lore" ? (
     <>
-      {pendingAdoptions > 0 && <button className="subtle adopt-all" onClick={() => { void applyAdoptAll(); }}
+      {pendingAdoptions !== null && pendingAdoptions > 0 && <button className="subtle adopt-all" onClick={() => { void applyAdoptAll(); }}
               disabled={adoptBusy || adoptAllBlocked}
               title={adoptAllBlocked
                 ? "Save or cancel the edit in progress first -- applying re-reads the record"
