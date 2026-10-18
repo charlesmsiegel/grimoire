@@ -9,6 +9,7 @@ package the result (`epub.py`, and the `build_*` functions below).
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import json
 import re
@@ -389,10 +390,9 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
     location = None
     hist = scenes_read.get_location_history(cid, sid)
     if hist:
-        try:
+        # A deleted location: the header line is silently omitted.
+        with contextlib.suppress(entities.EntityNotFound):
             location = overlay.read_entity(cid, "locations", hist[0])["meta"].get("name")
-        except entities.EntityNotFound:
-            pass  # deleted location: header line silently omitted
     cast = [a["name"] for a in appearances_cast.scene_cast(cid, sid)]
     # The transition tag is internal metadata (drift measurement treats these as
     # turn separators); it is never a speaker the reader should see. Dropping it

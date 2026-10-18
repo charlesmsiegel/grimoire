@@ -27,7 +27,7 @@ export const RAIL_PX = 1180;
  *  It is also why `useOpenCampaign` excludes these paths: `/campaigns/new`
  *  matches `/campaigns/:cid` as a route pattern, so a wizard abandoned halfway
  *  would otherwise leave `"new"` remembered as the open campaign. */
-export const RAIL_LESS = ["/welcome", "/campaigns/new"];
+export const RAIL_LESS = ["/welcome", "/campaigns/new"] as const;
 
 export function railless(pathname: string): boolean {
   return RAIL_LESS.some((p) => isUnder(pathname, p));

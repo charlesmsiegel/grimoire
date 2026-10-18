@@ -1,3 +1,4 @@
+import contextlib
 import errno
 import hashlib
 import io
@@ -418,10 +419,8 @@ def test_a_crash_mid_promotion_always_leaves_a_resolvable_avatar(
     assets.put_image(tmp_path, "sera", "default", "gallery_1", b"NEW", new_ext)
 
     _fail_after(monkeypatch, allowed)
-    try:
+    with contextlib.suppress(OSError):
         assets.promote_image(tmp_path, "sera", "default", "gallery_1")
-    except OSError:
-        pass
     monkeypatch.undo()
 
     p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)

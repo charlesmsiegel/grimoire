@@ -9,6 +9,7 @@ Everything else here gathers the data one section renders from.
 
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 
@@ -1188,25 +1189,19 @@ def _actor_aliases(aroot, cid: str, actor: dict) -> set[str]:
     if kind == "characters":
         names.append(_npc_name(aroot, aid))
         if vid:
-            try:
+            with contextlib.suppress(characters.CharacterNotFound, characters.VersionNotFound):
                 names.append(characters.read_card(aroot, aid, vid)["data"].get("name", ""))
-            except (characters.CharacterNotFound, characters.VersionNotFound):
-                pass
     elif kind == "pcs":
         # BOTH names here too, for the reason the character branch above takes
         # both: a PC's container name and its locked persona name can differ,
         # and taking only the persona left a suspicion written against the
         # canonical PC name unmatched. The asymmetry was an oversight, not a
         # judgement about PCs.
-        try:
+        with contextlib.suppress(pcs.PCNotFound):
             names.append(pcs.read_pc(aroot, aid)["meta"].get("name", ""))
-        except pcs.PCNotFound:
-            pass
         if vid:
-            try:
+            with contextlib.suppress(pcs.PCNotFound, pcs.PCVersionNotFound):
                 names.append(pcs.read_persona(aroot, aid, vid).get("name", ""))
-            except (pcs.PCNotFound, pcs.PCVersionNotFound):
-                pass
     return {n.strip() for n in names if isinstance(n, str) and n.strip()}
 
 

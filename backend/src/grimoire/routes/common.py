@@ -1158,10 +1158,8 @@ async def _spooled_upload(request: Request, cap: int, too_large: str):
                 f.write(chunk)
         yield Path(tmp_name)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_name)
-        except OSError:
-            pass
 
 
 def _display_name_or_400(name: str) -> str:

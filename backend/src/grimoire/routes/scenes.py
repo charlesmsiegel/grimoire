@@ -1270,10 +1270,8 @@ def _restore_reroll(cid: str, sid: str, removed: dict):
     """
     def restore() -> None:
         store.scenes.restore_trailing_assistant_run(cid, sid, removed)
-        try:
+        with contextlib.suppress(OSError):
             store.alternates.disown_pending(cid, sid)
-        except OSError:
-            pass
     return restore
 
 
@@ -1481,10 +1479,8 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
                 # Best-effort: whatever stopped the removal (a full disk, most
                 # likely) may stop this too, and the original failure is the one
                 # worth reporting.
-                try:
+                with contextlib.suppress(OSError):
                     store.alternates.disown_pending(cid, sid)
-                except OSError:
-                    pass    # the disk that stopped the removal can stop this too
                 if isinstance(exc, store.scenes.TurnSizesDesynced):
                     # Refusing beats guessing: the recorded turn boundaries don't
                     # fit the transcript, so any deletion could take blocks from
@@ -1729,10 +1725,9 @@ def post_scene_alternate(cid: str, sid: str, vid: str, request: Request):
                 # the decision has to go, because what it was derived from is
                 # gone — an empty slot the ‹/› control can refill, beside a
                 # proposal that would otherwise still be acceptable.
-                try:
+                # The original failure is the one worth reporting.
+                with contextlib.suppress(OSError, store.scenes.TurnSizesDesynced):
                     store.proposals.supersede(cid, sid)
-                except (OSError, store.scenes.TurnSizesDesynced):
-                    pass    # the original failure is the one worth reporting
             raise
         # The transcript is now showing a different take, so the decision the
         # old narration produced is retired — and only now that it really is.
@@ -1770,10 +1765,9 @@ def post_scene_alternate(cid: str, sid: str, vid: str, request: Request):
                 #
                 # Safe to aim at the tail: the lock has been held since before
                 # `promote`, so the trailing run is the one it just appended.
-                try:
+                # The original failure is the one worth reporting.
+                with contextlib.suppress(OSError, store.scenes.TurnSizesDesynced, IndexError):
                     store.scenes.remove_trailing_assistant_run(cid, sid)
-                except (OSError, store.scenes.TurnSizesDesynced, IndexError):
-                    pass    # the original failure is the one worth reporting
             raise
     return {"ok": True}
 
@@ -5655,10 +5649,9 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
             key, original, content, fired = _edit_store_phase(
                 cid, sid, target, content, restore=body.restore)
             store.scenes.edit_message(cid, sid, index, content)
-            try:
+            # The edit is on disk; the sidecar is not a reason to fail it.
+            with contextlib.suppress(OSError):
                 store.alternates.reconcile(cid, sid)
-            except OSError:
-                pass          # the edit is on disk; the sidecar is not a reason to fail it
             if key:
                 _settle_rewrite(cid, sid, target, key, original, fired, content)
             # The post's tracker record describes text that is no longer there,

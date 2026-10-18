@@ -71,7 +71,7 @@ def decode_data_uri(uri: str) -> tuple[bytes, str] | None:
         return None
     try:
         raw = base64.b64decode(b64, validate=False)
-    except Exception:  # noqa: BLE001
+    except ValueError:      # bad padding (binascii.Error), or a payload that is not ASCII
         return None
     if not raw or len(raw) > MAX_BYTES:
         return None

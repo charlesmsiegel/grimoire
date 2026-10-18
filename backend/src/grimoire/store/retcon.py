@@ -63,6 +63,8 @@ the one thing a retcon must not do on its own.
 
 from __future__ import annotations
 
+import contextlib
+
 from . import (
     alternates,
     cascade,
@@ -343,8 +345,6 @@ def retcon(cid: str, sid: str, index: int, content: str) -> dict:
         # leaves the post rewritten and the stale review free to save.
         commits.retire_scene(cid, sid)
         scenes_write.edit_message(cid, sid, index, content)
-        try:
+        with contextlib.suppress(OSError):
             alternates.reconcile(cid, sid)
-        except OSError:
-            pass
         return {"later": later, **cascade.revert_scene(cid, sid)}

@@ -169,7 +169,9 @@ def test_runtime_error_skipped(monkeypatch):
 def test_runtime_error_logged_once(monkeypatch, caplog):
     monkeypatch.setattr(rules, "expand", lambda *a, **k: 1 / 0)
     apply._logged.clear()
-    e = _entry()
+    # A random hex identifier can contain "aaa" without leaking any prose.
+    # Keep it distinct from the message whose absence this assertion proves.
+    e = _entry(id="r-1")
     with caplog.at_level("WARNING", logger=apply.log.name):
         _run("aaa", e)
         _run("aaa", e)

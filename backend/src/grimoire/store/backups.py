@@ -58,6 +58,7 @@ and every `image-refs/` placement under an `assets/` folder
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import mimetypes
 import os
@@ -712,10 +713,8 @@ def sweep(keep: int | None = None) -> list[str]:
         # a same-named file out of a directory it never looked at.
         doomed = list(reversed(_list_in(directory)[keep:]))
         for row in doomed:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 (directory / row["name"]).unlink()
-            except FileNotFoundError:
-                pass
         return [row["name"] for row in doomed]
 
 

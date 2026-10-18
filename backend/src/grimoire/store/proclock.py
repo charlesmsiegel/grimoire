@@ -24,6 +24,7 @@ Spec: docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import hashlib
 import os
@@ -149,10 +150,8 @@ def lock_path(root: Path, domain: str, name: str) -> Path:
     # the umask, so it is not sufficient on its own).
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     if sys.platform != "win32":
-        try:
+        with contextlib.suppress(OSError):    # best effort; an existing dir may not be ours
             os.chmod(d, 0o700)
-        except OSError:
-            pass                      # best effort; an existing dir may not be ours
     slug = _UNSAFE.sub("-", name)[:_MAX_NAME_HINT]
     keyed = f"{domain}\0{name}".encode("utf-8", "surrogateescape")
     digest = hashlib.sha256(keyed).hexdigest()[:16]

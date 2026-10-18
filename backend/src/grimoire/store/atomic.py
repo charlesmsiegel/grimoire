@@ -44,7 +44,7 @@ import re
 import stat
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TextIO
 
@@ -158,10 +158,8 @@ def _carry_metadata(tmp_name: str, path: Path) -> None:
         src = None
 
     mode = stat.S_IMODE(src.st_mode) if src else 0o666 & ~_UMASK
-    try:
+    with suppress(OSError):
         os.chmod(tmp_name, mode)
-    except OSError:
-        pass
 
     if src is not None and hasattr(os, "chown"):
         try:
@@ -169,10 +167,8 @@ def _carry_metadata(tmp_name: str, path: Path) -> None:
         except (OSError, AttributeError):
             # Unprivileged: uid can't change. Retry group alone -- that one
             # usually succeeds and is what shared-group setups depend on.
-            try:
+            with suppress(OSError, AttributeError):
                 os.chown(tmp_name, -1, src.st_gid)
-            except (OSError, AttributeError):
-                pass
 
     # Listing is not enough: copying needs the complete optional API. Bind the
     # capabilities rather than statically naming absent Windows stdlib APIs.
@@ -222,10 +218,8 @@ def is_write_temp(path: Path) -> bool:
 def _discard(tmp_name: str) -> None:
     """Best effort: the same scanner that can block a replace can briefly block
     the unlink, and failing to remove litter must not mask the real error."""
-    try:
+    with suppress(OSError):
         os.unlink(tmp_name)
-    except OSError:
-        pass
 
 
 def _write_through_fd(path: Path, mode: str, encoding: str | None, payload) -> None:
@@ -251,10 +245,8 @@ def _write_through_fd(path: Path, mode: str, encoding: str | None, payload) -> N
         _replace(tmp_name, path)
     except BaseException:
         if not closed:
-            try:
+            with suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
         _discard(tmp_name)
         raise
 
@@ -383,10 +375,8 @@ def streaming_write(path: Path):
         _replace(tmp_name, path)
     except BaseException:
         if not closed:
-            try:
+            with suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
         _discard(tmp_name)
         raise
     writeset.note(path)

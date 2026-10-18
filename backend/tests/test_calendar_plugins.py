@@ -1,4 +1,5 @@
 import textwrap
+import threading
 
 import pytest
 
@@ -79,3 +80,35 @@ def test_a_broken_plugin_file_is_skipped_without_crashing_other_lookups(tmp_path
 
     provider = get_provider(_cfg("gregorian"))
     assert provider is not None
+
+
+def test_concurrent_first_lookups_import_a_plugin_once(tmp_path, monkeypatch):
+    """Every lookup asks for the plugins first, from whatever worker thread it
+    runs on. A plugin whose top level is slow to run is the window: without a
+    guard, each lookup that arrived in it imported the file again."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    calendars_dir = tmp_path / "calendars"
+    calendars_dir.mkdir()
+    imports = calendars_dir / "imports.log"
+    slow = textwrap.dedent(f"""
+        import time
+        with open({str(imports)!r}, "a", encoding="utf-8") as f:
+            f.write("imported\\n")
+        time.sleep(0.2)
+    """) + _PROVIDER_SRC
+    (calendars_dir / "plugin_slow.py").write_text(slow, encoding="utf-8")
+
+    start = threading.Barrier(4)
+    found = []
+
+    def lookup():
+        start.wait()
+        found.append(get_provider(_cfg("plugin-test-calendar")).format(5))
+
+    threads = [threading.Thread(target=lookup) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert found == ["5"] * 4
+    assert imports.read_text(encoding="utf-8").splitlines() == ["imported"]

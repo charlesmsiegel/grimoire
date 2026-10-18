@@ -516,26 +516,29 @@ def test_no_embedding_role_is_structural_and_lexical_tier_one(cid, monkeypatch):
     assert client.calls == []
 
 
-def test_a_stalled_endpoint_costs_one_phase_per_turn_and_keeps_file_evidence(cid, space):
-    """10.2 through the turn-path wrapper: a stalled embed costs at most the
-    phase deadline, the file evidence survives it, and -- the cut being the
-    turn's own clock -- the next turn asks again rather than backing off."""
+def test_a_phase_timeout_preserves_file_evidence_and_retries_next_turn(cid, space):
+    """10.2 through the turn-path wrapper: a phase timeout preserves file
+    evidence and the next turn asks again rather than backing off.
+
+    The stalled-call test above pins the real network deadline. Here the fake
+    reports that same phase cut after real file retrieval: file work may
+    overrun a short deadline, so timing it too can skip the request entirely
+    on a slow filesystem and never test the timeout recovery path.
+    """
     old = played(cid, text="Mara studies the silver ledger.")
     absorbed(cid, old)
     sid = played(cid, text="Where is the silver ledger?")
-    client = FakeAsyncEmbeddings(delay=10)
+    client = FakeAsyncEmbeddings(error=LLMError("timeout", "phase deadline spent", code=embeddings.DEADLINE))
 
     def turn(seconds):
         return asyncio.run(history_recall.gather(
             None, cid, sid, seed="", resolved=None, llm_client=None, embed_client=client,
             deadline=time.monotonic() + seconds))
 
-    start = time.monotonic()
-    first = turn(0.3)
-    assert time.monotonic() - start < 2
+    first = turn(30)
     assert first.coverage.semantic == "failed:timeout"
     assert [i.scene.sid for i in first.items] == [old]
-    second = turn(0.3)
+    second = turn(30)
     assert second.coverage.semantic == "failed:timeout" and len(client.calls) == 2
     assert [i.scene.sid for i in second.items] == [old]
 

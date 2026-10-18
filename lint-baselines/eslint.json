@@ -71,7 +71,6 @@
   },
   "frontend/src/components/CoverPanel.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
-    "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 1,
     "@typescript-eslint/no-unsafe-argument": 2,
     "@typescript-eslint/no-unsafe-member-access": 2
@@ -262,7 +261,6 @@
   },
   "frontend/src/components/SheetPanel.tsx": {
     "@typescript-eslint/no-explicit-any": 3,
-    "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 1,
     "@typescript-eslint/no-unsafe-argument": 3,
     "@typescript-eslint/no-unsafe-member-access": 3,
@@ -388,8 +386,8 @@
   },
   "frontend/src/routes/CampaignView.tsx": {
     "@typescript-eslint/no-explicit-any": 17,
-    "@typescript-eslint/no-floating-promises": 11,
-    "@typescript-eslint/no-misused-promises": 11,
+    "@typescript-eslint/no-floating-promises": 4,
+    "@typescript-eslint/no-misused-promises": 10,
     "@typescript-eslint/no-unnecessary-type-assertion": 2,
     "@typescript-eslint/no-unsafe-assignment": 2,
     "@typescript-eslint/no-unsafe-member-access": 10,
@@ -438,8 +436,8 @@
   },
   "frontend/src/routes/WorldsView.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
-    "@typescript-eslint/no-floating-promises": 2,
-    "@typescript-eslint/no-misused-promises": 3,
+    "@typescript-eslint/no-floating-promises": 1,
+    "@typescript-eslint/no-misused-promises": 2,
     "@typescript-eslint/no-unsafe-argument": 1,
     "@typescript-eslint/no-unsafe-member-access": 3,
     "jsx-a11y/no-autofocus": 1

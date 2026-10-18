@@ -23,6 +23,7 @@ from grimoire.store import (
     entities,
     facts,
     plot,
+    readstats,
     regex,
     relationship_history,
     rolling_intact,
@@ -344,12 +345,13 @@ def test_a_prompt_rule_over_a_covered_post_drops_it(cid):
 
 def test_an_intact_summary_is_memoized_on_the_files_it_read(cid):
     sid = _folded_with_word(cid)
-    count = rolling.parses["count"]
-    doc(cid, sid)
-    assert rolling.parses["count"] == count          # warm: no transcript parse
+    with readstats.collect() as counts:
+        doc(cid, sid)
+    assert counts.get(rolling.PARSES) == 0            # warm: no transcript parse
     scenes.append_message(cid, sid, "user", "A new post.")
-    doc(cid, sid)
-    assert rolling.parses["count"] > count            # the scene file moved
+    with readstats.collect() as counts:
+        doc(cid, sid)
+    assert counts.get(rolling.PARSES) > 0             # the scene file moved
 
 
 # --- gates ------------------------------------------------------------------------
@@ -612,10 +614,10 @@ def test_a_summary_with_moved_facts_reads_no_transcript_and_no_rules(cid):
     _location(cid, sid, "Saltmarch harbour")          # the first location: facts move
     slices._POOL.clear()
     rolling._POOL.clear()
-    count = rolling.parses["count"]
-    inputs = slices.CampaignInputs.load(cid)
-    sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
-    assert rolling.parses["count"] == count
+    with readstats.collect() as counts:
+        inputs = slices.CampaignInputs.load(cid)
+        sl = slices.scene_slices(inputs, slices.read_head(cid, sid))
+    assert counts.get(rolling.PARSES) == 0
     assert regex.layers.path("global") not in sl.paths
     assert sl.values["rolling"] == ""
 

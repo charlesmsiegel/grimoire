@@ -1,3 +1,4 @@
+import contextlib
 import importlib
 import json
 from pathlib import Path
@@ -315,10 +316,8 @@ def test_delete_clears_active_id_even_if_file_removal_then_fails(monkeypatch, tm
         return original_unlink(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", flaky_unlink)
-    try:
+    with contextlib.suppress(OSError):
         s.llm_connections.delete_connection(cid)
-    except OSError:
-        pass
     # active_connection_id is already cleared, even though the file unlink
     # itself failed and the connection technically still exists on disk
     assert s.read_config()["active_connection_id"] == ""

@@ -97,6 +97,20 @@ test("creating a world posts the name and refreshes the list", async () => {
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1));
 });
 
+test("a refused create says why, keeps the name, and refreshes nothing", async () => {
+  // It used to be an unhandled rejection: the grid unchanged and nothing on
+  // screen to tell a refused name from a click that never landed.
+  (api.createWorld as any).mockRejectedValue({ detail: "a world named Realm already exists" });
+  renderView();
+  await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());
+  fireEvent.change(screen.getByPlaceholderText(/world name/i), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    /'Realm' could not be created: a world named Realm already exists/i);
+  expect(screen.getByPlaceholderText(/world name/i)).toHaveValue("Realm");
+  expect(api.listWorlds).toHaveBeenCalledTimes(BASE);
+});
+
 test("create is disabled with no name", async () => {
   renderView();
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());

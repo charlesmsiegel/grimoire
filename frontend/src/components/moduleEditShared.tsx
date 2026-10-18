@@ -26,7 +26,7 @@ export function useModuleDryRun(save: SaveFn, deps: unknown[]) {
     timer.current = setTimeout(() => {
       save(true).then((r) => {
         if (revision.current === rev) setResult(r);
-      }).catch(() => {});
+      }).catch(() => {});   // a check that fails previewed nothing; Save runs its own
     }, 500);
     return () => clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps

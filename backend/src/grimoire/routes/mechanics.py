@@ -4,6 +4,8 @@ bound module and sheets."""
 
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from .. import prompts, store
@@ -261,10 +263,8 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
                     # machinery -- that is in proposals.NON_TERMINAL, so the next
                     # send's supersede() retires it, and until then this route
                     # answers 409 "adjudication in progress", which is accurate.
-                    try:
+                    with contextlib.suppress(store.locks.StoreBusy):
                         store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
-                    except store.locks.StoreBusy:
-                        pass
                     raise
                 except Exception as exc:  # noqa: BLE001 — any failure reverts cleanly
                     store.proposals.transition(cid, sid, pid, ("resolving",), "pending")

@@ -105,10 +105,8 @@ def _open_store_to_usb(home_dir: str) -> None:
                 # campaign written since the last sync stayed unreadable.
                 pass
             for name in filenames:
-                try:
+                with contextlib.suppress(OSError):
                     os.chmod(os.path.join(dirpath, name), 0o666)
-                except OSError:
-                    pass
         with open(sentinel, "w", encoding="utf-8") as fh:
             fh.write(str(root))
     except Exception:  # noqa: BLE001 - never block startup on a permissions tweak

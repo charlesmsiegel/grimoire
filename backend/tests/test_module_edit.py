@@ -1,4 +1,5 @@
 import ast
+import contextlib
 import inspect
 import io
 import json
@@ -1010,10 +1011,9 @@ def test_import_wraps_extraction_oserror(monkeypatch, tmp_path):
     }
     zpath = tmp_path / "con.zip"
     zpath.write_bytes(_zip_bytes(entries))
-    try:
+    # An extraction failure surfaces cleanly, never as a raw OSError.
+    with contextlib.suppress(modules.ModuleError):
         module_edit.import_module(zpath)
-    except modules.ModuleError:
-        pass  # extraction failure surfaced cleanly, not a raw OSError
 
 
 def test_import_wraps_zip_read_errors(monkeypatch, tmp_path):

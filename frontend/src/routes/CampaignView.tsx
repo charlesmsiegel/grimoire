@@ -895,11 +895,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       setWorldName(c.meta.world_name ?? ""); // embedded: no second fetch
     });
     // Which scene to open is NOT decided here: the URL says, and the resolver
-    // below is the one place that reads it.
-    loadScenes().catch(() => {});
+    // below is the one place that reads it -- once this list has installed. A
+    // read that fails installs nothing, so dropping its rejection left the page
+    // with no scene, no rail and no word of why.
+    loadScenes().catch((err: unknown) => {
+      if (cidRef.current === cid) {
+        setError({ text: `The scene list could not be read: ${errorText(err)}`, retryable: false });
+      }
+    });
     api.getConfig().then((c) => {
       setColorQuotes(c.quote_color === "on");
-    }).catch(() => {});
+    }).catch(() => {});   // unread, quotes render uncoloured: a style, not the transcript
     readModuleBound(true);   // new campaign: nothing known about it yet
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
@@ -1140,7 +1146,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const el = streamRef.current;
     if (!el) return;
     atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
-    if (el.scrollTop <= NEAR_TOP_PX) loadOlder();
+    if (el.scrollTop <= NEAR_TOP_PX) void loadOlder();
   }
 
   // Unstamped user lines fall back to the seated player's name on their plate.
@@ -1623,6 +1629,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       windowSizeRef.current += page.messages.length;
       setMessages((m) => [...page.messages, ...m]);
       setFirstIndex(page.offset ?? 0);
+    } catch (err: unknown) {
+      // The scroll handler and the button both drop this promise, so a page
+      // that would not load was an unhandled rejection and a button that went
+      // back to its label as if nothing had been asked. Scoped like
+      // `readScene`'s report: a page for a window the reader has left says
+      // nothing about the one on screen.
+      if (windowTokenRef.current === token) {
+        setError({ text: `Older posts could not be loaded: ${errorText(err)}`, retryable: false });
+      }
     } finally {
       loadingOlderRef.current = false;
       setLoadingOlder(false);
@@ -1898,6 +1913,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     try {
       await api.removeFromCast(cid, activeId, selectedActor.kind, selectedActor.id);
       setSelectedActor(null);
+      // The removal landed: a cast that will not re-read is a stale panel until
+      // the next read, not a failed removal.
       api.getCast(cid, activeId).then(setCast).catch(() => {});
       // A join/leave appends a transition post (#85), so the transcript moved.
       readScene(activeId);
@@ -2014,7 +2031,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // reader made in an open scene — so an opener-sized scene would sit with no
     // summary until a later turn or a manual Refresh (#85). A manual (empty)
     // scene answers `refreshed: false` having reached no provider.
-    refreshAndAsk(id);
+    void refreshAndAsk(id);
   }
 
   // Re-read a scene after a write made OUTSIDE this component, then ask whether
@@ -2252,10 +2269,24 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     await renameScene(id, title);
   }
 
+  // Reports rather than throws, for `renameScene`'s reason: the ✕ drops the
+  // promise. A delete the server refuses -- a scene a review or another
+  // window's turn holds answers 409 -- otherwise left the row standing with
+  // nothing on screen to say it had been asked.
   async function deleteScene(s: SceneMeta) {
     if (!window.confirm(`Delete '${s.title}'?`)) return;
-    await api.deleteScene(cid, s.id);
-    await loadScenes();
+    try {
+      await api.deleteScene(cid, s.id);
+    } catch (err: unknown) {
+      fail(err, false);   // nothing was deleted; generating is not its recovery
+      return;
+    }
+    try {
+      await loadScenes();
+    } catch (err: unknown) {
+      setError({ text: `Deleted, but the scene list could not be refreshed: ${errorText(err)}`,
+                 retryable: false });
+    }
     // Same reason as `renameScene`: the ledger resolves every thread,
     // commitment and fact against the scene list, so a deletion changes what
     // it returns. Bumped here rather than left to the refresh, because the two
@@ -4331,7 +4362,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      send();
+      void send();
     }
   }
 
@@ -4752,7 +4783,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const removeSelectedActorStable = useStableCallback(() => void removeSelectedActor());
   const openDrawerActor = useStableCallback((kind: string, id: string) => setDrawer(
     { type: "actor", kind: kind as "characters" | "pcs", id }));
-  const onCastChanged = useStableCallback(() => { if (activeId) refreshAndAsk(activeId); });
+  const onCastChanged = useStableCallback(() => { if (activeId) void refreshAndAsk(activeId); });
   const onInspectorSceneChanged = useStableCallback(() => { if (activeId) void selectScene(activeId); });
   // A restore from Turn history is a message edit, and asks what `saveEdit`
   // asks after one: it rewrites text the rolling summary may already cover.
@@ -5056,7 +5087,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                    onChange={(e) => setRenamingScene({ id: renamingScene.id, title: e.target.value })}
                    onKeyDown={(e) => {
                      // See the reroll box: an inline Enter is claimed, not shared.
-                     if (e.key === "Enter") { e.preventDefault(); commitSceneRename(); }
+                     if (e.key === "Enter") { e.preventDefault(); void commitSceneRename(); }
                      if (e.key === "Escape") setRenamingScene(null);
                    }} />
           ) : (
@@ -5461,7 +5492,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   onChange={(e) => setRenamingScene({ id: renamingScene.id, title: e.target.value })}
                   onKeyDown={(e) => {
                     // See the reroll box: an inline Enter is claimed, not shared.
-                    if (e.key === "Enter") { e.preventDefault(); commitSceneRename(); }
+                    if (e.key === "Enter") { e.preventDefault(); void commitSceneRename(); }
                     if (e.key === "Escape") setRenamingScene(null);
                   }}
                 />
@@ -5498,7 +5529,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                         title={sceneLocked ? LOCKED_WHILE_GENERATING : "Delete scene"}
                         onClick={() => {
                           const meta = scenes.find((x) => x.id === activeId);
-                          if (meta) deleteScene(meta);
+                          if (meta) void deleteScene(meta);
                         }}>✕</button>
               </div>
             </div>
@@ -5507,7 +5538,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                data-testid="stream" onScroll={onStreamScroll}>
             {firstIndex > 0 && (
               <div className="stream-older">
-                <button className="subtle" onClick={loadOlder} disabled={loadingOlder}>
+                <button className="subtle" onClick={() => void loadOlder()} disabled={loadingOlder}>
                   {loadingOlder ? "Loading…" : (() => {
                     const n = Math.min(PAGE_SIZE, firstIndex);
                     return `Load ${n} older post${n === 1 ? "" : "s"}`;

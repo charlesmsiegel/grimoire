@@ -121,9 +121,12 @@ def get_provider(config: dict) -> CalendarProvider:
 
 
 def list_providers() -> list[dict]:
-    """Every registered calendar (built-in + user-authored), for a UI picker."""
+    """Every registered calendar (built-in + user-authored), for a UI picker.
+
+    Over a copy of the registry's keys: another thread's lookup can be
+    importing a plugin, which registers into it, while this one lists."""
     load_custom_providers()
-    return [{"id": pid, "name": NAMES.get(pid, pid)} for pid in REGISTRY]
+    return [{"id": pid, "name": NAMES.get(pid, pid)} for pid in list(REGISTRY)]
 
 
 # ---- time-of-day-aware, calendar-agnostic helpers ----
@@ -216,11 +219,14 @@ def resolve(provider: CalendarProvider, native: str, near: str = "") -> str:
     except CalendarError as e:
         raise CalendarError(f"bad date: {native!r}") from e
     for offset in range(RESOLVE_WINDOW_DAYS + 1):
-        # Outward from the anchor, and FORWARD first at each distance: the
-        # caller is dating the next scene, and where a calendar renders two days
-        # the same way the later one is the likelier read. Ordered explicitly
-        # rather than left to a set, whose iteration order is a hash detail --
-        # the same question must not get two answers.
+        # Outward from the anchor, nearest day first: of two days written the
+        # same way, the one closest to the campaign's present is the one that
+        # was meant, and the common case (days or weeks ahead) stops the scan
+        # early rather than walking the whole window. FORWARD first at each
+        # distance: the caller is dating the next scene, and where a calendar
+        # renders two days the same way the later one is the likelier read.
+        # Ordered explicitly rather than left to a set, whose iteration order is
+        # a hash detail -- the same question must not get two answers.
         for fixed in ((anchor,) if offset == 0 else (anchor + offset, anchor - offset)):
             try:
                 canonical = provider.format(fixed)
@@ -236,25 +242,6 @@ def resolve(provider: CalendarProvider, native: str, near: str = "") -> str:
                 return canonical
             minutes = minutes_of(native)   # validates the range, raises CalendarError
             return f"{canonical}T{minutes // 60:02d}:{minutes % 60:02d}"
-    raise CalendarError(f"bad date: {native!r}")
-    try:
-        anchor = fixed_of(provider, near)
-    except CalendarError as e:
-        raise CalendarError(f"bad date: {native!r}") from e
-    # Outward from the anchor, nearest day first: where two days could be
-    # written the same way, the one closest to the campaign's present is the
-    # one that was meant -- and the common case (days or weeks ahead) stops
-    # the scan early rather than walking the whole window.
-    for offset in range(RESOLVE_WINDOW_DAYS + 1):
-        for fixed in ({anchor + offset, anchor - offset} if offset else {anchor}):
-            try:
-                canonical = provider.format(fixed)
-                if _loose(canonical) == wanted:
-                    return canonical
-                if _loose(provider.describe(fixed)["friendly"]) == wanted:
-                    return canonical
-            except (CalendarError, KeyError, TypeError, ValueError, OverflowError, OSError):
-                continue   # a day outside this calendar's own range is simply not the answer
     raise CalendarError(f"bad date: {native!r}")
 
 

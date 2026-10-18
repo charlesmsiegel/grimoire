@@ -84,7 +84,7 @@ export default function SheetPanel({ scope, module, kind, eid, onOpenRef, onChan
     return (
       <SheetEditor scope={scope} module={module} kind={kind} eid={eid} initial={sheet}
                    onClose={() => setEditing(false)}
-                   onSaved={() => { refetch(); }} onOpenRef={onOpenRef} />
+                   onSaved={() => { void refetch(); }} onOpenRef={onOpenRef} />
     );
   }
 

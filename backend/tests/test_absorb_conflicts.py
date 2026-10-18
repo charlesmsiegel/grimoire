@@ -9,6 +9,7 @@ it.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json as _json
 
@@ -709,11 +710,9 @@ def test_a_resume_keeps_the_verdicts_the_first_attempt_computed(monkeypatch, tmp
         return real_update(cid_, kind, eid, **kw)
 
     monkeypatch.setattr(overlay, "update_entity", crash_on_the_ledger)
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         absorb.apply_edits(cid, edits, progress=live,
                            checkpoint=lambda: persisted.append(copy.deepcopy(live)))
-    except KeyboardInterrupt:
-        pass
     monkeypatch.setattr(overlay, "update_entity", real_update)
 
     journal = persisted[-1]
@@ -763,11 +762,9 @@ def test_a_resume_rejudges_a_row_an_outside_write_moved(monkeypatch, tmp_path):
         return real_update(cid_, kind, eid, **kw)
 
     monkeypatch.setattr(overlay, "update_entity", crash_on_the_ledger)
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         absorb.apply_edits(cid, edits, progress=live,
                            checkpoint=lambda: persisted.append(copy.deepcopy(live)))
-    except KeyboardInterrupt:
-        pass
     monkeypatch.setattr(overlay, "update_entity", real_update)
 
     journal = persisted[-1]
@@ -840,11 +837,9 @@ def test_a_resume_does_not_mistake_another_record_holding_the_same_text(monkeypa
         return real_update(cid_, kind, eid, **kw)
 
     monkeypatch.setattr(overlay, "update_entity", crash_on_the_ledger)
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         absorb.apply_edits(cid, edits, progress=live,
                            checkpoint=lambda: persisted.append(copy.deepcopy(live)))
-    except KeyboardInterrupt:
-        pass
     monkeypatch.setattr(overlay, "update_entity", real_update)
 
     journal = persisted[-1]

@@ -1683,6 +1683,20 @@ test("the delete button deletes a scene after confirm", async () => {
   await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("run", "s1"));
 });
 
+test("a delete the server refuses says so and leaves the scene", async () => {
+  // The ✕ drops the promise, so a refusal used to be an unhandled rejection:
+  // the row stood there with nothing to say the delete had been asked for.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.deleteScene as any).mockRejectedValue(
+    new ApiError(409, "a review is being prepared for this scene", "scene_busy"));
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+  expect(await screen.findByText(/a review is being prepared for this scene/)).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /^Old$/ })).toBeInTheDocument();
+});
+
 test("declining the delete confirm does nothing", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   vi.spyOn(window, "confirm").mockReturnValue(false);
@@ -6377,6 +6391,23 @@ test("the older-history button loads the previous page and disappears at the top
   expect(screen.queryByRole("button", { name: /older posts/i })).toBeNull();
 });
 
+test("an older page that will not load says so", async () => {
+  // Both the button and the scroll handler drop the promise, so a failed page
+  // used to be an unhandled rejection: the button went back to its label as if
+  // it had never been pressed.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockImplementation((_c: string, _s: string, w?: any) =>
+    (w?.before === 1
+      ? Promise.reject(new ApiError(503, "store busy", "busy"))
+      : Promise.resolve({ meta: {}, messages: [{ role: "assistant", content: "newer post" }],
+                          offset: 1, total: 2, has_older: true })));
+  renderCampaign();
+  await screen.findByText("newer post");
+  fireEvent.click(screen.getByRole("button", { name: /load 1 older post/i }));
+  expect(await screen.findByText(/Older posts could not be loaded: store busy/)).toBeInTheDocument();
+  expect(screen.getByText("newer post")).toBeInTheDocument();
+});
+
 test("no older-history button when the whole transcript is loaded", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "assistant", content: "only post" }], offset: 0, total: 1, has_older: false });
@@ -7073,6 +7104,14 @@ test("a scene the URL names but the server cannot read says so", async () => {
   renderCampaign();
 
   expect(await screen.findByText(/transcript is not valid UTF-8/)).toBeInTheDocument();
+});
+
+test("a scene list that cannot be read says so", async () => {
+  // The resolver waits for this list, and a read that fails installs nothing:
+  // the page used to sit with no scene and no rail, and no word of why.
+  (api.listScenes as any).mockRejectedValue(new ApiError(500, "list down"));
+  renderCampaign();
+  expect(await screen.findByText(/The scene list could not be read: list down/)).toBeInTheDocument();
 });
 
 // See above: an empty campaign has no play view, so it has no first send.

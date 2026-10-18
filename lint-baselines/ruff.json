@@ -5,7 +5,7 @@
     "PLW1510": 1
   },
   "android/app/src/main/python/android_entry.py": {
-    "SIM105": 2
+    "SIM105": 1
   },
   "backend/scripts/ingest_scene.py": {
     "C901": 1,
@@ -19,8 +19,7 @@
   },
   "backend/src/grimoire/llm.py": {
     "ASYNC109": 2,
-    "C901": 1,
-    "SIM105": 1
+    "C901": 1
   },
   "backend/src/grimoire/openai_compatible.py": {
     "C901": 2
@@ -38,9 +37,6 @@
     "A002": 2,
     "SIM105": 1
   },
-  "backend/src/grimoire/routes/common.py": {
-    "SIM105": 1
-  },
   "backend/src/grimoire/routes/config.py": {
     "A002": 4,
     "PERF401": 1
@@ -49,18 +45,16 @@
     "RUF005": 1
   },
   "backend/src/grimoire/routes/mechanics.py": {
-    "C901": 1,
-    "SIM105": 1
+    "C901": 1
   },
   "backend/src/grimoire/routes/modules.py": {
     "A002": 3
   },
   "backend/src/grimoire/routes/scenes.py": {
     "A002": 3,
-    "C901": 5,
+    "C901": 4,
     "N818": 2,
-    "RUF003": 2,
-    "SIM105": 5
+    "RUF003": 2
   },
   "backend/src/grimoire/routes/streaming.py": {
     "C901": 4,
@@ -71,8 +65,7 @@
     "RET504": 1
   },
   "backend/src/grimoire/routes/worlds.py": {
-    "A002": 2,
-    "SIM105": 1
+    "A002": 2
   },
   "backend/src/grimoire/store/__init__.py": {
     "RUF022": 1
@@ -104,20 +97,8 @@
   "backend/src/grimoire/store/appearances/detect.py": {
     "RUF001": 7
   },
-  "backend/src/grimoire/store/assets.py": {
-    "SIM105": 1
-  },
-  "backend/src/grimoire/store/atomic.py": {
-    "SIM105": 5
-  },
   "backend/src/grimoire/store/audit/apply.py": {
     "B023": 2
-  },
-  "backend/src/grimoire/store/backups.py": {
-    "SIM105": 1
-  },
-  "backend/src/grimoire/store/calendars/base.py": {
-    "C901": 1
   },
   "backend/src/grimoire/store/calendars/hebrew.py": {
     "PERF401": 1,
@@ -176,8 +157,7 @@
   "backend/src/grimoire/store/context/world_state.py": {
     "B905": 2,
     "C901": 1,
-    "RUF001": 3,
-    "SIM105": 3
+    "RUF001": 3
   },
   "backend/src/grimoire/store/covers.py": {
     "N818": 2
@@ -199,8 +179,7 @@
     "C901": 1
   },
   "backend/src/grimoire/store/export.py": {
-    "C901": 1,
-    "SIM105": 1
+    "C901": 1
   },
   "backend/src/grimoire/store/expressions.py": {
     "B905": 1,
@@ -276,12 +255,6 @@
   "backend/src/grimoire/store/playing.py": {
     "SIM102": 1
   },
-  "backend/src/grimoire/store/proclock.py": {
-    "SIM105": 1
-  },
-  "backend/src/grimoire/store/prompt_log.py": {
-    "SIM105": 2
-  },
   "backend/src/grimoire/store/proposals.py": {
     "SIM102": 1
   },
@@ -295,9 +268,6 @@
     "C901": 1,
     "N818": 3,
     "RUF005": 2
-  },
-  "backend/src/grimoire/store/retcon.py": {
-    "SIM105": 1
   },
   "backend/src/grimoire/store/rolls.py": {
     "N818": 1
@@ -388,9 +358,6 @@
   "backend/tests/llm_fakes.py": {
     "N818": 1
   },
-  "backend/tests/test_absorb_conflicts.py": {
-    "SIM105": 3
-  },
   "backend/tests/test_absorb_routing.py": {
     "RUF059": 2
   },
@@ -403,9 +370,6 @@
   },
   "backend/tests/test_appearances_store.py": {
     "RUF059": 6
-  },
-  "backend/tests/test_assets_store.py": {
-    "SIM105": 1
   },
   "backend/tests/test_atomic_guard.py": {
     "B007": 1,
@@ -421,8 +385,7 @@
   "backend/tests/test_campaigns_store.py": {
     "C408": 1,
     "N818": 4,
-    "RUF059": 3,
-    "SIM105": 1
+    "RUF059": 3
   },
   "backend/tests/test_casefile_route.py": {
     "RUF059": 1
@@ -486,9 +449,6 @@
     "RUF005": 2,
     "RUF012": 1
   },
-  "backend/tests/test_llm_connections_store.py": {
-    "SIM105": 1
-  },
   "backend/tests/test_llm_fakes.py": {
     "PERF401": 1
   },
@@ -521,8 +481,7 @@
   "backend/tests/test_module_edit.py": {
     "B007": 1,
     "PERF102": 1,
-    "RUF059": 11,
-    "SIM105": 1
+    "RUF059": 11
   },
   "backend/tests/test_modules_store.py": {
     "RUF005": 4,

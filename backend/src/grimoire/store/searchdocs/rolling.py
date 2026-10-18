@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .. import chronicle, rolling_intact, rolling_summary, statcache
+from .. import chronicle, readstats, rolling_intact, rolling_summary, statcache
 from ..appearances import cast as appearances_cast
 from ..campaigns import paths as campaigns_paths
 from ..regex import layers as regex_layers
@@ -33,12 +33,13 @@ from ..scenes import read as scenes_read
 POOL_ENTRIES = scenes_read.POOL_ENTRIES
 _POOL: dict = {}
 
-#: Transcript parses this module made, so a test can see a warm call make none.
-parses = {"count": 0}
+#: The `readstats` counter of transcript parses this module makes, so a test
+#: can see a warm call make none.
+PARSES = "searchdocs.rolling.parse"
 
 
 def _connections(cid: str, sid: str) -> tuple[str, ...]:
-    parses["count"] += 1
+    readstats.bump(PARSES)
     messages = scenes_read.read_scene(cid, sid)["messages"]
     return tuple(sorted({c for c in map(regex_view.connection_of, messages) if c}))
 
@@ -75,7 +76,7 @@ def intact_rolling(cid: str, head) -> Running:
         rules = regex_layers.signature(cid, conns)
 
         def compute() -> str:
-            parses["count"] += 1
+            readstats.bump(PARSES)
             scene = scenes_read.read_scene(cid, sid)
             return rolling_intact.view(cid, sid, scene, facts)["prior"]
         sig = None if scene_sig is None or rules is None else \

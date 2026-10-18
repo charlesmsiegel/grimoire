@@ -45,6 +45,7 @@ from .. import (
     paths,
     pcs,
     plot,
+    readstats,
     relationship_history,
     statcache,
 )
@@ -205,8 +206,9 @@ def digest(value: object) -> str:
 
 # --- memoized ledger parses -----------------------------------------------------
 
-#: Counted per parse, so a test can see a warm call parse nothing.
-parse_count: dict[str, int] = {}
+#: The `readstats` prefix each parse is counted under (`PARSES` + the ledger's
+#: file name, or + "records"), so a test can see a warm call parse nothing.
+PARSES = "searchdocs.parse."
 
 
 def _opt(value: object, kind: type) -> bool:
@@ -277,7 +279,7 @@ def _parse_json(name: str, path: Path, shape: type) -> tuple[object, bool]:
     nested part of the wrong shape (`_SHAPES`) keeps the value and is
     degraded."""
     def compute() -> tuple[object, bool]:
-        parse_count[name] = parse_count.get(name, 0) + 1
+        readstats.bump(PARSES + name)
         try:
             raw = path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -301,7 +303,7 @@ def _records(cid: str) -> tuple[dict, dict, set[str]]:
     files = (plot._path(cid), commitments._path(cid), continuity_doc._path(cid))
 
     def compute() -> tuple[dict, dict, set[str]]:
-        parse_count["records"] = parse_count.get("records", 0) + 1
+        readstats.bump(PARSES + "records")
         out: list[dict] = []
         bad: set[str] = set()
         for kind, name, ledger in (("thread", "plot.json", plot),

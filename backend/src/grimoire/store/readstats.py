@@ -22,6 +22,8 @@ Names are stable because tests assert on them:
 - `overview.computed.<kind>`, `overview.live_path.<kind>`,
   `overview.unreadable_scene`
 - `todo.scope.library`, `todo.scope.campaign`, `todo.chore.<id>`
+- `searchdocs.parse.<ledger file>`, `searchdocs.parse.records` --
+  `searchdocs.slices`; `searchdocs.rolling.parse` -- `searchdocs.rolling`
 """
 
 from __future__ import annotations

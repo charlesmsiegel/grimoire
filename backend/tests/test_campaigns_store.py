@@ -1,3 +1,4 @@
+import contextlib
 import shutil
 from pathlib import Path
 
@@ -786,10 +787,8 @@ def test_no_interruption_of_the_migration_tombstones_a_live_record(monkeypatch, 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(atomic, "write_text", counted("write", real_write))
         mp.setattr(Path, "unlink", counted("unlink", real_unlink))
-        try:
+        with contextlib.suppress(Interrupted):
             campaigns.ensure_campaign_slim(cid)
-        except Interrupted:
-            pass
 
     campaigns.ensure_campaign_slim(cid)
     campaigns.ensure_campaign_slim(cid)   # and again: the recovery is idempotent

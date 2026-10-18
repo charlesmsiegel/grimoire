@@ -49,6 +49,11 @@ def test_decode_data_uri_rejects_non_data_uri():
     assert fetch.decode_data_uri("https://example.com/a.png") is None
 
 
+def test_decode_data_uri_rejects_a_payload_that_is_not_base64():
+    assert fetch.decode_data_uri("data:image/png;base64,R0lGOD") is None     # bad padding
+    assert fetch.decode_data_uri("data:image/png;base64,R0lGODé=") is None   # not ASCII
+
+
 def test_host_is_blocked_blocks_loopback():
     assert fetch.host_is_blocked("127.0.0.1") is True
     assert fetch.host_is_blocked("localhost") is True

@@ -177,6 +177,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   }
 
   function queueSaved(savedGid: string) {
+    // The queue's save landed; a re-read that fails leaves the chips as they
+    // were read, until the greeting is next opened.
     if (savedGid === gid) api.getGreetingSubjects(wid, savedGid).then(setSubjects).catch(() => {});
   }
 
@@ -228,7 +230,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
         setEdges(g.edges);
         setLoadedEdges(g.edges);
         setPredecessors(g.predecessors ?? []);
-      }).catch(() => {});
+      }).catch(() => {});   // the draft keeps the edges it had: no worse than before the rebase
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);

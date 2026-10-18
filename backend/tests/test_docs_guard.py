@@ -408,8 +408,13 @@ def test_store_guarantees_names_the_lock_domain_constants():
 
 
 def _section(text: str, heading: str) -> str:
-    """The body of the `## <heading>` section, up to the next `## ` heading."""
-    start = text.index(f"\n## {heading}\n")
+    """The body of the `## <heading>` section, up to the next `## ` heading.
+
+    `heading` is the start of the heading line, so CLAUDE.md's
+    `## Costs: three money columns, ...` is found as "Costs" -- and anchored
+    to the line, so a `### ` heading that happens to start the same way is not.
+    """
+    start = text.index(f"\n## {heading}")
     end = text.find("\n## ", start + 1)
     return text[start:] if end < 0 else text[start:end]
 
@@ -544,13 +549,6 @@ def test_store_guarantees_names_every_public_atomic_writer():
     assert not missing, (
         f"docs/store-guarantees.md does not name these atomic writers: {missing}"
     )
-
-
-def _section(text: str, heading: str) -> str:
-    """The body of the `## heading` section, up to the next `## `."""
-    start = text.index(f"## {heading}")
-    end = text.find("\n## ", start + 1)
-    return text[start:] if end < 0 else text[start:end]
 
 
 def _is_route(fn: ast.FunctionDef) -> bool:

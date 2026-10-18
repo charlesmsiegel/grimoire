@@ -9,6 +9,7 @@ Characters and greetings have their own modules; the generic
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from pathlib import Path
@@ -311,10 +312,8 @@ async def post_world_import(request: Request):
     # reported as a failed import -- the caller would retry and import a second
     # copy (Codex review). The flag is backfilled by the next config read
     # anyway; this only saves that read a scan.
-    try:
+    with contextlib.suppress(OSError):
         store.config.mark_setup_done()
-    except OSError:
-        pass
     return {"id": wid}
 
 

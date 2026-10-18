@@ -18,11 +18,19 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import threading
 from pathlib import Path
 
 from ..paths import home
 
 _loaded: set[Path] = set()
+#: Every calendar lookup asks for the plugins first, from whichever worker
+#: thread it runs on, so two first lookups after a file lands would otherwise
+#: both import it -- running its top level twice and racing each other's
+#: `sys.modules` entry. Re-entrant because a plugin is ordinary Python: one
+#: that looks a calendar up at import time recurses as it always did, instead
+#: of deadlocking every lookup in the process behind it.
+_load_guard = threading.RLock()
 
 
 def load_custom_providers() -> None:
@@ -35,16 +43,17 @@ def load_custom_providers() -> None:
     directory = home() / "calendars"
     if not directory.is_dir():
         return
-    for path in sorted(directory.glob("*.py")):
-        if path.name.startswith("_") or path in _loaded:
-            continue
-        module_name = f"grimoire_custom_calendar_{path.stem}"
-        try:
-            spec = importlib.util.spec_from_file_location(module_name, path)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
-        except Exception:  # noqa: BLE001 - a homebrew calendar must not break the calendar list
-            sys.modules.pop(module_name, None)
-        else:
-            _loaded.add(path)
+    with _load_guard:
+        for path in sorted(directory.glob("*.py")):
+            if path.name.startswith("_") or path in _loaded:
+                continue
+            module_name = f"grimoire_custom_calendar_{path.stem}"
+            try:
+                spec = importlib.util.spec_from_file_location(module_name, path)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+            except Exception:  # noqa: BLE001 - a homebrew calendar must not break the calendar list
+                sys.modules.pop(module_name, None)
+            else:
+                _loaded.add(path)

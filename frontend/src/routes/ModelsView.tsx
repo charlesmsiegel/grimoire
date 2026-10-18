@@ -53,6 +53,8 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
   }
 
   function ratesSaved() {
+    // The rates are saved; a re-read that fails keeps the page's previous
+    // answer until the next one.
     api.getInferenceSettings().then(install).catch(() => {});
     leaveRates();
   }

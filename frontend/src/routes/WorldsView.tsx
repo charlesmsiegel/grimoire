@@ -101,7 +101,16 @@ export default function WorldsView() {
   async function create() {
     const trimmed = name.trim();
     if (!trimmed) return;
-    await (details ? api.createWorld(trimmed, profileOf(profile)) : api.createWorld(trimmed));
+    setError(null);
+    try {
+      await (details ? api.createWorld(trimmed, profileOf(profile)) : api.createWorld(trimmed));
+    } catch (err) {
+      // Reported, not dropped: a refused create leaves the grid exactly as it
+      // was, so a silent one is indistinguishable from a click that never
+      // landed -- and the name stays typed for the retry.
+      setError(`'${trimmed}' could not be created: ${errorText(err)}`);
+      return;
+    }
     setName("");
     setProfile(EMPTY_DRAFT);
     setDetails(false);
@@ -213,9 +222,10 @@ export default function WorldsView() {
             <input
               placeholder="World name…" aria-label="World name"
               value={name} onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") create(); }}
+              onKeyDown={(e) => { if (e.key === "Enter") void create(); }}
             />
-            <button className="btn-accent" onClick={create} disabled={!name.trim()}>Create</button>
+            <button className="btn-accent" onClick={() => void create()}
+                    disabled={!name.trim()}>Create</button>
             <button className="subtle" aria-expanded={details}
                     onClick={() => setDetails((d) => !d)}>{details ? "Fewer details" : "More details"}</button>
             <button className="subtle" disabled={importing} onClick={() => fileRef.current?.click()}>

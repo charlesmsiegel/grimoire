@@ -62,6 +62,7 @@ ledger belongs.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -259,10 +260,8 @@ def _unlink(cid: str, eid: str) -> None:
     """Best effort. A payload that will not go leaves litter; a payload whose
     unlink raised would leave the index already rewritten without it, which is
     the same litter plus a failed capture."""
-    try:
+    with contextlib.suppress(OSError):
         _entry_path(cid, eid).unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "",
@@ -467,10 +466,8 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
         # invalidate the old ids, because leaving them is the outcome that hands
         # a recreated scene someone else's prompts; if this fails too the file is
         # simply unavailable and the rename still stands.
-        try:
+        with contextlib.suppress(OSError, locks.StoreBusy):
             _drop_scenes(cid, set(mapping))
-        except (OSError, locks.StoreBusy):
-            pass
 
 
 def _drop_scenes(cid: str, scenes: set[str]) -> None:

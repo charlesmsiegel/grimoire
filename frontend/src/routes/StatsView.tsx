@@ -363,6 +363,8 @@ export default function StatsView({ cid = null }: { cid?: string | null }) {
 
   useEffect(() => {
     let alive = true;
+    // Unread, the "Recording at" note is simply not drawn: it explains the
+    // log rather than being part of it.
     api.getLogLevel().then((l) => { if (alive) setConfigured(l.level); }).catch(() => {});
     return () => { alive = false; };
   }, []);

@@ -678,10 +678,8 @@ def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
         with suppress(OSError):     # swallowed like the legacy files below
             image_refs.delete(d, name)
         for p in siblings(d, name, supported_only):
-            try:
+            with suppress(OSError):
                 p.unlink()
-            except OSError:
-                pass
 
 
 def is_slot_file(p: Path) -> bool:

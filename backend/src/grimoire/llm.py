@@ -6,6 +6,7 @@ The shared error type lives in `llm_errors.py`, not here — see its docstring.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import functools
 import logging
@@ -429,10 +430,9 @@ def _close_when_settled(task: asyncio.Task, agen) -> None:
     connection for the life of the process.
     """
     _swallow(task)
-    try:
+    # No running loop (shutdown): nothing left to close into.
+    with contextlib.suppress(RuntimeError):
         asyncio.ensure_future(_aclose(agen)).add_done_callback(_swallow)
-    except RuntimeError:
-        pass  # no running loop (shutdown): nothing left to close into
 
 
 async def _settle(task: asyncio.Task | None, agen) -> bool:

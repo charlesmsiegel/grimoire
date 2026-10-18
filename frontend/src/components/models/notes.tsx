@@ -11,7 +11,7 @@ export const WARNINGS = {
   vision: "This route sends images; the chosen model is unverified for vision.",
   decide: "No native decision API; structured generation will be used.",
   embed: "This model can't create embeddings.",
-};
+} as const;
 
 /** How a decision is answered, by the resolution's `decision_mode` (spec 10,
  *  I9) -- what it says, not a warning: `native` is the provider's decisions
@@ -21,7 +21,7 @@ export const WARNINGS = {
 export const DECIDE_WORDS = {
   native: "Answered by the provider's decisions endpoint.",
   structured: "Answered by structured generation.",
-};
+} as const;
 
 /** The warning one capabilities answer gives for a model, or null. Reads
  *  only what the server grouped: a hidden model is one it knows cannot. How a

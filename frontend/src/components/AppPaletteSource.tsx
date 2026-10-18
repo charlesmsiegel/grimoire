@@ -25,6 +25,8 @@ export default function AppPaletteSource() {
   useEffect(() => {
     if (!open) return;
     let live = true;
+    // A list that will not load leaves its half of the palette empty: every
+    // entry in it is a page the rail and the shelves also reach.
     api.listCampaigns().then((c) => { if (live) setCampaigns(c); }).catch(() => {});
     api.listWorlds().then((w) => { if (live) setWorlds(w); }).catch(() => {});
     return () => { live = false; };

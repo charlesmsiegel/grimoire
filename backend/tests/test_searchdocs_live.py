@@ -26,6 +26,7 @@ from grimoire.store import (
     compiled,
     facts,
     paths,
+    readstats,
     scenes,
     statcache,
     vectors,
@@ -177,13 +178,14 @@ def test_losing_the_cache_changes_no_answer(cid):
 def test_warm_memos_parse_no_ledger_and_an_edit_reparses_only_its_own(cid):
     sid, *_ = _three(cid)
     live.scene_documents(cid)
-    before = dict(slices.parse_count)
-    live.scene_documents(cid)
-    assert slices.parse_count == before
+    with readstats.collect() as counts:
+        live.scene_documents(cid)
+    assert counts.total(slices.PARSES) == 0
     facts.record(cid, "The ledger counts the tide tax twice.", "", sid)
-    live.scene_documents(cid)
-    changed = {k for k in slices.parse_count if slices.parse_count[k] != before.get(k)}
-    assert changed == {"facts.json"}
+    with readstats.collect() as counts:
+        live.scene_documents(cid)
+    parsed = {k for k in counts.snapshot() if k.startswith(slices.PARSES)}
+    assert parsed == {slices.PARSES + "facts.json"}
 
 
 def test_the_cache_off_memo_is_bounded(cid, monkeypatch):

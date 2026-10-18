@@ -131,7 +131,7 @@ export function CoverPanel({ scope }: { scope: CoverScope }) {
       </label>
       <input id={`${scope.kind}-cover-file`} ref={input} type="file" disabled={busy}
              accept="image/png,image/jpeg,image/gif,image/webp"
-             onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
+             onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); }} />
       {hasCover && (
         <button className="subtle" disabled={busy} onClick={remove}>Remove cover</button>
       )}
