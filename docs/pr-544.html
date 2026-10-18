@@ -177,7 +177,7 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
   <div class="doc-label">PULL REQUEST REVIEW</div>
   <h1 class="doc-title">Grimoire PR544 - Independent Review</h1>
   <p class="doc-sub">Calendar imports, truthful failure recovery and synthetic-process output</p>
-  <div class="doc-meta">Git author repository contributor; base be5e208d9ddbc677eb562c343039f391056cf5c9; HEAD8e423ea plus six frozen review-fix files; 54 paths +1342/-295; generated 2026-10-18; full gates/CI/fresh review pending</div>
+  <div class="doc-meta">Base be5e208d9ddbc677eb562c343039f391056cf5c9; b419 historical review plus frozen two-file test-isolation port; 56 source paths plus report; full corrected gates, CI and fresh review pending</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="summary" aria-selected="true" aria-controls="summary">Summary</button>
 <button role="tab" data-tab="footprint" aria-selected="false" aria-controls="footprint">Footprint</button>
@@ -186,9 +186,78 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <button role="tab" data-tab="flow-impact" aria-selected="false" aria-controls="flow-impact">Flow Impact</button>
 <button role="tab" data-tab="review-walkthrough" aria-selected="false" aria-controls="review-walkthrough">Review Walkthrough</button></nav>
 <main><section class="panel active" id="summary" role="tabpanel">
+<div class="callout"><b>Historical 54-path snapshot at b419.</b> The current two-file isolation addition, 56-path inventory and failed-gate evidence are recorded in the Summary appendix. These original charts and judgments are not current gate results.</div>
+<div class="card hero" id="isolation-appendix">
+<span class="badge good">Current source review: non-blocking; final gates pending</span>
+<h2>Current appendix: isolate tests from the launcher's library and frontend build</h2>
+<p>The current reviewed scope is <b>56 source, test and supporting paths</b>, plus this generated report. The original six-tab analysis below is a historical <code>b419aa5bb0162b944f47352f561e05530333f702</code> snapshot of 54 paths; its charts, changed-line totals and earlier evidence have not been regenerated for this two-file addition. All 54 earlier reviewed source blobs are unchanged. The two additions exactly match the previously reviewed tail fix <code>992afbabbcb6cecc886298a1213e302ef3a9f8b3</code>.</p>
+<div class="callout warn"><b>The b419 full backend gate failed:</b> 9 failed, 22,492 passed, 46 skipped; coverage 93.76%. Coverage exceeding the floor does not make that run green. The complete failed log remains preserved. A new full gate, exact-head CI and fresh remote review are pending.</div>
+<p>The session fixture installs private default-home, bootstrap-pointer and machine-lock floors before clearing an inherited <code>GRIMOIRE_HOME</code>. Store-only tests then use their own per-test default home; explicit per-test overrides still win. Its default <code>GRIMOIRE_DIST</code> points to an absent child under the session's temporary tree, so a preceding frontend build cannot shadow synthetic API routes appended after app creation. Static-serving tests explicitly supply their own build. There is no production code, API, store format or mutation-order change in this addition. <code>backend/tests/conftest.py:84</code>.</p>
+<p>The three regressions launch actual child pytest suites with the real shared fixtures. They exercise an existing pair of image-description assertions with an inherited private library, existing synthetic PUT routes with a built frontend, and writes plus a late route after <code>monkeypatch.undo()</code>. They do not merely assert environment-variable assignments. <code>backend/tests/test_fixture_isolation.py:28</code>, <code>backend/tests/test_fixture_isolation.py:40</code>, <code>backend/tests/test_fixture_isolation.py:51</code>.</p>
+<p><b>Current targeted evidence:</b> Author&#x27;s current-source Python 3.14.5 run passed 184 tests, with 4 skipped, in 31.22 seconds across the three new subprocess regressions and the complete image-description, compiled-lifecycle, data-dir, SPA-fallback, serving-compression and environment-override files. The inherited private launcher home deliberately contained .cache/compiled. Before the fixture change, all three new regressions failed; the image wrapper passed alone but failed after the preceding description writer (1 failed, 1 passed). Those RED/GREEN results use explicit worktree PYTHONPATH and private TMPDIR, TEMP and TMP. This reviewer inspected the recorded results and exact source hashes without duplicating the suites.</p>
+<p><b>Diagnosis boundaries:</b> eight image-description failures came from a shared content-addressed pool under the inherited launcher home. Root separately reproduced the compiled-lifecycle failure on unchanged main: an empty inherited home passed, while creating only its <code>.cache/compiled</code> directory reproduced reopening a session for that unrelated root. The reviewed compiled, config-route, lifecycle-test and old fixture blobs are identical between main and b419. This is controlled environmental evidence, not a claim that this review ran or passed a corrected full suite.</p>
+<p><b>Review limitation:</b> this reviewer authored the original tail isolation fix. This is a fresh critical integration review, not independent of original authorship. No concrete test-quality, privacy or behavior blocker was found in the exact port; root's separate review and the final gates remain required. No real library was accessed.</p>
+<details><summary>Complete current 56-path source inventory and Git blob binding</summary><div class="tbl-wrap"><table><thead><tr><th>Path</th><th>Reviewed Git blob</th></tr></thead><tbody><tr><td><code>CONTRIBUTING.md</code></td><td><code>3274b2fdcafdab72e8b6e073bab7a77aba0aeacf</code></td></tr>
+<tr><td><code>android/app/src/main/python/android_entry.py</code></td><td><code>f6247e5f4decb2ba9d2de8f89a2c6daeb6c11169</code></td></tr>
+<tr><td><code>backend/src/grimoire/llm.py</code></td><td><code>79b7394a07754d843c6dd4bcc00a01fa9c2d1275</code></td></tr>
+<tr><td><code>backend/src/grimoire/routes/common.py</code></td><td><code>bf657b4ede7ea21a58f2f57825f7dd1d18712b03</code></td></tr>
+<tr><td><code>backend/src/grimoire/routes/mechanics.py</code></td><td><code>ab6c57cb1b9dfe5cee88162c6f75ec3ff32be67d</code></td></tr>
+<tr><td><code>backend/src/grimoire/routes/scenes.py</code></td><td><code>4201f244d60a5d3c28a9468b5121dad7c3d773e3</code></td></tr>
+<tr><td><code>backend/src/grimoire/routes/worlds.py</code></td><td><code>1c3c921c20cce47c93dc79396a5721d774a9baa6</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/assets.py</code></td><td><code>24fc7d24fb924d57b6a13fbc95d5b26a22798fd3</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/atomic.py</code></td><td><code>e131ecc1d0925c6387079b2604f40bb5abaf1859</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/backups.py</code></td><td><code>c97e0e877262be08337b8e78823c64584f70e37c</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/calendars/base.py</code></td><td><code>472479029874a3bfc98312d93a5fa135ddcb8409</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/calendars/plugins.py</code></td><td><code>061e7dc6d95cb3f5a8affe590651728e77b8e0a8</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/context/world_state.py</code></td><td><code>cdde16ef3261577caaa9863de52ce5cddadd8c23</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/export.py</code></td><td><code>15f31b79a745e6b17781df7bde624f1538ad36b8</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/fetch.py</code></td><td><code>a4be643b45318e598deb8c59cf2918c495b7db7c</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/proclock.py</code></td><td><code>72817167c6562013178291a8874468410d450c97</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/prompt_log.py</code></td><td><code>68703f1dd5e9c01c5ad32f676980d4671b1c77f5</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/readstats.py</code></td><td><code>e98578e1bdb7c8b8eb3a0ed30e3d1dfccf14df5f</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/retcon.py</code></td><td><code>8ba1854384d902971ee5e832c225040e02ce2a47</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/searchdocs/rolling.py</code></td><td><code>1106bb5d29d33e3700002189ea3b334aadf29c6b</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/searchdocs/slices.py</code></td><td><code>8f664408ae59d70e2cc283e19f8adb0fec2c8fa3</code></td></tr>
+<tr><td><code>backend/tests/conftest.py</code></td><td><code>91ef2b41db13d9f98c8c652b636f78ac34591e0a</code></td></tr>
+<tr><td><code>backend/tests/synthetic_suite.py</code></td><td><code>275ab61a8917c721bd8893830469182e236e71d0</code></td></tr>
+<tr><td><code>backend/tests/test_absorb_conflicts.py</code></td><td><code>24d71f18e920f9f195b0c00d1bcc5890cf5e7428</code></td></tr>
+<tr><td><code>backend/tests/test_assets_store.py</code></td><td><code>844f00a3fc48a31a0c3c8b16a0d67db5d93ed05f</code></td></tr>
+<tr><td><code>backend/tests/test_calendar_plugins.py</code></td><td><code>34bcdb486ba200c3884eadaf2520933ae406ec3e</code></td></tr>
+<tr><td><code>backend/tests/test_campaigns_store.py</code></td><td><code>ec09f4b25f7db1035704908a05c724dd8491258a</code></td></tr>
+<tr><td><code>backend/tests/test_docs_guard.py</code></td><td><code>456efd912ee531090a63ae21a69d19eba8e4cacb</code></td></tr>
+<tr><td><code>backend/tests/test_fetch_store.py</code></td><td><code>a3b24501ce4ad17d5b382368a94c37cc6ae3a3ef</code></td></tr>
+<tr><td><code>backend/tests/test_fixture_isolation.py</code></td><td><code>29a818c769ceff3dca4e4c8be3966fe4aa9e1342</code></td></tr>
+<tr><td><code>backend/tests/test_history_semantic.py</code></td><td><code>3b14aad4393149053479d8f7047929c04aae019d</code></td></tr>
+<tr><td><code>backend/tests/test_llm_connections_store.py</code></td><td><code>722255df7788f8fe095a27eae2504e48e051edbf</code></td></tr>
+<tr><td><code>backend/tests/test_module_edit.py</code></td><td><code>f332412143e0d610fda3f1e56f368c045a7300fd</code></td></tr>
+<tr><td><code>backend/tests/test_overview_continuity.py</code></td><td><code>fbb9079519eeff5e53f949a0802be08ffd6942f5</code></td></tr>
+<tr><td><code>backend/tests/test_regex_engine.py</code></td><td><code>74bd9905a017bc36cfa52055b84462534d36182e</code></td></tr>
+<tr><td><code>backend/tests/test_searchdocs_live.py</code></td><td><code>15f68c33543cddffa753a7d20c31074f25518367</code></td></tr>
+<tr><td><code>backend/tests/test_searchdocs_scene.py</code></td><td><code>76853af13b517f7ab339c784d2c10c367d842170</code></td></tr>
+<tr><td><code>backend/tests/test_synthetic_suite.py</code></td><td><code>fc495d54618a0e035893e1b4fdd4ab3aedea5d05</code></td></tr>
+<tr><td><code>backend/tests/test_unreachable_guard.py</code></td><td><code>e757c6f4dd5647b51934e0979fc6dad5dc5a3508</code></td></tr>
+<tr><td><code>frontend/src/api/useRevalidated.test.ts</code></td><td><code>ae5e716c9db6f552ffeffef834bcea527c835b48</code></td></tr>
+<tr><td><code>frontend/src/api/useRevalidated.ts</code></td><td><code>0501c001d41e8171b0595762164817f6b61fcf1b</code></td></tr>
+<tr><td><code>frontend/src/components/AppPaletteSource.tsx</code></td><td><code>971d3848d33affa5ce104f39b6627e971be8b82e</code></td></tr>
+<tr><td><code>frontend/src/components/CoverPanel.tsx</code></td><td><code>23b4f6223994d2f3f27390482f8f967a257829cd</code></td></tr>
+<tr><td><code>frontend/src/components/GreetingEditor.tsx</code></td><td><code>0cbd0fa93a403c3e8ec1dee2c15caf815108bd8a</code></td></tr>
+<tr><td><code>frontend/src/components/SheetPanel.tsx</code></td><td><code>0b6809f00062b010f6a557fb379cf3cbfbfb6c3b</code></td></tr>
+<tr><td><code>frontend/src/components/models/notes.tsx</code></td><td><code>d5088058e949a59aafd34d3f06d9c0c2192557ee</code></td></tr>
+<tr><td><code>frontend/src/components/moduleEditShared.tsx</code></td><td><code>1bb8143d58ab8db0f8a406cc069ad1ef661c2516</code></td></tr>
+<tr><td><code>frontend/src/routes/CampaignView.test.tsx</code></td><td><code>12649020c77371629b71f23c45ec6bd673106612</code></td></tr>
+<tr><td><code>frontend/src/routes/CampaignView.tsx</code></td><td><code>9e6a6846054a3b514a0a36d3f146be66a8c88968</code></td></tr>
+<tr><td><code>frontend/src/routes/ModelsView.tsx</code></td><td><code>187c3b1301a3ed0164fc81bb6fe9fcab685c492d</code></td></tr>
+<tr><td><code>frontend/src/routes/StatsView.tsx</code></td><td><code>0d8d23f4b4b0916794d25f08d9ee010f8880db55</code></td></tr>
+<tr><td><code>frontend/src/routes/WorldsView.test.tsx</code></td><td><code>a4ebd79f4dc0a4905b0b264511766d592961a259</code></td></tr>
+<tr><td><code>frontend/src/routes/WorldsView.tsx</code></td><td><code>f54d753f3b33d4dcd62f956d37c58728daccd8c0</code></td></tr>
+<tr><td><code>frontend/src/shell/rail.ts</code></td><td><code>c225dc8d4e90e50c71cdb7e265e82305b3bb6d2f</code></td></tr>
+<tr><td><code>lint-baselines/eslint.json</code></td><td><code>727d4444c8807ff3693b1c9a76666ff2cf3c2b38</code></td></tr>
+<tr><td><code>lint-baselines/ruff.json</code></td><td><code>83cf4431baa5a0d5f1230473d3a5a36756f2b95d</code></td></tr></tbody></table></div></details>
+</div>
+
 
 <div class="card hero">
-<span class="badge good">Source review: non-blocking</span>
+<span class="badge good">Historical source review: non-blocking</span>
 <h2>Preserve the result of a committed operation while reporting its failed read</h2>
 <p>Git retains the committed range's original attribution; this candidate also includes the six frozen review-fix files awaiting commit. World creation now refuses synchronous duplicate submissions, retains refused drafts, and distinguishes a committed world from a failed confirming list read. Scene-list and older-page errors belong to their campaign and read generation. A newer confirming read keeps mutation controls pending until its result settles. <code>frontend/src/routes/WorldsView.tsx:118</code>, <code>frontend/src/api/useRevalidated.ts:95</code>, <code>frontend/src/routes/CampaignView.tsx:907</code>.</p>
 <p>Backend changes serialize first calendar-plugin imports, reuse request-scoped parse counters, and capture synthetic pytest output without waiting for a descendant's pipe EOF or moving its write offset. These are useful correctness and maintenance improvements. No remaining concrete source blocker was found after reviewing the complete range and the amended six-file diff. <code>backend/src/grimoire/store/calendars/plugins.py:46</code>, <code>backend/src/grimoire/store/searchdocs/slices.py:282</code>, <code>backend/tests/synthetic_suite.py:79</code>.</p>
@@ -206,6 +275,7 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 
 </section>
 <section class="panel" id="footprint" role="tabpanel">
+<div class="callout"><b>Historical 54-path snapshot at b419.</b> The current two-file isolation addition, 56-path inventory and failed-gate evidence are recorded in the Summary appendix. These original charts and judgments are not current gate results.</div>
 
 
 <div class="kpis">
@@ -240,6 +310,7 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 
 </section>
 <section class="panel" id="contracts-tests" role="tabpanel">
+<div class="callout"><b>Historical 54-path snapshot at b419.</b> The current two-file isolation addition, 56-path inventory and failed-gate evidence are recorded in the Summary appendix. These original charts and judgments are not current gate results.</div>
 
 
 <div class='callout good'><b>No schema, API-contract, or dependency-manifest files touched.</b></div>
@@ -268,6 +339,7 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 
 </section>
 <section class="panel" id="blast-radius" role="tabpanel">
+<div class="callout"><b>Historical 54-path snapshot at b419.</b> The current two-file isolation addition, 56-path inventory and failed-gate evidence are recorded in the Summary appendix. These original charts and judgments are not current gate results.</div>
 
 
 <div class="kpis">
@@ -298,6 +370,7 @@ inherit the new content with nothing in the diff to review. Resource edges are f
 
 </section>
 <section class="panel" id="flow-impact" role="tabpanel">
+<div class="callout"><b>Historical 54-path snapshot at b419.</b> The current two-file isolation addition, 56-path inventory and failed-gate evidence are recorded in the Summary appendix. These original charts and judgments are not current gate results.</div>
 
 <div class="card"><h2>1. Commit, confirm, then release the create form</h2>
 <div class="grid cols-2"><div><h3>Before</h3><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
@@ -392,6 +465,7 @@ sequenceDiagram
 
 </section>
 <section class="panel" id="review-walkthrough" role="tabpanel">
+<div class="callout"><b>Historical 54-path snapshot at b419.</b> The current two-file isolation addition, 56-path inventory and failed-gate evidence are recorded in the Summary appendix. These original charts and judgments are not current gate results.</div>
 
 <div class="card hero"><span class="badge good">No remaining concrete source blocker</span><h2>Useful fixes; final integration gates remain open</h2><p>The seven concrete Codex findings considered in this pass are implemented in the frozen source. The independent review found no additional failing input in the amended range. This is source-review clearance, not a claim that the final commit's full gates, CI or fresh remote review have passed.</p></div>
 <div class="card"><h2>Risk-ordered walkthrough</h2><div class="tbl-wrap"><table><thead><tr><th>Area</th><th>Verdict and evidence</th></tr></thead><tbody>
@@ -420,7 +494,7 @@ sequenceDiagram
 <div class="card hero"><h2>Merge readiness</h2><p><b>Non-blocking source review.</b> No must-fix source finding remains in this frozen working diff. Root's final full gates, exact-head CI and renewed Codex review must still pass before merge. Root reports 434/434 CampaignView tests and 119/119 shared-hook consumer tests passing; the reviewer did not duplicate those suites or run a full gate. Browser and Android runtime checks were not repeated, and earlier Windows whole-suite timeout causes remain unproven.</p></div>
 
 </section></main>
-<footer class="doc">Generated with pr-visualization. Automated Footprint, Contracts and Tests, and Blast Radius tabs are heuristic; judgment tabs come from the full diff and manually traced consumers. Citations verified against the frozen working source. This candidate remains outside the worktree until root reviews and integrates it.</footer>
+<footer class="doc">Generated with pr-visualization. Original six-tab charts are a historical b419 source snapshot. The Summary appendix binds the current 56-path scope and records the failed full backend gate plus targeted port evidence. Final corrected full gates, exact-head CI and fresh review are pending.</footer>
 <script>
 /* ============ tabs ============ */
 /* The tabs are the shell's. Everything a tab shows that needs script (sortable

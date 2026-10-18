@@ -84,10 +84,21 @@ def _default_home_never_the_real_one(tmp_path_factory):
     floor = tmp_path_factory.mktemp("default-home")
     pointer = tmp_path_factory.mktemp("bootstrap-pointer") / ".grimoire.json"
     machine_locks = tmp_path_factory.mktemp("machine-lock-floor") / "grimoire" / "locks"
+    missing_dist = tmp_path_factory.mktemp("frontend-dist") / "absent"
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(paths, "DEFAULT_HOME", floor)
         mp.setattr(paths, "pointer_path", lambda: pointer)
         mp.setattr(proclock, "lock_dir", lambda: machine_locks)
+        # A launcher may guard collection with a private GRIMOIRE_HOME. Once
+        # these floors exist, that override would make every store-only test
+        # share one content-addressed image pool instead of its DEFAULT_HOME.
+        # Clearing it here also prevents a mid-test undo restoring the caller's
+        # library. Each test's own explicit override still runs later and wins.
+        mp.delenv("GRIMOIRE_HOME", raising=False)
+        # check-web can leave a built SPA whose catch-all mount precedes routes
+        # a unit test appends after create_app(). Default to no frontend; tests
+        # of static serving opt in explicitly, including after an undo.
+        mp.setenv("GRIMOIRE_DIST", str(missing_dist))
         yield
 
 
