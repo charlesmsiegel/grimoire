@@ -1,0 +1,15 @@
+{
+  "salt-owed": {
+    "beats": [
+      {
+        "scene": "001--the-tide-comes-in",
+        "text": "Seraphine asked for salt."
+      }
+    ],
+    "due": "2026-01-05",
+    "kind": "promise",
+    "last_scene": "001--the-tide-comes-in",
+    "status": "open",
+    "title": "Bring salt to the keep"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "001--the-tide-comes-in": {
+    "module": "d20-basic",
+    "schema": {
+      "hash": "51dc05d7dc58719d08a42876767c0ef756f8223f195d36190d2976f08a72760f",
+      "mtime": 1786041228910727401
+    },
+    "sheets": {
+      "characters--seraphine": {
+        "fields": {
+          "dexterity": 11,
+          "gear": [
+            "tide ledger"
+          ],
+          "hp": {
+            "current": 9,
+            "max": 12
+          },
+          "mind": 16,
+          "strength": 8
+        },
+        "gen": "2741ebcdea174b19909f7a9084ac14a2",
+        "sheet_type": "warrior"
+      }
+    }
+  }
+}

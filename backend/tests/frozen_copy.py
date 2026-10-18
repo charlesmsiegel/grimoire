@@ -24,9 +24,13 @@ from pathlib import Path
 HOME = Path(__file__).resolve().parent / "fixtures" / "frozen_campaign" / "home"
 
 
-def copy_home(dst: Path) -> Path:
-    """A private copy of `HOME` at `dst` (which must not exist yet); `dst`."""
-    shutil.copytree(HOME, dst)
+def copy_home(dst: Path, *, source: Path = HOME) -> Path:
+    """A private copy of a frozen input at nonexistent `dst`; legacy by default.
+
+    A newer vintage supplies `source` explicitly. Keeping one copy operation
+    prevents a snapshot generator and its tests from preparing different inputs.
+    """
+    shutil.copytree(source, dst)
     return dst
 
 

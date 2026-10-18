@@ -1,0 +1,16 @@
+{
+  "sheet_type": "warrior",
+  "fields": {
+    "hp": {
+      "current": 9,
+      "max": 12
+    },
+    "gear": [
+      "tide ledger"
+    ],
+    "strength": 8,
+    "dexterity": 11,
+    "mind": 16
+  },
+  "gen": "2741ebcdea174b19909f7a9084ac14a2"
+}

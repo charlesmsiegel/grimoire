@@ -12,6 +12,10 @@ android/gradlew text eol=lf
 # readers, not of the fixture.
 backend/tests/fixtures/frozen_campaign/**/*.md text eol=lf
 backend/tests/fixtures/frozen_campaign/**/*.json text eol=lf
+backend/tests/fixtures/frozen_campaign_current/** text eol=lf
+# Minted by the Windows writer: preserve its exact bytes, including CRLF.
+backend/tests/fixtures/frozen_campaign_current/home/** -text
+backend/tests/fixtures/frozen_campaign_current/**/*.png binary
 backend/tests/fixtures/llm/*.json text eol=lf
 # The lint baselines are the same kind of artifact: generated, compared
 # byte-for-byte by `test_ratchet_guard.py`, and read as a diff in review.

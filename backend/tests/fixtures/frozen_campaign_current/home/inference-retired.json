@@ -1,0 +1,13 @@
+{
+  "fields": {
+    "claude": {
+      "model": "opus",
+      "post_process": "none"
+    },
+    "openrouter": {
+      "model": "anthropic/claude-opus-4.1",
+      "post_process": "none"
+    }
+  },
+  "notes": []
+}

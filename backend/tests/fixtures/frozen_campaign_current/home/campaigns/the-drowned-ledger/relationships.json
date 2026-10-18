@@ -1,0 +1,16 @@
+{
+  "bonds": {
+    "characters:seraphine|pcs:winifred": {
+      "since_scene": "001--the-tide-comes-in",
+      "type": "creditor"
+    }
+  },
+  "feelings": {
+    "pcs:winifred->characters:seraphine": {
+      "affection": 0,
+      "note": "Owes her a page.",
+      "tension": 2,
+      "trust": 1
+    }
+  }
+}
