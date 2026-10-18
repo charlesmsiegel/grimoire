@@ -1,6 +1,8 @@
-import { NavLink, useLocation } from "react-router-dom";
-import type { ProviderHealth } from "../api/client";
+import { NavLink, useLocation, useMatch } from "react-router-dom";
+import type { ProviderHealth, ShellCampaign } from "../api/client";
 import { railless, titleFor } from "../shell/rail";
+import { formatChord } from "../shortcuts/keys";
+import { useTheme } from "../theme/ThemeProvider";
 import { useThemeSetting } from "../theme/useThemeSetting";
 import { useFocus } from "./focus";
 import { usePalette } from "./palette";
@@ -41,18 +43,23 @@ function verdict(connection: string, ready: boolean, health: ProviderHealth | nu
  *  rather than a link here. The pill is still how you go *anywhere* — the rail
  *  lists the places worth a permanent row, and says what is waiting at each. */
 export default function AppHeader(
-  { model, connection, ready, health, onOpenRail, railDrawer }: {
+  { model, connection, ready, health, onOpenRail, railDrawer, campaign = null }: {
     model: string; connection: string; ready: boolean; health: ProviderHealth | null;
     /** Opens the rail as a drawer. Rendered only below `RAIL_PX`. */
     onOpenRail: () => void;
     /** True while the rail is a drawer rather than docked. */
     railDrawer: boolean;
+    /** The shell's pending read supplies undefined; the default uses global labels. */
+    campaign?: ShellCampaign | null | undefined;
   },
 ) {
   const { setOpen } = usePalette();
   const { setFocus } = useFocus();
   const theme = useThemeSetting();
+  const { name: themeName } = useTheme();
+  const nextTheme = themeName === "dark" ? "light" : "dark";
   const { pathname } = useLocation();
+  const campaignRoute = useMatch("/campaigns/:cid/*");
   const { context, usage, sceneSpend, sceneModel, sceneReady } = useShellStatus();
   // The open campaign's scene model wins over the global one: with per-task
   // routing (#142) the active connection is not necessarily what writes this
@@ -68,9 +75,15 @@ export default function AppHeader(
   // Everything else is named centrally rather than by twenty publish hooks —
   // the table's last entry matches everything, so no route reaches the pill
   // nameless.
+  // The shared shell read can name report/settings pages that publish no
+  // scene context. Its remembered campaign must match this route before the
+  // name is used, so navigation never labels a new campaign with an old one.
+  const pageTitle = titleFor(pathname);
+  const fallback = campaign && campaignRoute?.params.cid === campaign.id
+    ? `${campaign.name} / ${pageTitle}` : pageTitle;
   const where = context
     ? (context.scene ? `${context.campaign} / ${context.scene}` : context.campaign)
-    : titleFor(pathname);
+    : fallback;
   // The context budget belongs to a scene, so it is shown beside one and
   // nowhere else. A percentage on a page with no scene is a claim about a
   // prompt you are not composing — the argument `ShellStatus` already makes
@@ -99,7 +112,7 @@ export default function AppHeader(
 
       <button type="button" className="kbar" onClick={() => setOpen(true)}
               aria-haspopup="dialog" aria-label={`Go anywhere. Currently: ${where}`}>
-        <span className="kbar-key" aria-hidden>⌘K</span>
+        <span className="kbar-key" aria-hidden>{formatChord("mod+k")}</span>
         <span className="kbar-where">{where}</span>
         <span className="kbar-caret" aria-hidden>▾</span>
       </button>
@@ -148,10 +161,11 @@ export default function AppHeader(
           read as the app forgetting; a look this control wrote into a deferred
           draft could be overwritten by an unrelated Save elsewhere. */}
       <button type="button" className="header-theme" disabled={theme.busy}
-              onClick={() => { void theme.pick(theme.mode === "dark" ? "light" : "dark"); }}
-              aria-label={`Theme: ${theme.mode}. Switch.`}>
+              onClick={() => { void theme.pick(nextTheme); }}
+              aria-label={`Switch to ${nextTheme} theme`}>
         {theme.mode.toUpperCase()}
       </button>
+      {theme.error && <span role="alert" className="header-theme-error">{theme.error}</span>}
 
       <button type="button" className="header-focus" onClick={() => setFocus(true)}
               title="Hide the toolbars and read the scene" aria-label="Enter focus mode">

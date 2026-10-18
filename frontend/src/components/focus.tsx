@@ -52,7 +52,7 @@ export function FocusRestore() {
   return (
     <button type="button" className="focus-restore" onClick={() => setFocus(false)}
             title="Show the toolbars" aria-label="Leave focus mode">
-      <span aria-hidden>☰</span>
+      <span aria-hidden>⛶</span>
     </button>
   );
 }

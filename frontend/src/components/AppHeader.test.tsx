@@ -1,13 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 // The header's theme toggle persists on click, so it reaches the api client.
-vi.mock("../api/client", () => ({
-  api: { putConfig: vi.fn().mockResolvedValue({ theme: "dark" }) },
-}));
+vi.mock("../api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/client")>();
+  return { ...actual, api: { ...actual.api, putConfig: vi.fn().mockResolvedValue({ theme: "dark" }) } };
+});
 
 import AppHeader from "./AppHeader";
-import type { ProviderHealth } from "../api/types";
+import { api } from "../api/client";
+import type { ProviderHealth, ShellPayload } from "../api/types";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import { FocusProvider, useFocus } from "./focus";
 import { ShellStatusProvider, usePublishContextUsage, usePublishSceneModel,
@@ -26,15 +28,16 @@ function Publisher({ model, ready }: { model: string | null; ready?: boolean | n
 }
 
 function renderHeader(published?: string | null, ready: boolean | null = null,
-                      health: ProviderHealth | null = null) {
+                      health: ProviderHealth | null = null,
+                      options: { initial?: string; path?: string; campaign?: ShellPayload["campaign"] } = {}) {
   return render(
-    <MemoryRouter>
-      <ThemeProvider initial="light">
+    <MemoryRouter initialEntries={[options.path ?? "/"]}>
+      <ThemeProvider initial={options.initial ?? "light"}>
       <FocusProvider>
       <ShellStatusProvider>
         {published !== undefined && <Publisher model={published} ready={ready} />}
         <AppHeader model="vendor/active" connection="OpenRouter" ready health={health}
-                   railDrawer={false} onOpenRail={() => {}} />
+                   railDrawer={false} onOpenRail={() => {}} campaign={options.campaign} />
       </ShellStatusProvider>
       </FocusProvider>
       </ThemeProvider>
@@ -180,7 +183,49 @@ test("outside a scene the pill says nothing about one", async () => {
 // The header's focus control PERSISTS on click, so a test that presses it
 // leaves `grimoire.focus` set for whatever runs next -- and the case below
 // asserts the mode starts off. `focus.test.tsx` clears for the same reason.
-beforeEach(() => localStorage.clear());
+beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+test("a dark system theme can switch directly to light", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  renderHeader(undefined, null, null, { initial: "system" });
+  fireEvent.click(screen.getByRole("button", { name: "Switch to light theme" }));
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ theme: "light" }));
+});
+
+test.each([["Win32", "Ctrl K"], ["MacIntel", "⌘ K"]])("the palette keycap matches %s", (platform, chord) => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  renderHeader();
+  expect(screen.getByRole("button", { name: /Go anywhere/ })).toHaveTextContent(chord);
+});
+
+test("a failed header theme write is visible and restores the previous look", async () => {
+  vi.mocked(api.putConfig).mockRejectedValueOnce(new Error("offline"));
+  renderHeader();
+  fireEvent.click(screen.getByRole("button", { name: "Switch to dark theme" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not save the theme");
+  expect(document.documentElement.dataset.themeMode).toBe("light");
+});
+
+test.each(["stats", "todo", "settings"])("the campaign %s page names its campaign in the header", (section) => {
+  renderHeader(undefined, null, null, {
+    path: `/campaigns/saltmarch/${section}`,
+    campaign: { id: "saltmarch", name: "Saltmarch", world_name: "Realm", scenes: 0,
+      open: [], ledger_open: 0, sheets: null, unreviewed: 0, pending: [], images_undescribed: 0 },
+  });
+  expect(screen.getByRole("button", { name: /Go anywhere/ })).toHaveTextContent(`Saltmarch / ${section === "todo" ? "To do" : section === "stats" ? "Stats" : "Settings"}`);
+});
+
+test("a remembered campaign cannot name a different campaign's report", () => {
+  renderHeader(undefined, null, null, {
+    path: "/campaigns/realm/stats",
+    campaign: { id: "saltmarch", name: "Saltmarch", world_name: "Realm", scenes: 0,
+      open: [], ledger_open: 0, sheets: null, unreviewed: 0, pending: [], images_undescribed: 0 },
+  });
+  const location = screen.getByRole("button", { name: /Go anywhere/ });
+  expect(location).toHaveTextContent("Stats");
+  expect(location).not.toHaveTextContent("Saltmarch");
+});
 
 /** Reports the focus flag from inside the same provider the header writes to. */
 function FocusProbe() {

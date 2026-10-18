@@ -3,6 +3,10 @@ import { api, type CampaignMeta, type WorldMeta } from "../api/client";
 import { LIBRARY_SECTIONS } from "../librarySections";
 import { byName } from "../sortByName";
 import { sectionHref } from "../worldPaths";
+import type { ShellPayload } from "../api/types";
+import { LINKS, SECTIONS } from "../configSections";
+import { ledgerHref } from "../ledgerPaths";
+import { APP_ROWS, CAMPAIGN_ROWS, campaignPath } from "../shell/rail";
 import { useFocus } from "./focus";
 import { usePalette, usePaletteSource, type PaletteItem } from "./palette";
 
@@ -13,7 +17,7 @@ import { usePalette, usePaletteSource, type PaletteItem } from "./palette";
  *  Everything here files under ELSEWHERE, which sorts last. A page that knows
  *  about the campaign you are actually in registers its own rows under
  *  IN THIS CAMPAIGN and SCENES, and those come first. */
-export default function AppPaletteSource() {
+export default function AppPaletteSource({ payload = null }: { payload?: ShellPayload | null }) {
   const { open } = usePalette();
   const { focus, setFocus } = useFocus();
   const [campaigns, setCampaigns] = useState<CampaignMeta[]>([]);
@@ -51,38 +55,51 @@ export default function AppPaletteSource() {
         to: sectionHref({ kind: "world", id: w.id }, { kind: "section", at: "overview" }),
       });
     }
-    // Home. Named as a place rather than left implicit behind the brand mark:
-    // the rail's Campaigns row is one way back to the shelf; this is the other,
-    // and it is the one that works with a hand on the keyboard.
-    out.push({ id: "section:/", group: "ELSEWHERE", label: "Campaigns",
-               meta: "the shelf", to: "/" });
+    // Navigation comes from the rail's tables and the settings column. Adding
+    // a destination makes it typeable without maintaining another route list;
+    // conditional offers use the same campaign payload as the visible rail.
+    const ctx = { cid: payload?.campaign?.id ?? null };
+    for (const row of APP_ROWS) {
+      const to = row.to(ctx, payload);
+      if (to) out.push({ id: `section:${to}`, group: "ELSEWHERE", label: row.label,
+        meta: `app navigation · ${row.keywords ?? ""}`, to });
+    }
+    for (const row of CAMPAIGN_ROWS) {
+      const to = row.to(ctx, payload);
+      if (to) out.push({ id: `campaign-page:${row.id}`, group: "IN THIS CAMPAIGN", label: row.label,
+        meta: `${payload?.campaign?.name} · campaign navigation · ${row.keywords ?? ""}`, to });
+    }
+    const campaign = payload?.campaign;
+    const campaignRoot = campaignPath(ctx);
+    if (campaign && campaignRoot) {
+      out.push(
+        { id: "campaign-page:timeline", group: "IN THIS CAMPAIGN", label: "Timeline",
+          meta: `${campaign.name} · dates and events`, to: `${campaignRoot}/timeline` },
+        { id: "campaign-page:knowledge", group: "IN THIS CAMPAIGN", label: "Knowledge",
+          meta: `${campaign.name} · who knows and suspects`, to: ledgerHref(campaign.id, { section: "knowledge" }) },
+        { id: "campaign-page:continuity", group: "IN THIS CAMPAIGN", label: "Continuity",
+          meta: `${campaign.name} · review findings`, to: ledgerHref(campaign.id, { section: "continuity", group: "overlaps" }) },
+        { id: "campaign-page:settings", group: "IN THIS CAMPAIGN", label: "Campaign settings",
+          meta: campaign.name, to: `${campaignRoot}/settings` },
+      );
+    }
     for (const s of LIBRARY_SECTIONS) {
       out.push({
         id: `section:${s.to}`, group: "ELSEWHERE", label: s.label,
         meta: "library section", to: s.to,
       });
     }
-    out.push({ id: "section:/library", group: "ELSEWHERE", label: "The Library",
-               meta: "library section", to: "/library" });
-    out.push({ id: "section:/search", group: "ELSEWHERE", label: "Search",
-               meta: "content and facts", to: "/search" });
     out.push({ id: "action:new-campaign", group: "ELSEWHERE", label: "New campaign",
                meta: "start one", action: true, to: "/campaigns/new" });
-    out.push({ id: "section:/config", group: "ELSEWHERE", label: "Settings",
-               meta: "storage, model, appearance", to: "/config" });
-    // The rail carries the routes worth a permanent row. For everything else,
-    // a route that is not typeable here is a route with
-    // no way in but the URL bar.
-    out.push({ id: "section:/stats", group: "ELSEWHERE", label: "Instrumentation",
-               meta: "latency, errors, the debug log", to: "/stats" });
-    // Settings → Inference's three pages: neither library sections nor rail
-    // rows, so this is the way in that does not need Settings open first.
-    out.push({ id: "section:/providers", group: "ELSEWHERE", label: "Providers",
-               meta: "Settings → Inference", to: "/providers" });
-    out.push({ id: "section:/models", group: "ELSEWHERE", label: "Models",
-               meta: "Settings → Inference", to: "/models" });
-    out.push({ id: "section:/presets", group: "ELSEWHERE", label: "Presets",
-               meta: "Settings → Inference", to: "/presets" });
+    for (const section of SECTIONS) {
+      const to = `/config?section=${section.id}`;
+      out.push({ id: `section:${to}`, group: "ELSEWHERE", label: section.label,
+        meta: `Settings → ${section.group}`, to });
+    }
+    for (const link of LINKS) {
+      out.push({ id: `section:${link.to}`, group: "ELSEWHERE", label: link.label,
+        meta: `Settings → ${link.group}`, to: link.to });
+    }
     // Typeable as well as clickable, for the same reason every route is: the
     // header button is the only other way in, and it is one of the things this
     // hides. Offered in both directions so the palette never describes a state
@@ -105,7 +122,7 @@ export default function AppPaletteSource() {
       });
     }
     return out;
-  }, [campaigns, worlds, focus, setFocus]);
+  }, [campaigns, worlds, focus, setFocus, payload]);
 
   usePaletteSource(source);
   return null;

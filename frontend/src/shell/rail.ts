@@ -42,6 +42,8 @@ export type RailRow = {
    *  function is how those are read. */
   id: string;
   label: string;
+  /** Search aliases for navigation surfaces such as the command palette. */
+  keywords?: string;
   /** A literal character. There is no icon library, and the design's glyphs
    *  are literal characters too. */
   icon: string;
@@ -83,7 +85,7 @@ export type RailRow = {
  *  a badge of six — which is why `GET /api/shell` carries no `library` field. */
 const LIBRARY_SECTION_COUNT = LIBRARY_SECTIONS.length;
 
-const campaignPath = (ctx: RailCtx, suffix = "") =>
+export const campaignPath = (ctx: RailCtx, suffix = "") =>
   ctx.cid ? `/campaigns/${ctx.cid}${suffix}` : null;
 
 export type Report = "todo" | "costs" | "stats";
@@ -187,7 +189,7 @@ export const APP_ROWS: RailRow[] = [
     // No tail: one campaign's spend would mislabel this global monthly report.
   },
   {
-    id: "stats", label: "Stats", icon: "▦",
+    id: "stats", label: "Stats", icon: "▦", keywords: "instrumentation latency errors debug log",
     to: () => "/stats",
     match: (p) => isUnder(p, "/stats"),
   },
@@ -205,7 +207,7 @@ export const APP_ROWS: RailRow[] = [
 export const CAMPAIGN_ROWS: RailRow[] = [
   ...(["todo", "costs", "stats"] as const).map((report): RailRow => ({
     id: report, label: report === "todo" ? "To do" : report === "costs" ? "Costs" : "Stats",
-    icon: report === "todo" ? "✓" : report === "costs" ? "$" : "▫",
+    icon: report === "todo" ? "✓" : report === "costs" ? "$" : "▦",
     to: (ctx) => ctx.cid ? reportHref(report, ctx.cid) : null,
     match: (p, ctx) => !!ctx.cid && isUnder(p, reportHref(report, ctx.cid)),
     // No tail on Costs either: one tail would have to pick one of three money
@@ -363,6 +365,12 @@ export const TITLES: [(p: string) => boolean, string][] = [
   [(p) => isUnder(p, "/presets"), "Presets"],
   [(p) => isUnder(p, "/search"), "Search"],
   [(p) => isUnder(p, "/stats"), "Stats"],
+  [(p) => isUnder(p, "/costs"), "Costs"],
+  [(p) => isUnder(p, "/todo"), "To do"],
+  [(p) => /^\/campaigns\/[^/]+\/stats(?:\/|$)/.test(p), "Stats"],
+  [(p) => /^\/campaigns\/[^/]+\/costs(?:\/|$)/.test(p), "Costs"],
+  [(p) => /^\/campaigns\/[^/]+\/todo(?:\/|$)/.test(p), "To do"],
+  [(p) => /^\/campaigns\/[^/]+\/settings(?:\/|$)/.test(p), "Settings"],
   [(p) => isUnder(p, "/config"), "Settings"],
   [(p) => isUnder(p, "/open"), "Opening"],
   // Last of the campaign-scoped entries, and only reachable when the page

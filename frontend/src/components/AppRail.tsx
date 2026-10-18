@@ -55,7 +55,7 @@ function Row({ row, ctx, payload, onPick }: {
   return (
     <Link to={to} onClick={onPick} aria-label={label}
           aria-current={active ? "page" : undefined}
-          className={"rail-row" + (active ? " active" : "")}>
+          className={"rail-row" + (active ? " active" : "") + (row.id === "search" ? " rail-row-shortcut" : "")}>
       <span className="rail-icon" aria-hidden>{row.icon}</span>
       <span className="rail-label">{row.label}</span>
       {text !== undefined && <span className="rail-tail" aria-hidden>{text}</span>}

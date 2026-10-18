@@ -179,9 +179,9 @@ const Shell = memo(function Shell(
           viewport. */}
       {focus ? <FocusRestore />
              : <AppHeader model={model} connection={connection} ready={ready}
-                          health={health} railDrawer={!docked}
+                          health={health} railDrawer={!docked} campaign={shell.payload?.campaign}
                           onOpenRail={() => setRailOpen(true)} />}
-      <AppPaletteSource />
+      <AppPaletteSource payload={shell.payload} />
       <CommandPalette />
       {/* `?`, and the sheet that lists whatever is bound where you are
           standing. Mounted beside the palette because they are the same

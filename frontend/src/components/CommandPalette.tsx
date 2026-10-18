@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useHotkeys } from "../shortcuts/useHotkeys";
+import { formatChord } from "../shortcuts/keys";
 import { highlight, matches, usePalette, type PaletteItem } from "./palette";
 
 /** The order groups appear in, whatever order the sources registered in. A
@@ -146,7 +147,7 @@ export default function CommandPalette() {
       <div className="palette" role="dialog" aria-modal="true" aria-label="Go anywhere"
            onMouseDown={(e) => e.stopPropagation()}>
         <div className="palette-input">
-          <span className="palette-key" aria-hidden>⌘K</span>
+          <span className="palette-key" aria-hidden>{formatChord("mod+k")}</span>
           <input
             ref={inputRef}
             value={query}

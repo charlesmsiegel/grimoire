@@ -56,6 +56,16 @@ function open(sources?: PaletteItem[][]) {
 
 beforeEach(() => { added = []; });
 
+test.each([["Win32", "Ctrl K"], ["MacIntel", "⌘ K"]])("the palette keycap matches %s", (platform, chord) => {
+  const spy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  try {
+    open();
+    expect(screen.getByRole("dialog").querySelector(".palette-key")).toHaveTextContent(chord);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
 test("is closed until ⌘K — it is not persistent nav wearing a shortcut", () => {
   render(
     <MemoryRouter><PaletteProvider><Harness /></PaletteProvider></MemoryRouter>,

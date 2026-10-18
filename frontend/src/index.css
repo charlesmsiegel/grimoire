@@ -278,7 +278,7 @@ a.btn-outline { display: inline-block; text-align: center; text-decoration: none
   transition: border-color 140ms ease-out, color 140ms ease-out;
 }
 .kbar:hover { border-color: var(--accent); color: var(--ink); }
-.kbar-key { color: var(--accent); font-size: 10px; letter-spacing: 0.1em; }
+.kbar-key { flex: none; white-space: nowrap; color: var(--accent); font-size: 10px; letter-spacing: 0.1em; }
 .kbar-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kbar-caret { color: var(--muted); font-size: 9px; }
 
@@ -559,7 +559,7 @@ a.column-count:hover { color: var(--ink); }
   display: flex; align-items: center; gap: 12px; padding: 0 16px;
   border-bottom: 1px solid var(--line); min-height: 52px; flex: none;
 }
-.palette-key { font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; color: var(--accent); }
+.palette-key { flex: none; white-space: nowrap; font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; color: var(--accent); }
 .palette-input input {
   flex: 1; min-width: 0; background: transparent; border: 0; outline: none; padding: 0;
   color: var(--ink); font-family: var(--fm); font-size: 14px; letter-spacing: 0.02em;
@@ -4832,6 +4832,18 @@ a.search-hit { text-decoration: none; color: inherit; }
 .header-rail { font-size: 15px; }
 .header-rail:hover, .header-theme:hover { color: var(--ink); }
 .header-theme[disabled] { color: var(--disabled); cursor: default; }
+/* A refused immediate theme write rolls back the look. Keep its reason beside
+   the control that owns the write rather than making that rollback silent. */
+.app-header { position: relative; }
+.header-theme-error {
+  position: absolute; top: calc(100% + 8px); right: 16px; z-index: 40;
+  max-width: calc(100vw - 32px); padding: 10px 12px;
+  background: var(--panel); border: 1px solid var(--alert);
+  font-size: 13px; color: var(--alert);
+}
+@media (max-width: 720px) {
+  .rail-row-shortcut .rail-tail { display: none; }
+}
 
 /* The scene pill: shown where there IS a scene, and nowhere else. */
 .scene-pill {
