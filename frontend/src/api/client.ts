@@ -1509,7 +1509,7 @@ export const api = {
   rememberedTodo: (cid?: string | null) => recall<TodoPayload>(memoKey("todo", cid ?? "")),
   /** The instances behind one chore's count. A second call rather than part of
    *  the list, because naming every instance of every chore is the cost the
-   *  list is built to avoid — the reader expands one. */
+   *  list is built to avoid — record previews load as they enter view. */
   getChoreItems: (choreId: string, cid?: string | null) =>
     request<ChoreItems>("GET",
       `/api/todo/${encodeURIComponent(choreId)}/items`
@@ -1900,8 +1900,8 @@ export const api = {
   // a list with the old id in it. `fresh` at the caller's choice was tried, and
   // left exactly that hole for the one caller that did not pass it.
   //
-  // Nothing is lost by it: this component is the only caller, so the sharing
-  // had no second asker to share with.
+  // To do also reads this uncapped list for its active scenes. It needs the
+  // same freshness: a completed scene must not survive a post-write refresh.
   listScenes: (cid: string) =>
     request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`, undefined, { fresh: true }),
   createScene: (cid: string, title?: string, suggestedDate?: string, pcless?: boolean, focus = "") =>

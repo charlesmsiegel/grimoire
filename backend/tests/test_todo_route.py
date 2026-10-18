@@ -751,7 +751,7 @@ def test_groups_keep_their_thematic_order_in_campaign_and_global_reports(client,
     _world_character(client, wid, "Mara")
     store.covers.delete_cover(cid)
     expected = {
-        "open-scenes": "Story & continuity",
+        "open-scenes": "Scenes",
         "anchors": "Character & voice",
         "taglines": "Character & voice",
         "avatars": "Character & voice",
@@ -768,9 +768,22 @@ def test_groups_keep_their_thematic_order_in_campaign_and_global_reports(client,
             "embeddings": "Housekeeping",
         }
         assert {c["id"]: c["group"] for c in body["chores"]} == wanted
-        assert body["groups"] == ["Story & continuity", "Character & voice", "Artwork",
+        assert body["groups"] == ["Scenes", "Character & voice", "Artwork",
                                   *([] if scope else ["Housekeeping"])]
         assert body["count"] == len(wanted)
+
+
+def test_scenes_and_commitments_are_separate_groups(client, campaign):
+    cid, _ = campaign
+    sid = store.scenes.create_scene(cid, "Saltmarch")
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "2026-10-16", "Mara swore it.", sid)
+    for scope in (cid, ""):
+        body = _todo(client, scope)
+        by_id = {chore["id"]: chore for chore in body["chores"]}
+        assert by_id["open-scenes"]["group"] == "Scenes"
+        assert by_id["owed"]["group"] == "Commitments"
+        assert body["groups"][:2] == ["Scenes", "Commitments"]
 
 
 def test_every_group_a_builder_can_emit_is_declared(client):

@@ -285,7 +285,7 @@ def _chore_unreviewed(ctx: _Ctx) -> dict | None:
     if not n:
         return None
     return {
-        "id": "unreviewed", "scope": "campaign", "group": "Story & continuity", "severity": "alert", "n": n,
+        "id": "unreviewed", "scope": "campaign", "group": "Wrap-up", "severity": "alert", "n": n,
         "what": f"{n} absorb proposal{'s' if n != 1 else ''} unreviewed",
         "why": "A scene was absorbed but never reviewed. Until it is, none of what "
                "it found has reached the world.",
@@ -302,7 +302,7 @@ def _chore_open_scenes(ctx: _Ctx) -> dict | None:
     if not n:
         return None
     return {
-        "id": "open-scenes", "scope": "campaign", "group": "Story & continuity", "severity": "note", "n": n,
+        "id": "open-scenes", "scope": "campaign", "group": "Scenes", "severity": "note", "n": n,
         "what": f"{n} incomplete scene{'s' if n != 1 else ''}",
         "why": "Each one holds part of the campaign's present. Wrapping one up is "
                "what moves the chronicle forward.",
@@ -413,7 +413,7 @@ def _chore_owed(ctx: _Ctx) -> dict | None:
     if not n:
         return None
     return {
-        "id": "owed", "scope": "campaign", "group": "Story & continuity", "severity": "warn", "n": n,
+        "id": "owed", "scope": "campaign", "group": "Commitments", "severity": "warn", "n": n,
         "what": f"{n} open commitment{'s' if n != 1 else ''} with a deadline",
         "why": "A promise with a date is the kind the campaign is expected to answer, "
                "and the ledger is where it is still waiting.",
@@ -838,7 +838,7 @@ LIBRARY_IDS = frozenset(i for i, _b in LIBRARY_BUILDERS)
 KNOWN = frozenset(i for i, _b in BUILDERS)
 CAMPAIGN_IDS = frozenset(i for i, _b in CAMPAIGN_BUILDERS)
 
-#: The order the themes are read in: story, continuity review, character, art,
+#: The order the themes are read in: scenes, wrap-up, commitments, continuity review, character, art,
 #: rules, costs, then housekeeping.
 #:
 #: Declared rather than derived, and that is the fix rather than the taste.
@@ -855,7 +855,9 @@ CAMPAIGN_IDS = frozenset(i for i, _b in CAMPAIGN_BUILDERS)
 #: adding a chore under a new heading is never invisible -- but it does belong
 #: here, and `test_todo_route.py` says so.
 GROUP_ORDER = (
-    "Story & continuity",
+    "Scenes",
+    "Wrap-up",
+    "Commitments",
     "Continuity",
     "Character & voice",
     "Artwork",
@@ -1275,8 +1277,8 @@ def _items_world_anchors(cid: str) -> list[dict]:
 
 
 #: What expanding a chore shows. Deliberately a SECOND pass rather than part of
-#: the list: naming every instance of every chore on every read is the cost the
-#: list is built to avoid, and the reader only ever expands one.
+#: the list: naming every instance of every chore on every summary read is the
+#: cost the list is built to avoid. The page asks for previews as they enter view.
 ITEMS = {
     "unreviewed": _items_unreviewed,
     "open-scenes": _items_open_scenes,
@@ -1371,8 +1373,9 @@ def get_todo_items(chore_id: str, campaign: str = ""):
 
     On demand, because this is the expensive half: `sheets` sweeps the cast and
     `taglines` walks the roster, and doing that for every chore whenever the
-    page opens is what would make the page not worth opening. The reader
-    expands one.
+    page opens is what would make the page not worth opening. The page asks for
+    the previews it is showing; its full active scene list uses the existing
+    uncapped scene listing instead.
     """
     if chore_id not in KNOWN:
         raise HTTPException(400, f"unknown chore: {chore_id}")

@@ -5160,25 +5160,52 @@ a.hub-row-title { text-decoration: none; color: inherit; }
 .review-footer { flex-wrap: wrap; }
 
 /* ---- to do ---- */
+.todo-intro { margin: 0 0 20px; color: var(--muted); line-height: 1.6; }
+.todo-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 24px; }
+.todo-controls .report-scope { margin: 0; }
+.todo-grouping { display: flex; align-items: center; gap: 10px; }
+.todo-grouping select {
+  min-height: 38px; padding: 7px 30px 7px 10px; border: 1px solid var(--line);
+  border-radius: 3px; background: var(--panel); color: var(--ink); font: inherit;
+}
+.todo-priorities { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 12px; }
+.todo-priorities button {
+  display: inline-flex; align-items: center; gap: 10px; min-height: 40px;
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--panel); color: var(--muted); font: inherit; font-size: 13px; cursor: pointer;
+}
+.todo-priorities button:hover { border-color: var(--accent); color: var(--ink); }
+.todo-priorities button[aria-pressed="true"] {
+  border-color: var(--accent); background: var(--accent); color: var(--on-accent);
+}
+.todo-priorities button span { font-family: var(--fm, monospace); font-size: 11px; }
+.todo-summary { margin: 0 0 20px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.todo-active-scenes { margin-bottom: 24px; }
+.todo-scene-campaign { padding: 4px 0; }
+.todo-scene-campaign-name { margin: 8px 0 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+.chore-items.chore-scenes { border-top: 0; margin-top: 0; }
+.chore-scenes li { border-bottom: 1px solid var(--line); }
 .chore-group {
-  font-family: var(--fm, monospace); font-size: 10px; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--muted); font-weight: 400;
-  margin: 22px 0 0; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+  font-family: var(--fd, Georgia, serif); font-size: 17px; color: var(--ink); font-weight: 500;
+  margin: 28px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
 }
-.chore-list { list-style: none; margin: 0; padding: 0; }
+.chore-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
 .chore {
-  display: flex; align-items: flex-start; gap: 12px; padding: 14px 0;
-  border-bottom: 1px solid var(--line);
+  padding: 18px 20px; border: 1px solid var(--line); border-left: 3px solid var(--line-strong);
+  border-radius: 4px; background: var(--panel);
 }
-.chore-dot {
-  flex: none; width: 6px; height: 6px; border-radius: 50%; margin-top: 7px;
-  background: var(--muted);
-}
-.chore-warn .chore-dot { background: var(--accent); }
-.chore-alert .chore-dot { background: var(--alert); }
+.chore-warn { border-left-color: var(--accent); }
+.chore-alert { border-left-color: var(--alert); }
 .chore-body { flex: 1; min-width: 0; }
-.chore-what { font-size: 15.5px; }
-.chore-why { font-size: 13.5px; line-height: 1.55; color: var(--muted); margin-top: 3px; }
+.chore-meta {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 8px; color: var(--muted);
+  font-family: var(--fm, monospace); font-size: 10px; line-height: 1.5;
+}
+.chore-meta:empty { display: none; }
+.chore-warn .chore-priority { color: var(--accent); }
+.chore-alert .chore-priority { color: var(--alert); }
+.chore-what { font-size: 18px; font-weight: 500; margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.chore-why { font-size: 14px; line-height: 1.65; color: var(--muted); margin-top: 6px; }
 .chore-actions { flex: none; display: flex; align-items: center; gap: 10px; }
 .chore-fix {
   display: inline-flex; align-items: center; min-height: 34px; padding: 0 12px;
@@ -5192,8 +5219,17 @@ a.hub-row-title { text-decoration: none; color: inherit; }
   text-transform: uppercase; color: var(--muted);
 }
 .chore-ignore:hover { color: var(--ink); }
+.chore-ignore:disabled { opacity: 0.5; cursor: default; }
+.todo-ignored { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line); }
+.todo-ignored-toggle {
+  background: none; border: 0; padding: 0; min-height: 44px; color: var(--muted);
+  font: inherit; font-size: 16px; cursor: pointer;
+}
+.todo-ignored .chore { border-left-color: var(--line); }
 @media (max-width: 1180px) {
-  .chore-fix, .chore-ignore { min-height: 44px; }
+  .chore-fix, .chore-ignore, .todo-priorities button, .todo-grouping select { min-height: 44px; }
+  .chore-line { flex-wrap: wrap; }
+  .chore-actions { flex-wrap: wrap; }
 }
 
 /* ---- the three money columns ---- */
@@ -5270,32 +5306,25 @@ a.hub-row-title { text-decoration: none; color: inherit; }
   font-family: var(--fm, monospace); font-size: 10px; color: var(--muted); }
 .cal-holiday-name { font-size: 13.5px; }
 
-/* A chore expands to the instances behind its count. */
-.chore { display: block; }
-.chore-line { display: flex; align-items: flex-start; gap: 12px; }
-button.chore-what {
-  background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
-  font-family: var(--fb, Georgia, serif); font-size: 15.5px; color: var(--ink);
-  display: flex; align-items: baseline; gap: 7px;
-}
-button.chore-what:hover { color: var(--accent); }
-.chore-caret { color: var(--muted); font-size: 10px; }
+/* Records are readable under their task; long notes wrap instead of hiding
+   the date, place or consequence that made the record worth showing. */
+.chore-line { display: flex; align-items: flex-start; gap: 18px; }
 /* Which body of content a chore is about, on the rows where that is the only
    thing telling two of them apart. Quiet on purpose: it disambiguates the
    sentence beside it and must not compete with it for the eye. */
 .chore-scope {
-  flex: none; font-family: var(--fm, monospace); font-size: 9.5px;
-  letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+  display: inline-block; max-width: 100%; vertical-align: middle; margin-left: 8px;
+  font-family: var(--fm, monospace); font-size: 10px; color: var(--muted);
   border: 1px solid var(--line); border-radius: 3px; padding: 2px 7px;
-  white-space: nowrap;
 }
-.chore-items { margin: 8px 0 2px 18px; padding-left: 12px; border-left: 1px solid var(--line); }
+.chore-items { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 8px; }
 .chore-items ul { list-style: none; margin: 0; padding: 0; }
-.chore-items li { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; }
-.chore-item-label { font-size: 14px; color: var(--ink); text-decoration: none; }
+.chore-items li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 4px 16px; padding: 7px 0; }
+.chore-item-label { font-size: 14px; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
 a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
-.chore-item-detail { font-size: 12.5px; color: var(--muted); min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chore-item-detail { font-size: 13px; color: var(--muted); min-width: 0; line-height: 1.6; overflow-wrap: anywhere; }
+.chore-more { border: 0; background: none; color: var(--accent); font: inherit; font-size: 13px;
+  min-height: 40px; padding: 6px 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 
 /* ---- below PHONE_PX: the bar replaces the drawer as the way to move ---- */
 /* 720 is `shell/tabs.ts`'s PHONE_PX and `PageShell`'s, and the three are one
@@ -5482,29 +5511,26 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
     font-size: 20px; line-height: 1.15; letter-spacing: 0.04em;
   }
 
-  /* ---- To do: a row becomes a card, and its actions stop competing ---- */
+  /* ---- To do: actions follow the task at phone widths ---- */
   /* Side by side, the fix and the ignore squeeze the sentence they are about
      into two words a line. Stacked under it they are two 44px targets and the
      chore keeps its measure. */
-  .chore-list { margin: 12px 0 0; }
-  .chore {
-    border: 1px solid var(--line); border-left: 3px solid var(--line-strong);
-    border-radius: 4px; background: var(--panel);
-    padding: 11px 13px; margin-bottom: 9px;
-  }
-  .chore-warn { border-left-color: var(--accent); }
-  .chore-alert { border-left-color: var(--alert); }
-  /* The dot said what the left rule now says, in less room. */
-  .chore-dot { display: none; }
+  .chore-list { margin: 12px 0 0; gap: 10px; }
+  .chore { padding: 14px; }
   .chore-line { flex-direction: column; align-items: stretch; gap: 9px; }
-  .chore-what { font-size: 14.5px; line-height: 1.35; }
-  .chore-why { font-size: 12.5px; }
+  .chore-what { font-size: 17px; }
+  .chore-why { font-size: 14px; }
+  .chore-items li { grid-template-columns: minmax(0, 1fr); }
   .chore-actions { gap: 7px; }
   /* The fix takes the room; ignoring is deliberate and stays the smaller of
      the two, as it is on the desktop row. */
   .chore-fix { flex: 1; justify-content: center; }
   .chore-ignore { flex: none; padding: 0 14px; }
   .chore-group { margin-top: 16px; }
+  .todo-controls { align-items: stretch; flex-direction: column; gap: 12px; }
+  .todo-grouping select, .todo-controls .report-scope select { flex: 1; min-width: 0; }
+  .todo-priorities { gap: 6px; }
+  .todo-priorities button { flex: 1 1 calc(50% - 6px); justify-content: space-between; }
 
   /* ---- the campaign hub ---- */
   .hub { max-width: none; }

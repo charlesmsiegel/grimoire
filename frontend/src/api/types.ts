@@ -3813,7 +3813,7 @@ export type Chore = {
 };
 
 /** One instance behind a chore's count — the character with no tagline, the
- *  thread that is owed. `detail` is what makes the row worth expanding to:
+ *  thread that is owed. `detail` is what makes the row worth reading:
  *  a list of bare names is the count again, spelled out. */
 export type ChoreItem = {
   id: string;
@@ -3836,7 +3836,8 @@ export type TodoPayload = {
    *  forgotten. */
   ignored: Chore[];
   count: number;
-  /** The theme headings, in reading order (story, character, art, rules, then
+  /** The theme headings, in reading order (scenes, wrap-up, commitments, continuity,
+   *  character, art, rules, then
    *  costs — `GROUP_ORDER` in `routes/todo.py`), and only the ones with
    *  something under them. The server decides, because deriving the order
    *  from the chore list reorders the headings whenever the data moves: the
