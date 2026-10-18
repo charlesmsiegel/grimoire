@@ -710,6 +710,10 @@ def _entries(suspects: str) -> list[tuple[list[str], int]]:
             pending_blank = False
         level = _underline_level(out, stripped, item)
         if level:
+            # The title may already have opened a colon or item heading. Its
+            # replacement must not inherit that same entry as its own governor:
+            # an indented quote underline can otherwise leave it open below.
+            _close(open_heads, lambda head: head.entry == len(out) - 1)
             # Same rule as the ATX branch below: a setext heading indented
             # inside a list item does not end that item.
             _close(open_heads, _ends_at_heading, indent, level)

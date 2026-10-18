@@ -2696,6 +2696,52 @@ def test_a_setext_heading_governs_the_bullets_under_it(monkeypatch, tmp_path):
     assert "watches the pier" in section          # the next heading ends the first
 
 
+@pytest.mark.parametrize("body", [
+    "\tNotes:\n > > ===",
+    "Notes:\n > ---",
+    "- Notes:\n  > ===",
+    "> Notes:\n > > ===",
+])
+def test_a_promoted_setext_title_keeps_its_text(body):
+    """A title that already opened a heading must not become its own parent.
+    Indented quote underlines left the colon or item open and raised before
+    the filter could decide even an entry that names nobody on stage."""
+    assert suspects.visible(body, {"Winifred"}) == body.strip()
+
+
+@pytest.mark.parametrize("body", [
+    "Winifred:\n > ===\n > - is hiding the ledger\n\n- Mara sold the manifest.",
+    "- Winifred:\n\n  Notes:\n   > ===\n   > - is hiding the ledger\n- Mara sold the manifest.",
+])
+def test_a_promoted_setext_title_preserves_private_governance(body):
+    """Retire the title's own heading without discarding its older parent:
+    a neutral title nested under Winifred still withholds its descendants,
+    while the outer sibling remains an independent statement."""
+    assert suspects.visible(body, {"Winifred"}) == "- Mara sold the manifest."
+
+
+@pytest.mark.parametrize(("pcless", "private_visible"), [(False, False), (True, True)])
+def test_a_promoted_setext_title_preserves_the_assembled_character_states(
+        monkeypatch, tmp_path, pcless, private_visible):
+    """The parser error reached the outer state barrier and removed every NPC's
+    current state and knowledge, not just the troublesome suspicion entry."""
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path, pcless=pcless)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "The ledger is real.",
+        "Notes:\n > > ===\n > > - Mara sold the manifest.\n\n"
+        "Winifred:\n > > ===\n > > - is hiding the ledger"))
+    playstate.write_state(croot, ids["Winifred"], playstate.compose_body(
+        "Impatient.", "The tide turns at dusk.", ""))
+
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "Seraphine Vale: Wary." in text
+    assert "The ledger is real." in text
+    assert "Mara sold the manifest." in text
+    assert "Winifred: Impatient." in text
+    assert "The tide turns at dusk." in text
+    assert ("is hiding the ledger" in text) is private_visible
+
+
 def test_a_horizontal_rule_is_not_read_as_a_heading(monkeypatch, tmp_path):
     """`---` after a blank line underlines nothing. Treating the blank as a
     heading would govern the whole list below it by an entry that names nobody —
