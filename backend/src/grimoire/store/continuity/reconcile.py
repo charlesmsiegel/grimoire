@@ -110,7 +110,7 @@ One that would leave the cache as it was writes nothing and moves no token.
 
 **Soft all the way down.** Pools, aging, the clock and pressure can each run
 user calendar-plugin code or read a garbled ledger, so each is read through
-`_soft`; a source that fell back, or whose ledger or chronicle could not be
+`tolerance.call`; a source that fell back, or whose ledger or chronicle could not be
 read, is reported unchecked in `Sweep.lifecycle_checked`, so a persist never
 retracts a finding on the word of a source it could not read. A malformed continuity.json reads as no
 decisions at all, so while it lasts discovery finds nothing (Decision 2).
@@ -126,8 +126,9 @@ import hashlib
 import re
 import time
 from collections import Counter
-from collections.abc import Callable, Iterable, Sequence
-from typing import Any, Literal, TypeVar
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from ... import decisions, embeddings, prompts
 from .. import (
@@ -147,7 +148,7 @@ from .. import (
 )
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
-from . import candidates, canon, effective, involvement, pending, pressure, similarity
+from . import candidates, canon, effective, involvement, pending, pressure, similarity, tolerance
 
 #: Uncached texts one run may embed, across its passes (`EmbedBudget`): four
 #: `embeddings.BATCH` round trips within one `embeddings.TIMEOUT` of embedding
@@ -232,17 +233,6 @@ _SEMANTIC_UNAVAILABLE = "semantic matching unavailable — basic matching used"
 _POOL_LEDGERS = frozenset({"thread", "commitment"})
 _STALE_LEDGERS = frozenset({"thread"})
 _DEADLINE_LEDGERS = frozenset({"commitment", "event"})
-
-T = TypeVar("T")
-
-
-def _soft(fn: Callable[..., T], fallback: T, *args: Any) -> T:
-    """`fn(*args)`, or `fallback` when it raises anything at all."""
-    try:
-        return fn(*args)
-    except Exception:  # noqa: BLE001 -- a source may run user calendar plugin code or read a garbled ledger; one source failing must cost only what it feeds, never the sweep
-        return fallback
-
 
 def generation(run_id: str) -> str:
     """A run's generation stamp: wall-clock nanoseconds, zero-padded so it sorts
@@ -340,6 +330,16 @@ def _signals(a: similarity.Subject, b: similarity.Subject,
     return {**signals, "via": similarity.admitted_by(signals)}
 
 
+def _unscored_partners(ref: str, subjects: list[similarity.Subject],
+                       done: set[frozenset[str]]) -> Iterator[tuple[frozenset[str], similarity.Subject]]:
+    """Other subjects whose unordered pair with `ref` has not been scored.
+    The caller marks a pair done only after admitting it within the budget."""
+    for other in subjects:
+        pair = frozenset((ref, other.ref))
+        if other.ref != ref and pair not in done:
+            yield pair, other
+
+
 def _score_pairs(to_score: list[str], subjects: list[similarity.Subject],
                  vecs: dict[str, list[float]], budget: int,
                  semantic: bool) -> tuple[dict, frozenset, frozenset, int, bool]:
@@ -356,10 +356,7 @@ def _score_pairs(to_score: list[str], subjects: list[similarity.Subject],
     finished: set[str] = set()
     count = 0
     for ref in to_score:
-        for other in subjects:
-            pair = frozenset((ref, other.ref))
-            if other.ref == ref or pair in done:
-                continue
+        for pair, other in _unscored_partners(ref, subjects, done):
             if count >= budget:
                 return kept, frozenset(refuted), frozenset(finished), count, True
             done.add(pair)
@@ -417,17 +414,30 @@ def _rescored(sweep: Sweep, finished: frozenset[str], by_ref: dict[str, similari
     return frozenset(ref for ref in finished if by_ref[ref].text in vecs)
 
 
-def _pairs(sweep: Sweep, current: pending.Current, subjects: list[similarity.Subject],
-           order: list[str], vecs: dict[str, list[float]], pools_whole: bool) -> None:
+@dataclass(frozen=True, slots=True)
+class _PairPool:
+    """The records this pass compares, their scoring order, and read completeness.
+
+    A partial pool can provide lexical hints but cannot retract prior pairs:
+    completeness belongs to these subjects throughout embedding and scoring.
+    """
+
+    subjects: list[similarity.Subject]
+    order: list[str]
+    whole: bool
+
+
+def _pairs(sweep: Sweep, current: pending.Current, pool: _PairPool,
+           vecs: dict[str, list[float]]) -> None:
     """Score and keep the pairs, with a cosine where both texts have a vector.
-    With a pool missing (`pools_whole` False) no ref's every pair was scored --
+    With a pool missing (`pool.whole` False) no ref's every pair was scored --
     none was paired against the records that could not be read -- so nothing
     is reported rescored, and a persist keeps the cached pairs rather than
     retract them on a partial view."""
     scored, refuted, finished, count, capped = _score_pairs(
-        order, subjects, vecs, RECONCILE_MAX_PAIRS, sweep.embedding != "off")
-    by_ref = {s.ref: s for s in subjects}
-    sweep.rescored = _rescored(sweep, finished, by_ref, vecs, pools_whole)
+        pool.order, pool.subjects, vecs, RECONCILE_MAX_PAIRS, sweep.embedding != "off")
+    by_ref = {s.ref: s for s in pool.subjects}
+    sweep.rescored = _rescored(sweep, finished, by_ref, vecs, pool.whole)
     sweep.refuted = refuted
     sweep.pairs_scored, sweep.pairs_capped = count, capped
     for a, b in sorted(_top_k(scored, by_ref, finished)):
@@ -454,13 +464,13 @@ class EmbedBudget:
         self.seconds = embeddings.TIMEOUT
 
 
-def _semantic(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Subject],
-              order: list[str], budget: EmbedBudget) -> similarity.Semantic:
+def _semantic(cid: str, sweep: Sweep, space: dict, pool: _PairPool,
+              budget: EmbedBudget) -> similarity.Semantic:
     """Vectors for the sweep (Decision 12): one probe of the cache, the changed
     refs' uncached texts required (incremental only), and a rotating window of
     the other uncached texts, all within what `budget` has left -- which this
     pass then spends."""
-    text_of = {s.ref: s.text for s in subjects}
+    text_of = {s.ref: s.text for s in pool.subjects}
     texts = list(dict.fromkeys(text_of[ref] for ref in sorted(text_of)))
     loaded = vectors.load(space["space"], texts)
     uncached = [t for t in texts if t not in loaded]
@@ -468,7 +478,7 @@ def _semantic(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Sub
     limit = max(budget.left, 0) if deadline is not None else 0
     required: list[str] = []
     if not sweep.full:
-        changed = (text_of[ref] for ref in order if text_of[ref] not in loaded)
+        changed = (text_of[ref] for ref in pool.order if text_of[ref] not in loaded)
         required = list(dict.fromkeys(changed))[:limit]
     need = set(required)
     seed = f"{cid}\0{sweep.stamp}"
@@ -486,13 +496,13 @@ def _semantic(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Sub
         budget.seconds -= time.monotonic() - started
 
 
-def _embed(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Subject],
-           order: list[str], budget: EmbedBudget) -> dict[str, list[float]]:
+def _embed(cid: str, sweep: Sweep, space: dict, pool: _PairPool,
+           budget: EmbedBudget) -> dict[str, list[float]]:
     """Run `_semantic`, record its mode on `sweep`, and answer its vectors. A
     failure (or anything unexpected) keeps basic matching and writes one
     counts-only error row."""
     failed = similarity.Semantic({}, "failure", error="unexpected")
-    sem = _soft(_semantic, failed, cid, sweep, space, subjects, order, budget)
+    sem = tolerance.call(_semantic, failed, cid, sweep, space, pool, budget)
     sweep.embedding, sweep.embedding_error = sem.mode, sem.error
     if sem.mode == "failure":
         errors.record(_TASK, sem.error or "network", _SEMANTIC_UNAVAILABLE,
@@ -506,20 +516,20 @@ def _embed(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Subjec
 def _chronicle_readable(cid: str) -> bool:
     """Whether chronicle.json parses: `aging.prepare` reads a garbled one as no
     scene dates, which would make a dated thread look undated, not stale."""
-    return isinstance(_soft(chronicle.read_chronicle, None, cid), dict)
+    return isinstance(tolerance.call(chronicle.read_chronicle, None, cid), dict)
 
 
 def _stale(cid: str, current: pending.Current, now: str) -> tuple[dict, bool]:
     """Closure nominations for live threads aging calls stale, and whether
     staleness could be read at all (a parseable present, a readable plot
     ledger and chronicle)."""
-    actx = _soft(aging.prepare, None, cid, now)
-    rows = _soft(effective.threads, None, cid)
+    actx = tolerance.call(aging.prepare, None, cid, now)
+    rows = tolerance.call(effective.threads, None, cid)
     if actx is None or rows is None:
         return {}, False
     out: dict[str, dict] = {}
     for row in rows:
-        block: dict = _soft(aging.age, {}, actx, row)
+        block: dict = tolerance.call(aging.age, {}, actx, row)
         if block.get("state") == aging.STALE:
             _nominate(out, current, "possible_thread_closure", [f"thread:{row['id']}"],
                       {"reason": "stale", "days_since": block["days_since"]})
@@ -533,7 +543,7 @@ def _overdue(cid: str, current: pending.Current, now: str) -> tuple[dict, bool]:
     a reached before/by/on event -- and whether that was read whole: the
     calendar placed `now`, and the commitments and events were readable
     (`pressure.build` reads an unreadable one as having nothing due)."""
-    built = _soft(pressure.build, None, cid, now, None, _OVERDUE_SOURCES)
+    built = tolerance.call(pressure.build, None, cid, now, None, _OVERDUE_SOURCES)
     if built is None:
         return {}, False
     out: dict[str, dict] = {}
@@ -604,7 +614,7 @@ def _undatable(actx: dict, current: pending.Current, ref: str, rec: dict) -> boo
         return False
     if not effective.is_live("commitment", rec.get("status")):
         return False
-    block = _soft(aging.age, None, actx, {"due": due})
+    block = tolerance.call(aging.age, None, actx, {"due": due})
     if block is None or block["due_in"] is not None or block["days_over"] is not None:
         return False
     return not any(link["a"] == ref and link["relation"] in pending.TEMPORAL_RELATIONS
@@ -616,8 +626,8 @@ def _temporal(cid: str, current: pending.Current, now: str) -> tuple[dict, bool]
     the events could all be read. With any of them unreadable there are none:
     a broken calendar must not make every due look unparseable, and a pair
     nominated from half the records must not retract the rest."""
-    actx = _soft(aging.prepare, None, cid, now)
-    built = _soft(pressure.build, None, cid, now, None, {"event"})
+    actx = tolerance.call(aging.prepare, None, cid, now)
+    built = tolerance.call(pressure.build, None, cid, now, None, {"event"})
     if actx is None or built is None or actx["now_fixed"] is None or built["fixed"] is None:
         return {}, False
     if current.unreadable & _DEADLINE_LEDGERS:
@@ -636,7 +646,7 @@ def _temporal(cid: str, current: pending.Current, now: str) -> tuple[dict, bool]
 def _live_only(current: pending.Current, found: dict[str, dict]) -> dict[str, dict]:
     """The nominations whose verdict is ``live`` (Decision 11)."""
     return {key: rec for key, rec in found.items()
-            if _soft(pending.verdict, "unknown", current, rec) == "live"}
+            if tolerance.call(pending.verdict, "unknown", current, rec) == "live"}
 
 
 # ---------------------------------------------------------------- discovery
@@ -648,7 +658,7 @@ def _subjects(cid: str, current: pending.Current) -> tuple[list[similarity.Subje
     out: list[similarity.Subject] = []
     whole = not current.unreadable & _POOL_LEDGERS
     for kind in ("thread", "commitment"):
-        pool = _soft(similarity.pool, None, cid, kind)
+        pool = tolerance.call(similarity.pool, None, cid, kind)
         whole = whole and pool is not None
         out.extend(pool or [])
     return out, whole
@@ -663,7 +673,7 @@ def _keep_basis_space(sweep: Sweep, basis: dict) -> None:
     rescored and every basis entry, its space included, is carried forward
     (`_rescored`, `_found_basis`) until the facts can be read again. No error
     row: the Embedding card says why."""
-    problem = _soft(similarity.options_problem, "")
+    problem = tolerance.call(similarity.options_problem, "")
     if not problem:
         return
     sweep.space, sweep.model = basis["embedding_space"], basis["embedding_model"]
@@ -680,11 +690,11 @@ def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
     the run's (`EmbedBudget`), shared with a follow-on pass; a fresh one when
     omitted."""
     sweep = Sweep(stamp, full)
-    space = _soft(similarity.available, None)
+    space = tolerance.call(similarity.available, None)
     if space is not None:
         sweep.space, sweep.model = space["space"], space["model"]
-    sweep.matching = _soft(similarity.matching, "basic")
-    current = _soft(pending.Current.load, None, cid)
+    sweep.matching = tolerance.call(similarity.matching, "basic")
+    current = tolerance.call(pending.Current.load, None, cid)
     if current is None:
         return sweep
     if current.continuity_malformed:
@@ -697,10 +707,11 @@ def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
     sweep.hashes = {s.ref: _identity_hash(sweep.space, s.text) for s in subjects}
     sweep.text_hashes = {s.ref: _text_hash(s.text) for s in subjects}
     order = _order(subjects, sweep.hashes, basis, sweep.full)
-    vecs = (_embed(cid, sweep, space, subjects, order, budget or EmbedBudget())
+    pool = _PairPool(subjects=subjects, order=order, whole=pools_whole)
+    vecs = (_embed(cid, sweep, space, pool, budget or EmbedBudget())
             if embed and space is not None else {})
-    _pairs(sweep, current, subjects, order, vecs, pools_whole)
-    now = _soft(clock.now, "", cid)
+    _pairs(sweep, current, pool, vecs)
+    now = tolerance.call(clock.now, "", cid)
     found, moved, checked = _lifecycle(cid, current, _touched_refs(sweep, basis, touched), now)
     temporal, temporal_ok = _temporal(cid, current, now)
     sweep.discovered.update(found)
@@ -764,7 +775,7 @@ def _keep(current: pending.Current, records: dict[str, dict]) -> tuple[dict[str,
     kept: dict[str, dict] = {}
     live = 0
     for key, record in records.items():
-        verdict = _soft(pending.verdict, "gone", current, record)
+        verdict = tolerance.call(pending.verdict, "gone", current, record)
         if verdict in _KEPT or (verdict == "suppressed" and pending.model_only(record)):
             kept[key] = record
             live += verdict == "live"
@@ -903,7 +914,7 @@ def persist_found(cid: str, sweep: Sweep, *,
         records = {key: rec for key, rec in cached.items() if not _retracted(key, rec, sweep)}
         records.update((key, _carried(rec, cached.get(key)))
                        for key, rec in sweep.discovered.items())
-        rows = _soft(scenes_read.list_scenes, None, cid)
+        rows = tolerance.call(scenes_read.list_scenes, None, cid)
         scenes = None if rows is None else {row["id"] for row in rows}
         records = {key: _unvoided(rec, scenes) for key, rec in records.items()}
         if stored["questions"] < candidates.QUESTIONS:
@@ -927,11 +938,11 @@ def persist_proposals(cid: str, sweep: Sweep, proposals: dict[str, dict], *,
         for key, proposal in proposals.items():
             cached = records.get(key)
             if cached is not None:
-                if _soft(pending.verdict, "", current, cached) == "live":
+                if tolerance.call(pending.verdict, "", current, cached) == "live":
                     records[key] = {**cached, "proposal": proposal}
                 continue
             nominated = sweep.model_only.get(key)
-            if nominated is not None and _soft(
+            if nominated is not None and tolerance.call(
                     pending.fingerprint, None, current, nominated["kind"],
                     nominated["refs"]) == nominated["fingerprint"]:
                 records[key] = {**nominated, "proposal": proposal}
@@ -973,7 +984,7 @@ def persist_investigation(cid: str, key: str, proposal: dict, *,
             return False
         current = pending.Current.load(cid)
         if current.continuity_malformed \
-                or _soft(pending.verdict, "", current, cached) != "live":
+                or tolerance.call(pending.verdict, "", current, cached) != "live":
             return False
         records = {**stored["records"], key: {**cached, "proposal": proposal}}
         candidates.write(cid, {**stored, "records": records})
@@ -994,13 +1005,13 @@ def _pressure_by_ref(cid: str) -> dict[str, dict]:
         subject = item["subject"]
         if subject and (subject not in best or rank(item["state"]) < rank(best[subject]["state"])):
             best[subject] = item
-    owed: list[dict] = _soft(effective.commitments, [], cid)
+    owed: list[dict] = tolerance.call(effective.commitments, [], cid)
     out = {f"commitment:{row['id']}": _reading(best.get(f"commitment:{row['id']}"))
            for row in owed}
-    actx = _soft(aging.prepare, None, cid, built["now"])
-    threads: list[dict] = _soft(effective.threads, [], cid)
+    actx = tolerance.call(aging.prepare, None, cid, built["now"])
+    threads: list[dict] = tolerance.call(effective.threads, [], cid)
     for row in threads:
-        block: dict = _soft(aging.age, {}, actx, row) if actx is not None else {}
+        block: dict = tolerance.call(aging.age, {}, actx, row) if actx is not None else {}
         state = "stale" if block.get("state") == aging.STALE else "ok"
         out[f"thread:{row['id']}"] = {"state": state, "in_days": None, "friendly": ""}
     return out
@@ -1011,7 +1022,7 @@ def pressure_by_ref(cid: str) -> dict[str, dict]:
     commitment's most urgent deadline item (``ok`` with no day when it has
     none), a thread's aging -- ``stale`` or ``ok``, with no day. ``{}`` when
     the read fails; discovery and the candidates read both use it."""
-    return _soft(_pressure_by_ref, {}, cid)
+    return tolerance.call(_pressure_by_ref, {}, cid)
 
 
 # -------------------------------------------------------------- adjudication
@@ -1118,19 +1129,19 @@ def select(cid: str, sweep: Sweep) -> list[dict]:
     malformed nothing is."""
     if sweep.continuity == "malformed":
         return []
-    current = _soft(pending.Current.load, None, cid)
+    current = tolerance.call(pending.Current.load, None, cid)
     if current is None or current.continuity_malformed:
         return []
     stored = candidates.read(cid)["records"]
     chosen: dict[str, dict] = {}
     for key, record in stored.items():
-        if record["proposal"] is None and _soft(pending.verdict, "", current, record) == "live":
+        if record["proposal"] is None and tolerance.call(pending.verdict, "", current, record) == "live":
             chosen[key] = _item(key, record)
     for key, record in sweep.model_only.items():
         cached = stored.get(key)
         if key in chosen or (cached is not None and cached["proposal"] is not None):
             continue
-        if _soft(pending.verdict, "", current, record) == "live":
+        if tolerance.call(pending.verdict, "", current, record) == "live":
             chosen[key] = _item(key, record)
     return sorted(chosen.values(), key=_priority)[:RECONCILE_MAX_CANDIDATES]
 
@@ -1200,7 +1211,7 @@ def _live_scenes(cid: str) -> list[str]:
     `pending.evidence_ok` checks a proposal against, so nothing outside it is
     shown as evidence. Empty when the scene list cannot be read."""
     none: list[dict] = []
-    rows = _soft(scenes_read.list_scenes, none, cid)
+    rows = tolerance.call(scenes_read.list_scenes, none, cid)
     return [row["id"] for row in play_order(rows)]
 
 
@@ -1213,7 +1224,7 @@ class _Context:
         self.current: pending.Current = pending.Current.load(cid)
         self.pressure = pressure_by_ref(cid)
         ledgered = [r for r in refs if not r.startswith("event:")]
-        self.involved: dict[str, dict] = _soft(involvement.of, {}, cid, ledgered)
+        self.involved: dict[str, dict] = tolerance.call(involvement.of, {}, cid, ledgered)
         self._names: dict[str, str] = {}
 
     def title(self, ref: str) -> str:
@@ -1222,7 +1233,7 @@ class _Context:
     def name(self, actor: str) -> str:
         if actor not in self._names:
             fallback = actor.partition(":")[2] or actor
-            self._names[actor] = _soft(relationships.actor_name, fallback, self.cid, actor) \
+            self._names[actor] = tolerance.call(relationships.actor_name, fallback, self.cid, actor) \
                 or fallback
         return self._names[actor]
 
@@ -1328,9 +1339,9 @@ def _signal_text(ctx: _Context, item: dict) -> str:
 
 
 def _campaign_date(cid: str) -> str:
-    built = _soft(pressure.build, None, cid, None, None, frozenset())
+    built = tolerance.call(pressure.build, None, cid, None, None, frozenset())
     if built is None:
-        return _soft(clock.now, "", cid)
+        return tolerance.call(clock.now, "", cid)
     return built["friendly"] or built["now"] or ""
 
 
@@ -1346,7 +1357,7 @@ def _scene_lines(cid: str, beat_scenes: set[str], live: list[str]) -> list[dict]
     `RECONCILE_SCENE_LINE_BYTES`. Only scenes that
     exist are shown (`delete_scene` leaves the chronicle line behind), and a
     scene with no line is not."""
-    read: Any = _soft(chronicle.read_chronicle, {}, cid)
+    read: Any = tolerance.call(chronicle.read_chronicle, {}, cid)
     chron: dict = read if isinstance(read, dict) else {}
     recent = set(_recent(live))
     out: list[dict] = []

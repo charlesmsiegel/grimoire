@@ -677,11 +677,26 @@ def test_every_stored_candidate_field_shares_the_identity_text_bound(cid, s0, si
               "beats": [{"text": "Mara swore it. " + "e" * bound, "scene": s0},
                         {"text": "Mara owes the tithe. " + "b" * bound, "scene": s0}]}
     stored = similarity.subject("commitment", "commitment:the-saltmarch-tithe", record)
-    examined = identity.Examined("commitment_movements", 0, "r1", "commitment",
-                                 {"title": "Saltmarch tithe", "beat": "Mara owes."},
-                                 "saltmarch-tithe", [(stored, {"via": "lexical"})], [])
-    [cand] = identity.Examination([examined], 1, "basic", "off", "", 0, set(),
-                                  {}).prompt_rows()[0]["candidates"]
+    examined = identity.Examined(
+        section="commitment_movements",
+        index=0,
+        key="r1",
+        kind="commitment",
+        row={"title": "Saltmarch tithe", "beat": "Mara owes."},
+        assigned="saltmarch-tithe",
+        candidates=[(stored, {"via": "lexical"})],
+        distinguished_from=[],
+    )
+    [cand] = identity.Examination(
+        rows=[examined],
+        proposed=1,
+        matching="basic",
+        embedding="off",
+        embedding_error="",
+        embedded=0,
+        targets=set(),
+        live={},
+    ).prompt_rows()[0]["candidates"]
     assert _candidate_text_bytes(cand) <= bound
     assert (cand["id"], cand["kind"]) == ("the-saltmarch-tithe", "threat")
     assert cand["title"].startswith("The Saltmarch tithe t")
@@ -713,11 +728,26 @@ def test_a_title_filling_the_bound_does_not_relabel_a_commitment_kind(s0):
     record = {"title": "The Saltmarch tithe " + "t" * bound, "kind": "threat",
               "status": "open", "beats": [{"text": "Mara swore it.", "scene": s0}]}
     stored = similarity.subject("commitment", "commitment:the-saltmarch-tithe", record)
-    examined = identity.Examined("commitment_movements", 0, "r1", "commitment",
-                                 {"title": "Saltmarch tithe", "beat": "Mara owes."},
-                                 "saltmarch-tithe", [(stored, {"via": "lexical"})], [])
-    [row] = identity.Examination([examined], 1, "basic", "off", "", 0, set(),
-                                 {}).prompt_rows()
+    examined = identity.Examined(
+        section="commitment_movements",
+        index=0,
+        key="r1",
+        kind="commitment",
+        row={"title": "Saltmarch tithe", "beat": "Mara owes."},
+        assigned="saltmarch-tithe",
+        candidates=[(stored, {"via": "lexical"})],
+        distinguished_from=[],
+    )
+    [row] = identity.Examination(
+        rows=[examined],
+        proposed=1,
+        matching="basic",
+        embedding="off",
+        embedding_error="",
+        embedded=0,
+        targets=set(),
+        live={},
+    ).prompt_rows()
     [cand] = row["candidates"]
     assert cand["kind"] == "threat"
     assert _candidate_text_bytes(cand) <= bound
@@ -1141,11 +1171,26 @@ def test_a_hand_edited_long_status_shares_the_identity_text_bound(cid, s0, sid):
     record = {"title": "Find the ledger", "status": "closed" + "z" * (10 * bound),
               "beats": [{"text": "Mara hid it.", "scene": s0}]}
     stored = similarity.subject("thread", "thread:find-the-ledger", record)
-    examined = identity.Examined("plot_movements", 0, "r1", "thread",
-                                 {"title": "Find that ledger again", "beat": "Winifred looks."},
-                                 "find-that-ledger-again", [(stored, {"via": "lexical"})], [])
-    [row] = identity.Examination([examined], 1, "basic", "off", "", 0, set(),
-                                 {}).prompt_rows()
+    examined = identity.Examined(
+        section="plot_movements",
+        index=0,
+        key="r1",
+        kind="thread",
+        row={"title": "Find that ledger again", "beat": "Winifred looks."},
+        assigned="find-that-ledger-again",
+        candidates=[(stored, {"via": "lexical"})],
+        distinguished_from=[],
+    )
+    [row] = identity.Examination(
+        rows=[examined],
+        proposed=1,
+        matching="basic",
+        embedding="off",
+        embedding_error="",
+        embedded=0,
+        targets=set(),
+        live={},
+    ).prompt_rows()
     [cand] = row["candidates"]
     assert _candidate_text_bytes(cand) <= bound
     assert cand["status"].startswith("closed")
@@ -1183,10 +1228,26 @@ def _memory_exam(*rows):
                                       "beats": [{"text": f"{rid} moved.", "scene": "s0"}]}),
                   {"via": "lexical"}) for rid in ids]
         section = "plot_movements" if kind == "thread" else "commitment_movements"
-        examined.append(identity.Examined(section, n, f"r{n + 1}", kind,
-                                          {"title": title, "beat": "Winifred looks."},
-                                          f"proposed-{n}", cands, []))
-    return identity.Examination(examined, len(examined), "basic", "off", "", 0, set(), {})
+        examined.append(identity.Examined(
+            section=section,
+            index=n,
+            key=f"r{n + 1}",
+            kind=kind,
+            row={"title": title, "beat": "Winifred looks."},
+            assigned=f"proposed-{n}",
+            candidates=cands,
+            distinguished_from=[],
+        ))
+    return identity.Examination(
+        rows=examined,
+        proposed=len(examined),
+        matching="basic",
+        embedding="off",
+        embedding_error="",
+        embedded=0,
+        targets=set(),
+        live={},
+    )
 
 
 def _options(choice):

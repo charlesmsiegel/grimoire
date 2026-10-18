@@ -491,12 +491,15 @@ def _identity_exam() -> identity.Examination:
         record["beats"] = [{"text": stored["beat"], "scene": "saltmarch-docks"}]
         return similarity.subject(kind, f"{kind}:{rid}", record), dict(_IDENTITY_SIGNALS)
 
-    rows = [identity.Examined(section, index, f"r{index + 1}", kind, dict(row),
-                              f"proposed-{index + 1}", [candidate(rid) for rid in ids], [])
+    rows = [identity.Examined(section=section, index=index, key=f"r{index + 1}", kind=kind,
+                              row=dict(row), assigned=f"proposed-{index + 1}",
+                              candidates=[candidate(rid) for rid in ids], distinguished_from=[])
             for index, (section, kind, row, ids) in enumerate(_IDENTITY_ROWS)]
-    return identity.Examination(rows, len(rows), "basic", "off", "", 0,
-                                {("thread", "winifreds-chart")},
-                                {"thread:the-old-map": "thread:maras-map"})
+    return identity.Examination(
+        rows=rows, proposed=len(rows), matching="basic", embedding="off",
+        embedding_error="", embedded=0, targets={("thread", "winifreds-chart")},
+        live={"thread:the-old-map": "thread:maras-map"},
+    )
 
 
 def _identity_items() -> tuple[decisions.Item, ...]:

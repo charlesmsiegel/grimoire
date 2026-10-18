@@ -300,7 +300,7 @@ class Subject:
     __slots__ = ("_features", "actors", "anchors", "kind", "live", "record", "ref", "scenes",
                  "status", "text", "title")
 
-    def __init__(self, ref: str, kind: Kind, title: str, status: str, live: bool,
+    def __init__(self, *, ref: str, kind: Kind, title: str, status: str, live: bool,
                  text: str, actors: frozenset[str], scenes: frozenset[str],
                  anchors: frozenset[str], record: dict):
         self.ref = ref
@@ -329,9 +329,11 @@ class Subject:
 def subject(kind: Kind, ref: str, record: dict, *, actors: Iterable[str] = (),
             scenes: Iterable[str] = (), anchors: Iterable[str] = ()) -> Subject:
     status = fieldtext.text(record.get("status"))
-    return Subject(ref, kind, fieldtext.text(record.get("title")), status,
-                   effective.is_live(kind, status), _TEXT[kind](record),
-                   frozenset(actors), frozenset(scenes), frozenset(anchors), record)
+    return Subject(
+        ref=ref, kind=kind, title=fieldtext.text(record.get("title")), status=status,
+        live=effective.is_live(kind, status), text=_TEXT[kind](record),
+        actors=frozenset(actors), scenes=frozenset(scenes), anchors=frozenset(anchors),
+        record=record)
 
 
 def _anchors(cid: str, refs: set[str]) -> dict[str, set[str]]:
@@ -411,9 +413,14 @@ def _structure(signals: dict) -> bool:
     return bool(signals["actors"] or signals["scenes"] or signals["anchors"])
 
 
+def _lexical_floor_met(signals: dict, *, tokens: float, chars: float) -> bool:
+    """Either lexical overlap measure reaches its clause's floor."""
+    return signals["tokens"] >= tokens or signals["chars"] >= chars
+
+
 def weak(signals: dict) -> bool:
     cosine = signals["cosine"]
-    return (signals["tokens"] >= WEAK_TOKEN or signals["chars"] >= WEAK_CHAR
+    return (_lexical_floor_met(signals, tokens=WEAK_TOKEN, chars=WEAK_CHAR)
             or (cosine is not None and cosine >= WEAK_COSINE))
 
 
@@ -421,10 +428,10 @@ def admitted_by(signals: dict) -> str | None:
     """Which clause admits the pair -- ``lexical``, ``structural`` or
     ``semantic`` (admitted ONLY through a cosine clause) -- or None."""
     if (signals["title_equal"] or signals["slug_equal"]
-            or signals["tokens"] >= TOKEN_FLOOR or signals["chars"] >= CHAR_FLOOR):
+            or _lexical_floor_met(signals, tokens=TOKEN_FLOOR, chars=CHAR_FLOOR)):
         return "lexical"
     structure = _structure(signals)
-    if structure and (signals["tokens"] >= WEAK_TOKEN or signals["chars"] >= WEAK_CHAR):
+    if structure and _lexical_floor_met(signals, tokens=WEAK_TOKEN, chars=WEAK_CHAR):
         return "structural"
     cosine = signals["cosine"]
     if cosine is not None and (cosine >= COSINE_FLOOR

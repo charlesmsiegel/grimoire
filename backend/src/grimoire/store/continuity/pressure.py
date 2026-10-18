@@ -19,7 +19,7 @@ advance digest has its own, older reading of the same records.
 code that raises anything (`calendars.primary_provider` catches only
 `CalendarError`/`KeyError`), so every source -- and the provider and `now`
 resolutions themselves, and every per-day call into the provider (`_fixed_of`,
-`_labels`) -- runs through `_soft`. A broken calendar degrades the list to
+`_labels`) -- runs through `tolerance.call`. A broken calendar degrades the list to
 undated items rather than failing the read, and one day a plugin cannot name
 costs that item's label rather than its source; nothing invents a date
 (spec §3.8, §26). With no readable `now` there is nothing to measure from:
@@ -50,11 +50,11 @@ listed only while it is `upcoming`.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import Any, TypeVar
+from typing import Any
 
 from .. import aging, birthdays, calendars, clock, events, notices
 from ..campaigns import paths as campaigns_paths
-from . import effective
+from . import effective, tolerance
 
 #: The item kinds, which are also the source names `build` accepts. The order
 #: is the tie-break between items on one fixed day.
@@ -83,17 +83,6 @@ _LINK_RELATIONS = _DEADLINE_RELATIONS | {"after"}
 #: The sources that yield per-commitment *candidates* rather than items;
 #: `_choose` turns them into at most one deadline item per commitment.
 _CANDIDATE_KINDS = frozenset({"deadline", "linked_deadline"})
-
-T = TypeVar("T")
-
-
-def _soft(fn: Callable[..., T], fallback: T, *args: Any) -> T:
-    """`fn(*args)`, or `fallback` when it raises anything at all."""
-    try:
-        return fn(*args)
-    except Exception:  # noqa: BLE001 -- a source may run user calendar plugin code, which can raise anything; one source failing must cost only its own items
-        return fallback
-
 
 def _is_deadline(kind: str, relation: str) -> bool:
     return kind == "deadline" or (kind == "linked_deadline" and relation in _DEADLINE_RELATIONS)
@@ -148,14 +137,14 @@ def _labels(provider, fixed: int | None) -> tuple[str, str]:
     """
     if provider is None or fixed is None:
         return "", ""
-    return _soft(lambda: (provider.format(fixed), provider.describe(fixed)["friendly"]),
+    return tolerance.call(lambda: (provider.format(fixed), provider.describe(fixed)["friendly"]),
                  ("", ""))
 
 
 def _fixed_of(provider, native: str) -> int | None:
     if provider is None or not native:
         return None
-    return _soft(calendars.fixed_of, None, provider, native)
+    return tolerance.call(calendars.fixed_of, None, provider, native)
 
 
 def _item(kind: str, ref: str, label: str, fixed: int | None, ctx: dict, **extra) -> dict:
@@ -250,14 +239,14 @@ def _due_fixed(actx: dict, due: str) -> int | None:
 def _deadline_candidates(ctx: dict) -> list[dict]:
     """One `deadline` candidate per live canonical commitment with a parseable
     due. `aging.prepare` resolves the provider outside any `try` (plugin code),
-    which is why this whole source sits inside `build`'s `_soft`; one due a
+    which is why this whole source sits inside `build`'s `tolerance.call`; one due a
     calendar cannot read costs only its own candidate."""
     actx = aging.prepare(ctx["cid"], ctx["now"])
     if ctx["now_fixed"] is None:
         return []
     out = []
     for row in effective.commitments(ctx["cid"]):
-        fixed = _soft(_due_fixed, None, actx, row["due"])
+        fixed = tolerance.call(_due_fixed, None, actx, row["due"])
         if fixed is not None:
             out.append(_owed_item(ctx, row, "deadline", f"commitment:{row['id']}", fixed))
     return out
@@ -305,7 +294,7 @@ def _linked_candidates(ctx: dict) -> list[dict]:
         row, event = owed.get(link["a"]), dated.get(link["b"])
         if row is None or event is None or link["relation"] not in _LINK_RELATIONS:
             continue
-        candidate = _soft(_link_candidate, None, ctx, link, row, event)
+        candidate = tolerance.call(_link_candidate, None, ctx, link, row, event)
         if candidate is not None:
             out.append(candidate)
     return out
@@ -359,9 +348,9 @@ def _requested(sources: Iterable[str]) -> frozenset[str]:
 def _context(cid: str, now: str | None, horizon: int | None, wanted: frozenset[str]) -> dict:
     """Everything the sources share, each part resolved once and softly."""
     croot = campaigns_paths.campaign_root(cid)
-    provider = _soft(calendars.primary_provider, None, croot)
+    provider = tolerance.call(calendars.primary_provider, None, croot)
     if now is None:
-        now = _soft(clock.now, "", cid)
+        now = tolerance.call(clock.now, "", cid)
     now_fixed = _fixed_of(provider, now) if now else None
     rows: list[dict] = []
     if wanted & {"event", "linked_deadline"}:
@@ -369,7 +358,7 @@ def _context(cid: str, now: str | None, horizon: int | None, wanted: frozenset[s
     return {"cid": cid, "croot": croot, "provider": provider, "now": now or "",
             "now_fixed": now_fixed,
             "horizon": max(calendars.UPCOMING_WINDOW_DAYS if horizon is None else horizon, 0),
-            "warn_days": _soft(calendars.warn_days, calendars.WARN_DAYS, croot),
+            "warn_days": tolerance.call(calendars.warn_days, calendars.WARN_DAYS, croot),
             "events": rows}
 
 
@@ -380,8 +369,8 @@ def _event_rows(cid: str, provider, now_fixed: int | None) -> list[dict]:
     dated, labelled and read for `passed` by this module, softly and one day
     at a time, so the fallback costs no item anything the provider can still
     answer for it."""
-    rows = _soft(events.list_events, None, cid, provider, now_fixed)
-    return _soft(events.list_events, [], cid) if rows is None else rows
+    rows = tolerance.call(events.list_events, None, cid, provider, now_fixed)
+    return tolerance.call(events.list_events, [], cid) if rows is None else rows
 
 
 def _order(item: dict) -> tuple:
@@ -409,7 +398,7 @@ def build(cid: str, now: str | None = None, horizon: int | None = None,
     candidates: list[dict] = []
     for kind, fn in _SOURCE_FNS.items():
         if kind in wanted:
-            (candidates if kind in _CANDIDATE_KINDS else items).extend(_soft(fn, [], ctx))
+            (candidates if kind in _CANDIDATE_KINDS else items).extend(tolerance.call(fn, [], ctx))
     items.extend(_choose(candidates))
     items.sort(key=_order)
     return {"now": ctx["now"], "friendly": _labels(ctx["provider"], ctx["now_fixed"])[1],

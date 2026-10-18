@@ -111,6 +111,33 @@ def test_identity_law_commitments(cid):
 # ------------------------------------------------------------------ merging
 
 
+def test_play_order_preserves_beat_objects_and_undated_runs():
+    leading = {"scene": "", "text": "Mara's map."}
+    late = {"scene": S3, "text": "Winifred's chart."}
+    undated = {"scene": "outside", "text": "Seraphine's map."}
+    early = {"scene": S1, "text": "The map was stolen."}
+    repeated = dict(early)
+    stored = [leading, late, undated, early, repeated]
+
+    ordered = effective.play_ordered(stored)
+
+    assert [id(beat) for beat in ordered] == [
+        id(leading), id(early), id(repeated), id(late), id(undated)]
+    assert [id(beat) for beat in stored] == [
+        id(leading), id(late), id(undated), id(early), id(repeated)]
+
+
+def test_merged_duplicate_keeps_the_first_members_exact_objects():
+    first = {"scene": S1, "text": "The map was stolen.", "note": "Mara"}
+    repeated = {**first, "note": "Winifred"}
+    other_member = {**first, "note": "Seraphine"}
+
+    merged = effective._merge_beats([[first, repeated], [], [other_member]])
+
+    assert [id(beat) for beat in merged] == [id(first), id(repeated)]
+    assert other_member == {"scene": S1, "text": "The map was stolen.", "note": "Seraphine"}
+
+
 def test_alias_hides_source_and_merges_beats(cid):
     _thread(cid, "maras-map", "Mara's map", "open",
             beats=[(S1, "The map was stolen."), (S3, "Mara traced the thief.")])
@@ -290,6 +317,19 @@ def test_commitment_alias_merges(cid):
 
 
 # -------------------------------------------------------------------- links
+
+
+@pytest.mark.parametrize("record,reason", [
+    (None, "malformed_record"),
+    ({"a": "thread:a", "b": None, "relation": "related_to"}, "malformed_record"),
+    ({"a": "a", "b": "thread:b", "relation": "related_to"}, "malformed_record"),
+    ({"a": "thread:a", "b": "thread:b", "relation": "unknown"}, "invalid_relation"),
+])
+def test_malformed_stored_links_are_classified_before_endpoint_lookup(cid, record, reason):
+    doc.put_link(cid, "l1", record)
+
+    assert effective.links(cid) == []
+    assert effective.diagnostics(cid)["broken_links"] == [{"id": "l1", "reason": reason}]
 
 
 def test_links_canonicalize_dedupe_and_hide(cid):

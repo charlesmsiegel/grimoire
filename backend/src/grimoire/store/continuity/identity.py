@@ -139,7 +139,7 @@ def has_proposals(parsed: dict) -> bool:
 class Examined:
     """One proposed-new row that has at least one plausible neighbour."""
 
-    def __init__(self, section: str, index: int, key: str, kind: similarity.Kind,
+    def __init__(self, *, section: str, index: int, key: str, kind: similarity.Kind,
                  row: dict, assigned: str,
                  candidates: list[tuple[similarity.Subject, dict]],
                  distinguished_from: list[str], siblings: tuple[int, ...] = ()):
@@ -224,7 +224,7 @@ def _prompt_row(e: Examined) -> dict:
 class Examination:
     """What `examine` found: the examined rows and how it looked for them."""
 
-    def __init__(self, rows: list[Examined], proposed: int,
+    def __init__(self, *, rows: list[Examined], proposed: int,
                  matching: Literal["basic", "semantic"],
                  embedding: Literal["off", "configured", "failure"],
                  embedding_error: str, embedded: int,
@@ -317,10 +317,7 @@ class Examination:
                 new = _onto_existing(e.kind, e.row, e.target)
                 new["identity_check"] = ic
                 new[AS_NEW_KEY] = dict(e.row)
-                for j in e.siblings:
-                    sibling = parsed[e.section][j]
-                    if out[e.section][j] is sibling and isinstance(sibling, dict):
-                        out[e.section][j] = _onto_existing(e.kind, sibling, e.target)
+                _retarget_siblings(e, parsed, out, e.target)
             else:
                 new = {**e.row, "identity_check": ic}
             out[e.section][e.index] = new
@@ -380,6 +377,15 @@ def _onto_existing(kind: str, row: dict, rid: str) -> dict:
         new["kind"] = ""
         new["status"] = status if status in commitments.RESOLVED else ""
     return new
+
+
+def _retarget_siblings(e: Examined, parsed: dict, out: dict, target: str) -> None:
+    """Keep a retargeted row's dropped siblings on the same existing record.
+    A sibling already rewritten by another examination keeps that decision."""
+    for j in e.siblings:
+        sibling = parsed[e.section][j]
+        if out[e.section][j] is sibling and isinstance(sibling, dict):
+            out[e.section][j] = _onto_existing(e.kind, sibling, target)
 
 
 def _identity_check(e: Examined) -> dict:
@@ -450,7 +456,7 @@ class _Proposal:
 
     __slots__ = ("assigned", "index", "kind", "row", "section", "siblings", "subject")
 
-    def __init__(self, section: str, index: int, kind: similarity.Kind, row: dict,
+    def __init__(self, *, section: str, index: int, kind: similarity.Kind, row: dict,
                  assigned: str, subject: similarity.Subject, siblings: tuple[int, ...]):
         self.section = section
         self.index = index
@@ -461,8 +467,8 @@ class _Proposal:
         self.siblings = siblings
 
 
-def _subject(kind: similarity.Kind, n: int, row: dict, assigned: str, sid: str,
-             actors: set[str]) -> similarity.Subject:
+def _subject(kind: similarity.Kind, n: int, row: dict, assigned: str, *,
+             sid: str, actors: set[str]) -> similarity.Subject:
     record = {"title": _staged_title(row, assigned),
               "beats": [{"text": _text(row.get("beat")), "scene": sid}],
               "kind": _text(row.get("kind")), "due": _text(row.get("due"))}
@@ -513,9 +519,10 @@ def _classify(cid: str, sid: str, parsed: dict, facts: dict, ledgers: effective.
             if actors is None:
                 actors = _actors(cid, sid, facts)
             proposals.append(_Proposal(
-                section, i, kind, row, slot.id,
-                _subject(kind, len(proposals) + 1, row, slot.id, sid, actors),
-                _siblings(threads, ledgers.commitments, parsed, live, assigned, section, i)))
+                section=section, index=i, kind=kind, row=row, assigned=slot.id,
+                subject=_subject(kind, len(proposals) + 1, row, slot.id, sid=sid, actors=actors),
+                siblings=_siblings(
+                    threads, ledgers.commitments, parsed, live, assigned, section, i)))
     return proposals, targets
 
 
@@ -572,13 +579,16 @@ def examine(cid: str, sid: str, parsed: dict, facts: dict, *,
         candidates = similarity.nearest(p.subject, pools[p.kind], vecs)
         if not candidates:
             continue
-        rows.append(Examined(p.section, p.index, f"r{len(rows) + 1}", p.kind, p.row,
-                             p.assigned, candidates,
-                             _distinguished(p.row, p.kind, stored[p.kind], live), p.siblings))
+        rows.append(Examined(
+            section=p.section, index=p.index, key=f"r{len(rows) + 1}", kind=p.kind,
+            row=p.row, assigned=p.assigned, candidates=candidates,
+            distinguished_from=_distinguished(p.row, p.kind, stored[p.kind], live),
+            siblings=p.siblings))
     matching: Literal["basic", "semantic"] = (
         "semantic" if similarity.matching() == "semantic" else "basic")
-    return Examination(rows, len(proposals), matching, sem.mode, sem.error, sem.embedded,
-                       targets, live)
+    return Examination(
+        rows=rows, proposed=len(proposals), matching=matching, embedding=sem.mode,
+        embedding_error=sem.error, embedded=sem.embedded, targets=targets, live=live)
 
 
 # ------------------------------------------------------ the item context
@@ -663,6 +673,38 @@ def _fits(options: int, chars: int) -> bool:
                  or chars <= decisions.MAX_ENUM_STRING_CHARS))
 
 
+def _reserve_candidate_ids(candidates: list[dict], seen: set[str]) -> list[dict]:
+    """Keep ranked candidates that fit the choice, reserving every primary id
+    before an alias can take its normalised spelling."""
+    kept: list[dict] = []
+    chars = sum(len(word) for word in _OTHER_WORDS)
+    for candidate in candidates:
+        option = EXISTING_PREFIX + candidate["id"]
+        if not decisions.offerable(candidate["id"]) or decisions.normalise(option) in seen:
+            continue
+        if not _fits(len(kept) + 1 + len(_OTHER_WORDS), chars + len(option)):
+            break
+        _spelled(seen, option)
+        kept.append(candidate)
+        chars += len(option)
+    return kept
+
+
+def _option_aliases(kind: str, rid: str, live: Mapping[str, str], seen: set[str],
+                   spaced_id: str) -> tuple[str, ...]:
+    """Claim the ref and same-kind live alias spellings in their protocol order.
+    `spaced_id` is already reserved, so another candidate's alias cannot shadow it."""
+    ref = f"{kind}:{rid}"
+    spellings = [ref]
+    for src, to in live.items():
+        if to == ref and src != to and src.startswith(f"{kind}:"):
+            spellings += [src, src.removeprefix(f"{kind}:")]
+    plain = tuple(s for s in (EXISTING_PREFIX + s for s in spellings) if _spelled(seen, s))
+    rest = tuple(s for s in (f"{EXISTING_PREFIX} {s}" for s in spellings)
+                 if _spelled(seen, s))
+    return (*plain, *((spaced_id,) if spaced_id else ()), *rest)
+
+
 def _offered(row: dict, live: Mapping[str, str]) -> tuple[list[dict], list[decisions.Option]]:
     """The row's candidates the `decision` choice may offer, in rank order,
     and their folded ``existing:<id>`` options (Review Focus 3, M4).
@@ -694,30 +736,12 @@ def _offered(row: dict, live: Mapping[str, str]) -> tuple[list[dict], list[decis
     today's `_existing` does."""
     kind = row["kind"]
     seen = {decisions.normalise(word) for word in _OTHER_WORDS}
-    kept: list[dict] = []
-    chars = sum(len(word) for word in _OTHER_WORDS)
-    for c in row["candidates"]:
-        option = EXISTING_PREFIX + c["id"]
-        if not decisions.offerable(c["id"]) or decisions.normalise(option) in seen:
-            continue
-        if not _fits(len(kept) + 1 + len(_OTHER_WORDS), chars + len(option)):
-            break
-        _spelled(seen, option)
-        kept.append(c)
-        chars += len(option)
+    kept = _reserve_candidate_ids(row["candidates"], seen)
     spaced = [f"{EXISTING_PREFIX} {c['id']}" for c in kept]
     spaced_ids = [s if _spelled(seen, s) else "" for s in spaced]
     options = []
     for c, spaced_id in zip(kept, spaced_ids, strict=True):
-        ref = f"{kind}:{c['id']}"
-        spellings = [ref]
-        for src, to in live.items():
-            if to == ref and src != to and src.startswith(f"{kind}:"):
-                spellings += [src, src.removeprefix(f"{kind}:")]
-        plain = tuple(s for s in (EXISTING_PREFIX + s for s in spellings) if _spelled(seen, s))
-        rest = tuple(s for s in (f"{EXISTING_PREFIX} {s}" for s in spellings)
-                     if _spelled(seen, s))
-        aliases = (*plain, *((spaced_id,) if spaced_id else ()), *rest)
+        aliases = _option_aliases(kind, c["id"], live, seen, spaced_id)
         options.append(decisions.Option(
             EXISTING_PREFIX + c["id"],
             prompts.render("continuity_identity/option.j2", decision="existing",

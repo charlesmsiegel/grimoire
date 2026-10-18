@@ -24,7 +24,7 @@ fails closed rather than open.
 
 Read-only and pure: nothing here writes, takes a lock, or calls a model or an
 embedding endpoint (`matching` only reads config). Every input is read through
-`_soft`, because a calendar provider can be plugin code that raises anything
+`tolerance.call`, because a calendar provider can be plugin code that raises anything
 (`aging.prepare` resolves one outside any `try`), and a garbled ledger must
 cost its own drivers rather than the read.
 
@@ -37,12 +37,11 @@ and its driver index) gets both from one computation at one `now`.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any
 
 from .. import aging, embed_space
 from ..appearances import cast as appearances_cast
-from . import effective, involvement, pressure
+from . import effective, involvement, pressure, tolerance
 
 #: The driver kinds, which are also the tie-break order between drivers in one
 #: pressure state.
@@ -72,22 +71,11 @@ _NO_PRESSURE: dict[str, Any] = {"now": "", "friendly": "", "fixed": None, "items
 _ANCHOR_FIELDS = ("ref", "kind", "label", "native", "friendly", "fixed", "in_days",
                   "precision")
 
-T = TypeVar("T")
-
-
-def _soft(fn: Callable[..., T], fallback: T, *args: Any) -> T:
-    """`fn(*args)`, or `fallback` when it raises anything at all."""
-    try:
-        return fn(*args)
-    except Exception:  # noqa: BLE001 -- an input may run user calendar plugin code or read a garbled ledger; one input failing must cost only what it feeds
-        return fallback
-
-
 def matching() -> str:
     """``"semantic"`` iff an embeddings connection and model resolve, else
     ``"basic"`` (spec §3.3). The one definition of the field, so the continuity
     read and the drivers read cannot disagree. Reads config only."""
-    return "semantic" if _soft(embed_space.resolve, None) is not None else "basic"
+    return "semantic" if tolerance.call(embed_space.resolve, None) is not None else "basic"
 
 
 def _reading(item: dict) -> dict:
@@ -118,7 +106,7 @@ def _dropped(cid: str, offscreen: bool) -> Players:
     and nothing left can say which one she is."""
     if not offscreen:
         return frozenset()
-    roster: list[dict] | None = _soft(appearances_cast.roster, None, cid)
+    roster: list[dict] | None = tolerance.call(appearances_cast.roster, None, cid)
     if roster is None:
         return None
     return frozenset(f"{a['kind']}:{a['id']}" for a in roster if a.get("role") == "player")
@@ -135,7 +123,7 @@ def _keep(actors: list[str], offscreen: bool, players: Players) -> list[str]:
 def _is_stale(actx: dict | None, row: dict) -> bool:
     if actx is None:
         return False
-    block: dict = _soft(aging.age, {}, actx, row)
+    block: dict = tolerance.call(aging.age, {}, actx, row)
     return block.get("state") == aging.STALE
 
 
@@ -145,11 +133,11 @@ def _record_drivers(cid: str, now: dict, offscreen: bool,
     rows: list[tuple[str, dict]] = []
     for kind, read in zip(_RECORD_KINDS, (effective.threads_or_physical,
                                           effective.commitments_or_physical), strict=True):
-        live: list[dict] = _soft(read, [], cid)
+        live: list[dict] = tolerance.call(read, [], cid)
         rows.extend((kind, row) for row in live)
     refs = [f"{kind}:{row['id']}" for kind, row in rows]
-    involved: dict[str, dict] = _soft(involvement.of, {}, cid, refs)
-    actx = _soft(aging.prepare, None, cid, now["now"])
+    involved: dict[str, dict] = tolerance.call(involvement.of, {}, cid, refs)
+    actx = tolerance.call(aging.prepare, None, cid, now["now"])
     out = []
     for (kind, row), ref in zip(rows, refs, strict=True):
         actors = involved.get(ref, {}).get("actors", [])
@@ -176,6 +164,18 @@ def _temporal_drivers(items: list[dict], offscreen: bool,
     return out
 
 
+def _attach_driver_link(by_ref: dict[str, dict], link: dict) -> None:
+    """Show one link at each present endpoint, with the endpoint's direction."""
+    relation = link["relation"]
+    directed = effective.RELATIONS.get(relation, ((), (), True))[2]
+    for end, other, direction in ((link["a"], link["b"], "out"),
+                                  (link["b"], link["a"], "in")):
+        driver = by_ref.get(end)
+        if driver is not None:
+            driver["links"].append({"id": link["id"], "relation": relation, "other": other,
+                                    "direction": direction if directed else "both"})
+
+
 def _attach_links(found: list[dict], links: list[dict]) -> None:
     """Each effective link on both of its drivers (`out` on `a`, `in` on `b`,
     `both` for an undirected relation), and each temporal link's event among
@@ -183,15 +183,8 @@ def _attach_links(found: list[dict], links: list[dict]) -> None:
     by_ref = {d["ref"]: d for d in found}
     anchors: dict[str, set[str]] = {}
     for link in links:
-        relation = link["relation"]
-        directed = effective.RELATIONS.get(relation, ((), (), True))[2]
-        for end, other, direction in ((link["a"], link["b"], "out"),
-                                      (link["b"], link["a"], "in")):
-            driver = by_ref.get(end)
-            if driver is not None:
-                driver["links"].append({"id": link["id"], "relation": relation, "other": other,
-                                        "direction": direction if directed else "both"})
-        if relation in _TIME_RELATIONS:
+        _attach_driver_link(by_ref, link)
+        if link["relation"] in _TIME_RELATIONS:
             anchors.setdefault(link["a"], set()).add(link["b"])
     for ref, events in anchors.items():
         if ref in by_ref and by_ref[ref]["kind"] in _RECORD_KINDS:
@@ -223,12 +216,12 @@ def snapshot(cid: str, offscreen: bool = False, *,
     pressure is not computed again. Drivers are in pressure order
     (`PRESSURE_STATES`), then `DRIVER_KINDS`, then `in_days` (nulls last), then
     ref. Never raises for an existing campaign."""
-    now = (_soft(pressure.build, _NO_PRESSURE, cid) if pressure_result is None
+    now = (tolerance.call(pressure.build, _NO_PRESSURE, cid) if pressure_result is None
            else pressure_result)
     players = _dropped(cid, offscreen)
     found = [*_record_drivers(cid, now, offscreen, players),
              *_temporal_drivers(now["items"], offscreen, players)]
-    _attach_links(found, _soft(effective.links, [], cid))
+    _attach_links(found, tolerance.call(effective.links, [], cid))
     found.sort(key=_order)
     return {"now": now["now"], "friendly": now["friendly"], "fixed": now["fixed"],
             "matching": matching(), "drivers": found, "anchors": _anchors(now["items"])}

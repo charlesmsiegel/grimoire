@@ -160,6 +160,20 @@ def _in_cycle(aliases: dict, src: str) -> bool:
     return False
 
 
+def _last_live_hop(aliases: dict, ledgers: Ledgers, src: str) -> str:
+    """Follow one alias chain only as far as its hops still name real records."""
+    seen, cur = {src}, src
+    while True:
+        record = aliases.get(cur)
+        if record is None or _hop_problem(ledgers, cur, record) is not None:
+            return cur
+        nxt = record["to"]
+        if nxt in seen:
+            return cur
+        seen.add(nxt)
+        cur = nxt
+
+
 def live_canon(cid: str, ledgers: Ledgers | None = None) -> dict[str, str]:
     """Alias source -> live canonical, for every source whose live canonical is
     not itself (spec §7.1, "Live canonical")."""
@@ -169,16 +183,7 @@ def live_canon(cid: str, ledgers: Ledgers | None = None) -> dict[str, str]:
     for src in aliases:
         if not isinstance(src, str) or _in_cycle(aliases, src):
             continue
-        seen, cur = {src}, src
-        while True:
-            record = aliases.get(cur)
-            if record is None or _hop_problem(ledgers, cur, record) is not None:
-                break
-            nxt = record["to"]
-            if nxt in seen:
-                break
-            seen.add(nxt)
-            cur = nxt
+        cur = _last_live_hop(aliases, ledgers, src)
         if cur != src:
             out[src] = cur
     return out
@@ -202,29 +207,35 @@ def diagnostics(cid: str, ledgers: Ledgers | None = None) -> dict:
             "hidden_links": hidden, "unreadable": list(ledgers.unreadable)}
 
 
+def _stored_link_problem(record: object) -> str | None:
+    """Reject malformed endpoints and relation vocabulary before resolving aliases."""
+    if not isinstance(record, dict) or not all(
+            isinstance(record.get(k), str) for k in ("a", "b", "relation")):
+        return "malformed_record"
+    try:
+        ap, _ = canon.split_ref(record["a"])
+        bp, _ = canon.split_ref(record["b"])
+    except ValueError:
+        return "malformed_record"
+    rule = RELATIONS.get(record["relation"])
+    if rule is None or ap not in rule[0] or bp not in rule[1]:
+        return "invalid_relation"
+    return None
+
+
 def _classify_links(cid: str, ledgers: Ledgers):
     live = live_canon(cid, ledgers)
     stored = doc.read(cid)["links"]
     kept, broken, hidden, seen = [], [], [], set()
     for lid in sorted(k for k in stored if isinstance(k, str)):
         record = stored[lid]
-        if not isinstance(record, dict) or not all(
-                isinstance(record.get(k), str) for k in ("a", "b", "relation")):
-            broken.append({"id": lid, "reason": "malformed_record"})
+        problem = _stored_link_problem(record)
+        if problem is not None:
+            broken.append({"id": lid, "reason": problem})
             continue
         a: str = record["a"]
         b: str = record["b"]
         relation: str = record["relation"]
-        try:
-            ap, _ = canon.split_ref(a)
-            bp, _ = canon.split_ref(b)
-        except ValueError:
-            broken.append({"id": lid, "reason": "malformed_record"})
-            continue
-        rule = RELATIONS.get(relation)
-        if rule is None or ap not in rule[0] or bp not in rule[1]:
-            broken.append({"id": lid, "reason": "invalid_relation"})
-            continue
         ca, cb = live.get(a, a), live.get(b, b)
         if ledgers.exists(ca) is False or ledgers.exists(cb) is False:
             broken.append({"id": lid, "reason": "missing_endpoint"})
@@ -232,7 +243,8 @@ def _classify_links(cid: str, ledgers: Ledgers):
         if ca == cb:
             broken.append({"id": lid, "reason": "self_collapsing"})
             continue
-        key = (relation, *sorted((ca, cb))) if not rule[2] else (relation, ca, cb)
+        directed = RELATIONS[relation][2]
+        key = (relation, ca, cb) if directed else (relation, *sorted((ca, cb)))
         if key in seen:
             hidden.append({"id": lid, "reason": "duplicate"})
             continue
@@ -284,11 +296,9 @@ def _order(scene) -> int | None:
     return parsed["number"] if parsed is not None else None
 
 
-def _merge_beats(members: list[list[dict]]) -> list[dict]:
-    """The members' beats as one list: the canonical's stored beats followed by
-    each alias's, stably sorted by scene play order. An uncomparable beat keeps
-    its place right after its stored predecessor in that concatenation -- for
-    an alias's leading unscened beat, that is the previous member's last beat."""
+def _ordered_beat_runs(members: list[list[dict]]) -> list[tuple[int, int, list[tuple[int, dict]]]]:
+    """Scene-keyed runs in stable play order, retaining each beat's member index.
+    Undated beats stay in their predecessor's run, including across members."""
     runs: list[tuple[int, int, list[tuple[int, dict]]]] = []
     key = -1
     current: list[tuple[int, dict]] = []
@@ -304,9 +314,17 @@ def _merge_beats(members: list[list[dict]]) -> list[dict]:
     if current:
         runs.append((key, len(runs), current))
     runs.sort(key=lambda r: (r[0], r[1]))
+    return runs
+
+
+def _merge_beats(members: list[list[dict]]) -> list[dict]:
+    """The members' beats as one list: the canonical's stored beats followed by
+    each alias's, stably sorted by scene play order. An uncomparable beat keeps
+    its place right after its stored predecessor in that concatenation -- for
+    an alias's leading unscened beat, that is the previous member's last beat."""
     out: list[dict] = []
     owner: dict[tuple[str, str], int] = {}
-    for _, _, run in runs:
+    for _, _, run in _ordered_beat_runs(members):
         for m_index, beat in run:
             sig = (fieldtext.text(beat.get("scene")), fieldtext.text(beat.get("text")))
             if owner.get(sig, m_index) != m_index:

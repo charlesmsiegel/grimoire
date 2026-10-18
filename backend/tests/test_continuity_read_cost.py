@@ -56,6 +56,7 @@ from grimoire.store.continuity import (
     reconcile,
     review,
     similarity,
+    tolerance,
 )
 from grimoire.store.continuity import doc as continuity_doc
 from grimoire.store.inference import embed
@@ -382,7 +383,7 @@ def test_no_read_only_path_reaches_a_model_or_an_embedding(client, monkeypatch, 
 def test_the_no_model_recorders_fire_on_a_tolerant_path(client, monkeypatch):
     """Positive control for the test above: a model call and an embedding
     made the app's way (resolve the connection, then call) inside the real
-    `drivers._soft`, on a read path, under the same arming, move both
+    `tolerance.call`, on a read path, under the same arming, move both
     recorders. Were either still stopped before its fake, the test above
     would pass with the call made."""
     cid, _sids = _seed(client, 2)
@@ -397,8 +398,8 @@ def test_the_no_model_recorders_fire_on_a_tolerant_path(client, monkeypatch):
                          client=similarity._CLIENT)
 
     def tolerant_matching():
-        drivers._soft(model_call, None)
-        drivers._soft(embedding_call, None)
+        tolerance.call(model_call, None)
+        tolerance.call(embedding_call, None)
         return "basic"
 
     monkeypatch.setattr(drivers, "matching", tolerant_matching)
