@@ -45,6 +45,8 @@ export type QuickReplyContext = {
   pcless: boolean;
   /** A connection is ready. */
   ready: boolean;
+  /** This campaign's scene route can generate a reply. Other tasks keep `ready`. */
+  canGenerate: boolean;
   /** The empty-scene cast panel (and its opener generator) is mounted. */
   openerOffered: boolean;
   /** The task is already running, from the strip or the inspector. */
@@ -66,7 +68,7 @@ export function quickReplyAvailability(r: QuickReply, ctx: QuickReplyContext): Q
       // Speak is disabled in a scene with no player character; so is a post.
       if (r.kind === "send" && ctx.pcless) return shown(true, PCLESS_TITLE);
       if (r.mode === "insert") return shown(false);
-      return shown(ctx.busy || ctx.rolling || ctx.renaming);   // the Send button's guards
+      return shown(ctx.busy || ctx.rolling || ctx.renaming || !ctx.canGenerate);   // the Send button's guards
     case "roll":
       // The dice button's guards, plus the module read -- but NOT a bound
       // module: a saved roll is something the player configured, and the roll

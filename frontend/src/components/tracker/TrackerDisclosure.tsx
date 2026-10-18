@@ -71,6 +71,12 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
   // disclosure never keeps a record the summary has outgrown.
   useEffect(() => {
     if (!open) return;
+    // The index is authoritative about whether a record was ever written.
+    // Older posts have keys but no entry: fetching one can only return 404.
+    if (entry === undefined) {
+      setRecord(null); setLoading(false);
+      return;
+    }
     let live = true;
     setLoading(true); setError(null);
     api.getTrackerRecord(cid, sid, trackerKey)
@@ -120,6 +126,7 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
                }}>
         <summary>Tracker</summary>
         <p className="field-hint">{summaryText(entry, names, labels)}</p>
+        {entry === undefined && <p className="field-hint">No tracked state was recorded for this post.</p>}
         {loading && record === null && <p role="status">Loading tracker…</p>}
         {entry?.status === "failed" && entry.error && (
           <p className="field-hint">{entry.error === "interrupted"
@@ -154,7 +161,9 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
         ))}
         {canRetry && (
           <button className="subtle" disabled={busy}
-                  onClick={() => void run(() => api.retryTracker(cid, sid, trackerKey))}>Retry</button>
+                  onClick={() => void run(() => api.retryTracker(cid, sid, trackerKey))}>
+            {entry === undefined ? "Track this post" : "Retry"}
+          </button>
         )}
         {error !== null && <p role="alert" className="field-hint"><ErrorNote err={error} /></p>}
       </details>

@@ -5,8 +5,20 @@ import {
 } from "./quickReplies";
 
 const base: QuickReplyContext = { busy: false, rolling: false, renaming: false, sceneLocked: false,
-  posts: 3, moduleKnown: true, pcless: false, ready: true, openerOffered: false, taskRunning: () => false };
+  posts: 3, moduleKnown: true, pcless: false, ready: true, canGenerate: true,
+  openerOffered: false, taskRunning: () => false };
 const roll: QuickReply = { id: "r", label: "Roll", kind: "roll", notation: "2d6+3" };
+
+test.each(["send", "direct"] as const)("campaign scene readiness blocks %s but keeps inserts and tasks", (kind) => {
+  const reply: QuickReply = { id: "s", label: "Look", kind, text: "Mara waits.", mode: "send" };
+  const unready = { ...base, canGenerate: false };
+  expect(quickReplyAvailability(reply, unready).disabled).toBe(true);
+  expect(quickReplyAvailability(reply, { ...base, ready: false }).disabled).toBe(false);
+  expect(quickReplyAvailability({ ...reply, mode: "insert" }, unready).disabled).toBe(false);
+  expect(quickReplyAvailability(roll, unready).disabled).toBe(false);
+  expect(quickReplyAvailability({ id: "sum", label: "Summary", kind: "task", task: "rolling_summary" },
+    unready).disabled).toBe(false);
+});
 
 test("send mirrors the Send button; insert is never disabled", () => {
   const send: QuickReply = { id: "s", label: "Look", kind: "send", text: "I take in the room.", mode: "send" };

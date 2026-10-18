@@ -4,7 +4,8 @@ import { QuickReplyStrip } from "./QuickReplyStrip";
 import type { QuickReplyContext } from "./quickReplies";
 
 const ctx: QuickReplyContext = { busy: false, rolling: false, renaming: false, sceneLocked: false,
-  posts: 3, moduleKnown: true, pcless: false, ready: true, openerOffered: false, taskRunning: () => false };
+  posts: 3, moduleKnown: true, pcless: false, ready: true, canGenerate: true,
+  openerOffered: false, taskRunning: () => false };
 const LOOK: QuickReply = { id: "a", label: "Look around", kind: "send", text: "I take in the room.", mode: "send" };
 const STEER: QuickReply = { id: "b", label: "Steer", kind: "direct", text: "Bring in the rain.", mode: "send" };
 const OPEN: QuickReply = { id: "c", label: "Write opener", kind: "opener" };

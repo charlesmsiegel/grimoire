@@ -68,3 +68,13 @@ test("shows sheet coverage below the resolved hint when a module is resolved", a
   render(<MechanicsConfig cid="run" />);
   expect(await screen.findByText("Characters 1/3")).toBeInTheDocument();
 });
+
+test("the module is one labelled field, its state the field's hint", async () => {
+  // A "Mechanics" heading over a "Mechanics" label that ran into the select.
+  render(<MechanicsConfig cid="run" />);
+  const select = await screen.findByLabelText("Mechanics");
+  const field = select.closest(".field") as HTMLElement;
+  expect(field).not.toBeNull();
+  expect(field.querySelector(".field-hint")).toHaveTextContent(/No mechanics/);
+  expect(screen.queryByRole("heading", { name: "Mechanics" })).toBeNull();
+});

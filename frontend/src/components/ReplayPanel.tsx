@@ -20,7 +20,7 @@ import { ErrorNote } from "./ErrorNote";
  *  trailing run.
  */
 export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onForked,
-                             disabled, latch, onUnanswered, branchable = false,
+                             disabled, generationDisabled = false, latch, onUnanswered, branchable = false,
                              onBranched, closed = false }: {
   cid: string;
   sid: string;
@@ -39,6 +39,9 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   /** True while the transcript is busy with something else — a turn in flight,
    *  a swap. Every button here writes to the same transcript. */
   disabled?: boolean;
+  /** Scene-route readiness blocks generation before a replay cuts the tail,
+   *  but accepting/stopping an existing walk must remain possible. */
+  generationDisabled?: boolean;
   /** Take the transcript's write latch for the duration of one of this panel's
    *  requests, releasing it with the returned function. The same latch retry,
    *  reroll, edit and the roll paths take — and this panel needs it for the
@@ -88,7 +91,7 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   const [preview, setPreview] = useState<{ at: number; data: ReplayPreview } | null>(null);
   const [busy, setBusy] = useState(false);
   // Every control that GENERATES into this scene; accept and stop do not.
-  const generateOff = busy || !!disabled || closed;
+  const generateOff = busy || !!disabled || generationDisabled || closed;
   // The rejection or the stream frame itself where there is one, so a
   // replay the model could not be reached for says so rather than showing a
   // bare socket error (#210) -- a replay re-runs model turns, so it fails
@@ -113,7 +116,12 @@ export function ReplayPanel({ cid, sid, startAt, onStartHandled, onChanged, onFo
   // first means the quiet case schedules nothing at all.
   const alive = useRef(true);
   const held = useRef<ReplaySession | null>(null);
-  useEffect(() => () => { alive.current = false; }, []);
+  useEffect(() => {
+    // StrictMode rehearses cleanup and setup before the real mount. Restore
+    // this effect's ownership on setup, or every loaded session is ignored.
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
 
   const load = useCallback(async () => {
     let next: ReplaySession | null = null;

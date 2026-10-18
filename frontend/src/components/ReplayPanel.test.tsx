@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ReplayPanel } from "./ReplayPanel";
@@ -451,4 +452,17 @@ test("on a closed branch a waiting reply can be accepted but not tried again", a
 test("on a closed branch a replay cannot be started", async () => {
   await renderPanel({ startAt: 3, closed: true });
   expect(screen.getByRole("button", { name: "Replay in place" })).toBeDisabled();
+});
+
+// StrictMode rehearses cleanup before mounting effects again. The real app's
+// root uses it, so its live replay must remain discoverable after that pass.
+test("StrictMode keeps an existing replay live after rehearsed cleanup", async () => {
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
+  render(<StrictMode><MemoryRouter>
+    <ReplayPanel cid="c1" sid="s1" startAt={null} onStartHandled={noop}
+      onChanged={noop} onForked={noop} />
+  </MemoryRouter></StrictMode>);
+  fireEvent.click(await screen.findByRole("button", { name: "Replay next turn" }));
+  await waitFor(() => expect(api.replayTurn).toHaveBeenCalledWith(
+    "c1", "s1", expect.any(Function), undefined, expect.any(String), expect.any(Function)));
 });

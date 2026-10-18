@@ -1,8 +1,10 @@
 import { memo } from "react";
+import { Link } from "react-router-dom";
 import { api, type Actor, type Briefing, type RosterEntry } from "../../api/client";
 import { thumbSet } from "../../api/thumbs";
 import { Portrait } from "../Portrait";
 import CastChanges from "./CastChanges";
+import { ledgerHref } from "../../ledgerPaths";
 
 /** Where an actor stands in the scene in front of you. */
 export type CastState = "PLAYER" | "IN SCENE";
@@ -49,7 +51,9 @@ function Tile(
 ) {
   // `.cast-tile-art`: half the 274px column (~116px) on a desktop, a 52px
   // circle once the grid becomes a strip at phone width.
-  const src = tile.version
+  // Null means the roster knows there is no avatar; an omitted token remains
+  // compatible with older servers that did not report avatar availability.
+  const src = tile.version && tile.avatar_v !== null
     ? thumbSet((w) => api.actorImageUrl({ kind: "campaign", id: cid }, tile.kind, tile.id,
                                         tile.version, "avatar", { w, v: tile.avatar_v }),
                "(max-width: 720px) 52px, 120px")
@@ -130,13 +134,13 @@ function CastColumn(
         </div>
         {threads.length === 0 && <p className="column-empty">Nothing open.</p>}
         {threads.map((t) => (
-          <div className="brief-row" key={t.id}>
+          <Link className="brief-row" key={t.id} to={ledgerHref(cid, { section: "threads", row: t.id })}>
             <div className="brief-title">{t.title}</div>
             <div className="brief-meta">
               <span className="brief-status">{t.status.toUpperCase()}</span>
               {t.last_scene && <span> · {t.last_scene}</span>}
             </div>
-          </div>
+          </Link>
         ))}
       </div>
 
@@ -147,7 +151,7 @@ function CastColumn(
         </div>
         {owed.length === 0 && <p className="column-empty">Nothing owed.</p>}
         {owed.map((c) => (
-          <div className="brief-row" key={c.id}>
+          <Link className="brief-row" key={c.id} to={ledgerHref(cid, { section: "commitments", row: c.id })}>
             <div className="brief-title">{c.title}</div>
             <div className="brief-meta">
               {/* A threat is the one kind of commitment that is about to
@@ -157,7 +161,7 @@ function CastColumn(
               </span>
               <span> · {c.due ? c.due : "NO DEADLINE"}</span>
             </div>
-          </div>
+          </Link>
         ))}
       </div>
     </>

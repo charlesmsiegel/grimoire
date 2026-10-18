@@ -22,7 +22,7 @@ vi.mock("../components/PostImagePicker", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.PostImagePicker());
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api, ApiError, type QuickReply } from "../api/client";
-import { installCampaignMocks, ONE_SCENE, playRoutes, renderCampaign, withPalette }
+import { campaignInference, installCampaignMocks, ONE_SCENE, playRoutes, renderCampaign, withPalette }
   from "../testkit/campaignHarness";
 import { RunRegistryProvider } from "../runs/RunRegistryProvider";
 
@@ -137,7 +137,7 @@ test("insert behind a different-kind draft waits under the held-draft notice", a
   await screen.findByText("a reply");
   fireEvent.change(speakBox(), { target: { value: "my own words" } });
   fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
-  expect(await screen.findByText(/🎬 note held · clear the box to get it back/)).toBeInTheDocument();
+  expect(await screen.findByText(/note held · clear the box to get it back/)).toBeInTheDocument();
   expect(speakBox()).toHaveValue("my own words");
   expect(screen.getByRole("button", { name: "Speak" })).toHaveAttribute("aria-pressed", "true");
   // Clearing the box is what releases it, with its own turn kind.
@@ -156,12 +156,12 @@ test("insert is refused rather than parked over words already waiting", async ()
   // A typed note fails while a Speak draft holds the box: the note is parked.
   fireEvent.click(screen.getByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByPlaceholderText(/direct the scene/i), { target: { value: "a typed note" } });
-  fireEvent.click(screen.getByRole("button", { name: "Direct 🎬" }));
+  fireEvent.click(screen.getByRole("button", { name: "Direct ▸" }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledTimes(1));
   fireEvent.click(screen.getByRole("button", { name: "Speak" }));
   fireEvent.change(speakBox(), { target: { value: "my own words" } });
   fail(new Error("boom"));
-  expect(await screen.findByText(/🎬 note held/)).toBeInTheDocument();
+  expect(await screen.findByText(/note held/)).toBeInTheDocument();
   fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
   expect(await screen.findByRole("status")).toHaveTextContent(/note not inserted/i);
   expect(speakBox()).toHaveValue("my own words");
@@ -292,6 +292,8 @@ test("a failed task says so in the composer", async () => {
 test("tasks wait for a connection", async () => {
   withPosts();
   offer(SUMMARIZE);
+  (api.getCampaignInference as any).mockResolvedValue(
+    campaignInference({ problem: "No LLM connection selected" }));
   render(
     <RunRegistryProvider>
       <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>

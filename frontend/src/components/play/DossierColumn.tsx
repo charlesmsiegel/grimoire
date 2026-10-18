@@ -71,7 +71,7 @@ function DossierColumn(
 
   const c = casefile;
   // `.dossier-portrait` is a fixed 134px frame.
-  const src = c.version
+  const src = c.version && c.avatar_v !== null
     ? thumbSet((w) => api.actorImageUrl({ kind: "campaign", id: cid }, c.kind, c.id, c.version,
                                         "avatar", { w, v: c.avatar_v }),
                "134px")

@@ -33,12 +33,59 @@ import type { GroupSettings, SceneMeta } from "../api/client";
 import { configChanged, onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER } from "../components/play/TranscriptPost";
+import { bodiesOf, declares, stylesheet } from "../testkit/stylesheet";
 import {
   campaignInference, DEFAULT_GROUP, here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes,
   renderCampaign, shellModel, shellReady, withPalette,
 } from "../testkit/campaignHarness";
 
 beforeEach(installCampaignMocks);
+
+test.each([
+  { assistant: "Grimoire", speaker: "Grimoire", actor_ref: undefined },
+  { assistant: "Seraphine", speaker: "Seraphine", actor_ref: undefined },
+  { assistant: "Winifred", speaker: "Mara", actor_ref: "grimoire" },
+])("a narrator plate says narrator with the $assistant label", async ({ assistant, speaker, actor_ref }) => {
+  vi.mocked(api.getCampaignSettings).mockResolvedValue(labelSettings("Mara", assistant));
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "assistant", content: "The tide turns.", speaker, actor_ref },
+  ] });
+  const { container } = renderCampaign();
+  await screen.findByText("The tide turns.");
+  expect(container.querySelector(".plate .role-chip")).toHaveTextContent(/^narrator$/);
+});
+
+test.each(["characters:mara", "pcs:mara"])(
+  "a departed actor reference %s stays an actor when its label matches the narrator", async (actor_ref) => {
+    vi.mocked(api.getCampaignSettings).mockResolvedValue(labelSettings("Winifred", "Mara"));
+    vi.mocked(api.getCast).mockResolvedValue([]);
+    vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+      { role: "assistant", content: "Mara waits.", speaker: "Mara", actor_ref },
+    ] });
+    const { container } = renderCampaign();
+    await screen.findByText("Mara waits.");
+    expect(container.querySelector(".plate .role-chip")).toHaveTextContent(/^npc$/);
+  });
+
+test("a known missing avatar renders initials in both the cast and the transcript", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getCast).mockResolvedValue([
+    { kind: "characters", id: "mara", role: "npc", name: "Mara" },
+  ]);
+  vi.mocked(api.listAppearances).mockResolvedValue([
+    { kind: "characters", id: "mara", version: "default", role: "npc", scenes: ["s1"],
+      appeared: true, avatar_v: null },
+  ]);
+  vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "assistant", content: "Mara waits.", speaker: "Mara", actor_ref: "characters:mara" },
+  ] });
+  const { container } = renderCampaign();
+  await screen.findByText("Mara waits.");
+  expect(screen.queryByAltText("Mara portrait")).not.toBeInTheDocument();
+  expect(container.querySelector(".plate .portrait-initials")).toHaveTextContent("M");
+  expect(container.querySelector(".cast-tile .portrait-initials")).toHaveTextContent("M");
+});
 
 function labelSettings(user_label = "Mara", assistant_label = "Seraphine") {
   const effective = { context_scan_depth: "8", context_budget: "12000", recap_depth: "5", archive_depth: "3",
@@ -149,6 +196,89 @@ test("the header's readiness is the scene route's problem", async () => {
   renderCampaign(undefined, { shell: true });
   await waitFor(() => expect(shellModel()).toBe("realm/small"));
   expect(shellReady()).toBe("false");
+});
+
+test.each(["quick send", "reroll response", "keep writing", "generate variant"])(
+  "campaign scene readiness blocks %s while stored response actions remain available", async (action) => {
+    sceneRouteResolves(null, "The scene provider has no key");
+    vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+    vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+      { role: "user", content: "Mara waits." },
+      { role: "assistant", content: "The tide turns.", response_id: "r1",
+        response_status: "complete", response_can_reroll: true },
+    ] });
+    vi.mocked(api.getResponseSwipe).mockResolvedValue({
+      active: 1, variants: [{ id: "v1", status: "complete" }, { id: "v2", status: "complete" }],
+      settings: null, resume_settings: null, can_reroll: true, editable: true,
+      round_open: false, edited: false,
+    });
+    vi.mocked(api.getEffectiveQuickReplies).mockResolvedValue({ replies: [
+      { id: "look", label: "Look around", kind: "send", text: "I look around.", mode: "send" },
+    ] });
+    renderCampaign();
+    await screen.findByText(/No model is ready to generate/);
+    await screen.findByText("The tide turns.");
+    await screen.findByRole("button", { name: "Generate a new reply variant" });
+    fireEvent.click(screen.getByText("Response actions"));
+    const name = action === "quick send" ? "Look around"
+      : action === "reroll response" ? "Reroll response"
+      : action === "keep writing" ? /Keep writing/ : "Generate a new reply variant";
+    const button = screen.getByRole("button", { name });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(api.chat).not.toHaveBeenCalled();
+    expect(api.regenerateResponse).not.toHaveBeenCalled();
+    expect(api.extendResponse).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Delete response" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Previous reply variant" })).toBeEnabled();
+  });
+
+test("an unready scene route keeps the reroll picker open but blocks its default send", async () => {
+  sceneRouteResolves(null, "The scene provider has no key");
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "Mara waits." }, { role: "assistant", content: "The tide turns." },
+  ] });
+  renderCampaign();
+  await screen.findByText(/No model is ready to generate/);
+  await screen.findByText("The tide turns.");
+  expect(screen.getByTitle("Reroll")).toBeEnabled();
+  fireEvent.keyDown(window, { key: "r" });
+  const guidance = await screen.findByLabelText("Reroll guidance");
+  const submit = screen.getByRole("button", { name: /reroll ▸/i });
+  expect(submit).toBeDisabled();
+  fireEvent.click(submit);
+  fireEvent.keyDown(guidance, { key: "Enter" });
+  expect(api.regenerate).not.toHaveBeenCalled();
+});
+
+test("campaign scene readiness keeps a roll proposal pending until narration can run", async () => {
+  sceneRouteResolves(null, "The scene provider has no key");
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getRollProposal).mockResolvedValue({ record: {
+    id: "pr-1", status: "pending", payload: { ...PROPOSAL_PAYLOAD, available: {} }, resolution: null,
+  } });
+  renderCampaign();
+  await screen.findByText(/No model is ready to generate/);
+  const roll = await screen.findByRole("button", { name: "Roll it" });
+  expect(roll).toBeDisabled();
+  fireEvent.click(roll);
+  expect(api.resolveProposal).not.toHaveBeenCalled();
+  expect(roll).toBeInTheDocument();
+});
+
+test.each(["auth", "missing_dependency"])("configuration failures %s offer no identical Retry", async (kind) => {
+  vi.mocked(api.chat).mockImplementation(async (_cid, _sid, _text, onEvent) => {
+    onEvent({ error: { detail: "Fix the configured provider first", kind } });
+  });
+  renderCampaign();
+  const input = await screen.findByRole("textbox");
+  fireEvent.change(input, { target: { value: "Mara waits." } });
+  fireEvent.click(screen.getByRole("button", { name: /send/i }));
+  await screen.findByText("Fix the configured provider first");
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  fireEvent.keyDown(window, { key: "t" });
+  expect(api.retry).not.toHaveBeenCalled();
 });
 
 test("a failed model read leaves the header to the library's answer", async () => {
@@ -798,6 +928,23 @@ test("shows Cast & scene setup for an empty scene", async () => {
   (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [] });
   renderCampaign();
   await screen.findByTestId("cast-panel");
+});
+
+test("the setup panel sits under the scene's title, between it and the composer", async () => {
+  // Above the title at its full height it pushed the composer below the fold
+  // of a new scene. Under it, the stylesheet lets it shrink and scroll.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [] });
+  renderCampaign();
+  const panel = await screen.findByTestId("cast-panel");
+  const head = screen.getByRole("heading", { name: /^Old$/ });
+  const box = screen.getByRole("textbox");
+  expect(head.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(panel.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const { css } = stylesheet();
+  const sized = bodiesOf(css, ".main > .cast-panel");
+  expect(sized.some((b) => declares(b, "flex") === "0 1 auto" && declares(b, "min-height") === "0"
+    && declares(b, "overflow-y") === "auto")).toBe(true);
 });
 
 // #91: an empty scene opened for an adapted greeting carries the greeting on
@@ -1833,6 +1980,42 @@ test("an error shows a Retry button that retries the scene", async () => {
   expect(screen.getAllByText("hello")).toHaveLength(1);
 });
 
+test("a turn refused for its settings offers the page that fixes them, not a Retry", async () => {
+  // Retry sent the same request into the same 409.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(async (_c: string, _s: string, _t: string, onEvent: any) => {
+    onEvent({ error: { detail: "Realm Local has no key", kind: "missing_key" } });
+  });
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "hello" } });
+  fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+  await screen.findByText(/Realm Local has no key/);
+  expect(screen.getByRole("link", { name: /Providers page/ })).toHaveAttribute("href", "/providers");
+  expect(screen.queryByRole("button", { name: /^retry$/i })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  expect(screen.queryByText(/Realm Local has no key/)).toBeNull();
+});
+
+test("where the campaign's scene route cannot answer, Send is disabled and says why", async () => {
+  // The library's model can be ready while this campaign's own override has
+  // no key, and the other way round: the scene route is the one a turn runs on.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCampaignInference as any).mockResolvedValue(
+    campaignInference({ problem: "No API key is set (Realm Local, routed for scene turns)" }));
+  renderCampaign();
+  const reason = await screen.findByText(/No model is ready to generate/);
+  expect(reason).toHaveTextContent("No API key is set (Realm Local, routed for scene turns)");
+  const send = screen.getByRole("button", { name: /continue ▶/i });
+  expect(send).toBeDisabled();
+  expect(send).toHaveAccessibleDescription(/No model is ready to generate/);
+  // The chord the button stands for is held too.
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "hello" } });
+  fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+  fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+  expect(api.chat).not.toHaveBeenCalled();
+});
+
 // ---- cancelling a turn (#95) ----
 
 /** api.chat that streams `deltas` and then hangs until its signal aborts,
@@ -1860,6 +2043,7 @@ test("a turn in flight offers Stop beside the disabled composer action", async (
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   const stop = await screen.findByRole("button", { name: /stop ■/i });
   expect(screen.queryByRole("button", { name: /send ▸/i })).toBeNull();
+  expect(document.querySelector(".run:last-child .role-chip")).toHaveTextContent("narrator");
   fireEvent.click(stop);
   // back to a composer that can send again, with no error banner: the player
   // asked for this, and the partial the backend kept arrives with the re-fetch
@@ -3096,7 +3280,8 @@ test("Retry after a failed reroll rerolls again, with its guidance", async () =>
   });
   (api.regenerate as any).mockImplementation(
     async (_c: string, _s: string, onEvent: any) => {
-      onEvent({ error: { detail: "OpenRouter API key is not set", kind: "missing_key" } });
+      // A failure a retry can get past: a refused key is not one (`setupFix`).
+      onEvent({ error: { detail: "upstream timed out", kind: "timeout" } });
     });
   renderCampaign();
   await screen.findByText("The tide turns.");
@@ -3104,7 +3289,7 @@ test("Retry after a failed reroll rerolls again, with its guidance", async () =>
   fireEvent.change(screen.getByPlaceholderText(/reroll/i),
                    { target: { value: "darker this time" } });
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
-  await screen.findByText(/OpenRouter API key is not set/);
+  await screen.findByText(/upstream timed out/);
   expect(api.regenerate).toHaveBeenCalledTimes(1);
 
   fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
@@ -3862,11 +4047,12 @@ function localModels(group: "fits" | "unverified" = "fits") {
     });
 }
 
-function rerollableScene() {
+function rerollableScene(problem: string | null = null) {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
     { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
-  (api.getCampaignInference as any).mockResolvedValue(rerollInference());
+  (api.getCampaignInference as any).mockResolvedValue({ ...rerollInference(),
+    routes: rerollInference().routes.map((route) => ({ ...route, problem })) });
   localModels();
 }
 
@@ -3877,6 +4063,70 @@ async function rerollOnLocal() {
   fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "local" } });
   fireEvent.click(await screen.findByRole("radio", { name: "Llama 3" }));
 }
+
+test.each(["legacy", "response", "continuation"])(
+  "an explicit provider rescues an unready default for a %s reroll", async (kind) => {
+    rerollableScene("The standing provider has no key");
+    if (kind !== "legacy") {
+      vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "old reply", response_id: "r1",
+          response_status: "complete", response_can_reroll: true },
+      ] });
+      vi.mocked(api.getResponseSwipe).mockResolvedValue({
+        active: 0, variants: [{ id: "v1", status: "complete" }], settings: null,
+        resume_settings: null, can_reroll: true, editable: true, round_open: false, edited: false,
+      });
+    }
+    renderCampaign();
+    await screen.findByText(/No model is ready to generate/);
+    await screen.findByText("old reply");
+    if (kind === "legacy") fireEvent.click(await screen.findByTitle("Reroll"));
+    else {
+      fireEvent.click(screen.getByText("Response actions"));
+      fireEvent.click(screen.getByText("Model for this reroll"));
+    }
+    const name = kind === "legacy" ? /reroll ▸/i
+      : kind === "response" ? "Reroll response" : /Keep writing/;
+    expect(screen.getByRole("button", { name })).toBeDisabled();
+    if (kind === "legacy") {
+      fireEvent.change(await screen.findByLabelText("Reroll preset"), { target: { value: "cold" } });
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+      fireEvent.click(screen.getByRole("button", { name: "Default" }));
+    }
+    fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "local" } });
+    fireEvent.click(await screen.findByRole("radio", { name: "Llama 3" }));
+    expect(screen.getByRole("button", { name })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name }));
+    await waitFor(() => {
+      if (kind === "legacy") expect(api.regenerate).toHaveBeenCalledWith(
+        "run", "s1", expect.any(Function), { guidance: "", provider: "local", model: "llama3" },
+        expect.any(AbortSignal), expect.any(String), expect.any(Function));
+      else expect(kind === "response" ? api.regenerateResponse : api.extendResponse)
+        .toHaveBeenCalledWith("run", "s1", "r1", expect.any(Function),
+          { guidance: "", provider: "local", model: "llama3" },
+          expect.any(AbortSignal), expect.any(String), expect.any(Function));
+    });
+    expect(screen.getByRole("button", { name: /^Continue/ })).toBeDisabled();
+  });
+
+test("a transient failure on an explicit provider can retry around the unready default", async () => {
+  rerollableScene("The standing provider has no key");
+  vi.mocked(api.regenerate).mockImplementationOnce(async (_cid, _sid, onEvent) => {
+    onEvent({ error: { kind: "network", detail: "The selected provider disconnected" } });
+  });
+  renderCampaign();
+  await screen.findByText(/No model is ready to generate/);
+  await rerollOnLocal();
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  expect(retry).toBeEnabled();
+  fireEvent.click(retry);
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(api.regenerate).mock.calls[1]?.[3]).toEqual({
+    guidance: "", provider: "local", model: "llama3",
+  });
+});
 
 test("a reroll sent to another provider names it, its model and its preset on the wire", async () => {
   rerollableScene();
@@ -5381,13 +5631,10 @@ test("offscreen scene: typed note shows transiently, never lands in messages", a
   renderCampaign();
   const box = await screen.findByPlaceholderText(/direct the scene/i);
   fireEvent.change(box, { target: { value: "the guard grows suspicious" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
-  await screen.findByText(/🎬 the guard grows suspicious/);
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
+  await screen.findByText("the guard grows suspicious");
   release();
-  // Scoped to the note, not to the glyph: since #83 the send button itself can
-  // read "Direct 🎬", so a bare /🎬/ would be answered by a control rather than
-  // by the chip this is about.
-  await waitFor(() => expect(screen.queryByText(/🎬 the guard grows suspicious/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText("the guard grows suspicious")).toBeNull());
 });
 
 test("normal scene: plain placeholder, Continue on empty input, Send once typed", async () => {
@@ -5430,14 +5677,14 @@ test("normal scene: Direct sends a director note, not a player post", async () =
   const box = screen.getByPlaceholderText(/direct the scene/i);
   fireEvent.change(box, { target: { value: "the storm intensifies" } });
   // the send control says what it will do, rather than reading "Send"
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
     "run", "s1", "the storm intensifies", expect.any(Function), undefined,
     expect.any(AbortSignal), expect.any(String), expect.any(Function), true));
   // shown transiently as a note, never appended as the player's own words
-  await screen.findByText(/🎬 the storm intensifies/);
+  await screen.findByText("the storm intensifies");
   release();
-  await waitFor(() => expect(screen.queryByText(/🎬 the storm intensifies/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText("the storm intensifies")).toBeNull());
 });
 
 test("normal scene: Speak is unchanged — a player post, and no director flag", async () => {
@@ -5453,7 +5700,7 @@ test("normal scene: Speak is unchanged — a player post, and no director flag",
     expect.any(AbortSignal), expect.any(String), expect.any(Function), false));
   // the player's own words, in the transcript — not a note above it
   expect(await screen.findByText("I draw my blade.")).toBeInTheDocument();
-  expect(screen.queryByText(/🎬/)).toBeNull();
+  expect(document.querySelector(".director-note")).toBeNull();
   release();
 });
 
@@ -5521,7 +5768,7 @@ test("a refused Direct send hands the note back", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
   const box = screen.getByPlaceholderText(/direct the scene/i);
   fireEvent.change(box, { target: { value: "the storm intensifies" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
   // and it comes back as a NOTE: the mode is sticky, so the recovered words
   // are staged as what they were written as
@@ -5546,7 +5793,7 @@ test("a Direct turn the provider killed hands the note back", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
                    { target: { value: "the storm intensifies" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
 });
 
@@ -5568,8 +5815,8 @@ test("a note recovered into a composer switched to Speak comes back as a note", 
   fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
                    { target: { value: "the storm intensifies" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
-  await screen.findByText(/🎬 the storm intensifies/);
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
+  await screen.findByText("the storm intensifies");
 
   // the player flips to Speak while the turn is still running
   fireEvent.click(screen.getByRole("button", { name: "Speak" }));
@@ -5598,7 +5845,7 @@ test("a failed Direct turn offers no Retry, because Retry cannot resend a note",
   fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
                    { target: { value: "the storm intensifies" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
   await screen.findByText(/the provider gave up/);
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   // the words are back where Send can resend them
@@ -5639,8 +5886,8 @@ test("a recovered note waits for a Speak draft rather than merging into it", asy
   fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
                    { target: { value: "the storm intensifies" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
-  await screen.findByText(/🎬 the storm intensifies/);
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
+  await screen.findByText("the storm intensifies");
 
   // the player switches to Speak and starts a line of their own
   fireEvent.click(screen.getByRole("button", { name: "Speak" }));
@@ -5674,8 +5921,8 @@ test("a Speak turn does not inherit the previous turn's director note", async ()
   fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
                    { target: { value: "the storm intensifies" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
-  await screen.findByText(/🎬 the storm intensifies/);
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
+  await screen.findByText("the storm intensifies");
   settle();
 
   // a Speak post follows, and must not be labelled by the previous note
@@ -5685,7 +5932,7 @@ test("a Speak turn does not inherit the previous turn's director note", async ()
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "I draw my blade." } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
 
-  await waitFor(() => expect(screen.queryByText(/🎬 the storm intensifies/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText("the storm intensifies")).toBeNull());
 });
 
 test("a held Speak draft says so too, not only a held note", async () => {
@@ -5767,7 +6014,7 @@ test("a Direct turn that generated nothing at all hands the note back", async ()
   fireEvent.click(await screen.findByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
                    { target: { value: "the storm intensifies" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
 
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
 });
@@ -5812,7 +6059,7 @@ test("a Direct turn that produced nothing keeps the one-shot length override", a
 
   fireEvent.click(screen.getByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "the storm intensifies" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
 
   // the note came back for another attempt...
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("the storm intensifies"));
@@ -5837,13 +6084,13 @@ test("a running scene's director note does not show in another scene", async () 
   fireEvent.click(screen.getByRole("button", { name: "Direct" }));
   fireEvent.change(screen.getByPlaceholderText(/direct the scene/i),
                    { target: { value: "the storm intensifies" } });
-  fireEvent.click(screen.getByRole("button", { name: /direct 🎬/i }));
-  await screen.findByText(/🎬 the storm intensifies/);
+  fireEvent.click(screen.getByRole("button", { name: /direct ▸/i }));
+  await screen.findByText("the storm intensifies");
 
   await openScene(/The Saltmarch Gate/);
 
   await screen.findByText("transcript of s2");
-  expect(screen.queryByText(/🎬 the storm intensifies/)).toBeNull();
+  expect(screen.queryByText("the storm intensifies")).toBeNull();
   release();
 });
 
@@ -5874,6 +6121,18 @@ test("Roll dice is disabled on a fresh scene until the opener/cast setup produce
   renderCampaign();
   const rollBtn = await screen.findByRole("button", { name: "Roll dice" });
   expect(rollBtn).toBeDisabled();
+});
+
+test("the composer's glyphs are drawn in the ink, never as colour emoji", async () => {
+  // 🎲 and "Direct 🎬" were full-colour pictures among the composer's
+  // hairline controls.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  const roll = await screen.findByRole("button", { name: "Roll dice" });
+  expect(roll.textContent).not.toMatch(/\p{Emoji}(?!\uFE0E)/u);
+  fireEvent.click(screen.getByRole("button", { name: "Direct" }));
+  fireEvent.change(screen.getByPlaceholderText(/direct the scene/i), { target: { value: "rain" } });
+  expect(screen.getByRole("button", { name: "Direct ▸" })).toBeInTheDocument();
 });
 
 // Dice are a mechanics affordance: an unbound campaign is freeform play, and
@@ -6784,7 +7043,8 @@ test("renaming the scene keeps a failed reroll's Retry a reroll", async () => {
   (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
   (api.regenerate as any).mockImplementation(
     async (_c: string, _s: string, onEvent: any) => {
-      onEvent({ error: { detail: "OpenRouter API key is not set", kind: "missing_key" } });
+      // A failure a retry can get past: a refused key is not one (`setupFix`).
+      onEvent({ error: { detail: "upstream timed out", kind: "timeout" } });
     });
   renderCampaign();
   await screen.findByText("The tide turns.");
@@ -6792,7 +7052,7 @@ test("renaming the scene keeps a failed reroll's Retry a reroll", async () => {
   fireEvent.change(screen.getByPlaceholderText(/reroll/i),
                    { target: { value: "darker this time" } });
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
-  await screen.findByText(/OpenRouter API key is not set/);
+  await screen.findByText(/upstream timed out/);
 
   // Rename the active scene. The banner stays up, so Retry is still offered.
   (api.listScenes as any).mockResolvedValue(

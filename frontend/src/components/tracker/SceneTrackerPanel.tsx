@@ -97,8 +97,10 @@ export function SceneTrackerPanel({ cid, sid, onChanged }: {
   }
 
   return (
-    <section className="scene-tracker" aria-label="Scene tracker">
-      <h3>Tracker for this scene</h3>
+    // Headed as the other panels over the transcript are (Mechanics, Sheets):
+    // a small mono label, not a bold heading in the prose's face.
+    <section className="scene-tracker side-section" aria-label="Scene tracker">
+      <h4>Tracker for this scene</h4>
       {error && <div className="banner" role="alert">{error}</div>}
       {loadFailed && !bundle ? (
         <div className="editor-empty">

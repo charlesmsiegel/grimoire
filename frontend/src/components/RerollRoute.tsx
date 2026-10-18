@@ -13,6 +13,13 @@ export type RerollRoute = { provider: string; model: string; preset: string };
 
 export const NO_REROLL_ROUTE: RerollRoute = { provider: "", model: "", preset: "" };
 
+/** A provider override chooses another connection, so the standing scene
+ *  route need not work. A model or preset alone still uses that connection.
+ *  The server validates the chosen provider's own readiness/capabilities. */
+export function canGenerateOnRoute(ready: boolean, route: RerollRoute): boolean {
+  return ready || !!route.provider.trim();
+}
+
 /** What a route adds to a reroll's body: only the parts that were chosen, so
  *  Default sends no override at all rather than three empty ones. */
 export function rerollOverrides(route: RerollRoute): Partial<RerollRoute> {

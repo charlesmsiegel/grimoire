@@ -20,11 +20,16 @@ export function stylesheet() {
     join(dirname(fileURLToPath(import.meta.url)), "..", "index.css"), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "");
 
-  /** The concatenated bodies of every `@media (max-width: <px>px)` block.
-   *  Braces are counted rather than matched with a regex, because these
-   *  blocks nest. */
+  /** The concatenated bodies of every `@media (max-width: <px>px)` block. */
   function atWidth(px: number): string {
-    const query = `@media (max-width: ${px}px)`;
+    return atMedia(`(max-width: ${px}px)`);
+  }
+
+  /** The concatenated bodies of every `@media <condition>` block -- spelled
+   *  as the stylesheet spells it, `(hover: none)`. Braces are counted rather
+   *  than matched with a regex, because these blocks nest. */
+  function atMedia(condition: string): string {
+    const query = `@media ${condition}`;
     const out: string[] = [];
     for (let i = 0; ; ) {
       const at = css.indexOf(query, i);
@@ -43,7 +48,7 @@ export function stylesheet() {
     return out.join("\n");
   }
 
-  return { css, atWidth, bodiesNaming, bodiesOf, declares };
+  return { css, atWidth, atMedia, bodiesNaming, bodiesOf, declares };
 }
 
 const rule = () => /([^{}]*)\{([^{}]*)\}/g;

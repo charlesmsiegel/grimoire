@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type CampaignModule, type ModuleSummary, type SheetCoverage } from "../api/client";
 import { sheetKindLabel } from "../sheetKinds";
+import { Field } from "./Field";
 
 export default function MechanicsConfig({ cid, onChanged }: {
   cid: string;
@@ -57,11 +58,16 @@ export default function MechanicsConfig({ cid, onChanged }: {
     mods.find((m) => m.id === mid)?.name ?? mid ?? "";
 
   return (
-    <div className="side-section">
-      <h4>Mechanics</h4>
-      <label>
-        Mechanics
-        <select aria-label="Mechanics" value={value}
+    <div className="side-section mechanics-config">
+      {/* One labelled control, so its label is the panel's head: a heading
+          above a label saying the same word was the panel saying it twice,
+          and the label ran into the select beside it. */}
+      <Field label="Mechanics" hint={state ? (state.resolved
+        ? `Playing with ${name(state.resolved)}` + (state.source === "world" ? " (world default)" : "")
+        : state.setting && state.setting !== "none"
+        ? `Bound module "${state.setting}" is missing or invalid — resolving to no mechanics.`
+        : "No mechanics — freeform play.") : undefined}>
+        <select value={value}
                 onChange={(e) => { setValue(e.target.value); setSaved(false); }}>
           <option value="">World default</option>
           <option value="none">None</option>
@@ -69,17 +75,7 @@ export default function MechanicsConfig({ cid, onChanged }: {
             <option key={m.id} value={m.id}>{m.name}</option>
           ))}
         </select>
-      </label>
-      {state && (
-        <div className="field-hint">
-          {state.resolved
-            ? `Playing with ${name(state.resolved)}` +
-              (state.source === "world" ? " (world default)" : "")
-            : state.setting && state.setting !== "none"
-            ? `Bound module "${state.setting}" is missing or invalid — resolving to no mechanics.`
-            : "No mechanics — freeform play."}
-        </div>
-      )}
+      </Field>
       {coverage && Object.keys(coverage).length > 0 && (
         <div className="side-section">
           <h4>Sheets</h4>
@@ -91,8 +87,10 @@ export default function MechanicsConfig({ cid, onChanged }: {
           ))}
         </div>
       )}
-      <button className="primary" onClick={save}>Save</button>
-      {saved && <span className="field-hint">Saved.</span>}
+      <div className="form-actions">
+        <button className="primary" onClick={save}>Save</button>
+        {saved && <span className="field-hint">Saved.</span>}
+      </div>
       {error && <div className="field-hint">{error}</div>}
     </div>
   );

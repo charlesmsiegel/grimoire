@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { api, STYLE_CLEAR, type ResponseBundle, type ResponseFields, type Style } from "../api/client";
 import { errorText } from "../api/errors";
 
@@ -29,6 +29,7 @@ export function ResponseTargetsPicker({ scope, cid, sid, onChanged }: Props) {
   const [styles, setStyles] = useState<Style[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const id = useId();
 
   const load = useCallback(async () => {
     const response = scope === "global" ? await api.getGlobalResponse()
@@ -65,35 +66,44 @@ export function ResponseTargetsPicker({ scope, cid, sid, onChanged }: Props) {
     }
   }
 
+  // One grid of fields -- label over box over where its figure comes from --
+  // laid out once for all three places this renders (Settings, the scene's
+  // Response panel, the inspector), which differ only in width: as many
+  // columns as fit. It was five bare labels in a row, each label, box and
+  // hint running into the next ("Opening words[400]400 from default…").
   return (
     <div className="response-targets-picker">
       {error && <div className="banner">{error}</div>}
       <p className="field-hint">Approximate targets for each generated contribution.</p>
-      {TARGETS.map(({ phase, unit, label }) => {
-        const key = `response_${phase}_${unit}` as keyof ResponseFields;
-        const source = bundle?.provenance[`${phase}.${unit}`]?.scope ?? "default";
-        const value = bundle?.effective[phase][unit];
-        return (
-          <label key={key}>
-            {label}
-            <input type="number" min="1" aria-label={label} value={fields[key]}
-              placeholder={value == null ? undefined : String(value)}
-              onChange={(event) => setFields((current) => ({ ...current, [key]: event.target.value }))} />
-            {bundle && <span className="field-hint">{value} from {source}</span>}
-          </label>
-        );
-      })}
-      <label>
-        Style
-        <select aria-label="Style" value={fields.style_id}
-          onChange={(event) => setFields((current) => ({ ...current, style_id: event.target.value }))}>
-          <option value="">Inherit</option>
-          <option value={STYLE_CLEAR}>No style</option>
-          {styles.map((style) => <option value={style.id} key={style.id}>{style.name}</option>)}
-        </select>
-      </label>
-      <button type="button" className="primary" onClick={() => void save()}>Save response targets</button>
-      {saved && <span className="field-hint">Saved.</span>}
+      <div className="response-targets-grid">
+        {TARGETS.map(({ phase, unit, label }) => {
+          const key = `response_${phase}_${unit}` as keyof ResponseFields;
+          const source = bundle?.provenance[`${phase}.${unit}`]?.scope ?? "default";
+          const value = bundle?.effective[phase][unit];
+          return (
+            <div className="field" key={key}>
+              <label htmlFor={`${id}-${key}`}>{label}</label>
+              <input id={`${id}-${key}`} type="number" min="1" value={fields[key]}
+                placeholder={value == null ? undefined : String(value)}
+                onChange={(event) => setFields((current) => ({ ...current, [key]: event.target.value }))} />
+              {bundle && <div className="field-hint">{value} from {source}</div>}
+            </div>
+          );
+        })}
+        <div className="field">
+          <label htmlFor={`${id}-style`}>Style</label>
+          <select id={`${id}-style`} value={fields.style_id}
+            onChange={(event) => setFields((current) => ({ ...current, style_id: event.target.value }))}>
+            <option value="">Inherit</option>
+            <option value={STYLE_CLEAR}>No style</option>
+            {styles.map((style) => <option value={style.id} key={style.id}>{style.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="form-actions">
+        <button type="button" className="primary" onClick={() => void save()}>Save response targets</button>
+        {saved && <span className="field-hint">Saved.</span>}
+      </div>
     </div>
   );
 }

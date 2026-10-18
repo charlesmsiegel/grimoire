@@ -179,23 +179,25 @@ test("Retry on a failed entry calls retryTracker and asks the view to refresh", 
   await waitFor(() => expect(onChanged).toHaveBeenCalled());
 });
 
-test("a key with no entry reads untracked and offers Retry", () => {
+test("a key with no entry explains that no snapshot was recorded and offers Track this post", async () => {
   mount(undefined);
   expect(screen.getByText("Tracker · untracked")).toBeInTheDocument();
   fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
-  expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  await screen.findByText("No tracked state was recorded for this post.");
+  expect(api.getTrackerRecord).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Track this post" }));
+  await waitFor(() => expect(api.retryTracker).toHaveBeenCalledWith("run", "s1", "p-1"));
 });
 
 test("a retry the server refuses is shown inline", async () => {
   vi.mocked(api.retryTracker).mockRejectedValue(new Error("tracker_off"));
   mount(undefined);
   fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
-  await screen.findByRole("button", { name: "Edit" });
-  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  fireEvent.click(screen.getByRole("button", { name: "Track this post" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(/tracker_off/);
   fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   expect(screen.getByRole("alert")).not.toBeVisible();
-  expect(screen.getByRole("button", { name: "Retry" })).not.toBeVisible();
+  expect(screen.getByRole("button", { name: "Track this post" })).not.toBeVisible();
 });
 
 test("Re-run tracker from here asks, naming the posts it will pay for, then runs", async () => {

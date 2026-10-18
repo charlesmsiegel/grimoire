@@ -1,15 +1,18 @@
 import { Thinking } from "./Thinking";
 import { useState } from "react";
 import { api, type ResponseRecord } from "../api/client";
-import RerollRoutePicker, { NO_REROLL_ROUTE, type RerollRoute } from "./RerollRoute";
+import RerollRoutePicker, { canGenerateOnRoute, NO_REROLL_ROUTE, type RerollRoute } from "./RerollRoute";
 import { ErrorNote } from "./ErrorNote";
+import { Field } from "./Field";
 import { madeByLines, settingsFor } from "./play/swipeTitle";
 
 export function ResponseControls({ cid, sid, responseId, canReroll, status, contextChanged,
-  disabled = false, onDelete, onReroll, onExtend, extendDisabled = false, onActivate, onReplay,
+  disabled = false, generationDisabled = false, onDelete, onReroll, onExtend, extendDisabled = false, onActivate, onReplay,
   onCreateCharacter }: {
   cid: string; sid: string; responseId: string; canReroll: boolean;
   status?: string; contextChanged?: boolean; disabled?: boolean;
+  /** The standing route may refuse; an explicit provider can recover it. */
+  generationDisabled?: boolean;
   onDelete: (id: string) => void; onReroll: (id: string, guidance: string, route: RerollRoute) => void;
   /** Keep writing: offered (on the trailing response only) by passing it.
    *  Shares the steer box and the route picker with Reroll response. */
@@ -24,6 +27,7 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
   // A model id typed into the route picker and not yet taken: both sends
   // wait for it (`RerollRoutePicker`'s `onPending`).
   const [pending, setPending] = useState(false);
+  const generateOff = !canGenerateOnRoute(!generationDisabled, route);
   const [record, setRecord] = useState<ResponseRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -63,37 +67,49 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
         this only follows it. The click handler reads the element as it is
         before its own toggle runs, so it sets what the element is about to
         become. */}
-    <details onToggle={(event) => follow(event.currentTarget.open)}>
+    {/* Drawn as the post's Tracker disclosure is -- small, muted, out of the
+        prose's way until opened -- and its body as a form: the steer as a
+        field, the actions as one wrapping row of quiet buttons with the one
+        that deletes last. It was a 17px summary in the prose's face over a
+        run of browser-default buttons. */}
+    <details className="response-actions" onToggle={(event) => follow(event.currentTarget.open)}>
       <summary onClick={(event) => follow(
         !(event.currentTarget.parentElement as HTMLDetailsElement).open)}>Response actions</summary>
       {open && <>
       {canReroll ? <>
-        <label>Response steer<input aria-label="Response steer" value={guidance} disabled={disabled}
-          onChange={(event) => setGuidance(event.target.value)} placeholder="Optional direction for this response" /></label>
-        <details onToggle={(event) => setRouteOpen(event.currentTarget.open)}>
+        <Field label="Response steer">
+          <input aria-label="Response steer" value={guidance} disabled={disabled}
+            onChange={(event) => setGuidance(event.target.value)} placeholder="Optional direction for this response" />
+        </Field>
+        <details className="response-route" onToggle={(event) => setRouteOpen(event.currentTarget.open)}>
           <summary>Model for this reroll</summary>
           {routeOpen && <fieldset disabled={disabled}><RerollRoutePicker cid={cid} value={route} onChange={setRoute} onPending={setPending} /></fieldset>}
         </details>
-        <button disabled={disabled || pending} onClick={() => onReroll(responseId, guidance.trim(), route)}>Reroll response</button>
-        {onExtend && <button disabled={disabled || extendDisabled || pending}
-          title="Continue this reply where it stops, as a new version of it"
-          onClick={() => onExtend(responseId, guidance.trim(), route)}>Keep writing ▸</button>}
       </> : <>
         <p className="field-hint">Historical context is unavailable for this reply. Replay explicitly rebuilds from this point.</p>
       </>}
-      <button disabled={disabled} onClick={onReplay}>Replay from here</button>
-      <button disabled={disabled} onClick={() => onDelete(responseId)}>Delete response</button>
-      <button disabled={disabled || loading} onClick={() => void variants()}>Response variants</button>
-      {onCreateCharacter && <button disabled={disabled} onClick={onCreateCharacter}>Create character from this passage</button>}
+      <div className="form-actions">
+        {canReroll && <>
+          <button className="subtle" disabled={disabled || generateOff || pending}
+            onClick={() => onReroll(responseId, guidance.trim(), route)}>Reroll response</button>
+          {onExtend && <button className="subtle" disabled={disabled || generateOff || extendDisabled || pending}
+            title="Continue this reply where it stops, as a new version of it"
+            onClick={() => onExtend(responseId, guidance.trim(), route)}>Keep writing ▸</button>}
+        </>}
+        <button className="subtle" disabled={disabled} onClick={onReplay}>Replay from here</button>
+        <button className="subtle" disabled={disabled || loading} onClick={() => void variants()}>Response variants</button>
+        {onCreateCharacter && <button className="subtle" disabled={disabled} onClick={onCreateCharacter}>Create character from this passage</button>}
+        <button className="subtle danger" disabled={disabled} onClick={() => onDelete(responseId)}>Delete response</button>
+      </div>
       {error !== null && <p role="alert"><ErrorNote err={error} /></p>}
       {record?.approach && <p className="field-hint">Approach: <span className="chip on">{record.approach}</span></p>}
-      {record?.variants.map((variant, index) => <div key={variant.id}>
+      {record?.variants.map((variant, index) => <div key={variant.id} className="response-variant">
         <Thinking content={variant.reasoning ?? ""} />
-        <p>{variant.content}</p>
+        <p className="response-variant-text">{variant.content}</p>
         {madeByLines(variant.made_by, settingsFor(variant.made_by, record))
           .map((line) => <p key={line} className="field-hint">{line}</p>)}
         {variant.issue && <p className="field-hint">Response issue: {variant.issue}</p>}
-        <button disabled={disabled || variant.status !== "complete" || record.active_variant === variant.id}
+        <button className="subtle" disabled={disabled || variant.status !== "complete" || record.active_variant === variant.id}
           onClick={() => { setRecord(null); onActivate(responseId, variant.id); }}>
           Use variant {index + 1}{variant.status === "incomplete" ? " (incomplete)" : ""}
         </button>

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import CastColumn, { tiers } from "./CastColumn";
 import type { Actor, Briefing, RosterEntry } from "../../api/client";
 
@@ -39,9 +40,9 @@ const opened: string[] = [];
 function renderColumn(props: Partial<Parameters<typeof CastColumn>[0]> = {}) {
   opened.length = 0;
   return render(
-    <CastColumn cid="saltmarch" sid="s1" hasPosts={false} refreshKey={0} cast={CAST} roster={ROSTER}
+    <MemoryRouter><CastColumn cid="saltmarch" sid="s1" hasPosts={false} refreshKey={0} cast={CAST} roster={ROSTER}
                 briefing={BRIEFING} moods={{}} onCastChanged={() => {}}
-                onOpen={(kind, id) => opened.push(`${kind}/${id}`)} {...props} />,
+                onOpen={(kind, id) => opened.push(`${kind}/${id}`)} {...props} /></MemoryRouter>,
   );
 }
 
@@ -149,6 +150,17 @@ test("a threat reads in the alert colour; a promise does not", () => {
   renderColumn();
   expect(screen.getByText("THREAT")).toHaveClass("alert");
   expect(screen.getByText("PROMISE")).not.toHaveClass("alert");
+});
+
+test("threads and commitments link to their ledger records with whole encoded ids", () => {
+  renderColumn({ briefing: { ...BRIEFING,
+    plot: [{ ...BRIEFING.plot[0], id: "mara/map" }],
+    commitments: [{ ...BRIEFING.commitments[0], id: "act:2" }],
+  } });
+  expect(screen.getByRole("link", { name: new RegExp(BRIEFING.plot[0].title) }))
+    .toHaveAttribute("href", "/campaigns/saltmarch/ledger/threads/mara%2Fmap");
+  expect(screen.getByRole("link", { name: new RegExp(BRIEFING.commitments[0].title) }))
+    .toHaveAttribute("href", "/campaigns/saltmarch/ledger/commitments/act%3A2");
 });
 
 test("a commitment with no date says so rather than showing a blank", () => {

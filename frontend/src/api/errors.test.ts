@@ -2,7 +2,7 @@
 // is, so the guard below cannot end up reading some other copy.
 import errorsSource from "./errors?raw";
 import { ApiError } from "./client";
-import { errorText, isOffline } from "./errors";
+import { errorText, isOffline, isSetupFailure, setupFix } from "./errors";
 
 // These two are what every error banner in the app is made of, so they are
 // tested apart from the client that mostly produces their input: `errors.ts`
@@ -81,4 +81,33 @@ test("errors.ts imports nothing, which is the only reason it works", () => {
   // objects. The file's own docstring says so; this is what holds it.
   expect(errorsSource).not.toMatch(/^\s*import\b/m);
   expect(errorsSource).not.toMatch(/\brequire\s*\(/);
+});
+
+// --- setupFix ---
+
+test.each(["missing_key", "incapable", "auth", "missing_dependency"])(
+  "configuration failures %s cannot be repaired by repeating the request", (kind) => {
+    expect(isSetupFailure({ detail: "Fix the configured provider first", kind })).toBe(true);
+  });
+
+test.each([null, "auth", { kind: null }, { kind: 7 }, { kind: "network" }, { kind: "timeout" }])(
+  "only classified configuration failures disable a retry (%j)", (error) => {
+    expect(isSetupFailure(error)).toBe(false);
+  });
+
+test("a configuration failure need not have an in-app settings destination", () => {
+  expect(isSetupFailure({ kind: "missing_dependency" })).toBe(true);
+  expect(setupFix({ kind: "missing_dependency" })).toBeNull();
+});
+
+test("a refusal of the model settings names the page that fixes it", () => {
+  expect(setupFix(new ApiError(409, "OpenRouter key not set", "missing_key"))).toBe("/providers");
+  expect(setupFix({ detail: "cannot read images", kind: "incapable" })).toBe("/models");
+});
+
+test("every other failure has no settings page to send the reader to", () => {
+  expect(setupFix(new ApiError(502, "connection reset", "network"))).toBeNull();
+  expect(setupFix(new ApiError(500, "boom"))).toBeNull();
+  expect(setupFix("a composed sentence")).toBeNull();
+  expect(setupFix(null)).toBeNull();
 });

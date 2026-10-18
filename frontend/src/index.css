@@ -48,6 +48,19 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
    colour, so this reaches only the ones that were rendering blue. */
 a { color: var(--accent); }
 
+/* A file input keeps its native control -- visible, labelled and reachable
+   by keyboard, which a hidden input behind a styled label is not
+   (PostImagePicker says so where it chose the same) -- but its button wears
+   the quiet button's look (`.subtle`) rather than the UA's grey bevel, and
+   "No file chosen" the app's small mono. */
+input[type="file"] { max-width: 100%; color: var(--muted); font-family: var(--fm); font-size: 11px; }
+input[type="file"]::file-selector-button {
+  margin-right: 10px; padding: 6px 12px; cursor: pointer;
+  background: transparent; color: var(--subtle); border: 1px solid var(--rule);
+  font-family: var(--fm); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+}
+input[type="file"]:not(:disabled)::file-selector-button:hover { color: var(--accent); border-color: var(--accent); }
+
 /* visually hidden but accessible (labels whose section heading already shows the text) */
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -786,6 +799,8 @@ form.column-actions { padding: 10px 16px 0; }
 }
 .provider-catalog li:first-child { border-top: 0; }
 .brief-row { padding: 8px 16px; border-top: 1px solid var(--line); }
+a.brief-row { display: block; color: inherit; text-decoration: none; }
+a.brief-row:hover, a.brief-row:focus-visible { background: var(--track); }
 .brief-title {
   font-family: var(--fb); font-weight: 300; font-size: 13px; line-height: 1.55; color: var(--ink);
 }
@@ -934,7 +949,10 @@ form.column-actions { padding: 10px 16px 0; }
 /* the older-history affordance sits above the oldest loaded post; scrolling
    up here loads the next page on its own, so this is the visible fallback */
 .stream-older { display: flex; justify-content: center; margin: 0 0 16px; }
-.msg { display: flex; margin: 0 0 14px; position: relative; }
+/* Capped at the prose measure plus the gutter, so the post's own actions --
+   pinned to its right edge -- sit over the end of its text rather than out
+   across the empty half of a wide screen. */
+.msg { display: flex; margin: 0 0 14px; position: relative; max-width: 676px; }
 /* Outside desktop focus mode, keep the readable prose measure rather than
    running the transcript across the width of a 1600px monitor. */
 .msg-body {
@@ -945,7 +963,7 @@ form.column-actions { padding: 10px 16px 0; }
 /* Desktop focus mode uses the room released by the chrome; the phone keeps
    its existing measure and layout below the shared 720px breakpoint. */
 @media (min-width: 721px) {
-  .shell.focus .msg-body { max-width: none; }
+  .shell.focus .msg, .shell.focus .msg-body { max-width: none; }
 }
 /* greeting art embedded in messages never overflows the text column */
 .msg-body img { max-width: 100%; height: auto; }
@@ -979,17 +997,56 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   border: 1px solid var(--line); border-radius: 2px; flex: none;
 }
 .plate.pc .role-chip, .role-chip.pc { border-color: var(--accent); color: var(--accent); background: none; }
-.msg-gutter {
-  width: 26px; flex: none; margin-right: 10px; position: relative;
-  display: flex; flex-direction: column; align-items: center;
+/* The column under the plate's portrait. Nothing in it is in the flow, so a
+   post is as tall as its text; it anchors the reroll box. */
+.msg-gutter { width: 26px; flex: none; margin-right: 10px; position: relative; }
+
+/* ---- a post's own actions (components/play/PostActions) ---- */
+/* One list, out of the post's flow, drawn two ways. Where the pointer can
+   hover it is a toolbar over the post's top-right corner that shows while the
+   post is hovered or holds focus; `pointer-events` follows the opacity, so an
+   invisible toolbar does not swallow a click or a text selection over the end
+   of the first line. The ⋯ that opens it as a menu is for a device that
+   cannot hover, below. */
+.post-actions {
+  position: absolute; top: -16px; right: 0; z-index: 4;
+  opacity: 0; pointer-events: none; transition: opacity .15s;
 }
-.gutter-icons { display: flex; flex-direction: column; gap: 4px; opacity: 0; transition: opacity .15s; }
-.msg:hover .gutter-icons, .msg:focus-within .gutter-icons { opacity: 1; }
+.msg:hover .post-actions, .msg:focus-within .post-actions { opacity: 1; pointer-events: auto; }
+.post-more { display: none; }
+.post-actions-list {
+  display: flex; gap: 1px; padding: 1px;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: 3px;
+  box-shadow: var(--shadow-pop);
+}
+/* 28px square: the floor every desktop glyph control has (`.row-actions`). */
+.post-action {
+  display: inline-flex; align-items: center; justify-content: center; gap: 12px;
+  min-width: 28px; min-height: 28px; padding: 0 6px;
+  background: transparent; border: none; border-radius: 2px; cursor: pointer;
+  color: var(--page-muted); line-height: 1;
+}
+.post-action:hover:not(:disabled) { color: var(--accent); background: var(--panel); }
+.post-action:disabled { opacity: 0.4; cursor: default; }
+/* The cascade cut (#75) takes this post and every one after it, so its hover
+   reads as the destructive action it is rather than as another accent icon. */
+.post-action.danger:hover:not(:disabled) { color: var(--alert); }
+.post-action[aria-pressed="true"] { color: var(--accent); }
+.post-action-glyph { font-size: 14px; width: 1.1em; text-align: center; flex: none; }
+/* A toolbar of glyphs: each one's name is its tooltip and its accessible
+   name, and the words are for the menu. */
+.post-action-label {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 .msg-body p:first-child { margin-top: 0; }
 .msg-body p:last-child { margin-bottom: 0; }
 
 /* ---- the composer ---- */
-.composer { display: flex; flex-direction: column; flex: none; }
+/* A size container, so the meta strip can ask how wide the COMPOSER is: that
+   is what decides whether its knobs fit on one row, and it is the viewport
+   less a rail and a column that come and go at their own breakpoints. */
+.composer { display: flex; flex-direction: column; flex: none; container: composer / inline-size; }
 /* Takes the composer's place on an absorbed scene. Sized and bordered like the
    bar it replaces so the transcript does not jump when a scene is ended. */
 .scene-complete {
@@ -1005,8 +1062,23 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
 /* The meta strip is the composer's first row now, not a footnote under it: the
    knobs are chosen before the turn is written, not after. */
 .composer-meta {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap;
   padding: 10px 26px 0; border-top: 1px solid var(--line);
+}
+/* Every knob keeps its size and never folds its label; only the sentences
+   give way (below). */
+.composer-meta .composer-link { flex: none; white-space: nowrap; }
+.composer-target { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.composer-oneshot { display: inline-flex; align-items: center; flex: none; }
+/* Where the composer has room for every knob, the strip is one row whatever
+   else is on it, and the sentences give way: ellipsis, the whole sentence in
+   their tooltip (components/play/ComposerMeta). Wrapping instead dropped the
+   box 40px every time Direct, a dossier or a one-shot target came on. */
+@container composer (min-width: 760px) {
+  .composer-meta { flex-wrap: nowrap; }
+  .composer-meta-hint, .composer-notice {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
 }
 .composer-meta-label {
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em; line-height: 22px;
@@ -1059,7 +1131,8 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent);
 }
 .composer-meta-hint {
-  font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; color: var(--muted);
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; line-height: 22px;
+  color: var(--muted);
 }
 .composer-notice {
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em; line-height: 22px;
@@ -1090,9 +1163,13 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   text-transform: uppercase; padding: 4px 0; min-height: 34px;
 }
 .composer-link:hover { color: var(--accent); }
+/* A die face (⚄) in the ink, not the 🎲 emoji: a full-colour picture beside
+   the composer's hairline controls read as another app's. Drawn at the size a
+   die needs to read as one. */
 .inputbar .roll-btn {
   border: 1px solid var(--line-strong); border-radius: 3px; background: transparent;
-  min-height: 44px; padding: 0 12px; cursor: pointer; font-size: 15px; flex: none;
+  min-height: 44px; padding: 0 12px; cursor: pointer; font-size: 22px; line-height: 1;
+  color: var(--ink); flex: none;
 }
 .inputbar .roll-btn:disabled { opacity: 0.4; cursor: default; }
 /* The reply-as chips, dressed as the dice button is. They share one row under
@@ -1159,11 +1236,14 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
 /* ---- response-length one-shot markers (in the composer meta strip) ---- */
 /* one-shot badge: a pending per-turn pick must not read as a standing setting */
 .chip-oneshot {
-  margin-left: 7px; padding: 1px 5px; border: 1px solid var(--accent);
-  color: var(--accent); font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase;
+  margin-left: 2px; padding: 1px 5px; border: 1px solid var(--accent);
+  color: var(--accent); font-family: var(--fm); font-size: 9px; line-height: 16px;
+  letter-spacing: 0.06em; text-transform: uppercase;
 }
+/* Its ✕: a 28px target beside the badge, not a bare glyph. */
 .chip-clear {
-  background: none; border: none; padding: 0 10px 0 0; cursor: pointer;
+  min-width: 28px; min-height: 28px; padding: 0;
+  background: none; border: none; cursor: pointer;
   font-family: var(--fm); font-size: 13px; line-height: 1; color: var(--page-muted);
 }
 .chip-clear:hover { color: var(--accent); }
@@ -1184,6 +1264,12 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
 .banner.error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .banner .retry { flex: none; background: var(--accent); color: var(--on-accent); border: none; padding: 4px 12px; cursor: pointer; font-family: var(--fm); text-transform: uppercase; }
 .banner .retry:disabled { opacity: 0.5; cursor: default; }
+/* Retry and Dismiss side by side; Dismiss is the quieter of the two. */
+.banner-actions { display: flex; gap: 8px; flex: none; }
+.banner .dismiss {
+  flex: none; background: transparent; color: var(--banner-ink); border: 1px solid currentColor;
+  padding: 3px 11px; cursor: pointer; font-family: var(--fm); text-transform: uppercase;
+}
 /* Sync-conflict report (#35) and the stale-save banner: prose and a path list
    inside a banner, which otherwise only ever holds a single line of text -- so
    the paragraph margins are reset here rather than on `.banner` itself, where
@@ -1685,6 +1771,17 @@ a.check-row { display: flex; align-items: center; text-decoration: none; }
 .ledger-beat { margin: 2px 0; }
 .ledger-meta { margin: 0; }
 .cast-panel summary { cursor: pointer; padding: 8px 12px; color: var(--accent); font-family: var(--fd); }
+/* A new scene's setup, in the play view: between the scene's title and its
+   composer, and giving way to both. It shrinks to the room they leave and
+   scrolls inside it, its summary pinned, so the box to write in -- and the
+   Generate the panel ends on -- is on screen when the scene opens. At its
+   full height (~600px, ~780 on a phone) it pushed the composer below the
+   fold, and the phone's foot pill sat over Generate. */
+.main > .cast-panel { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.main > .cast-panel > summary { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+/* An empty transcript -- a scene with no posts, the one this panel is for --
+   holds nothing, so it is the leftover room and no padding. */
+.stream:empty { padding: 0; }
 .cast-panel .panel-body { padding: 12px; border-top: 1px solid var(--muted); display: flex; flex-direction: column; gap: 16px; }
 .cast-row { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
 .cast-row .role { color: var(--muted); }
@@ -2094,22 +2191,26 @@ a.shelf-promote { text-decoration: none; text-align: center; }
   border-right: 1px solid var(--rule); padding: 7px 10px; font-family: var(--fm); font-size: 12px;
 }
 .check-pop input[type="number"] { width: 60px; }
-.msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
-.msg-edit:hover { color: var(--accent); }
-.msg-edit:disabled { opacity: 0.4; cursor: default; }
-/* The cascade cut (#75) takes this post and every one after it, so its hover
-   reads as the destructive action it is rather than as another accent icon. */
-.msg-edit.msg-cut:hover { color: var(--alert); }
 /* Hidden from context: still in the transcript, reaching no prompt. Marked per
    post rather than per run, since a hidden post can sit inside a run of
    included ones. */
 .msg.excluded { border-left: 1px dashed var(--page-muted); }
 .msg.excluded .msg-body { opacity: 0.55; }
 .not-in-context { font-size: 0.75em; font-style: italic; color: var(--page-muted); margin-right: 0.5em; }
-.msg-exclude[aria-pressed="true"] { color: var(--accent); }
-/* reroll alternates: ‹ n/m › in the gutter, on the message Reroll acts on */
-.swipe-nav { display: flex; align-items: center; gap: 3px; }
-.swipe-count { color: var(--page-muted); font-family: var(--fm); font-size: 10px; }
+/* A reply's takes: ‹ n/m › under the text of the post Reroll acts on, always
+   drawn there (components/play/SwipeNav). */
+.swipe-nav { display: flex; align-items: center; gap: 2px; margin-top: 6px; }
+.swipe-nav button {
+  min-width: 28px; min-height: 28px; padding: 0; cursor: pointer;
+  background: transparent; border: 1px solid transparent; border-radius: 2px;
+  color: var(--page-muted); font-size: 18px; line-height: 1;
+}
+.swipe-nav button:hover:not(:disabled) { color: var(--accent); border-color: var(--line); }
+.swipe-nav button:disabled { opacity: 0.4; cursor: default; }
+.swipe-count {
+  min-width: 3.5ch; text-align: center; color: var(--page-muted);
+  font-family: var(--fm); font-size: 11px; letter-spacing: 0.06em;
+}
 /* The last response takes a sideways touch drag as a swipe. Vertical panning
    and pinch-zoom stay the browser's (the gesture discards a second finger);
    a horizontal drag would otherwise be claimed as a pan and cancel the
@@ -2653,6 +2754,35 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 .tracker-list-item { display: inline-flex; gap: 2px; align-items: baseline; min-width: 0; }
 .tracker-list-item input { min-width: 0; width: 10rem; max-width: 100%; }
 .tracker-wrap > .field-hint { flex-basis: 100%; }
+/* The response targets (components/ResponseTargetsPicker), wherever they are
+   set -- Settings, the scene's Response panel, the inspector: as many
+   columns of label-over-box as the width holds. */
+.response-targets-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 4px 16px; max-width: 880px;
+}
+.response-targets-grid .field { margin: 8px 0; min-width: 0; }
+.response-targets-grid .field input, .response-targets-grid .field select { font-size: 15px; }
+.response-targets-picker .form-actions { justify-content: flex-start; align-items: center; margin-top: 8px; }
+/* The campaign's mechanics (components/MechanicsConfig): one field, its
+   Save under it rather than across the panel's width. */
+.mechanics-config { max-width: 420px; }
+.mechanics-config .form-actions { justify-content: flex-start; align-items: center; margin-top: 10px; }
+/* A reply's actions (ResponseControls): the same small, muted disclosure as
+   the Tracker above it, so the two read as one kind of thing under the prose
+   rather than a 17px heading in the prose's face. */
+.response-actions { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.response-actions > summary, .response-route > summary { cursor: pointer; }
+.response-actions[open] { padding: 4px 0 6px 10px; border-left: 2px solid var(--muted); }
+.response-actions .field { margin: 8px 0; max-width: 480px; }
+.response-actions .field label { font-size: 12px; }
+.response-actions .field input { font-size: 14px; padding: 6px 8px; }
+.response-actions .form-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 8px; }
+.response-route { margin: 4px 0; }
+.response-variant { border-top: 1px solid var(--line); padding: 8px 0; margin-top: 8px; }
+/* A take is prose, read beside the one on screen: the prose's face, not the
+   disclosure's small print. */
+.response-variant-text { margin: 0 0 4px; font-family: var(--fb); font-size: 15px; line-height: 1.6; color: var(--ink); }
 
 .director-note .msg-body { opacity: 0.65; font-style: italic; }
 .director-note .msg { border-left: 1px dashed var(--muted); }
@@ -3612,17 +3742,24 @@ a.column-back { text-decoration: none; }
      most of a phone's width. */
   .conditions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; padding: 0 16px; }
   .conditions-row { display: block; padding: 0; }
+  /* Over its value, so the label and the location name cannot run together. */
+  .conditions-label { display: block; }
   .world-copy { grid-column: 1 / -1; margin: 8px 0 0; }
 
-  /* The composer keeps all four controls; the meta strip scrolls rather than
-     wrapping into three rows that push the textarea off screen. */
-  .composer-meta { flex-wrap: nowrap; overflow-x: auto; padding: 10px 16px 0; scrollbar-width: none; }
-  .composer-meta::-webkit-scrollbar { display: none; }
-  /* `.composer-link` too. A nowrap ROW does not make its items nowrap: each
-     still shrinks to its own min-content width, and the inspector link's is
-     one word -- so "What the model saw →" folded into four lines, 96px tall,
-     and the strip above the box stood taller than the box. */
-  .composer-notice, .composer-meta-hint, .composer-link { white-space: nowrap; }
+  /* The meta strip wraps, which is the base rule: it used to scroll sideways
+     with its scrollbar hidden, so everything past "Response" -- the
+     paragraphs box, Order, the inspector link -- was off the edge with
+     nothing to say it was there. The boxes narrow to their three digits so
+     the turn kind and both of them share the first row, and what Direct does
+     goes unsaid here: the box's own accent edge and placeholder say it. */
+  .composer-meta { padding: 10px 16px 0; }
+  .composer-meta .response-target-input { width: 3.5em; }
+  .composer-direct-hint { display: none; }
+  /* A link never folds. Its min-content width is one word, so "What the model
+     saw →" once folded into four lines, 96px tall, and stood taller than the
+     box. */
+  .composer-link { white-space: nowrap; }
+  .chip-clear { min-width: 44px; min-height: 44px; }
   /* The Speak/Direct toggle owes the floor every other control on the strip
      already clears; at 34px it was the one short item in a 44px row. */
   .composer-mode { min-height: 44px; }
@@ -3680,10 +3817,28 @@ a.column-back { text-decoration: none; }
   .roll-pop { right: 0; }
   .roll-pop input { width: auto; flex: 1 1 120px; min-width: 0; }
   .scene-head, .scene-actions { padding-left: 16px; padding-right: 16px; }
+  /* The scene's head on one line of title: at 26px a three-word title broke
+     over two lines and the head stood 123px tall, a third of a phone's
+     transcript. The title is in the head and nowhere else on a phone, so it
+     stays, at the size every other phone head uses, and gives way to an
+     ellipsis rather than a second line. */
+  .scene-head { padding-top: 12px; padding-bottom: 8px; }
+  .scene-title {
+    font-size: 18px; letter-spacing: 0.04em; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* The page's banners and a new scene's setup keep to the page's gutter
+     rather than adding their own inset: on a phone the transcript is the
+     first thing to give. */
+  .main > .banner { margin: 8px 16px; padding: 8px 12px; }
+  .main > .cast-panel { margin: 8px 16px; }
   .stream { padding: 16px; }
-  /* The player's rule would otherwise hang off the left edge with the negative
-     margin that pulls it into the desktop gutter. */
-  .run.pc { margin-left: 0; padding-left: 12px; }
+  /* The player's rule, pulled into the page's 16px gutter as the desktop
+     pulls it into its own: the desktop's 17px would hang it off the screen,
+     and none at all (as this was) pushed the player's prose 13px right of
+     everyone else's -- the two-column transcript the desktop rule exists to
+     avoid. */
+  .run.pc { margin-left: -9px; padding-left: 8px; }
 
   /* Library. Its six sections become a horizontally scrolling strip at the
      foot rather than a column, because section-switching is the dominant
@@ -5278,8 +5433,47 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
    the input rather than the width (the field and version pair used to be
    keyed on 720px): a narrow desktop window can hover, and a tablet is wide. */
 @media (hover: none) {
-  .world-card .row-actions, .gutter-icons { opacity: 1; }
+  .world-card .row-actions { opacity: 1; }
   .field-edit, .version-rename, .row-do { color: var(--muted); }
+
+  /* A post's actions: nothing hovers, so a toolbar that waits for a hover
+     would never show -- and shown for good, it was eight glyphs down every
+     post's gutter, one of them "delete this and everything after". One ⋯ in
+     the gutter instead, a 44px target centred on the post's first line, and
+     the same list behind it as a sheet of labelled 44px rows. */
+  .post-actions { top: -8px; left: -9px; right: auto; opacity: 1; pointer-events: auto; }
+  .post-more {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; padding: 0; background: transparent; border: none;
+    color: var(--page-muted); font-size: 18px; line-height: 1; cursor: pointer;
+  }
+  .post-actions.open .post-more { color: var(--accent); }
+  .post-actions-list { display: none; }
+  /* At the foot of the screen, where a phone's own action sheets are and a
+     thumb already is, rather than under the ⋯: hung off a post, seven rows
+     ran past the bottom of a transcript that is a few hundred pixels tall on
+     a phone. Above the scene's foot pill and the cast sheet while it is up. */
+  .post-actions.open { z-index: 40; }
+  .post-actions.open .post-actions-list {
+    display: flex; flex-direction: column; gap: 0; padding: 0;
+    position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
+    width: min(420px, calc(100vw - 24px)); max-height: 70vh; max-height: 70dvh;
+    overflow-y: auto; border-color: var(--line-strong); border-radius: 10px;
+    box-shadow: var(--shadow-pop);
+  }
+  .post-action {
+    justify-content: flex-start; min-height: 44px; padding: 8px 14px; border-radius: 0;
+    line-height: 1.35;
+    color: var(--ink); font-family: var(--fm); font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase; text-align: left;
+  }
+  .post-action + .post-action { border-top: 1px solid var(--line); }
+  .post-action.danger { color: var(--alert); }
+  .post-action-label { position: static; width: auto; height: auto; margin: 0; clip: auto; white-space: normal; }
+
+  /* The swipe arrows are the phone's way to a reply's other takes, beside
+     the gesture: a thumb's target, not a pointer's. */
+  .swipe-nav button { min-width: 44px; min-height: 44px; }
 }
 
 /* Collection navigation is local to the image occurrence, including in prose. */

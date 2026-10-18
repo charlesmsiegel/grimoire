@@ -152,3 +152,12 @@ test("each save that lands tells the play view, and a refused one does not", asy
   expect(await screen.findByRole("alert")).toHaveTextContent("scene_busy");
   expect(onChanged).toHaveBeenCalledTimes(3);
 });
+
+test("the panel is headed as its siblings over the transcript are", async () => {
+  // A bold heading in the prose's face among panels headed by a small label.
+  serve({});
+  render(<SceneTrackerPanel cid="saltmarch" sid="s1" />);
+  const head = await screen.findByRole("heading", { name: "Tracker for this scene" });
+  expect(head.tagName).toBe("H4");
+  expect(head.closest("section")).toHaveClass("side-section");
+});

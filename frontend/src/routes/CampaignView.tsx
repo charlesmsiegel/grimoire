@@ -1,5 +1,5 @@
 import { Thinking } from "../components/Thinking";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useMatch, useNavigate, useParams } from "react-router-dom";
 import { sceneNumber as numberOf } from "./sceneNumber";
 import {
@@ -17,10 +17,9 @@ import { THUMB } from "../api/thumbs";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
 import { useRunRegistry } from "../runs/RunRegistryProvider";
 import { forkNotes } from "../components/forkNotes";
-import { ErrorNote } from "../components/ErrorNote";
 import { shareSummary } from "../components/tracker/share";
 import { lastOkKey, pendingAfter, type NowTracker } from "../components/tracker/TrackerNow";
-import { errorText, isProviderFailure } from "../api/errors";
+import { errorText, isProviderFailure, isSetupFailure } from "../api/errors";
 import { configChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
@@ -36,11 +35,11 @@ import { CampaignCover } from "../components/CoverPanel";
 import { SceneTrackerPanel } from "../components/tracker/SceneTrackerPanel";
 import { SceneInspector, type RewrittenPost } from "../components/SceneInspector";
 import {
-  UNPRICED, bucketPrice, estimatedTokensTitle, headlineIsEstimate, money,
+  UNPRICED, bucketPrice, estimatedTokensTitle, headlineIsEstimate,
 } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
-import { NO_REROLL_ROUTE, rerollOverrides, type RerollRoute } from "../components/RerollRoute";
+import { canGenerateOnRoute, NO_REROLL_ROUTE, rerollOverrides, type RerollRoute } from "../components/RerollRoute";
 import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { onConfigChanged } from "../appEvents";
@@ -50,6 +49,9 @@ import { RollProposal, type ResolveBody } from "../components/RollProposal";
 import { PageShell } from "../components/PageShell";
 import { sectionHref } from "../worldPaths";
 import { useFocus } from "../components/focus";
+import { ComposerMeta } from "../components/play/ComposerMeta";
+import { PlayBanners, type PlayError } from "../components/play/PlayBanners";
+import { SceneMenu } from "../components/play/SceneMenu";
 import CastColumn from "../components/play/CastColumn";
 import ReviewColumn from "../components/review/ReviewColumn";
 import ReviewPanel from "../components/review/ReviewPanel";
@@ -68,7 +70,7 @@ import { applyDisplay } from "../components/play/displayFrames";
 import { quotedIn } from "../components/play/citation";
 import { RegexTestDialog, type RegexTestTarget } from "../components/play/RegexTestDialog";
 import {
-  DIRECTOR_LABEL, DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER, TranscriptRun,
+  DIRECTOR_LABEL, DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER, TranscriptRun, isNarrator,
   type TranscriptActions, type TranscriptContext, type TranscriptReroll, type TranscriptRunData,
   type TranscriptVariantSwipe,
 } from "../components/play/TranscriptPost";
@@ -232,6 +234,23 @@ function taskKey(origin: "strip" | "inspector", cid: string, sid: string, task: 
 
 export default function CampaignView({ ready }: { ready: boolean }) {
   const { cid = "" } = useParams();
+  // The model THIS campaign's scene turns run on, which is not necessarily the
+  // library's: a campaign can override Primary, or point its scene route
+  // elsewhere. Read here because the header has a pathname and no cid, and
+  // answered by the resolver -- the campaign inference view's `scene` route,
+  // whose `resolves` is what `require_inference` would serve a turn and whose
+  // `problem` is the seam's own refusal of it, so the dot cannot say "ready"
+  // about a send the server would refuse. A failed read publishes nothing and
+  // the header keeps the library's answer (`GET /config`).
+  const [sceneModel, setSceneModel] = useState<string | null>(null);
+  const [sceneReady, setSceneReady] = useState<boolean | null>(null);
+  const [sceneProblem, setSceneProblem] = useState<string | null>(null);
+  // Whether a turn here has a model to answer it: the campaign's own scene
+  // route when that read has answered, the library's `ready` until it has.
+  // The library's alone was wrong both ways -- a campaign whose own Primary
+  // works read "no model is ready", and one whose override has no key read
+  // ready until a send came back refused.
+  const canGenerate = sceneReady ?? ready;
   // Focus mode: the scene bar and the scene head go with the app header and the
   // context column, leaving the transcript and the composer. Together they were
   // the ~300px above the first line of prose on a phone — the scene bar worst of
@@ -279,12 +298,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  not find them on in a scene they open next week. Reset by the effect that
    *  reads a scene, beside every other piece of per-scene view state. */
   const [showNotes, setShowNotes] = useState(false);
-  /** The `Scene ⋯` disclosure, so picking an item can shut it.
-   *
-   *  A ref onto the element rather than a controlled `open`: `<details>` owns
-   *  that state and driving it from React means fighting the browser for it on
-   *  every keyboard toggle. */
-  const sceneMenu = useRef<HTMLDetailsElement>(null);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   // Which campaign `scenes` describes. The router reuses this component across
   // /campaigns/A → /campaigns/B, so between the switch and B's list landing
@@ -505,30 +518,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // settled, with the poll already finished. So: every write bumps this, and a
   // read may only apply while its own bump is still the newest.
   const proposalSeqRef = useRef(0);
-  // The banner offers Retry, which *generates*. That is the right recovery for
-  // a turn that failed, and the wrong one for anything else: retrying a failed
-  // alternate swap by generating appends a consecutive reply, which moves the
-  // slot and hides the very set the user was trying to cycle. So the failure
-  // carries whether a generation is what it wants, rather than the banner
-  // assuming so.
-  // `from` names the operation that raised it. The banner is global but the
-  // reviews are not: an absorb review survives a scene switch, so a chat error
-  // raised in scene B can be on screen while scene A's review is still open.
-  // Without the tag, A's retry clearing "the previous attempt's error" would
-  // take B's unrelated failure -- and its generate-a-reply Retry -- with it.
-  // `err` is the rejection itself, kept alongside its text so the banner can
-  // tell a model it could not reach from any other refusal (#210) -- the
-  // `network` kind lives on the rejection and nowhere in the sentence. Only
-  // `fail` has one to keep: half a dozen other raisers compose their own
-  // sentence out of nothing that failed, and set `text` alone.
-  const [error, setError] =
-    useState<{ text: string; retryable: boolean; from?: string; err?: unknown } | null>(null);
+  // The banner's failure, and whether its Retry -- which generates -- is the
+  // recovery for it: `PlayError` says why each field is there.
+  const [error, setError] = useState<PlayError | null>(null);
   /** Whether the dot has been told this connection is failing, so that the
    *  next turn which works can tell it otherwise. Recovery is only visible if
    *  something announces it, and the shell has no other way to hear. */
   const sawProviderFailure = useRef(false);
   const fail = (e: any, retryable = true, from?: string) => {
-    setError({ text: errorText(e), retryable, from, err: e });
+    // A refusal of the model settings is not retried: the same request meets
+    // the same refusal. A missing installation may need repairing outside the
+    // app, so whether a settings page can fix it does not decide retryability.
+    setError({ text: errorText(e), retryable: retryable && !isSetupFailure(e), from, err: e });
     // A turn that failed is the freshest thing anyone knows about that
     // connection, and it arrives as an SSE frame — so it never passes through
     // the api client's rejection path, where the same signal is raised for
@@ -1203,18 +1204,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     return !!group && scenes.filter((s) => s.branch_group === group).length > 1;
   }, [scenes, activeId]);
 
-  // The response-length chip. A pending one-shot pick beats the scene's own
-  // saved preset; with neither, the label comes from what the SERVER resolved
-  // (api.getSceneResponse), because a preset set at campaign or global scope
-  // names nothing the scene knows about. Claiming "Standard" in that case is
-  // simply false whenever a broader scope supplies something else — so with no
-  // preset to name we report the effective budget and where it came from.
-  const responseChipPending = !!pendingResponse;
-  const responseChipLabel = sceneResponse
-    ? `${pendingResponse?.response_continuation_words || sceneResponse.effective.continuation.words} words · ${
-        pendingResponse?.response_continuation_paragraphs || sceneResponse.effective.continuation.paragraphs} paragraphs`
-    : "Continuation targets";
-
   function chooseResponseOverride(key: "response_continuation_words" | "response_continuation_paragraphs", value: string) {
     if (value && !/^[1-9]\d*$/.test(value)) return;
     setPendingResponse((current) => {
@@ -1231,7 +1220,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // outside-click listener and an Escape handler. It is a native <select> now,
   // which the browser opens, closes, dismisses and keyboard-drives for free --
   // so all three are gone rather than reimplemented.
-  // The transient 🎬 note, and the scene it is steering. Codex review (P2): a
+  // The transient director note, and the scene it is steering. Codex review (P2): a
   // bare string plus the GLOBAL `busy` rendered one scene's note inside
   // another's transcript, because a turn deliberately survives navigation --
   // the reader moves, the run does not. Campaign as well as scene: ids are
@@ -2701,7 +2690,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         else if (e.delta) { acc += e.delta; setStreaming(acc); }
         else if (e.display) { acc = applyDisplay(acc, partStart, e.display); setStreaming(acc); }
         else if (e.error) {
-          fail(e.error, true);
+          fail(e.error, true, "scene");
           finished = true;
           // An ADOPTED run can fail the same way a watched one does, and it
           // rolls the post back the same way -- `post_returned` says so. The
@@ -2922,7 +2911,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // AFTER the refresh, not before. `selectScene` clears the banner on a
     // successful load -- which is right for an ordinary scene open and wrong
     // here, so this has to be the last word rather than the first.
-    if (handle?.state === "failed" && handle.error) fail(handle.error, true);
+    if (handle?.state === "failed" && handle.error) fail(handle.error, true, "scene");
     if (!durable) {
       // The post is not in the scene. Either it was rolled back or it never
       // landed -- and both mean the player's words exist only here. Ambiguity
@@ -2958,14 +2947,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // Whether this turn persists a post of its own. An ephemeral one does not,
     // which changes what evidence the recovery below can use — see there.
     ephemeral = false,
-    // The 🎬 note this generation is steering, or null for the generations that
+    // The director note this generation is steering, or null for the generations that
     // steer with nothing — an ordinary post, a reroll, a resolved proposal.
     // Owned HERE rather than at the call sites (Codex review): every stream
     // enters by this function, and `send` was only one of five ways in, so a
     // note left over from a previous turn rendered beside a reroll or a
     // proposal continuation as though it had steered them.
     note: { cid: string; sid: string; text: string } | null = null,
+    // A chosen provider can recover a broken standing route. Model/preset-only
+    // overrides still depend on that route's connection, as the backend does.
+    route: RerollRoute = NO_REROLL_ROUTE,
   ) {
+    if (!canGenerateOnRoute(canGenerate, route)) return false;
     setDirectorNote(note);
     // The authoritative rename guard, not the ones in `send`/`retry`/`reroll`.
     // Those stop the optimistic UI work before it happens, but they are a list
@@ -3089,7 +3082,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           if (runRef.current?.attempt === attempt) runRef.current.id = e.run.id;
           registry.attach(cid, id, e.run.id);
         } else if (e.error) {
-          fail(e.error, !ephemeral && !(rerolling && acc.trim().length > 0));
+          fail(e.error, !ephemeral && !(rerolling && acc.trim().length > 0), "scene");
           errored = true;
           // The post is gone from the transcript, so the composer has to give
           // the player their words back. Otherwise a failed send destroys what
@@ -3135,7 +3128,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // transcript, so Retry would quietly produce an undirected continuation
       // — or, in a scene with nothing else, fail with "nothing to retry". The
       // note is back in the composer by then, and Send is its retry.
-      if (!isAbortError(err)) fail(err, !ephemeral && !(rerolling && acc.trim().length > 0));
+      if (!isAbortError(err)) fail(err, !ephemeral && !(rerolling && acc.trim().length > 0), "scene");
       // Nothing reached the server, so nothing was stored — the same position
       // the player is in after a rollback, and the same remedy. Review caught
       // that Stop pressed during connection setup, or a server that is simply
@@ -3456,7 +3449,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   }
 
   async function send(speakerRef?: string) {
-    if (busy || rolling || renamesInFlight) return;
+    if (busy || rolling || renamesInFlight || !canGenerate) return;
     const content = input.trim();
     let id = activeId;
     if (!id) {
@@ -3507,6 +3500,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  targets are consumed exactly as Send consumes them. */
   async function sendText(id: string, content: string, director: boolean, recover: boolean,
                           speakerRef?: string) {
+    if (!canGenerate) return;
     // A new prompt supersedes a failed reroll: whatever Retry would have
     // repeated, the player has moved on from it.
     rerollToRetryRef.current = null;
@@ -3598,7 +3592,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  nor cleared, and a failure does not hand the text back (it is still on the
    *  button). The guard is Send's own. */
   async function sendQuick(text: string, director: boolean) {
-    if (!activeId || busy || rolling || renamesInFlight || !text.trim()) return;
+    if (!activeId || busy || rolling || renamesInFlight || !canGenerate || !text.trim()) return;
     atBottomRef.current = true;
     await sendText(activeId, text.trim(), director, false);
   }
@@ -3625,7 +3619,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const key = parkKey(cid, activeId);
     if (parkedPrompts.current.has(key)) {
       setQuickNotice({ cid, sid: activeId,
-        text: `${director ? "🎬 note" : "post"} not inserted · clear the box first` });
+        text: `${director ? "note" : "post"} not inserted · clear the box first` });
       return;
     }
     parkedPrompts.current.set(key, { text, director });
@@ -3846,11 +3840,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  player's next-turn length chip on a request that never used it. The
    *  legacy `reroll` path, which recomposes, still carries and spends it. */
   async function rerollResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
-    if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive) return;
+    if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive
+      || !canGenerateOnRoute(canGenerate, route)) return;
     const sid = activeId;
     await runStream(sid, (onEvent, signal, attempt, onIndex) =>
       api.regenerateResponse(cid, sid, id, onEvent, { guidance, ...rerollOverrides(route) }, signal, attempt, onIndex),
-      undefined, true, "", true);
+      undefined, true, "", true, null, route);
     // No swipe refresh here: `runStream`'s finally asks again on every
     // outcome, including a failed generate that kept the previous variant.
   }
@@ -3862,16 +3857,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  never sends or clears the pending one-shot override. No bare key: it
    *  spends money, so it is only ever a click. */
   async function extendResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
-    if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive) return;
+    if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive
+      || !canGenerateOnRoute(canGenerate, route)) return;
     if (extendDisabled || swipeTarget?.response_id !== id) return;
     const sid = activeId;
     await runStream(sid, (onEvent, signal, attempt, onIndex) =>
       api.extendResponse(cid, sid, id, onEvent, { guidance, ...rerollOverrides(route) }, signal, attempt, onIndex),
-      undefined, true, "", true);
+      undefined, true, "", true, null, route);
   }
 
   async function respondAs(ref: string) {
-    if (!activeId || busy || rolling || sceneLocked || renamesInFlight || !transcriptIsActive) return;
+    if (!activeId || busy || rolling || sceneLocked || renamesInFlight || !transcriptIsActive || !canGenerate) return;
     const sid = activeId;
     const landed = await runStream(sid, (onEvent, signal, attempt, onIndex) =>
       api.chat(cid, sid, "", onEvent, pendingResponse ?? undefined, signal, attempt, onIndex, false, ref),
@@ -4002,8 +3998,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const rerollToRetryRef =
     useRef<{ sid: string; guidance: string; route: RerollRoute } | null>(null);
 
+  // A failed explicit reroute retries the provider it chose, not the broken
+  // default. The banner and shortcut read the same route-aware availability.
+  const canRetry = canGenerateOnRoute(canGenerate,
+    rerollToRetryRef.current?.sid === activeId ? rerollToRetryRef.current.route : NO_REROLL_ROUTE);
+
   async function retry() {
-    if (!activeId || busy || rolling || renamesInFlight) return;
+    if (!activeId || busy || rolling || renamesInFlight || !canRetry) return;
     const again = rerollToRetryRef.current;
     if (again && again.sid === activeId) return void await reroll(again);
     const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
@@ -4023,6 +4024,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (!transcriptIsActive) return;
     const guidance = repeat?.guidance ?? (rerollPrompt ?? "").trim();
     const route = repeat?.route ?? rerollRoute;
+    if (!canGenerateOnRoute(canGenerate, route)) return;
     setRerollPrompt(null);
     rerollToRetryRef.current = { sid: activeId, guidance, route };
     const selectedResponse = messages[rerollAt - firstIndex];
@@ -4051,7 +4053,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // `rerolling`: a reroll that fails wants a different recovery offered
       // than a failed send does — see `runStream`.
       api.regenerate(cid, activeId!, onEvent, body, signal, attempt, onIndex),
-      undefined, true);
+      undefined, true, "", false, null, route);
     if (landed) {
       setPendingResponse(null);
       rerollToRetryRef.current = null;   // it worked; Retry is a plain retry again
@@ -4275,7 +4277,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // on another rail row only re-lists scenes and never refreshes this one.
     // Bailing here leaves the chip exactly as it was, which is the honest state:
     // the decision is still pending (#95).
-    if (renamesInFlight) return;
+    if (renamesInFlight || !canGenerate) return;
     setProposalNow(null);
     await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
       api.resolveProposal(cid, activeId!, body, onEvent, signal, attempt, onIndex));
@@ -4581,18 +4583,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   const plateAvatar = useCallback((run: Pick<TranscriptRunData, "actor" | "speaker" | "pc">,
                                   actorRef?: string): string | null => {
-    // Narrator labels are configurable; the response identity survives a rename.
-    // Older posts have no identity, so retain their reserved/configured labels.
-    if (actorRef === "grimoire") return "/grimoire-32.png";
-    if (!run.actor) return !run.pc && (run.speaker === "Grimoire" || run.speaker === labels.assistant)
-      ? "/grimoire-32.png" : null;
+    if (isNarrator(run, actorRef, labels.assistant)) return "/grimoire-32.png";
+    if (!run.actor) return null;
     // Either actor kind: a speaker plate used to fall back to initials for
     // every PC, because PCs had no images to point at (#219).
     const { kind, id } = run.actor;
     const locked = lockedEntry.get(`${kind}/${id}`);
     // A 26px plate: the smallest bucket, never the original. The token makes
     // it immutable, so a reopened scene asks nothing for any of its plates.
-    return locked?.version
+    // Null is the server's positive report that no avatar exists. An omitted
+    // token is the older API contract, which still needs its fallback request.
+    return locked?.version && locked.avatar_v !== null
       ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, locked.version, "avatar",
                           { w: THUMB.row, v: locked.avatar_v })
       : null;
@@ -4689,7 +4690,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // What decides each quick reply: the guards of the controls they stand for.
   const quickCtx: QuickReplyContext = {
     busy, rolling, renaming: renamesInFlight > 0, sceneLocked, posts: messages.length,
-    moduleKnown: moduleBound !== null, pcless: activePcless, ready,
+    moduleKnown: moduleBound !== null, pcless: activePcless, ready, canGenerate,
     openerOffered, taskRunning,
   };
 
@@ -4716,7 +4717,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const swipeGenerates = swipeShown && swipePosition === swipeCount - 1;
   const swipePrevDisabled = swipeBlocked || swipePosition === 0;
   const swipeNextDisabled = swipeBlocked
-    || (swipeGenerates && (!canReroll || !ledgerSwipe?.can_reroll));
+    || (swipeGenerates && (!canGenerate || !canReroll || !ledgerSwipe?.can_reroll));
   const swipeTip = ledgerSwipe ? swipeTitle(ledgerSwipe) : undefined;
   // Keep writing, on the swipe target: what a generating › needs, minus the
   // arrows' own position rules. A hand-edited reply (`edited`, active null) is
@@ -4768,12 +4769,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     loadedCid: loaded?.cid ?? null, loadedSid: loaded?.sid ?? null,
     // A closed branch is read-only: no gutter actions, no response controls.
     busy, rolling, active: transcriptIsActive && !activeClosed, absorbed: activeDone,
-    responseDisabled,
+    responseDisabled, generationDisabled: !canGenerate,
     lastIndex: firstIndex + messages.length - 1,
     rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker, trackerKeys,
     trackerRerun,
   }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, activeDone,
-       activeClosed, responseDisabled,
+       activeClosed, responseDisabled, canGenerate,
        firstIndex, messages.length, rerollAt, canReroll,
        postChips, citedNeedle, lastOfResponse, tracker, trackerKeys, trackerRerun]);
 
@@ -4788,11 +4789,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const holds = (index: number) => run.posts.some((p) => p.index === index);
     return (
       <TranscriptRun key={run.posts[0].index} run={run} avatar={plateAvatar(run, run.posts[0].m.actor_ref)}
+                     narrator={isNarrator(run, run.posts[0].m.actor_ref, labels.assistant)}
                      ctx={transcriptCtx} actions={transcriptActions}
                      editing={editing && holds(editing.index) ? editing : null}
                      reroll={holds(rerollAt) ? transcriptReroll : null} />
     );
-  }), [runs, plateAvatar, transcriptCtx, transcriptActions, editing, rerollAt, transcriptReroll]);
+  }), [runs, plateAvatar, transcriptCtx, transcriptActions, editing, rerollAt, transcriptReroll,
+       labels.assistant]);
 
   // The same treatment for the context column and the inspector, which are
   // memoized too and were handed fresh closures on every render.
@@ -4843,16 +4846,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
              scene: absorb ? `Absorbing ${absorbTitle}`
                     : wrapUp ? `Wrap-up · ${sceneTitle}` : sceneTitle } : null);
 
-  // The model THIS campaign's scene turns run on, which is not necessarily the
-  // library's: a campaign can override Primary, or point its scene route
-  // elsewhere. Read here because the header has a pathname and no cid, and
-  // answered by the resolver -- the campaign inference view's `scene` route,
-  // whose `resolves` is what `require_inference` would serve a turn and whose
-  // `problem` is the seam's own refusal of it, so the dot cannot say "ready"
-  // about a send the server would refuse. A failed read publishes nothing and
-  // the header keeps the library's answer (`GET /config`).
-  const [sceneModel, setSceneModel] = useState<string | null>(null);
-  const [sceneReady, setSceneReady] = useState<boolean | null>(null);
   const [modelsRev, setModelsRev] = useState(0);
   // Any model-settings write announces itself (the Inspector's Models section,
   // /models, /providers), and each can move what the scene route resolves to.
@@ -4864,6 +4857,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   useEffect(() => {
     setSceneModel(null);
     setSceneReady(null);
+    setSceneProblem(null);
     setLabels({ user: "You", assistant: "Grimoire" });
   }, [cid]);
   // #73: display labels follow this campaign's effective settings. Config is
@@ -4893,10 +4887,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       const scene = view.routes.find((r) => r.key === "scene");
       setSceneModel(scene?.resolves?.model || null);
       setSceneReady(scene ? scene.problem === null : null);
-    }).catch(() => { if (live) { setSceneModel(null); setSceneReady(null); } });
+      setSceneProblem(scene?.problem ?? null);
+    }).catch(() => {
+      if (live) { setSceneModel(null); setSceneReady(null); setSceneProblem(null); }
+    });
     return () => { live = false; };
   }, [cid, modelsRev]);
   usePublishSceneModel(sceneModel, sceneReady);
+  // The banner that says why not, which is what explains a disabled Send.
+  const notReadyId = useId();
 
   // The scene's own keyboard (#193). Every binding here mirrors a control that
   // is on screen, and carries the same condition that control is disabled by —
@@ -4931,7 +4930,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // and the chronicle disagreeing, with nothing to say which is right
       // (PR #400 review).
       // A closed branch's composer is replaced the same way, for the same reason.
-      enabled: !absorb && !activeDone && !activeClosed && !busy && !rolling && !renamesInFlight,
+      enabled: !absorb && !activeDone && !activeClosed && !busy && !rolling && !renamesInFlight
+        && canGenerate,
       run: () => void send(),
     },
     {
@@ -4974,7 +4974,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // Only while the banner is up. `retry()` with nothing to recover is a
       // fresh generation the reader did not ask for, and a bare letter is far
       // too cheap to press for that.
-      enabled: !absorb && !!error?.retryable && !busy && !rolling && !renamesInFlight,
+      enabled: !absorb && !!error?.retryable && !busy && !rolling && !renamesInFlight && canRetry,
       run: () => void retry(),
     },
   ]);
@@ -4992,17 +4992,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     [showCalendar, "Calendar"], [showStyle, "Response"], [showCover, "Cover"],
     [showTracker, "Tracker"],
   ] as const).flatMap(([open, label]) => (open ? [{ label }] : []))[0];
-
-  /** Run a menu item, then shut the menu it was picked from.
-   *
-   *  On each item rather than one handler on the container: a click handler on
-   *  a `<div>` is a control a keyboard cannot reach, and every item here is
-   *  already a button that can carry it.
-   */
-  function pickFromMenu(run: () => void) {
-    if (sceneMenu.current) sceneMenu.current.open = false;
-    run();
-  }
 
   /** Shut everything the menu can open.
    *
@@ -5139,21 +5128,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               the chrome, on the page, and in the palette. What is left on this
               bar is what is about the SCENE in front of you; what belongs to
               the campaign moved to the hub. */}
-          {/* Eight panels behind one control (`Scene ⋯`), which is the design's
-              overflow and is the mobile-clutter half of the brief. The bar's
-              own focus-mode comment already conceded the cost of not having
-              one: "eleven controls at the 44px touch target this width
-              mandates wrap into four rows".
-
-              What stays outside it is what the bar is FOR: the way back to the
-              campaign, and End scene. Everything in the menu opens a panel
-              above the transcript, and none of them is something you press
-              mid-turn.
-
-              A `<details>` rather than a hand-built popover: it is a disclosure
-              and the browser already knows how to open one from the keyboard.
-              The menu closes on pick, because a menu still standing over the
-              panel it just opened is in the way of the thing you asked for. */}
+          {/* Eight panels behind one control (`SceneMenu` says why). What
+              stays outside it is what the bar is FOR: the way back to the
+              campaign, and End scene. */}
           {/* The director-notes toggle. On the bar rather than in the menu:
               it is a way of LOOKING at what is on screen, and everything in
               the menu opens something over the transcript. It renders only
@@ -5165,33 +5142,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               {showNotes ? "Hide" : "Show"} director notes · {noteCount}
             </button>
           )}
-          <details className="scene-menu" ref={sceneMenu}>
-            <summary className="scene-action">Scene ⋯</summary>
-            <div className="scene-menu-options">
-              {/* One list, so a panel added tomorrow is one row rather than a
-                  button, a label and a place in the wrap order. `open` is the
-                  panel's own flag, which is what lets the bar say which one is
-                  showing without a second copy of that state. */}
-              {([
-                ["Changes", showChanges, setShowChanges],
-                ["World updates", showIncoming, setShowIncoming],
-                ["Composition", showComposition, setShowComposition],
-                ["Mechanics", showMechanics, setShowMechanics],
-                ["Calendar", showCalendar, setShowCalendar],
-                ["Response", showStyle, setShowStyle],
-                ["Cover", showCover, setShowCover],
-                ["Tracker", showTracker, setShowTracker],
-              ] as const).map(([label, open, set]) => (
-                <button key={label} className="scene-menu-item"
-                        aria-pressed={open}
-                        onClick={() => pickFromMenu(() => set((v: boolean) => !v))}>
-                  {label}{open ? " ✓" : ""}
-                </button>
-              ))}
-              <button className="scene-menu-item"
-                      onClick={() => pickFromMenu(newScene)}>+ New scene</button>
-            </div>
-          </details>
+          <SceneMenu onNewScene={newScene} panels={[
+            { label: "Changes", open: showChanges, toggle: () => setShowChanges((v) => !v) },
+            { label: "World updates", open: showIncoming, toggle: () => setShowIncoming((v) => !v) },
+            { label: "Composition", open: showComposition, toggle: () => setShowComposition((v) => !v) },
+            { label: "Mechanics", open: showMechanics, toggle: () => setShowMechanics((v) => !v) },
+            { label: "Calendar", open: showCalendar, toggle: () => setShowCalendar((v) => !v) },
+            { label: "Response", open: showStyle, toggle: () => setShowStyle((v) => !v) },
+            { label: "Cover", open: showCover, toggle: () => setShowCover((v) => !v) },
+            { label: "Tracker", open: showTracker, toggle: () => setShowTracker((v) => !v) },
+          ]} />
           {/* The one control the menu cannot carry. A panel is open ABOVE the
               transcript and the button that closes it is behind a disclosure,
               so closing costs two clicks and a hunt for which row has the tick.
@@ -5272,65 +5232,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               End scene one mis-click from discarding every proposal already
               judged. The transcript is still on screen, as the third pane
               below: read-only, and there to check a quote against. */}
-          {/* All three banners sit ABOVE that split, and are the only things
-              that do. They are the page's, not the scene's: `error` is
-              deliberately global and tagged with `from` because a review
-              outlives a scene switch, and a scoped retry that fails inside the
-              review reports through it — so hiding it during a review would
-              swallow the failure of the one button the review offers. The
-              budget (#153) is the page's for a plainer reason: it is the
-              campaign's, and a review spends nothing of its own. */}
-          {!ready && (
-            <div className="banner">
-              No model is ready to generate. Choose a provider and a Primary model on
-              the <Link to="/models">Models page</Link>.
-            </div>
-          )}
-          {/* The only one of the three a reader can dismiss: the other two
-              describe something broken, while this one describes a decision
-              they may well have made on purpose. Dismissing is per level, so
-              spending past the cap says so again after the 80% warning was
-              waved off. Below the connection notice and above the error, which
-              is the order they matter in: nothing can be spent without a
-              connection, and a turn that just failed outranks a running total. */}
-          {budget && (budget.level === "warn" || budget.level === "over")
-            && budgetSeen !== budget.level && (
-            <div className="banner error-banner" role="alert">
-              <span>
-                {budget.level === "over" ? "Over budget: " : "Approaching budget: "}
-                {money(budget.spent_usd ?? 0)} of {money(budget.limit_usd)} spent{" "}
-                {budget.period === "total" ? "in total" : "this month"}
-                {/* The figure is a floor whenever this is non-zero, and a
-                    banner that hid that would be understating the very number
-                    it exists to raise. */}
-                {(budget.unpriced_calls ?? 0) > 0
-                  && ` — ${budget.unpriced_calls} unpriced `
-                     + `${budget.unpriced_calls === 1 ? "call" : "calls"} not counted`}
-                {". "}
-                {/* Where to act on it. The control is in the inspector's Cost
-                    section, which is collapsed by default and so is exactly
-                    what a reader given this banner cannot find — a warning
-                    nobody can act on is the shape this whole view avoids. */}
-                <span className="ctx-meta">Change it in the inspector’s Cost section.</span>
-              </span>
-              <button className="retry" onClick={() => setBudgetSeen(budget.level)}>
-                Dismiss
-              </button>
-            </div>
-          )}
-          {error && (
-            <div className="banner error-banner">
-              {/* `?? text` for the raisers that composed a sentence rather than
-                  catching something: `ErrorNote` renders a plain string
-                  unchanged, so both kinds of banner go through one path. */}
-              <span><ErrorNote err={error.err ?? error.text} /></span>
-              {error.retryable && (
-                <button className="retry" onClick={retry} disabled={busy || rolling}>
-                  Retry
-                </button>
-              )}
-            </div>
-          )}
+          {/* The page's banners sit ABOVE that split, and are the only things
+              that do (`PlayBanners` says why). */}
+          <PlayBanners ready={canGenerate} problem={sceneProblem} readyId={notReadyId}
+                       budget={budget} budgetSeen={budgetSeen} onBudgetSeen={setBudgetSeen}
+                       error={error} onRetry={() => void retry()} retryDisabled={busy || rolling || !canRetry}
+                       onDismissError={() => setError(null)} />
           {!absorb && (<>
           {/* Every one of these eight is opened AND closed from the scene bar,
               which focus mode does not render — so one left open when focus
@@ -5435,29 +5342,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           </>)}
           {absorb && <ReviewPanel review={review} />}
           {!absorb && (<>
-          {/* Only once THIS scene's transcript has landed and turned out empty.
-              `messages` is also empty in the gap between opening a scene and
-              its transcript arriving, and mounting here then cost a
-              campaign-wide character list and a suggestion scan for a panel
-              that unmounted as soon as the posts came in. `landedScene`
-              rather than `loaded`, so a rename from the panel's own date field
-              does not remount it -- see there. */}
-          {activeId && openerOffered && (
-            <CastPanel
-              cid={cid}
-              sid={activeId}
-              openerRequest={openerRequest}
-              ready={ready}
-              onSeeded={() => refreshAndAsk(activeId)}
-              onSceneRenamed={sceneRenamed}
-              initialPrompt={seedPrompt?.cid === cid && seedPrompt.sid === activeId
-                               ? seedPrompt.prompt : undefined}
-              greeting={openedFrom || undefined}
-              pcless={activePcless}
-              sceneLocked={sceneLocked}
-              onRenaming={markRenaming}
-            />
-          )}
           {showInspector && activeId && (
             <div className="panel-slot">
               {/* Memoized, with stable handlers: it re-renders for the scene,
@@ -5552,6 +5436,34 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               </div>
             </div>
           )}
+          {/* Under the scene's title and above its composer, which it gives way
+              to: it shrinks to the room left and scrolls inside it (the
+              stylesheet), so the place to write is on screen when a new scene
+              opens. Above the title at its full height it pushed the composer
+              below the fold.
+              Only once THIS scene's transcript has landed and turned out empty.
+              `messages` is also empty in the gap between opening a scene and
+              its transcript arriving, and mounting here then cost a
+              campaign-wide character list and a suggestion scan for a panel
+              that unmounted as soon as the posts came in. `landedScene`
+              rather than `loaded`, so a rename from the panel's own date field
+              does not remount it -- see there. */}
+          {activeId && openerOffered && (
+            <CastPanel
+              cid={cid}
+              sid={activeId}
+              openerRequest={openerRequest}
+              ready={ready}
+              onSeeded={() => refreshAndAsk(activeId)}
+              onSceneRenamed={sceneRenamed}
+              initialPrompt={seedPrompt?.cid === cid && seedPrompt.sid === activeId
+                               ? seedPrompt.prompt : undefined}
+              greeting={openedFrom || undefined}
+              pcless={activePcless}
+              sceneLocked={sceneLocked}
+              onRenaming={markRenaming}
+            />
+          )}
           <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}
                data-testid="stream" onScroll={onStreamScroll}>
             {firstIndex > 0 && (
@@ -5571,10 +5483,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             {transcript}
             {directorNote && busy
               && directorNote.cid === cid && directorNote.sid === activeId && (
+              /* Plated as a shown stored note is, which is what this one
+                 becomes once the turn lands. */
               <div className="run director-note">
+                <div className="plate"><span className="plate-name">{DIRECTOR_LABEL}</span></div>
                 <div className="msg assistant">
                   <span className="msg-gutter" />
-                  <div className="msg-body">🎬 {directorNote.text}</div>
+                  <div className="msg-body">{directorNote.text}</div>
                 </div>
               </div>
             )}
@@ -5585,7 +5500,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   <div className="plate">
                     <span className="plate-avatar"><Portrait src="/grimoire-32.png" name={labels.assistant} /></span>
                     <span className="plate-name">{labels.assistant}</span>
-                    <span className="role-chip">npc</span>
+                    <span className="role-chip">narrator</span>
                   </div>
                 )}
                 <div className="msg assistant">
@@ -5630,7 +5545,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             )}
           </div>
           {proposal && activeId && (
-            <RollProposal key={proposal.id} record={proposal} busy={busy || rolling}
+            <RollProposal key={proposal.id} record={proposal} busy={busy || rolling || !canGenerate}
                           onResolve={resolve} />
           )}
           {activeId && (
@@ -5641,7 +5556,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                here funnels through. */
             <ReplayPanel key={`${activeId}:${replayEpoch}`}
                          cid={cid} sid={activeId} startAt={replayAt}
-                         disabled={busy || rolling}
+                         disabled={busy || rolling} generationDisabled={!canGenerate}
                          // The same latch every other write to this transcript
                          // takes: a replayed turn is a generation into the scene
                          // on screen, and while one runs nothing else here may
@@ -5710,90 +5625,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             <div className="scene-complete">✓ Scene complete</div>
           ) : (
           <div className={`composer${directing ? " directing" : ""}`}>
-          {/* Its own row, not a cell inside the input bar. As a cell it was
-              `flex: none` at 334px of un-shrinkable nowrap text -- 63% of the
-              bar's 529px minimum -- so a narrow column squeezed the textarea to
-              36px and then pushed Send clean out of the column. Here it is free
-              to shrink and Send cannot be displaced. */}
-          <div className="composer-meta">
-            {/* #83. The two things this composer can send have always been two
-                things; until now only one of them had a name on screen. Shown
-                in every scene, because the director turn is not offscreen-only
-                — an empty send takes the same path in an ordinary scene, and a
-                control that appeared only when `pcless` would hide half of what
-                the feature does. */}
-            <div className="composer-mode" role="group" aria-label="Turn kind">
-              <button type="button" aria-pressed={!directing}
-                      disabled={activePcless}
-                      title={activePcless
-                        ? "No player character is in this scene"
-                        : "Post as your character"}
-                      onClick={() => setDirectMode(false)}>Speak</button>
-              <button type="button" aria-pressed={directing}
-                      title="Steer the scene without posting"
-                      onClick={() => setDirectMode(true)}>Direct</button>
-            </div>
-            {/* What Direct actually costs and buys, said once, beside the
-                control — the note is spent on this generation and the
-                transcript never sees it. */}
-            {directing && (
-              <span className="composer-meta-hint">steers the reply · never posted</span>
-            )}
-            {/* A note that could not be handed back because a draft of the
-                other kind holds the box. Without this it waits in a place with
-                nothing on screen naming it, which is its own way of losing
-                what somebody wrote. */}
-            {heldKind && (
-              <span className="composer-meta-hint">
-                {heldKind === "note" ? "🎬 note held" : "post held"}
-                {" · clear the box to get it back"}
-              </span>
-            )}
-            <label className="composer-meta-label" htmlFor="response-words">Response</label>
-            <input id="response-words" type="number" min="1" step="1" aria-label="Next reply words"
-              className="response-target-input"
-              value={pendingResponse?.response_continuation_words ?? ""}
-              placeholder={String(sceneResponse?.effective.continuation.words ?? 150)}
-              onChange={(event) => chooseResponseOverride("response_continuation_words", event.target.value)} />
-            <label className="composer-meta-label" htmlFor="response-paragraphs">paragraphs</label>
-            <input id="response-paragraphs" type="number" min="1" step="1" aria-label="Next reply paragraphs"
-              className="response-target-input"
-              value={pendingResponse?.response_continuation_paragraphs ?? ""}
-              placeholder={String(sceneResponse?.effective.continuation.paragraphs ?? 2)}
-              onChange={(event) => chooseResponseOverride("response_continuation_paragraphs", event.target.value)} />
-            <span className="composer-meta-hint">{responseChipLabel}</span>
-            {responseChipPending && (
-              <button type="button" className="chip-clear" title="Cancel the one-shot targets"
-                aria-label="Cancel the one-shot response targets"
-                onClick={clearResponseOverride}>?</button>
-            )}
-            {/* Who replies next, and in what order. Not disabled by a live run:
-                the settings are read at the next round, and the PUT is not a
-                transcript write. */}
-            {activeId && group && (
-              <button type="button" className="composer-link" aria-expanded={showGroup}
-                title="Who replies next, and in what order"
-                onClick={() => setShowGroup((v) => !v)}>
-                Order: {GROUP_ORDER_LABEL[group.order]}
-              </button>
-            )}
-            <span className="header-spacer" />
-            {/* Opening a dossier does not take the turn away from you, and this
-                is where the app says so — beside the control you were about to
-                use, while the draft and the caret are still exactly where you
-                left them. */}
-            {selectedActor && (
-              <span className="composer-notice">Still your turn · dossier open</span>
-            )}
-            {quickNotice && quickNotice.cid === cid && quickNotice.sid === activeId && (
-              <span className="composer-notice" role="status">{quickNotice.text}</span>
-            )}
-            <button type="button" className="composer-link"
-                    aria-expanded={showInspector}
-                    onClick={() => setShowInspector((v) => !v)}>
-              {showInspector ? "Hide what the model saw" : "What the model saw →"}
-            </button>
-          </div>
+          <ComposerMeta
+            directing={directing} pcless={activePcless} onDirect={setDirectMode} held={heldKind}
+            targets={{
+              words: pendingResponse?.response_continuation_words ?? "",
+              paragraphs: pendingResponse?.response_continuation_paragraphs ?? "",
+              wordsDefault: String(sceneResponse?.effective.continuation.words ?? 150),
+              paragraphsDefault: String(sceneResponse?.effective.continuation.paragraphs ?? 2),
+            }}
+            onTarget={chooseResponseOverride} onClearTargets={clearResponseOverride}
+            order={activeId && group ? GROUP_ORDER_LABEL[group.order] : null}
+            orderOpen={showGroup} onOrder={() => setShowGroup((v) => !v)}
+            dossierOpen={!!selectedActor}
+            notice={quickNotice && quickNotice.cid === cid && quickNotice.sid === activeId
+              ? quickNotice.text : null}
+            inspectorOpen={showInspector} onInspector={() => setShowInspector((v) => !v)} />
           {showGroup && activeId && group && (
             <GroupPanel key={`${cid}/${activeId}`} cid={cid} sid={activeId} cast={cast}
               settings={group}
@@ -5822,7 +5668,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                       aria-label="Roll dice"
                       disabled={!activeId || busy || sceneLocked || messages.length === 0}
                       onClick={toggleRollPop}>
-                🎲
+                ⚄
               </button>
             )}
             {rollForm && (
@@ -5921,7 +5767,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             />
             {activeId && <div className="form-actions">
               <ReplyChips cast={cast} sittingOut={group?.sitting_out ?? []}
-                disabled={busy || rolling || sceneLocked || renamesInFlight > 0}
+                disabled={busy || rolling || sceneLocked || renamesInFlight > 0 || !canGenerate}
                 onReply={(ref) => void (input.trim() ? send(ref) : respondAs(ref))} />
             </div>}
             {/* Selection and every handoff share the run's busy latch. Keep
@@ -5929,9 +5775,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 the separate Stop still cancels it before any prose arrives. */}
             <div className="composer-run-actions">
               {busy && <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>}
-              <button className="send" onClick={() => void send()} disabled={busy || rolling || renamesInFlight > 0}>
+              {/* Disabled where no model can answer, rather than sending into
+                  the refusal: the banner above says why, and is named as this
+                  button's description. */}
+              <button className="send" onClick={() => void send()}
+                      disabled={busy || rolling || renamesInFlight > 0 || !canGenerate}
+                      title={canGenerate ? undefined : "No model is ready to generate"}
+                      aria-describedby={canGenerate ? undefined : notReadyId}>
                 {/* An empty box requests one additional response in either mode. */}
-                {!input.trim() ? "Continue ▶" : directing ? "Direct 🎬" : "Send ▸"}
+                {!input.trim() ? "Continue ▶" : directing ? "Direct ▸" : "Send ▸"}
               </button>
             </div>
           </div>

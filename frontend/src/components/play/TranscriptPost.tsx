@@ -3,10 +3,12 @@ import type { Actor, Message, TrackerEntry, TrackerSummary, UsagePostBucket } fr
 import { PostCost } from "../cost";
 import { Portrait } from "../Portrait";
 import { ResponseControls } from "../ResponseControls";
-import RerollRoutePicker, { type RerollRoute } from "../RerollRoute";
+import RerollRoutePicker, { canGenerateOnRoute, type RerollRoute } from "../RerollRoute";
 import { SavedThinking } from "../Thinking";
 import { TrackerDisclosure } from "../tracker/TrackerDisclosure";
+import { PostActions, type PostAction } from "./PostActions";
 import { RenderedMarkdown } from "./StreamingMarkdown";
+import { SwipeNav } from "./SwipeNav";
 import { quotedIn } from "./citation";
 import { useSwipe } from "./useSwipe";
 import { useHotkeys } from "../../shortcuts/useHotkeys";
@@ -43,6 +45,15 @@ export type TranscriptRunData = {
   speaker: string; pc: boolean; actor: Actor | undefined;
   posts: { m: Message; index: number }[];
 };
+
+/** A response identity survives a renamed narrator label. Older transcripts
+ *  carry labels alone, so only an unmatched, reserved/configured label can
+ *  identify their narrator; a cast member with that name is still an actor. */
+export function isNarrator(run: Pick<TranscriptRunData, "actor" | "speaker" | "pc">,
+                           actorRef: string | undefined, narratorLabel: string): boolean {
+  return actorRef === "grimoire" || (!actorRef && !run.actor && !run.pc
+    && (run.speaker === "Grimoire" || run.speaker === narratorLabel));
+}
 
 /** What a row can ask the play view to do.
  *
@@ -138,6 +149,7 @@ export type TranscriptContext = {
    *  there (there is no future prompt to protect), so the toggle is not shown. */
   absorbed: boolean;
   responseDisabled: boolean;
+  generationDisabled: boolean;
   /** Absolute index of the last post in the window. */
   lastIndex: number;
   rerollAt: number; canReroll: boolean;
@@ -168,10 +180,11 @@ const NO_NAMES: Record<string, string> = {};
  *  props again — so a keystroke in the edit form or the reroll guidance
  *  re-renders one run, and in it one row. */
 export const TranscriptRun = memo(function TranscriptRun({
-  run, avatar, ctx, editing, reroll, actions,
+  run, avatar, narrator, ctx, editing, reroll, actions,
 }: {
   run: TranscriptRunData;
   avatar: string | null;
+  narrator: boolean;
   ctx: TranscriptContext;
   /** The edit form, when the post it is open on is in this run; else null. */
   editing: { index: number; text: string } | null;
@@ -206,7 +219,7 @@ export const TranscriptRun = memo(function TranscriptRun({
             <span className="plate-name">{run.speaker}</span>
           </>
         )}
-        <span className="role-chip">{run.pc ? "pc" : "npc"}</span>
+        <span className="role-chip">{narrator ? "narrator" : run.pc ? "pc" : "npc"}</span>
       </div>
       {run.posts.map(({ m, index }) => {
         const rerollRow = index === ctx.rerollAt;
@@ -239,6 +252,7 @@ export const TranscriptRun = memo(function TranscriptRun({
               ? ctx.trackerRerun[ctx.trackerKeys[index]] ?? 1 : 0}
             loadedCid={ctx.loadedCid} loadedSid={ctx.loadedSid}
             cid={ctx.cid} sid={ctx.sid} responseDisabled={ctx.responseDisabled}
+            generationDisabled={ctx.generationDisabled}
             actions={actions}
           />
         );
@@ -246,6 +260,89 @@ export const TranscriptRun = memo(function TranscriptRun({
     </div>
   );
 });
+
+/** A post's actions, in the order the toolbar and the menu list them: the
+ *  generation first, the edits after, and the one that takes the post and
+ *  everything after it last, where a slip of the thumb down a menu does not
+ *  land on it.
+ *
+ *  Every gate below is the one the gutter's buttons carried, and each says
+ *  why. Exported for its own cases in `PostActions.test.tsx`. */
+export function postActions({ m, index, actor, speaker, rolling, active, absorbed, rerollButton,
+  canReplayAfter, actions }: {
+  m: Message; index: number; actor: Actor | undefined; speaker: string;
+  rolling: boolean; active: boolean; absorbed: boolean;
+  rerollButton: boolean; canReplayAfter: boolean;
+  actions: TranscriptActions;
+}): PostAction[] {
+  const post = index + 1;
+  const out: PostAction[] = [];
+  const prose = m.speaker !== ROLL_SPEAKER && m.speaker !== TRANSITION_SPEAKER
+    && m.speaker !== DIRECTOR_SPEAKER;
+  if (rerollButton) {
+    out.push({ label: "Reroll", name: "Reroll", glyph: "↻", disabled: rolling,
+               run: actions.openReroll });
+  }
+  if (m.speaker !== ROLL_SPEAKER && active) {
+    out.push({ label: "Edit message", name: `Edit message ${post}`, glyph: "✎",
+               disabled: rolling, run: () => actions.edit(index, m.content) });
+  }
+  // Hide from context: the post stays here and in every export, and reaches
+  // no prompt. Player and model posts only -- a roll line is half of an
+  // immutable rolls.json fact, a transition is half of the scene's
+  // location/time history, and a note never reaches a story prompt anyway.
+  // Not on an absorbed scene, which has no future prompt to protect.
+  if (active && !absorbed && prose) {
+    out.push({
+      label: m.excluded ? "Return to context" : "Hide from context",
+      name: `${m.excluded ? "Return" : "Hide"} message ${post} ${m.excluded ? "to" : "from"} context`,
+      glyph: "⊘", pressed: !!m.excluded, disabled: rolling,
+      run: () => actions.toggleExcluded(index, !m.excluded),
+    });
+  }
+  // Refused on a dice-roll line for the same reason Edit is: this rewrites
+  // the post, and that line's text must stay in lockstep with an immutable
+  // rolls.json entry. Everything else about it is Edit -- it opens the very
+  // same buffer, with the reference already in it (#376).
+  if (m.speaker !== ROLL_SPEAKER && active) {
+    out.push({ label: "Insert an image", name: `Insert an image into message ${post}`,
+               glyph: "▨", disabled: rolling,
+               run: () => actions.pickImage(index, actor, speaker) });
+  }
+  // Offered on a post the rules can touch, which is every post but a
+  // synthetic line (a roll, a transition, a director note). Read-only, so it
+  // needs neither `active` nor `rolling`.
+  if (prose) {
+    out.push({ label: "Test rules on this post", name: `Test rules on message ${post}`,
+               glyph: "⚗\uFE0E", run: () => actions.testRules(index, m) });
+  }
+  // Replay the turns AFTER this one (#79): the post itself stands -- it is
+  // the one that was retconned -- and everything past it is cut and re-run
+  // one turn at a time. Offered only where there is something after it to
+  // replay, and on a roll line too: a cut span may contain one, and
+  // replaying it re-posts the line while `rolls.json` keeps the entry it
+  // names.
+  if (active && canReplayAfter) {
+    out.push({ label: "Replay the turns after this post",
+               name: `Replay the turns after message ${post}`, glyph: "»", disabled: rolling,
+               run: () => actions.replayFrom(index + 1) });
+  }
+  // Branch from here (play controls III): on every post of an active scene,
+  // roll lines included -- the branch keeps this post as its last.
+  if (active) {
+    out.push({ label: "Branch from here", name: `Branch from message ${post}`, glyph: "⑂",
+               disabled: rolling, run: () => actions.branchFrom(index) });
+  }
+  // Offered on a dice-roll line too, where Edit is not: that line is refused
+  // because its text must stay in lockstep with an immutable rolls.json entry,
+  // and a cut removes the line rather than rewriting it.
+  if (active) {
+    out.push({ label: "Delete this post and everything after it",
+               name: `Delete message ${post} and everything after it`, glyph: "✂\uFE0E",
+               danger: true, disabled: rolling, run: () => actions.cutFrom(index) });
+  }
+  return out;
+}
 
 /** One post: its gutter, its body and its response controls.
  *
@@ -255,7 +352,7 @@ export const TranscriptRun = memo(function TranscriptRun({
 export const TranscriptPost = memo(function TranscriptPost({
   m, index, actor, speaker, cited, editingText, busy, rolling, active, absorbed, rerollButton, swipe,
   variantSwipe, rerollPop, extend, canReplayAfter, chip, lastOfResponse, trackerKey, trackerEntry, trackerNames,
-  trackerLabels, trackerEnabled, trackerRerun, loadedCid, loadedSid, cid, sid, responseDisabled, actions,
+  trackerLabels, trackerEnabled, trackerRerun, loadedCid, loadedSid, cid, sid, responseDisabled, generationDisabled, actions,
 }: {
   m: Message; index: number;
   /** Who spoke it, for the image picker's scope (#376). */
@@ -286,6 +383,7 @@ export const TranscriptPost = memo(function TranscriptPost({
   loadedCid: string | null; loadedSid: string | null;
   cid: string; sid: string;
   responseDisabled: boolean;
+  generationDisabled: boolean;
   actions: TranscriptActions;
 }) {
   const editing = editingText !== null;
@@ -302,121 +400,17 @@ export const TranscriptPost = memo(function TranscriptPost({
     <div className={`msg ${m.role}` + (cited ? " cited" : "") + (variantSwipe ? " swipe-target" : "")
                      + (m.excluded ? " excluded" : "")}
          {...(variantSwipe ? gesture : {})}>
+      {/* The column the plate's portrait sits over, so every speaker's prose
+          starts on one measure. It holds the reroll box's anchor and nothing
+          in the flow: a post is as tall as its text. */}
       <span className="msg-gutter">
-        {!editing && !busy && (
-          <span className="gutter-icons">
-            {rerollButton && (
-              <button className="msg-edit" title="Reroll" aria-label="Reroll"
-                      disabled={rolling} onClick={actions.openReroll}>↻</button>
-            )}
-            {swipe && (
-              <span className="swipe-nav">
-                <button className="msg-edit" aria-label="Previous alternate"
-                        disabled={swipe.disabled}
-                        onClick={() => actions.stepAlternate(-1)}>‹</button>
-                <span className="swipe-count" title={swipe.title}>
-                  {swipe.active === null ? "–" : swipe.active + 1}/{swipe.count}
-                </span>
-                <button className="msg-edit" aria-label="Next alternate"
-                        disabled={swipe.disabled}
-                        onClick={() => actions.stepAlternate(1)}>›</button>
-              </span>
-            )}
-            {variantSwipe && (
-              <span className="swipe-nav">
-                <button className="msg-edit" aria-label="Previous reply variant"
-                        disabled={variantSwipe.previousDisabled}
-                        onClick={() => actions.stepVariant(-1)}>‹</button>
-                <span className="swipe-count" title={variantSwipe.title}>
-                  {variantSwipe.position + 1}/{variantSwipe.count}
-                </span>
-                <button className="msg-edit"
-                        aria-label={variantSwipe.generates
-                          ? "Generate a new reply variant" : "Next reply variant"}
-                        disabled={variantSwipe.nextDisabled}
-                        onClick={() => actions.stepVariant(1)}>›</button>
-              </span>
-            )}
-            {m.speaker !== ROLL_SPEAKER && active && (
-              <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
-                      disabled={rolling}
-                      onClick={() => actions.edit(index, m.content)}>✎</button>
-            )}
-            {/* Hide from context: the post stays here and in every export,
-                and reaches no prompt. Player and model posts only -- a roll
-                line is half of an immutable rolls.json fact, a transition is
-                half of the scene's location/time history, and a note never
-                reaches a story prompt anyway. Not on an absorbed scene,
-                which has no future prompt to protect. */}
-            {active && !absorbed && m.speaker !== ROLL_SPEAKER && m.speaker !== TRANSITION_SPEAKER
-              && m.speaker !== DIRECTOR_SPEAKER && (
-              <button className="msg-edit msg-exclude"
-                      title={m.excluded ? "Return to context" : "Hide from context"}
-                      aria-label={`${m.excluded ? "Return" : "Hide"} message ${index + 1} ${m.excluded ? "to" : "from"} context`}
-                      aria-pressed={!!m.excluded}
-                      disabled={rolling}
-                      onClick={() => actions.toggleExcluded(index, !m.excluded)}>⊘</button>
-            )}
-            {/* Refused on a dice-roll line for the same reason
-                Edit is: this rewrites the post, and that line's
-                text must stay in lockstep with an immutable
-                rolls.json entry. Everything else about it is
-                Edit — it opens the very same buffer, with the
-                reference already in it (#376). */}
-            {m.speaker !== ROLL_SPEAKER && active && (
-              <button className="msg-edit" title="Insert an image"
-                      aria-label={`Insert an image into message ${index + 1}`}
-                      disabled={rolling}
-                      onClick={() => actions.pickImage(index, actor, speaker)}>🖼</button>
-            )}
-            {/* Offered on a dice-roll line too, where Edit is not:
-                that line is refused because its text must stay in
-                lockstep with an immutable rolls.json entry, and a
-                cut removes the line rather than rewriting it. */}
-            {active && (
-              <button className="msg-edit msg-cut" title="Delete this post and everything after it"
-                      aria-label={`Delete message ${index + 1} and everything after it`}
-                      disabled={rolling}
-                      onClick={() => actions.cutFrom(index)}>🗑</button>
-            )}
-            {/* Replay the turns AFTER this one (#79): the post
-                itself stands -- it is the one that was retconned
-                -- and everything past it is cut and re-run one
-                turn at a time. Offered only where there is
-                something after it to replay, and on a roll line
-                too: a cut span may contain one, and replaying it
-                re-posts the line while `rolls.json` keeps the
-                entry it names. */}
-            {/* Offered on a post the rules can touch, which is every post
-                but a synthetic line (a roll, a transition, a director note).
-                Read-only, so it needs neither `active` nor `rolling`. */}
-            {m.speaker !== ROLL_SPEAKER && m.speaker !== TRANSITION_SPEAKER
-              && m.speaker !== DIRECTOR_SPEAKER && (
-              <button className="msg-edit" title="Test rules on this post"
-                      aria-label={`Test rules on message ${index + 1}`}
-                      onClick={() => actions.testRules(index, m)}>⚗</button>
-            )}
-            {active && canReplayAfter && (
-              <button className="msg-edit" title="Replay the turns after this post"
-                      aria-label={`Replay the turns after message ${index + 1}`}
-                      disabled={rolling}
-                      onClick={() => actions.replayFrom(index + 1)}>⏩</button>
-            )}
-            {/* Branch from here (play controls III): on every post of an
-                active scene, roll lines included -- the branch keeps this post
-                as its last. */}
-            {active && (
-              <button className="msg-edit" title="Branch from here"
-                      aria-label={`Branch from message ${index + 1}`}
-                      disabled={rolling}
-                      onClick={() => actions.branchFrom(index)}>⑂</button>
-            )}
-          </span>
-        )}
         {rerollPop && !busy && (
-          <RerollPopover cid={cid} pop={rerollPop} rolling={rolling} actions={actions} />
+          <RerollPopover cid={cid} pop={rerollPop} rolling={rolling}
+                         generationDisabled={generationDisabled} actions={actions} />
         )}
       </span>
+      {!editing && !busy && <PostActions post={index + 1} actions={postActions(
+        { m, index, actor, speaker, rolling, active, absorbed, rerollButton, canReplayAfter, actions })} />}
       <div className="msg-body">
         {m.excluded && !editing && <span className="not-in-context">not in context</span>}
         {/* What this post cost to answer, over every reroll of it
@@ -457,6 +451,25 @@ export const TranscriptPost = memo(function TranscriptPost({
                 The edit form above still starts from `content`: the raw text
                 is what is stored, and what an edit rewrites. */}
             <RenderedMarkdown content={m.shown ?? m.content} />
+            {swipe && (
+              <SwipeNav shown={`${swipe.active === null ? "–" : swipe.active + 1}/${swipe.count}`}
+                        title={swipe.title}
+                        previous={{ name: "Previous alternate", disabled: swipe.disabled || busy,
+                                    run: () => actions.stepAlternate(-1) }}
+                        next={{ name: "Next alternate", disabled: swipe.disabled || busy,
+                                run: () => actions.stepAlternate(1) }} />
+            )}
+            {variantSwipe && (
+              <SwipeNav shown={`${variantSwipe.position + 1}/${variantSwipe.count}`}
+                        title={variantSwipe.title}
+                        previous={{ name: "Previous reply variant",
+                                    disabled: variantSwipe.previousDisabled,
+                                    run: () => actions.stepVariant(-1) }}
+                        next={{ name: variantSwipe.generates
+                                  ? "Generate a new reply variant" : "Next reply variant",
+                                disabled: variantSwipe.nextDisabled,
+                                run: () => actions.stepVariant(1) }} />
+            )}
             {trackerKey !== undefined && loadedCid !== null && loadedSid !== null
               && (m.role === "user" || lastOfResponse)
               && <TrackerDisclosure key={`${loadedCid}:${loadedSid}:${trackerKey}`}
@@ -470,6 +483,7 @@ export const TranscriptPost = memo(function TranscriptPost({
             responseId={m.response_id} canReroll={!!m.response_can_reroll}
             status={m.response_status} contextChanged={m.context_changed}
             disabled={responseDisabled}
+            generationDisabled={generationDisabled}
             onDelete={actions.deleteResponse}
             onReroll={actions.rerollResponse}
             onExtend={extend ? actions.extendResponse : undefined}
@@ -499,10 +513,11 @@ export const TranscriptPost = memo(function TranscriptPost({
  *  Enter stays on the element, where it is a commit: from the guidance box,
  *  or from a model row. The picker keeps the Enter its own controls answer (a
  *  select, a button, the typed-id box) by stopping it before it gets here. */
-function RerollPopover({ cid, pop, rolling, actions }: {
+function RerollPopover({ cid, pop, rolling, generationDisabled, actions }: {
   cid: string;
   pop: { prompt: string; route: RerollRoute };
   rolling: boolean;
+  generationDisabled: boolean;
   actions: TranscriptActions;
 }) {
   useHotkeys(
@@ -513,6 +528,7 @@ function RerollPopover({ cid, pop, rolling, actions }: {
   // A model id typed into the picker and not yet taken: Reroll waits for it
   // (`RerollRoutePicker`'s `onPending`), and so does Enter's commit.
   const [pending, setPending] = useState(false);
+  const disabled = rolling || pending || !canGenerateOnRoute(!generationDisabled, pop.route);
   return (
     // Keydown is only Enter's commit, filtered from what its controls send;
     // they are the interactive elements.
@@ -526,7 +542,7 @@ function RerollPopover({ cid, pop, rolling, actions }: {
             // `preventDefault` is what tells the shortcut dispatcher this
             // keystroke is spoken for: ⌘⏎ typed here means "reroll", not
             // "send", and without it both fired (PR #400 review).
-            if (e.key === "Enter") { e.preventDefault(); if (!pending) actions.reroll(); }
+            if (e.key === "Enter") { e.preventDefault(); if (!disabled) actions.reroll(); }
           }}>
       {/* Above the guidance, not beside it: this is where the reroll goes,
           and the hint is what it says once it gets there. Untouched, it is
@@ -541,7 +557,7 @@ function RerollPopover({ cid, pop, rolling, actions }: {
           value={pop.prompt}
           onChange={(e) => actions.setRerollPrompt(e.target.value)}
         />
-        <button className="btn-chrome" onClick={actions.reroll} disabled={rolling || pending}>
+        <button className="btn-chrome" onClick={actions.reroll} disabled={disabled}>
           Reroll ▸
         </button>
       </span>

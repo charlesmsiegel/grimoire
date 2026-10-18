@@ -85,3 +85,31 @@ export function isOffline(err: unknown): boolean {
   return typeof err === "object" && err !== null
     && (err as { kind?: unknown }).kind === "network";
 }
+
+const SETUP_FAILURES = new Set(["missing_key", "incapable", "auth", "missing_dependency"]);
+
+/** Another identical attempt cannot repair credentials, capabilities or an
+ *  absent provider installation. A settings link is a separate question:
+ *  an SDK or CLI dependency may need installing outside the app. */
+export function isSetupFailure(err: unknown): boolean {
+  const kind = typeof err === "object" && err !== null
+    ? (err as { kind?: unknown }).kind : undefined;
+  return typeof kind === "string" && SETUP_FAILURES.has(kind);
+}
+
+/** Where a refusal that is the model SETTINGS' gets fixed, or null for any
+ *  other failure.
+ *
+ *  Two kinds are refused before anything is sent, and sending the same
+ *  request again meets the same refusal: `missing_key` (a provider with no
+ *  key or address, or nothing selected at all) and `incapable` (a model known
+ *  unable to do what its route needs). Retrying either is a second identical
+ *  409, so a surface that offers Retry for a failed call offers the page that
+ *  fixes these instead: Providers, where a key is set, or Models, where a
+ *  model is chosen. */
+export function setupFix(err: unknown): "/providers" | "/models" | null {
+  const kind = typeof err === "object" && err !== null
+    ? (err as { kind?: unknown }).kind
+    : undefined;
+  return kind === "missing_key" ? "/providers" : kind === "incapable" ? "/models" : null;
+}

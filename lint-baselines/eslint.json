@@ -387,7 +387,7 @@
   "frontend/src/routes/CampaignView.tsx": {
     "@typescript-eslint/no-explicit-any": 17,
     "@typescript-eslint/no-floating-promises": 4,
-    "@typescript-eslint/no-misused-promises": 10,
+    "@typescript-eslint/no-misused-promises": 9,
     "@typescript-eslint/no-unnecessary-type-assertion": 2,
     "@typescript-eslint/no-unsafe-assignment": 2,
     "@typescript-eslint/no-unsafe-member-access": 10,

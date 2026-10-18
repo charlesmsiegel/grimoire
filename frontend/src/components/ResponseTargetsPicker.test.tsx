@@ -53,3 +53,16 @@ it("uses global response endpoints at global scope", async () => {
   await waitFor(() => expect(api.setGlobalResponse).toHaveBeenCalled());
   expect(api.getSceneResponse).not.toHaveBeenCalled();
 });
+
+it("lays each target out as a field: label over box over where its figure comes from", async () => {
+  // It was five bare labels in a row, each running into the next
+  // ("Opening words[400]400 from default…"), in all three places it renders.
+  render(<ResponseTargetsPicker scope="scene" cid="run" sid="s1" />);
+  const box = await screen.findByLabelText("Opening words");
+  const field = box.closest(".field") as HTMLElement;
+  expect(field.parentElement).toHaveClass("response-targets-grid");
+  expect(field.querySelector("label")).toHaveTextContent("Opening words");
+  expect(field).toHaveTextContent("400 from global");
+  expect(screen.getByLabelText("Style").closest(".field")?.parentElement)
+    .toHaveClass("response-targets-grid");
+});

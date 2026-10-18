@@ -159,6 +159,26 @@ test("› at the newest generates once, with no guidance, and keeps the pending 
   expect(api.regenerateResponse).toHaveBeenCalledTimes(1);
 });
 
+test("while a turn runs the count stays under its post, with both arrows disabled", async () => {
+  // The arrows used to live in the hover gutter, which hid them -- count and
+  // all -- for the length of every turn, so the row under the reply jumped.
+  playing();
+  reads({ active: 2 });
+  let finish: (() => void) | undefined;
+  (api.regenerateResponse as any).mockImplementation(
+    (_c: string, _s: string, _r: string, onEvent: (e: unknown) => void) => new Promise<void>((resolve) => {
+      finish = () => { onEvent({ done: true }); resolve(); };
+    }));
+  renderCampaign();
+  expect(await screen.findByText("3/3")).toBeInTheDocument();
+  fireEvent.click(next());
+  await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
+  expect(within(row("The second answer.")).getByText("3/3")).toBeInTheDocument();
+  expect(previous()).toBeDisabled();
+  expect(next()).toBeDisabled();
+  await act(async () => finish?.());
+});
+
 test.each([
   ["an unfinished round is open", { round_open: true }],
   ["the server says the response is not editable", { editable: false }],

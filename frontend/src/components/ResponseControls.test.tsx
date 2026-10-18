@@ -27,6 +27,20 @@ function show(extra = {}, { open = true } = {}) {
 }
 
 describe("individual response controls", () => {
+  it("campaign scene readiness blocks generation while retained-response actions stay usable", () => {
+    const onExtend = vi.fn();
+    const actions = show({ generationDisabled: true, onExtend });
+    expect(screen.getByRole("button", { name: "Reroll response" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Keep writing/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
+    fireEvent.click(screen.getByRole("button", { name: /Keep writing/ }));
+    expect(actions.onReroll).not.toHaveBeenCalled();
+    expect(onExtend).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete response" }));
+    expect(actions.onDelete).toHaveBeenCalledWith("response-a");
+    expect(screen.getByRole("button", { name: "Response variants" })).toBeEnabled();
+    expect(screen.queryByText(/Historical context is unavailable/)).toBeNull();
+  });
   it("deletes only the selected response and rerolls with its own steer", () => {
     const actions = show();
     fireEvent.click(screen.getByRole("button", { name: "Delete response" }));
@@ -35,6 +49,22 @@ describe("individual response controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
     expect(actions.onReroll).toHaveBeenCalledWith("response-a", "More restrained",
       { provider: "", model: "", preset: "" });
+  });
+  it("is a quiet disclosure: the steer a labelled field, the actions one row with Delete last", () => {
+    // It was a 17px summary over a run of browser-default buttons, with the
+    // steer's label running into its input.
+    show({ onExtend: vi.fn(), onCreateCharacter: vi.fn() });
+    expect(screen.getByText("Response actions").closest("details")).toHaveClass("response-actions");
+    const steer = screen.getByLabelText("Response steer");
+    expect(steer.closest(".field")).not.toBeNull();
+    const row = screen.getByRole("button", { name: "Reroll response" }).parentElement as HTMLElement;
+    expect(row).toHaveClass("form-actions");
+    const buttons = Array.from(row.querySelectorAll("button"));
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      "Reroll response", "Keep writing ▸", "Replay from here", "Response variants",
+      "Create character from this passage", "Delete response"]);
+    for (const b of buttons) expect(b).toHaveClass("subtle");
+    expect(buttons[buttons.length - 1]).toHaveClass("danger");
   });
   it("shows retained incomplete and changed-context states, disables all writes while busy", () => {
     show({ disabled: true, status: "incomplete", contextChanged: true });

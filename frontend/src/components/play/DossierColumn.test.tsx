@@ -137,6 +137,12 @@ test("‹ All cast returns to the grid", () => {
   expect(opened).toEqual(["back"]);
 });
 
+test("an avatar known to be missing renders initials without an image request", () => {
+  renderDossier({ ...AUD, name: "Mara", avatar_v: null });
+  expect(screen.queryByAltText("Mara portrait")).not.toBeInTheDocument();
+  expect(document.querySelector(".dossier-portrait .portrait-initials")).toHaveTextContent("M");
+});
+
 test("Remove from scene is locked while the scene is being written to", () => {
   // Removing someone mid-turn moves the cast out from under the write.
   const locked = renderDossier(AUD, true);
