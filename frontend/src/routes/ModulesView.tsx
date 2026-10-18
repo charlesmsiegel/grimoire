@@ -1,42 +1,71 @@
 import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, type ModuleDetail, type ModuleSummary } from "../api/client";
+import { errorText } from "../api/errors";
+import { Field } from "../components/Field";
+import { useCreationRequest } from "../components/useCreationRequest";
 import ModuleEditor from "../components/ModuleEditor";
 import LibraryPage from "../components/LibraryPage";
-import { errorText } from "../api/errors";
 
 export default function ModulesView() {
+  const [params, setParams] = useSearchParams();
+  const selected = params.get("id");
+  const creating = params.get("new") === "1";
+  const [newName, setNewName] = useState("");
+  const { busy: creatingBusy, begin: beginCreation } = useCreationRequest(creating ? "module" : null);
   const [mods, setMods] = useState<ModuleSummary[]>([]);
   const [detail, setDetail] = useState<ModuleDetail | null>(null);
+  const [detailRevision, setDetailRevision] = useState(0);
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [dupName, setDupName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const listTicket = useRef(0);
 
-  const reloadList = () => api.listModules().then(setMods).catch((e) => setError(String(e)));
+  // Cancel can retire one creation while its list read is still pending and a
+  // new creation asks again. An older snapshot must not hide the newer record.
+  const reloadList = (canReport = () => true) => {
+    const mine = ++listTicket.current;
+    return api.listModules()
+      .then((list) => { if (listTicket.current === mine) { setMods(list); setListError(null); } })
+      .catch((e) => { if (listTicket.current === mine && canReport()) setListError(errorText(e)); });
+  };
 
   useEffect(() => {
     reloadList();
   }, []);
 
-  const select = (mid: string) => {
+  const select = (mid: string) => setParams({ id: mid });
+
+  useEffect(() => {
+    let live = true;
+    setDetail(null);
+    setError(null);
     setMode("view");
     setDupName(null);
-    api.readModule(mid).then(setDetail).catch((e) => setError(String(e)));
-  };
+    setNewName("");
+    if (selected) api.readModule(selected)
+      .then((d) => { if (live) setDetail(d); })
+      .catch((err: unknown) => { if (live) setError(errorText(err)); });
+    return () => { live = false; };
+  }, [selected, creating, detailRevision]);
 
   async function createNew() {
-    const name = window.prompt("New module name?")?.trim();
-    if (!name) return;
+    const name = newName.trim();
+    if (!name || creatingBusy) return;
+    const request = beginCreation();
+    if (!request) return;
     setError(null);
     try {
       const { id } = await api.createModule(name);
-      await reloadList();
-      const d = await api.readModule(id);
-      setDetail(d);
-      setMode("edit");
+      // Cancel retires the form, but the server's new module still belongs in
+      // the list. Only its navigation and failure report need the form fence.
+      await reloadList(request.current);
+      if (request.current()) select(id);
     } catch (err: unknown) {
-      setError(errorText(err));
-    }
+      if (request.current()) setError(errorText(err));
+    } finally { request.finish(); }
   }
 
   async function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -74,9 +103,12 @@ export default function ModulesView() {
 
   return (
     <LibraryPage>
+      <div className="page-wide view-anim">
+      <div className="eyebrow">The Library</div>
+      <h1 className="screen-title">Modules</h1>
       <div className="editor">
         <div className="editor-list">
-          <button className="primary new" onClick={createNew}>+ New module</button>
+          <Link className="primary new" to="?new=1">+ New module</Link>
           <button className="subtle new" onClick={() => fileRef.current?.click()}>+ Import</button>
           <input
             ref={fileRef}
@@ -87,20 +119,34 @@ export default function ModulesView() {
             onChange={onImportFile}
           />
           {mods.map((m) => (
-            <button
+            <Link
               key={m.id}
               className={"row" + (detail?.id === m.id ? " active" : "")}
-              onClick={() => select(m.id)}
+              to={`?${new URLSearchParams({ id: m.id })}`}
             >
               {m.name}
               {m.display_ok === false && <span className="field-hint"> · display issues</span>}
-            </button>
+            </Link>
           ))}
         </div>
         <div className="editor-body">
+          {listError && <div className="banner">Could not refresh modules: {listError}
+            <button className="subtle" onClick={() => { void reloadList(); }}>Retry module list</button>
+          </div>}
           {error && <div className="banner">{error}</div>}
-          {mode === "edit" && detail ? (
-            <ModuleEditor detail={detail} onDone={() => { setMode("view"); select(detail.id); }} />
+          {creating ? <div className="form">
+            <h3>New module</h3>
+            <Field label="Module name"><input type="text" value={newName} disabled={creatingBusy}
+              onChange={(e) => setNewName(e.target.value)} /></Field>
+            <div className="form-actions">
+              <Link className="subtle" to="?">Cancel</Link>
+              <button className="primary" disabled={creatingBusy || !newName.trim()} onClick={() => void createNew()}>Create module</button>
+            </div>
+          </div> : mode === "edit" && detail ? (
+            <ModuleEditor detail={detail} onDone={() => {
+              setMode("view");
+              setDetailRevision((n) => n + 1);
+            }} />
           ) : detail ? (
             <div className="detail-view">
               <div className="detail-main">
@@ -132,23 +178,22 @@ export default function ModulesView() {
                 })}
               </div>
               <aside className="detail-sidebar">
-                <div className="form-actions">
+                {detail.source !== "user" && <p className="field-hint">built-in — duplicate to customize</p>}
+                <div className="form-actions module-actions">
                   {detail.source === "user" ? (
                     <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
-                  ) : (
-                    <span className="field-hint">built-in — duplicate to customize</span>
-                  )}
+                  ) : null}
                   <button className="subtle" onClick={startDuplicate}>Duplicate</button>
-                  <a className="row" href={api.exportModuleUrl(detail.id)} download>Export</a>
+                  <a className="subtle" href={api.exportModuleUrl(detail.id)} download>Export</a>
                 </div>
                 {dupName !== null && (
                   <div className="side-section">
                     <h4>Duplicate as</h4>
-                    <input
+                    <Field label="Copy name"><input
                       type="text"
                       value={dupName}
                       onChange={(e) => setDupName(e.target.value)}
-                    />
+                    /></Field>
                     <div className="form-actions">
                       <button className="subtle" onClick={() => setDupName(null)}>Cancel</button>
                       <button className="primary" onClick={confirmDuplicate}>Create copy</button>
@@ -165,11 +210,11 @@ export default function ModulesView() {
                     <div className="field-hint">Dice: {detail.manifest.dice}</div>
                   )}
                 </div>
-                {Object.keys(detail.checks).length > 0 && (
+                {Object.keys(detail.checks).some((id) => id !== "_defaults") && (
                   <div className="side-section">
                     <h4>Checks</h4>
                     <div className="chips">
-                      {Object.entries(detail.checks).map(([id, c]) => (
+                      {Object.entries(detail.checks).filter(([id]) => id !== "_defaults").map(([id, c]) => (
                         <span key={id} className="chip on">{c.label}</span>
                       ))}
                     </div>
@@ -221,6 +266,7 @@ export default function ModulesView() {
             <p className="field-hint">Select a module to view its contract.</p>
           )}
         </div>
+      </div>
       </div>
     </LibraryPage>
   );

@@ -620,7 +620,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         <div className="world-facts">
           {campaign
             ? `copy · ${campaignName}`
-            : `${dash(counts.tags)} tags · ${dash(campaignCount)} campaigns`}
+            : `${dash(counts.tags)} ${counts.tags === 1 ? "tag" : "tags"} · ${dash(campaignCount)} ${campaignCount === 1 ? "campaign" : "campaigns"}`}
         </div>
       </div>
 
@@ -640,7 +640,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               aria-current={section === "push" ? "page" : undefined}
               to={hrefFor("push")}>
           <span className="column-row-label">Push to campaigns</span>
-          <span className="column-row-count">{dash(campaignCount)}</span>
+          <span className="column-row-count" aria-hidden>→</span>
         </Link>
       )}
 
@@ -696,7 +696,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   );
 
   return (
-    <PageShell column={column} footer={footer} columnLabel="World index">
+    <PageShell className="world-page" column={column} footer={footer} columnLabel="World index">
       <div className="page-wide view-anim">
         {campaign && (
           <div className="fork-banner">
@@ -826,8 +826,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                         // The current address, not a freshly-built one: whatever record
                         // segment is already there (or none) survives the switch, and
                         // only the `?view=graph` query is added or dropped.
-                        onClick={() => navigate(location.pathname
-                          + (key === "graph" ? "?view=graph" : ""))}>{label}</button>
+                        onClick={() => {
+                          const next = new URLSearchParams(params);
+                          if (key === "graph") next.set("view", "graph");
+                          else next.delete("view");
+                          navigate(location.pathname + (next.size ? `?${next}` : ""));
+                        }}>{label}</button>
               ))}
             </div>
             {/* Hidden rather than unmounted: the editor holds a half-written
@@ -837,6 +841,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
               <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter}
                               onOpenLocation={(id) => openEntity("locations", id)}
                               selected={section === "greetings" ? rid : null}
+                              isNew={newForm}
                               sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "greetings" })}
                               recordHref={(r) => sectionHref(scopeForPaths,
                                                              { kind: "record", at: "greetings", rid: r })}

@@ -1,6 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, useLocation } from "react-router-dom";
+import { act, fireEvent, render as renderRTL, screen, waitFor } from "@testing-library/react";
 import { ClimateEditor } from "./ClimateEditor";
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
+
+function Address() { return <output aria-label="Address">{useLocation().search}</output>; }
+const render = (element: React.ReactElement, entry = "/") => renderRTL(
+  <MemoryRouter initialEntries={[entry]}>{element}<Address /></MemoryRouter>);
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -62,7 +67,7 @@ test("Edit reveals the form", async () => {
 
 test("+ New climate opens the form directly", async () => {
   render(<ClimateEditor />);
-  fireEvent.click(await screen.findByRole("button", { name: "+ New climate" }));
+  fireEvent.click(await screen.findByRole("link", { name: "+ New climate" }));
   expect(await screen.findByLabelText("Id")).toBeInTheDocument();
 });
 
@@ -160,7 +165,7 @@ test("renaming a temperature rewrites the conditions that require it", async () 
 
 test("a new climate cannot silently overwrite an existing custom id", async () => {
   render(<ClimateEditor />);
-  fireEvent.click(await screen.findByRole("button", { name: "+ New climate" }));
+  fireEvent.click(await screen.findByRole("link", { name: "+ New climate" }));
   fireEvent.change(await screen.findByLabelText("Id"), { target: { value: "saltmarch-fens" } });
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Mine" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -250,7 +255,7 @@ test("removing a temperature drops it from the conditions that required it", asy
   fireEvent.click(await screen.findByText("Temperate Interior"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   // The first Temperature row is `freezing`, which `snow` requires.
-  fireEvent.click(screen.getAllByRole("button", { name: "✕" })[0]);
+  fireEvent.click(screen.getByRole("button", { name: "Remove temperature freezing from season 1" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.saveClimate).toHaveBeenCalled());
   const calls = vi.mocked(api.saveClimate).mock.calls;
@@ -281,10 +286,101 @@ test("+ New climate cannot reuse a shipped preset's id", async () => {
   // Submitting the blank form under a preset's id would create a custom
   // document shadowing it; copy-on-write belongs to the Edit flow.
   render(<ClimateEditor />);
-  fireEvent.click(await screen.findByRole("button", { name: "+ New climate" }));
+  fireEvent.click(await screen.findByRole("link", { name: "+ New climate" }));
   fireEvent.change(await screen.findByLabelText("Id"), { target: { value: "temperate-interior" } });
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Mine" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByText(/already exists/)).toBeInTheDocument();
   expect(api.saveClimate).not.toHaveBeenCalled();
+});
+
+
+test("the root browses without a blank draft and New can be cancelled without a write", async () => {
+  render(<ClimateEditor />);
+  expect(await screen.findByText(/Choose a climate to read/)).toBeInTheDocument();
+  expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("link", { name: "+ New climate" }));
+  expect(await screen.findByLabelText("Name")).toHaveValue("");
+  expect(screen.getByLabelText("Address")).toHaveTextContent("?new=1");
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  expect(await screen.findByText(/Choose a climate to read/)).toBeInTheDocument();
+  expect(api.saveClimate).not.toHaveBeenCalled();
+});
+
+test("a bookmarked record opens read-only", async () => {
+  render(<ClimateEditor />, "/?id=temperate-interior");
+  await waitFor(() => expect(api.readClimate).toHaveBeenCalledWith("temperate-interior"));
+  expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+});
+
+
+test("a Cancel reload refusal preserves the climate draft and reports the failure", async () => {
+  render(<ClimateEditor />, "/?id=temperate-interior");
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
+  vi.mocked(api.readClimate).mockRejectedValueOnce({ detail: "Climate reload refused" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(await screen.findByText("Climate reload refused")).toBeInTheDocument();
+  expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+});
+
+test.each([false, true])("review regression: a retired new climate save cannot reclaim a fresh form, refused=%s", async (refused) => {
+  let finish: () => void = () => {};
+  vi.mocked(api.saveClimate).mockImplementationOnce(() => new Promise((resolve, reject) => {
+    finish = () => refused ? reject(new ApiError(409, "Old climate refused")) : resolve({ climate: CLIMATE });
+  }));
+  render(<ClimateEditor />, "/?new=1");
+  fireEvent.change(await screen.findByLabelText("Id"), { target: { value: "realm" } });
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("link", { name: "+ New climate" }));
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Saltmarch" } });
+  await act(async () => finish());
+  expect(screen.getByLabelText("Name")).toHaveValue("Saltmarch");
+  expect(screen.getByLabelText("Address")).toHaveTextContent("?new=1");
+  expect(screen.queryByText("Old climate refused")).not.toBeInTheDocument();
+});
+
+test("review regression: a refused climate Cancel retires the old save without unlocking a newer save", async () => {
+  let finishOld: () => void = () => {};
+  let refuseNew: () => void = () => {};
+  vi.mocked(api.saveClimate).mockImplementationOnce(() => new Promise((resolve) => {
+    finishOld = () => resolve({ climate: CLIMATE });
+  })).mockImplementationOnce(() => new Promise((_resolve, reject) => {
+    refuseNew = () => reject(new ApiError(409, "New climate refused"));
+  }));
+  render(<ClimateEditor />, "/?id=temperate-interior");
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  vi.mocked(api.readClimate).mockRejectedValueOnce({ detail: "Cancel climate refused" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await screen.findByText("Cancel climate refused");
+  expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(api.saveClimate).toHaveBeenCalledTimes(2);
+  await act(async () => finishOld());
+  expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  await act(async () => refuseNew());
+  expect(screen.getByText("New climate refused")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+});
+
+test("review regression: an owned climate follow-up read cannot navigate after another selection", async () => {
+  render(<ClimateEditor />, "/?id=temperate-interior");
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  let release: (value: Awaited<ReturnType<typeof api.readClimate>>) => void = () => {};
+  vi.mocked(api.readClimate).mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.readClimate).toHaveBeenCalledTimes(2));
+  vi.mocked(api.readClimate).mockResolvedValue({ climate: { ...CLIMATE, id: "saltmarch-fens", name: "Fens" }, builtin: false, custom: true });
+  fireEvent.click(screen.getByRole("link", { name: /Fens/ }));
+  await screen.findByRole("heading", { name: "Fens" });
+  await act(async () => release({ climate: CLIMATE, builtin: true, custom: false }));
+  expect(screen.getByRole("heading", { name: "Fens" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Address")).toHaveTextContent("id=saltmarch-fens");
 });

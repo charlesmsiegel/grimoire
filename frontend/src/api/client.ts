@@ -2214,6 +2214,8 @@ export const api = {
     request<{ applied: Record<string, string> }>(
       "POST", `${entityBase(scope)}/${kind}/${id}/adopt-st`),
   /** Every record of the world (or the campaign's own), all kinds. */
+  previewAdoptStAll: (scope: EntityScope) =>
+    request<{ pending: number }>("GET", `${entityBase(scope)}/adopt-st`, undefined, { fresh: true }),
   adoptStAll: (scope: EntityScope) =>
     request<{ applied: { kind: string; id: string; fields: Record<string, string> }[];
               skipped: { kind: string; id: string; reason: string }[] }>(

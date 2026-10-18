@@ -73,6 +73,8 @@ test("an empty query asks nothing and says what the page covers", async () => {
   show("/search");
   expect(await screen.findByText(/every world and campaign in the library/i)).toBeInTheDocument();
   expect(api.search).not.toHaveBeenCalled();
+  expect(within(screen.getByRole("button", { name: /Worlds/ })).getByText("—")).toBeInTheDocument();
+  expect(within(screen.getByRole("button", { name: /Campaigns/ })).getByText("—")).toBeInTheDocument();
 });
 
 test("typing settles before it searches, and only the settled query is asked", async () => {

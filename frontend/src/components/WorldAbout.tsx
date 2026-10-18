@@ -55,7 +55,9 @@ export function WorldAbout({ wid }: { wid: string }) {
   const p = profile ?? EMPTY;
   const empty = !p.genre && !p.tone && !p.themes.length && !p.description;
   return <div className="side-section world-about">
-    <h4>About</h4>
+    <div className="side-section-head"><h4>About</h4>
+      {!draft && profile && <button className="subtle" onClick={() => setDraft(draftOf(p))}>Edit</button>}
+    </div>
     {error && <div className="banner">{error}</div>}
     {draft ? <div className="form">
       <Field label="Genre"><input type="text" value={draft.genre}
@@ -72,9 +74,6 @@ export function WorldAbout({ wid }: { wid: string }) {
         <button className="primary" disabled={saving} onClick={() => void save()}>Save</button>
       </div>
     </div> : profile && <>
-      <div className="form-actions">
-        <button className="subtle" onClick={() => setDraft(draftOf(p))}>Edit</button>
-      </div>
       {empty ? <div className="field-hint">
           No description yet. Genre, tone, themes and a description reach the narrator
           in every campaign played in this world.

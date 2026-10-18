@@ -1,5 +1,5 @@
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   api, type ChubImportResult, type CharacterSummary, type ChubUnlinkedVersion,
   type EntityScope, type ModuleDetail, type RosterEntry, type UndescribedImage,
@@ -7,6 +7,8 @@ import {
 import { errorText } from "../api/errors";
 import { thumbSet } from "../api/thumbs";
 import { isAbortError, type TaglineBatchEvent } from "../api/stream";
+import { Field } from "./Field";
+import { useCreationRequest } from "./useCreationRequest";
 import CreationWizard from "./CreationWizard";
 import { DescribeQueue } from "./DescribeQueue";
 import { ErrorNote } from "./ErrorNote";
@@ -20,11 +22,11 @@ import { characterHref, focusStyle, formatOf, initialsOf } from "./character/sha
  *  `.page-wide`, which stops growing at 1120px -- so at most
  *  (1120 - 68 padding - 36 gaps) / 3 on a desktop, and under a third of the
  *  viewport below that. A phone is spelled out rather than left to the third:
- *  there the page keeps only a 14px gutter, and at DPR 3 the slack in "33vw"
- *  is exactly the difference between the 512 bucket and the 1024 one.
+ *  there the grid has two columns, 14px gutters and an 18px gap. Keeping
+ *  that measure here lets the browser choose the right thumbnail bucket.
  *  A roster is the one screen where a whole library's art can be on screen at
  *  once, so this is where a thumbnail the size of the card matters most. */
-const CARD_SIZES = "(max-width: 720px) calc((100vw - 64px) / 3), (max-width: 1120px) 33vw, 340px";
+const CARD_SIZES = "(max-width: 720px) calc((100vw - 46px) / 2), (max-width: 1120px) 33vw, 340px";
 
 /** How many cards a roster's first commit draws; the rest follow once that
  *  has painted.
@@ -33,7 +35,8 @@ const CARD_SIZES = "(max-width: 720px) calc((100vw - 64px) / 3), (max-width: 112
  *  to resolve, and its share of the grid's layout -- small once, but a roster
  *  is paid for all at once, and on a phone-class CPU the whole of a large one
  *  kept the first card off the screen for as long as the last one took. The
- *  grid is three columns wide at every size, so this is eight rows: more than
+ *  grid is three columns wide on desktop and two on a phone, so this is at
+ *  least eight rows: more than
  *  the tallest viewport shows of a desktop's cards, and more than a phone's
  *  much smaller ones fill. A constant rather than a measurement of the
  *  viewport, because a grid that measured first would be a frame later for
@@ -93,11 +96,10 @@ function reuseRows(prev: CharacterSummary[], next: CharacterSummary[]): Characte
  *  character -- and every card rebuilding its portrait's `srcset` for each of
  *  them is the grid paying for its whole roster to redraw a toolbar. */
 const CharacterCard = memo(function CharacterCard(
-  { c, scopeKind, scopeId, onDelete }: {
+  { c, scopeKind, scopeId }: {
     c: CharacterSummary;
     scopeKind: EntityScope["kind"];
     scopeId: string;
-    onDelete: (cid: string, name: string) => void;
   },
 ) {
   const scope: EntityScope = { kind: scopeKind, id: scopeId };
@@ -128,13 +130,7 @@ const CharacterCard = memo(function CharacterCard(
           </span>
         )}
       </Link>
-      <div className="char-card-actions">
-        {/* Both scopes since #60: in campaign scope this removes the
-            character from THIS campaign and leaves the library's alone.
-            Shipping a create with no delete left an NPC invented by
-            mistake unremovable. */}
-        <button className="subtle" onClick={() => onDelete(c.id, c.name)}>Delete</button>
-      </div>
+
     </div>
   );
 });
@@ -181,6 +177,11 @@ export function CharacterGrid(
   const scopeKey = `${scope.kind}:${scope.id}`;
   const worldScope = scope.kind === "world";
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const creating = params.get("new") === "1";
+  const [newName, setNewName] = useState("");
+  const { busy: creatingBusy, begin: beginCreation } = useCreationRequest(creating ? scopeKey : null);
+  useEffect(() => { setNewName(""); }, [creating, scope.kind, scope.id]);
   const [chars, setChars] = useState<CharacterSummary[]>(() => api.rememberedCharacters(scope) ?? []);
   /** Whether `chars` is an answer for this scope -- remembered or read -- as
    *  opposed to the empty array a first visit starts from. Until it is, the
@@ -352,26 +353,20 @@ export function CharacterGrid(
   }, [reveal, appeared]);
 
   async function newCharacter() {
-    const name = window.prompt("New character name?")?.trim();
-    if (!name) return;
+    const name = newName.trim();
+    if (!name || creatingBusy) return;
+    const request = beginCreation();
+    if (!request) return;
     // `scope`, not `wid`: in campaign scope this makes a character who exists
     // only in this campaign — an NPC who walked on mid-scene and was never in
     // the library (#60).
-    const { character } = await api.createCharacter(scope, { name });
-    await reload();
-    navigate(characterHref(scope, character));
+    setError(null);
+    try {
+      const { character } = await api.createCharacter(scope, { name });
+      if (request.current()) navigate(characterHref(scope, character));
+    } catch (err) { if (request.current()) setError(err); }
+    finally { request.finish(); }
   }
-
-  // Stable per scope, because every memoized card holds it.
-  const deleteCharacter = useCallback(async (cid: string, name: string) => {
-    const where = scope.kind === "world" ? "the library" : "this campaign";
-    if (!window.confirm(`Delete character '${name}' from ${where}?`)) return;
-    await api.deleteCharacter(scope, cid);
-    await reload();
-  }, [scope, reload]);
-  const onDeleteCard = useCallback((cid: string, name: string) => {
-    void deleteCharacter(cid, name);
-  }, [deleteCharacter]);
 
   /** Open the describe queue: the backlog is fetched now, when somebody means
    *  to work through it, and not on every visit to label a button. The count
@@ -633,6 +628,16 @@ export function CharacterGrid(
     );
   }
 
+  if (creating) return <div className="form">
+    <h3>{worldScope ? "New character" : "New NPC in this campaign"}</h3>
+    {error != null && <div className="banner"><ErrorNote err={error} /></div>}
+    <Field label="Character name"><input type="text" value={newName} disabled={creatingBusy}
+      onChange={(e) => setNewName(e.target.value)} /></Field>
+    <div className="form-actions"><Link className="subtle" to="?">Cancel</Link>
+      <button className="primary" disabled={creatingBusy || !newName.trim()} onClick={() => void newCharacter()}>Create character</button>
+    </div>
+  </div>;
+
   return (
     <div className="character-editor">
       {taglineQueue.length > 0 && (
@@ -674,9 +679,9 @@ export function CharacterGrid(
         {/* Both scopes since #60. In campaign scope the label says whose
             character it will be: the world's roster is the library, and this
             one deliberately is not in it until somebody publishes it. */}
-        <button className="primary" onClick={() => void newCharacter()}>
+        <Link className="primary" to="?new=1">
           {worldScope ? "+ New character" : "+ New NPC (this campaign)"}
-        </button>
+        </Link>
         {worldScope && <>
           {module && Object.values(module.sheets.sheet_types).some((st) => st.kind === "characters") && (
             <button className="subtle" onClick={() => setWizardOpen(true)}>+ New character with sheet…</button>
@@ -761,8 +766,7 @@ export function CharacterGrid(
       ) : (
         <div className="char-grid">
           {drawn.map((c) => (
-            <CharacterCard key={c.id} c={c} scopeKind={scope.kind} scopeId={scope.id}
-                           onDelete={onDeleteCard} />
+            <CharacterCard key={c.id} c={c} scopeKind={scope.kind} scopeId={scope.id} />
           ))}
         </div>
       )}

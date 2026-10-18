@@ -1,4 +1,4 @@
-import { render, fireEvent, waitFor, within, screen } from "@testing-library/react";
+import { act, render, fireEvent, waitFor, within, screen } from "@testing-library/react";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -14,14 +14,14 @@ import { api } from "../api/client";
 import ModulesView from "./ModulesView";
 import { MemoryRouter } from "react-router-dom";
 import { fixture } from "../testkit/fixture";
-import type { ModuleDetail } from "../api/types";
+import type { ModuleDetail, ModuleSummary } from "../api/types";
 
 // The page lives in the library's shell now — a context column of sections
 // beside main — and every row in that column is a <NavLink>.
 const inShell = (el: React.ReactElement) => <MemoryRouter>{el}</MemoryRouter>;
 
 // minimal valid ModuleDetail — extend per-test with spreads
-const DETAIL = {
+const DETAIL: ModuleDetail = {
   id: "mine",
   source: "user",
   manifest: { id: "mine", name: "Mine", description: "", version: "0.1", dice: "1d20" },
@@ -172,3 +172,174 @@ test("Edit mounts the module editor", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   expect(await screen.findByText("Manifest")).toBeInTheDocument(); // section nav
 });
+
+test("New is an addressed cancellable name form and keeps a refused draft", async () => {
+  vi.mocked(api.createModule).mockRejectedValue({ detail: "A module already uses this name." });
+  render(inShell(<ModulesView />));
+  fireEvent.click(await screen.findByRole("link", { name: "+ New module" }));
+  fireEvent.change(screen.getByLabelText("Module name"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create module" }));
+  expect(await screen.findByText("A module already uses this name.")).toBeInTheDocument();
+  expect(screen.getByLabelText("Module name")).toHaveValue("Realm");
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  expect(await screen.findByText(/Select a module/)).toBeInTheDocument();
+});
+
+test.each(["success", "refusal"])("a cancelled module creation cannot reclaim the page: %s", async (outcome) => {
+  let finish: (() => void) | undefined;
+  vi.mocked(api.createModule).mockImplementation(() => new Promise((resolve, reject) => {
+    finish = () => outcome === "success" ? resolve({ id: "realm" }) : reject(new Error("creation refused"));
+  }));
+  render(inShell(<ModulesView />));
+  fireEvent.click(await screen.findByRole("link", { name: "+ New module" }));
+  fireEvent.change(screen.getByLabelText("Module name"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create module" }));
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  if (!finish) throw new Error("creation never started");
+  await act(async () => { finish?.(); });
+  expect(screen.getByText(/Select a module/)).toBeInTheDocument();
+  expect(screen.queryByText(/creation refused/)).not.toBeInTheDocument();
+});
+
+test.each([false, true])("only the exact defaults check is hidden: defaults-only=%s", async (defaultsOnly) => {
+  vi.mocked(api.readModule).mockResolvedValue({ ...POOL, checks: {
+    _defaults: { label: "Internal defaults", roll: "", requires: [] },
+    ...(defaultsOnly ? {} : { _attack: { label: "Attack", roll: "1d20", requires: [] } }),
+  } });
+  render(inShell(<ModulesView />));
+  fireEvent.click(await screen.findByText("Basic Pool"));
+  await screen.findByRole("heading", { name: "Basic Pool" });
+  expect(screen.queryByText("Internal defaults")).not.toBeInTheDocument();
+  if (defaultsOnly) expect(screen.queryByRole("heading", { name: "Checks" })).not.toBeInTheDocument();
+  else expect(screen.getByText("Attack")).toBeInTheDocument();
+});
+
+test.each([false, true])("a cancelled creation's list refresh keeps its scope: refusal=%s", async (refused) => {
+  let finishRefresh: (() => void) | undefined;
+  vi.mocked(api.createModule).mockResolvedValue({ id: "realm" });
+  vi.mocked(api.listModules).mockResolvedValue([]);
+  render(inShell(<ModulesView />));
+  fireEvent.click(await screen.findByRole("link", { name: "+ New module" }));
+  vi.mocked(api.listModules).mockImplementation(() => new Promise((resolve, reject) => {
+    finishRefresh = () => refused ? reject(new Error("refresh refused"))
+      : resolve([{ id: "realm", name: "Realm", description: "", version: "0.1", source: "user", valid: true }]);
+  }));
+  fireEvent.change(screen.getByLabelText("Module name"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create module" }));
+  await waitFor(() => expect(finishRefresh).toBeDefined());
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  if (!finishRefresh) throw new Error("refresh never started");
+  await act(async () => { finishRefresh?.(); });
+  expect(screen.getByText(/Select a module/)).toBeInTheDocument();
+  expect(screen.queryByText(/refresh refused/)).not.toBeInTheDocument();
+  if (!refused) expect(screen.getByRole("link", { name: "Realm" })).toBeInTheDocument();
+});
+
+test("an older creation refresh cannot hide a module from the newer refresh", async () => {
+  const realm: ModuleSummary = {
+    id: "realm", name: "Realm", description: "", version: "0.1", source: "user", valid: true,
+  };
+  const saltmarch: ModuleSummary = { ...realm, id: "saltmarch", name: "Saltmarch" };
+  let finishOlder: (() => void) | undefined;
+  vi.mocked(api.listModules).mockResolvedValue([]);
+  vi.mocked(api.createModule).mockResolvedValueOnce({ id: "realm" }).mockResolvedValueOnce({ id: "saltmarch" });
+  render(inShell(<ModulesView />));
+  fireEvent.click(await screen.findByRole("link", { name: "+ New module" }));
+  const initialReads = vi.mocked(api.listModules).mock.calls.length;
+  vi.mocked(api.listModules).mockImplementationOnce(() => new Promise((resolve) => {
+    finishOlder = () => resolve([realm]);
+  })).mockResolvedValueOnce([realm, saltmarch]);
+  fireEvent.change(screen.getByLabelText("Module name"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create module" }));
+  await waitFor(() => expect(finishOlder).toBeDefined());
+  expect(api.listModules).toHaveBeenCalledTimes(initialReads + 1);
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("link", { name: "+ New module" }));
+  fireEvent.change(screen.getByLabelText("Module name"), { target: { value: "Saltmarch" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create module" }));
+  await screen.findByRole("link", { name: "Saltmarch" });
+  await waitFor(() => expect(api.readModule).toHaveBeenLastCalledWith("saltmarch"));
+  if (!finishOlder) throw new Error("the older refresh never started");
+  await act(async () => { finishOlder?.(); });
+  expect(screen.getByRole("link", { name: "Saltmarch" })).toBeInTheDocument();
+  expect(api.readModule).toHaveBeenLastCalledWith("saltmarch");
+});
+
+test("a module create in flight cannot be submitted twice", async () => {
+  vi.mocked(api.createModule).mockReturnValue(new Promise(() => {}));
+  render(inShell(<ModulesView />));
+  fireEvent.click(await screen.findByRole("link", { name: "+ New module" }));
+  fireEvent.change(screen.getByLabelText("Module name"), { target: { value: "Realm" } });
+  const create = screen.getByRole("button", { name: "Create module" });
+  fireEvent.click(create);
+  fireEvent.click(create);
+  expect(api.createModule).toHaveBeenCalledTimes(1);
+  expect(create).toBeDisabled();
+});
+
+test("a bookmarked module reads its record and hides internal check defaults", async () => {
+  vi.mocked(api.readModule).mockResolvedValue({
+    ...POOL, source: "builtin", checks: { ...POOL.checks, _defaults: { label: "Internal defaults", roll: "", requires: [] } },
+  });
+  render(<MemoryRouter initialEntries={["/modules?id=pool-basic"]}><ModulesView /></MemoryRouter>);
+  expect(await screen.findByRole("heading", { name: "Basic Pool" })).toBeInTheDocument();
+  expect(screen.getByText("Vigor + Brawl")).toBeInTheDocument();
+  expect(screen.queryByText("Internal defaults")).not.toBeInTheDocument();
+});
+
+
+test("Done cannot install an earlier module over a newer addressed selection", async () => {
+  vi.mocked(api.listModules).mockResolvedValue(fixture([
+    { id: "mine", name: "Realm", source: "user", valid: true },
+    { id: "pool-basic", name: "Saltmarch", source: "builtin", valid: true },
+  ]));
+  vi.mocked(api.readModule).mockResolvedValue({ ...DETAIL, manifest: { ...DETAIL.manifest, name: "Realm" } });
+  render(inShell(<ModulesView />));
+  fireEvent.click(await screen.findByRole("link", { name: "Realm" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  let release: (v: Awaited<ReturnType<typeof api.readModule>>) => void = () => {};
+  vi.mocked(api.readModule).mockReturnValueOnce(new Promise((r) => { release = r; }));
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  vi.mocked(api.readModule).mockResolvedValue({ ...POOL, manifest: { ...POOL.manifest, name: "Saltmarch" } });
+  fireEvent.click(screen.getByRole("link", { name: "Saltmarch" }));
+  await screen.findByRole("heading", { name: "Saltmarch" });
+  await act(async () => release({ ...DETAIL, manifest: { ...DETAIL.manifest, name: "Realm stale" } }));
+  expect(screen.getByRole("heading", { name: "Saltmarch" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Realm stale" })).toBeNull();
+});
+
+test.each(["create", "import", "duplicate"])(
+  "review regression: a committed module %s preserves refresh failure and retries only the list", async (operation) => {
+    vi.mocked(api.createModule).mockResolvedValue({ id: "realm" });
+    vi.mocked(api.importModule).mockResolvedValue({ id: "realm" });
+    vi.mocked(api.duplicateModule).mockResolvedValue({ id: "realm" });
+    render(inShell(<ModulesView />));
+    await screen.findByRole("link", { name: "Basic Pool" });
+    if (operation === "duplicate") {
+      fireEvent.click(screen.getByRole("link", { name: "Basic Pool" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Duplicate" }));
+    }
+    vi.mocked(api.listModules).mockRejectedValueOnce(new Error("Module refresh refused"));
+    vi.mocked(api.readModule).mockResolvedValue({ ...DETAIL, id: "realm", manifest: { ...DETAIL.manifest, name: "Realm" } });
+    if (operation === "create") {
+      fireEvent.click(screen.getByRole("link", { name: "+ New module" }));
+      fireEvent.change(screen.getByLabelText("Module name"), { target: { value: "Realm" } });
+      fireEvent.click(screen.getByRole("button", { name: "Create module" }));
+    } else if (operation === "import") {
+      fireEvent.change(screen.getByLabelText("Import module zip"), {
+        target: { files: [new File(["zip"], "realm.zip", { type: "application/zip" })] },
+      });
+    } else fireEvent.click(screen.getByRole("button", { name: "Create copy" }));
+    await screen.findByRole("heading", { name: "Realm" });
+    expect(screen.getByText(/Module refresh refused/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create module" })).not.toBeInTheDocument();
+    vi.mocked(api.listModules).mockResolvedValue([{
+      id: "realm", name: "Realm", description: "", version: "0.1", source: "user", valid: true,
+    }]);
+    fireEvent.click(screen.getByRole("button", { name: "Retry module list" }));
+    await screen.findByRole("link", { name: "Realm" });
+    expect(screen.queryByText(/Module refresh refused/)).not.toBeInTheDocument();
+    expect(api.createModule).toHaveBeenCalledTimes(operation === "create" ? 1 : 0);
+    expect(api.importModule).toHaveBeenCalledTimes(operation === "import" ? 1 : 0);
+    expect(api.duplicateModule).toHaveBeenCalledTimes(operation === "duplicate" ? 1 : 0);
+  });

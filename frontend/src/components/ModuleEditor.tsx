@@ -26,22 +26,24 @@ export default function ModuleEditor({ detail, onDone }: {
                   className={"chip" + (s === section ? " on" : "")}
                   onClick={() => setSection(s)}>{s}</button>
         ))}
-        <button className="chip" onClick={onDone}>Done</button>
       </div>
-      {section === "Manifest" && <ManifestSection pack={pack} reload={reload} />}
+      {section === "Manifest" && <ManifestSection pack={pack} reload={reload} onDone={onDone} />}
       {section === "Groups" && <GroupsSection pack={pack} reload={reload} />}
       {section === "Sheet types" && <SheetTypesSection pack={pack} reload={reload} />}
       {section === "Checks" && <ChecksSection pack={pack} reload={reload} />}
       {section === "Rules" && <RulesSection pack={pack} reload={reload} />}
       {section === "Content" && <ContentSection pack={pack} reload={reload} />}
-      {section === "Layout" && <LayoutSection pack={pack} reload={reload} />}
-      {section === "Theme" && <ThemeSection pack={pack} reload={reload} />}
+      {section === "Layout" && <LayoutSection pack={pack} reload={reload} onDone={onDone} />}
+      {section === "Theme" && <ThemeSection pack={pack} reload={reload} onDone={onDone} />}
+      {section !== "Manifest" && section !== "Layout" && section !== "Theme" && (
+        <div className="form-actions"><button className="subtle" onClick={onDone}>Done</button></div>
+      )}
     </div>
   );
 }
 
-function ManifestSection({ pack, reload }: {
-  pack: ModuleDetail; reload: () => Promise<unknown>;
+function ManifestSection({ pack, reload, onDone }: {
+  pack: ModuleDetail; reload: () => Promise<unknown>; onDone: () => void;
 }) {
   const m = pack.manifest;
   const [form, setForm] = useState({
@@ -82,6 +84,7 @@ function ManifestSection({ pack, reload }: {
       <div className="form-actions">
         <button className="primary" disabled={dr.saving}
                 onClick={() => void dr.requestSave(() => void reload())}>Save</button>
+        <button className="subtle" disabled={dr.saving} onClick={onDone}>Done</button>
       </div>
     </div>
   );

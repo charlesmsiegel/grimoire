@@ -52,6 +52,7 @@ vi.mock("../api/client", () => ({
     readRecordArt: vi.fn(),
     // The greeting writes the plot-map races drive; each test says how they answer.
     updateGreeting: vi.fn(), createGreeting: vi.fn(), setEdges: vi.fn(),
+    previewAdoptStAll: vi.fn().mockResolvedValue({ pending: 0 }),
     getWorld: vi.fn(),
     getWorldDefaultPrompt: vi.fn().mockResolvedValue({ text: "", status: "empty" }),
     setWorldDefaultPrompt: vi.fn(),
@@ -451,7 +452,7 @@ test("picking Characters renders the character editor", async () => {
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Characters"));
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "world", id: "w" }));
-  expect(screen.getByRole("button", { name: /new character/i })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /new character/i })).toBeInTheDocument();
 });
 
 test("picking PCs renders the PC editor", async () => {
@@ -459,7 +460,7 @@ test("picking PCs renders the PC editor", async () => {
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("PCs"));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalledWith({ kind: "world", id: "w" }));
-  expect(screen.getByRole("button", { name: /new pc/i })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /new pc/i })).toBeInTheDocument();
 });
 
 test("opening a record swaps only main — the column keeps its selection", async () => {
@@ -757,7 +758,7 @@ test("switching to the plot map keeps a half-written greeting, and a save reload
   fireEvent.click(indexRow("Greetings"));
 
   // start a new greeting, then look at the graph without saving
-  await screen.findByRole("link", { name: /new greeting/i });
+  fireEvent.click(await screen.findByRole("link", { name: /new greeting/i }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Half-written" } });
   fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
@@ -940,10 +941,10 @@ test("a greeting's own address honours ?view=graph, and the record stays selecte
 });
 
 test("switching to the map and back does not lose a half-written greeting", async () => {
-  renderAtUrl("/worlds/w/greetings");
+  renderAtUrl("/worlds/w/greetings?new=1");
   fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "Half written" } });
   fireEvent.click(screen.getByRole("button", { name: "Plot map" }));
-  await waitFor(() => expect(lastSearch).toBe("?view=graph"));
+  await waitFor(() => expect(lastSearch).toBe("?new=1&view=graph"));
   fireEvent.click(screen.getByRole("button", { name: "List" }));
   expect(await screen.findByLabelText(/Name/)).toHaveValue("Half written");
 });
@@ -982,7 +983,7 @@ test("+ New greeting clears the form after a create", async () => {
     meta: { id: "new-greeting", name: "New greeting", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
   }));
-  renderAtUrl("/worlds/w/greetings");
+  renderAtUrl("/worlds/w/greetings?new=1");
   fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "New greeting" } });
   fireEvent.click(screen.getByRole("button", { name: /create greeting/i }));
   await waitFor(() => expect(lastPath).toBe("/worlds/w/greetings/new-greeting"));
@@ -1346,7 +1347,7 @@ test("the world shape counts its campaigns off the world read, not the campaign 
   vi.mocked(api.getWorld).mockResolvedValue({ ...worldWithCounts({}), campaigns: 5 });
   renderAtUrl("/worlds/w/characters");
   await screen.findByText(/5 campaigns/);
-  expect(indexRow("Push to campaigns")).toHaveTextContent("5");
+  expect(indexRow("Push to campaigns")).toHaveTextContent("\u2192");
   expect(api.listCampaigns).not.toHaveBeenCalled();
 });
 
@@ -1355,7 +1356,7 @@ test("a campaign count the world read could not give is a dash, never a zero", a
   renderAtUrl("/worlds/w/characters");
   await screen.findByText("Drowned Realm");
   expect(screen.getByText(/— campaigns/)).toBeInTheDocument();
-  expect(indexRow("Push to campaigns")).toHaveTextContent("—");
+  expect(indexRow("Push to campaigns")).toHaveTextContent("\u2192");
   expect(indexRow("Push to campaigns")).not.toHaveTextContent("0");
 });
 
@@ -1378,7 +1379,7 @@ test("a revisit paints the header and its numbers before the world read lands", 
   // it last said about this world.
   expect(screen.getAllByText("Drowned Realm").length).toBeGreaterThan(0);
   expect(indexRow("Characters")).toHaveTextContent("4");
-  expect(indexRow("Push to campaigns")).toHaveTextContent("3");
+  expect(indexRow("Push to campaigns")).toHaveTextContent("\u2192");
   expect(api.getWorld).toHaveBeenCalledWith("w");
   await screen.findByRole("heading", { name: "Characters" });
 });
@@ -1449,7 +1450,7 @@ test("a world with nothing remembered opens on dashes, not on another world's nu
   vi.mocked(api.getWorld).mockReturnValue(new Promise(() => {}));
   renderAtUrl("/worlds/w/characters");
   expect(indexRow("Characters")).toHaveTextContent("—");
-  expect(indexRow("Push to campaigns")).toHaveTextContent("—");
+  expect(indexRow("Push to campaigns")).toHaveTextContent("\u2192");
   expect(api.rememberedWorld).not.toHaveBeenCalledWith("other");
   await screen.findByRole("heading", { name: "Characters" });
 });

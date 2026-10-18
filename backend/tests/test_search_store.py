@@ -34,6 +34,7 @@ from grimoire.store import (
     taglines,
     worlds,
 )
+from tests import frozen_copy
 
 
 @pytest.fixture
@@ -171,6 +172,35 @@ def test_a_scene_transcript_is_searchable(campaign):
     # The `**Speaker:**` markers are dropped from the snippet: a transcript
     # window is otherwise mostly asterisks.
     assert "**" not in hits[0]["snippet"]
+
+
+def test_hidden_response_metadata_is_not_searchable(monkeypatch, tmp_path):
+    """An old transcript played on today has prose beside persisted metadata.
+
+    Search must show the former without matching or quoting the latter; the
+    checked-in fixture stays untouched while its private copy grows a post.
+    """
+    root = frozen_copy.copy_home(tmp_path / "home")
+    monkeypatch.setenv("GRIMOIRE_HOME", str(root))
+    campaign = "the-drowned-ledger"
+    sid = "001--the-tide-comes-in"
+    scenes.append_messages(campaign, sid, [{
+        "role": "assistant", "content": "Mara waits beside the quay.",
+        "response_id": "hidden-response-token",
+    }])
+    hits = search.search("Mara waits")["hits"]
+    assert [(h["kind"], h["id"]) for h in hits] == [("scenes", sid)]
+    assert "grimoire-response" not in hits[0]["snippet"]
+    assert "hidden-response-token" not in hits[0]["snippet"]
+    assert search.search("hidden-response-token")["hits"] == []
+
+
+def test_multiline_html_comments_do_not_split_searchable_prose():
+    name, text, prose = search.markdown_document(
+        b"# Realm\nMara <!-- hidden\nbookkeeping --> waits by the quay.", "realm")
+    assert name == "realm"
+    assert "Mara waits by the quay." in text
+    assert "hidden" not in prose and "bookkeeping" not in text
 
 
 def test_the_world_and_campaign_meta_files_are_records_too(world):
@@ -533,3 +563,96 @@ def test_a_store_with_no_worlds_or_campaigns_yet_searches_to_nothing(home):
     assert not (home / "worlds").exists()
     out = search.search("anything at all")
     assert out["hits"] == [] and out["total"] == 0 and out["facets"] == {}
+
+
+@pytest.mark.parametrize("body", [
+    "`<!-- Seraphine code example -->`",
+    "``code ` <!-- Seraphine code example --> ``",
+    "```html\n<!-- Seraphine code example -->\n```",
+    "~~~~html\n<!-- Seraphine code example -->\n~~~~",
+    "    <!-- Seraphine code example -->",
+    "`multiline\nMara <!-- Seraphine code example -->`",
+    r"\<!-- Seraphine code example -->",
+    "```html\r\n<!-- Seraphine code example -->\r\n```",
+    "`line \u2028 <!-- Seraphine code example -->`",
+], ids=["inline", "long-inline", "backtick-fence", "tilde-fence", "indented",
+        "multiline-inline", "escaped", "crlf-fence", "unicode-inline"])
+def test_visible_code_comment_examples_remain_searchable(body: str) -> None:
+    _name, text, prose = search.markdown_document(body.encode(), "realm")
+    assert "Seraphine code example" in text
+    assert "Seraphine code example" in prose
+
+
+def test_an_unmatched_code_opener_does_not_hide_later_comments_from_filtering() -> None:
+    body = b"Mara `unmatched\n\n<!-- hidden bookkeeping -->\nVisible prose."
+    _name, text, _prose = search.markdown_document(body, "realm")
+    assert "hidden bookkeeping" not in text
+    assert "Visible prose." in text
+
+
+@pytest.mark.parametrize("suffix", [" tail", " tail `code`"], ids=["plain", "code-aware"])
+def test_repeated_unterminated_comment_openers_scale_linearly(suffix: str) -> None:
+    """Sixteen times the bytes must not trigger the lazy regex's quadratic scan.
+
+    Each size calibrates its own batch to several CPU clock ticks, then uses
+    per-call cost. Separate batch sizes bound test time even on the old slow
+    implementation; the 96x boundary separates linear (~16x) and quadratic
+    (~256x), with room for timer granularity and a busy test runner.
+    """
+    def per_call(n: int) -> float:
+        body = ("Mara " + "<!--" * n + suffix).encode()
+        assert "tail" in search.markdown_document(body, "realm")[1]
+        timer = timeit.Timer(lambda: search.markdown_document(body, "realm"),
+                             timer=time.process_time)
+        repetitions = 1
+        while timer.timeit(repetitions) < 0.05:
+            repetitions *= 2
+        return min(timer.timeit(repetitions) for _ in range(3)) / repetitions
+
+    small, large = per_call(1000), per_call(16000)
+    assert small > 0
+    assert large / small < 96, f"comment extraction scaled {large / small:.1f}x for 16x the bytes"
+
+
+def test_html_block_can_interrupt_an_unmatched_inline_code_opener() -> None:
+    # CommonMark ends the paragraph before a block HTML comment even if a
+    # backtick earlier in that paragraph was not closed. This is a hidden
+    # note, not the multiline code span a source-wide backtick scan suggests.
+    body = b"`Mara\n<!-- hidden bookkeeping -->`\n"
+    assert "hidden bookkeeping" not in search.markdown_document(body, "realm")[1]
+
+
+def test_removing_an_inline_note_preserves_visible_word_adjacency() -> None:
+    body = b"Realm<!-- hidden note -->Mara"
+    _name, text, prose = search.markdown_document(body, "realm")
+    assert text == prose == "RealmMara"
+
+
+@pytest.mark.parametrize("opener", ["<!-->", "<!--->"])
+def test_inline_short_closed_comment_tokens_remain_searchable(opener: str) -> None:
+    # The actual stored ReactMarkdown pipeline preserves these inline tokens;
+    # its separate later closer is visible text, not a reason to eat the gap.
+    body = f"Visible {opener} marker --> tail".encode()
+    _name, text, prose = search.markdown_document(body, "realm")
+    assert "marker" in text
+    assert "marker" in prose
+
+
+@pytest.mark.parametrize("body, hidden", [
+    ("Visible <!--not-a-comment---> marker", "not-a-comment"),
+    ("Visible <!--outer <!--inner--> marker", "outer"),
+])
+def test_syntax_hidden_by_the_actual_frontend_stays_hidden_in_search(body: str, hidden: str) -> None:
+    _name, text, prose = search.markdown_document(body.encode(), "realm")
+    assert hidden not in text
+    assert hidden not in prose
+    assert "marker" in text
+
+
+@pytest.mark.parametrize("opener", ["<!-->", "<!--->"])
+def test_short_closed_tokens_in_raw_html_blocks_keep_the_frontend_treatment(opener: str) -> None:
+    body = f"{opener} marker --> tail".encode()
+    _name, text, prose = search.markdown_document(body, "realm")
+    assert "marker" not in text
+    assert "marker" not in prose
+    assert "tail" in text

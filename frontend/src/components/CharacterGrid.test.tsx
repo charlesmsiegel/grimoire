@@ -365,30 +365,63 @@ test("a campaign's card points inside that campaign's world copy", async () => {
     .toHaveAttribute("href", "/campaigns/run/world/characters/seraphine");
 });
 
-test("a card's Delete removes the character and says which library", async () => {
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+test("browse cards leave deletion to the record page", async () => {
   renderGrid();
-  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
-  await waitFor(() => expect(api.deleteCharacter).toHaveBeenCalledWith(WORLD, "seraphine"));
-  expect(confirm.mock.calls[0][0]).toMatch(/from the library/i);
+  await screen.findByRole("link", { name: /Seraphine/ });
+  expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
 });
 
-test("creating a character prompts, posts the name, and opens the new page", async () => {
-  vi.spyOn(window, "prompt").mockReturnValue("Rook");
+test("creating a character uses a cancellable name form and opens its record", async () => {
+  vi.mocked(api.createCharacter).mockResolvedValue({ character: "mara", version: "default" });
   renderGrid();
-  fireEvent.click(await screen.findByRole("button", { name: "+ New character" }));
-  await waitFor(() => expect(api.createCharacter).toHaveBeenCalledWith(WORLD, { name: "Rook" }));
-  await waitFor(() => expect(lastLocation).toBe("/worlds/realm/characters/rook"));
+  fireEvent.click(await screen.findByRole("link", { name: "+ New character" }));
+  expect(lastLocation).toContain("?new=1");
+  fireEvent.change(screen.getByLabelText("Character name"), { target: { value: "Mara" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create character" }));
+  await waitFor(() => expect(api.createCharacter).toHaveBeenCalledWith(WORLD, { name: "Mara" }));
+  await waitFor(() => expect(lastLocation).toBe("/worlds/realm/characters/mara"));
 });
 
-test("in campaign scope the create is campaign-local (#60)", async () => {
-  vi.spyOn(window, "prompt").mockReturnValue("Rook");
-  render(
-    <MemoryRouter><Spy />
-      <CharacterGrid scope={CAMPAIGN} wid="realm" />
-    </MemoryRouter>);
-  fireEvent.click(await screen.findByRole("button", { name: /New NPC \(this campaign\)/ }));
-  await waitFor(() => expect(api.createCharacter).toHaveBeenCalledWith(CAMPAIGN, { name: "Rook" }));
+test.each(["success", "refusal"])("a cancelled character creation cannot reclaim the page: %s", async (outcome) => {
+  let finish: (() => void) | undefined;
+  vi.mocked(api.createCharacter).mockImplementation(() => new Promise((resolve, reject) => {
+    finish = () => outcome === "success" ? resolve({ character: "mara", version: "default" })
+      : reject(new Error("creation refused"));
+  }));
+  renderGrid();
+  fireEvent.click(await screen.findByRole("link", { name: "+ New character" }));
+  fireEvent.change(screen.getByLabelText("Character name"), { target: { value: "Mara" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create character" }));
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  if (!finish) throw new Error("creation never started");
+  await act(async () => { finish?.(); });
+  expect(lastLocation).toBe("/worlds/realm");
+  expect(screen.queryByText(/creation refused/)).not.toBeInTheDocument();
+});
+
+test("a character create in flight cannot be submitted twice", async () => {
+  vi.mocked(api.createCharacter).mockReturnValue(new Promise(() => {}));
+  renderGrid();
+  fireEvent.click(await screen.findByRole("link", { name: "+ New character" }));
+  fireEvent.change(screen.getByLabelText("Character name"), { target: { value: "Mara" } });
+  const create = screen.getByRole("button", { name: "Create character" });
+  fireEvent.click(create);
+  fireEvent.click(create);
+  expect(api.createCharacter).toHaveBeenCalledTimes(1);
+  expect(create).toBeDisabled();
+});
+
+test("a refused campaign NPC create preserves the draft and can be cancelled", async () => {
+  vi.mocked(api.createCharacter).mockRejectedValue({ detail: "Name is already used." });
+  render(<MemoryRouter><Spy /><CharacterGrid scope={CAMPAIGN} wid="realm" /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole("link", { name: /New NPC \(this campaign\)/ }));
+  fireEvent.change(screen.getByLabelText("Character name"), { target: { value: "Mara" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create character" }));
+  expect(await screen.findByText("Name is already used.")).toBeInTheDocument();
+  expect(api.createCharacter).toHaveBeenCalledWith(CAMPAIGN, { name: "Mara" });
+  expect(screen.getByLabelText("Character name")).toHaveValue("Mara");
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  expect(screen.queryByLabelText("Character name")).not.toBeInTheDocument();
 });
 
 // ------------------------------------------------------------------ import

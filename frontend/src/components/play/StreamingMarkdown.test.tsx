@@ -25,6 +25,24 @@ function whole(text: string): string {
   return html;
 }
 
+test.each([
+  ["reviewed inline syntax", "Visible <!--not-a-comment---> marker", "Visible  marker"],
+  ["valid inline", "Visible <!-- hidden --> marker", "Visible  marker"],
+  ["internal marker", 'Visible <!-- grimoire-response {"response_id":"r1"} --> marker', "Visible  marker"],
+  ["reviewed block syntax", "<!--not-a-comment--->\nVisible marker", "\nVisible marker"],
+  ["short closing opener", "Visible <!--> marker --> tail", "Visible <!--> marker --> tail"],
+  ["dashed short closing opener", "Visible <!---> marker --> tail", "Visible <!---> marker --> tail"],
+  ["nested opener", "Visible <!--outer <!--inner--> marker", "Visible  marker"],
+  ["short closing block", "<!--> marker --> tail", " tail"],
+  ["dashed short closing block", "<!---> marker --> tail", " tail"],
+  ["inline code", "Visible `<!-- literal -->` marker", "Visible <!-- literal --> marker"],
+  ["escaped opener", String.raw`Visible \<!-- literal --> marker`, "Visible <!-- literal --> marker"],
+  ["unmatched opener", "Visible <!-- unfinished marker", "Visible <!-- unfinished marker"],
+])("the stored Markdown renderer defines searchable visibility: %s", (_name, content, visible) => {
+  const { container } = render(<RenderedMarkdown content={content} />);
+  expect(container.textContent).toBe(visible);
+});
+
 /** Stream `text` in `step`-sized deltas, checking the DOM against a single
  *  parse of the same prefix after every one of them. */
 function streamAndCompare(text: string, step = 3) {

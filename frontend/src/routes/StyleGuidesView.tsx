@@ -4,9 +4,10 @@ import { StyleGuideEditor } from "../components/StyleGuideEditor";
 export default function StyleGuidesView() {
   return (
     <LibraryPage>
-      <div className="page view-anim">
-        <div className="page-head">
-          <h1 className="page-h1">Style Guides</h1>
+      <div className="page-wide view-anim">
+        <div className="library-page-head">
+          <div className="eyebrow">The Library</div>
+          <h1 className="screen-title">Style Guides</h1>
         </div>
         <StyleGuideEditor />
       </div>

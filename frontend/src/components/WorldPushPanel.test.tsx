@@ -54,6 +54,8 @@ test("a campaign with nothing pending says so", async () => {
     { id: "quiet", name: "Quiet Season", pending: { new: 0, update: 0, conflict: 0 } }]);
   await renderPanel();
   expect(screen.getByRole("link", { name: /Quiet Season/ }).textContent).toContain("up to date");
+  expect(screen.getByText(/All campaigns are up to date/)).toBeInTheDocument();
+  expect(screen.queryByText(/These are waiting/)).not.toBeInTheDocument();
 });
 
 test("shows an empty state when the world has no campaigns", async () => {

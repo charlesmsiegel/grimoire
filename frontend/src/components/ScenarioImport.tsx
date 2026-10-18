@@ -219,7 +219,7 @@ export function ScenarioImport({ wid, onImported }: { wid: string; onImported?: 
       <div className="picker">
         <input type="text" aria-label="Card URL" placeholder="…or a chub.ai character URL"
                value={url} onChange={(e) => setUrl(e.target.value)} />
-        <button onClick={parseUrl} disabled={busy}>Read URL</button>
+        <button className="subtle" onClick={parseUrl} disabled={busy}>Read URL</button>
       </div>
       <div className="field-hint">
         For a card that describes a whole setting rather than one person. Reading it costs one

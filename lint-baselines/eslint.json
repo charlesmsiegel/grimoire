@@ -31,7 +31,7 @@
   },
   "frontend/src/components/ClimateEditor.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 4,
+    "@typescript-eslint/no-misused-promises": 2,
     "@typescript-eslint/no-unnecessary-type-assertion": 5,
     "react/no-array-index-key": 4
   },
@@ -227,7 +227,7 @@
   },
   "frontend/src/components/StyleGuideEditor.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 4
+    "@typescript-eslint/no-misused-promises": 3
   },
   "frontend/src/components/SuggestedCast.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
@@ -316,7 +316,7 @@
   },
   "frontend/src/routes/ModulesView.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 3,
+    "@typescript-eslint/no-misused-promises": 2,
     "react/no-array-index-key": 2
   },
   "frontend/src/routes/SearchView.tsx": {
@@ -329,9 +329,7 @@
     "react/no-array-index-key": 1
   },
   "frontend/src/routes/WorldsView.tsx": {
-    "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 2,
-    "jsx-a11y/no-autofocus": 1
+    "@typescript-eslint/no-misused-promises": 2
   },
   "frontend/src/test-setup.ts": {
     "@typescript-eslint/no-unnecessary-type-assertion": 1,

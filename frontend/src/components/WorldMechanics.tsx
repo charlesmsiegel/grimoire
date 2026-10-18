@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type ModuleSummary, type SheetCoverage } from "../api/client";
+import { Field } from "./Field";
 import { sheetKindLabel } from "../sheetKinds";
 
 export default function WorldMechanics({
@@ -44,8 +45,7 @@ export default function WorldMechanics({
   return (
     <div className="side-section">
       <h4>Mechanics</h4>
-      <label>
-        Mechanics
+      <Field label="Mechanics">
         <select aria-label="Mechanics" value={value}
                 onChange={(e) => { setValue(e.target.value); setSaved(false); }}>
           <option value="">None</option>
@@ -53,14 +53,13 @@ export default function WorldMechanics({
             <option key={m.id} value={m.id}>{m.name}</option>
           ))}
         </select>
-      </label>
+      </Field>
       <div className="field-hint">
         {value
           ? `Campaigns on this world default to ${name(value)}.`
           : "No default — campaigns choose their own mechanics."}
       </div>
-      <label>
-        Starting sheets for:
+      <Field label="Starting sheets for">
         <select aria-label="Starting sheets module" value={worldMid}
                 onChange={(e) => onPickMid(e.target.value)}>
           <option value="">None</option>
@@ -68,7 +67,7 @@ export default function WorldMechanics({
             <option key={m.id} value={m.id}>{m.name}</option>
           ))}
         </select>
-      </label>
+      </Field>
       {coverage && Object.keys(coverage).length > 0 && (
         <div className="side-section">
           <h4>Sheets</h4>

@@ -83,7 +83,9 @@ test("empty, failed, and gallery-only entries remain honest and reachable", asyn
   function Surface() { const controller = useRecordArt(target, { onSaved: async () => {} });
     return <><RecordArtEntry controller={controller} name="Saltmarch" onOpenArt={() => {}} /><RecordArtPanel controller={controller} /></>; }
   render(<MemoryRouter><Surface /></MemoryRouter>);
-  await screen.findByRole("button", { name: "Art (0)" });
+  await screen.findByText("No images yet");
+  expect(screen.queryByRole("button", { name: "Art (0)" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Manage art" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Add images" })).toBeEnabled();
   expect(screen.getByText("No images yet")).toBeVisible();
 });
@@ -108,7 +110,8 @@ function mountArt(adapter: ReturnType<typeof artAdapter>) {
   vi.spyOn(adapters, "createRecordArtAdapter").mockReturnValue(adapter);
   function Surface() {
     const controller = useRecordArt(adapter.target, { onSaved: async () => {} });
-    return <><RecordArtEntry controller={controller} name="Saltmarch" onOpenArt={() => {}} />
+    return <><h1 ref={controller.focusRef} tabIndex={-1}>Saltmarch</h1>
+      <RecordArtEntry controller={controller} name="Saltmarch" onOpenArt={() => {}} />
       <RecordArtPanel controller={controller} /><RecordArtViewer controller={controller} /></>;
   }
   render(<MemoryRouter><Surface /></MemoryRouter>);
@@ -191,7 +194,7 @@ test("unavailable description metadata stays unknown and cannot open a guarded e
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 });
 
-test("removed viewer selection returns focus to the surviving Art entry", async () => {
+test("removed viewer selection returns focus to the record heading", async () => {
   const adapter = artAdapter();
   mountArt(adapter);
   fireEvent.click(await screen.findByRole("button", { name: "View Primary image" }));
@@ -199,7 +202,7 @@ test("removed viewer selection returns focus to the surviving Art entry", async 
   adapter.read.mockResolvedValue(artRead(adapter.target, []));
   artChanged();
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  expect(screen.getByRole("button", { name: "Art (0)" })).toHaveFocus();
+  expect(screen.getByRole("heading", { name: "Saltmarch" })).toHaveFocus();
 });
 
 test("confirmed partial invalidates other uses and a later shared writer survives cleanup retry", async () => {

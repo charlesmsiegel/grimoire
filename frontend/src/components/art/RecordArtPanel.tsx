@@ -32,12 +32,12 @@ export function RecordArtPanel({ controller: c, related }: { controller: RecordA
   function chooseFiles() { c.transition(() => { c.setManage(true); files.current?.click(); }); }
   return <section className="record-art-panel" aria-label="Record art">
     <div className="form-actions">
-      <button disabled={!!c.busy || !c.data} onClick={() => c.setManage(!c.manage)}>{c.manage ? "Done" : "Manage art"}</button>
+      {(c.images.length > 0 || c.manage) && <button className="subtle" disabled={!!c.busy || !c.data} onClick={() => c.setManage(!c.manage)}>{c.manage ? "Done" : "Manage art"}</button>}
       {(c.manage || c.status === "empty") && <>
-        <button disabled={blocked || !permits("append")} onClick={chooseFiles}>Add images</button>
-        <button disabled={blocked || !permits("reuse")} onClick={() => setPicker({ owner, primary: c.primary?.v ?? null })}>Use existing art</button>
+        <button className="subtle" disabled={blocked || !permits("append")} onClick={chooseFiles}>Add images</button>
+        <button className="subtle" disabled={blocked || !permits("reuse")} onClick={() => setPicker({ owner, primary: c.primary?.v ?? null })}>Use existing art</button>
       </>}
-      <button disabled={!!c.busy} onClick={() => { void c.refresh(true); }}>Reload art</button>
+      <button className="subtle" disabled={!!c.busy} onClick={() => { void c.refresh(true); }}>Reload art</button>
     </div>
     <input ref={files} type="file" accept="image/*" multiple hidden aria-label="Image files" disabled={blocked}
       onChange={(event) => { const selected = Array.from(event.target.files ?? []); event.target.value = ""; if (selected.length) void c.upload(selected); }} />
@@ -51,7 +51,7 @@ export function RecordArtPanel({ controller: c, related }: { controller: RecordA
     {c.error && <p className="banner" role="alert">{c.error}</p>}
     {c.message && <p role="status">{c.message}</p>}
     {c.uploadProgress && <p role="status">Uploading {c.uploadProgress.filename}: {c.uploadProgress.completed} of {c.uploadProgress.total} files completed.</p>}
-    {c.status === "empty" && !c.readError && <p>No images yet</p>}
+    {c.status === "empty" && !c.readError && <div className="editor-empty">No images yet</div>}
     {c.batch.length > 0 && <ul className="art-upload-results">{c.batch.map((row) => <li key={row.key}>
       {row.file.name}: {row.status === "saved" ? "Added" : row.error}
       {row.status === "failed" && <button disabled={blocked} onClick={() => { void c.retryUpload(row.key); }}>Retry {row.file.name}</button>}
@@ -129,7 +129,7 @@ export function RecordArtPanel({ controller: c, related }: { controller: RecordA
       recovery={draftStale || c.readError ? <div role="alert"><p>{c.readError
           ? "Art could not be read. Reload art before applying your crop; your local crop is retained."
           : "This image changed or was removed. Review the current image before applying your crop."}</p>
-        <button disabled={!!c.busy} onClick={() => { void c.refresh(true); }}>Reload art</button>
+        <button className="subtle" disabled={!!c.busy} onClick={() => { void c.refresh(true); }}>Reload art</button>
         {!c.readError && c.images.some(image => image.name === c.draft?.image.name) && <>
           <img className="art-recovery-preview" src={c.images.find(image => image.name === c.draft?.image.name)?.url} alt="Current primary art" />
           <button disabled={!!c.busy || !!c.readError} onClick={c.rebaseDraft}>Keep crop for current image</button>

@@ -1,5 +1,5 @@
 ﻿import type { ComponentProps } from "react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { GreetingEditor } from "./GreetingEditor";
 
@@ -72,16 +72,32 @@ type Props = ComponentProps<typeof GreetingEditor>;
 function Wrap(props: Partial<Props> & { scope: Props["scope"]; wid: string }) {
   return (
     <MemoryRouter>
-      <GreetingEditor sectionPath="/section" recordHref={(r) => `/section/${r}`} {...props} />
+      <GreetingEditor isNew sectionPath="/section" recordHref={(r) => `/section/${r}`} {...props} />
     </MemoryRouter>
   );
 }
 
 const GREETINGS_DEFAULTS = {
+  isNew: true,
   wid: "realm", scope: { kind: "world" as const, id: "realm" },
   sectionPath: "/worlds/realm/greetings",
   recordHref: (r: string) => `/worlds/realm/greetings/${r}`,
 };
+
+test("the greetings root browses and its addressed new form can be cancelled", async () => {
+  function AtAddress() {
+    const location = useLocation();
+    return <GreetingEditor {...GREETINGS_DEFAULTS} isNew={location.search === "?new=1"} />;
+  }
+  render(<MemoryRouter initialEntries={["/worlds/realm/greetings"]}><AtAddress /></MemoryRouter>);
+  expect(await screen.findByText(/Choose a greeting to read/)).toBeInTheDocument();
+  expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("link", { name: "+ New greeting" }));
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  expect(await screen.findByText(/Choose a greeting to read/)).toBeInTheDocument();
+  expect(api.createGreeting).not.toHaveBeenCalled();
+});
 const greetingsWith = (p: Partial<Props> = {}) => (
   <MemoryRouter><GreetingEditor {...GREETINGS_DEFAULTS} {...p} /></MemoryRouter>);
 const renderGreetings = (p: Partial<Props> = {}) => render(greetingsWith(p));
@@ -1252,4 +1268,101 @@ test.each([
   await waitFor(() => expect(within(container.querySelector(".img-extras") as HTMLElement)
     .getByText("None")).toBeInTheDocument());
   expect(api.setImageSubjects).toHaveBeenLastCalledWith("realm", "open", key, []);
+});
+
+
+test("a Cancel reload refusal preserves the greeting draft and reports the failure", async () => {
+  render(<Wrap scope={{ kind: "world", id: "realm" }} wid="realm" selected="open" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
+  vi.mocked(api.readGreeting).mockRejectedValueOnce({ detail: "Greeting reload refused" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(await screen.findByText("Greeting reload refused")).toBeInTheDocument();
+  expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+});
+
+function SavingGreetingAddress(callbacks: Pick<Props, "onBusy" | "onChanged">) {
+  const location = useLocation();
+  const base = GREETINGS_DEFAULTS.sectionPath;
+  const selected = location.pathname.startsWith(base + "/") ? location.pathname.slice(base.length + 1) : null;
+  return <><GreetingEditor {...GREETINGS_DEFAULTS} selected={selected} isNew={location.search === "?new=1"}
+    {...callbacks} />
+    <output aria-label="Address">{location.pathname + location.search}</output></>;
+}
+
+test.each([false, true])("review regression: a retired greeting create cannot reclaim a fresh form, refused=%s", async (refused) => {
+  let finish: () => void = () => {};
+  const onBusy = vi.fn();
+  const onChanged = vi.fn();
+  vi.mocked(api.createGreeting).mockImplementationOnce(() => new Promise((resolve, reject) => {
+    finish = () => refused ? reject(fail(409, "Old greeting refused")) : resolve({ id: "open" });
+  }));
+  render(<MemoryRouter initialEntries={["/worlds/realm/greetings?new=1"]}>
+    <SavingGreetingAddress onBusy={onBusy} onChanged={onChanged} /></MemoryRouter>);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create greeting" }));
+  fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("link", { name: "+ New greeting" }));
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Saltmarch" } });
+  expect(onBusy).toHaveBeenLastCalledWith(true);
+  await act(async () => finish());
+  expect(screen.getByLabelText("Name")).toHaveValue("Saltmarch");
+  expect(screen.getByLabelText("Address")).toHaveTextContent("/worlds/realm/greetings?new=1");
+  expect(screen.queryByText("Old greeting refused")).not.toBeInTheDocument();
+  expect(onBusy.mock.calls.map(([busy]) => busy)).toEqual([true, false]);
+  expect(onChanged).toHaveBeenCalledTimes(refused ? 0 : 1);
+  expect(api.setEdges).toHaveBeenCalledTimes(refused ? 0 : 1);
+});
+
+test("review regression: a refused greeting Cancel preserves its draft after the older save commits", async () => {
+  let finish: () => void = () => {};
+  vi.mocked(api.updateGreeting).mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ ok: true }); }));
+  render(<Wrap scope={{ kind: "world", id: "realm" }} wid="realm" selected="open" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save greeting" }));
+  vi.mocked(api.readGreeting).mockRejectedValueOnce({ detail: "Cancel greeting refused" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await screen.findByText("Cancel greeting refused");
+  await act(async () => finish());
+  expect(screen.getByLabelText("Name")).toHaveValue("Realm draft");
+  expect(screen.getByText("Cancel greeting refused")).toBeInTheDocument();
+});
+
+test("review regression: an owned greeting follow-up read cannot reclaim another selection", async () => {
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
+    greeting("open", "Open", "", []), greeting("saltmarch", "Saltmarch", "", []),
+  ]));
+  render(<MemoryRouter initialEntries={["/worlds/realm/greetings/open"]}><SavingGreetingAddress /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  let release: (value: Awaited<ReturnType<typeof api.readGreeting>>) => void = () => {};
+  vi.mocked(api.readGreeting).mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+  fireEvent.click(screen.getByRole("button", { name: "Save greeting" }));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledTimes(2));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture(greetingFixture("saltmarch", "Saltmarch")));
+  fireEvent.click(screen.getByRole("link", { name: "Saltmarch" }));
+  await screen.findByRole("heading", { name: "Saltmarch" });
+  await act(async () => release(fixture(greetingFixture("open", "Realm stale"))));
+  expect(screen.getByRole("heading", { name: "Saltmarch" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Realm stale" })).not.toBeInTheDocument();
+});
+
+test("review regression: a committed greeting refresh stays in its original scope", async () => {
+  let finish: () => void = () => {};
+  const onChanged = vi.fn();
+  vi.mocked(api.createGreeting).mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ id: "open" }); }));
+  vi.mocked(api.listGreetings).mockImplementation(async (scope) => fixture([
+    greeting(scope.id, scope.id === "realm" ? "Realm" : "Saltmarch", "", []),
+  ]));
+  const { rerender } = renderGreetings({ onChanged });
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Realm draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create greeting" }));
+  rerender(greetingsWith({ scope: { kind: "world", id: "saltmarch" }, wid: "saltmarch", onChanged }));
+  await screen.findByRole("link", { name: "Saltmarch" });
+  await act(async () => finish());
+  expect(screen.getByRole("link", { name: "Saltmarch" })).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Realm" })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Name")).toHaveValue("");
+  expect(api.setEdges).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "open", { leads_to: [], excludes: [] });
+  expect(onChanged).not.toHaveBeenCalled();
 });

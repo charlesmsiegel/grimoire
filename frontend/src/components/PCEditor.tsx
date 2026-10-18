@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, type EntityScope, type ModuleDetail, type PCSummary } from "../api/client";
 import { errorText } from "../api/errors";
 import { THUMB } from "../api/thumbs";
+import { Field } from "./Field";
+import { useCreationRequest } from "./useCreationRequest";
 import CreationWizard from "./CreationWizard";
 import { Portrait } from "./Portrait";
 
@@ -13,6 +15,12 @@ export function PCEditor({ scope, wid, recordHref, module = null }: {
   recordHref: (rid: string) => string; module?: ModuleDetail | null;
 }) {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const creating = params.get("new") === "1";
+  const [newName, setNewName] = useState("");
+  const { busy: creatingBusy, begin: beginCreation } = useCreationRequest(
+    creating ? `${scope.kind}:${scope.id}:${wid}` : null);
+  useEffect(() => { setNewName(""); }, [creating, scope.kind, scope.id]);
   const worldScope = scope.kind === "world";
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -25,17 +33,21 @@ export function PCEditor({ scope, wid, recordHref, module = null }: {
     return () => { active = false; };
   }, [scope.kind, scope.id]); // eslint-disable-line react-hooks/exhaustive-deps
   async function newPC() {
-    const name = window.prompt("New PC name?")?.trim();
-    if (!name) return;
+    const name = newName.trim();
+    if (!name || creatingBusy) return;
+    const request = beginCreation();
+    if (!request) return;
+    setError(null);
     try {
       const { pc } = worldScope ? await api.createPC(wid, { name })
         : await api.createCampaignPC(scope.id, { name });
-      navigate(recordHref(pc), { state: { newPC: true } });
-    } catch (err: unknown) { setError(errorText(err)); }
+      if (request.current()) navigate(recordHref(pc), { state: { newPC: true } });
+    } catch (err: unknown) { if (request.current()) setError(errorText(err)); }
+    finally { request.finish(); }
   }
   return <div className="editor">
     <div className="editor-list">
-      <button className="primary new" onClick={() => void newPC()}>+ New PC</button>
+      <Link className="primary new" to="?new=1">+ New PC</Link>
       {worldScope && module && Object.values(module.sheets.sheet_types).some((st) => st.kind === "characters") &&
         <button className="subtle" onClick={() => setWizardOpen(true)}>+ New PC with sheet…</button>}
       {pcs.map((pc) => <Link key={pc.id} className="row" to={recordHref(pc.id)}>
@@ -47,7 +59,13 @@ export function PCEditor({ scope, wid, recordHref, module = null }: {
     </div>
     <div className="editor-body">
       {error && <div className="banner">{error}</div>}
-      {wizardOpen && module && worldScope
+      {creating ? <div className="form">
+        <h3>New PC</h3>
+        <Field label="PC name"><input type="text" value={newName} disabled={creatingBusy} onChange={(e) => setNewName(e.target.value)} /></Field>
+        <div className="form-actions"><Link className="subtle" to="?">Cancel</Link>
+          <button className="primary" disabled={creatingBusy || !newName.trim()} onClick={() => void newPC()}>Create PC</button>
+        </div>
+      </div> : wizardOpen && module && worldScope
         ? <CreationWizard scope={scope} kind="pcs" module={module}
             createRecord={(name) => api.createPC(wid, { name }).then((r) => r.pc)}
             deleteRecord={(id) => api.deletePC(scope, id).then(() => {})}

@@ -10,6 +10,7 @@ registered before these. That is the one ordering rule the package has, and
 from __future__ import annotations
 
 from contextlib import nullcontext
+from pathlib import Path
 
 from fastapi import (
     APIRouter,
@@ -375,6 +376,28 @@ def _adopt_bulk(kind: str, records, apply, applied: list, skipped: list) -> None
         fields = apply(kind, eid, row)
         if fields:
             applied.append({"kind": kind, "id": eid, "fields": fields})
+
+
+def _pending_adoptions(root: Path) -> dict[str, int]:
+    """Count records the matching bulk write can change, without adopting them."""
+    return {"pending": sum(
+        bool(store.lorebook.pending_adopt(row).fields)
+        for kind in store.entities.ENTITY_KINDS
+        for row in store.entities.list_entities(root, kind)
+    )}
+
+
+@router.get("/worlds/{wid}/adopt-st")
+def get_world_adopt_st(wid: str) -> dict[str, int]:
+    """Preview whether the world has any imported settings left to adopt."""
+    return _pending_adoptions(_world_root_or_404(wid))
+
+
+@router.get("/campaigns/{cid}/adopt-st")
+def get_campaign_adopt_st(cid: str) -> dict[str, int]:
+    """Count only campaign-owned records, just like the bulk campaign write."""
+    # overlay-ok: inherited records belong to the world's bulk adoption, never this campaign's
+    return _pending_adoptions(_campaign_root_or_404(cid))
 
 
 @router.post("/worlds/{wid}/adopt-st")

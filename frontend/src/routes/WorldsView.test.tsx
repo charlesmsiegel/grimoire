@@ -81,7 +81,7 @@ test("lists worlds as cards with count footers", async () => {
   ]);
   renderView();
   await screen.findByText("Saltmarch");
-  expect(screen.getByText(/3 LOCATIONS · 6 CHARACTERS · 12 LORE/i)).toBeInTheDocument();
+  expect(screen.getByText(/3 LOCATIONS · 5 CHARACTERS · 1 PC · 12 LORE/i)).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: /worlds/i })).toBeInTheDocument();
 });
 
@@ -279,8 +279,9 @@ test.each(["create", "fork"])("a %s refresh warning retires after an automatic c
     fireEvent.change(screen.getByLabelText("World name"), { target: { value: "Realm" } });
     fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
   } else {
-    vi.spyOn(window, "prompt").mockReturnValue("Realm");
     fireEvent.click(screen.getByRole("button", { name: "Fork Saltmarch" }));
+    fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "Realm" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create fork" }));
   }
   expect(await screen.findByRole("alert")).toHaveTextContent(/'Realm' was created, but the list could not be refreshed/i);
 
@@ -309,14 +310,17 @@ test.each(["create", "fork"])("a batched %s recovery with unchanged list identit
   await screen.findByText("Saltmarch");
   const failed = held<WorldMeta[]>();
   vi.mocked(api.listWorlds).mockReturnValue(failed.promise);
-  vi.spyOn(window, "prompt").mockReturnValue("Realm");
   fireEvent.change(screen.getByLabelText("World name"), { target: { value: "Realm" } });
+  if (operation === "fork") {
+    fireEvent.click(screen.getByRole("button", { name: "Fork Saltmarch" }));
+    fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "Realm" } });
+  }
 
   // Both outcomes land before React commits. The successful read reuses the
   // previously confirmed array, so an effect keyed only by that array cannot
   // notice that this creation's read warning also needs retiring.
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: operation === "create" ? /^create$/i : "Fork Saltmarch" }));
+    fireEvent.click(screen.getByRole("button", { name: operation === "create" ? /^create$/i : "Create fork" }));
     await Promise.resolve();
     failed.reject(new Error("offline"));
     await failed.promise.catch(() => {});
@@ -531,43 +535,41 @@ const ONE_WORLD = [
   { id: "w1", name: "Saltmarch", created: "", updated: "", counts: {} },
 ];
 
-test("forking prompts for a name, posts it, and refreshes the grid", async () => {
+test("forking asks in a form for a name, posts it, and refreshes the grid", async () => {
   // Refreshed rather than navigated to: `listWorlds` orders by `updated` and
   // the fork stamps its own, so the copy lands at the front of the grid the
   // user is already looking at.
   vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "Winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create fork" }));
   await waitFor(() => expect(api.forkWorld).toHaveBeenCalledWith("w1", "Winifred"));
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE + 1));
   expect(navigate).not.toHaveBeenCalled();
-  expect(prompt).toHaveBeenCalledWith("Fork 'Saltmarch' as?", "Saltmarch (fork)");
-  prompt.mockRestore();
 });
 
-test("a dismissed or blank fork prompt copies nothing", async () => {
+test("a cancelled or blank fork form copies nothing", async () => {
   vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue(null);
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
-  prompt.mockReturnValue("   ");
-  fireEvent.click(screen.getByLabelText("Fork Saltmarch"));
-  await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(BASE));
+  fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "   " } });
+  expect(screen.getByRole("button", { name: "Create fork" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel fork" }));
+  expect(screen.queryByLabelText("Fork name")).not.toBeInTheDocument();
   expect(api.forkWorld).not.toHaveBeenCalled();
-  prompt.mockRestore();
 });
 
 test("a failed fork names the world and the reason, and refreshes nothing", async () => {
   vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   vi.mocked(api.forkWorld).mockRejectedValue({ detail: "could not claim a world id" });
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "Winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create fork" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(
     /'Saltmarch' could not be forked: could not claim a world id/i);
   expect(api.listWorlds).toHaveBeenCalledTimes(BASE);
-  prompt.mockRestore();
 });
 
 test("a fork in flight cannot be started twice", async () => {
@@ -579,9 +581,10 @@ test("a fork in flight cannot be started twice", async () => {
   ]);
   let release: (v: Awaited<ReturnType<typeof api.forkWorld>>) => void = () => {};
   vi.mocked(api.forkWorld).mockReturnValue(new Promise((r) => { release = r; }));
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "Winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create fork" }));
   await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeDisabled());
   expect(screen.getByLabelText("Fork Realm")).toBeDisabled();
   fireEvent.click(screen.getByLabelText("Fork Realm"));
@@ -589,7 +592,6 @@ test("a fork in flight cannot be started twice", async () => {
 
   release({ id: "copy" });
   await waitFor(() => expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled());
-  prompt.mockRestore();
 });
 
 test("deleting a world is blocked while a fork is copying it", async () => {
@@ -598,19 +600,19 @@ test("deleting a world is blocked while a fork is copying it", async () => {
   vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   let release: (v: Awaited<ReturnType<typeof api.forkWorld>>) => void = () => {};
   vi.mocked(api.forkWorld).mockReturnValue(new Promise((r) => { release = r; }));
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   renderView();
 
   expect(await screen.findByLabelText("Delete Saltmarch")).toBeEnabled();
   fireEvent.click(screen.getByLabelText("Fork Saltmarch"));
+  fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "Winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create fork" }));
   await waitFor(() => expect(screen.getByLabelText("Delete Saltmarch")).toBeDisabled());
   fireEvent.click(screen.getByLabelText("Delete Saltmarch"));
   expect(api.deleteWorld).not.toHaveBeenCalled();
 
   release({ id: "copy" });
   await waitFor(() => expect(screen.getByLabelText("Delete Saltmarch")).toBeEnabled());
-  prompt.mockRestore();
   confirm.mockRestore();
 });
 
@@ -619,12 +621,12 @@ test("the post-fork refresh does not join a read started before it published", a
   // while the copy was running would answer with a list the fork is not in --
   // no error, button re-enabled, and the obvious retry makes a second copy.
   vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "Winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create fork" }));
   await waitFor(() => expect(api.forkWorld).toHaveBeenCalled());
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalledWith(true));
-  prompt.mockRestore();
 });
 
 test("a failed refresh after a successful fork says the copy exists", async () => {
@@ -638,9 +640,10 @@ test("a failed refresh after a successful fork says the copy exists", async () =
     .mockResolvedValueOnce(ONE_WORLD)
     .mockResolvedValueOnce(ONE_WORLD)
     .mockRejectedValueOnce(new Error("network"));
-  const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
+  fireEvent.change(screen.getByLabelText("Fork name"), { target: { value: "Winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create fork" }));
   const alert = await screen.findByRole("alert");
   expect(alert).toHaveTextContent(/'Winifred' was created/i);
   expect(alert).not.toHaveTextContent(/could not be forked/i);
@@ -650,7 +653,6 @@ test("a failed refresh after a successful fork says the copy exists", async () =
   fireEvent.click(screen.getByRole("button", { name: /try again/i }));
   expect(await screen.findByText("Winifred")).toBeInTheDocument();
   expect(screen.getByLabelText("Fork Saltmarch")).toBeEnabled();
-  prompt.mockRestore();
 });
 
 // ---- intent prefetch ----
@@ -860,4 +862,18 @@ test("the visit's own read, landing late, cannot paint over a refresh after a ch
   mount.resolve(ONE_WORLD);
   await screen.findByText("Saltmarch");
   expect(screen.getByText("Realm")).toBeInTheDocument();
+});
+
+
+test("a refused rename preserves its draft and offers explicit Save and Cancel", async () => {
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.renameWorld).mockRejectedValue({ detail: "World is busy. Try again." });
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Rename Saltmarch"));
+  fireEvent.change(screen.getByLabelText("Rename world"), { target: { value: "Realm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("World is busy. Try again.");
+  expect(screen.getByLabelText("Rename world")).toHaveValue("Realm");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel rename" }));
+  expect(screen.queryByLabelText("Rename world")).not.toBeInTheDocument();
 });

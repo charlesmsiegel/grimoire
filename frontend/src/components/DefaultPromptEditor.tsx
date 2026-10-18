@@ -23,7 +23,13 @@ function ScopedDefaultPrompt({ scope }: { scope: Scope }) {
   const inherited = field.data && "world" in field.data ? field.data.world : null;
 
   return <div className="side-section default-prompt-editor">
-    <h4>{scope.kind === "campaign" ? "Default prompts" : label}</h4>
+    <div className="side-section-head"><h4>{scope.kind === "campaign" ? "Default prompts" : label}</h4>
+      <div className="form-actions">
+        {!field.editing && <button className="subtle" aria-label={`Edit ${label}`} onClick={field.edit}
+          disabled={!field.readable || field.loading}>Edit</button>}
+        <button className="subtle" onClick={field.reload} disabled={field.loading || field.saving}>Refresh</button>
+      </div>
+    </div>
     <div className="field-hint">
       Keep standing context compact. Shared with all actors, including NPC writers; do not include
       hidden plot facts, private knowledge or credentials. Existing repeated copies are not removed automatically.
@@ -56,9 +62,6 @@ function ScopedDefaultPrompt({ scope }: { scope: Scope }) {
     </> : <>
       {field.data?.status === "ok" && <div className="detail-rendered"><Markdown remarkPlugins={[remarkGfm]}>{field.data.text}</Markdown></div>}
       {field.data?.status === "empty" && <div className="field-hint">No {label.toLowerCase()} is set.</div>}
-      <button className="subtle" aria-label={`Edit ${label}`} onClick={field.edit}
-        disabled={!field.readable || field.loading}>Edit</button>
     </>}
-    <button className="subtle" onClick={field.reload} disabled={field.loading || field.saving}>Refresh</button>
   </div>;
 }

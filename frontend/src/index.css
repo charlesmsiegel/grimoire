@@ -653,6 +653,12 @@ textarea:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
    leaves about 100px of content, and stacking them puts main below a screenful
    of index. `PageShell` owns which one is up; these rules only lay them out. */
 @media (max-width: 720px) {
+  .char-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .library .page-head, .library .page-head .joined { flex-wrap: wrap; }
+  .library .page-head .joined { gap: 8px; }
+  .library .page-head .joined input { flex: 1 1 140px; min-width: 0; }
+  .world-page .import-section { margin-inline: 14px; }
+  .field-edit { min-width: 44px; min-height: 44px; }
   .shell { flex-direction: column; position: relative; }
   .context-column {
     position: absolute; inset: 0; z-index: 20; width: 100%;
@@ -1547,7 +1553,7 @@ a.chip { text-decoration: none; text-align: center; }
    carried (search, count, the adopt sweep) sit above it, unchanged in shape.
    Three columns, as `.char-grid`, so a roster and a character grid read alike. */
 .entity-browse { flex: 1; min-width: 0; }
-.entity-browse-head { margin-bottom: 14px; }
+.entity-browse-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .entity-browse-head .new { display: inline-block; margin-bottom: 8px; }
 .entity-browse .rail-search { width: 100%; max-width: 320px; box-sizing: border-box; margin-bottom: 8px; }
 .entity-grid { --entity-cols: 3; display: grid; grid-template-columns: repeat(var(--entity-cols), minmax(0, 1fr)); gap: 18px; }
@@ -1849,8 +1855,11 @@ a.check-row { display: flex; align-items: center; text-decoration: none; }
 .greeting-row textarea { flex: 1; }
 
 /* character grid (cards with avatars) */
-.grid-toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
+.grid-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .char-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+@media (max-width: 720px) {
+  .char-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .char-card {
   display: flex; flex-direction: column; gap: 0; padding: 0;
   background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow-glow);
@@ -2483,8 +2492,11 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 }
 
 /* collapsible lorebook import inside the Lore tab */
-.import-section { margin-bottom: 16px; border: 1px solid var(--muted); padding: 8px 12px; }
-.import-section > summary { cursor: pointer; font-weight: bold; color: var(--accent); }
+.import-section { margin-bottom: 16px; border-top: 1px solid var(--line); padding: 12px 0; }
+.import-section > summary {
+  cursor: pointer; font-family: var(--fm); font-size: 11px;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent);
+}
 .import-section[open] > summary { margin-bottom: 12px; }
 
 /* The review IS main now, not a strip pinned to the top of the scene (4c), so
@@ -3309,6 +3321,31 @@ a.column-back { text-decoration: none; }
 .card-tabs .tab { padding: 10px 14px; margin-bottom: -1px; }
 .card-pane-body { padding: 20px 0 0; }
 .screen-head-actions { display: flex; gap: 8px; align-items: center; }
+.screen-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  flex-wrap: wrap; gap: 14px; border-bottom: 1px solid var(--line);
+  padding-bottom: 14px; margin-bottom: 20px;
+}
+.character-page .context-column .column-section,
+.character-page .reach-warning { margin-inline: 16px; }
+.side-section-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px; margin-bottom: 10px;
+}
+.side-section-head h4 { margin: 0; }
+.side-section-head .form-actions { margin: 0; }
+.module-actions { justify-content: flex-start; }
+.world-rename-form { padding: 16px; }
+.world-rename-form .form-actions { flex-wrap: wrap; }
+.search-page .empty-state a, .search-page .ledger-lead a { color: var(--accent); }
+.world-page .column-scroll > .column-row:last-of-type { margin-bottom: 20px; }
+.climate-entry, .climate-entry-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;
+}
+.climate-entry input, .climate-entry-head span { flex: 1; min-width: 0; width: 100%; }
+.climate-entry input[type="number"], .climate-entry-head span:nth-child(2) { flex: 0 0 72px; }
+.climate-entry-head { font-family: var(--fm); font-size: 10px; text-transform: uppercase; color: var(--muted); padding-right: 40px; }
+.library-page-head { margin-bottom: 20px; }
 
 /* A card field is framed even when it is only being read, on purpose: the frame
    says "this is an authored artifact with edges", which is the argument main
@@ -3318,11 +3355,11 @@ a.column-back { text-decoration: none; }
 .card-field-head {
   display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
 }
-/* The edit control sits with the label of the field it changes, and stays out
-   of the way until wanted — same discipline as the version rename. */
+/* An empty field needs an always-visible way in: hover cannot explain what
+   to do on a phone, and Add is most useful before a field contains anything. */
 .field-edit {
   margin-left: auto; background: none; border: 0; cursor: pointer;
-  padding: 2px 4px; color: transparent;
+  padding: 2px 4px; color: var(--muted);
   font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em;
   text-transform: uppercase; transition: color 140ms ease-out;
 }
@@ -3366,7 +3403,9 @@ a.column-back { text-decoration: none; }
    and costs nothing where it is not. */
 .field-draft {
   width: 100%; max-width: 72ch; min-height: 44px; resize: vertical;
-  font-size: 15px; line-height: 1.6; field-sizing: content;
+  font-family: var(--fb); font-size: 15px; line-height: 1.6; field-sizing: content;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong);
+  border-radius: 3px; padding: 10px 12px;
 }
 .field-draft.one-line { min-height: 0; }
 .field-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
@@ -3977,7 +4016,7 @@ a.column-back { text-decoration: none; }
      foot rather than a column, because section-switching is the dominant
      action there and a strip keeps it one tap away from the records. */
   .shell.library .context-column {
-    position: static; visibility: visible; inset: auto;
+    position: relative; visibility: visible; inset: auto;
     border-bottom: 0; border-top: 1px solid var(--line);
     order: 2; max-height: none;
   }
@@ -3993,6 +4032,10 @@ a.column-back { text-decoration: none; }
   .shell.library .column-section::-webkit-scrollbar { display: none; }
   .shell.library .column-row { width: auto; white-space: nowrap; border-left: 0; border-top: 2px solid transparent; }
   .shell.library .column-row.active { border-left-color: transparent; border-top-color: var(--accent); }
+  .shell.library .context-column::after {
+    content: ""; position: absolute; right: 0; bottom: 0; width: 24px; height: 44px;
+    pointer-events: none; background: linear-gradient(to right, transparent, var(--panel));
+  }
   .shell.library .phone-index { display: none; }
 
   /* Absorb review: the three panes are already stacked by the 1100px rule, but

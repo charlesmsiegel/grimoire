@@ -11,6 +11,7 @@ import { ErrorNote } from "../components/ErrorNote";
 import { LibraryPanel } from "../components/LibraryPanel";
 import { OwnedLorePanel } from "../components/OwnedLorePanel";
 import { ActorGroups } from "../components/ActorGroups";
+import { usePublishShellContext } from "../components/ShellStatus";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { useEntityKinds } from "../components/useEntityKinds";
 import { RecordArtEntry, RecordArtViewer } from "../components/art/RecordArtEntry";
@@ -92,6 +93,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
    *  chub, taglines) hang off `/worlds` whatever scope you read in. */
   const [wid, setWid] = useState(campaign ? "" : widParam);
   const [campaignName, setCampaignName] = useState("");
+  usePublishShellContext(worldScope ? null : { campaign: campaignName || scope.id, scene: "" });
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
   const [vid, setVid] = useState("");
   const [card, setCard] = useState<Card | null>(null);
@@ -544,11 +546,13 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       <PageShell columnLabel="Character" column={
         <Link className="column-back" to={charactersHref(scope)}>‹ All characters</Link>
       }>
+        <div className="page-wide view-anim">
         <div className="screen-head"><h1 className="screen-title">Character</h1></div>
         {error != null
           ? <div className="banner"><ErrorNote err={error} /></div>
           : <p className="field-hint">Reading…</p>}
-      </PageShell>
+        </div>
+    </PageShell>
     );
   }
 
@@ -570,6 +574,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     <Link className="column-back" to={charactersHref(scope)}
           state={{ reveal: eid }}>‹ All characters</Link>
 
+    <div className="dossier-head">
     <RecordArtEntry controller={art} name={name} onOpenArt={() => selectTab("art")} />
 
     <h2 className="identity-name">{name}</h2>
@@ -577,6 +582,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
 
     {worldScope && <TaglineSection wid={wid} cid={eid} onError={setError} />}
 
+    </div>
     <VersionList scope={scope} detail={detail} vid={vid} locked={locked}
                  campaignLabel={campaignLabel} worldVersions={worldVersions}
                  onPick={() => art.transition(() => { void runPick(); })}
@@ -653,6 +659,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   return (
     <PageShell column={column} footer={footer} columnLabel="Character" className="character-page">
       <RecordArtViewer controller={art} />
+      <div className="page-wide view-anim">
       {importFile && (
         <ImportVersionDialog fileName={importFile.name} characters={roster}
                              fixedTo={{ id: eid, name: detail.meta.name }}
@@ -745,6 +752,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
             onLocalize: () => { void art.runRelated("localize images", () => runLocalize(vid)); },
           }} />
         )}
+      </div>
       </div>
     </PageShell>
   );

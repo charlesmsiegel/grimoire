@@ -92,7 +92,7 @@ export function EditableField(
         <div className="card-field-head">
           <span className="data-label">{label}</span>
           {stamp}
-          <button className="field-edit" type="button" disabled={disabled}
+          <button className="field-edit" type="button" disabled={disabled} aria-label={`${empty ? "Add" : "Edit"} ${label}`}
                   onClick={() => onEditingChange(true)}>
             {empty ? "Add" : "Edit"}
           </button>

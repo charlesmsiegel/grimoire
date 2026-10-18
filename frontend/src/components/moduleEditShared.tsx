@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type ModuleEditResult } from "../api/client";
+import { errorText } from "../api/errors";
 
 export type SaveFn = (dryRun: boolean) => Promise<ModuleEditResult>;
 
@@ -42,6 +43,11 @@ export function useModuleDryRun(save: SaveFn, deps: unknown[]) {
       setResult(r);
       if (r.ok) onOk(r);
       return r;
+    } catch (err) {
+      // An explicit save has a person waiting for an outcome. Keep its
+      // refusal in the same error surface as validation, and leave the draft
+      // intact so a transient failure can be retried.
+      setResult({ ok: false, errors: [errorText(err)], display_errors: [] });
     } finally {
       setSaving(false);
     }
@@ -54,7 +60,10 @@ export function useModuleDryRun(save: SaveFn, deps: unknown[]) {
     let fresh: ModuleEditResult;
     try {
       fresh = await save(true);            // fresh dry-run of the CURRENT form
-    } catch {
+    } catch (err) {
+      if (revision.current === rev) {
+        setResult({ ok: false, errors: [errorText(err)], display_errors: [] });
+      }
       setSaving(false);
       return;
     }

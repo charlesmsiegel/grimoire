@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import { LIBRARY_SECTIONS } from "../librarySections";
 import { ColumnSection } from "./PageShell";
 
@@ -18,6 +18,14 @@ import { ColumnSection } from "./PageShell";
  *  instead of blanking the column. */
 export default function LibraryColumn() {
   const [counts, setCounts] = useState<Record<string, number | null>>({});
+  const sections = useRef<HTMLDivElement>(null);
+  const { pathname } = useLocation();
+  useEffect(() => {
+    if (window.innerWidth <= 720) {
+      sections.current?.querySelector<HTMLElement>(".column-row.active")
+        ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    }
+  }, [pathname]);
 
   useEffect(() => {
     let live = true;
@@ -35,7 +43,7 @@ export default function LibraryColumn() {
   }, []);
 
   return (
-    <ColumnSection label="The Library">
+    <div ref={sections} className="library-sections"><ColumnSection label="The Library">
       {LIBRARY_SECTIONS.map((s) => (
         // NavLink is already prefix-aware, which is what a section wants:
         // /worlds/saltmarch is still Worlds.
@@ -50,6 +58,6 @@ export default function LibraryColumn() {
           </span>
         </NavLink>
       ))}
-    </ColumnSection>
+    </ColumnSection></div>
   );
 }

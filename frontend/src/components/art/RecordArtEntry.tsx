@@ -11,9 +11,9 @@ export function RecordArtEntry({ controller, name, onOpenArt }: {
       style={{ aspectRatio: actor ? "1" : "1.6" }} onClick={(event) => controller.openImage(image, event.currentTarget)}>
       <img src={image.thumb} alt={name + " art preview"} style={{ objectPosition: (image.focus ?? 50) + "% " + (image.focus ?? 50) + "%" }} />
     </button>}
-    <button type="button" ref={controller.entryRef} disabled={!!controller.busy} onClick={() => controller.transition(onOpenArt)}>
+    {controller.count !== 0 && <button className="subtle" type="button" ref={controller.entryRef} disabled={!!controller.busy} onClick={() => controller.transition(onOpenArt)}>
       {controller.count === null ? "Art" : "Art (" + controller.count + ")"}
-    </button>
+    </button>}
   </div>;
 }
 /** Mount once beside the selected record's header, independently of its tab.

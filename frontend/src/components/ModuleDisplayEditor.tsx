@@ -102,8 +102,8 @@ function Preview({ pack, sheetType, tree, theme }: {
   );
 }
 
-export function LayoutSection({ pack, reload }: {
-  pack: ModuleDetail; reload: () => Promise<unknown>;
+export function LayoutSection({ pack, reload, onDone }: {
+  pack: ModuleDetail; reload: () => Promise<unknown>; onDone?: () => void;
 }) {
   const [text, setText] = useState(() => JSON.stringify(pack.layout_source ?? {}, null, 2));
   const [sheetType, setSheetType] = useState(() => Object.keys(pack.sheets.sheet_types)[0] ?? "");
@@ -146,6 +146,7 @@ export function LayoutSection({ pack, reload }: {
       <div className="form-actions">
         <button className="primary" disabled={parsed === undefined || dr.saving}
                 onClick={() => void dr.requestSave(() => void reload())}>Save</button>
+        {onDone && <button className="subtle" disabled={dr.saving} onClick={onDone}>Done</button>}
       </div>
     </div>
   );
@@ -181,8 +182,8 @@ function themeTokenOf(form: ThemeForm): ModuleTheme {
   };
 }
 
-export function ThemeSection({ pack, reload }: {
-  pack: ModuleDetail; reload: () => Promise<unknown>;
+export function ThemeSection({ pack, reload, onDone }: {
+  pack: ModuleDetail; reload: () => Promise<unknown>; onDone?: () => void;
 }) {
   const [form, setForm] = useState<ThemeForm>(() => themeFormOf(pack.theme));
   const [sheetType, setSheetType] = useState(() => Object.keys(pack.sheets.sheet_types)[0] ?? "");
@@ -259,6 +260,7 @@ export function ThemeSection({ pack, reload }: {
       <div className="form-actions">
         <button className="primary" disabled={dr.saving}
                 onClick={() => void dr.requestSave(() => void reload())}>Save</button>
+        {onDone && <button className="subtle" disabled={dr.saving} onClick={onDone}>Done</button>}
       </div>
     </div>
   );

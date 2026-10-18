@@ -4,9 +4,10 @@ import { ClimateEditor } from "../components/ClimateEditor";
 export default function ClimatesView() {
   return (
     <LibraryPage>
-      <div className="page view-anim">
-        <div className="page-head">
-          <h1 className="page-h1">Climates</h1>
+      <div className="page-wide view-anim">
+        <div className="library-page-head">
+          <div className="eyebrow">The Library</div>
+          <h1 className="screen-title">Climates</h1>
         </div>
         <ClimateEditor />
       </div>

@@ -25,7 +25,7 @@ export type RecordSection = (typeof RECORD_SECTIONS)[number];
 /** The record sections that browse as a grid of cards and open a blank form
  *  from a `+ New` link. The section root is the browse grid; `?new=1` (or, on
  *  Lore, `?owner=`) is the form (#437). */
-export const NEW_FORM_SECTIONS: readonly Section[] = ["locations", "lore", "items", "groups", "creatures"];
+export const NEW_FORM_SECTIONS: readonly Section[] = ["locations", "lore", "items", "groups", "creatures", "greetings"];
 
 /** ...and the seven screens that are not a list of records: the world's own
  *  setup, the campaigns it feeds, its art, its tag vocabulary, its tracker
@@ -67,7 +67,7 @@ export type SectionTarget =
   | { kind: "section"; at: "overview" | "push" | "tags" | "tracker" | "output" | "quick-replies" }
   | { kind: "section"; at: "images"; forCampaign?: string; view?: "world" }
   | { kind: "section"; at: "images"; forCampaign: string; view: "campaign-library" }
-  | { kind: "section"; at: "greetings"; view?: "graph" }
+  | { kind: "section"; at: "greetings"; view?: "graph"; new?: true }
   | { kind: "section"; at: "lore"; newOwner?: string; new?: true }
   | { kind: "section"; at: "locations" | "items" | "groups" | "creatures"; new?: true }
   | { kind: "section"; at: Exclude<RecordSection, "lore" | "greetings" | "locations" | "items" | "groups" | "creatures"> }

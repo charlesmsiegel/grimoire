@@ -76,7 +76,8 @@ export function WorldPushPanel({ wid }: { wid: string }) {
         <>
           <p className="field-hint">
             Edits to this world reach a campaign only when that campaign accepts
-            them. These are waiting.
+            them. {rows.some((row) => COUNTS.some((c) => row.pending[c.key] > 0))
+              ? "These changes are waiting." : "All campaigns are up to date."}
           </p>
           <div className="push-rows">
             {rows.map((row) => <Row key={row.id} row={row} />)}

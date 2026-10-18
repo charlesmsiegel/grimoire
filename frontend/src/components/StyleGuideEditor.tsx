@@ -1,20 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Link, useSearchParams } from "react-router-dom";
+import { errorText } from "../api/errors";
 import { api, type Style } from "../api/client";
 import { Field } from "./Field";
-import { errorText } from "../api/errors";
+import { useCreationRequest } from "./useCreationRequest";
 
 const BLANK = { name: "", description: "", tags: [] as string[], body: "" };
 
 export function StyleGuideEditor() {
+  const [params, setParams] = useSearchParams();
+  const selected = params.get("id");
+  const creating = params.get("new") === "1";
   const [styles, setStyles] = useState<Style[]>([]);
   const [sid, setSid] = useState<string | null>(null);
   const [form, setForm] = useState(BLANK);
   const [builtIn, setBuiltIn] = useState(false);
-  const [mode, setMode] = useState<"view" | "edit">("edit");
+  const [mode, setMode] = useState<"view" | "edit">("view");
   const [tagInput, setTagInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const { busy: saving, begin: beginSave, retire: retireSave } = useCreationRequest(
+    creating || selected ? "style" : null);
 
   const reload = useCallback(() => api.listStyles().then(setStyles), []);
   useEffect(() => { reload(); }, [reload]);
@@ -26,37 +33,65 @@ export function StyleGuideEditor() {
     setMode("edit");
   }
 
-  async function select(id: string) {
-    setError(null);
-    const s = await api.readStyle(id);
-    setSid(id);
-    setForm({ name: s.meta.name, description: s.meta.description, tags: s.meta.tags, body: s.body.trim() });
-    setBuiltIn(s.meta.built_in);
-    setMode("view");
+  // URL selection and Cancel share one read sequence: a late reload cannot
+  // overwrite the record the reader moved to, or banner it with an old error.
+  const selectionRead = useRef(0);
+  async function select(id: string, current = () => true) {
+    const request = ++selectionRead.current;
+    try {
+      setError(null);
+      const s = await api.readStyle(id);
+      if (!current() || request !== selectionRead.current) return;
+      setSid(id);
+      setForm({ name: s.meta.name, description: s.meta.description, tags: s.meta.tags, body: s.body.trim() });
+      setBuiltIn(s.meta.built_in);
+      setMode("view");
+    } catch (err: unknown) {
+      if (request === selectionRead.current && current()) throw err;
+    }
   }
 
+  useEffect(() => {
+    let live = true;
+    resetForm();
+    if (selected) {
+      setMode("view");
+      void select(selected, () => live).catch((err: unknown) => {
+        if (live) setError(errorText(err));
+      });
+    }
+    return () => { live = false; selectionRead.current += 1; };
+    // The URL is the record identity; form edits must never re-read its draft.
+  }, [selected, creating]);
+
   async function save() {
-    if (!form.name.trim()) return;
+    if (!form.name.trim() || saving) return;
+    const request = beginSave();
+    if (!request) return;
     setError(null);
     try {
       if (sid && !builtIn) {
         await api.updateStyle(sid, form);
         await reload();
-        await select(sid);
+        if (!request.current()) return;
+        await select(sid, request.current);
+        if (request.current()) setParams({ id: sid });
       } else {
         const { id } = await api.createStyle(form);
         await reload();
-        await select(id);
+        if (!request.current()) return;
+        await select(id, request.current);
+        if (request.current()) setParams({ id });
       }
     } catch (err: unknown) {
-      setError(errorText(err));
-    }
+      if (request.current()) setError(errorText(err));
+    } finally { request.finish(); }
   }
 
   async function remove(s: Style) {
     if (!window.confirm(`Delete style guide '${s.name}'?`)) return;
     await api.deleteStyle(s.id);
-    if (sid === s.id) resetForm();
+    if (sid === s.id) { resetForm(); setParams({}); }
     await reload();
   }
 
@@ -65,6 +100,7 @@ export function StyleGuideEditor() {
     const { id } = await api.duplicateStyle(sid);
     await reload();
     await select(id);
+    setParams({ id });
   }
 
   function addTag() {
@@ -80,18 +116,20 @@ export function StyleGuideEditor() {
   return (
     <div className="editor">
       <div className="editor-list">
-        <button className="primary new" onClick={resetForm}>+ New style guide</button>
+        <Link className="primary new" to="?new=1">+ New style guide</Link>
         {styles.map((s) => (
-          <button key={s.id} className={"row" + (sid === s.id ? " active" : "")} onClick={() => select(s.id)}>
+          <Link key={s.id} className={"row" + (sid === s.id ? " active" : "")} to={`?${new URLSearchParams({ id: s.id })}`}>
             {s.name}
             {s.built_in && <span className="mark-badge">built-in</span>}
-          </button>
+          </Link>
         ))}
       </div>
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
-        {mode === "view" && sid ? (
+        {!selected && !creating ? <div className="editor-empty">Choose a style guide to read, or create one.</div>
+          : selected && !sid ? error ? null : <p className="field-hint">Loading style guide...</p>
+          : mode === "view" && sid ? (
           <div className="detail-view">
             <div className="detail-main">
               <h3>{form.name}</h3>
@@ -150,8 +188,9 @@ export function StyleGuideEditor() {
               {sid && !builtIn && (
                 <button className="subtle" onClick={() => remove(styles.find((s) => s.id === sid)!)}>Delete</button>
               )}
-              {sid && <button className="subtle" onClick={() => setMode("view")}>Cancel</button>}
-              <button className="primary" onClick={save} disabled={!form.name.trim()}>
+              {sid ? <button className="subtle" onClick={() => { retireSave(); void select(sid).catch((err: unknown) => setError(errorText(err))); }}>Cancel</button>
+                : <Link className="subtle" to="?">Cancel</Link>}
+              <button className="primary" onClick={save} disabled={saving || !form.name.trim()}>
                 {sid && !builtIn ? "Save style guide" : "Create style guide"}
               </button>
             </div>

@@ -76,6 +76,7 @@ vi.mock("../api/client", () => ({
     previewAdoptSt: vi.fn(),
     adoptSt: vi.fn(),
     adoptStAll: vi.fn(),
+    previewAdoptStAll: vi.fn(),
     listCharacters: vi.fn(),
     listPCs: vi.fn(),
     listClimates: vi.fn(),
@@ -124,6 +125,7 @@ const fail = (status: number, detail: string, kind?: string,
   new (ApiError)(status, detail, kind, body);
 
 beforeEach(() => {
+  vi.mocked(api.previewAdoptStAll).mockResolvedValue({ pending: 1 });
   vi.clearAllMocks();
   vi.mocked(api.readRecordArt).mockImplementation(async (target) => artRead(target, []));
   vi.mocked(api.getGroupState).mockResolvedValue({ goals: "", resources: "", focus: "", public_perception: "", secrets: "", updated: "" });
@@ -414,7 +416,8 @@ test("an empty location keeps Details clean and makes Add images available from 
   renderEditor({ kind: "locations", selected: "saltmarch" });
   await screen.findByRole("tab", { name: "Art 0" });
   expect(screen.queryByRole("button", { name: "Add images" })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Art (0)" }));
+  expect(screen.queryByRole("button", { name: "Art (0)" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Art 0" }));
   expect(screen.getByText("No images yet")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Add images" })).toBeInTheDocument();
 });
@@ -878,8 +881,8 @@ test("rail rows carry the record's token count", async () => {
   const { container } = render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findByText("Salt");
   const counts = Array.from(container.querySelectorAll(".row-tokens")).map((n) => n.textContent);
-  expect(counts).toEqual(["1,240", "7"]);
-  // the rail drops the unit for width, so the row's accessible name carries it
+  expect(counts).toEqual(["1,240 tokens", "7 tokens"]);
+  // The visible and accessible labels both carry the unit.
   expect(screen.getByRole("link", { name: /Salt 1,240 tokens/ })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: /Brine 7 tokens/ })).toBeInTheDocument();
 });
@@ -892,7 +895,7 @@ test("a zero-token record still shows its count, in the rail and the detail", as
     meta: { id: "stub", name: "Stub" }, body: "", tokens: 0 }));
   const browse = render(<Wrap wid="w" kind="lore" isNew={false} />);
   await within(browse.container.querySelector(".entity-grid") as HTMLElement).findByText("Stub");
-  expect(browse.container.querySelector(".row-tokens")!.textContent).toBe("0");
+  expect(browse.container.querySelector(".row-tokens")!.textContent).toBe("0 tokens");
   browse.unmount();
   const { container } = render(<Wrap wid="w" kind="lore" selected="stub" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -2041,6 +2044,13 @@ test("adopt-all is disabled over an open edit and never discards it", async () =
   fireEvent.click(all);
   expect(api.adoptStAll).not.toHaveBeenCalled();
   expect(screen.getByLabelText("Body")).toHaveValue("unsaved words");
+});
+
+test("a library with no pending imported settings offers no bulk Apply", async () => {
+  vi.mocked(api.previewAdoptStAll).mockResolvedValue({ pending: 0 });
+  render(<Wrap isNew={false} wid="w" kind="lore" />);
+  await waitFor(() => expect(api.previewAdoptStAll).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: "Apply imported settings to all" })).not.toBeInTheDocument();
 });
 
 test("adopt-all over a viewed record applies and re-reads it", async () => {

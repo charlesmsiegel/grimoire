@@ -404,8 +404,8 @@ function GalleryBody({ wid, forCampaign }: { wid: string; forCampaign: string | 
       {images !== null && !err && tab === "gallery" && (
         <div className="editor">
           <div className="editor-list">
-            <label>Search images<input type="search" aria-label="Search images" value={search}
-              onChange={(event) => { setPresentation((old) => ({ ...old, search: event.target.value, selected: null })); viewer.close(); }} /></label>
+            <input className="rail-search" type="search" aria-label="Search images" placeholder="Search images..." value={search}
+              onChange={(event) => { setPresentation((old) => ({ ...old, search: event.target.value, selected: null })); viewer.close(); }} />
             <button className={"row" + (kind === null ? " active" : "")}
                     onClick={() => { setKind(null); setSel(null); }}>
               All images

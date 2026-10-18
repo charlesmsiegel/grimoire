@@ -12,10 +12,12 @@ import { EMPTY_DRAFT, profileOf, type ProfileDraft } from "../worldProfile";
 
 function footerLabel(counts: Record<string, number> | undefined): string {
   const c = counts ?? {};
-  const chars = (c.characters ?? 0) + (c.pcs ?? 0);
-  const parts = [`${c.locations ?? 0} LOCATIONS`, `${chars} CHARACTERS`, `${c.lore ?? 0} LORE`];
+  const count = (n: number, singular: string, plural = `${singular}S`) => `${n} ${n === 1 ? singular : plural}`;
+  const parts = [count(c.locations ?? 0, "LOCATION"), count(c.characters ?? 0, "CHARACTER")];
+  if (c.pcs) parts.push(count(c.pcs, "PC"));
+  parts.push(`${c.lore ?? 0} LORE`);
   for (const [key, label] of [["items", "ITEMS"], ["groups", "GROUPS"], ["creatures", "CREATURES"]] as const) {
-    if (c[key]) parts.push(`${c[key]} ${label}`);
+    if (c[key]) parts.push(count(c[key], label.slice(0, -1), label));
   }
   return parts.join(" · ");
 }
@@ -48,6 +50,8 @@ export default function WorldsView() {
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [importing, setImporting] = useState(false);
   const [forking, setForking] = useState<string | null>(null);
+  const [forkDraft, setForkDraft] = useState<{ world: WorldMeta; name: string } | null>(null);
+  const [renamingBusy, setRenamingBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A committed create/fork whose confirming read failed is a read warning,
   // not a mutation refusal. An automatic run-settled reload can recover it
@@ -146,8 +150,15 @@ export default function WorldsView() {
   }
 
   async function rename() {
-    if (!renaming) return;
-    await api.renameWorld(renaming.id, renaming.name);
+    if (!renaming?.name.trim() || renamingBusy) return;
+    setError(null);
+    setRenamingBusy(true);
+    try {
+      await api.renameWorld(renaming.id, renaming.name.trim());
+    } catch (err) {
+      setError(`Could not rename this world: ${errorText(err)}`);
+      return;
+    } finally { setRenamingBusy(false); }
     setRenaming(null);
     await reload();
   }
@@ -175,13 +186,12 @@ export default function WorldsView() {
    *  Reported, not dropped, and with the row's button disabled meanwhile: a
    *  world runs to a gigabyte of character art, so this is a request that can
    *  take real time, and a second click on a pending one would make a second
-   *  copy. `rename` and `remove` above let a rejection become an unhandled
-   *  promise — the card simply does not change, which reads as "nothing
-   *  happened" and is near enough true for them. It is not true here.
+   *  copy. The name draft stays available after a refusal, so retrying does
+   *  not require reconstructing it in another browser prompt.
    */
-  async function fork(w: WorldMeta) {
-    const name = window.prompt(`Fork '${w.name}' as?`, `${w.name} (fork)`)?.trim();
-    if (!name) return;
+  async function fork(w: WorldMeta, draft: string) {
+    const name = draft.trim();
+    if (!name || forking !== null) return;
     setError(null);
     setCreatedReadWarning(null);
     setForking(w.id);
@@ -195,6 +205,7 @@ export default function WorldsView() {
       setForking(null);
       return;
     }
+    setForkDraft(null);
     // Returning from the call IS the commit point: the copy exists from here
     // on. So a failing refresh must not read as a failed fork -- the user
     // would retry, and after a minute of copying a gigabyte the retry makes a
@@ -246,9 +257,9 @@ export default function WorldsView() {
 
   return (
     <LibraryPage busy={stale}>
-      <div className="page view-anim">
+      <div className="page-wide view-anim">
         <div className="page-head">
-          <h1 className="page-h1">Worlds</h1>
+          <div><div className="eyebrow">The Library</div><h1 className="screen-title">Worlds</h1></div>
           <div className="joined">
             <input
               placeholder="World name…" aria-label="World name"
@@ -284,6 +295,16 @@ export default function WorldsView() {
             onChange={(e) => setProfile({ ...profile, description: e.target.value })} /></Field>
         </div>}
         {shownError && <div className="error" role="alert">{shownError}</div>}
+        {forkDraft && <div className="form world-fork-form">
+          <h3>Fork {forkDraft.world.name}</h3>
+          <Field label="Fork name"><input type="text" value={forkDraft.name} disabled={forking !== null}
+            onChange={(e) => setForkDraft({ ...forkDraft, name: e.target.value })} /></Field>
+          <div className="form-actions">
+            <button className="subtle" disabled={forking !== null} onClick={() => setForkDraft(null)}>Cancel fork</button>
+            <button className="primary" disabled={forking !== null || !forkDraft.name.trim()}
+              onClick={() => void fork(forkDraft.world, forkDraft.name)}>Create fork</button>
+          </div>
+        </div>}
         {exports.map((attempt) => (
           <iframe key={attempt.id} hidden title={`Export ${attempt.name} response`}
                   src={attempt.url} onLoad={(event) => exportLoaded(event.currentTarget, attempt)} />
@@ -303,12 +324,18 @@ export default function WorldsView() {
           {shown.map((w) => (
             <div className="world-card" key={w.id}>
               {renaming?.id === w.id ? (
+                <div className="form world-rename-form">
                 <input
-                  className="row-rename" aria-label="Rename world" autoFocus
+                  className="row-rename" aria-label="Rename world" ref={(node) => node?.focus()}
                   value={renaming.name}
                   onChange={(e) => setRenaming({ id: w.id, name: e.target.value })}
-                  onKeyDown={(e) => { if (e.key === "Enter") rename(); if (e.key === "Escape") setRenaming(null); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") void rename(); if (e.key === "Escape") setRenaming(null); }}
                 />
+                <div className="form-actions">
+                  <button className="subtle" disabled={renamingBusy} onClick={() => setRenaming(null)}>Cancel rename</button>
+                  <button className="primary" disabled={renamingBusy || !renaming.name.trim()} onClick={() => void rename()}>Save name</button>
+                </div>
+                </div>
               ) : (
                 // A rest on the card, or the press itself, starts the world's
                 // reads -- its record and its character rows, which the
@@ -336,7 +363,7 @@ export default function WorldsView() {
                   <footer>{footerLabel(w.counts)}</footer>
                 </button>
               )}
-              <div className="row-actions">
+              {renaming?.id !== w.id && <div className="row-actions">
                 <a aria-label={`Export ${w.name}`} title="Export as a bundle"
                    href={api.exportWorldUrl(w.id)} download onClick={(event) => {
                      event.preventDefault();
@@ -349,7 +376,7 @@ export default function WorldsView() {
                 <button aria-label={`Rename ${w.name}`} disabled={stale}
                         onClick={() => setRenaming({ id: w.id, name: w.name })}>✎</button>
                 <button aria-label={`Fork ${w.name}`} title="Fork into a new world"
-                        disabled={stale || forking !== null} onClick={() => { void fork(w); }}>
+                        disabled={stale || forking !== null} onClick={() => setForkDraft({ world: w, name: `${w.name} (fork)` })}>
                   {forking === w.id ? "…" : "⑂"}
                 </button>
                 {/* Disabled while any fork is in flight, not just this card's:
@@ -358,7 +385,7 @@ export default function WorldsView() {
                     neither the copy nor the original (Codex review). */}
                 <button aria-label={`Delete ${w.name}`} disabled={stale || forking !== null}
                         onClick={() => remove(w)}>✕</button>
-              </div>
+              </div>}
             </div>
           ))}
         </div>

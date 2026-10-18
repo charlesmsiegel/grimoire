@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { errorText } from "../api/errors";
 import { api, type Climate, type ClimateEntry, type ClimateSeason, type ClimateSummary } from "../api/client";
 import { Field } from "./Field";
-import { errorText } from "../api/errors";
+import { useCreationRequest } from "./useCreationRequest";
 
 const BLANK_SEASON: ClimateSeason = {
   name: "all year", from: 0, to: 0,
@@ -40,12 +42,17 @@ function eligible(conditions: ClimateEntry[], temp: string) {
 }
 
 export function ClimateEditor() {
+  const [params, setParams] = useSearchParams();
+  const selected = params.get("id");
+  const creating = params.get("new") === "1";
   const [climates, setClimates] = useState<ClimateSummary[]>([]);
   const [id, setId] = useState<string | null>(null); // null = new
   const [form, setForm] = useState<Climate>(BLANK);
   const [flags, setFlags] = useState({ builtin: false, custom: false });
-  const [mode, setMode] = useState<"view" | "edit">("edit");
+  const [mode, setMode] = useState<"view" | "edit">("view");
   const [error, setError] = useState<string | null>(null);
+  const { busy: saving, begin: beginSave, retire: retireSave } = useCreationRequest(
+    creating || selected ? "climate" : null);
 
   const reload = useCallback(
     () => api.listClimates().then((r) => setClimates(r.climates)), []);
@@ -59,18 +66,40 @@ export function ClimateEditor() {
     setMode("edit"); // a brand-new climate goes straight to the form
   }
 
-  async function select(next: string) {
-    setError(null);
-    const got = await api.readClimate(next);
-    setId(next);
-    setForm(got.climate);
-    setFlags({ builtin: got.builtin, custom: got.custom });
-    setMode("view"); // existing climates are read-only until Edit
+  // URL selection and Cancel share one read sequence: a late reload cannot
+  // overwrite the record the reader moved to, or banner it with an old error.
+  const selectionRead = useRef(0);
+  async function select(next: string, current = () => true) {
+    const request = ++selectionRead.current;
+    try {
+      setError(null);
+      const got = await api.readClimate(next);
+      if (!current() || request !== selectionRead.current) return;
+      setId(next);
+      setForm(got.climate);
+      setFlags({ builtin: got.builtin, custom: got.custom });
+      setMode("view"); // existing climates are read-only until Edit
+    } catch (err: unknown) {
+      if (request === selectionRead.current && current()) throw err;
+    }
   }
+
+  useEffect(() => {
+    let live = true;
+    resetForm();
+    if (selected) {
+      setMode("view");
+      void select(selected, () => live).catch((err: unknown) => {
+        if (live) setError(errorText(err));
+      });
+    }
+    return () => { live = false; selectionRead.current += 1; };
+    // The URL is the record identity; form edits must never re-read its draft.
+  }, [selected, creating]);
 
   async function save() {
     const target = (id ?? form.id).trim();
-    if (!target || !form.name.trim()) return;
+    if (!target || !form.name.trim() || saving) return;
     setError(null);
     if (!id && climates.some((c) => c.id === target)) {
       // Every registry entry, not just custom ones: entering a shipped
@@ -80,15 +109,19 @@ export function ClimateEditor() {
       setError(`A climate with the id '${target}' already exists. Open it to edit, or choose another id.`);
       return;
     }
+    const request = beginSave();
+    if (!request) return;
     try {
       await api.saveClimate(target, { ...form, id: target });
       await reload();
-      await select(target);
+      if (!request.current()) return;
+      await select(target, request.current);
+      if (request.current()) setParams({ id: target });
     } catch (err: unknown) {
       // The resolver is lenient so bad data cannot take a turn down, which
       // makes this the only place a mistake is ever reported.
-      setError(errorText(err));
-    }
+      if (request.current()) setError(errorText(err));
+    } finally { request.finish(); }
   }
 
   async function revertOrDelete() {
@@ -133,7 +166,7 @@ export function ClimateEditor() {
     const got = await api.deleteClimate(id);
     await reload();
     if (got.reverted_to_preset) await select(id);
-    else resetForm();
+    else { resetForm(); setParams({}); }
   }
 
   function patchSeason(n: number, patch: Partial<ClimateSeason>) {
@@ -225,19 +258,21 @@ export function ClimateEditor() {
   return (
     <div className="editor">
       <div className="editor-list">
-        <button className="primary new" onClick={resetForm}>+ New climate</button>
+        <Link className="primary new" to="?new=1">+ New climate</Link>
         {climates.map((c) => (
-          <button key={c.id} className={"row" + (c.id === id ? " on" : "")}
-                  onClick={() => select(c.id)}>
+          <Link key={c.id} className={"row" + (c.id === id ? " on" : "")}
+                to={`?${new URLSearchParams({ id: c.id })}`}>
             {c.name}
             {c.custom && <span className="chip on">custom</span>}
-          </button>
+          </Link>
         ))}
       </div>
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
-        {mode === "view" && id ? (
+        {!selected && !creating ? <div className="editor-empty">Choose a climate to read, or create one.</div>
+          : selected && !id ? error ? null : <p className="field-hint">Loading climate...</p>
+          : mode === "view" && id ? (
           <div className="detail-view">
             <div className="detail-main">
               <h3>{form.name}</h3>
@@ -344,8 +379,11 @@ export function ClimateEditor() {
                 {AXES.map((axis) => (
                   <div key={axis.key} className="side-section">
                     <h4>{axis.label}</h4>
+                    <div className="climate-entry-head" aria-hidden="true"><span>Name</span><span>Weight</span>
+                      {axis.key === "conditions" && <span>Only when</span>}
+                    </div>
                     {s[axis.key].map((e, i) => (
-                      <div key={i} className="chips">
+                      <div key={i} className="climate-entry">
                         <input aria-label={`${axis.label} name ${i + 1}`} value={e.name}
                                onChange={(ev) => {
                                  if (axis.key === "temperature" && e.name) {
@@ -365,7 +403,7 @@ export function ClimateEditor() {
                                    requires_temp: ev.target.value.split(",").map((t) => t.trim()).filter(Boolean),
                                  })} />
                         )}
-                        <button className="chip" onClick={() => removeEntry(n, axis.key, i)}>✕</button>
+                        <button className="chip" aria-label={`Remove ${axis.label.toLowerCase()} ${e.name || i + 1} from season ${n + 1}`} onClick={() => removeEntry(n, axis.key, i)}>✕</button>
                       </div>
                     ))}
                     <button className="chip" onClick={() => addEntry(n, axis.key)}>+ add</button>
@@ -379,8 +417,9 @@ export function ClimateEditor() {
             <button className="chip" onClick={addSeason}>+ add season</button>
 
             <div className="form-actions">
-              <button className="primary" onClick={save}>Save</button>
-              {id && <button className="subtle" onClick={() => select(id)}>Cancel</button>}
+              <button className="primary" onClick={save} disabled={saving}>Save</button>
+              {id ? <button className="subtle" onClick={() => { retireSave(); void select(id).catch((err: unknown) => setError(errorText(err))); }}>Cancel</button>
+                  : <Link className="subtle" to="?">Cancel</Link>}
             </div>
           </div>
         )}

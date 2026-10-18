@@ -65,7 +65,7 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
-from . import chronicle, entities, facts, plot, relationships, statcache
+from . import _search_markdown, chronicle, entities, facts, plot, relationships, statcache
 from .frontmatter import parse_frontmatter, parse_frontmatter_head, text_of
 from .paths import home, natural_key, safe_id
 
@@ -257,7 +257,9 @@ def markdown_document(data: bytes, stem: str) -> tuple[str, str, str]:
 def _markdown_text(text: str, stem: str) -> tuple[str, str, str]:
     meta, body = parse_frontmatter(text)
     name = str(meta.get("name") or meta.get("title") or stem)
-    prose = _flat(body)
+    # Response identities and authored notes are hidden in the rendered prose.
+    # Literal code remains visible, so a source-wide comment regex is too broad.
+    prose = _flat(_search_markdown.without_comments(body))
     parts = [prose] + [str(meta.get(key, "")) for key in _META_KEYS]
     return name, _flat(" ".join(p for p in parts if p)), prose
 

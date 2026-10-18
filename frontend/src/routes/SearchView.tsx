@@ -369,7 +369,7 @@ export default function SearchView() {
                   onClick={() => setQuery({ scope: s.key }, false)}>
             <span className="column-row-label">{s.label}</span>
             <span className="column-row-count">
-              {s.key ? (scopes[s.key] ?? 0) : (result ? shown.total : "—")}
+              {!q.trim() || !result ? "—" : s.key ? (scopes[s.key] ?? 0) : shown.total}
             </span>
           </button>
         ))}
@@ -413,7 +413,7 @@ export default function SearchView() {
     && (result.indexed ?? 0) < result.corpus);
 
   return (
-    <PageShell column={column} footer={footer} columnLabel="Search filters">
+    <PageShell className="search-page" column={column} footer={footer} columnLabel="Search filters">
       <div className="page-wide view-anim">
         <div className="shelf-head">
           <div>

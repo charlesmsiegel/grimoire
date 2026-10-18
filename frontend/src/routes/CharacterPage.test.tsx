@@ -224,7 +224,7 @@ function fieldBlock(label: string): HTMLElement {
 }
 
 async function editField(label: string) {
-  fireEvent.click(within(fieldBlock(label)).getByRole("button", { name: /^(edit|add)$/i }));
+  fireEvent.click(within(fieldBlock(label)).getByRole("button", { name: new RegExp(`^(edit|add) ${label}$`, "i") }));
   return await screen.findByRole("textbox", { name: label });
 }
 
@@ -339,7 +339,7 @@ test("an empty field offers Add rather than Edit, and says it is unset", async (
     versions: [{ ...DETAIL.versions[0], card: card({ scenario: "" }) }],
   }));
   await renderWorld();
-  expect(within(fieldBlock("Scenario")).getByRole("button", { name: "Add" })).toBeTruthy();
+  expect(within(fieldBlock("Scenario")).getByRole("button", { name: "Add Scenario" })).toBeTruthy();
 });
 
 test("tags edit as text and read back as chips", async () => {
@@ -767,7 +767,8 @@ test("a character version change closes its viewer and resets management", async
   fireEvent.click(screen.getByRole("button", { name: "Close image viewer" }));
   fireEvent.click(screen.getByRole("button", { name: "veiled" }));
   expect(lastLocation).toContain("v=veiled");
-  await waitFor(() => expect(screen.getByRole("button", { name: "Manage art" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add images" })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Manage art" })).not.toBeInTheDocument();
   expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
 });
 
@@ -965,7 +966,7 @@ test("a birthdate save holds other character edits", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
   fireEvent.click(screen.getByRole("button", { name: "Save birthdate" }));
   await waitFor(() => expect(within(fieldBlock("Personality"))
-    .getByRole("button", { name: "Edit" })).toBeDisabled());
+    .getByRole("button", { name: "Edit Personality" })).toBeDisabled());
   await act(async () => { release({ ok: true }); });
 });
 
@@ -1040,7 +1041,7 @@ test("a save in flight holds every other field's control", async () => {
   // Opening a second field while the first is saving is how a whole-card PUT
   // built from the pre-save card silently drops the write that is in flight.
   await waitFor(() =>
-    expect(within(fieldBlock("Scenario")).getByRole("button", { name: "Edit" })).toBeDisabled());
+    expect(within(fieldBlock("Scenario")).getByRole("button", { name: "Edit Scenario" })).toBeDisabled());
   await act(async () => { release({ ok: true }); });
 });
 

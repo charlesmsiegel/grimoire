@@ -12,6 +12,7 @@ import { Field } from "../components/Field";
 import { LibraryPanel } from "../components/LibraryPanel";
 import { OwnedLorePanel } from "../components/OwnedLorePanel";
 import { ActorGroups } from "../components/ActorGroups";
+import { usePublishShellContext } from "../components/ShellStatus";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import SheetPanel from "../components/SheetPanel";
 import { sectionHref } from "../worldPaths";
@@ -20,6 +21,7 @@ import { useRecordArt } from "../components/art/useRecordArt";
 import { PCArtTab } from "../components/pc/PCArtTab";
 import { MobileArtEntry } from "../components/MobileArtEntry";
 import { whenLabel } from "../components/turnLabels";
+import { useCreationRequest } from "../components/useCreationRequest";
 
 const BLANK: Persona = {
   name: "", pronouns: "", summary: "", description: "", birthdate: "", goals: "", player_notes: "",
@@ -45,9 +47,18 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   const wanted = params.get("v") ?? "";
   const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: worldParam };
   const [wid, setWid] = useState(worldParam);
+  const [campaignName, setCampaignName] = useState("");
+  usePublishShellContext(campaign ? { campaign: campaignName || cid, scene: "" } : null);
   const [detail, setDetail] = useState<PCDetail | null>(null);
   const [vid, setVid] = useState("");
   const [persona, setPersona] = useState<Persona>(BLANK);
+  const [versionName, setVersionName] = useState<string | null>(null);
+  const { busy: creatingVersion, begin: beginVersion, retire: retireVersion } = useCreationRequest(
+    versionName === null ? null : "pc-version");
+  // A failed read after the write is recovery, not permission to create the
+  // uniquified version again. The returned id belongs only to this form visit.
+  const committedVersion = useRef<{ route: string; version: string } | null>(null);
+  if (committedVersion.current?.route !== location.key) committedVersion.current = null;
   const [mode, setMode] = useState<"view" | "edit">(
     (location.state as { newPC?: boolean } | null)?.newPC ? "edit" : "view");
   // Creation is a one-shot instruction. Reopening this history entry later is
@@ -77,16 +88,20 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
 
-  const read = useCallback(async (version?: string, preserveMode = false) => {
+  const read = useCallback(async (version?: string, preserveMode = false,
+                                 creation?: { current: () => boolean; installForm: () => void }) => {
     const request = ++recordRequest.current;
     const next = await api.readPC(scope, pid);
-    if (!live.current || request !== recordRequest.current) return;
+    if (!live.current || request !== recordRequest.current || (creation && !creation.current())) return;
     setDetail(next);
     const selected = next.versions.find((v) => v.id === (version ?? next.meta.default_version)) ?? next.versions[0];
     setVid(selected?.id ?? "");
     selectedVid.current = selected?.id ?? "";
     setPersona(selected?.persona ?? BLANK);
     if (!preserveMode) setMode("view");
+    // Complete the creation form in the same owned installation, before this
+    // read's own URL change retires its request and while no other form can act.
+    creation?.installForm();
     // Post-save metadata refresh is not navigation. Replacing the same URL
     // retires Art's feedback and, after a partial save, its recovery editor.
     if (!preserveMode && version && selected?.id && selected.id !== wanted) {
@@ -110,7 +125,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
       setPersona(v?.persona ?? BLANK);
     }).catch((err: unknown) => { if (active) setError(errorText(err)); });
     if (campaign) {
-      api.getCampaign(cid).then((c) => { if (active) setWid(c.meta.world); })
+      api.getCampaign(cid).then((c) => { if (active) { setWid(c.meta.world); setCampaignName(c.meta.name); } })
         .catch((err: unknown) => { if (active) setError(errorText(err)); });
       api.listAppearances(cid).then((roster) => {
         if (active) setLocked(roster.find((r) => r.kind === "pcs" && r.id === pid)?.version ?? null);
@@ -232,12 +247,30 @@ function PCRecord({ campaign }: { campaign: boolean }) {
     await run(() => api.updatePCVersion(scope, pid, vid, persona), () => read(vid));
   }
   async function addVersion() {
-    const name = window.prompt("New version name?")?.trim();
-    if (!name) return;
-    await run(async () => {
-      const { version } = await api.createPCVersion(scope, pid, { name, persona });
-      await read(version); setMode("edit");
-    }, () => Promise.resolve());
+    const name = versionName?.trim();
+    if (!name || creatingVersion) return;
+    let job: Promise<void> | undefined;
+    art.transition(() => {
+      const request = beginVersion();
+      if (!request) return;
+      job = (async () => {
+        setError(null);
+        try {
+          const version = committedVersion.current?.version
+            ?? (await api.createPCVersion(scope, pid, { name, persona })).version;
+          if (!request.current()) return;
+          committedVersion.current = { route: location.key, version };
+          await read(version, false, { current: request.current, installForm: () => {
+            committedVersion.current = null;
+            setVersionName(null);
+            setMode("edit");
+          } });
+        } catch (err: unknown) {
+          if (request.current()) setError(errorText(err));
+        } finally { request.finish(); }
+      })();
+    });
+    await job;
   }
   async function saveTags(next: string[]) {
     await run(() => api.updatePC(scope, pid, { tags: next }), () => read(vid, true));
@@ -262,25 +295,40 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   const back = sectionHref(scope, { kind: "section", at: "pcs" });
   const column = <>
     <Link className="column-back" to={back}>‹ All PCs</Link>
+    <div className="dossier-head">
     <RecordArtEntry controller={art} name={name} onOpenArt={() => selectTab("art")} />
     <h2 className="identity-name">{name}</h2>
+    </div>
     {detail && <ColumnSection label="Version">
       <select value={vid} onChange={(e) => switchVersion(e.target.value)} aria-label="Version">
         {detail.versions.map((v) => <option key={v.id} value={v.id}>
           {v.name}{v.id === detail.meta.default_version ? " (default)" : ""}
         </option>)}
       </select>
-      {(scope.kind === "world" || !locked) && <button className="subtle" onClick={() => void addVersion()}>+ Version</button>}
-      <button className="subtle" onClick={() => void run(() => api.updatePC(scope, pid, { default_version: vid }))}>Set default</button>
+      {(scope.kind === "world" || !locked) && <button className="subtle" disabled={creatingVersion}
+        onClick={() => { committedVersion.current = null; setVersionName(""); }}>+ Version</button>}
+      {versionName !== null && <div className="form">
+        <Field label="Version name"><input type="text" value={versionName} disabled={creatingVersion || !!committedVersion.current}
+          onChange={(e) => setVersionName(e.target.value)} /></Field>
+        <div className="form-actions">
+          <button className="subtle" onClick={() => { retireVersion(); committedVersion.current = null; setVersionName(null); }}>Cancel version</button>
+          <button className="primary" disabled={creatingVersion || !versionName.trim()} onClick={() => void addVersion()}>
+            {committedVersion.current ? "Retry loading version" : "Create version"}
+          </button>
+        </div>
+      </div>}
+      {vid !== detail.meta.default_version && <button className="subtle" onClick={() => void run(() => api.updatePC(scope, pid, { default_version: vid }))}>Set default</button>}
     </ColumnSection>}
     {campaign && detail && <ColumnSection label="Campaign version">
       {locked ? <>
         <div className="field-hint">Locked to {detail.versions.find((v) => v.id === locked)?.name ?? locked}.</div>
+        {worldVersions.length > 0 && <>
         <select aria-label="Import version" value={importVid} onChange={(e) => setImportVid(e.target.value)}>
           <option value="">— world version —</option>
           {worldVersions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
         </select>
         <button className="subtle" disabled={!importVid} onClick={() => void importVersion()}>Import from world</button>
+        </>}
       </> : detail.versions.length > 1
         ? <button className="subtle" onClick={() => void pickVersion()}>Pick this version</button>
         : <div className="field-hint">Single version; it locks when first used in a scene.</div>}
@@ -314,6 +362,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
 
   return <PageShell column={column} columnLabel="PC" className="character-page pc-page">
     <RecordArtViewer controller={art} />
+    <div className="page-wide view-anim">
     <div className="screen-head"><div>
       <div className="eyebrow">{campaign ? "Campaign PC" : "World PC"}</div>
       <h1 className="screen-title" ref={art.focusRef} tabIndex={-1}>{detail ? name : "PC"}</h1>
@@ -349,6 +398,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
           <div className="detail-rendered"><MarkdownArtProvider enabled contextKey={JSON.stringify([scope.kind, scope.id, pid, vid, revision.saved])}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{revision.persona.description}</Markdown></MarkdownArtProvider></div>
         </div> : <>
           <div className="form-actions"><button className="subtle" onClick={() => setMode("edit")}>Edit</button></div>
+          {!persona.description.trim() && <p className="editor-empty">No persona description yet. Choose Edit to describe this PC.</p>}
           <div className="detail-rendered"><MarkdownArtProvider enabled contextKey={JSON.stringify([scope.kind, scope.id, pid, vid, "persona"])}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{persona.description}</Markdown></MarkdownArtProvider></div>
         </> : <div className="form">
           <Field label="Name"><input type="text" value={persona.name} onChange={(e) => setPersona({ ...persona, name: e.target.value })} /></Field>
@@ -389,5 +439,6 @@ function PCRecord({ campaign }: { campaign: boolean }) {
         {tab === "sheet" && module && <SheetPanel scope={scope} module={module} kind="pcs" eid={pid} />}
       </div>
     </>}
+    </div>
   </PageShell>;
 }

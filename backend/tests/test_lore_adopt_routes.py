@@ -32,6 +32,31 @@ def test_preview_lists_pending_fields(client):
     assert "sticky" not in client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]
 
 
+def test_bulk_preview_counts_pending_records_across_kinds_without_writing(client):
+    wid = _world(client)
+    root = worlds.world_root(wid)
+    lore = _stashed(root)
+    _stashed(root, "items", "Mara's Lantern", {"sticky": 4})
+    _stashed(root, "locations", "Saltmarch", "{not json")
+    _stashed(root, "lore", "Realm", sticky="2", cooldown="3", priority="900")
+    r = client.get(f"/api/worlds/{wid}/adopt-st")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"pending": 2}
+    assert "sticky" not in entities.read_entity(root, "lore", lore)["meta"]
+
+
+def test_bulk_campaign_preview_counts_only_its_own_pending_records(client):
+    wid = _world(client)
+    inherited = _stashed(worlds.world_root(wid))
+    cid = _campaign(client, wid)
+    _stashed(campaigns.campaign_root(cid), "items", "Mara's Lantern", {"sticky": 4})
+    r = client.get(f"/api/campaigns/{cid}/adopt-st")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"pending": 1}
+    assert not overlay.has_own_copy(cid, "lore", inherited)
+    assert journal.read(cid) == []
+
+
 def test_campaign_preview_reads_an_inherited_record(client):
     wid = _world(client)
     eid = _stashed(worlds.world_root(wid))

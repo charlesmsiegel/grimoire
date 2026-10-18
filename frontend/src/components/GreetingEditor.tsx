@@ -10,6 +10,7 @@ import { LibraryPanel } from "./LibraryPanel";
 import { StaleRecordBanner } from "./StaleRecordBanner";
 import { SubjectsPopover } from "./SubjectsPopover";
 import { TaggingQueue } from "./TaggingQueue";
+import { useCreationRequest } from "./useCreationRequest";
 
 const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any", pcless: false, location: "", phase: "", sequence: null as number | null, optional: false };
 
@@ -45,14 +46,15 @@ function edgeChips(others: Greeting[], on: string[], onToggle: (id: string) => v
   ));
 }
 
-export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, selected, sectionPath, recordHref,
+export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, selected, isNew = false, sectionPath, recordHref,
                                  onChanged, onBusy, onEdgeDraft, hold = null, refreshKey = 0 }:
   { scope: EntityScope; wid: string;
     onOpenCharacter?: (cid: string, vid: string) => void;
     onOpenLocation?: (eid: string) => void;
     /** The record the URL names, or null for the section's own screen --
-     *  which is the blank new-greeting form this editor already opens on. */
+     *  which browses until New is requested. */
     selected?: string | null;
+    isNew?: boolean;
     /** This section's own address, for `+ New`. */
     sectionPath: string;
     /** ...and one record's, for a rail row. A CALLBACK rather than a string
@@ -104,6 +106,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   // land on top of an edit made outside the app (#35).
   const [rev, setRev] = useState<string | null>(null);
   const [stale, setStale] = useState<{ rev: string | null } | null>(null);
+  const { begin: beginSave, retire: retireSave } = useCreationRequest(
+    selected || isNew ? `${scope.kind}:${scope.id}:${selected ?? "new"}` : null);
   /** Bumped by anything that means "the reader is looking at something else
    *  now", so an answer to an older question can tell that it is stale. */
   const intent = useRef(0);
@@ -144,7 +148,12 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   // that follow a save must not put the rail back into a loading state.
   const [listsReady, setListsReady] = useState(false);
 
-  const reload = useCallback(() => api.listGreetings(scope).then(setGreetings), [scope.kind, scope.id]);
+  const scopeKey = `${scope.kind}:${scope.id}`;
+  const currentScope = useRef(scopeKey);
+  currentScope.current = scopeKey;
+  const reload = useCallback(() => api.listGreetings(scope).then((list) => {
+    if (currentScope.current === scopeKey) setGreetings(list);
+  }), [scope.kind, scope.id]);
   useEffect(() => {
     setListsReady(false);
     Promise.all([reload(), api.listCharacters(scope).then(setChars)])
@@ -196,8 +205,9 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
       void select(selected, () => req === selReq.current)
         .catch((err: unknown) => { if (req === selReq.current) setError(errorText(err)); });
     } else resetForm();
+    return () => { selectionRead.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, scope.kind, scope.id]);
+  }, [selected, isNew, scope.kind, scope.id]);
 
   // The other view of these records wrote (#9). A greeting being READ is
   // re-read, so its chips say what the store now says; a greeting being
@@ -253,26 +263,34 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     setMode("edit"); // a brand-new greeting goes straight to the form
   }
 
+  // URL selection and Cancel share one read sequence: a late reload cannot
+  // overwrite the record the reader moved to, or banner it with an old error.
+  const selectionRead = useRef(0);
   async function select(id: string, still: () => boolean = () => true) {
-    setError(null);
-    setStale(null);
-    const g = await api.readGreeting(scope, id);
-    if (!still()) return;   // the reader moved on while this was in flight
-    setGid(id);
-    setRev(g.rev);
-    setForm({
-      name: g.meta.name, character: g.meta.character, version: g.meta.version,
-      body: g.body.trim(), present: g.meta.present ?? [], requires_tags: g.meta.requires_tags,
-      predecessor_join: g.meta.predecessor_join, pcless: g.meta.pcless ?? false,
-      location: g.meta.location ?? "", phase: g.meta.phase ?? "",
-      sequence: g.meta.sequence ?? null, optional: g.meta.optional ?? false,
-    });
-    setEdges(g.edges);
-    setLoadedEdges(g.edges);
-    setPredecessors(g.predecessors ?? []);
-    setMode("view"); // existing greetings are read-only until Edit
-    setPicking(null);
-    if (worldScope) api.getGreetingSubjects(wid, id).then(setSubjects).catch(() => setSubjects({}));
+    const request = ++selectionRead.current;
+    try {
+      setError(null);
+      setStale(null);
+      const g = await api.readGreeting(scope, id);
+      if (!still() || request !== selectionRead.current) return;   // the reader moved on while this was in flight
+      setGid(id);
+      setRev(g.rev);
+      setForm({
+        name: g.meta.name, character: g.meta.character, version: g.meta.version,
+        body: g.body.trim(), present: g.meta.present ?? [], requires_tags: g.meta.requires_tags,
+        predecessor_join: g.meta.predecessor_join, pcless: g.meta.pcless ?? false,
+        location: g.meta.location ?? "", phase: g.meta.phase ?? "",
+        sequence: g.meta.sequence ?? null, optional: g.meta.optional ?? false,
+      });
+      setEdges(g.edges);
+      setLoadedEdges(g.edges);
+      setPredecessors(g.predecessors ?? []);
+      setMode("view"); // existing greetings are read-only until Edit
+      setPicking(null);
+      if (worldScope) api.getGreetingSubjects(wid, id).then(setSubjects).catch(() => setSubjects({}));
+    } catch (err: unknown) {
+      if (request === selectionRead.current && still()) throw err;
+    }
   }
 
   const versions = chars.find((c) => c.id === form.character)?.versions ?? [];
@@ -282,6 +300,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   async function save(base: string | null = rev) {
     if (!form.name.trim() || (form.character && !form.version)) return;
     if (hold) { setError(hold); return; }
+    const request = beginSave();
+    if (!request) return;
     setError(null);
     setStale(null);
     beginWrite();
@@ -314,8 +334,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
         await api.setEdges(scope, id, { leads_to: edges.leads_to, excludes: edges.excludes });
       }
       await reload();
+      if (currentScope.current === scopeKey) onChanged?.();
+      if (!request.current()) return;
       if (gid) {
-        await select(id);
+        await select(id, request.current);
       } else {
         // A create leaves the address on the section root, so `+ New
         // greeting` (a `Link` to `sectionPath`) would point at the screen
@@ -325,8 +347,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
         // way a rail-row click does.
         navigate(recordHref(id));
       }
-      onChanged?.();
     } catch (err: unknown) {
+      if (!request.current()) return;
       if (err instanceof ApiError && err.kind === "stale_record") {
         setStale({ rev: (err.body?.rev as string | null) ?? null });
         return;
@@ -334,6 +356,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
       setError(errorText(err));
     } finally {
       endWrite();
+      request.finish();
     }
   }
 
@@ -539,7 +562,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   return (
     <div className="editor">
       <div className="editor-list">
-        <Link className="primary new" to={sectionPath}>+ New greeting</Link>
+        <Link className="primary new" to={{ pathname: sectionPath, search: "?new=1" }}>+ New greeting</Link>
         {worldScope && untagged.length > 0 && (
           <button className="subtle new" onClick={() => setQueueOpen(true)}>
             ▶ Tag images ({untagged.length})
@@ -587,7 +610,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
         {worldScope && queueOpen ? (
           <TaggingQueue wid={wid} chars={chars} greetings={greetings} queue={untagged}
                         onClose={closeQueue} onSaved={queueSaved} />
-        ) : mode === "view" && gid ? (
+        ) : !selected && !isNew ? <div className="editor-empty">Choose a greeting to read, or create one.</div>
+          : mode === "view" && gid ? (
           <div className="detail-view">
             <div className="detail-main">
               <h3>{form.name}</h3>
@@ -842,7 +866,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
           <div className="form-actions">
             {gid && <button className="subtle" title={hold ?? undefined} disabled={!!hold || writing}
                             onClick={() => remove(greetings.find((g) => g.id === gid)!)}>Delete</button>}
-            {gid && <button className="subtle" onClick={() => setMode("view")}>Cancel</button>}
+            {gid ? <button className="subtle" onClick={() => { retireSave(); void select(gid).catch((err: unknown) => setError(errorText(err))); }}>Cancel</button>
+              : <Link className="subtle" to={sectionPath}>Cancel</Link>}
             <button className="primary" onClick={() => save()} title={hold ?? undefined}
                     disabled={!form.name.trim() || (!!form.character && !form.version)
                               || !!hold || writing}>

@@ -529,6 +529,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     { fields: Record<string, string>; unmapped: string[]; inherited?: boolean } | null>(null);
   // The bulk button's one-line outcome.
   const [adoptAllNote, setAdoptAllNote] = useState<string | null>(null);
+  const [pendingAdoptions, setPendingAdoptions] = useState(0);
   // An adopt request is out (this record's or the whole library's). Both
   // buttons wait on it: a second click would send the same write twice and, for
   // the bulk one, report the second run's "0 entries" over the first's outcome.
@@ -539,7 +540,15 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     const gen = scopeGen.current, sequence = ++summaryReads.current;
     try {
       const rows = await (fresh ? api.listEntities(scope, kind, true) : api.listEntities(scope, kind));
-      if (gen === scopeGen.current && sequence === summaryReads.current) setItems(rows);
+      if (gen === scopeGen.current && sequence === summaryReads.current) {
+        setItems(rows);
+        // The bulk action spans every entity kind and only campaign-owned
+        // records. The server owns both that scope and the import mapping.
+        if (kind === "lore") void api.previewAdoptStAll(scope)
+          .then((r) => {
+            if (gen === scopeGen.current && sequence === summaryReads.current) setPendingAdoptions(r.pending);
+          }).catch(() => {}); // an unavailable offer cannot stop browsing
+      }
     } catch (err) {
       if (gen === scopeGen.current && sequence === summaryReads.current) throw err;
     }
@@ -550,6 +559,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     readReq.current += 1;   // discard a record read still out for the old scope
     scopeGen.current += 1;  // ...and an adopt still out for it
     setAdoptBusy(false);    // that request no longer holds this scope's buttons
+    setPendingAdoptions(0);
     const gen = scopeGen.current;
     void reload(false).catch((err: unknown) => { if (gen === scopeGen.current) setError(errorText(err)); });
     resetForm();
@@ -559,6 +569,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
   useEffect(() => {
     if (kind === "lore") loreOwnerOptions(scope).then(setOwnerOpts);
   }, [wid, kind]);
+
 
   useEffect(() => {
     // Fetched on mount and on every kind change rather than cached across
@@ -1164,7 +1175,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
           <span className={tokenClass(asSecrecy(e.secrecy), "row-tokens")}
                 title={tokenTitle(asSecrecy(e.secrecy))}
                 aria-label={tokenAria(e.tokens, asSecrecy(e.secrecy))}>
-            {e.tokens.toLocaleString()}
+            {e.tokens.toLocaleString()} {e.tokens === 1 ? "token" : "tokens"}
           </span>
         )}
       </Link>
@@ -1290,13 +1301,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
   // record too: the rail that used to hold it is gone from a record's screen.
   const adoptAllControls = kind === "lore" ? (
     <>
-      <button className="subtle adopt-all" onClick={() => { void applyAdoptAll(); }}
+      {pendingAdoptions > 0 && <button className="subtle adopt-all" onClick={() => { void applyAdoptAll(); }}
               disabled={adoptBusy || adoptAllBlocked}
               title={adoptAllBlocked
                 ? "Save or cancel the edit in progress first -- applying re-reads the record"
                 : undefined}>
         Apply imported settings to all
-      </button>
+      </button>}
       {adoptAllNote && <div className="field-hint" role="status">{adoptAllNote}</div>}
     </>
   ) : null;
@@ -1372,7 +1383,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
         {groupNeedsReload && (
           <div className="banner">
             Reload the group to review its current World references before saving.
-            <button onClick={() => { if (editing) void select(editing).catch((err: unknown) => setError(errorText(err))); }}>
+            <button className="subtle" onClick={() => { if (editing) void select(editing).catch((err: unknown) => setError(errorText(err))); }}>
               Reload group (discard edits)
             </button>
           </div>

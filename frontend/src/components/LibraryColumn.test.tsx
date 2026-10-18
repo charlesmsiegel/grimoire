@@ -36,6 +36,23 @@ beforeEach(() => {
   vi.mocked(api.listConnections).mockResolvedValue(fixture([{ id: "openrouter" }]));
 });
 
+test("a phone section scrolls its active link into the library strip", async () => {
+  const previous = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scroll });
+  const width = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+  try {
+    renderColumn("/climates");
+    await screen.findByRole("link", { name: /Climates/ });
+    expect(scroll).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+  } finally {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+    if (previous) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", previous);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  }
+});
+
 test("offers every section as a link to the page that already owns it", async () => {
   renderColumn();
   for (const [name, href] of [
