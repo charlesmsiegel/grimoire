@@ -79,6 +79,6 @@ test("accepted same-record Back retires the related-version viewer", async () =>
   </MemoryRouter>);
   fireEvent.click(within(screen.getByRole("region", { name: "Other world versions" })).getByRole("button"));
   expect(screen.getByRole("dialog")).toBeInTheDocument();
-  act(() => navigate(-1));
+  await act(async () => { await navigate(-1); });
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });

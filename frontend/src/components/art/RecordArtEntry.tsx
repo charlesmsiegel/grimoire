@@ -22,6 +22,6 @@ export function RecordArtViewer({ controller }: { controller: RecordArtControlle
   const navigate = useNavigate();
   return <>{controller.viewerNotice && <p role="status">{controller.viewerNotice}</p>}
     {controller.viewerProps && <ImageViewer {...controller.viewerProps} fallbackFocus={controller.focusRef.current ?? controller.entryRef.current} onOpenRecord={(destination) => {
-    controller.closeViewer(); navigate(destination);
+    controller.closeViewer(); void navigate(destination);
   }} />}</>;
 }

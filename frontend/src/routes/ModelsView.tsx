@@ -49,7 +49,7 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
   /** Out of the rate editor, either way: drop `?add` so a reload does not
    *  reopen it, and keep `#rates` so the page stays on the table. */
   function leaveRates() {
-    if (add) navigate({ pathname: "/models", hash: "#rates" }, { replace: true });
+    if (add) void navigate({ pathname: "/models", hash: "#rates" }, { replace: true });
   }
 
   function ratesSaved() {
@@ -66,8 +66,8 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
     const n = overrideCount(settings);
     body = edit ? (
       <ModelsEditForm settings={settings} health={health} blocked={blocked}
-                      onSaved={(next) => { install(next); navigate("/models"); }}
-                      onCancel={() => navigate("/models")} />
+                      onSaved={(next) => { install(next); void navigate("/models"); }}
+                      onCancel={() => void navigate("/models")} />
     ) : (
       <>
         <section className="models-roles" aria-label="Roles">
@@ -82,7 +82,7 @@ export default function ModelsView({ edit = false }: { edit?: boolean }) {
           </Link></p>
         )}
         <div className="form-actions models-actions">
-          <button className="primary" disabled={blocked} onClick={() => navigate("/models/edit")}>
+          <button className="primary" disabled={blocked} onClick={() => void navigate("/models/edit")}>
             Edit models
           </button>
           <Link className="button subtle" to="/providers/new"

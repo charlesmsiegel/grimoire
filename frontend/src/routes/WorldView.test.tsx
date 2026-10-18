@@ -250,7 +250,7 @@ function renderAt() {
  *  inside. */
 function GoTo({ to }: { to: string }) {
   const navigate = useNavigate();
-  return <button onClick={() => navigate(to)}>go</button>;
+  return <button onClick={() => void navigate(to)}>go</button>;
 }
 
 function renderAtUrl(url: string) {
@@ -1396,7 +1396,7 @@ test("moving to another campaign holds its sections until that campaign names it
     : new Promise((r) => { nameSecond = r; })));
   function Jump() {
     const navigate = useNavigate();
-    return <button onClick={() => navigate("/campaigns/c2/world/greetings")}>jump</button>;
+    return <button onClick={() => void navigate("/campaigns/c2/world/greetings")}>jump</button>;
   }
   render(
     <MemoryRouter initialEntries={["/campaigns/c1/world/greetings"]}>

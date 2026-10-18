@@ -363,7 +363,7 @@ export function CharacterGrid(
     setError(null);
     try {
       const { character } = await api.createCharacter(scope, { name });
-      if (request.current()) navigate(characterHref(scope, character));
+      if (request.current()) void navigate(characterHref(scope, character));
     } catch (err) { if (request.current()) setError(err); }
     finally { request.finish(); }
   }
@@ -431,7 +431,7 @@ export function CharacterGrid(
           .then((d) => d.meta.name).catch(() => character);
         setTaglineQueue([{ cid: character, name }]);
       }
-      navigate(characterHref(scope, character, version));
+      void navigate(characterHref(scope, character, version));
     } catch (err: unknown) { setError(err); }
   }
 
@@ -621,7 +621,7 @@ export function CharacterGrid(
                         onDone={(id) => void (async () => {
                           setWizardOpen(false);
                           await reload();
-                          navigate(characterHref(scope, id));
+                          void navigate(characterHref(scope, id));
                         })()}
                         onCancel={() => setWizardOpen(false)} />
       </div>
@@ -662,7 +662,7 @@ export function CharacterGrid(
             setTextImportOpen(false);
             void reload().then(() => {
               if (liveVisit.current === visit) {
-                navigate(characterHref(scope, result.character));
+                void navigate(characterHref(scope, result.character));
               }
             }).catch((err: unknown) => {
               if (liveVisit.current === visit) setError(err);

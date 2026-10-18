@@ -277,7 +277,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
       // scene is and the greeting's own location is the only answer available
       // (#218). The default is load-bearing -- do not "tidy" it away.
       await api.startFromGreeting(committed.cid, committed.sid, gid);
-      navigate(`/campaigns/${committed.cid}`);
+      void navigate(`/campaigns/${committed.cid}`);
     } catch (err: unknown) {
       setError(err);
     }
@@ -296,12 +296,12 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
    *  before. */
   async function finish(useOpener: boolean) {
     if (!committed) return;
-    if (!useOpener) { navigate(`/campaigns/${committed.cid}`); return; }
+    if (!useOpener) { void navigate(`/campaigns/${committed.cid}`); return; }
     setError(null);
     setBusy(true);
     try {
       await api.firstPost(committed.cid, committed.sid, opener, openerParts, openerSnapshot);
-      navigate(`/campaigns/${committed.cid}/scenes/${committed.sid}`);
+      void navigate(`/campaigns/${committed.cid}/scenes/${committed.sid}`);
     } catch (err: unknown) {
       setError(err);
     } finally {
@@ -451,7 +451,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
               {/* The way out. The rail is not drawn beside a wizard, so without
                   this the only exit was the browser's Back. Nothing is written
                   before step 3, so nothing is left behind. */}
-              <button className="subtle" onClick={() => navigate("/")}>Cancel</button>
+              <button className="subtle" onClick={() => void navigate("/")}>Cancel</button>
               <button className="btn-accent" disabled={!canNext1} onClick={() => setStep(2)}>Next ▸</button>
             </div>
           </div>

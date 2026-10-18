@@ -505,7 +505,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     if (!window.confirm(`Delete character '${detail.meta.name}' from ${where}?`)) return;
     try {
       await api.deleteCharacter(scope, eid);
-      navigate(charactersHref(scope));
+      void navigate(charactersHref(scope));
     } catch (err: unknown) { setError(err); }
   }
 

@@ -406,7 +406,7 @@ test("an addressed PC version change closes viewing and resets its Art managemen
   fireEvent.click(await screen.findByRole("button", { name: "Manage art" }));
   fireEvent.click(screen.getByRole("button", { name: "View Primary image" }));
   expect(screen.getByRole("dialog", { name: "Image viewer" })).toBeInTheDocument();
-  act(() => movePC("/worlds/realm/pcs/mara?tab=art&v=veiled"));
+  await act(async () => { await movePC("/worlds/realm/pcs/mara?tab=art&v=veiled"); });
   await screen.findByText("No images yet");
   expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Manage art" })).not.toBeInTheDocument();
@@ -418,7 +418,7 @@ test("removing an addressed PC version restores the same default as a direct bar
     { id: "veiled", name: "veiled", persona: DETAIL.versions[0].persona, images: [] }] });
   renderPC("/worlds/realm/pcs/mara?tab=art&v=veiled");
   await waitFor(() => expect(screen.getByRole("combobox", { name: "Version" })).toHaveValue("veiled"));
-  act(() => movePC("/worlds/realm/pcs/mara?tab=art"));
+  await act(async () => { await movePC("/worlds/realm/pcs/mara?tab=art"); });
   await waitFor(() => expect(screen.getByRole("combobox", { name: "Version" })).toHaveValue("default"));
   expect(api.readRecordArt).toHaveBeenLastCalledWith(expect.objectContaining({ version: "default" }), expect.anything());
 });

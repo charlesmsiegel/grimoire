@@ -252,7 +252,7 @@ export default function WorldsView() {
     // As in `fork`: a post-mutation read. A failure is the grid's to report;
     // navigating to the new world is what matters here.
     await reload();
-    navigate(sectionHref({ kind: "world", id: imported }, { kind: "section", at: "overview" }));
+    void navigate(sectionHref({ kind: "world", id: imported }, { kind: "section", at: "overview" }));
   }
 
   return (
@@ -343,7 +343,7 @@ export default function WorldsView() {
                 // hand, or in flight, by the time it mounts.
                 <button className="world-card-main"
                         {...intentProps({ kind: "world", id: w.id })}
-                        onClick={() => navigate(sectionHref({ kind: "world", id: w.id },
+                        onClick={() => void navigate(sectionHref({ kind: "world", id: w.id },
                                                             { kind: "section", at: "overview" }))}>
                   <div className="shelf-cover">
                     {w.cover && !brokenCover[`${w.id}:${w.cover}`] ? (

@@ -29,7 +29,7 @@ writes `android/local.properties` (`sdk.dir` plus `grimoire.buildPython`).
 Chaquopy 17 requires that build-machine Python to be the **same minor version**
 as the runtime it packages into the APK — 3.12, pinned by `version =` in the
 `chaquopy` block — and fails the build on a mismatch; the runtime itself is
-still downloaded by the plugin. The only other prerequisites are Node 18+
+still downloaded by the plugin. The only other prerequisites are Node 24+
 (`npm run build` runs as a Gradle task, so `frontend/` must have had
 `npm install`) and Python 3.12.
 

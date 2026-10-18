@@ -339,19 +339,19 @@ export default function ProvidersView() {
   }
 
   function startNew() {
-    navigate("/providers/new",
+    void navigate("/providers/new",
              { state: { returnTo: location.pathname + location.search + location.hash } });
   }
 
   function cancelNew() {
-    navigate(validReturn(location.state) ?? "/providers");
+    void navigate(validReturn(location.state) ?? "/providers");
   }
 
   // The provider exists once the create answers, so it is opened by the id
   // that answer named whatever the list re-read does: a failed re-read left on
   // the form would offer Create again, and a second press makes a duplicate.
   async function created(newId: string) {
-    navigate(providerPath(newId));
+    void navigate(providerPath(newId));
     await reloadList().catch(setListError);
   }
 
@@ -375,7 +375,7 @@ export default function ProvidersView() {
       setError(err);
       return;
     }
-    navigate("/providers");
+    void navigate("/providers");
     await reloadList().catch(setListError);
   }
 
@@ -412,7 +412,7 @@ export default function ProvidersView() {
               <span className="column-row-label">{m.id}</span>
             </Link>
           ))}
-          <OpenModelById onOpen={(m) => navigate(modelPath(id, m))} />
+          <OpenModelById onOpen={(m) => void navigate(modelPath(id, m))} />
         </ColumnSection>
       )}
     </>
@@ -487,7 +487,7 @@ export default function ProvidersView() {
                            onEdit={() => setMode("edit")} onAsk={setAskCheck}
                            onCheck={(confirm) => { void check(shown.id, confirm); }}
                            onRefresh={() => { void refresh(shown.id); }}
-                           onUse={(to) => navigate(to)} />
+                           onUse={(to) => void navigate(to)} />
         </div>
         {/* This provider's own rules, run before the global ones: they correct
             one endpoint's habits. They save as they are edited. */}

@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # minutes later inside `pip install` as a wheel that has no build for this
 # interpreter -- an error naming a package rather than the actual cause.
 PY_MIN="3.11"
-NODE_MIN="18"
+NODE_MIN="24"
 
 command -v python3 >/dev/null || { echo "Python $PY_MIN+ not found on PATH"; exit 1; }
 python3 -c "import sys; raise SystemExit(0 if sys.version_info >= tuple(int(n) for n in '$PY_MIN'.split('.')) else 1)" \

@@ -101,7 +101,7 @@ const Shell = memo(function Shell(
   // navigated away from a half-written post would lose it.
   useHotkeys([{
     keys: SEARCH_CHORD, label: "Search everything", group: "ANYWHERE",
-    global: true, run: () => navigate("/search"),
+    global: true, run: () => void navigate("/search"),
   }]);
 
   // Which campaign the rail's second tier is about. A hint the payload

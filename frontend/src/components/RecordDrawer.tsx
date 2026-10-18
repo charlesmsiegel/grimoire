@@ -112,7 +112,7 @@ function DrawerBody({ cid, sid, target, onClose, owner }:
   const openArt = (opener: HTMLElement) => { if (preview) viewer.open(descriptors, toImageDescriptor(preview).key, opener); };
   return (<>
     {viewer.notice && <p role="status">{viewer.notice}</p>}
-    {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={descriptors} fallbackFocus={entry.current} onOpenRecord={destination => { viewer.close(); navigate(destination); }} />}
+    {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={descriptors} fallbackFocus={entry.current} onOpenRecord={destination => { viewer.close(); void navigate(destination); }} />}
     <div className="drawer-backdrop" onClick={onClose}>
       <aside className="drawer" onClick={(e) => e.stopPropagation()}>
         <button className="drawer-close" onClick={onClose} aria-label="Close">✕</button>

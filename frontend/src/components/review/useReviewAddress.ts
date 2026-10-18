@@ -41,9 +41,9 @@ export function useReviewAddress({ cid, activeId, wrapUp, review }: {
     shownFor.current = showing ? activeId : null;
     if (!activeId) return;
     if (showing && !wrapUp) {
-      navigate(`${scenePath(cid, activeId)}/wrap-up`, { replace: true });
+      void navigate(`${scenePath(cid, activeId)}/wrap-up`, { replace: true });
     } else if (closedHere && wrapUp && !review.absorbing) {
-      navigate(scenePath(cid, activeId), { replace: true });
+      void navigate(scenePath(cid, activeId), { replace: true });
     }
   }, [cid, activeId, showing, wrapUp, review.absorb, review.absorbing, navigate]);
 }

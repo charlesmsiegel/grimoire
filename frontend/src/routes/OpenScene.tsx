@@ -31,7 +31,7 @@ export default function OpenScene() {
 
   useEffect(() => {
     let alive = true;
-    if (!cid) { navigate("/", { replace: true }); return; }
+    if (!cid) { void navigate("/", { replace: true }); return; }
     void (async () => {
       // `scene_busy`-style 409s from this lookup are RETRYABLE and a 404 is
       // not, and folding them together sent a tap to the campaign because a
@@ -43,7 +43,7 @@ export default function OpenScene() {
         try {
           const r = await api.sceneByIdentity(cid, identity);
           if (alive) {
-            navigate(`/campaigns/${encodeSegment(cid)}/scenes/${encodeSegment(r.id)}`,
+            void navigate(`/campaigns/${encodeSegment(cid)}/scenes/${encodeSegment(r.id)}`,
                      { replace: true });
           }
           return;
@@ -61,7 +61,7 @@ export default function OpenScene() {
         }
       }
       if (alive) {
-        navigate(`/campaigns/${encodeSegment(cid)}`, { replace: true, state: { openedFrom: why } });
+        void navigate(`/campaigns/${encodeSegment(cid)}`, { replace: true, state: { openedFrom: why } });
       }
     })();
     return () => { alive = false; };

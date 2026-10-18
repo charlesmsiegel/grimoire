@@ -417,7 +417,8 @@ export function renderCampaign(initialEntry = "/campaigns/run/scenes/s1",
     // path silently does nothing -- which is the exact shape of the bug this
     // harness is supposed to be able to catch.
     <RunRegistryProvider>
-      <MemoryRouter initialEntries={[initialEntry]}>
+      {/* Same synchronous navigation policy as main.tsx on React 18. */}
+      <MemoryRouter initialEntries={[initialEntry]} useTransitions={false}>
         {withPalette(<><Here />{playRoutes()}</>)}
       </MemoryRouter>
     </RunRegistryProvider>

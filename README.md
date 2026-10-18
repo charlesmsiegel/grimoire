@@ -162,7 +162,7 @@ freely otherwise, e.g. `4d6kh3!+2`.
 ## Requirements
 
 - **Python 3.11+**
-- **Node 18+**
+- **Node 24+**
 - An **[OpenRouter](https://openrouter.ai/) API key** (you supply the model;
   Grimoire defaults to `anthropic/claude-opus-4.1` and you can change it in the
   app).

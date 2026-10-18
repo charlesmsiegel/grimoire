@@ -44,7 +44,7 @@ test("a route that only changes its params still opens main at the top", () => {
   // reset the next record opens at the offset the last one was left at.
   function Jump() {
     const navigate = useNavigate();
-    return <button onClick={() => navigate("/w/b")}>go</button>;
+    return <button onClick={() => void navigate("/w/b")}>go</button>;
   }
   render(
     <MemoryRouter initialEntries={["/w/a"]}>
@@ -118,7 +118,7 @@ test("picking something that navigates puts the column away again", () => {
   try {
     function Jump() {
       const navigate = useNavigate();
-      return <button onClick={() => navigate("/w/b")}>go</button>;
+      return <button onClick={() => void navigate("/w/b")}>go</button>;
     }
     render(
       <MemoryRouter initialEntries={["/w/a"]}>

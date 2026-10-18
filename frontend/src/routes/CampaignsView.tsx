@@ -243,7 +243,7 @@ export default function CampaignsView() {
       {/* Disabled until the worlds read has landed, not only on an empty
           list: a campaign is played inside a world, and the wizard is no
           place to learn there are none. */}
-      <button className="column-primary" onClick={() => navigate("/campaigns/new")}
+      <button className="column-primary" onClick={() => void navigate("/campaigns/new")}
               disabled={!worldsKnown || worlds.length === 0}>
         ＋ New campaign
       </button>

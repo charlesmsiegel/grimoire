@@ -122,7 +122,7 @@ function FindingList(
           return (
             <li key={c.id}>
               <button type="button" className="continuity-finding"
-                      onClick={() => navigate(ledgerHref(cid, {
+                      onClick={() => void navigate(ledgerHref(cid, {
                         section: "continuity", group, candidate: c.id }))}>
                 <span className="continuity-item-title">
                   {titlesOf(c, candidates.diagnostics.unreadable)}
@@ -404,7 +404,7 @@ export function ContinuityReview(
       if (openRef.current.candidate !== c.id) return;
       setDone({ cid, group: c.group, text: confirmation(c, said, review.candidates && review.candidates !== "failed"
         ? review.candidates.diagnostics.unreadable : [], followers(answer)) });
-      navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
+      void navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
     } catch (err: unknown) {
       if (openRef.current.cid === cid) refused(c, err, said);
     } finally {
@@ -454,7 +454,7 @@ export function ContinuityReview(
       review.wrote();
       if (!here) return;
       setError({ cid, text: errorText(err) });
-      navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
+      void navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
     } else if (kind === "bad_scene") {
       // The beat's scene was renamed or removed under the open form (§12.9):
       // re-read, so the select offers the scenes as they are now rather than
@@ -512,7 +512,7 @@ export function ContinuityReview(
                            void decide(open, () => api.dismissCandidate(
                              cid, open.id, decision, open.fingerprint), decision);
                          }}
-                         onBack={() => navigate(ledgerHref(cid, {
+                         onBack={() => void navigate(ledgerHref(cid, {
                            section: "continuity", group }))}
                          onRefresh={() => { void review.refresh(); }}
                          onInvestigate={investigable ? () => { investigate(open); } : undefined}

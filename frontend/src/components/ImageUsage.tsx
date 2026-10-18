@@ -76,7 +76,7 @@ function NavChip({ chip }: { chip: Chip & { to: string } }) {
   const navigate = useNavigate();
   return (
     <button type="button" className="chip" title={chip.title}
-            onClick={() => navigate(chip.to)}>{chip.label}</button>
+            onClick={() => void navigate(chip.to)}>{chip.label}</button>
   );
 }
 

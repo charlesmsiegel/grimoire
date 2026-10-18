@@ -23,7 +23,7 @@ function Editor() {
     <textarea aria-label="Description" value={text} onChange={(e) => setText(e.target.value)} />
     <Link to="/worlds/Realm/items/Saltmarch">Leave</Link>
     <button onClick={() => navigation.requestArtTransition(() => setTab("Details"))}>Details</button>
-    <button onClick={() => navigation.requestArtTransition(() => navigate("/worlds/Realm/pcs/Mara?tab=art"))}>Art destination</button>
+    <button onClick={() => navigation.requestArtTransition(() => void navigate("/worlds/Realm/pcs/Mara?tab=art"))}>Art destination</button>
     <span>{tab}</span></>;
 }
 function setup() {

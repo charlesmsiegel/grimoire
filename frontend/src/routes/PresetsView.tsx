@@ -51,7 +51,7 @@ export default function PresetsView() {
   // `/presets` alone opens the first preset, as a list page opens on a record.
   useEffect(() => {
     if (!id && !isNew && !isImport && presets && presets.length > 0) {
-      navigate(presetPath(presets[0].id), { replace: true });
+      void navigate(presetPath(presets[0].id), { replace: true });
     }
   }, [id, isNew, isImport, presets, navigate]);
 
@@ -70,7 +70,7 @@ export default function PresetsView() {
                                       : await api.createSamplerPreset(body);
       await reload();
       setMode("view");
-      navigate(presetPath(saved.id));
+      void navigate(presetPath(saved.id));
     } catch (err: unknown) {
       setError(errorText(err));
     } finally {
@@ -84,7 +84,7 @@ export default function PresetsView() {
     try {
       await api.deleteSamplerPreset(current.id);
       await reload();
-      navigate("/presets");
+      void navigate("/presets");
     } catch (err: unknown) {
       setError(errorText(err));
     } finally {
@@ -99,7 +99,7 @@ export default function PresetsView() {
       const got = await api.importSamplerPreset({ name, data, include_max_tokens: withMax });
       await reload();
       setReport({ id: got.preset.id, report: got.report });
-      navigate(presetPath(got.preset.id));
+      void navigate(presetPath(got.preset.id));
     } catch (err: unknown) {
       setError(errorText(err));
     } finally {
@@ -115,9 +115,9 @@ export default function PresetsView() {
             disabled -- present, and plainly not available -- as before. */}
         <div className="column-actions">
           <button type="button" className="column-primary" disabled={newer}
-                  onClick={() => navigate("/presets/new")}>+ New preset</button>
+                  onClick={() => void navigate("/presets/new")}>+ New preset</button>
           <button type="button" className="subtle column-secondary" disabled={newer}
-                  onClick={() => navigate("/presets/import")}>Import…</button>
+                  onClick={() => void navigate("/presets/import")}>Import…</button>
         </div>
         {presets?.length === 0 && <p className="column-empty">None yet.</p>}
         {presets?.map((p) => (
@@ -134,10 +134,10 @@ export default function PresetsView() {
   if (isNew || (mode === "edit" && current)) {
     body = <PresetForm draft={draft} onDraft={setDraft} table={table} busy={busy} newer={newer}
                        onSave={() => void save()}
-                       onCancel={() => (isNew ? navigate("/presets") : setMode("view"))} />;
+                       onCancel={() => (isNew ? void navigate("/presets") : setMode("view"))} />;
   } else if (isImport) {
     body = <PresetImport busy={busy} newer={newer} onImport={(n, d, m) => void runImport(n, d, m)}
-                         onCancel={() => navigate("/presets")} onError={setError} />;
+                         onCancel={() => void navigate("/presets")} onError={setError} />;
   } else if (presets === null) {
     body = <p className="field-hint">Reading presets…</p>;
   } else if (presets.length === 0) {

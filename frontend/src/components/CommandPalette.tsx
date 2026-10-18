@@ -111,7 +111,7 @@ export default function CommandPalette() {
     if (!item) return;
     setOpen(false);
     item.run?.();
-    if (item.to) navigate(item.to);
+    if (item.to) void navigate(item.to);
   }
 
   function onKeyDown(e: React.KeyboardEvent) {

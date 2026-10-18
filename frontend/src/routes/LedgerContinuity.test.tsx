@@ -589,7 +589,7 @@ test("re-reads while a sweep is followed do not follow it again", async () => {
  *  route is not keyed on `cid`, so this is what a switch really is. */
 function SwitchTo({ to }: { to: string }) {
   const navigate = useNavigate();
-  return <button type="button" onClick={() => navigate(to)}>switch campaign</button>;
+  return <button type="button" onClick={() => void navigate(to)}>switch campaign</button>;
 }
 
 test("switching campaign mid-refresh starts no follow-up", async () => {

@@ -347,7 +347,7 @@ export default function SetupWizard(
     // sends the user straight back into the wizard — the exact trap the latch
     // exists to prevent, on the one path where the flag write also failed.
     onDone(store ?? storeDir ?? undefined);
-    navigate(to, { replace: true });
+    void navigate(to, { replace: true });
   }
 
   const preset = presets?.find((p) => p.id === presetId) ?? null;

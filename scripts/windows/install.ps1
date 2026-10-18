@@ -8,7 +8,7 @@ $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 # minutes later inside `pip install` as a wheel that has no build for this
 # interpreter -- an error naming a package rather than the actual cause.
 $PyMin = "3.11"
-$NodeMin = "18"
+$NodeMin = "24"
 
 # $ErrorActionPreference stops on PowerShell errors, not on a native exit code,
 # so each probe's $LASTEXITCODE is tested explicitly.

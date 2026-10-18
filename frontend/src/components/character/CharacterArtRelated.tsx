@@ -49,7 +49,7 @@ export function CharacterArtRelated(props: CharacterArtRelatedProps) {
         <p>{image.description ?? "Not described"}</p>
       </article>)}</div>
     </section>}
-    {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={images} fallbackFocus={props.fallbackFocus} onOpenRecord={(destination) => { viewer.close(); navigate(destination); }} />}
+    {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={images} fallbackFocus={props.fallbackFocus} onOpenRecord={(destination) => { viewer.close(); void navigate(destination); }} />}
     {appearances.length > 0 && <div className="card-field">
       <div className="card-field-head"><span className="data-label">Appears in</span></div>
       <div className="images-shelf">{appearances.map((a) => <div className="shelf-tile" key={a.gid + "/" + a.name}>

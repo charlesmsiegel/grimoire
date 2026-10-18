@@ -22,7 +22,7 @@ export default function ReportScopeSelector({ report, cid, suffix = "" }: {
   return <label className="report-scope">
     <span className="section-label">Campaign</span>
     <select aria-label="Report campaign" value={cid ?? ""}
-            onChange={(event) => navigate(reportHref(report, event.target.value || null) + suffix)}>
+            onChange={(event) => void navigate(reportHref(report, event.target.value || null) + suffix)}>
       <option value="">All campaigns</option>
       {campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>
         {campaign.name}

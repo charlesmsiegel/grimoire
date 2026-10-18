@@ -381,7 +381,7 @@ function GalleryBody({ wid, forCampaign }: { wid: string; forCampaign: string | 
       {tab === "campaign-library" && forCampaign && <PostImagePicker cid={forCampaign}
         target={{ kind: "campaign", name: "Campaign image library" }} onClose={() => setTab("gallery")} />}
       {viewer.viewerProps && <ImageViewer {...viewer.viewerProps} images={descriptors} fallbackFocus={root.current}
-        onSelectionChange={setSel} onOpenRecord={(destination) => navigate(destination)} onRemove={removeFromGallery} />}
+        onSelectionChange={setSel} onOpenRecord={(destination) => void navigate(destination)} onRemove={removeFromGallery} />}
       {(tab === "gallery" || tab === "queue") && images === null && !err
         && <p className="field-hint">Reading the world’s art…</p>}
       {images !== null && !err && tab === "queue" && (

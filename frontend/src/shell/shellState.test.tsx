@@ -202,7 +202,7 @@ describe("the payload's own state", () => {
       const shell = useShellPayload("/store/a", asked, reconcile);
       seen.push(`${asked}:${shell.status}`);
       const navigate = useNavigate();
-      return <button onClick={() => navigate("/campaigns/c2")}>to-c2</button>;
+      return <button onClick={() => void navigate("/campaigns/c2")}>to-c2</button>;
     }
     vi.mocked(api.getShell).mockRejectedValue(new Error("offline"));
     render(<MemoryRouter initialEntries={["/campaigns/c1"]}><Recorder /></MemoryRouter>);
@@ -242,7 +242,7 @@ function Page() {
 /** Moves the router without remounting the provider above it. */
 function Jump() {
   const navigate = useNavigate();
-  return <button onClick={() => navigate("/campaigns/c1")}>jump</button>;
+  return <button onClick={() => void navigate("/campaigns/c1")}>jump</button>;
 }
 
 function renderProvided(path: string, dataDir = "/store/a") {

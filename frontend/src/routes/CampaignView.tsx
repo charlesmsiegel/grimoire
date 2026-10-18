@@ -773,7 +773,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // rebuilding the entry from the pathname alone would quietly discard the
     // rest of the address. Nothing on this route reads a query param today,
     // which is exactly why a silent drop here would go unnoticed later.
-    navigate(location.pathname + location.search + location.hash,
+    void navigate(location.pathname + location.search + location.hash,
              { replace: true, state: null });
   }, [cid, sid, handoff, location.pathname, location.search, location.hash, navigate]);
   // Response-length chip beside Send: the scene's own preset (its saved
@@ -1107,11 +1107,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // this campaign", so the newest is a reasonable answer. Landing on a sid
       // that no longer resolves is not -- ids are filenames and a rename mints
       // a new one -- and the same fallback covers both.
-      navigate(sceneUrl(cid, scenes[0].id), { replace: true });
+      void navigate(sceneUrl(cid, scenes[0].id), { replace: true });
     } else if (sid) {
       // A named scene that resolves to nothing, in a campaign with none left:
       // back to `/scenes`, which is the empty play view rather than a 404.
-      navigate(`/campaigns/${encodeURIComponent(cid)}/scenes`, { replace: true });
+      void navigate(`/campaigns/${encodeURIComponent(cid)}/scenes`, { replace: true });
       if (activeIdRef.current) clearScene();
     } else {
       // An empty campaign sits here with its composer. Sending into it creates
@@ -1133,7 +1133,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       readScene(id);
       return;
     }
-    navigate(sceneUrl(cid, id));
+    void navigate(sceneUrl(cid, id));
   }
 
   // Following the tail is the default and stays the default — but only while
@@ -2133,7 +2133,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // so there is no intermediate state where the URL still says `oldId`
       // while the ref says `newId` — which the resolver would read as the
       // reader having navigated, and chase back to a scene that is now gone.
-      navigate(sceneUrl(cid, newId), { replace: true });
+      void navigate(sceneUrl(cid, newId), { replace: true });
     }
     // The rail's own metadata, not just the things pointing at it. `pcless` and
     // the title are read off the row whose id matches `activeId`, so adopting
@@ -2392,7 +2392,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       return;
     }
     // A clean fork takes the reader with it, to the scene it was cut at.
-    navigate(`/campaigns/${report.id}/scenes`);
+    void navigate(`/campaigns/${report.id}/scenes`);
   }
 
   /** "Branch from here" (⑂ in the gutter, play controls III). An unabsorbed
@@ -2445,7 +2445,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     }
     // The campaign is asked after the relist, as `sceneCreated` asks it.
     if (cidRef.current !== cid) return;
-    navigate(sceneUrl(cid, id));
+    void navigate(sceneUrl(cid, id));
   }
 
   // How long to keep looking for a cancelled turn's partial. Aborting rejects
@@ -3485,7 +3485,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // (there was no scene here to go Back to). Without this the resolver
       // sees `activeId` moved while the URL still names no scene, and bounces
       // the turn onto whatever the list happens to sort first.
-      navigate(sceneUrl(cid, id), { replace: true });
+      void navigate(sceneUrl(cid, id), { replace: true });
     }
     setInput("");
     // the player just spoke: put them back at the tail even if they had
@@ -5565,7 +5565,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                          // particular post. `replayAt` is deliberately left
                          // standing — the scene did not change, so the dialog
                          // they were looking at is waiting for them in the copy.
-                         onForked={(forked) => navigate(sceneUrl(forked, activeId))}
+                         onForked={(forked) => void navigate(sceneUrl(forked, activeId))}
                          onChanged={async (asked) => {
                            void loadScenes();
                            const seen = await selectScene(activeId);

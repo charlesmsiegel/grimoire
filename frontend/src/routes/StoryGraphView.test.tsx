@@ -27,7 +27,7 @@ const SHELL: ShellPayload = {
   },
 };
 
-let retry: ReturnType<typeof vi.fn>;
+let retry: ReturnType<typeof vi.fn<() => void>>;
 
 beforeEach(() => {
   vi.mocked(api.continuityGraph).mockReset();
@@ -45,7 +45,7 @@ function LocationProbe() {
 
 function Jump() {
   const navigate = useNavigate();
-  return <button type="button" onClick={() => navigate("/campaigns/c2/graph")}>jump</button>;
+  return <button type="button" onClick={() => void navigate("/campaigns/c2/graph")}>jump</button>;
 }
 
 function renderGraph(entry = "/campaigns/c1/graph") {
@@ -119,7 +119,7 @@ test("switching the lens away and back restores its Show toggles (Decision 19)",
 
 function Back() {
   const navigate = useNavigate();
-  return <button type="button" onClick={() => navigate(-1)}>back</button>;
+  return <button type="button" onClick={() => void navigate(-1)}>back</button>;
 }
 
 test("a lens change pushes history and a node pick replaces it (Decision 19)", async () => {

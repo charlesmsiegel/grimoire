@@ -2075,8 +2075,15 @@ test("renaming the reviewed scene repoints an UNANSWERED conflict snapshot", asy
   };
   vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
   vi.mocked(api.getScene).mockResolvedValue(fixture({ meta: {}, messages: [{ role: "user", content: "hi" }] }));
-  vi.mocked(api.renameScene).mockResolvedValue({ id: "s1-renamed", title: "New" });
   absorbWithPhases(PHASES_NONE_CUT, { edits: [COMMITMENT_EDIT] });
+  // A successful rename also changes the next list read. Keeping the old id
+  // there asks the resolver to leave the renamed scene, so whether /wrap-up
+  // renders first depends on the router's transition batching.
+  vi.mocked(api.renameScene).mockImplementation(async () => {
+    vi.mocked(api.listScenes).mockResolvedValue(
+      ONE_SCENE.map((scene) => ({ ...scene, id: "s1-renamed", title: "New" })));
+    return { id: "s1-renamed", title: "New" };
+  });
   // First save comes back as a conflict, so the review sits holding one.
   const { ApiError } = await vi.importActual<typeof import("../../api/client")>("../../api/client");
   vi.mocked(api.saveChronicle)
@@ -2103,14 +2110,14 @@ test("renaming the reviewed scene repoints an UNANSWERED conflict snapshot", asy
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
 
-  // The review moved with the rename, address and all (this harness's scene
-  // list never learns the new id, so the view is sent back to `s1` after).
+  // The review moved with the rename, address and all.
   // The conflict's `stored` panel and the row's own `before` both carry the
   // fingerprint, so both move -- though neither SHOWS the scene id it ends
   // in, which is a file name and not something a reader can place: the panel
   // reads the beat count.
   const moved = "promise, open — She swore it. [1 beat, last moved in s1-renamed]";
   await waitFor(() => expect(visited()).toContain("/campaigns/run/scenes/s1-renamed/wrap-up"));
+  expect(here()).toBe("/campaigns/run/scenes/s1-renamed/wrap-up");
   expect(screen.getAllByText("promise, open — She swore it. [1 beat]").length).toBeGreaterThan(0);
   expect(screen.queryByText(/last moved in/)).toBeNull();
 

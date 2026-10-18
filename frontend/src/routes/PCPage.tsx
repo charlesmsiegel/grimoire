@@ -65,7 +65,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   // a normal read, and must not silently put an existing PC back in edit mode.
   useEffect(() => {
     if ((location.state as { newPC?: boolean } | null)?.newPC) {
-      navigate(location.pathname + location.search, { replace: true, state: null });
+      void navigate(location.pathname + location.search, { replace: true, state: null });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [detailTab, setDetailTab] = useState<Exclude<Tab, "art">>("persona");
@@ -278,7 +278,7 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   async function deletePC() {
     if (!detail || !window.confirm(`Delete PC '${detail.meta.name}'?`)) return;
     await run(() => api.deletePC(scope, pid), () => {
-      navigate(sectionHref(scope, { kind: "section", at: "pcs" }));
+      void navigate(sectionHref(scope, { kind: "section", at: "pcs" }));
       return Promise.resolve();
     });
   }

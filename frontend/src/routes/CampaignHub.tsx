@@ -195,7 +195,7 @@ export default function CampaignHub() {
   useEffect(() => {
     if (!cid || (handoff !== "gone" && handoff !== "busy" && handoff !== "unreadable")) return;
     setNotification({ cid, why: handoff });
-    navigate(location.pathname + location.search + location.hash, { replace: true, state: null });
+    void navigate(location.pathname + location.search + location.hash, { replace: true, state: null });
   }, [cid, handoff, location.pathname, location.search, location.hash, navigate]);
 
   useEffect(() => {

@@ -27,7 +27,11 @@ ReactDOM.createRoot(root).render(
         and lose every unresolved send the moment the player opened another
         scene. */}
     <RunRegistryProvider>
-      <RouterProvider router={router} />
+      {/* Retain v6's synchronous routing on React 18. A scene rename updates
+          its URL and cached identity together; a deferred router commit lets
+          the resolver see the old URL beside the new list and leave the scene.
+          Both memory and data hosts pin this in CampaignView.test.tsx. */}
+      <RouterProvider router={router} useTransitions={false} />
     </RunRegistryProvider>
   </React.StrictMode>,
 );

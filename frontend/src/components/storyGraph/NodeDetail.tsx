@@ -207,7 +207,7 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
         <>
           {node.merged_into === null && action(
             "Focus next scene", node.focusable, FOCUS_HINT,
-            () => navigate(`/campaigns/${encodeSegment(cid)}/scenes`,
+            () => void navigate(`/campaigns/${encodeSegment(cid)}/scenes`,
                            { state: seedFor(node, "focus") }))}
           {target && <Link className="btn-outline" to={ledgerHref(cid, target)}>
             Open ledger entry
@@ -247,7 +247,7 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
       ];
       actions = action(
         "Anchor next scene", node.anchorable, ANCHOR_HINT,
-        () => navigate(`/campaigns/${encodeSegment(cid)}/scenes`,
+        () => void navigate(`/campaigns/${encodeSegment(cid)}/scenes`,
                        { state: seedFor(node, "anchor") }));
       break;
     }

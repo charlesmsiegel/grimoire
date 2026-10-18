@@ -14,11 +14,10 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
     coverage: {
-      // istanbul, not v8, and the difference is not a preference. v8 reports
-      // only what the runtime actually loaded, so with `all` below every file
-      // no test imports collapses to a single synthetic line record --
+      // Keep Istanbul: the earlier v8 measurement collapsed a source file
+      // no test imported to a single synthetic line record --
       // `LF:1 LH:1`, i.e. 100% line coverage for a file whose functions never
-      // ran. Measured on this suite: 47 of 68 files came back that way, and
+      // ran. In that measurement, 47 of 68 files came back that way, and
       // api/client.ts claimed 100% lines while hitting 46 of its 212
       // functions. Istanbul instruments at transform time, so a statement
       // gets a line entry whether or not it executes. The provider package is
@@ -30,12 +29,12 @@ export default defineConfig({
       // name, as do Codecov and the VS Code coverage gutters).
       reporter: ["text", "lcov"],
       reportsDirectory: "coverage",
+      // Vitest 4 removed `all`: explicit include now keeps source files no
+      // test imports in the denominator at 0%. Without it, deleting a test
+      // could raise coverage. verify-coverage-contract.mjs executes this
+      // config against an unimported module and checks the missing-include
+      // negative control before the full suite.
       include: ["src/**/*.{ts,tsx}"],
-      // `all` is what makes the number honest: without it a source file that
-      // no test imports is simply absent from the report, so deleting a test
-      // file would *raise* coverage. With it, untested modules are counted at
-      // 0% and show up as the gap they are.
-      all: true,
       exclude: [
         "src/**/*.test.{ts,tsx}",
         "src/test-setup.ts",
@@ -62,7 +61,7 @@ export default defineConfig({
       // does not raise it. Raise a figure when the number rises; lowering one
       // needs the same justification as any other gate being weakened. Only a
       // whole-suite run can meet it: `vitest run --coverage` over a few files
-      // misses it, with `all` above counting every other file at 0%.
+      // misses it, with `include` above counting every other file at 0%.
       thresholds: { lines: 91, statements: 89, functions: 84, branches: 84 },
     },
   },

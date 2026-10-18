@@ -721,7 +721,7 @@ export default function LedgerView() {
         {SECTIONS.map((s) => (
           <button key={s.key}
                   className={"column-row" + (section === s.key ? " active" : "")}
-                  onClick={() => navigate(ledgerHref(cid, { section: s.key }))}>
+                  onClick={() => void navigate(ledgerHref(cid, { section: s.key }))}>
             <span className="column-row-label">{s.label}</span>
             {/* Undefined is "still reading" — a dash says so, where a 0 would
                 claim the section is empty. */}
@@ -739,15 +739,15 @@ export default function LedgerView() {
       <ColumnSection label="Who knows what">
         {section !== "knowledge" ? (
           <button className="column-row"
-                  onClick={() => navigate(ledgerHref(cid, { section: "knowledge" }))}>
+                  onClick={() => void navigate(ledgerHref(cid, { section: "knowledge" }))}>
             <span className="column-row-label">Knowledge</span>
           </button>
         ) : (
           <KnowledgeRows
             entries={knowledge?.data?.entries ?? (knowledge?.error ? [] : null)}
             selected={addressedRow}
-            onNew={() => navigate(ledgerHref(cid, { section: "knowledge", row: "new" }))}
-            onOpen={(kid) => navigate(ledgerHref(cid, { section: "knowledge", row: kid }))} />
+            onNew={() => void navigate(ledgerHref(cid, { section: "knowledge", row: "new" }))}
+            onOpen={(kid) => void navigate(ledgerHref(cid, { section: "knowledge", row: kid }))} />
         )}
       </ColumnSection>
       <ColumnSection label="Continuity review">
@@ -757,7 +757,7 @@ export default function LedgerView() {
                   // Dismissed findings is collapsed: its count is all the
                   // column shows, and its list opens only when chosen.
                   aria-expanded={g === "dismissed" ? activeGroup === g : undefined}
-                  onClick={() => navigate(ledgerHref(cid, { section: "continuity", group: g }))}>
+                  onClick={() => void navigate(ledgerHref(cid, { section: "continuity", group: g }))}>
             <span className="column-row-label">{GROUP_LABELS[g]}</span>
             {/* Per group: the two reads answer apart, and a group whose read
                 has not answered -- or failed -- has no number to show. */}
@@ -818,14 +818,14 @@ export default function LedgerView() {
           <KnowledgeSection cid={cid} list={knowledge} row={addressedRow}
                             onSaved={(kid) => {
                               bump();
-                              navigate(ledgerHref(cid, { section: "knowledge", row: kid }));
+                              void navigate(ledgerHref(cid, { section: "knowledge", row: kid }));
                             }}
                             onDeleted={() => {
                               bump();
-                              navigate(ledgerHref(cid, { section: "knowledge" }));
+                              void navigate(ledgerHref(cid, { section: "knowledge" }));
                             }}
-                            onNew={() => navigate(ledgerHref(cid, { section: "knowledge", row: "new" }))}
-                            onLeave={() => navigate(ledgerHref(cid, { section: "knowledge" }))} />
+                            onNew={() => void navigate(ledgerHref(cid, { section: "knowledge", row: "new" }))}
+                            onLeave={() => void navigate(ledgerHref(cid, { section: "knowledge" }))} />
         )}
         {activeGroup && (
           <ContinuityReview cid={cid} group={activeGroup} review={review}

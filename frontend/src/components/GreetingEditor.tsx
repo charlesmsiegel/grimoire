@@ -345,7 +345,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
         // address instead keeps the two in agreement -- the URL-driven
         // `selected` effect is what actually opens it read-only, the same
         // way a rail-row click does.
-        navigate(recordHref(id));
+        void navigate(recordHref(id));
       }
     } catch (err: unknown) {
       if (!request.current()) return;

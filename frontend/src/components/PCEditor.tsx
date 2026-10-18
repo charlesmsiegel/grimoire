@@ -41,7 +41,7 @@ export function PCEditor({ scope, wid, recordHref, module = null }: {
     try {
       const { pc } = worldScope ? await api.createPC(wid, { name })
         : await api.createCampaignPC(scope.id, { name });
-      if (request.current()) navigate(recordHref(pc), { state: { newPC: true } });
+      if (request.current()) void navigate(recordHref(pc), { state: { newPC: true } });
     } catch (err: unknown) { if (request.current()) setError(errorText(err)); }
     finally { request.finish(); }
   }
@@ -69,7 +69,7 @@ export function PCEditor({ scope, wid, recordHref, module = null }: {
         ? <CreationWizard scope={scope} kind="pcs" module={module}
             createRecord={(name) => api.createPC(wid, { name }).then((r) => r.pc)}
             deleteRecord={(id) => api.deletePC(scope, id).then(() => {})}
-            onDone={(id) => { setWizardOpen(false); navigate(recordHref(id), { state: { newPC: true } }); }}
+            onDone={(id) => { setWizardOpen(false); void navigate(recordHref(id), { state: { newPC: true } }); }}
             onCancel={() => setWizardOpen(false)} />
         : <div className="editor-empty">Select or create a PC.</div>}
     </div>

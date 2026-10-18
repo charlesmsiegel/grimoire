@@ -43,6 +43,11 @@ function serve(layer: RegexLayer, inh: RegexEntry[] = [], warnings = {}) {
 beforeEach(() => {
   vi.mocked(api.getRegex).mockReset();
   vi.mocked(api.putRegex).mockReset();
+  // Vitest 4 restoreAllMocks restores spies without clearing module mocks.
+  // An earlier import must not count as this test's in-flight import.
+  vi.mocked(api.testRegex).mockReset();
+  vi.mocked(api.previewRegexImport).mockReset();
+  vi.mocked(api.importRegex).mockReset();
   vi.mocked(api.listConnections).mockReset().mockResolvedValue(
     fixture([{ id: "conn-a", name: "Local Llama" }]));
   vi.spyOn(window, "confirm").mockReturnValue(true);

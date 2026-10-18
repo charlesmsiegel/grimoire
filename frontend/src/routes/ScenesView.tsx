@@ -131,7 +131,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
     setSeed(handoff);
     setHeld(handoff !== null);
     // Search and hash carried along: the replace exists to drop the STATE.
-    navigate(location.pathname + location.search + location.hash,
+    void navigate(location.pathname + location.search + location.hash,
              { replace: true, state: null });
   }, [rawHandoff, handoff, location.pathname, location.search, location.hash, navigate]);
 
@@ -338,7 +338,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
                          onCancel={() => setImporting(false)}
                          onImported={(sid) => {
                            setImporting(false);
-                           navigate(`/campaigns/${cid}/scenes/${sid}`);
+                           void navigate(`/campaigns/${cid}/scenes/${sid}`);
                          }} />
           </div>
         )}
@@ -365,7 +365,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
             onCreated={(sid, initialPrompt) => {
               setChoosing(false);
               setSeed(null);
-              navigate(`/campaigns/${cid}/scenes/${sid}`,
+              void navigate(`/campaigns/${cid}/scenes/${sid}`,
                        initialPrompt ? { state: { seedPrompt: initialPrompt } } : undefined);
             }} />
         )}

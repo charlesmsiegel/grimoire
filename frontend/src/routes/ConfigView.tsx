@@ -195,7 +195,7 @@ export default function ConfigView() {
   const navigate = useNavigate();
   const askedSection = SECTIONS.find((s) => s.id === asked)?.id ?? null;
   const movedTo = MOVED.get(asked) ?? null;
-  useEffect(() => { if (movedTo) navigate(movedTo, { replace: true }); }, [movedTo, navigate]);
+  useEffect(() => { if (movedTo) void navigate(movedTo, { replace: true }); }, [movedTo, navigate]);
   const [section, setSection] = useState<SectionId>(askedSection ?? "storage");
   // ...and a changed query is followed while the page stays mounted. Keyed on
   // the asked id, so the reader's own clicks in the column are not undone by a

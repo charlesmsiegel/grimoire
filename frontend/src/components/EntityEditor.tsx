@@ -866,7 +866,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
       // the screen already showing and silently do nothing (#follow-up to
       // GreetingEditor's own fix for the same defect). The URL-driven
       // `selected` effect is what actually opens the record read-only.
-      navigate(recordHref(id));
+      void navigate(recordHref(id));
     } catch (err: unknown) {
       setError(errorText(err));
     }
@@ -1021,7 +1021,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
       // The address still names the record just deleted; leave it for the grid
       // rather than a blank form under a dead id.
       resetForm();
-      navigate(sectionPath);
+      void navigate(sectionPath);
     }
     await reload();
   }
@@ -1399,7 +1399,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
           <CreationWizard scope={scope} kind={kind} module={module}
                           createRecord={(n) => api.createEntity(scope, kind, { name: n }).then((r) => r.id)}
                           deleteRecord={(id) => api.deleteEntity(scope, kind, id).then(() => {})}
-                          onDone={async (id) => { setWizardOpen(false); await reload(); navigate(recordHref(id)); }}
+                          onDone={async (id) => { setWizardOpen(false); await reload(); void navigate(recordHref(id)); }}
                           onCancel={() => setWizardOpen(false)} />
         ) : contentPreview ? (
           <div className="detail-view">
@@ -1490,7 +1490,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
                                // A completed sidebar write belongs to the record
                                // that opened it, not a later selection's form.
                                // The address still names the record just removed: go to the grid.
-                               if (selectedRead === readReq.current) { void reload(); resetForm(); navigate(sectionPath); }
+                               if (selectedRead === readReq.current) { void reload(); resetForm(); void navigate(sectionPath); }
                              }} />
               ))}
               <div className="side-section">

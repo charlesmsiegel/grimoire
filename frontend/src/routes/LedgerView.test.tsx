@@ -989,7 +989,7 @@ test("re-renders do not re-scroll", async () => {
 function renderLedgerThenGo(from: string, to: string) {
   function Go() {
     const navigate = useNavigate();
-    return <button onClick={() => navigate(to)}>go</button>;
+    return <button onClick={() => void navigate(to)}>go</button>;
   }
   return render(
     <MemoryRouter initialEntries={[from]}>

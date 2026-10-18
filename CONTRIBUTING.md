@@ -60,7 +60,7 @@ on **5173**, in the current terminal. Without the flag the launcher is the
 player's one — the backend alone, serving `frontend/dist` — so source edits
 appear only after its next rebuild, on the following launch.
 
-Requirements: **Python 3.11+** (CI tests 3.11 and 3.14), **Node 18+** (CI uses
+Requirements: **Python 3.11+** (CI tests 3.11 and 3.14), **Node 24+** (CI uses
 24), and an OpenRouter key only if you want to exercise real model calls — the
 test suite never makes one.
 

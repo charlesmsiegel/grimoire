@@ -84,7 +84,7 @@ function Hotkey() { usePaletteHotkey(); return null; }
 function SwitchCampaign() {
   const navigate = useNavigate();
   return (
-    <button onClick={() => navigate("/campaigns/other/sheets")}>go to other</button>
+    <button onClick={() => void navigate("/campaigns/other/sheets")}>go to other</button>
   );
 }
 

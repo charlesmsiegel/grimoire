@@ -453,19 +453,19 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // rather than opening a pane inside it -- `characterHref` is the one place
   // that knows where that page lives in each scope.
   function openCharacter(cid: string, vid: string) {
-    navigate(characterHref(scope, cid, vid || undefined), { replace: true });
+    void navigate(characterHref(scope, cid, vid || undefined), { replace: true });
   }
 
   // a world-greeting link from a character page jumps to that greeting -- as
   // does a node on the plot map. A record segment forces the list view (the
   // graph has no detail pane), so navigating here is the whole story.
   function openGreeting(gid: string) {
-    navigate(sectionHref(scopeForPaths, { kind: "record", at: "greetings", rid: gid }));
+    void navigate(sectionHref(scopeForPaths, { kind: "record", at: "greetings", rid: gid }));
   }
 
   // a search hit, or any other deep link, opens the record it names
   function openEntity(kind: RecordSection, id: string) {
-    navigate(sectionHref(scopeForPaths, { kind: "record", at: kind, rid: id }));
+    void navigate(sectionHref(scopeForPaths, { kind: "record", at: kind, rid: id }));
   }
 
   // A `<kind>:<id>` chip — a lore owner, or the target of a ref-valued entity
@@ -495,16 +495,16 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     const out: PaletteItem[] = [];
     if (!campaign) {
       out.push({ id: "world-section:overview", group: "IN THIS WORLD", label: "Overview",
-                 meta: `${name} · setup`, run: () => navigate(hrefFor("overview")) });
+                 meta: `${name} · setup`, run: () => void navigate(hrefFor("overview")) });
       out.push({ id: "world-section:push", group: "IN THIS WORLD", label: "Push to campaigns",
-                 meta: `${name} · pending changes`, run: () => navigate(hrefFor("push")) });
+                 meta: `${name} · pending changes`, run: () => void navigate(hrefFor("push")) });
       out.push({ id: "world-section:images", group: "IN THIS WORLD", label: "Images",
-                 meta: `${name} · art`, run: () => navigate(hrefFor("images")) });
+                 meta: `${name} · art`, run: () => void navigate(hrefFor("images")) });
     }
     for (const g of groups) {
       for (const r of g.rows) {
         out.push({ id: `world-section:${r.key}`, group: "IN THIS WORLD", label: r.label,
-                   meta: `${name} · ${g.group.toLowerCase()}`, run: () => navigate(hrefFor(r.key)) });
+                   meta: `${name} · ${g.group.toLowerCase()}`, run: () => void navigate(hrefFor(r.key)) });
       }
     }
     return out;
@@ -685,11 +685,11 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
     </Link>
   ) : (
     <>
-      <button className="column-link" onClick={() => { setImportOpen(true); navigate(hrefFor("lore")); }}>
+      <button className="column-link" onClick={() => { setImportOpen(true); void navigate(hrefFor("lore")); }}>
         Import lorebook <span aria-hidden>→</span>
       </button>
       <button className="column-link"
-              onClick={() => { setScenarioOpen(true); navigate(hrefFor("overview")); }}>
+              onClick={() => { setScenarioOpen(true); void navigate(hrefFor("overview")); }}>
         Import scenario card <span aria-hidden>→</span>
       </button>
     </>
@@ -830,7 +830,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                           const next = new URLSearchParams(params);
                           if (key === "graph") next.set("view", "graph");
                           else next.delete("view");
-                          navigate(location.pathname + (next.size ? `?${next}` : ""));
+                          void navigate(location.pathname + (next.size ? `?${next}` : ""));
                         }}>{label}</button>
               ))}
             </div>

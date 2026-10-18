@@ -109,7 +109,7 @@ vi.mock("./routes/SetupWizard", () => ({
     const navigate = useNavigate();
     return (
       <div data-testid="setup-wizard">
-        <button onClick={() => { onDone("/home/u/.grimoire"); navigate("/", { replace: true }); }}>
+        <button onClick={() => { onDone("/home/u/.grimoire"); void navigate("/", { replace: true }); }}>
           finish-setup
         </button>
       </div>
@@ -122,7 +122,7 @@ vi.mock("./routes/SetupWizard", () => ({
  *  about two PLAY urls that differ only in `:cid`. */
 function Jump({ to }: { to: string }) {
   const navigate = useNavigate();
-  return <button onClick={() => navigate(to)}>jump</button>;
+  return <button onClick={() => void navigate(to)}>jump</button>;
 }
 
 const READY_OPENROUTER = fixture<Config & { active_connection: ActiveConnection; health: ProviderHealth }>({

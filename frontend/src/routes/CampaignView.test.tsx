@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
-import { MemoryRouter, Link, useLocation, useNavigate } from "react-router-dom";
+import { createMemoryRouter, MemoryRouter, Link, RouterProvider, useLocation, useNavigate } from "react-router-dom";
 import { FocusProvider, useFocus } from "../components/focus";
 
 // The mocks and the per-test defaults live in `src/testkit`, which the review
@@ -44,6 +44,8 @@ import {
   renderCampaign, shellModel, shellReady, withPalette,
 } from "../testkit/campaignHarness";
 import { fixture } from "../testkit/fixture";
+import { RouterRequest } from "../testkit/routerRequest";
+import { RunRegistryProvider } from "../runs/RunRegistryProvider";
 
 beforeEach(installCampaignMocks);
 
@@ -7374,7 +7376,7 @@ function transcriptsPerScene() {
 
 function Back() {
   const navigate = useNavigate();
-  return <button onClick={() => navigate(-1)}>go back</button>;
+  return <button onClick={() => void navigate(-1)}>go back</button>;
 }
 
 test("a scene URL opens that scene, not the most recently updated one", async () => {
@@ -7466,7 +7468,7 @@ test("renaming the active scene carries the URL to its new id, replacing the old
   await waitFor(() => expect(here()).toBe("/worlds"));
 });
 
-test("renaming a scene that is not first in the rail keeps the reader on it", async () => {
+test.each(["memory", "data"] as const)("renaming a scene that is not first in the rail keeps the reader on it (%s router)", async (host) => {
   // The rename has to move the URL itself. Left to the stale-id fallback, the
   // reader lands on whatever the list sorts FIRST — which is the renamed scene
   // only when there is one scene, and some other scene the moment there are two.
@@ -7476,16 +7478,30 @@ test("renaming a scene that is not first in the rail keeps the reader on it", as
   ]);
   transcriptsPerScene();
   vi.mocked(api.renameScene).mockResolvedValue(fixture({ id: "s2-renamed" }));
-  renderCampaign("/campaigns/run/scenes/s2");
-  await screen.findByText("transcript of s2");
+  // Production uses a data-router host; keep the ordinary MemoryRouter case
+  // too, so the same identity contract holds in both harnesses.
+  if (host === "data") vi.stubGlobal("Request", RouterRequest);
+  const router = host === "data" ? createMemoryRouter([
+    { path: "*", element: withPalette(<><Here />{playRoutes()}</>) },
+  ], { initialEntries: ["/campaigns/run/scenes/s2"] }) : null;
+  const page = router
+    ? render(<RunRegistryProvider><RouterProvider router={router} useTransitions={false} /></RunRegistryProvider>)
+    : renderCampaign("/campaigns/run/scenes/s2");
+  try {
+    await screen.findByText("transcript of s2");
 
-  fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
-  const box = screen.getByDisplayValue("The Saltmarch Gate");
-  fireEvent.change(box, { target: { value: "Renamed" } });
-  fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: /rename scene/i }));
+    const box = screen.getByDisplayValue("The Saltmarch Gate");
+    fireEvent.change(box, { target: { value: "Renamed" } });
+    fireEvent.keyDown(box, { key: "Enter" });
 
-  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s2-renamed"));
-  expect(screen.queryByText("transcript of s1")).toBeNull();
+    await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s2-renamed"));
+    expect(screen.queryByText("transcript of s1")).toBeNull();
+  } finally {
+    page.unmount();
+    router?.dispose();
+    if (host === "data") vi.unstubAllGlobals();
+  }
 });
 
 test("a scene renamed by the inspector's first date stamp carries the URL too", async () => {
