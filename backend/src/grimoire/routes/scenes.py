@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 
 from fastapi import (
     APIRouter,
@@ -850,28 +851,14 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     _require_scene(cid, sid)
     if character_turns.enabled() or turn.speaker_ref:
         character_turns.validate_actor(cid, sid, turn.speaker_ref)
-    resolved: UsableInference | None
-    try:
-        resolved = require_inference("chat", cid)
-    except HTTPException as exc:
-        # A Manual-mode post naming no speaker generates nothing, so a missing
-        # connection is no reason to refuse it. None tells the engine none was
-        # resolved; it requires one after all if its plan turns out to speak.
-        if not (isinstance(exc.detail, dict) and exc.detail.get("kind") == "missing_key"
-                and character_turns.answers_nothing(
-                    cid, sid, director=turn.director, content=turn.content,
-                    speaker_ref=turn.speaker_ref)):
-            raise
-        resolved = None
+    resolved = _chat_resolution(cid, sid, turn)
     if character_turns.enabled():
         # The speaker pick's refusal, ahead of the reservation for the reason
         # below. The kind is `_chat_run`'s: a post unless the send is
         # ephemeral, then a note when one was typed, else a continue.
-        ephemeral = (turn.director or store.scenes.is_pcless(cid, sid)
-                     or not turn.content.strip())
         character_turns.refuse_an_unanswerable_pick(
             cid, sid, actor_ref=turn.speaker_ref,
-            kind=("post" if not ephemeral
+            kind=("post" if not _is_ephemeral(cid, sid, turn)
                   else "note" if turn.director and turn.content.strip() else "continue"))
     # RESERVED BEFORE THE FIRST MUTATOR. `heal` can append a line and the
     # sidecar block can retire a proposal, so a 409 raised after them would
@@ -887,6 +874,33 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     with runs.reservation(request.app, run):
         return _chat_run(cid, sid, turn, request, client, resolved, run,
                          embed_client=embed_client)
+
+
+def _chat_resolution(cid: str, sid: str, turn: ChatTurn) -> UsableInference | None:
+    """The send's `chat` resolution -- or None for a send that generates
+    nothing (`character_turns.answers_nothing`), which a missing key does not
+    refuse."""
+    try:
+        return require_inference("chat", cid)
+    except HTTPException as exc:
+        # A Manual-mode post naming no speaker generates nothing, so a missing
+        # connection is no reason to refuse it. None tells the engine none was
+        # resolved; it requires one after all if its plan turns out to speak.
+        if not (isinstance(exc.detail, dict) and exc.detail.get("kind") == "missing_key"
+                and character_turns.answers_nothing(
+                    cid, sid, director=turn.director, content=turn.content,
+                    speaker_ref=turn.speaker_ref)):
+            raise
+        return None
+
+
+def _is_ephemeral(cid: str, sid: str, turn: ChatTurn) -> bool:
+    """Whether a send posts no player dialogue: a director note steering one
+    generation -- asked for outright (`director`, the composer's Direct
+    mode), implied by an offscreen scene, which has no other kind of turn, or
+    implied — in any scene — by an empty send meaning "next NPC round"."""
+    return bool(turn.director or store.scenes.is_pcless(cid, sid)
+                or not turn.content.strip())
 
 
 def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run,
@@ -942,12 +956,8 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     `return` statements (any mutator below can raise), which is why this is a
     wrapper rather than a checklist.
     """
-    # A turn that posts no player dialogue: a director note steering one
-    # generation -- asked for outright (`director`, the composer's Direct
-    # mode), implied by an offscreen scene, which has no other kind of turn, or
-    # implied — in any scene — by an empty send meaning "next NPC round".
-    ephemeral = (turn.director or store.scenes.is_pcless(cid, sid)
-                 or not turn.content.strip())
+    # A turn that posts no player dialogue (`_is_ephemeral`)...
+    ephemeral = _is_ephemeral(cid, sid, turn)
     # ...of which exactly one kind leaves a record. A typed note is a thing the
     # player wrote and paid for a generation against, and it is stored as a
     # marked user message so that generation can be attributed to it --
@@ -1416,39 +1426,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         # produced the roll had already been removed. Reentrant, so `heal`
         # taking it again is free.
         store.proposals.heal(cid, sid)
-        # Read AFTER the heal, which can append a 🎲 line the pre-heal snapshot
-        # doesn't have. Judging the checks below on a stale snapshot let the
-        # ROLL_SPEAKER guard pass and `remove_trailing_assistant_run` then
-        # refuse (IndexError -> 500) — it never deletes a roll line, but the
-        # caller deserves the 400 instead.
-        msgs = _require_scene(cid, sid)["messages"]
-        if not msgs:
-            raise HTTPException(status_code=400, detail="nothing to regenerate")
-        # Trailing scene transitions are stepped over, not consumed: reroll
-        # targets the last generation BENEATH them, and every check below has to
-        # look at that generation rather than at the transition line on top.
-        core = msgs[:len(msgs) - store.scenes.trailing_transitions(msgs)]
-        # An archived set whose slot is EMPTY means the previous reroll's stream
-        # died before its replacement landed. Generations can sit back to back
-        # (an empty send and a director turn persist no player message), so what
-        # is exposed at the tail is then the generation BEFORE that slot —
-        # removing it would delete a reply nobody asked to reroll and carry the
-        # slot past the parked one, losing both. Stream into the empty slot.
-        parked = store.alternates.state(cid, sid)
-        replacing = (bool(core) and core[-1]["role"] == "assistant"
-                     and not (parked["runs"] and parked["active"] is None))
-        if replacing:
-            if all(m["role"] == "assistant" for m in core):
-                raise HTTPException(status_code=400,
-                                    detail="cannot regenerate the opening post")
-            if core[-1].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
-                # Enumerated from the same tuple `remove_trailing_assistant_run`
-                # refuses on, not from one speaker name: only ROLL_SPEAKER is
-                # reachable here (trailing transitions are already stripped
-                # above), but a future synthetic speaker gets this 400 rather
-                # than the bare IndexError (500) that refusal would surface.
-                raise HTTPException(status_code=400,
-                                    detail="cannot regenerate past a manual dice roll")
+        replacing = _reroll_replaces(cid, sid)
         # Archive BEFORE the removal, and let the replacement join the set on
         # its own when the next read reconciles: no callback has to fire deep
         # inside the stream's persist path, and a stream that dies between the
@@ -1468,28 +1446,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         if guidance:
             store.steering.record(cid, sid, guidance)
         if replacing:
-            try:
-                removed = store.scenes.remove_trailing_assistant_run(cid, sid)
-            except Exception as exc:
-                # The archive above recorded the hint against a replacement that
-                # is now never going to land, and the reply it was meant to
-                # replace is still live. Left there, the next resolution credits
-                # that unchanged reply to an instruction it never received.
-                #
-                # Best-effort: whatever stopped the removal (a full disk, most
-                # likely) may stop this too, and the original failure is the one
-                # worth reporting.
-                with contextlib.suppress(OSError):
-                    store.alternates.disown_pending(cid, sid)
-                if isinstance(exc, store.scenes.TurnSizesDesynced):
-                    # Refusing beats guessing: the recorded turn boundaries don't
-                    # fit the transcript, so any deletion could take blocks from
-                    # an earlier generation. The transcript is untouched.
-                    raise HTTPException(
-                        status_code=400,
-                        detail="this scene's recorded turn boundaries no longer match its "
-                               "transcript — delete the last reply manually to regenerate") from exc
-                raise
+            removed = _remove_outgoing_reply(cid, sid)
         # Built BEFORE the retirement below, not after: `supersede` writes
         # proposals.json and can fail, and until this exists there is nothing
         # holding the way back — the reply would be gone with the decision it
@@ -1517,21 +1474,17 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
             appended=(("Regenerate guidance", "system", block),) if block else (),
             describe=store.prompt_log.capturing(), model=primary.model,
             images=store.post_images.images_for(primary), history_view=view)
-    except BaseException:
-        if restore is not None:
-            restore()
-        raise
-    # LAST, because it is the one step with no way back. Everything that can
-    # refuse has now refused — the guards, the removal, and the setup above,
-    # which reads the whole store and compiles a template and so can fail on its
-    # own — and the stream is the next statement. Retiring any earlier cancelled
-    # a decision whose narration the restore then put straight back, still valid
-    # and no longer resolvable.
-    #
-    # Outside the lock, unlike the archive and the removal: `supersede` takes it
-    # itself, and holding it across the context build would stretch a span
-    # documented as a read and two writes over the slowest part of the request.
-    try:
+        # LAST, because it is the one step with no way back. Everything that can
+        # refuse has now refused — the guards, the removal, and the setup above,
+        # which reads the whole store and compiles a template and so can fail on
+        # its own — and the stream is the next statement. Retiring any earlier
+        # cancelled a decision whose narration the restore then put straight
+        # back, still valid and no longer resolvable.
+        #
+        # Outside the lock, unlike the archive and the removal: `supersede`
+        # takes it itself, and holding it across the context build would
+        # stretch a span documented as a read and two writes over the slowest
+        # part of the request.
         store.proposals.supersede(cid, sid)
     except BaseException:
         if restore is not None:
@@ -1590,6 +1543,76 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result, on_unstarted=restore)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+
+
+def _reroll_replaces(cid: str, sid: str) -> bool:
+    """Whether a reroll replaces the trailing reply -- False when it streams
+    into the empty slot a dead reroll left -- refusing, as a 400, a transcript
+    with nothing a reroll could replace. Called in the hold that heals, archives
+    and removes, after the heal."""
+    # Read AFTER the heal, which can append a 🎲 line the pre-heal snapshot
+    # doesn't have. Judging the checks below on a stale snapshot let the
+    # ROLL_SPEAKER guard pass and `remove_trailing_assistant_run` then
+    # refuse (IndexError -> 500) — it never deletes a roll line, but the
+    # caller deserves the 400 instead.
+    msgs = _require_scene(cid, sid)["messages"]
+    if not msgs:
+        raise HTTPException(status_code=400, detail="nothing to regenerate")
+    # Trailing scene transitions are stepped over, not consumed: reroll
+    # targets the last generation BENEATH them, and every check below has to
+    # look at that generation rather than at the transition line on top.
+    core = msgs[:len(msgs) - store.scenes.trailing_transitions(msgs)]
+    # An archived set whose slot is EMPTY means the previous reroll's stream
+    # died before its replacement landed. Generations can sit back to back
+    # (an empty send and a director turn persist no player message), so what
+    # is exposed at the tail is then the generation BEFORE that slot —
+    # removing it would delete a reply nobody asked to reroll and carry the
+    # slot past the parked one, losing both. Stream into the empty slot.
+    parked = store.alternates.state(cid, sid)
+    replacing = (bool(core) and core[-1]["role"] == "assistant"
+                 and not (parked["runs"] and parked["active"] is None))
+    if not replacing:
+        return False
+    if all(m["role"] == "assistant" for m in core):
+        raise HTTPException(status_code=400,
+                            detail="cannot regenerate the opening post")
+    if core[-1].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
+        # Enumerated from the same tuple `remove_trailing_assistant_run`
+        # refuses on, not from one speaker name: only ROLL_SPEAKER is
+        # reachable here (trailing transitions are already stripped
+        # above), but a future synthetic speaker gets this 400 rather
+        # than the bare IndexError (500) that refusal would surface.
+        raise HTTPException(status_code=400,
+                            detail="cannot regenerate past a manual dice roll")
+    return True
+
+
+def _remove_outgoing_reply(cid: str, sid: str) -> dict:
+    """Take the reply a reroll replaces out of the transcript, returning what
+    `_restore_reroll` puts back. Called after `archive` recorded the hint, in
+    the same hold."""
+    try:
+        return store.scenes.remove_trailing_assistant_run(cid, sid)
+    except Exception as exc:
+        # The archive recorded the hint against a replacement that is now
+        # never going to land, and the reply it was meant to replace is still
+        # live. Left there, the next resolution credits that unchanged reply
+        # to an instruction it never received.
+        #
+        # Best-effort: whatever stopped the removal (a full disk, most
+        # likely) may stop this too, and the original failure is the one
+        # worth reporting.
+        with contextlib.suppress(OSError):
+            store.alternates.disown_pending(cid, sid)
+        if isinstance(exc, store.scenes.TurnSizesDesynced):
+            # Refusing beats guessing: the recorded turn boundaries don't
+            # fit the transcript, so any deletion could take blocks from
+            # an earlier generation. The transcript is untouched.
+            raise HTTPException(
+                status_code=400,
+                detail="this scene's recorded turn boundaries no longer match its "
+                       "transcript — delete the last reply manually to regenerate") from exc
+        raise
 
 
 _PREVIEW_CHARS = 200
@@ -1709,25 +1732,8 @@ def post_scene_alternate(cid: str, sid: str, vid: str, request: Request):
             # chosen one — and failing between them is a third window: the slot
             # is empty, so the pending decision's narration is not on screen at
             # all, and neither refusal above applies because a write really did
-            # land. Both repairs are correct here; they just differ in what the
-            # reader ends up looking at.
-            #
-            # Only when there was a live run to lose, though. Filling an EMPTY
-            # slot appends and removes nothing, so a failed append leaves the
-            # transcript exactly as it was: the decision's narration never
-            # moved, and there is nothing to repair. Retiring it there would
-            # cancel a still-valid roll for a swap that did not happen — which
-            # is the state a reroll that emitted a fence and no narration
-            # deliberately leaves recoverable.
-            if showing is not None and not _put_back(cid, sid, showing):
-                # The put-back is preferred: it restores the state the request
-                # started from, decision and narration together. Failing that,
-                # the decision has to go, because what it was derived from is
-                # gone — an empty slot the ‹/› control can refill, beside a
-                # proposal that would otherwise still be acceptable.
-                # The original failure is the one worth reporting.
-                with contextlib.suppress(OSError, store.scenes.TurnSizesDesynced):
-                    store.proposals.supersede(cid, sid)
+            # land.
+            _repair_a_broken_promotion(cid, sid, showing)
             raise
         # The transcript is now showing a different take, so the decision the
         # old narration produced is retired — and only now that it really is.
@@ -1743,33 +1749,61 @@ def post_scene_alternate(cid: str, sid: str, vid: str, request: Request):
         try:
             store.proposals.supersede(cid, sid)
         except BaseException:
-            # Put the take that was showing back. A different file failed
-            # (proposals.json), so the write that just succeeded is likely to
-            # succeed again — unlike the reroll restore, where the same disk
-            # stopped both.
-            #
-            # No second repair here, unlike the partial-promotion path above:
-            # the fallback there is to retire the decision, and retiring it is
-            # precisely what has just failed.
-            if showing is not None:
-                _put_back(cid, sid, showing)
-            else:
-                # The slot was EMPTY and `promote` has just filled it, so
-                # putting it back means emptying it again — there is no take to
-                # promote, and `_put_back` correctly reports nothing to do.
-                # Without this the reader is left with the archived take on
-                # screen beside a decision that was produced with the slot
-                # empty: the same mismatch the branch above exists to prevent,
-                # reached from the state a reroll that emitted a fence and no
-                # narration leaves behind.
-                #
-                # Safe to aim at the tail: the lock has been held since before
-                # `promote`, so the trailing run is the one it just appended.
-                # The original failure is the one worth reporting.
-                with contextlib.suppress(OSError, store.scenes.TurnSizesDesynced, IndexError):
-                    store.scenes.remove_trailing_assistant_run(cid, sid)
+            _undo_a_promotion(cid, sid, showing)
             raise
     return {"ok": True}
+
+
+def _repair_a_broken_promotion(cid: str, sid: str, showing: str | None) -> None:
+    """Repair a promotion that raised, possibly between its two transcript
+    writes with the slot left empty: put back the take that was `showing`, or,
+    failing that, retire the decision its narration was derived from. Both
+    repairs are correct; they just differ in what the reader ends up looking
+    at. Best-effort -- the promotion's own failure is the one worth reporting.
+
+    Only when there was a live run to lose, though. Filling an EMPTY slot
+    appends and removes nothing, so a failed append leaves the transcript
+    exactly as it was: the decision's narration never moved, and there is
+    nothing to repair. Retiring it there would cancel a still-valid roll for a
+    swap that did not happen — which is the state a reroll that emitted a fence
+    and no narration deliberately leaves recoverable."""
+    if showing is None or _put_back(cid, sid, showing):
+        return
+    # The put-back is preferred: it restores the state the request started
+    # from, decision and narration together. Failing that, the decision has to
+    # go, because what it was derived from is gone — an empty slot the ‹/›
+    # control can refill, beside a proposal that would otherwise still be
+    # acceptable.
+    with contextlib.suppress(OSError, store.scenes.TurnSizesDesynced):
+        store.proposals.supersede(cid, sid)
+
+
+def _undo_a_promotion(cid: str, sid: str, showing: str | None) -> None:
+    """Undo a promotion that landed when retiring its decision could not: put
+    the take that was `showing` back, or empty the slot it filled. Called in
+    the hold that promoted; best-effort.
+
+    Putting it back is likely to work: a different file failed
+    (proposals.json), so the write that just succeeded is likely to succeed
+    again — unlike the reroll restore, where the same disk stopped both. No
+    second repair, unlike `_repair_a_broken_promotion`: the fallback there is
+    to retire the decision, and retiring it is precisely what has just
+    failed."""
+    if showing is not None:
+        _put_back(cid, sid, showing)
+        return
+    # The slot was EMPTY and `promote` has just filled it, so putting it back
+    # means emptying it again — there is no take to promote, and `_put_back`
+    # correctly reports nothing to do. Without this the reader is left with the
+    # archived take on screen beside a decision that was produced with the
+    # slot empty: the same mismatch `_repair_a_broken_promotion` exists to
+    # prevent, reached from the state a reroll that emitted a fence and no
+    # narration leaves behind.
+    #
+    # Safe to aim at the tail: the lock has been held since before `promote`,
+    # so the trailing run is the one it just appended.
+    with contextlib.suppress(OSError, store.scenes.TurnSizesDesynced, IndexError):
+        store.scenes.remove_trailing_assistant_run(cid, sid)
 
 
 #: How many chronicle records this route returns when the caller names no
@@ -2392,6 +2426,65 @@ async def _run_audit(cid: str, sid: str, client: LLMClient,
                    "attempted": True, "budget_exhausted": False}
 
 
+@dataclass(frozen=True)
+class _NpcPhaseWords:
+    """How a per-NPC phase's row words each way it can end. The dossier and
+    voice phases differ only in these nouns; the rule that picks among them is
+    `_npc_phase_result`, one for both."""
+
+    none_present: str
+    none_succeeded: str
+    none_in_time: str
+    some_failed: str
+    rest_out_of_time: str
+
+
+_DOSSIER_WORDS = _NpcPhaseWords(
+    none_present="no npcs present",
+    none_succeeded="no dossier could be prepared",
+    none_in_time="the absorb time budget ran out before any dossier could be prepared",
+    some_failed="some dossiers could not be prepared",
+    rest_out_of_time="the absorb time budget ran out before the rest could be prepared")
+
+_VOICE_WORDS = _NpcPhaseWords(
+    none_present="no anchored npcs present",
+    none_succeeded="no voice check could be run",
+    none_in_time="the absorb time budget ran out before any voice check could be run",
+    some_failed="some voice checks could not be run",
+    rest_out_of_time="the absorb time budget ran out before the rest could be checked")
+
+
+def _npc_phase_result(edits: list[dict], out: dict, succeeded: str,
+                      words: _NpcPhaseWords) -> tuple[list[dict], dict]:
+    """A per-NPC phase's `(edits, block)` once its loop is over, the status
+    read off its tallies: `out[succeeded]` (the NPCs it got an answer for),
+    `failed`, and `skipped` (the ones the budget never reached)."""
+    if not out[succeeded] and not out["failed"] and not out["skipped"]:
+        return edits, {**out, "reason": words.none_present}
+    if not out[succeeded]:
+        # A budget that ran out before the first call is a different story from
+        # calls that were made and went wrong; say which one happened.
+        return edits, {**out, "status": "failed",
+                       "reason": words.none_succeeded if out["failed"] else words.none_in_time}
+    if out["failed"]:  # the more specific story when both happened; `skipped` still lists the rest
+        return edits, {**out, "status": "degraded", "reason": words.some_failed}
+    if out["skipped"]:
+        return edits, {**out, "status": "degraded", "reason": words.rest_out_of_time}
+    return edits, {**out, "status": "ok"}
+
+
+def _npc_failed(out: dict, aid: str, exc: BaseException) -> None:
+    """Tally one NPC's failed attempt on its phase's `out`, flagging the budget
+    when this absorb's own clock is what stopped it. Type-prefixed: a bare
+    str() is useless for the store's own errors (CharacterNotFound("aese")
+    stringifies to just "aese")."""
+    detail = str(exc).strip()
+    out["budget_exhausted"] = out["budget_exhausted"] or _budget_overrun(exc)
+    out["failed"].append({
+        "id": aid,
+        "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
+
+
 async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient,
                           resolved: UsableInference | None, budget: _Budget,
                           abandoned=None,
@@ -2437,19 +2530,19 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
                                       detail=f"could not read the scene cast: {exc}",
                                       campaign=cid, scene=sid, task="dossier")
         return [], {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
+    # Dossiers feed the npc-only "Active elsewhere" tier; player cards are skipped.
+    npcs = [a for a in cast if a["kind"] == "characters" and a["role"] == "npc"]
+
     def drop_tail(i: int) -> None:
         """Record the NPC at `i` and everyone after it as never reached.
 
         The extraction call is the part worth keeping, so the tail is dropped
         rather than run unbounded (#243) — but named, not silently, for the same
         reason failures are (#236)."""
-        out["skipped"] = [b["id"] for b in cast[i:]
-                          if b["kind"] == "characters" and b["role"] == "npc"]
+        out["skipped"] = [b["id"] for b in npcs[i:]]
         out["budget_exhausted"] = True
 
-    for i, a in enumerate(cast):
-        if a["kind"] != "characters" or a["role"] != "npc":
-            continue  # dossiers feed the npc-only "Active elsewhere" tier; skip player cards
+    for i, a in enumerate(npcs):
         if budget.spent():
             drop_tail(i)
             break
@@ -2519,34 +2612,12 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # zero trace anywhere" and get their row here.
             store.errors.record_exception(exc, "dossier", campaign=cid, scene=sid,
                                           task="dossier")
-            # Type-prefixed: a bare str() is useless for the store's own errors
-            # (CharacterNotFound("aese") stringifies to just "aese").
-            detail = str(exc).strip()
-            out["budget_exhausted"] = out["budget_exhausted"] or _budget_overrun(exc)
-            out["failed"].append({
-                "id": a["id"],
-                "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
+            _npc_failed(out, a["id"], exc)
         else:
             out["proposed"].append(a["id"])
             if edit:
                 edits.append(edit)
-    if not out["proposed"] and not out["failed"] and not out["skipped"]:
-        return edits, {**out, "reason": "no npcs present"}
-    if not out["proposed"]:
-        # A budget that ran out before the first call is a different story from
-        # calls that were made and went wrong; say which one happened.
-        return edits, {**out, "status": "failed",
-                       "reason": "no dossier could be prepared" if out["failed"] else
-                                 "the absorb time budget ran out before any dossier "
-                                 "could be prepared"}
-    if out["failed"]:  # the more specific story when both happened; `skipped` still lists the rest
-        return edits, {**out, "status": "degraded",
-                       "reason": "some dossiers could not be prepared"}
-    if out["skipped"]:
-        return edits, {**out, "status": "degraded",
-                       "reason": "the absorb time budget ran out before the rest "
-                                 "could be prepared"}
-    return edits, {**out, "status": "ok"}
+    return _npc_phase_result(edits, out, "proposed", _DOSSIER_WORDS)
 
 
 def _voice_item(name: str, record: dict, transcript: str,
@@ -2599,92 +2670,13 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
     try:
         cast = store.appearances.scene_cast(cid, sid)
         croot = store.appearances.locked_actor_root(cid)   # cast actors are locked, so campaign-side
-        speakers = store.appearances.roster_names(cid)
+        roster = store.appearances.roster_names(cid)
     except Exception as exc:  # noqa: BLE001 -- an unreadable cast is a failed phase, not a 500
         return [], {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
-    # The speaker labels this scene's transcript can carry. transcript.j2 labels
-    # each line with the speaker's card name and nothing else, so an anchored NPC
-    # sharing a label with ANY other speaker is unjudgeable -- the judge cannot
-    # tell whose lines belong to its subject, and answers confidently regardless.
-    #
-    # Counted over the CAMPAIGN roster, not the present cast, because the present
-    # cast is not the set of speakers: `scene_cast` drops an actor the moment it
-    # leaves, while the transcript keeps every line it spoke, still wearing its
-    # name. `_drift_roster` reaches for the same list against the same problem.
-    # Nothing records which scene a departed actor spoke in, so this over-counts
-    # a same-named actor who was never here -- the safe direction, since the
-    # alternative is a corrective persisted against the wrong character.
-    # Plus the role fallbacks transcript.j2 uses for a line carrying no speaker
-    # stamp -- those are labels too. Whether this scene has any such line is not
-    # recoverable from the rendered transcript, and an ambiguous judgment must
-    # never be persisted, so a character wearing one of these names is
-    # disqualified unconditionally rather than on a guess.
-    speakers = [n for n in speakers if isinstance(n, str) and n.strip()]
-    speakers += ["You", "Grimoire"]
-
     # Resolved up front so the budget check below covers only the actors that
     # will really cost a call: an anchorless NPC must not be reported as
     # "skipped for time" when it was never going to be judged at all.
-    todo = []
-    for a in cast:
-        if a["kind"] != "characters" or a["role"] != "npc":
-            continue   # a player character's voice is the user's to drift
-        try:
-            record = store.overlay.voice_anchor_record(cid, a["id"])
-        except Exception as exc:  # noqa: BLE001 -- unreadable anchor: skip this actor, keep the phase
-            out["failed"].append({"id": a["id"], "reason": f"{type(exc).__name__}: {exc}"})
-            continue
-        if record["text"]:
-            # `a["name"]` is the LOCKED VERSION's card name, which is what the
-            # transcript labels this character's lines with. The container's
-            # meta name can differ from it, and naming the judge a character the
-            # transcript never mentions is how a multi-NPC scene gets judged
-            # against the wrong lines (or comes back `not_enough`).
-            #
-            # Cards are stored as arbitrary dicts, so `data.name` can be a
-            # number or an object -- import and version PUT both accept them.
-            # Checked HERE, inside the per-actor boundary: everything below
-            # treats the name as text, and one bad card must cost that actor its
-            # voice check rather than 500 the whole absorb.
-            # The RAW card name (`voice_drift.locked_name`), not `a["name"]`:
-            # `_actor_name` substitutes the actor id for a card that carries no
-            # usable one, and that id is a display convenience, not something
-            # the transcript is known to label anyone with. Judging against it
-            # means judging against a name nobody agreed on.
-            try:
-                name = store.voice_drift.locked_name(cid, a["id"])
-            except Exception as exc:  # noqa: BLE001 -- unreadable card: skip this actor
-                out["failed"].append({"id": a["id"], "reason": f"{type(exc).__name__}: {exc}"})
-                continue
-            # `label_preserved`, not merely "is a nonblank string": the
-            # serializer silently writes the generic role label instead of a
-            # name it cannot form a marker from (one holding `*` or a newline,
-            # or over 64 characters). Those lines land in the transcript as
-            # "Grimoire", so pointing the judge at the card name hunts for a
-            # speaker that cannot appear -- and risks charging generic
-            # assistant prose to this character instead.
-            if not isinstance(name, str) or not store.scenes.label_preserved(name):
-                out["failed"].append({
-                    "id": a["id"],
-                    "reason": "the locked card has no name that can appear as a transcript "
-                              "label, so the judge cannot be pointed at its lines"})
-                continue
-            # Report the clash instead of judging through it -- naming it is
-            # actionable (rename a card), whereas judging is a coin flip
-            # presented as a finding, and a wrong one persists a corrective
-            # that nags a character for dialogue someone else spoke.
-            # `scenes.confusable`, not a whole-name comparison: `match_name` is
-            # what decided which cast member a written label meant when the
-            # reply was stored, so it is what decides whether a label is
-            # ambiguous. "Winifred Vance" and "Winifred Vale" are distinct
-            # strings, but a block labelled "Winifred" belongs to neither.
-            if store.scenes.confusable(name, speakers):
-                out["failed"].append({
-                    "id": a["id"],
-                    "reason": f"another speaker in this scene can also be labelled {name!r}, "
-                              "so their lines cannot be told apart in the transcript"})
-                continue
-            todo.append((a["id"], name, record))
+    todo, out["failed"] = _judgeable_npcs(cid, cast, roster)
 
     def drop_tail(i: int) -> None:
         """Record the anchored NPC at `i` and everyone after it as never
@@ -2747,43 +2739,130 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
                 drop_tail(i)
                 break
             except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
-                detail = str(exc).strip()
-                out["budget_exhausted"] = out["budget_exhausted"] or _budget_overrun(exc)
-                out["failed"].append({
-                    "id": aid,
-                    "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
+                _npc_failed(out, aid, exc)
             else:
-                out["checked"].append(aid)
-                if finding["verdict"] == store.voice_drift.DRIFT:
-                    out["flagged"].append(aid)
-                    if not finding["note"].strip():
-                        # Only a native drift reaches here with no note
-                        # (`check_failure`). Shown, and `stage_edit` proposes
-                        # nothing for it: a standing flag is neither replaced nor
-                        # cleared by a verdict that has no corrective to store.
-                        out["noteless"].append(aid)
-                elif finding["verdict"] == store.voice_drift.NOT_ENOUGH:
-                    # A real judgment that produces no edit -- like a dossier that
-                    # came back unchanged. Named so "checked, not flagged" does not
-                    # read as "confirmed in voice" when nobody actually heard them.
-                    out["unjudged"].append(aid)
+                _tally_voice_verdict(out, aid, finding)
                 if edit:
                     edits.append(edit)
-    if not out["checked"] and not out["failed"] and not out["skipped"]:
-        return edits, {**out, "reason": "no anchored npcs present"}
-    if not out["checked"]:
-        return edits, {**out, "status": "failed",
-                       "reason": "no voice check could be run" if out["failed"] else
-                                 "the absorb time budget ran out before any voice check "
-                                 "could be run"}
-    if out["failed"]:  # the more specific story when both happened; `skipped` still lists the rest
-        return edits, {**out, "status": "degraded",
-                       "reason": "some voice checks could not be run"}
-    if out["skipped"]:
-        return edits, {**out, "status": "degraded",
-                       "reason": "the absorb time budget ran out before the rest "
-                                 "could be checked"}
-    return edits, {**out, "status": "ok"}
+    return _npc_phase_result(edits, out, "checked", _VOICE_WORDS)
+
+
+def _judgeable_npcs(cid: str, cast: list[dict],
+                    roster: list) -> tuple[list[tuple[str, str, dict]], list[dict]]:
+    """`(todo, failed)`: the present NPCs with a voice anchor whose lines the
+    judge can be pointed at, as `(id, name, anchor record)`, and every one it
+    cannot, with the reason -- an unreadable anchor or card, a card name no
+    transcript label can carry, or a name another speaker can also be
+    labelled. `roster` is the campaign's speaker names (`roster_names`).
+
+    A failure here costs that actor its voice check, never the phase."""
+    # The speaker labels this scene's transcript can carry. transcript.j2 labels
+    # each line with the speaker's card name and nothing else, so an anchored NPC
+    # sharing a label with ANY other speaker is unjudgeable -- the judge cannot
+    # tell whose lines belong to its subject, and answers confidently regardless.
+    #
+    # Counted over the CAMPAIGN roster, not the present cast, because the present
+    # cast is not the set of speakers: `scene_cast` drops an actor the moment it
+    # leaves, while the transcript keeps every line it spoke, still wearing its
+    # name. `_drift_roster` reaches for the same list against the same problem.
+    # Nothing records which scene a departed actor spoke in, so this over-counts
+    # a same-named actor who was never here -- the safe direction, since the
+    # alternative is a corrective persisted against the wrong character.
+    # Plus the role fallbacks transcript.j2 uses for a line carrying no speaker
+    # stamp -- those are labels too. Whether this scene has any such line is not
+    # recoverable from the rendered transcript, and an ambiguous judgment must
+    # never be persisted, so a character wearing one of these names is
+    # disqualified unconditionally rather than on a guess.
+    speakers = [n for n in roster if isinstance(n, str) and n.strip()]
+    speakers += ["You", "Grimoire"]
+    todo: list[tuple[str, str, dict]] = []
+    failed: list[dict] = []
+    for a in cast:
+        if a["kind"] != "characters" or a["role"] != "npc":
+            continue   # a player character's voice is the user's to drift
+        try:
+            record = store.overlay.voice_anchor_record(cid, a["id"])
+        except Exception as exc:  # noqa: BLE001 -- unreadable anchor: skip this actor, keep the phase
+            failed.append({"id": a["id"], "reason": f"{type(exc).__name__}: {exc}"})
+            continue
+        if not record["text"]:
+            continue
+        # `a["name"]` is the LOCKED VERSION's card name, which is what the
+        # transcript labels this character's lines with. The container's
+        # meta name can differ from it, and naming the judge a character the
+        # transcript never mentions is how a multi-NPC scene gets judged
+        # against the wrong lines (or comes back `not_enough`).
+        #
+        # Cards are stored as arbitrary dicts, so `data.name` can be a
+        # number or an object -- import and version PUT both accept them.
+        # Checked HERE, inside the per-actor boundary: everything below
+        # treats the name as text, and one bad card must cost that actor its
+        # voice check rather than 500 the whole absorb.
+        # The RAW card name (`voice_drift.locked_name`), not `a["name"]`:
+        # `_actor_name` substitutes the actor id for a card that carries no
+        # usable one, and that id is a display convenience, not something
+        # the transcript is known to label anyone with. Judging against it
+        # means judging against a name nobody agreed on.
+        try:
+            name = store.voice_drift.locked_name(cid, a["id"])
+        except Exception as exc:  # noqa: BLE001 -- unreadable card: skip this actor
+            failed.append({"id": a["id"], "reason": f"{type(exc).__name__}: {exc}"})
+            continue
+        label, reason = _transcript_label(name, speakers)
+        if reason:
+            failed.append({"id": a["id"], "reason": reason})
+            continue
+        todo.append((a["id"], label, record))
+    return todo, failed
+
+
+def _transcript_label(name: object, speakers: list[str]) -> tuple[str, str]:
+    """`(name, "")` when the transcript labels a card's lines `name` and no
+    other speaker's, so the voice judge can be pointed at them, else
+    `("", why not)`. `name` is the locked card's raw name, which need not even
+    be text."""
+    # `label_preserved`, not merely "is a nonblank string": the
+    # serializer silently writes the generic role label instead of a
+    # name it cannot form a marker from (one holding `*` or a newline,
+    # or over 64 characters). Those lines land in the transcript as
+    # "Grimoire", so pointing the judge at the card name hunts for a
+    # speaker that cannot appear -- and risks charging generic
+    # assistant prose to this character instead.
+    if not isinstance(name, str) or not store.scenes.label_preserved(name):
+        return "", ("the locked card has no name that can appear as a transcript "
+                    "label, so the judge cannot be pointed at its lines")
+    # Report the clash instead of judging through it -- naming it is
+    # actionable (rename a card), whereas judging is a coin flip
+    # presented as a finding, and a wrong one persists a corrective
+    # that nags a character for dialogue someone else spoke.
+    # `scenes.confusable`, not a whole-name comparison: `match_name` is
+    # what decided which cast member a written label meant when the
+    # reply was stored, so it is what decides whether a label is
+    # ambiguous. "Winifred Vance" and "Winifred Vale" are distinct
+    # strings, but a block labelled "Winifred" belongs to neither.
+    if store.scenes.confusable(name, speakers):
+        return "", (f"another speaker in this scene can also be labelled {name!r}, "
+                    "so their lines cannot be told apart in the transcript")
+    return name, ""
+
+
+def _tally_voice_verdict(out: dict, aid: str, finding: dict) -> None:
+    """Tally one NPC's usable verdict on the voice phase's `out`: checked, and
+    flagged, noteless or unjudged as the verdict reads."""
+    out["checked"].append(aid)
+    if finding["verdict"] == store.voice_drift.DRIFT:
+        out["flagged"].append(aid)
+        if not finding["note"].strip():
+            # Only a native drift reaches here with no note
+            # (`check_failure`). Shown, and `stage_edit` proposes
+            # nothing for it: a standing flag is neither replaced nor
+            # cleared by a verdict that has no corrective to store.
+            out["noteless"].append(aid)
+    elif finding["verdict"] == store.voice_drift.NOT_ENOUGH:
+        # A real judgment that produces no edit -- like a dossier that
+        # came back unchanged. Named so "checked, not flagged" does not
+        # read as "confirmed in voice" when nobody actually heard them.
+        out["unjudged"].append(aid)
 
 
 def _already_absorbed(scene: dict) -> bool:
@@ -4745,14 +4824,202 @@ def _merged_detail(cid: str, merged: list[dict]) -> str:
             f"Reject {rows} (or re-absorb) and save again.")
 
 
+def _changes_membership(body: ChronicleSave) -> bool:
+    """Whether this save changes group membership -- refused without a commit
+    token, whose journal is where its group targets are reserved."""
+    has_membership = any(isinstance(edit, dict) and edit.get("kind") == "membership"
+                         for edit in body.edits)
+    if has_membership and not body.commit_token:
+        raise HTTPException(status_code=409, detail={"kind": "membership_commit_token",
+            "detail": "Membership changes need a durable review commit token; prepare a new review."})
+    return has_membership
+
+
+def _refuse_a_foreign_replay(sid: str, prior: dict, fp: str) -> None:
+    """Refuse a repeat of a recorded token that is not a repeat of THIS save."""
+    if prior.get("sid") and prior["sid"] != sid:
+        # The review panel survives a scene switch, so a retry can carry
+        # scene A's token to scene B's route. The ledger is
+        # campaign-scoped; without this, B's save would return A's
+        # result and write nothing.
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": "this save was already committed for a different "
+                              "scene — reopen that scene's review",
+                    "kind": "commit_scene_mismatch"})
+    if prior.get("fingerprint") and prior["fingerprint"] != fp:
+        # The review stayed editable after the failed save, and this
+        # retry carries different content. Returning the first result
+        # would report success while discarding the edits made since.
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": "this review changed after a save that already "
+                              "committed — reload the campaign and edit the "
+                              "records directly",
+                    "kind": "commit_body_changed"})
+
+
+def _refuse_an_unresumable_save(cid: str, sid: str, prior: dict) -> None:
+    """Refuse to resume a reservation that never completed when its journal
+    cannot say what it did, or a newer save of the scene has landed since."""
+    if not prior["journalled"]:
+        # Reserved before #271, so there is no account of what it did --
+        # and it could have appended the timeline and applied any number
+        # of edits before it died. Resuming it as fresh work would repeat
+        # every one of them, so this keeps the pre-#271 refusal. Only
+        # entries written by an older build can land here.
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": "an earlier save of this review started and did "
+                              "not finish — reload the campaign to see what "
+                              "landed",
+                    "kind": "commit_incomplete"})
+    claimed = prior.get("claimed")
+    if claimed is not None and store.commits.scene_epoch(cid, sid) > claimed:
+        # The epoch this reservation's own claim produced, recorded by
+        # `reserve`. Anything past it is a LATER commit for this scene --
+        # the re-absorb that the wedge deliberately leaves room for, or
+        # the scene's deletion. Resuming now would rewrite the chronicle
+        # entry and the scene summary with this older review on top of
+        # that one. Being stranded half-applied is the better of the two:
+        # the newer save is the current record, this one is history.
+        #
+        # Read from the entry rather than derived from the token, so a
+        # caller-minted key -- which carries no epoch and is a supported
+        # thing to send -- is fenced exactly like a server-minted one.
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": "a newer save of this scene completed while this "
+                              "one was unfinished — reload the campaign to see "
+                              "what landed",
+                    "kind": "commit_incomplete"})
+
+
+def _refuse_a_stale_review(cid: str, sid: str, token: str) -> None:
+    """Refuse a fresh save whose review no longer describes the scene: play
+    went on after it was prepared, or another review of the scene saved."""
+    # The transcript watermark, and it does NOT overlap with the epoch
+    # check below. The epoch guards against another REVIEW committing;
+    # this guards against play continuing. `commits.reserve` is called
+    # from exactly one place -- this route -- so appending a turn,
+    # cutting a post or retconning one after the review landed advances
+    # nothing, and the token minted from the older snapshot still
+    # passes every check while the scene is marked absorbed with a
+    # summary of posts nobody reviewed.
+    #
+    # Read under the hold that already covers the whole sequence, and
+    # ahead of the first write, so a refusal leaves the chronicle
+    # untouched and the commit token unspent.
+    _require_unmoved_review(cid, sid, token)
+    epoch = store.commits.token_epoch(token)
+    if epoch is not None and epoch != store.commits.scene_epoch(cid, sid):
+        # Two reviews of one scene carry different tokens, so the key
+        # cannot order them: the second to save would append a second
+        # set of timeline events and plot beats for the same scene. The
+        # epoch stamped into the token is what the key is missing --
+        # this review was prepared before some other save of this scene
+        # completed, so it describes a state that no longer exists.
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": "another review of this scene was saved after "
+                              "this one was prepared — re-absorb the scene to "
+                              "review it against what is now recorded",
+                    "kind": "commit_superseded"})
+
+
+def _refuse_drifted_edits(cid: str, edits: list, reviewed_edits: list) -> None:
+    """Refuse a fresh save some of whose staged edits no longer match what is
+    stored, or target a record merged away since they were staged."""
+    # Contradiction check (#111), before the first write and after the replay
+    # branches of `put_chronicle` -- a replay of a save that already landed
+    # must return its result, not be told the records it wrote now contradict
+    # it.
+    # On a FRESH commit only, for the same reason taken one step further: a
+    # resume's own earlier writes have already moved the records its
+    # remaining edits were staged against, so this pass would refuse the
+    # very commit it is trying to finish. Those edits still meet
+    # `apply_edits`' per-edit pass, which reports them as conflict failures
+    # rather than as a clean refusal.
+    #
+    # This is the REVIEWER'S check, not the guard: it runs ahead of every
+    # write so a 409 leaves the chronicle untouched and this commit token
+    # unspent, letting the panel offer keep/replace/merge on a review that is
+    # still intact. The guard is `apply_edits`' own pass, which re-judges the
+    # batch immediately before it writes -- so a target that moves between
+    # here and there is still caught, as a conflict failure rather than a
+    # clean refusal.
+    #
+    # Neither pass makes check-and-write atomic, and the campaign lock does
+    # not either: `overlay` (and most of `locks.UNREVIEWED`) mutates without
+    # taking it, and the lock is machine-local, so a synced store sees none
+    # of it. Closing the remaining window means compare-and-swap in each
+    # mutator -- what `sheets.write(expected=...)` already does, and what the
+    # other seven would need -- which is the concurrency change `locks.py`
+    # says those modules are waiting on, not something to bolt on here.
+    drifted = store.absorb.check_conflicts(cid, reviewed_edits)
+    if drifted:
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": "some proposed changes no longer match what is "
+                              "stored — review them and save again",
+                    "kind": "edit_conflicts", "conflicts": drifted})
+    # A row staged against a record merged away since (Slice D Decision
+    # 19). Refused, never redirected: its `before` token was read off
+    # the alias source, so writing its beat onto the canonical is a
+    # write `check_conflicts` above never vouched for. Same place and
+    # same reason as that check -- ahead of the first write, so the
+    # reviewer rejects the named rows and the rest saves on this token.
+    merged = continuity_review.merged_edit_targets(cid, edits)
+    if merged:
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": _merged_detail(cid, merged),
+                    "kind": "edits_target_merged", "edits": merged})
+
+
+def _append_timeline_once(cid: str, body: ChronicleSave, progress: dict,
+                          timeline: str | None) -> list[dict]:
+    """Append this save's timeline events unless its journal says an earlier
+    attempt already did (`timeline`, as the journal stood before this attempt
+    reserved), and return what went wrong as failure rows.
+
+    The one step of the save that appends, so the one that must not repeat: an
+    append the journal marked attempted and never confirmed is reported, not
+    made again."""
+    started: list[dict] = []
+    if timeline is None:
+        try:
+            store.chronicle.append_timeline(cid, body.timeline_events)
+        except Exception as exc:  # noqa: BLE001 — unreadable timeline, full disk, ...
+            # An exception means the append did NOT publish: atomic.write_text
+            # replaces by rename as its last act. So this is an ordinary
+            # reported failure, and the mark comes back off -- "unconfirmed"
+            # is for a process that died without returning, not for a call
+            # that returned by raising.
+            progress.pop("timeline", None)
+            started.append({"id": "timeline", "kind": "error",
+                            "reason": f"the timeline events could not be "
+                                      f"recorded: {exc}"})
+        else:
+            progress["timeline"] = "done"
+        # Settled straight away rather than left to apply_edits' first
+        # checkpoint: a failure in mark_absorbed below would otherwise leave
+        # an append that demonstrably landed reading as unconfirmed forever.
+        store.commits.checkpoint(cid, body.commit_token, progress)
+    elif timeline == "pending" and body.timeline_events:
+        # An earlier attempt journalled the append and never confirmed it.
+        # Repeating it would double the campaign's timeline, so say so
+        # instead -- the events are in the review and in the response.
+        started.append({"id": "timeline", "kind": "error",
+                        "reason": store.absorb.UNCONFIRMED})
+    return started
+
+
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
 def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
                   client: LLMClient = Depends(get_llm)):
     body.edits = absorb_membership.strip_private(body.edits)
-    has_membership = any(isinstance(edit, dict) and edit.get("kind") == "membership" for edit in body.edits)
-    if has_membership and not body.commit_token:
-        raise HTTPException(status_code=409, detail={"kind": "membership_commit_token",
-            "detail": "Membership changes need a durable review commit token; prepare a new review."})
+    has_membership = _changes_membership(body)
     # Filled when this request reserves fresh membership identities: a row whose
     # group or lease could not be reached fails alone, with its own reason.
     membership_failures: dict[str, str] = {}
@@ -4790,26 +5057,7 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
         prior = store.commits.lookup(cid, body.commit_token)
         progress: dict = {}
         if prior is not None:
-            if prior.get("sid") and prior["sid"] != sid:
-                # The review panel survives a scene switch, so a retry can carry
-                # scene A's token to scene B's route. The ledger is
-                # campaign-scoped; without this, B's save would return A's
-                # result and write nothing.
-                raise HTTPException(
-                    status_code=409,
-                    detail={"detail": "this save was already committed for a different "
-                                      "scene — reopen that scene's review",
-                            "kind": "commit_scene_mismatch"})
-            if prior.get("fingerprint") and prior["fingerprint"] != fp:
-                # The review stayed editable after the failed save, and this
-                # retry carries different content. Returning the first result
-                # would report success while discarding the edits made since.
-                raise HTTPException(
-                    status_code=409,
-                    detail={"detail": "this review changed after a save that already "
-                                      "committed — reload the campaign and edit the "
-                                      "records directly",
-                            "kind": "commit_body_changed"})
+            _refuse_a_foreign_replay(sid, prior, fp)
             if prior["done"]:
                 # The review goes on the REPLAY path too, not only the
                 # fresh-success tail. The commit is idempotent by design
@@ -4822,37 +5070,7 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
                 # hold, so nothing reads it between the two.
                 _clear_pending_review(cid, sid, body.commit_token)
                 return prior["result"]
-            if not prior["journalled"]:
-                # Reserved before #271, so there is no account of what it did --
-                # and it could have appended the timeline and applied any number
-                # of edits before it died. Resuming it as fresh work would repeat
-                # every one of them, so this keeps the pre-#271 refusal. Only
-                # entries written by an older build can land here.
-                raise HTTPException(
-                    status_code=409,
-                    detail={"detail": "an earlier save of this review started and did "
-                                      "not finish — reload the campaign to see what "
-                                      "landed",
-                            "kind": "commit_incomplete"})
-            claimed = prior.get("claimed")
-            if claimed is not None and store.commits.scene_epoch(cid, sid) > claimed:
-                # The epoch this reservation's own claim produced, recorded by
-                # `reserve`. Anything past it is a LATER commit for this scene --
-                # the re-absorb that the wedge deliberately leaves room for, or
-                # the scene's deletion. Resuming now would rewrite the chronicle
-                # entry and the scene summary with this older review on top of
-                # that one. Being stranded half-applied is the better of the two:
-                # the newer save is the current record, this one is history.
-                #
-                # Read from the entry rather than derived from the token, so a
-                # caller-minted key -- which carries no epoch and is a supported
-                # thing to send -- is fenced exactly like a server-minted one.
-                raise HTTPException(
-                    status_code=409,
-                    detail={"detail": "a newer save of this scene completed while this "
-                                      "one was unfinished — reload the campaign to see "
-                                      "what landed",
-                            "kind": "commit_incomplete"})
+            _refuse_an_unresumable_save(cid, sid, prior)
             # Reserved and never completed: some of the four writes landed and
             # nobody knows which. Its journal does, so this attempt RESUMES it
             # (#271) -- every step the journal accounts for is skipped, and a
@@ -4867,82 +5085,12 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
                 if refreshed is not None:
                     progress = refreshed["progress"]
         else:
-            # The transcript watermark, and it does NOT overlap with the epoch
-            # check below. The epoch guards against another REVIEW committing;
-            # this guards against play continuing. `commits.reserve` is called
-            # from exactly one place -- this route -- so appending a turn,
-            # cutting a post or retconning one after the review landed advances
-            # nothing, and the token minted from the older snapshot still
-            # passes every check while the scene is marked absorbed with a
-            # summary of posts nobody reviewed.
-            #
-            # Read under the hold that already covers the whole sequence, and
-            # ahead of the first write, so a refusal leaves the chronicle
-            # untouched and the commit token unspent.
-            _require_unmoved_review(cid, sid, body.commit_token)
-            epoch = store.commits.token_epoch(body.commit_token)
-            if epoch is not None and epoch != store.commits.scene_epoch(cid, sid):
-                # Two reviews of one scene carry different tokens, so the key
-                # cannot order them: the second to save would append a second
-                # set of timeline events and plot beats for the same scene. The
-                # epoch stamped into the token is what the key is missing --
-                # this review was prepared before some other save of this scene
-                # completed, so it describes a state that no longer exists.
-                raise HTTPException(
-                    status_code=409,
-                    detail={"detail": "another review of this scene was saved after "
-                                      "this one was prepared — re-absorb the scene to "
-                                      "review it against what is now recorded",
-                            "kind": "commit_superseded"})
-            # Contradiction check (#111), before the first write and after the
-            # replay branches above -- a replay of a save that already landed must
-            # return its result, not be told the records it wrote now contradict it.
-            # On a FRESH commit only, for the same reason taken one step further: a
-            # resume's own earlier writes have already moved the records its
-            # remaining edits were staged against, so this pass would refuse the
-            # very commit it is trying to finish. Those edits still meet
-            # `apply_edits`' per-edit pass, which reports them as conflict failures
-            # rather than as a clean refusal.
-            #
-            # This is the REVIEWER'S check, not the guard: it runs ahead of every
-            # write so a 409 leaves the chronicle untouched and this commit token
-            # unspent, letting the panel offer keep/replace/merge on a review that is
-            # still intact. The guard is `apply_edits`' own pass, which re-judges the
-            # batch immediately before it writes -- so a target that moves between
-            # here and there is still caught, as a conflict failure rather than a
-            # clean refusal.
-            #
-            # Neither pass makes check-and-write atomic, and the campaign lock does
-            # not either: `overlay` (and most of `locks.UNREVIEWED`) mutates without
-            # taking it, and the lock is machine-local, so a synced store sees none
-            # of it. Closing the remaining window means compare-and-swap in each
-            # mutator -- what `sheets.write(expected=...)` already does, and what the
-            # other seven would need -- which is the concurrency change `locks.py`
-            # says those modules are waiting on, not something to bolt on here.
+            _refuse_a_stale_review(cid, sid, body.commit_token)
             if has_membership:
                 progress["membership_targets"], membership_failures = absorb_membership.initial_targets(
                     cid, body.edits)
-            reviewed_edits = absorb_membership.resumed_edits(
-                body.edits, progress.get("membership_targets", {}), membership_failures)
-            drifted = store.absorb.check_conflicts(cid, reviewed_edits)
-            if drifted:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"detail": "some proposed changes no longer match what is "
-                                      "stored — review them and save again",
-                            "kind": "edit_conflicts", "conflicts": drifted})
-            # A row staged against a record merged away since (Slice D Decision
-            # 19). Refused, never redirected: its `before` token was read off
-            # the alias source, so writing its beat onto the canonical is a
-            # write `check_conflicts` above never vouched for. Same place and
-            # same reason as that check -- ahead of the first write, so the
-            # reviewer rejects the named rows and the rest saves on this token.
-            merged = continuity_review.merged_edit_targets(cid, body.edits)
-            if merged:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"detail": _merged_detail(cid, merged),
-                            "kind": "edits_target_merged", "edits": merged})
+            _refuse_drifted_edits(cid, body.edits, absorb_membership.resumed_edits(
+                body.edits, progress.get("membership_targets", {}), membership_failures))
         reviewed_edits = absorb_membership.resumed_edits(
             body.edits, progress.get("membership_targets", {}), membership_failures)
         # The one step of the four that appends -- the other three overwrite (the
@@ -4960,32 +5108,7 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request,
         record = store.chronicle.absorb(cid, {
             "id": sid, "one_line": body.one_line, "summary": body.summary,
             "keywords": body.keywords, **facts})
-        started: list[dict] = []
-        if timeline is None:
-            try:
-                store.chronicle.append_timeline(cid, body.timeline_events)
-            except Exception as exc:  # noqa: BLE001 — unreadable timeline, full disk, ...
-                # An exception means the append did NOT publish: atomic.write_text
-                # replaces by rename as its last act. So this is an ordinary
-                # reported failure, and the mark comes back off -- "unconfirmed"
-                # is for a process that died without returning, not for a call
-                # that returned by raising.
-                progress.pop("timeline", None)
-                started.append({"id": "timeline", "kind": "error",
-                                "reason": f"the timeline events could not be "
-                                          f"recorded: {exc}"})
-            else:
-                progress["timeline"] = "done"
-            # Settled straight away rather than left to apply_edits' first
-            # checkpoint: a failure in mark_absorbed below would otherwise leave
-            # an append that demonstrably landed reading as unconfirmed forever.
-            store.commits.checkpoint(cid, body.commit_token, progress)
-        elif timeline == "pending" and body.timeline_events:
-            # An earlier attempt journalled the append and never confirmed it.
-            # Repeating it would double the campaign's timeline, so say so
-            # instead -- the events are in the review and in the response.
-            started.append({"id": "timeline", "kind": "error",
-                            "reason": store.absorb.UNCONFIRMED})
+        started = _append_timeline_once(cid, body, progress, timeline)
         store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
         def checkpoint() -> None:
             store.commits.checkpoint(cid, body.commit_token, progress)
@@ -5728,20 +5851,14 @@ def _settle_rewrite(cid: str, sid: str, target: dict, key: str, original: str,
     an original. "The same" is compared stripped, as `_describes` compares, so
     the two agree on it.
 
-    Every record that is this message's is settled, not only `key`'s: a
-    migrated legacy reply is recorded under its `post_id`, and a later part's
-    record from before parts had keys sits under the bare `response_id`
-    (`_record_for`). Its part key and its `post_id` are the message's alone;
-    the bare `response_id` is too for the first part, and for a later part only
-    when its record describes this message -- otherwise it is the first part's.
-    A rewrite that fired supersedes the others, and an edit that clears the
-    rewrite retires them all."""
+    Every record that is this message's (`_own_record_keys`) is settled, not
+    only `key`'s. A rewrite that fired supersedes the others, and an edit that
+    clears the rewrite retires them all."""
     records = store.regex.rewrites.read_all(cid, sid)
     found = _record_for(target, records, _active_variants(cid, sid, records),
                         _first_part_of(cid, sid, target))
     rid = target.get("response_id") or ""
-    own = [k for k in store.regex.rewrites.candidates(target)
-           if k in records and (k != rid or k == key or (found and found[0] == k))]
+    own = _own_record_keys(target, records, key, found)
     if fired:
         variant = streaming._active_variant(cid, sid, rid) if rid else ""
         streaming._record_rewrite(cid, sid, key, original, fired, content, variant)
@@ -5752,6 +5869,20 @@ def _settle_rewrite(cid: str, sid: str, target: dict, key: str, original: str,
     if found is not None and content.strip() != str(found[1]["stored"]).strip():
         for k in own:
             _forget_rewrite(cid, sid, k)
+
+
+def _own_record_keys(target: dict, records: dict[str, dict], key: str,
+                     found: tuple[str, dict] | None) -> list[str]:
+    """The stored-rewrite records that are `target`'s, by key. A migrated
+    legacy reply is recorded under its `post_id`, and a later part's record
+    from before parts had keys sits under the bare `response_id`
+    (`_record_for`, whose answer is `found`). Its part key (`key`) and its
+    `post_id` are the message's alone; the bare `response_id` is too for the
+    first part, and for a later part only when its record describes this
+    message -- otherwise it is the first part's."""
+    rid = target.get("response_id") or ""
+    return [k for k in store.regex.rewrites.candidates(target)
+            if k in records and (k != rid or k == key or (found and found[0] == k))]
 
 
 def _forget_rewrite(cid: str, sid: str, key: str) -> None:

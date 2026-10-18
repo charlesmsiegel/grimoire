@@ -181,12 +181,12 @@ def test_sitting_out_mid_round_is_skipped(client):
         run_id="test", actor_ref=MARA, mode="list", plan=[WINIFRED])
     run = SimpleNamespace(
         id="test", scene_identity=store.scenes.scene_identity(cid, sid), cancel_requested=False)
-    token = streaming._claim_turn(cid, sid)
+    claim = character_turns._Claim.take(cid, sid, run)
     fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", None)])
 
     async def collect():
         async for frame in character_turns._frames(
-            cid, sid, fake, wire_kit.resolution(wire_kit.target(model="test")), run, token,
+            claim, fake, wire_kit.resolution(wire_kit.target(model="test")),
             round_record, streaming.StreamOutcome(),
         ):
             if "response_end" in json.loads(frame.removeprefix("data: ")):
@@ -355,11 +355,11 @@ def _run(cid, sid):
 
 def _drive(cid, sid, fake, run, round_record, on_frame):
     """Drive `_frames` directly, handing each decoded frame to `on_frame`."""
-    token = streaming._claim_turn(cid, sid)
+    claim = character_turns._Claim.take(cid, sid, run)
 
     async def collect():
         async for frame in character_turns._frames(
-            cid, sid, fake, wire_kit.resolution(wire_kit.target(model="test")), run, token,
+            claim, fake, wire_kit.resolution(wire_kit.target(model="test")),
             round_record, streaming.StreamOutcome(),
         ):
             if frame.startswith("data: "):
@@ -630,11 +630,11 @@ def test_stop_at_round_start_of_a_planned_round_leaves_nothing_to_retry(client):
     run = _run(cid, sid)
     fake = FakeLLM([reply("Mara one.", None), reply("Winifred one.", None),
                     reply("Mara two.", None)])
-    token = streaming._claim_turn(cid, sid)
+    claim = character_turns._Claim.take(cid, sid, run)
 
     async def collect():
         frames = character_turns._frames(
-            cid, sid, fake, wire_kit.resolution(wire_kit.target(model="test")), run, token,
+            claim, fake, wire_kit.resolution(wire_kit.target(model="test")),
             round_record, streaming.StreamOutcome())
         # Stop lands while the announcement is being delivered: the run is
         # closed at that yield, so the rescue path is what ends the round.

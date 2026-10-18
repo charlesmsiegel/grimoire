@@ -69,13 +69,34 @@ def validate_actor(cid, sid, actor_ref):
         raise HTTPException(400, detail="speaker must be a present NPC or grimoire")
 
 
-def _fence(cid, sid, run, token):
-    if streaming._scene_moved(cid, sid, run.scene_identity) or not streaming._owns_turn(
-        cid, sid, token
-    ):
-        raise store.responses.ResponseConflict(
-            "scene_replaced", "The scene changed during generation."
-        )
+@dataclass(frozen=True)
+class _Claim:
+    """A run's claim on its scene's turn, which every write the run makes is
+    fenced on (`fence`): the scene by the identity the run was reserved on
+    (`run.scene_identity` -- a `sid` moves on rename and is reissued after a
+    delete) and the turn by the token it took (`streaming._claim_turn`),
+    which the scene's next turn replaces."""
+
+    cid: str
+    sid: str
+    run: Any
+    token: int
+
+    @classmethod
+    def take(cls, cid, sid, run) -> _Claim:
+        """Make `run` the scene's current turn. Under the campaign lock, ahead
+        of anything the turn writes."""
+        return cls(cid, sid, run, streaming._claim_turn(cid, sid))
+
+    def fence(self) -> None:
+        """Refuse a write once the scene moved or another turn claimed it.
+        Under the campaign lock that covers the write, beside it: read outside
+        one, it answers a question that was true a moment ago."""
+        if streaming._scene_moved(self.cid, self.sid, self.run.scene_identity) \
+                or not streaming._owns_turn(self.cid, self.sid, self.token):
+            raise store.responses.ResponseConflict(
+                "scene_replaced", "The scene changed during generation."
+            )
 
 
 def _settings(cid, sid):
@@ -180,8 +201,8 @@ def start(
     (a send's `chat`, a retry's, a roll's `continuation`, a replay's): every
     contribution runs on it, under its own task (`_round_frames`)."""
     with store.locks.campaign_lock(cid):
-        token = streaming._claim_turn(cid, sid)
-        _fence(cid, sid, run, token)
+        claim = _Claim.take(cid, sid, run)
+        claim.fence()
         if round_record is None:
             planned = _plan(cid, sid, kind, trigger, actor_ref)
             if resolved is None and (planned["actor_ref"]
@@ -218,12 +239,9 @@ def start(
             )
     outcome = streaming.StreamOutcome()
     frames = _frames(
-        cid,
-        sid,
+        claim,
         client,
         resolved,
-        run,
-        token,
         round_record,
         outcome,
         app=request.app,
@@ -291,7 +309,7 @@ def _plan_round(settings, cast, *, trigger, history, lead, author=None):
             "present": cast}
 
 
-def _follow_on(cid, sid, run, token, round_record, lead):
+def _follow_on(claim, round_record, lead):
     """The next automatic round of a player post's chain, or None when the
     scene's order is Manual now (which never auto-continues) or its
     `auto_rounds` has been lowered below the rounds already started.
@@ -302,8 +320,9 @@ def _follow_on(cid, sid, run, token, round_record, lead):
     post, so usage stays attributed to what the player sent, and answers the
     Continue note, as an empty send would. A Directed round with no lead goes
     through the selector (`_first_actor`)."""
+    cid, sid = claim.cid, claim.sid
     with store.locks.campaign_lock(cid):
-        _fence(cid, sid, run, token)
+        claim.fence()
         scene = store.scenes.read_scene(cid, sid)
         settings = store.group_play.settings_of(scene["meta"])
         if settings["order"] == "manual":
@@ -331,7 +350,7 @@ def _follow_on(cid, sid, run, token, round_record, lead):
             sid,
             automatic=True,
             post=round_record["post"],
-            run_id=run.id,
+            run_id=claim.run.id,
             note=prompts.render("scene/director_note.j2"),
             turn=round_record.get("turn"),
             auto_remaining=remaining,
@@ -549,7 +568,7 @@ def _stored_view(cid, sid, run, stored):
         view, perspective=dataclasses.replace(view.perspective, sid=sid))
 
 
-def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, plan=None,
+def _prepare(claim, round_record, actor, resolved, appended, *, plan=None,
              response_id="", history_view=None, epistemic=None):
     """Compose (or resume) the contribution and record it.
 
@@ -565,8 +584,9 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, p
     later request -- which holds no view of its own -- recomposes with the
     one the response was composed with, and asks nothing again; `epistemic`
     is the Decision stage's record, stored beside `intent`."""
+    cid, sid = claim.cid, claim.sid
     with store.locks.campaign_lock(cid):
-        _fence(cid, sid, run, token)
+        claim.fence()
         pending = round_record.get("pending_response")
         if pending:
             record = store.responses.get(cid, sid, pending, private=True)
@@ -589,7 +609,7 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, p
             stored = store.responses.get(cid, sid, pending, private=True)
             plan = stored.get("intent")
             if history_view is None:
-                history_view = _stored_view(cid, sid, run, stored)
+                history_view = _stored_view(cid, sid, claim.run, stored)
         messages, _breakdown = _compose(cid, sid, round_record, actor, resolved, appended,
                                         plan=plan, history_view=history_view)
         # The round's eligible first, then the whole present cast: an explicit
@@ -622,14 +642,18 @@ def _prepare(cid, sid, run, token, round_record, actor, resolved, appended, *, p
         return record, messages, "primary", None
 
 
-def _save(cid, sid, run, token, record, watcher, status, round_record, continuation=None,
-          tracked=None, connection="", made_by=None, tool=None):
-    """Persist this contribution's variant. A key the tracker marked `pending`
-    for it is appended to `tracked`, for the caller to start once the turn's
-    terminal frames are out (see `_start_tracking`). `connection` is the id of
-    the connection that served it, recorded on the variant and its post."""
+def _save(claim, turn, status):
+    """Persist the contribution in flight's variant, as `status`: what
+    `turn.watcher` read of the reply to `turn.record`. A key the tracker marked
+    `pending` for it is appended to `turn.tracked`, for `_frames` to start
+    once the turn's terminal frames are out (see `_start_tracking`).
+    `turn.served` is the id of the connection that served it, recorded on the
+    variant and its post."""
+    cid, sid = claim.cid, claim.sid
+    record, watcher, continuation = turn.record, turn.watcher, turn.continuation
+    connection = turn.served
     with store.locks.campaign_lock(cid):
-        _fence(cid, sid, run, token)
+        claim.fence()
         text, authority_issue, rewrite = _normalise(cid, sid, record, watcher.narration,
                                                     connection)
         if authority_issue:
@@ -650,8 +674,8 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
             part=continuation or "",
             reasoning=watcher.reasoning + watcher.preparation_note,
             connection=connection,
-            made_by=made_by,
-            tool=tool,
+            made_by=turn.made_by,
+            tool=turn.tool_record,
         )
         before = streaming._active_variant(cid, sid, record["id"]) if continuation else ""
         if continuation and status == "complete":
@@ -675,13 +699,13 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
             # `commit_narration` trims an earlier attempt at the continuation.
             streaming._prune_rewrites(cid, sid)
         streaming._turn_settled(cid)
-        if text and tracked is not None:
+        if text:
             # Marked HERE, in the hold that wrote the variant, where the
             # tracker's lock acquisition is reentrant: anywhere later on this
             # path it would be a fresh wait in front of the player's frames.
             marked = tracker_routes.mark_response(cid, sid, record["id"])
             if marked:
-                tracked.append(marked)
+                turn.tracked.append(marked)
         return streaming._tail_length(cid, sid) if text else None
 
 
@@ -1558,14 +1582,18 @@ async def _stream_contribution(client, messages, resolved, meter, watcher, run, 
         raise anyio.get_cancelled_exc_class()()
 
 
-def _pause(cid, sid, run, token, record, watcher, round_record, continuation, outcome, actor,
-           tracked=None, connection="", made_by=None, tool=None):
+def _pause(claim, turn, actor, outcome):
+    """Park the contribution in flight on the roll its fence proposed: the
+    proposal, the round paused on it with `actor` to resume, and the prose
+    before the fence saved as an incomplete variant (`_save`)."""
+    cid, sid = claim.cid, claim.sid
+    record, round_record, continuation = turn.record, turn.round_record, turn.continuation
     with store.locks.campaign_lock(cid):
-        _fence(cid, sid, run, token)
+        claim.fence()
         if continuation:
             store.proposals.commit_narration(cid, sid, continuation, lambda: None)
             streaming._prune_rewrites(cid, sid)   # what the commit trimmed
-        payload = streaming._make_proposal(cid, sid, watcher.roll)
+        payload = streaming._make_proposal(cid, sid, turn.watcher.roll)
         proposal = store.proposals.new(cid, sid, payload, round_record["post"])
         _round_state(
             cid,
@@ -1580,8 +1608,7 @@ def _pause(cid, sid, run, token, record, watcher, round_record, continuation, ou
         # The prose before the roll fence is a post the transcript shows, so it
         # is tracked; the resumed part marks the finished variant again, over
         # the whole response.
-        at = _save(cid, sid, run, token, record, watcher, "incomplete", round_record, continuation,
-                   tracked=tracked, connection=connection, made_by=made_by, tool=tool)
+        at = _save(claim, turn, "incomplete")
         _round_state(
             cid,
             sid,
@@ -1624,10 +1651,11 @@ class _Progress:
     prompt still owes). `served` is the connection that answered that
     contribution, kept here so a rescue after `meter` is dropped (a failing
     `_pause`/`_save`) still files the partial under the fallback that served
-    it, not the primary. `ending` is the successor choice of the contribution
-    that closed the round, None until one does (`_chain_continues`), and
-    `terminal` that the round already wrote the run's last frame (a roll
-    pause, an empty response)."""
+    it, not the primary. `_save` and `_pause` file the contribution in flight
+    from here, whether the round or its rescue lands it. `ending` is the
+    successor choice of the contribution that closed the round, None until one
+    does (`_chain_continues`), and `terminal` that the round already wrote the
+    run's last frame (a roll pause, an empty response)."""
 
     def __init__(self, round_record, appended, continuation, served=""):
         self.round_record = round_record
@@ -1654,15 +1682,17 @@ class _Progress:
         #: (round id, speaker) -> the Decision stage's record for that step
         #: (spec 11 §5.5); a key here was refined, and is never asked again.
         self.refined: dict[tuple, dict | None] = {}
+        #: Tracker keys this turn marked `pending` (`_save`), started in
+        #: `_frames`' `finally` once the terminal frames are out -- in
+        #: transcript order, which is the order the scene's tracker lock runs
+        #: them in.
+        self.tracked: list[tracker_routes.Mark] = []
 
 
 async def _frames(
-    cid,
-    sid,
+    claim,
     client,
     resolved,
-    run,
-    token,
     round_record,
     outcome,
     *,
@@ -1676,16 +1706,13 @@ async def _frames(
     """One run carries a player post's whole chain of rounds: the first, then
     each follow-on `_follow_on` opens while rounds remain, announced by a
     `round_start` frame. The turn settles once, after the last of them."""
+    cid, sid, run = claim.cid, claim.sid, claim.run
     turn = _Progress(round_record, appended, continuation, streaming._asked(resolved))
-    # Tracker keys this turn marked `pending`, started in `finally` once the
-    # terminal frames are out -- in transcript order, which is the order the
-    # scene's tracker lock runs them in.
-    tracked: list[tracker_routes.Mark] = []
     try:
         actor, turn.round_record = await _first_actor(cid, sid, client, round_record)
         while True:
             round_frames = _round_frames(
-                cid, sid, client, resolved, run, token, turn, actor, outcome, tracked,
+                claim, client, resolved, turn, actor, outcome,
                 app=app, embed_client=embed_client, history_enabled=history_enabled
             )
             async with aclosing(round_frames) as frames:
@@ -1696,7 +1723,7 @@ async def _frames(
             if not _chain_continues(turn.round_record, turn.ending, run.cancel_requested):
                 break
             following = await run_in_threadpool(
-                _follow_on, cid, sid, run, token, turn.round_record, turn.ending["lead"]
+                _follow_on, claim, turn.round_record, turn.ending["lead"]
             )
             if following is None:
                 break
@@ -1723,27 +1750,17 @@ async def _frames(
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
     except LLMError as exc:
-        await _rescue(
-            cid, sid, run, token, turn.record, turn.watcher, turn.round_record, turn.continuation,
-            outcome, turn.meter, exc, tracked=tracked, served=turn.served,
-            made_by=turn.made_by, composed=turn.composed,
-            composed_settings=turn.composed_settings, tool=turn.tool_record,
-        )
+        await _rescue(claim, turn, outcome, exc)
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
     except BaseException:
         with anyio.CancelScope(shield=True):
-            await _rescue(
-                cid, sid, run, token, turn.record, turn.watcher, turn.round_record,
-                turn.continuation, outcome, turn.meter, tracked=tracked, served=turn.served,
-                made_by=turn.made_by, composed=turn.composed,
-                composed_settings=turn.composed_settings, tool=turn.tool_record,
-            )
+            await _rescue(claim, turn, outcome)
         raise
     finally:
         with anyio.CancelScope(shield=True):
             await streaming._fire_follow_up(after_turn, outcome, cid, sid)
-            await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
+            await _start_tracking(app, cid, sid, client, turn.tracked, run.scene_identity)
 
 
 def _history_replays(cid, sid, round_record):
@@ -1896,10 +1913,11 @@ async def _after_saved_contribution(cid, sid, client, round_record, watcher, use
         return _successor_answer(round_record, used, actor, None)
     return result
 
-async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, outcome,
-                        tracked, *, app=None, embed_client=None, history_enabled=False):
+async def _round_frames(claim, client, resolved, turn, actor, outcome, *,
+                        app=None, embed_client=None, history_enabled=False):
     """One round's contributions, from `actor` until nobody is next. Every
     write lands on `turn`, which is what `_frames` rescues from on failure."""
+    cid, sid, run = claim.cid, claim.sid, claim.run
     turn.ending = None
     while actor and not run.cancel_requested:
         await anyio.lowlevel.checkpoint()
@@ -1916,9 +1934,7 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
             )
             turn.ending = None
             break
-        recovered = await run_in_threadpool(
-            _recover_completed, cid, sid, run, token, turn.round_record
-        )
+        recovered = await run_in_threadpool(_recover_completed, claim, turn.round_record)
         if recovered is not None:
             turn.round_record, after = await _settle_recovered_successor(
                 cid, sid, client, *recovered, run.cancel_requested)
@@ -1949,7 +1965,7 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         history, epistemic_record, response_id = await _refine_step(
             cid, sid, client, turn, actor, history, response_id, run=run)
         turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
-            _prepare, cid, sid, run, token, turn.round_record, actor, resolved, turn.appended,
+            _prepare, claim, turn.round_record, actor, resolved, turn.appended,
             plan=plan, response_id=response_id, history_view=history,
             epistemic=epistemic_record)
         record = turn.record
@@ -1991,7 +2007,7 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         # Read before the meter is dropped: the facade stamps the attempt
         # that ran on `meter.usage`, which a fallback makes someone other
         # than the resolution's primary.
-        turn.served = served = streaming._served(turn.meter, streaming._asked(resolved))
+        turn.served = streaming._served(turn.meter, streaming._asked(resolved))
         turn.meter.done()
         turn.made_by = _made_by(
             turn.meter, turn.meter.task, turn.composed, turn.round_record.get("typed_note", ""),
@@ -2003,32 +2019,13 @@ async def _round_frames(cid, sid, client, resolved, run, token, turn, actor, out
         if paused:
             # The chain waits on the roll: `auto_remaining` stays on the
             # paused round, and its resume carries on from it.
-            proposal = await run_in_threadpool(
-                _pause,
-                cid,
-                sid,
-                run,
-                token,
-                record,
-                watcher,
-                turn.round_record,
-                turn.continuation,
-                outcome,
-                actor,
-                tracked,
-                served,
-                made_by=turn.made_by,
-                tool=turn.tool_record,
-            )
+            proposal = await run_in_threadpool(_pause, claim, turn, actor, outcome)
             turn.terminal = True
             yield streaming._sse({"proposal": {**proposal["payload"], "id": proposal["id"]}})
             outcome.land()
             yield streaming._sse({"done": True})
             return
-        at = await run_in_threadpool(
-            _save, cid, sid, run, token, record, watcher, status, turn.round_record,
-            turn.continuation, tracked, served, made_by=turn.made_by, tool=turn.tool_record,
-        )
+        at = await run_in_threadpool(_save, claim, turn, status)
         outcome.persisted(at)
         if watcher.issue == "empty response":
             await run_in_threadpool(
@@ -2139,29 +2136,32 @@ def _abort_meter(meter):
         meter.done("aborted")
 
 
-async def _rescue(
-    cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, error=None,
-    *, tracked=None, served="", made_by=None, composed="primary", composed_settings=None,
-    tool=None,
-):
+async def _rescue(claim, turn, outcome, error=None):
+    """Keep what a broken turn has in hand (`turn`): the contribution in
+    flight saved for Retry -- or paused on its roll -- and the round marked
+    `incomplete`; a Stop ends the chain however it is kept."""
+    meter = turn.meter
     # Before `meter.done`, for `_frames`' reason: what a rescued partial is
     # filed under is the attempt that was running when the turn broke. With no
-    # meter left, `served` is what `_frames` already settled on.
+    # meter left, `turn.served` is what `_frames` already settled on.
     if meter:
-        served = streaming._served(meter, served)
+        turn.served = streaming._served(meter, turn.served)
         if error:
             meter.done("error", error.kind, detail=error.detail)
         else:
             meter.done("aborted")
-        made_by = _made_by(
-            meter, meter.task, composed, round_record.get("typed_note", ""),
-            settings=composed_settings,
+        turn.made_by = _made_by(
+            meter, meter.task, turn.composed, turn.round_record.get("typed_note", ""),
+            settings=turn.composed_settings,
         )
+
+    cid, sid = claim.cid, claim.sid
+    record, watcher, round_record = turn.record, turn.watcher, turn.round_record
 
     def save():
         with store.locks.campaign_lock(cid):
-            _fence(cid, sid, run, token)
-            if run.cancel_requested:
+            claim.fence()
+            if claim.run.cancel_requested:
                 # A Stop ends the chain however the interrupted contribution
                 # is kept below -- saved for Retry, or paused on its roll.
                 _stop(cid, sid, round_record)
@@ -2170,38 +2170,9 @@ async def _rescue(
                 if current["status"] != "complete":
                     watcher.finish()
                     if watcher.roll.complete or watcher.roll.truncated:
-                        _pause(
-                            cid,
-                            sid,
-                            run,
-                            token,
-                            record,
-                            watcher,
-                            round_record,
-                            continuation,
-                            outcome,
-                            record["actor_ref"],
-                            tracked,
-                            served,
-                            made_by=made_by,
-                            tool=tool,
-                        )
+                        _pause(claim, turn, record["actor_ref"], outcome)
                         return
-                    at = _save(
-                        cid,
-                        sid,
-                        run,
-                        token,
-                        record,
-                        watcher,
-                        "incomplete",
-                        round_record,
-                        continuation,
-                        tracked,
-                        served,
-                        made_by=made_by,
-                        tool=tool,
-                    )
+                    at = _save(claim, turn, "incomplete")
                     outcome.persisted(at)
             # Only this run's own round, and only while it is unfinished: a
             # Stop may already have completed it (`_stop`), and marking it
@@ -2315,15 +2286,16 @@ def _retry_context_matches(messages, round_record):
     )
 
 
-def _recover_completed(cid, sid, run, token, round_record):
+def _recover_completed(claim, round_record):
     """`(round, successor choice)` once a pending contribution that already
     completed is published and the round advanced past it; None when the
     round has no completed contribution left to recover."""
     pending = round_record.get("pending_response")
     if not pending:
         return None
+    cid, sid = claim.cid, claim.sid
     with store.locks.campaign_lock(cid):
-        _fence(cid, sid, run, token)
+        claim.fence()
         record = store.responses.get(cid, sid, pending, private=True)
         if record["status"] != "complete":
             return None
@@ -2348,7 +2320,7 @@ def _recover_completed(cid, sid, run, token, round_record):
                                   "actor": record["actor_ref"], "response_id": pending,
                                   "content_issue": variant.get("issue")}
         after = _successor(cid, sid, {**round_record, "used": used}, variant.get("handoff"),
-                           run.cancel_requested, record["actor_ref"])
+                           claim.run.cancel_requested, record["actor_ref"])
         return _round_state(
             cid,
             sid,
@@ -2488,7 +2460,7 @@ def regenerate_response(
                     store.scenes.read_scene(cid, sid)["messages"], record)
             except store.responses.ResponseConflict as exc:
                 raise _public_error(exc) from exc
-            token = streaming._claim_turn(cid, sid)
+            claim = _Claim.take(cid, sid, run)
             # Lock-free and non-minting, inside this hold: the round's typed
             # note, which a reroll of a director turn replays with its snapshot.
             note = store.responses.round_typed_note(cid, sid, record["round_id"])
@@ -2511,7 +2483,7 @@ def regenerate_response(
                 store.steering.record(cid, sid, body.guidance)
         outcome = streaming.StreamOutcome()
         frames = _reroll_frames(
-            request.app, cid, sid, rid, client, resolved, run, token, record, messages, outcome,
+            request.app, claim, rid, client, resolved, record, messages, outcome,
             note=note, guidance=(body.guidance if body else None) or "", task="regenerate",
         )
         runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
@@ -2545,7 +2517,7 @@ def extend_response(
     with runs.reservation(request.app, run):
         with store.locks.campaign_lock(cid):
             plan = _extend_target(cid, sid, rid)
-            token = streaming._claim_turn(cid, sid)
+            claim = _Claim.take(cid, sid, run)
             note = store.responses.round_typed_note(cid, sid, plan.record["round_id"])
             messages = _extend_messages(plan.snapshot, resolved.chain.primary, plan.partial, guidance,
                                         plan.words, campaign=cid)
@@ -2554,15 +2526,15 @@ def extend_response(
                 store.steering.record(cid, sid, guidance)
         outcome = streaming.StreamOutcome()
         frames = _reroll_frames(
-            request.app, cid, sid, rid, client, resolved, run, token, plan.record, messages,
+            request.app, claim, rid, client, resolved, plan.record, messages,
             outcome, note=note, guidance=guidance, task="extend", extend=plan,
         )
         runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
-async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, record, messages,
-                         outcome, *, note="", guidance="", task: str = "regenerate",
+async def _reroll_frames(app, claim, rid, client, resolved, record, messages, outcome, *,
+                         note="", guidance="", task: str = "regenerate",
                          extend: ExtendPlan | None = None):
     """A reroll's stream -- or, with `extend`, a Keep writing continuation's.
 
@@ -2571,6 +2543,7 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
     where the model is mid-reply), the `extend.seed` the live bubble grows from,
     and how the result lands (`_accept_extend` joins it onto the reply).
     `resolved` is the reroll's own resolution of `task` (`override_inference`)."""
+    cid, sid, run = claim.cid, claim.sid, claim.run
     chain = resolved.chain
     perception = record["actor_ref"] != "grimoire"
     if extend is not None:
@@ -2620,7 +2593,7 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
         if extend is None:
             made_by = _made_by(meter, task, "primary", note, guidance)
             accepted = await run_in_threadpool(
-                _accept_reroll, cid, sid, rid, run, token, record, watcher, tracked, served,
+                _accept_reroll, claim, rid, record, watcher, tracked=tracked, connection=served,
                 made_by=made_by, tool=tool_record,
             )
             refusal = None if accepted else (
@@ -2633,8 +2606,8 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
                 extra={"extends": extend.extends, "mode": mode},
             )
             refusal = await run_in_threadpool(
-                _accept_extend, cid, sid, rid, run, token, watcher, extend, mode,
-                tracked, made_by, served,
+                _accept_extend, claim, rid, watcher, extend, mode, tracked=tracked,
+                made_by=made_by, connection=served,
             )
         if refusal is None:
             outcome.land()
@@ -2658,11 +2631,12 @@ async def _reroll_frames(app, cid, sid, rid, client, resolved, run, token, recor
             await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
 
 
-def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, connection="",
+def _accept_reroll(claim, rid, record, watcher, *, tracked=None, connection="",
                    made_by=None, tool=None):
+    cid, sid = claim.cid, claim.sid
     with store.locks.campaign_lock(cid):
-        _fence(cid, sid, run, token)
-        if run.cancel_requested or watcher.roll.complete or watcher.roll.truncated:
+        claim.fence()
+        if claim.run.cancel_requested or watcher.roll.complete or watcher.roll.truncated:
             return False
         text, issue, rewrite = _normalise(cid, sid, record, watcher.narration, connection)
         if issue:
@@ -2833,13 +2807,14 @@ def _served_mode(messages, meter, primary: wire.Target) -> str:
     return messages.mode_for(attempted) or _extend_mode(attempted)
 
 
-def _accept_extend(cid, sid, rid, run, token, watcher, plan: ExtendPlan, mode: str,
+def _accept_extend(claim, rid, watcher, plan: ExtendPlan, mode: str, *,
                    tracked=None, made_by=None, connection="") -> tuple[str, str] | None:
     """Join the continuation onto the reply as a new active variant, or say why
     not -- in which case nothing is written and the active variant stays."""
+    cid, sid = claim.cid, claim.sid
     with store.locks.campaign_lock(cid):
-        _fence(cid, sid, run, token)
-        if run.cancel_requested:
+        claim.fence()
+        if claim.run.cancel_requested:
             return "replacement_incomplete", _EXTEND_RETAINED
         if watcher.roll.complete or watcher.roll.truncated:
             return "extend_roll_refused", _EXTEND_ROLL

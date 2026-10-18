@@ -313,17 +313,14 @@ def test_single_npc_skips_selector_and_stop_blocks_successor(client, monkeypatch
     run = SimpleNamespace(
         id="test", scene_identity=store.scenes.scene_identity(cid, sid), cancel_requested=False
     )
-    token = streaming._claim_turn(cid, sid)
+    claim = character_turns._Claim.take(cid, sid, run)
     fake = FakeLLM([['First.\n```handoff\n{"next":"characters:winifred"}\n```']])
 
     async def collect():
         async for frame in character_turns._frames(
-            cid,
-            sid,
+            claim,
             fake,
             wire_kit.resolution(wire_kit.target(model="test")),
-            run,
-            token,
             round_record,
             streaming.StreamOutcome(),
         ):
@@ -510,12 +507,12 @@ def test_stop_on_final_delta_preserves_pending_response_for_retry(client):
         post=None, run_id="test", actor_ref="characters:mara")
     run = SimpleNamespace(id="test", scene_identity=store.scenes.scene_identity(cid, sid),
                           cancel_requested=False)
-    token = streaming._claim_turn(cid, sid)
+    claim = character_turns._Claim.take(cid, sid, run)
     fake = FakeLLM([['First.\n```handoff\n{"next":"characters:winifred"}\n```']])
 
     async def collect():
         async for frame in character_turns._frames(
-            cid, sid, fake, wire_kit.resolution(wire_kit.target(model="test")), run, token,
+            claim, fake, wire_kit.resolution(wire_kit.target(model="test")),
             round_record, streaming.StreamOutcome()):
             if "delta" in json.loads(frame.removeprefix("data: ")):
                 run.cancel_requested = True

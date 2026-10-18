@@ -443,12 +443,13 @@ def test_a_native_note_over_the_cap_still_fails():
 
 
 def _route_source():
-
-
     # With `_voice_item`, the helper the route hands to a worker thread so the
-    # item renders off the loop: what it calls, the route calls.
+    # item renders off the loop, and the roster and label checks that pick who
+    # it judges: what those helpers call, the route calls. The label check must
+    # keep using the serializer's own rules when it moves out of the roster.
     return ast.parse("\n".join(textwrap.dedent(inspect.getsource(fn))
-                               for fn in (scenes._stage_voice_drift, scenes._voice_item)))
+                               for fn in (scenes._stage_voice_drift, scenes._voice_item,
+                                          scenes._judgeable_npcs, scenes._transcript_label)))
 
 
 def _route_reasons() -> set[str]:
@@ -518,7 +519,8 @@ def test_the_route_gathers_each_npc_through_the_store_helpers():
     calls = _route_calls()
     assert {"store.voice_drift.locked_name", "store.voice_drift.read_record",
             "store.voice_drift.judge_item", "store.voice_drift.explain",
-            "store.voice_drift.finding_of", "operations.decide"} <= calls
+            "store.voice_drift.finding_of", "store.scenes.label_preserved",
+            "store.scenes.confusable", "operations.decide"} <= calls
     assert not {"store.voice_drift.build_item", "store.voice_drift.live_correction",
                 "store.voice_drift.fingerprint_matches", "store.voice_anchors.effective",
                 "store.characters.read_card", "client.complete"} & calls

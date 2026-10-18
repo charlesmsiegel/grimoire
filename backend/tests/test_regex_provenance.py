@@ -125,11 +125,11 @@ def test_a_rescued_partial_keeps_the_serving_connection(client, monkeypatch):
     backup, _ = with_fallback(client, monkeypatch)
     real_save, filed = character_turns._save, []
 
-    def failing_once(*args, **kwargs):
-        filed.append(args[-1] if len(args) > 10 else kwargs.get("connection"))
+    def failing_once(claim, turn, status):
+        filed.append(turn.served)
         if len(filed) == 1:
             raise RuntimeError("the terminal write failed")
-        return real_save(*args, **kwargs)
+        return real_save(claim, turn, status)
 
     monkeypatch.setattr(character_turns, "_save", failing_once)
     with contextlib.suppress(Exception):   # the rescue re-raises what broke the turn

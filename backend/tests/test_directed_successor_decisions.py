@@ -8,7 +8,7 @@ import asyncio
 from types import SimpleNamespace
 
 from grimoire import decisions, routes, store
-from grimoire.routes import character_turns, streaming
+from grimoire.routes import character_turns
 from tests.llm_fakes import FakeLLM
 
 MARA = "characters:mara"
@@ -153,10 +153,10 @@ def test_completed_reply_recovery_keeps_pending_until_successor_is_decided(clien
     run = SimpleNamespace(
         id="recover", scene_identity=store.scenes.scene_identity(cid, sid),
         cancel_requested=False)
-    token = streaming._claim_turn(cid, sid)
+    claim = character_turns._Claim.take(cid, sid, run)
 
     pending = store.responses._scope(cid, sid, store.responses._read(cid))["rounds"][round_["id"]]
-    recovered, after = character_turns._recover_completed(cid, sid, run, token, pending)
+    recovered, after = character_turns._recover_completed(claim, pending)
     assert after["needs_decision"] is True
     assert after["response_id"] == saved["id"]
     assert after["used"] == [MARA]

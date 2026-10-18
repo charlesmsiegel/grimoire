@@ -52,7 +52,7 @@
   },
   "backend/src/grimoire/routes/scenes.py": {
     "A002": 3,
-    "C901": 4,
+    "C901": 2,
     "N818": 2,
     "RUF003": 2
   },
