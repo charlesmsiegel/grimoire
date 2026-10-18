@@ -101,22 +101,40 @@ export const SEARCH_CHORD = "mod+shift+f";
 const wrapPath = (cid: string, sid: string) =>
   `/campaigns/${cid}/scenes/${sid}/wrap-up`;
 
-/** Whether this pathname is a wrap-up in the open campaign.
+/** The scene a pathname is the wrap-up of, in the open campaign, or null.
  *
  *  A suffix test rather than a prefix one, because the scene id sits in the
- *  middle: `/campaigns/c/scenes/<any sid>/wrap-up`. Shared by two rows that
- *  must never both be lit -- `scenes` uses it to step aside and `wrap` to step
- *  forward, so there is one sentence deciding rather than two that can drift. */
-function isWrapUp(p: string, ctx: RailCtx): boolean {
-  if (!ctx.cid) return false;
+ *  middle: `/campaigns/c/scenes/<any sid>/wrap-up`. */
+function wrapUpSid(p: string, ctx: RailCtx): string | null {
+  if (!ctx.cid) return null;
   const head = `/campaigns/${ctx.cid}/scenes/`;
   // The trailing slash is stripped first so `/wrap-up/` answers the same as
   // `/wrap-up`; the router treats them as one route and the rail must too.
   const path = p.endsWith("/") && p.length > 1 ? p.slice(0, -1) : p;
-  return path.startsWith(head) && path.endsWith("/wrap-up")
-    // ...and the scene id is a real segment, so `/scenes/wrap-up` -- a scene
-    // somebody managed to name that -- is a scene rather than a review.
-    && path.slice(head.length, -"/wrap-up".length).length > 0;
+  if (!path.startsWith(head) || !path.endsWith("/wrap-up")) return null;
+  // ...and the scene id is a real segment, so `/scenes/wrap-up` -- a scene
+  // somebody managed to name that -- is a scene rather than a review.
+  const sid = path.slice(head.length, -"/wrap-up".length);
+  if (!sid) return null;
+  try { return decodeURIComponent(sid); } catch { return sid; }
+}
+
+/** Whether this pathname is a wrap-up that is holding a review.
+ *
+ *  Shared by two rows that must never both be lit -- `scenes` uses it to step
+ *  aside and `wrap` to step forward, so there is one sentence deciding rather
+ *  than two that can drift.
+ *
+ *  A scene's `/wrap-up` with nothing waiting is that scene's page saying so,
+ *  not the review queue: lighting Wrap-up there drew the badge of whichever
+ *  OTHER scene was waiting beside a page saying "Nothing to wrap up", so
+ *  Scenes keeps it. Until the shell has said what is pending, the address is
+ *  the only evidence and it is believed. */
+function isWrapUp(p: string, ctx: RailCtx, s?: ShellPayload | null): boolean {
+  const sid = wrapUpSid(p, ctx);
+  if (sid === null) return false;
+  const pending = s?.campaign?.pending;
+  return !pending || pending.some((x) => x.sid === sid);
 }
 
 export const APP_ROWS: RailRow[] = [
@@ -209,8 +227,8 @@ export const CAMPAIGN_ROWS: RailRow[] = [
     // Without the exclusion both light at once, which the rail's own test
     // forbids and which would leave a reader unable to tell from the chrome
     // whether they are reading a scene or judging one.
-    match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/scenes`)
-                       && !isWrapUp(p, ctx),
+    match: (p, ctx, s) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/scenes`)
+                          && !isWrapUp(p, ctx, s),
     tail: (s) => (s?.campaign ? String(s.campaign.scenes) : undefined),
     tailLabel: (s) => (s?.campaign ? `${s.campaign.scenes} scenes` : undefined),
   },
@@ -228,10 +246,10 @@ export const CAMPAIGN_ROWS: RailRow[] = [
       const first = s?.campaign?.pending?.[0];
       return ctx.cid && first ? wrapPath(ctx.cid, first.sid) : null;
     },
-    // Lit on any scene's wrap-up, not only the one the row points at: with two
-    // scenes waiting the row offers the first, and a reader who reached the
-    // second from the hub is still on Wrap-up.
-    match: (p, ctx) => isWrapUp(p, ctx),
+    // Lit on any waiting scene's wrap-up, not only the one the row points at:
+    // with two scenes waiting the row offers the first, and a reader who
+    // reached the second from the hub is still on Wrap-up.
+    match: (p, ctx, s) => isWrapUp(p, ctx, s),
     // The one badge that is an alert rather than a count: proposals nobody has
     // decided are holding the world back, and the hub says so in words.
     tail: (s) => num(s?.campaign?.unreviewed),

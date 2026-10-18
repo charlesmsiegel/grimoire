@@ -237,7 +237,8 @@ def test_actor_name_taken_in_a_campaign_is_refused(home):
     problems = create_world.validate_plan(
         {"world": "Saltmarch", "characters": [{"name": "Old Bram"}]},
         worlds.world_root(wid), wid)
-    assert any("already used" in p for p in problems), problems
+    assert any("already a character called" in p and "a campaign of this world" in p
+               for p in problems), problems
 
 
 def test_module_binds_on_a_fresh_world(home):

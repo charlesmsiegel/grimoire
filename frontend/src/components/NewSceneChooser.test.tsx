@@ -101,6 +101,32 @@ test("picking a mode asks the ranked question, which is what fills the picker", 
   expect(screen.queryByRole("button", { name: /suggest ideas/i })).toBeNull();
 });
 
+test("the picker steps back to the mode cards, as the panes after it do", async () => {
+  // Its only way out was Cancel, which closes the whole chooser: a reader who
+  // picked "With your PC" meaning "Offscreen" had to start again.
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByRole("button", { name: /back/i }));
+  expect(await screen.findByText("Offscreen (NPCs only)")).toBeInTheDocument();
+  expect(screen.queryByText(/blank scene/i)).toBeNull();
+});
+
+test.each([false, true])("Offscreen Back retains its question while generation pending=%s", async (pending) => {
+  const answer = { suggestions: [{ title: "Mara waits", premise: "", cast: [], location: null }],
+    greeting_picks: [], next_date: "2026-01-01" };
+  let settle: (value: typeof answer) => void = () => { throw new Error("generation not started"); };
+  vi.mocked(api.sceneSuggestions).mockReturnValueOnce(new Promise((resolve) => { settle = resolve; }));
+  render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
+  await waitFor(() => expect(api.sceneSuggestions).toHaveBeenCalledTimes(1));
+  if (!pending) await act(async () => { settle(answer); });
+  fireEvent.click(screen.getByRole("button", { name: /back/i }));
+  fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
+  if (pending) await act(async () => { settle(answer); });
+  expect(await screen.findByText("Mara waits")).toBeInTheDocument();
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+});
+
 test("the mode cards themselves spend nothing", async () => {
   // The gate is `ready && playable`: the question is not asked until there is
   // a mode to ask it in, so a reader who came here to import a transcript --

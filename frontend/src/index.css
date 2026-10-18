@@ -398,6 +398,9 @@ input[type="file"]:not(:disabled)::file-selector-button:hover { color: var(--acc
 .column-count, .column-row-count {
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; color: var(--muted);
 }
+/* A section's tail that is a way to its records, not a count. */
+a.column-count { color: var(--accent); text-decoration: none; }
+a.column-count:hover { color: var(--ink); }
 /* The sheets room's per-member badge (#201). Muted is "fine"; `missing` lifts
    to full ink because "no sheet yet" is the thing the page exists to show, and
    `alert` is kept for a sheet that is actually broken or over its creation
@@ -468,12 +471,10 @@ input[type="file"]:not(:disabled)::file-selector-button:hover { color: var(--acc
 /* ---- campaigns shelf (3a) ---- */
 /* The shelf's order control. Button reset only -- the type is `.data-label`'s,
    because this reads as the page's own annotation rather than as a form
-   control sitting in the header. */
-.sort-toggle {
-  background: none; border: none; padding: 0; cursor: pointer;
-  font-family: inherit; font-size: inherit; letter-spacing: inherit;
-  text-transform: inherit; color: inherit;
-}
+   control sitting in the header. Only the box: it used to set the type to
+   `inherit` too, and coming after `.data-label` at the same specificity that
+   won, so the label rendered in the body's 16px serif ink instead. */
+.sort-toggle { background: none; border: none; padding: 0; cursor: pointer; }
 .sort-toggle:hover { color: var(--accent); }
 .shelf { display: flex; flex-direction: column; gap: 14px; }
 .campaign-card {
@@ -527,7 +528,13 @@ input[type="file"]:not(:disabled)::file-selector-button:hover { color: var(--acc
 }
 .campaign-last {
   font-family: var(--fb); font-weight: 300; font-size: 12px; color: var(--muted);
+  text-align: right;
 }
+.campaign-last-label {
+  font-family: var(--fm); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+}
+.campaign-rename { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.campaign-rename .row-rename { flex: 1 1 220px; min-width: 0; }
 
 /* ---- ⌘K ---- */
 .palette-scrim {
@@ -861,8 +868,9 @@ a.brief-row:hover, a.brief-row:focus-visible { background: var(--track); }
   margin: 0; border-left: 2px solid var(--line); padding-left: 10px;
   font-family: var(--fb); font-weight: 300; font-size: 13px; line-height: 1.55; color: var(--subtle);
 }
-/* The panel's claim is that these are files you can go and read, so it says
-   which file each block came from rather than presenting them as one voice. */
+/* The panel's claim is that these are records, so it says which record each
+   block came from rather than presenting them as one voice -- by name, not by
+   the store's file name, which a reader has nowhere to open. */
 .dossier-source {
   display: block; margin-top: 6px; padding-left: 12px;
   font-family: var(--fm); font-size: 9px; letter-spacing: 0.1em; color: var(--muted);
@@ -1442,6 +1450,9 @@ pre.regex-code { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10p
 }
 .field textarea { resize: vertical; min-height: 80px; }
 .field-hint { margin-top: 4px; font-size: 12px; color: var(--muted); }
+/* A hint that is a refusal or a failed read rather than advice: what the field
+   holds will not be accepted, or what the card shows could not be read. */
+.field-hint.error { color: var(--alert); }
 /* Not scoped to .config: the same inline-link button appears in the shared
    storage-location block, on the Connections page and in the setup wizard, and
    outside .config it was rendering as a default chrome button. */
@@ -1456,6 +1467,12 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
   border: 1px solid var(--rule); padding: 4px 10px; cursor: pointer;
 }
 .chip.on { background: var(--accent); color: var(--on-accent); border-color: var(--rule); }
+/* A chip that reports a state rather than toggling one -- a scene in play,
+   absorbed, closed. Outlined whatever the state: a filled accent chip is the
+   app's pressed toggle, and "OPEN" in one read as the row's primary action. */
+.chip.status { cursor: default; }
+.chip.status.live { color: var(--accent); border-color: var(--accent); }
+.chip.status.alert { color: var(--alert); border-color: var(--alert); }
 .chip.solid { background: var(--chrome); color: var(--chrome-text); border-color: var(--chrome); }
 /* A chip that cannot be pressed right now has to look it: the wizard's
    greeting chips carry their reason only in a tooltip, and read as live. */
@@ -1787,6 +1804,11 @@ a.check-row { display: flex; align-items: center; text-decoration: none; }
 .cast-row .role { color: var(--muted); }
 .opener-preview { background: var(--surface); border: 1px solid var(--muted);
   padding: 10px; min-height: 60px; white-space: pre-wrap; }
+/* A preview rendered as markdown rather than streamed as text: the paragraphs
+   carry the breaks, so the whitespace between them must not add more. */
+.opener-preview.rendered { white-space: normal; }
+.opener-preview.rendered p { margin: 0 0 8px; }
+.opener-preview.rendered p:last-child { margin-bottom: 0; }
 
 /* "Who should appear" (#96). The row wraps and the buttons shrink because this
    strip also renders in the inspector's narrow sidebar, where a name, a
@@ -2074,6 +2096,8 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 .wizard .field { margin: 14px 0; }
 .wizard .field .role { margin-bottom: 6px; }
 .wizard .chips { margin-bottom: 8px; }
+.wizard-blocked { margin: 6px 0 0; padding-left: 18px; }
+.wizard-blocked span { color: var(--ink); }
 /* The draft's opening preview shows labels; only step 4 starts a scene (#68). */
 .greeting-preview .chip { cursor: default; }
 
@@ -2592,6 +2616,16 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 .chooser textarea { width: 100%; background: transparent; border: 1px solid var(--muted); color: inherit; padding: 8px; font: inherit; }
 .chooser select { width: 100%; }
 .chooser label.role { display: block; }
+/* A date as one control: year, then month and day, which wrap as a pair. It
+   had no rule of its own, so inside a `.picker` row the chooser's full-width
+   selects stacked its three parts down the pane, a 400px day select alone on
+   the last line. After `.chooser select` so the parts take their own widths. */
+.date-picker { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 18em; min-width: 0; }
+.date-picker > input { flex: 0 0 6.5em; width: 6.5em; min-width: 0; }
+.date-picker-md { display: flex; gap: 6px; flex: 1 1 11em; min-width: 0; }
+.date-picker-md select { width: auto; min-width: 0; }
+.date-picker-md select:first-child { flex: 1 1 auto; }
+.date-picker-md select:last-child { flex: 0 0 4.5em; }
 /* Scoped like every rule around it: the chooser is the only radio group in the
    app, so these stay local until a second one earns promoting them. */
 .chooser .radio-group { display: flex; flex-direction: column; gap: 4px; }
@@ -3022,6 +3056,13 @@ button.pip { cursor: pointer; }
    check against anything — so it is the one the panel argues with. */
 .absorb-edit.uncited { border-color: var(--alert); }
 .absorb-edit.rejected { opacity: 0.55; }
+/* Ticked: the save will write it. `.approved` had no rule at all, so a row
+   that arrived pre-approved looked exactly as undecided as one that had not.
+   A rule down the left rather than a border colour, and inset, so it sits
+   inside an uncited card's alert border instead of replacing it -- a row can
+   be both, and the reviewer needs to read both. */
+.absorb-edit.approved { box-shadow: inset 3px 0 0 var(--accent); }
+.chip.absorb-preapproved { cursor: default; color: var(--accent); border-color: var(--accent); }
 .absorb-edit-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .absorb-edit-label {
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em; line-height: 1.45;
@@ -3034,6 +3075,9 @@ button.pip { cursor: pointer; }
 .absorb-stamp.alert { color: var(--alert); }
 .absorb-verdict { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .absorb-verdict button { min-height: 34px; }
+/* Approve and Reject are toggles; pressed is where the row stands. */
+.absorb-verdict .absorb-approve[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.absorb-verdict .absorb-reject[aria-pressed="true"] { color: var(--alert); border-color: var(--alert); }
 .absorb-find { margin-left: auto; }
 /* An approved row collapses to one dimmed line. Not hidden: a decision you
    cannot see is a decision you cannot revisit, and Undo needs somewhere to sit. */
@@ -3868,6 +3912,15 @@ a.column-back { text-decoration: none; }
   .absorb-edit { padding: 12px; }
   .absorb-verdict { gap: 6px; }
   .absorb-find { margin-left: 0; }
+  /* The footer is sticky, and here its sentence wrapped to three lines under
+     the counts and over the buttons: 180px of a phone held down over the
+     cards it is about. The Save button already names the count the sentence
+     explains, so the sentence goes, and the counts take a line of their own
+     above the two buttons. */
+  .review-explain { display: none; }
+  .review-left { flex-basis: 100%; margin-right: 0; line-height: 1.45; }
+  .review-footer { gap: 8px; padding: 10px 0; }
+  .review-footer .primary { flex: 1; }
 }
 
 /* ---- ledger (4e) ---- */
@@ -4604,7 +4657,12 @@ a.search-hit { text-decoration: none; color: inherit; }
 /* The campaign's front door. Leads with what to do next and only then with
    state — opening a campaign used to resume whichever scene was last, which is
    the complaint this page answers. */
-.hub { max-width: 1120px; }
+/* One measure for the hub's blocks. The "what next" and "waiting" panels ran
+   the full 1120px while the cards under them stopped at 760, so nothing on the
+   page shared a right edge. A settings panel opened here keeps the width: its
+   editors are lists beside forms. */
+.hub { max-width: 1120px; --hub-measure: 760px; }
+.hub-next, .hub-waiting, .hub-quiet { max-width: var(--hub-measure); }
 .hub-eyebrow {
   font-family: var(--fm, monospace); font-size: 9px; letter-spacing: 0.16em;
   text-transform: uppercase; color: var(--accent);
@@ -4657,7 +4715,7 @@ a.search-hit { text-decoration: none; color: inherit; }
 /* One column, at a readable measure. */
 .hub-grid {
   display: grid; gap: 14px; margin-top: 20px;
-  grid-template-columns: minmax(0, 760px);
+  grid-template-columns: minmax(0, var(--hub-measure));
 }
 
 .hub-card {
@@ -4862,6 +4920,15 @@ a.hub-row-title { text-decoration: none; color: inherit; }
      one control that cannot be undone does not belong under a thumb reaching
      for the scene's name. */
   .scene-item-del { grid-column: 4; grid-row: 3; min-height: 44px; }
+}
+
+/* The wrap-up address with nothing to wrap up: its two ways on, on one line
+   and centred on it. The hub's button carries a top margin for the hub's own
+   layout, which is what sat it a line below the link beside it. */
+.wrapup-nothing-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.wrapup-nothing-actions .hub-primary { margin-top: 0; }
+.wrapup-nothing-actions a.subtle {
+  display: inline-flex; align-items: center; min-height: 44px; text-decoration: none;
 }
 
 /* The wrap-up footer: what the button is about to do, before it is pressed. */

@@ -40,9 +40,11 @@ const opened: string[] = [];
 function renderColumn(props: Partial<Parameters<typeof CastColumn>[0]> = {}) {
   opened.length = 0;
   return render(
-    <MemoryRouter><CastColumn cid="saltmarch" sid="s1" hasPosts={false} refreshKey={0} cast={CAST} roster={ROSTER}
-                briefing={BRIEFING} moods={{}} onCastChanged={() => {}}
-                onOpen={(kind, id) => opened.push(`${kind}/${id}`)} {...props} /></MemoryRouter>,
+    <MemoryRouter>
+      <CastColumn cid="saltmarch" sid="s1" hasPosts={false} refreshKey={0} cast={CAST} roster={ROSTER}
+                  briefing={BRIEFING} moods={{}} onCastChanged={() => {}}
+                  onOpen={(kind, id) => opened.push(`${kind}/${id}`)} {...props} />
+    </MemoryRouter>,
   );
 }
 
@@ -141,9 +143,21 @@ test("threads and commitments sit beside the transcript, not behind a toggle", (
   renderColumn();
   expect(screen.getByText("The priory's debt")).toBeInTheDocument();
   expect(screen.getByText("The Reeve will call it in")).toBeInTheDocument();
-  // named as the files they are, so they can be gone and read
-  expect(screen.getByText("plot.json")).toBeInTheDocument();
-  expect(screen.getByText("commitments.json")).toBeInTheDocument();
+  // Each says where it is kept, as a way to get there -- not as the store's
+  // file name ("plot.json"), which a reader has nowhere to open.
+  const ledger = screen.getAllByRole("link", { name: /ledger/i });
+  expect(ledger.map((a) => a.getAttribute("href"))).toEqual([
+    "/campaigns/saltmarch/ledger/threads", "/campaigns/saltmarch/ledger/commitments"]);
+  expect(screen.queryByText(/\.json/)).toBeNull();
+});
+
+test("a thread says who in the room it touches, not the id of a scene", () => {
+  // It printed `last_scene`, a scene's file name, under every thread.
+  renderColumn({ briefing: { ...BRIEFING, plot: [{ ...BRIEFING.plot[0], last_scene: "001--iv",
+                                                   involves: ["Sister Aud"] }] } });
+  const row = screen.getByText("The priory's debt").closest(".brief-row") as HTMLElement;
+  expect(within(row).getByText(/Sister Aud/)).toBeInTheDocument();
+  expect(within(row).queryByText(/001--iv/)).toBeNull();
 });
 
 test("a threat reads in the alert colour; a promise does not", () => {

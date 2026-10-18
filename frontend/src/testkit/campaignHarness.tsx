@@ -7,7 +7,7 @@
 // which is the kind of duplicate that drifts silently. This module imports the
 // mocked `api` and so must never be reached from a `vi.mock` factory --
 // `campaignMocks` is the half that can be, and holds the factories.
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { RunRegistryProvider } from "../runs/RunRegistryProvider";
 import { Link, MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
@@ -359,20 +359,27 @@ function ScenesStub() {
   return <div data-testid="scenes-list" />;
 }
 
-// Reads back the URL the view has navigated itself to, and offers the one
-// navigation the shell makes that this harness has no rail to make: the rail's
-// Wrap-up row, which is a link to the review's own address.
+// Reads back the URL the view has navigated itself to -- and every one it
+// passed through, since the view replaces its own address and a test may need
+// to know a hop happened -- and offers the two navigations the shell makes
+// that this harness has no rail or link to make: the rail's Wrap-up row, which
+// goes to the review's own address, and a link to the scene's.
 export function Here() {
   const { pathname } = useLocation();
-  const wrap = pathname.replace(/\/wrap-up$/, "") + "/wrap-up";
+  const visited = useRef<string[]>([]);
+  if (visited.current[visited.current.length - 1] !== pathname) visited.current.push(pathname);
+  const scene = pathname.replace(/\/wrap-up$/, "");
   return (
     <>
       <span data-testid="here">{pathname}</span>
-      <Link data-testid="go-wrap-up" to={wrap}>wrap up</Link>
+      <span data-testid="visited">{visited.current.join(" ")}</span>
+      <Link data-testid="go-wrap-up" to={scene + "/wrap-up"}>wrap up</Link>
+      <Link data-testid="go-scene" to={scene}>the scene</Link>
     </>
   );
 }
 export const here = () => screen.getByTestId("here").textContent;
+export const visited = () => (screen.getByTestId("visited").textContent ?? "").split(" ");
 
 /** The shell's ⌘K, mounted around the page exactly as `App` mounts it.
  *

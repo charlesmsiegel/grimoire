@@ -1435,6 +1435,44 @@ test("absorbScene polls the run and answers with the stored review", async () =>
   }
 });
 
+test.each([false, true])("a landed absorb refreshes the shell before returning its review (recovered: %s)", async (recovered) => {
+  vi.useFakeTimers();
+  const changed = vi.fn();
+  const off = onShellChanged(changed);
+  try {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonOk({
+      run: { id: "r1", state: recovered ? "running" : "landed", cls: "review",
+             attempt_id: null, next_index: 0 }, generation: "gen1",
+    }));
+    if (recovered) fetchMock.mockResolvedValueOnce({ ok: false, status: 404,
+      json: async () => ({ detail: "no such run", kind: "run_gone" }) });
+    fetchMock.mockResolvedValueOnce(jsonOk({ review: { one_line: "They met." },
+      generation: "gen1", stale: null }));
+    globalThis.fetch = fetchMock;
+    const pending = api.absorbScene("run", "s1");
+    expect(changed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await pending).review.one_line).toBe("They met.");
+    expect(changed).toHaveBeenCalledTimes(1);
+  } finally {
+    off();
+    vi.useRealTimers();
+  }
+});
+
+test("an absorb whose review no longer matches does not announce a landed review", async () => {
+  const changed = vi.fn();
+  const off = onShellChanged(changed);
+  try {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "landed", cls: "review",
+        attempt_id: null, next_index: 0 }, generation: "gen1" }))
+      .mockResolvedValueOnce(jsonOk({ review: null, generation: null, stale: null }));
+    await expect(api.absorbScene("run", "s1")).rejects.toMatchObject({ kind: "review_stale" });
+    expect(changed).not.toHaveBeenCalled();
+  } finally { off(); }
+});
+
 test("a failed run raises the failure the synchronous route used to raise", async () => {
   vi.useFakeTimers();
   try {

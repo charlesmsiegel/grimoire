@@ -132,10 +132,11 @@ export function PageShell(
   );
 }
 
-/** The two pages that legitimately have no column: the first-run wizard and
- *  the campaign wizard, both of which are one centred question at a time and
+/** The pages that legitimately have no column: the first-run wizard and the
+ *  campaign wizard, both of which are one centred question at a time and
  *  would be answering "what am I navigating" with "nothing, finish this
- *  first". Everything else gets a column. */
+ *  first" -- and the notification hop (`OpenScene`), a moment of "opening…"
+ *  on the way to a page that has one. Everything else gets a column. */
 export function PlainShell({ children }: { children: ReactNode }) {
   return (
     <div className="shell">

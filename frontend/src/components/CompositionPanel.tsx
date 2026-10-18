@@ -267,7 +267,9 @@ export function CompositionPanel({ cid, onReview, onPinned, refreshKey = 0 }: {
                         {STATE_LABELS[row.state]}
                       </span>
                       {row.pinned && <span className="chip on">pinned</span>}
-                      {row.lock && <span className="chip on">v{row.lock.version}</span>}
+                      {/* A version is named, not numbered ("default"), so a
+                          "v" in front of it made "vdefault". */}
+                      {row.lock && <span className="chip on">{row.lock.version} version</span>}
                     </button>
                   ))}
                 </div>

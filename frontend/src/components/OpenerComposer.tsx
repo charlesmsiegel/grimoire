@@ -7,7 +7,10 @@ import { NeedsModel } from "./inference/NeedsModel";
 
 const serialize = (parts: OpenerContribution[]) =>
   parts.map((part) => `**${part.speaker}:** ${part.content}`).join("\n\n");
-const generatedCount = (cast: OpenerSpeaker[]) => cast.filter((actor) => actor.role !== "player").length;
+/** How many parts a whole opener has: one per speaker in the run's snapshot,
+ *  the player's seat aside. Only an opener with all of them may be posted --
+ *  here by Use, and by the campaign wizard's Finish. */
+export const generatedCount = (cast: OpenerSpeaker[]) => cast.filter((actor) => actor.role !== "player").length;
 
 /** The "Generate an opener" block: stream a first post for an empty scene,
  *  then adopt it or keep it as a greeting. Split out of `CastPanel`. */

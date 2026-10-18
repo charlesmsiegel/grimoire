@@ -62,7 +62,7 @@ export function CampaignSection(
               <span className="data-label">Dossier</span>
               <p className="local-value">{state.casefile.dossier || state.casefile.tagline}</p>
               <span className="dossier-source">
-                {state.casefile.dossier ? "dossier.md" : "tagline.md"}
+                {state.casefile.dossier ? "dossier" : "tagline — no dossier yet"}
               </span>
             </div>
           )}

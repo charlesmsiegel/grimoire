@@ -1,14 +1,15 @@
 import type { ReactNode } from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { useShellPayload } from "../shell/useShellPayload";
 import { ShellPayloadProvider } from "../shell/ShellPayloadContext";
 
 vi.mock("../api/client", () => ({
   api: { getCampaign: vi.fn(), listScenes: vi.fn(), getShell: vi.fn(),
          deleteScene: vi.fn(),
-         // The deferred read: spend arrives after the list is on screen.
-         getCampaignSceneCosts: vi.fn() },
+         // The deferred reads: spend, place names and month names arrive after
+         // the list is on screen.
+         getCampaignSceneCosts: vi.fn(), listEntities: vi.fn(), getCalendarMonths: vi.fn() },
 }));
 
 // The importer is a three-step walk with its own suite; here it only has to
@@ -126,8 +127,10 @@ beforeEach(() => {
   (api.getCampaign as any).mockResolvedValue({ meta: META, body: "" });
   (api.getShell as any).mockResolvedValue(shell());
   (api.getCampaignSceneCosts as any).mockResolvedValue(costs([]));
+  (api.listEntities as any).mockResolvedValue([{ id: "the-weir", name: "The weir" }]);
+  (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
   (api.listScenes as any).mockResolvedValue([
-    scene({ id: "003--third", title: "The third", date: "Day 41", place: "The weir" }),
+    scene({ id: "003--third", title: "The third", date: "Day 41", place: "the-weir" }),
     scene({ id: "002--second", title: "The second", done: true }),
     scene({ id: "001--first", title: "The first", done: true }),
   ]);
@@ -148,7 +151,7 @@ test("the eyebrow names the campaign, what this list is, and how much is open", 
   // what kind of list this is and how much of it still needs playing.
   renderScenes();
   await screen.findByText("The third");
-  expect(screen.getByText("Run One · every scene, newest first · 1 open"))
+  expect(screen.getByText("Run One · last played first · 1 open"))
     .toBeInTheDocument();
 });
 
@@ -160,7 +163,7 @@ test("the eyebrow drops the open count rather than claiming zero", async () => {
   ]);
   renderScenes();
   await screen.findByText("The first");
-  expect(screen.getByText("Run One · every scene, newest first")).toBeInTheDocument();
+  expect(screen.getByText("Run One · last played first")).toBeInTheDocument();
 });
 
 test("the action names what to do, and it is not the same verb for every state", async () => {
@@ -195,10 +198,53 @@ test("the chip carries the proposal count, not just that some are waiting", asyn
   expect(within(row).getByText("12 unreviewed")).toBeInTheDocument();
 });
 
-test("when and where come off the row without a second read", async () => {
+test("where is the location's name, not its id", async () => {
+  // A scene stores its place as a location id, and the list printed it as
+  // stored: "THE-WEIR". The name comes from the campaign's locations, read
+  // once after the list.
   renderScenes();
   await screen.findByText("The third");
-  expect(screen.getByText(/Day 41 · The weir/)).toBeInTheDocument();
+  expect(await screen.findByText(/Day 41 · The weir/)).toBeInTheDocument();
+  expect(screen.queryByText(/the-weir/)).toBeNull();
+  expect(api.listEntities).toHaveBeenCalledWith({ kind: "campaign", id: "run" }, "locations");
+});
+
+test("a place nobody can name is left out rather than shown as an id", async () => {
+  (api.listEntities as any).mockRejectedValue(new Error("offline"));
+  renderScenes();
+  await screen.findByText("The third");
+  expect(screen.getByText("Day 41")).toBeInTheDocument();
+  expect(screen.queryByText(/the-weir/)).toBeNull();
+});
+
+test("a date reads in its calendar's own month names, one read per year", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "002--b", title: "B", date: "2026-01-02T18:00" }),
+    scene({ id: "001--a", title: "A", date: "2026-02-14" }),
+  ]);
+  (api.getCalendarMonths as any).mockResolvedValue({ months: [
+    { key: "01", name: "January", days: 31 }, { key: "02", name: "February", days: 28 }] });
+  renderScenes();
+  expect(await screen.findByText("January 2, 2026")).toBeInTheDocument();
+  expect(screen.getByText("February 14, 2026")).toBeInTheDocument();
+  expect(api.getCalendarMonths).toHaveBeenCalledTimes(1);
+  expect(api.getCalendarMonths).toHaveBeenCalledWith({ kind: "campaign", id: "run" }, 2026);
+});
+
+test("until the months are known a date reads as written", async () => {
+  (api.listScenes as any).mockResolvedValue([scene({ id: "001--a", title: "A", date: "2026-01-02" })]);
+  (api.getCalendarMonths as any).mockReturnValue(new Promise(() => {}));
+  renderScenes();
+  expect(await screen.findByText("2026-01-02")).toBeInTheDocument();
+});
+
+test("a scene's state is an outlined status, not a filled button", async () => {
+  // A filled "OPEN" outweighed the row's real action at its end.
+  renderScenes();
+  await screen.findByText("The third");
+  const chip = screen.getByText("in play");
+  expect(chip).toHaveClass("chip", "status", "live");
+  expect(chip).not.toHaveClass("on");
 });
 
 test("filtering narrows the list and says how much of it is showing", async () => {
@@ -555,7 +601,7 @@ test("a closed branch is not counted or listed as open", async () => {
   ]);
   renderScenes();
   await screen.findByText("Other");
-  expect(screen.getByText("Run One · every scene, newest first · 1 open")).toBeInTheDocument();
+  expect(screen.getByText("Run One · last played first · 1 open")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^Open/ }));
   await screen.findByText("Other");
   expect(screen.queryByText("Alt")).toBeNull();
@@ -677,4 +723,65 @@ test("the list's Try again reads the list again", async () => {
   expect(await screen.findByText("The third")).toBeInTheDocument();
   expect(api.listScenes).toHaveBeenCalledTimes(2);
   expect(screen.queryByText(/the scenes could not be read/i)).not.toBeInTheDocument();
+});
+
+test("scene rows name locations and calendar months, reading each year once", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue([
+    scene({ id: "003--third", title: "The third", date: "2026-01-02T10:30", place: "saltmarch" }),
+    scene({ id: "002--second", title: "The second", date: "2026-01-03", place: "saltmarch" }),
+  ]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({
+    months: [{ key: "01", name: "January", days: 31 }],
+  });
+  vi.mocked(api.getCalendarMonths).mockClear();
+  renderScenes();
+
+  expect(await screen.findByText("January 2, 2026 · Saltmarch")).toBeInTheDocument();
+  expect(screen.getByText("January 3, 2026 · Saltmarch")).toBeInTheDocument();
+  expect(api.getCalendarMonths).toHaveBeenCalledTimes(1);
+  expect(api.getCalendarMonths).toHaveBeenCalledWith({ kind: "campaign", id: "run" }, 2026);
+});
+
+test("unreadable date and location metadata leaves the scene reachable", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue([
+    scene({ id: "003--third", title: "The third", date: "2026-01-02", place: "saltmarch" }),
+  ]);
+  vi.mocked(api.listEntities).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getCalendarMonths).mockRejectedValue(new Error("offline"));
+  renderScenes();
+
+  expect(await screen.findByText("2026-01-02")).toBeInTheDocument();
+  expect(screen.queryByText("saltmarch")).not.toBeInTheDocument();
+  expect(screen.queryByText(/the scenes could not be read/i)).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Open →" }))
+    .toHaveAttribute("href", "/campaigns/run/scenes/003--third");
+});
+
+test("switching campaigns clears the previous calendar while the new months are pending", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue([
+    scene({ id: "003--third", title: "The third", date: "2026-01-02" }),
+  ]);
+  let finishMonths: (value: Awaited<ReturnType<typeof api.getCalendarMonths>>) => void = () => {
+    throw new Error("the month request was not started");
+  };
+  const nextMonths = new Promise<Awaited<ReturnType<typeof api.getCalendarMonths>>>(
+    (resolve) => { finishMonths = resolve; });
+  vi.mocked(api.getCalendarMonths).mockImplementation((scope) => scope.id === "run"
+    ? Promise.resolve({ months: [{ key: "01", name: "January", days: 31 }] })
+    : nextMonths);
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <Link to="/campaigns/realm/scenes">Switch campaign</Link>
+    <Routes><Route path="/campaigns/:cid/scenes" element={<ScenesView />} /></Routes>
+  </MemoryRouter>);
+  expect(await screen.findByText("January 2, 2026")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("link", { name: "Switch campaign" }));
+  await waitFor(() => expect(api.getCalendarMonths)
+    .toHaveBeenCalledWith({ kind: "campaign", id: "realm" }, 2026));
+  expect(screen.queryByText("January 2, 2026")).not.toBeInTheDocument();
+  expect(screen.getByText("2026-01-02")).toBeInTheDocument();
+
+  finishMonths({ months: [{ key: "01", name: "February", days: 31 }] });
+  expect(await screen.findByText("February 2, 2026")).toBeInTheDocument();
 });

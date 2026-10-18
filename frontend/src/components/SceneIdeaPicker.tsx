@@ -69,7 +69,7 @@ function refName(r: { kind: DriverKind; label: string }): string {
  *  re-slices what is already showing (Decision 22). */
 export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDirectionChange,
                                   asked, suggestions, picks, nextDate, busy, error: genError,
-                                  suggest, onPicked, onCancel, storyPressure, pressureNote,
+                                  suggest, onPicked, onBack, onCancel, storyPressure, pressureNote,
                                   held = false, stale = false, controlled = false,
                                   promptFieldStatuses = {} }: {
   cid: string;
@@ -81,6 +81,9 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   /** `warning` is shown by the confirm pane: this component unmounts the
    *  instant a draft is emitted, so its own banner cannot carry one. */
   onPicked: (draft: SceneDraft, warning?: string) => void;
+  /** Back to the step before this one -- in the chooser, the mode cards.
+   *  Optional: a picker shown on its own has nothing before it. */
+  onBack?: () => void;
   onCancel: () => void;
   storyPressure?: ReactNode;
   pressureNote?: string;
@@ -483,6 +486,10 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
                 onChange={(e) => setTyped(e.target.value)} />
 
       <div className="form-actions">
+        {/* The confirm pane after this one and the import pane beside it both
+            offer Back; this was the one step whose only way out was out of
+            the whole chooser. */}
+        {onBack && <button className="subtle" onClick={onBack}>← Back</button>}
         <button className="subtle" onClick={onCancel}>Cancel</button>
         {/* Saving skips the extraction deliberately: it is an LLM call whose
             result is only used to pre-fill the confirm form, and this path is

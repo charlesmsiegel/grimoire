@@ -1,10 +1,10 @@
 import { memo } from "react";
 import { Link } from "react-router-dom";
 import { api, type Actor, type Briefing, type RosterEntry } from "../../api/client";
+import { ledgerHref } from "../../ledgerPaths";
 import { thumbSet } from "../../api/thumbs";
 import { Portrait } from "../Portrait";
 import CastChanges from "./CastChanges";
-import { ledgerHref } from "../../ledgerPaths";
 
 /** Where an actor stands in the scene in front of you. */
 export type CastState = "PLAYER" | "IN SCENE";
@@ -130,15 +130,20 @@ function CastColumn(
       <div className="column-section">
         <div className="column-section-head">
           <span className="section-label">Threads</span>
-          <span className="column-count">plot.json</span>
+          {/* Where these are kept, as a way to get there. It used to name the
+              store's file, plot.json, which only the store can open. */}
+          <Link className="column-count" to={ledgerHref(cid, { section: "threads" })}>Ledger →</Link>
         </div>
         {threads.length === 0 && <p className="column-empty">Nothing open.</p>}
         {threads.map((t) => (
           <Link className="brief-row" key={t.id} to={ledgerHref(cid, { section: "threads", row: t.id })}>
             <div className="brief-title">{t.title}</div>
+            {/* Who in the room it touches, which is the briefing's question --
+                not the id of the scene that last moved it, which is what this
+                printed. */}
             <div className="brief-meta">
               <span className="brief-status">{t.status.toUpperCase()}</span>
-              {t.last_scene && <span> · {t.last_scene}</span>}
+              {t.involves.length > 0 && <span> · {t.involves.join(", ")}</span>}
             </div>
           </Link>
         ))}
@@ -147,7 +152,9 @@ function CastColumn(
       <div className="column-section">
         <div className="column-section-head">
           <span className="section-label">Owed</span>
-          <span className="column-count">commitments.json</span>
+          <Link className="column-count" to={ledgerHref(cid, { section: "commitments" })}>
+            Ledger →
+          </Link>
         </div>
         {owed.length === 0 && <p className="column-empty">Nothing owed.</p>}
         {owed.map((c) => (

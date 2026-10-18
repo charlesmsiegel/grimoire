@@ -6,7 +6,7 @@ import type { SceneReview } from "./useSceneReview";
 
 export default function ReviewColumn({ review }: { review: SceneReview }) {
   const {
-    editRows, approvedCount, rejectedCount, undecidedCount, uncitedRows, lowRows, groupCounts,
+    editRows, approvedCount, rejectedCount, untouchedCount, uncitedRows, lowRows, groupCounts,
     openSection, openDrawer,
   } = review;
   return (
@@ -16,12 +16,16 @@ export default function ReviewColumn({ review }: { review: SceneReview }) {
         <h3 className="review-count">
           {editRows.length} {editRows.length === 1 ? "edit" : "edits"}
         </h3>
+        {/* The footer's three counts, so the two ends of the page agree. A
+            pre-approved row is untouched here, not approved: nobody answered
+            it, and the drawer it sits in may be saying it needs you. */}
         <div className="review-tally">
-          {approvedCount} approved · {rejectedCount} rejected · {undecidedCount} left
+          {approvedCount} approved · {rejectedCount} rejected · {untouchedCount} untouched
         </div>
         {/* Approved and rejected are both *judged*; the bar fills with the work
             done rather than with the work approved, or rejecting everything
-            would read as making no progress. */}
+            would read as making no progress -- and a row ticked on arrival is
+            no work done, so it does not fill it either. */}
         <div className="review-bar" role="img"
              aria-label={`${approvedCount + rejectedCount} of ${editRows.length} judged`}>
           <span className="review-bar-approved"
@@ -57,7 +61,9 @@ export default function ReviewColumn({ review }: { review: SceneReview }) {
           Not the footer's count: that one is what the save will accept without
           a verdict, and a pre-approved row is already ticked on screen so it is
           not "remaining" to the reader. This is what has not been read. */}
-      <ColumnSection label="By store">
+      {/* Absent when every row is in a NEEDS YOU drawer, rather than a heading
+          over nothing. */}
+      {groupCounts.length > 0 && <ColumnSection label="By store">
         {groupCounts.map((g) => (
           <button key={g.key}
                   className={"column-row" + (openSection === g.key ? " active" : "")
@@ -72,7 +78,20 @@ export default function ReviewColumn({ review }: { review: SceneReview }) {
             </span>
           </button>
         ))}
-      </ColumnSection>
+      </ColumnSection>}
     </>
+  );
+}
+
+/** The column's pinned action while a review is open. Offered only while it
+ *  has something to do: with every cited row answered -- or none cited at all
+ *  -- it would change nothing, and an enabled control that does nothing reads
+ *  as one that is broken. */
+export function ApproveCitedButton({ review }: { review: SceneReview }) {
+  return (
+    <button className="column-primary" onClick={review.approveAllCited}
+            disabled={review.citedOpenCount === 0}>
+      Approve all cited
+    </button>
   );
 }

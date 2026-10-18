@@ -101,3 +101,11 @@ test("an existing value pre-fills the controls", async () => {
     expect(screen.getByLabelText("Scene date month")).toHaveValue("Mirtul"));
   expect(screen.getByLabelText("Scene date day")).toHaveValue("5");
 });
+
+test("the year box says it is the year", () => {
+  // The month and day name themselves with their empty options; an empty
+  // number box beside them said nothing.
+  render(<CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value=""
+                             onChange={() => {}} ariaLabel="Scene date" />);
+  expect(screen.getByLabelText("Scene date year")).toHaveAttribute("placeholder", "Year");
+});

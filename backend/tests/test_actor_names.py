@@ -156,3 +156,67 @@ def test_legacy_colliding_version_cannot_be_selected(client):
         f"/api/campaigns/{cid}/characters/{actor['character']}/pick-version",
         json={"version": vid})
     assert campaign_pick.status_code == 409
+
+
+def test_a_refused_name_is_said_in_words_not_refs(client):
+    # The 409 is shown verbatim, and the campaign wizard printed "characters:mara
+    # in campaign <slug>" at a player who had only typed a name.
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    refused = client.post(f"/api/campaigns/{cid}/pcs", json={"name": "mara", "tags": []})
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert 'There is already a character called "Mara" in this campaign' in detail
+    assert "characters:" not in detail and cid not in detail
+
+
+def test_a_world_write_names_the_campaign_that_holds_the_name(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/pcs", json={"name": "Winifred", "tags": []})
+    refused = client.post(f"/api/worlds/{wid}/characters", json={"name": "winifred"})
+    assert refused.status_code == 409
+    assert "a player character called \"Winifred\" in Saltmarch, a campaign of this world" \
+        in refused.json()["detail"]
+
+
+def test_a_new_campaign_pc_name_is_checked_before_any_campaign_exists(client):
+    # The wizard's question, asked of the world because the campaign it would be
+    # asked of does not exist yet. Answering from the PC route meant creating
+    # the campaign first, and every refused name left one behind.
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.post(f"/api/worlds/{wid}/pcs", json={"name": "Seraphine", "tags": []})
+
+    def ask(name: str):
+        return client.get(f"/api/worlds/{wid}/campaign-pc-name",
+                          params={"name": name}).json()["refusal"]
+
+    assert 'a character called "Mara"' in ask(" MARA ")
+    assert 'a player character called "Seraphine"' in ask("Seraphine")
+    # The persona's folded spelling is the one the PC route checks too (#65).
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara Vance"})
+    assert ask("Mara\nVance") is not None
+    assert ask("Winifred") is None
+    assert ask("   ") is None
+    assert client.get("/api/campaigns").json() == []
+
+
+def test_a_new_campaign_does_not_inherit_a_sibling_campaigns_pc(client):
+    # A campaign PC is visible in its own campaign alone, so a sibling's does
+    # not make the name unavailable to the next campaign -- which is why the
+    # check is the world's own rows and not `require_unique(scope="world")`.
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/pcs", json={"name": "Winifred", "tags": []})
+    answer = client.get(f"/api/worlds/{wid}/campaign-pc-name", params={"name": "Winifred"})
+    assert answer.json() == {"refusal": None}
+    second = client.post("/api/campaigns", json={"name": "Realm", "world": wid}).json()["id"]
+    assert client.post(f"/api/campaigns/{second}/pcs",
+                       json={"name": "Winifred", "tags": []}).status_code == 200
+
+
+def test_the_new_campaign_check_refuses_an_unknown_world(client):
+    assert client.get("/api/worlds/nowhere/campaign-pc-name",
+                      params={"name": "Mara"}).status_code == 404

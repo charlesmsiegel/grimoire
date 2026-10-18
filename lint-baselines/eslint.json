@@ -403,8 +403,6 @@
     "react/no-array-index-key": 1
   },
   "frontend/src/routes/CampaignsView.tsx": {
-    "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 2,
     "jsx-a11y/no-autofocus": 1
   },
   "frontend/src/routes/ConfigView.tsx": {

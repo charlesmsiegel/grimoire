@@ -148,6 +148,18 @@ describe("Wrap-up goes where the proposals are", () => {
     expect(wrap().match("/campaigns/c1/scenes/s11/wrap-up", ctx)).toBe(true);
   });
 
+  test("a scene's wrap-up with nothing waiting is that scene's page, not the queue", () => {
+    // Lighting Wrap-up there drew the OTHER scene's badge beside a page saying
+    // "Nothing to wrap up". With the shell's answer in hand, Scenes keeps it.
+    const scenes = CAMPAIGN_ROWS.find((r) => r.id === "scenes")!;
+    const quiet = "/campaigns/c1/scenes/s12/wrap-up";
+    expect(wrap().match(quiet, ctx, PENDING)).toBe(false);
+    expect(scenes.match(quiet, ctx, PENDING)).toBe(true);
+    // A waiting one is still Wrap-up's, and not Scenes'.
+    expect(wrap().match("/campaigns/c1/scenes/s11/wrap-up", ctx, PENDING)).toBe(true);
+    expect(scenes.match("/campaigns/c1/scenes/s11/wrap-up", ctx, PENDING)).toBe(false);
+  });
+
   test("a trailing slash is the same route", () => {
     expect(wrap().match("/campaigns/c1/scenes/s13/wrap-up/", ctx)).toBe(true);
   });

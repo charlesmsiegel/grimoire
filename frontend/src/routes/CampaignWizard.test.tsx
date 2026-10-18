@@ -29,6 +29,8 @@ vi.mock("../api/client", () => ({
       { id: "high-desert", name: "High Desert", builtin: true, custom: false },
     ] })),
     listModules: vi.fn(),
+    checkCampaignPCName: vi.fn(),
+    firstPost: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -53,6 +55,7 @@ beforeEach(() => {
   (api.availableGreetings as any).mockResolvedValue([]);
   vi.mocked(api.previewGreetings).mockResolvedValue([]);
   (api.startFromGreeting as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.checkCampaignPCName).mockResolvedValue({ refusal: null });
   (api.listModules as any).mockResolvedValue([
     { id: "pool-basic", name: "Basic Pool", description: "", version: "1", source: "builtin", valid: true },
   ]);
@@ -73,7 +76,32 @@ async function fillBackdropAndPC() {
   // step 2: PC
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  // Next asks the server whether the name is free before it leaves the step.
+  await screen.findByRole("heading", { name: /starting locations|create your character/i });
 }
+
+test.each(["Back", "edit"])("a pending name check cannot advance after %s", async (action) => {
+  let settle: (value: { refusal: string | null }) => void = () => { throw new Error("check not started"); };
+  vi.mocked(api.checkCampaignPCName).mockReturnValueOnce(new Promise((resolve) => { settle = resolve; }));
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Saltmarch" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  expect(api.checkCampaignPCName).toHaveBeenCalledWith("w1", "Mara");
+  if (action === "Back") fireEvent.click(screen.getByRole("button", { name: /^back$/i }));
+  else fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Winifred" } });
+  await act(async () => { settle({ refusal: null }); });
+  expect(screen.queryByRole("heading", { name: /starting locations/i })).not.toBeInTheDocument();
+  if (action === "Back") expect(screen.getByLabelText(/campaign name/i)).toBeInTheDocument();
+  else {
+    expect(screen.getByLabelText(/character name/i)).toHaveValue("Winifred");
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await screen.findByRole("heading", { name: /starting locations/i });
+    expect(api.checkCampaignPCName).toHaveBeenLastCalledWith("w1", "Winifred");
+  }
+});
 
 test("Next is gated until campaign name is entered", async () => {
   renderWizard();
@@ -88,7 +116,7 @@ test("Create campaign commits the full sequence in order", async () => {
   await fillBackdropAndPC();
   // step 3: add a location, then create
   fireEvent.change(screen.getByLabelText(/location name/i), { target: { value: "The Tavern" } });
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
 
   await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "US", "gregorian", undefined, "temperate-interior"));
   expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
@@ -112,7 +140,7 @@ test("module picker defaults to inherit and passes the chosen module", async () 
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith(
     "Run One", "w1", "US", "gregorian", "pool-basic", "temperate-interior"));
 });
@@ -133,7 +161,7 @@ test("selecting a holidays region passes it to createCampaign", async () => {
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "GB", "gregorian", undefined, "temperate-interior"));
 });
 
@@ -147,7 +175,7 @@ test("choosing a custom (user-authored) calendar hides the Holidays select and c
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("FR", "w1", undefined, "my-custom-calendar", undefined, "temperate-interior"));
 });
 
@@ -161,14 +189,14 @@ test("choosing Hebrew and Israel passes the observance region to createCampaign"
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("H", "w1", "IL", "hebrew", undefined, "temperate-interior"));
 });
 
 test("Finish on the opener step navigates to the campaign", async () => {
   renderWizard();
   await fillBackdropAndPC();
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await screen.findByRole("heading", { name: /opening/i });
   fireEvent.click(screen.getByRole("button", { name: /finish/i }));
   expect(navigate).toHaveBeenCalledWith("/campaigns/run");
@@ -195,13 +223,18 @@ test("a failed wizard opener retries only unfinished speakers", async () => {
   });
   renderWizard(true);
   await fillBackdropAndPC();
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await screen.findByRole("heading", { name: /opening/i });
   fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "Arrive" } });
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));
   const retry = await screen.findByRole("button", { name: "Retry remaining speakers" });
-  expect(screen.getByText("**Grimoire:** Rain falls.")).toBeInTheDocument();
+  // Rendered: the speaker's label is bold, not wrapped in asterisks.
+  expect(screen.getByText("Grimoire:").tagName).toBe("STRONG");
+  expect(screen.getByText(/Rain falls\./)).toBeInTheDocument();
   expect(screen.queryByText(/unfinished/)).toBeNull();
+  // An unfinished opener cannot begin the scene, and says so.
+  expect(screen.getByText(/Not saved/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^finish/i })).toBeInTheDocument();
   fireEvent.click(retry);
   await waitFor(() => expect(api.opener).toHaveBeenCalledTimes(2));
   expect(api.opener).toHaveBeenLastCalledWith("run", "s1", "Arrive", expect.any(Function),
@@ -224,7 +257,7 @@ test("a world with PCs offers them in step 2; picking one seats it and skips PC 
   fireEvent.click(screen.getByRole("button", { name: /mara/i }));
   expect(screen.queryByLabelText(/character name/i)).toBeNull(); // form collapses
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
 
   await waitFor(() => expect(api.addToCast).toHaveBeenCalledWith("run", "s1", { kind: "pcs", id: "mara" }));
   expect(api.createCampaignPC).not.toHaveBeenCalled();
@@ -266,7 +299,7 @@ test("the chosen climate is passed to createCampaign", async () => {
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith(
     "Run One", "w1", "US", "gregorian", undefined, "high-desert"));
 });
@@ -281,7 +314,7 @@ test("a first-run opener the model could not be reached for offers the recovery"
     });
   renderWizard(true);
   await fillBackdropAndPC();
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await screen.findByRole("heading", { name: /opening/i });
   fireEvent.change(screen.getByLabelText(/opener prompt/i), { target: { value: "A foggy harbor" } });
   fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
@@ -371,7 +404,7 @@ test("a world tag is suggested by label and committed as its id", async () => {
   await screen.findByRole("button", { name: /rebel ✕/ });
 
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await waitFor(() => expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
     tags: ["t1"],
   })));
@@ -388,7 +421,7 @@ test("a tag the world does not declare is committed verbatim", async () => {
   await screen.findByRole("button", { name: /stowaway ✕/ });
 
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
-  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await waitFor(() => expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
     tags: ["stowaway"],
   })));
@@ -504,4 +537,206 @@ test("switching worlds drops the draft's tags, which name the old world's vocabu
   expect(screen.getByRole("button", { name: /stowaway ✕/ })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /sailor ✕/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /rebel ✕/ })).toBeNull();
+});
+
+// ---- a commit is five writes, and a failure part-way must not orphan the first ----
+
+test("a commit that fails after the campaign exists resumes it rather than making another", async () => {
+  // Create used to start every attempt with `createCampaign`, so a failure at
+  // any later step left that campaign behind -- and the retry made the next one
+  // beside it, `-2`, `-3`, one per click.
+  (api.createScene as any).mockRejectedValueOnce(new Error("the scene could not be written"));
+  renderWizard();
+  await fillBackdropAndPC();
+  fireEvent.change(screen.getByLabelText(/location name/i), { target: { value: "The Tavern" } });
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
+  await screen.findByText(/the scene could not be written/);
+
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
+  await screen.findByRole("heading", { name: /opening/i });
+  expect(api.createCampaign).toHaveBeenCalledTimes(1);
+  expect(api.createCampaignPC).toHaveBeenCalledTimes(1);
+  expect(api.createScene).toHaveBeenCalledTimes(2);
+  expect(api.addToCast).toHaveBeenCalledTimes(1);
+  expect(api.addToCast).toHaveBeenCalledWith("run", "s1", { kind: "pcs", id: "mara", version: "default" });
+  expect(api.createEntity).toHaveBeenCalledTimes(1);
+});
+
+test("a location written before the failure is not written twice", async () => {
+  (api.createEntity as any).mockResolvedValueOnce({ id: "tavern" })
+    .mockRejectedValueOnce(new Error("the second location could not be written"));
+  renderWizard();
+  await fillBackdropAndPC();
+  fireEvent.change(screen.getByLabelText(/location name/i), { target: { value: "The Tavern" } });
+  fireEvent.click(screen.getByRole("button", { name: /add another location/i }));
+  fireEvent.change(screen.getAllByLabelText(/location name/i)[1], { target: { value: "The Quay" } });
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
+  await screen.findByText(/second location could not be written/);
+  // The written one says so and can no longer be edited into something the
+  // retry would not write.
+  expect(screen.getAllByLabelText(/location name/i)[0]).toBeDisabled();
+  expect(screen.getAllByLabelText(/location name/i)[1]).toBeEnabled();
+
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
+  await screen.findByRole("heading", { name: /opening/i });
+  expect(api.createCampaign).toHaveBeenCalledTimes(1);
+  expect((api.createEntity as any).mock.calls.map((c: any[]) => c[2].name))
+    .toEqual(["The Tavern", "The Quay", "The Quay"]);
+});
+
+test("a PC name the world already holds is refused on step 2, before anything is written", async () => {
+  vi.mocked(api.checkCampaignPCName).mockResolvedValue({
+    refusal: "There is already a character called \"Mara\" in this world. A transcript "
+      + "could not tell the two apart, so this one needs another name.",
+  });
+  renderWizard();
+  await fillBackdropAndPC();
+  expect(await screen.findByRole("alert")).toHaveTextContent(/already a character called "Mara"/);
+  // Still on step 2, with the field to fix.
+  expect(screen.getByLabelText(/character name/i)).toBeInTheDocument();
+  expect(api.checkCampaignPCName).toHaveBeenCalledWith("w1", "Mara");
+  expect(api.createCampaign).not.toHaveBeenCalled();
+
+  vi.mocked(api.checkCampaignPCName).mockResolvedValue({ refusal: null });
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Winifred" } });
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  await screen.findByRole("button", { name: /create campaign/i });
+});
+
+test("a check that cannot be answered does not hold the wizard on step 2", async () => {
+  // The check is advice: the PC route's own refusal still binds, and a commit
+  // it refuses resumes rather than orphaning.
+  vi.mocked(api.checkCampaignPCName).mockRejectedValue(new Error("offline"));
+  renderWizard();
+  await fillBackdropAndPC();
+  await screen.findByRole("button", { name: /create campaign/i });
+});
+
+test("a picked world PC is not name-checked: it is not a new name", async () => {
+  vi.mocked(api.listPCs).mockResolvedValue([
+    { id: "mara", name: "Mara", tags: [], default_version: "default", versions: [] },
+  ]);
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /mara/i }));
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  await screen.findByRole("button", { name: /create campaign/i });
+  expect(api.checkCampaignPCName).not.toHaveBeenCalled();
+});
+
+test("a PC refused at commit is renamed on step 2 and the retry reuses the campaign", async () => {
+  // The race the step-2 check cannot close: the name was free when asked and
+  // taken by the time the PC was written. The campaign exists by then, so the
+  // backdrop it was made from is no longer offered for editing -- Back from
+  // step 2 is gone -- while the character is, because nothing was written for
+  // it.
+  (api.createCampaignPC as any)
+    .mockRejectedValueOnce({ status: 409, detail: "There is already a character called \"Mara\" in this campaign." })
+    .mockResolvedValueOnce({ pc: "winifred", version: "default" });
+  renderWizard();
+  await fillBackdropAndPC();
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
+  await screen.findByText(/already a character called "Mara" in this campaign/);
+
+  fireEvent.click(screen.getByRole("button", { name: /back/i }));
+  expect(screen.queryByRole("button", { name: /back/i })).toBeNull();
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Winifred" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
+  await screen.findByRole("heading", { name: /opening/i });
+  expect(api.createCampaign).toHaveBeenCalledTimes(1);
+  expect(api.createCampaignPC).toHaveBeenLastCalledWith("run", expect.objectContaining({ name: "Winifred" }));
+  expect(api.addToCast).toHaveBeenCalledWith("run", "s1", { kind: "pcs", id: "winifred", version: "default" });
+});
+
+test("once the character is written, step 3 offers no way back to edit it", async () => {
+  (api.createScene as any).mockRejectedValueOnce(new Error("the scene could not be written"));
+  renderWizard();
+  await fillBackdropAndPC();
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
+  await screen.findByText(/the scene could not be written/);
+  expect(screen.queryByRole("button", { name: /back/i })).toBeNull();
+});
+
+// ---- the way out, and the way into the scene ----
+
+test("step 1 offers a way out, since a wizard has no rail beside it", async () => {
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+  expect(navigate).toHaveBeenCalledWith("/");
+  expect(api.createCampaign).not.toHaveBeenCalled();
+});
+
+async function toOpenerStep() {
+  renderWizard(true);
+  await fillBackdropAndPC();
+  fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
+  await screen.findByRole("heading", { name: /opening/i });
+}
+
+test("a greeting that cannot open the campaign is named with its reason, not hidden in a tooltip", async () => {
+  (api.availableGreetings as any).mockResolvedValue([
+    { id: "quay", name: "On the quay", available: true, reasons: [], pcless: false, location: "" },
+    { id: "keep", name: "At the keep", available: false, reasons: ["needs the scholar tag"],
+      pcless: false, location: "" },
+  ]);
+  await toOpenerStep();
+  expect(await screen.findByRole("button", { name: "On the quay" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "At the keep" })).toBeNull();
+  expect(screen.getByText(/needs the scholar tag/)).toBeInTheDocument();
+});
+
+const CAST = [
+  { actor_ref: "pcs:mara", speaker: "Mara", version: "default", role: "player" as const },
+  { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
+];
+const PART = { ...CAST[1], content: "Rain falls on the quay." };
+
+function aWholeOpener() {
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string,
+                                                on: (e: unknown) => void) => {
+    on({ snapshot: CAST });
+    on({ speaker_done: PART });
+    on({ done: true });
+  });
+}
+
+test("Finish with a whole opener posts it as the scene's first post and opens the scene", async () => {
+  // It used to be thrown away: the reader paid for the preview and landed on
+  // an empty scene.
+  aWholeOpener();
+  (api.firstPost as any).mockResolvedValue({ ok: true });
+  await toOpenerStep();
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "Arrive" } });
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  fireEvent.click(await screen.findByRole("button", { name: /begin with this opener/i }));
+  await waitFor(() => expect(api.firstPost).toHaveBeenCalledWith(
+    "run", "s1", "**Grimoire:** Rain falls on the quay.", [PART], CAST));
+  await waitFor(() => expect(navigate).toHaveBeenCalledWith("/campaigns/run/scenes/s1"));
+});
+
+test("a whole opener can still be left behind, deliberately", async () => {
+  aWholeOpener();
+  await toOpenerStep();
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "Arrive" } });
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  fireEvent.click(await screen.findByRole("button", { name: /finish without it/i }));
+  expect(navigate).toHaveBeenCalledWith("/campaigns/run");
+  expect(api.firstPost).not.toHaveBeenCalled();
+});
+
+test("an opener the scene refuses stays on screen with the reason", async () => {
+  aWholeOpener();
+  (api.firstPost as any).mockRejectedValue({ status: 409, detail: "the scene already has posts" });
+  await toOpenerStep();
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "Arrive" } });
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  fireEvent.click(await screen.findByRole("button", { name: /begin with this opener/i }));
+  expect(await screen.findByText(/the scene already has posts/)).toBeInTheDocument();
+  expect(navigate).not.toHaveBeenCalled();
+  expect(screen.getByText(/Rain falls on the quay/)).toBeInTheDocument();
 });

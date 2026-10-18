@@ -6,7 +6,7 @@
 // recomputed from either list's own ordering.
 import {
   AUTHORITY_LABELS, CONTRADICTION_SOURCES, identityChip, identityHint, identityProposal,
-  isCandidateAlternative, isUncited, targetTaken, type EditRow,
+  isCandidateAlternative, isUncited, shownLine, targetTaken, type EditRow,
 } from "./editRows";
 import type { SceneReview } from "./useSceneReview";
 
@@ -36,8 +36,10 @@ export default function AbsorbEditRow({ e, i, review }: {
   // cannot see is a decision you cannot revisit, and UNDO has to have
   // something to sit on. A row with an unanswered conflict never collapses:
   // it is approved AND blocking, and folding it away would hide the only
-  // thing standing between the reviewer and a refused save.
-  if (e.approved && e.judged && !conflict) {
+  // thing standing between the reviewer and a refused save. A Merge is a
+  // verdict too, but its combined draft stays editable for the reviewer to
+  // trim before saving -- counting that answer must not hide its text.
+  if (e.approved && e.judged && !conflict && e.resolve !== "merge") {
     return (
       <div className="absorb-edit done">
         <span className="absorb-done-mark" aria-hidden>✓</span>
@@ -49,6 +51,11 @@ export default function AbsorbEditRow({ e, i, review }: {
       </div>
     );
   }
+  // Approved by band on arrival and not answered since: the save accepts it,
+  // and nobody has said so. Named on the card, because without it a row in
+  // NEEDS YOU looked exactly as undecided as a low-confidence one beside it
+  // while the footer counted it accepted.
+  const preApproved = e.approved && !e.judged;
   return (
     // `.approved` is the card's standing verdict made visible: a row that
     // arrived pre-approved by band looks different from one still waiting on
@@ -79,6 +86,9 @@ export default function AbsorbEditRow({ e, i, review }: {
                        ` · score ${e.review.score}`}>
             {e.review.band} · {AUTHORITY_LABELS[e.review.authority] ?? e.review.authority}
           </span>)}
+        {preApproved && (
+          <span className="chip absorb-preapproved"
+                title="Accepted when you save, unless you reject it">pre-approved</span>)}
         {conflict && <span className="chip on absorb-conflict-badge">Changed</span>}
         {/* A row a LATER scene already answered differently (#78). Advisory,
             and worded as attribution rather than as a verdict: the badge
@@ -142,7 +152,7 @@ export default function AbsorbEditRow({ e, i, review }: {
       {conflict && (
         <div className="absorb-conflict">
           <p className="field-hint">{conflict.reason} — it now reads:</p>
-          <div className="absorb-stored">{conflict.stored}</div>
+          <div className="absorb-stored">{shownLine(conflict.stored)}</div>
           <div className="form-actions">
             {/* Keeping what is stored means this proposal must NOT be written,
                 and rejecting is the only thing that excludes one now. Merely
@@ -202,7 +212,7 @@ export default function AbsorbEditRow({ e, i, review }: {
       )}
       {e.kind === "sheet" ? (
         <>
-          {e.before && <div className="absorb-before">{e.before}</div>}
+          {e.before && <div className="absorb-before">{shownLine(e.before)}</div>}
           <div className="absorb-after">{e.after}</div>
           {typeof e.payload?.note === "string" && e.payload.note && (
             <p className="field-hint">{e.payload.note}</p>
@@ -210,12 +220,12 @@ export default function AbsorbEditRow({ e, i, review }: {
         </>
       ) : e.kind === "relationship" || e.kind === "bond" || e.kind === "membership" ? (
         <div className="absorb-diff">
-          {e.before && <span className="absorb-before">{e.before}</span>}
+          {e.before && <span className="absorb-before">{shownLine(e.before)}</span>}
           <span className="absorb-after">{e.after}</span>
         </div>
       ) : (
         <>
-          {e.before && <div className="absorb-before">{e.before}</div>}
+          {e.before && <div className="absorb-before">{shownLine(e.before)}</div>}
           <textarea aria-label={`After ${e.label}`} rows={2} value={e.after}
                     onChange={(ev) => editRow(i, { after: ev.target.value })} />
         </>
@@ -262,8 +272,14 @@ export default function AbsorbEditRow({ e, i, review }: {
         </label>
       )}
       <div className="absorb-verdict">
-        <button className="btn-accent" aria-label={`Approve ${e.label}`}
-                onClick={() => decide(i, "approved")}>Approve</button>
+        {/* A toggle that shows where the row stands, like Reject beside it: a
+            pre-approved row's Approve is already pressed. Pressing it again
+            is the reviewer's own yes, which folds the row. */}
+        <button className={(e.approved ? "subtle" : "btn-accent") + " absorb-approve"}
+                aria-label={`Approve ${e.label}`} aria-pressed={!!e.approved}
+                onClick={() => decide(i, "approved")}>
+          {e.approved ? "Approved" : "Approve"}
+        </button>
         {/* "Edit" is where the caret already is: every one of these rows
             renders its `after` as a textarea, so the button focuses it rather
             than opening a second editing mode nobody asked for. */}
@@ -272,7 +288,7 @@ export default function AbsorbEditRow({ e, i, review }: {
                   const card = (ev.currentTarget.closest(".absorb-edit") as HTMLElement | null);
                   card?.querySelector("textarea")?.focus();
                 }}>Edit</button>
-        <button className="subtle" aria-label={`Reject ${e.label}`}
+        <button className="subtle absorb-reject" aria-label={`Reject ${e.label}`}
                 aria-pressed={!!e.rejected}
                 onClick={() => decide(i, e.rejected ? "undecided" : "rejected")}>
           {e.rejected ? "Rejected" : "Reject"}

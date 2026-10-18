@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { render, screen, within, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { useShellPayload } from "../shell/useShellPayload";
 import { ShellPayloadProvider } from "../shell/ShellPayloadContext";
 
@@ -232,10 +232,11 @@ test("each waiting scene is named on its own wrap-up link", async () => {
   renderHub();
   await screen.findByText("Run One");
   const waiting = screen.getByText("Waiting on you").closest("section")!;
+  // To each review's own address, as the rail's Wrap-up row goes.
   expect(within(waiting).getByRole("link", { name: /wrap up the second/i }))
-    .toHaveAttribute("href", "/campaigns/run/scenes/s2");
+    .toHaveAttribute("href", "/campaigns/run/scenes/s2/wrap-up");
   expect(within(waiting).getByRole("link", { name: /wrap up the third/i }))
-    .toHaveAttribute("href", "/campaigns/run/scenes/s3");
+    .toHaveAttribute("href", "/campaigns/run/scenes/s3/wrap-up");
   // The prose counts the scenes too, rather than saying "a scene" over two.
   expect(within(waiting).getByText(/2 scenes were absorbed/)).toBeInTheDocument();
 });
@@ -248,7 +249,7 @@ test("a waiting scene the list cannot name still offers its wrap-up", async () =
   renderHub();
   await screen.findByText("Run One");
   expect(screen.getByRole("link", { name: /open wrap-up/i }))
-    .toHaveAttribute("href", "/campaigns/run/scenes/gone");
+    .toHaveAttribute("href", "/campaigns/run/scenes/gone/wrap-up");
 });
 
 test("the to-do card renders a zero and links at the list", async () => {
@@ -261,8 +262,9 @@ test("the to-do card renders a zero and links at the list", async () => {
   const card = screen.getByText("To do").closest("section")!;
   expect(within(card).getByText("0")).toBeInTheDocument();
   expect(within(card).getByText(/nothing outstanding/i)).toBeInTheDocument();
+  // This campaign's list, not every campaign's.
   expect(within(card).getByRole("link", { name: /everything noticed/i }))
-    .toHaveAttribute("href", "/todo");
+    .toHaveAttribute("href", "/campaigns/run/todo");
 });
 
 test("a to-do count nobody computed draws no count at all", async () => {
@@ -274,7 +276,8 @@ test("a to-do count nobody computed draws no count at all", async () => {
   await screen.findByText("Run One");
   const card = screen.getByText("To do").closest("section")!;
   expect(within(card).queryByText("0")).not.toBeInTheDocument();
-  expect(within(card).getByText(/no count was reported/i)).toBeInTheDocument();
+  // In the words the commitments card uses for the same answer.
+  expect(within(card).getByText("Could not be counted.")).toBeInTheDocument();
 });
 
 test("the to-do card carries what is still outstanding", async () => {
@@ -361,6 +364,34 @@ test("a failed read is not an empty campaign", async () => {
   expect(screen.queryByText("Next up")).not.toBeInTheDocument();
 });
 
+test("Try again reads the campaign again", async () => {
+  // It used to clear the banner and send nothing, so the page it uncovered
+  // was a hub titled "…" whose cards waited for a read that never came.
+  (api.getCampaign as any).mockRejectedValueOnce(new Error("offline"));
+  renderHub();
+  const retry = await screen.findByRole("button", { name: /try again/i });
+  const reads = (fn: unknown) => (fn as { mock: { calls: unknown[] } }).mock.calls.length;
+  const campaignReads = reads(api.getCampaign);
+  const castReads = reads(api.listCampaignPCs);
+  fireEvent.click(retry);
+  expect(await screen.findByRole("heading", { name: "Run One" })).toBeInTheDocument();
+  expect(reads(api.getCampaign)).toBe(campaignReads + 1);
+  // ...and the cards' own reads, which the first attempt's failure left
+  // nothing to show for.
+  expect(reads(api.listCampaignPCs)).toBe(castReads + 1);
+});
+
+test("a campaign that is not there says so, and offers the way back", async () => {
+  // A link to a deleted campaign, or a typo: a Try again can never answer it.
+  (api.getCampaign as any).mockRejectedValue({ status: 404, detail: "campaign not found" });
+  renderHub();
+  expect(await screen.findByRole("heading", { name: /no such campaign/i })).toBeInTheDocument();
+  expect(screen.getByText(/no campaign called “run”/i)).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /back to campaigns/i })).toHaveAttribute("href", "/");
+  expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+  expect(screen.queryByText("Next up")).not.toBeInTheDocument();
+});
+
 // ---- the shell read is the rail's, and the page does not wait on it ----
 
 test("the page does not wait on the shell read", async () => {
@@ -377,7 +408,7 @@ test("the page does not wait on the shell read", async () => {
   expect(screen.queryByText(/every scene has been wrapped up/i)).not.toBeInTheDocument();
   expect(screen.queryByText("Nothing waiting")).not.toBeInTheDocument();
   expect(screen.queryByText(/nothing is owed/i)).not.toBeInTheDocument();
-  expect(screen.queryByText(/no count was reported/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/could not be counted/i)).not.toBeInTheDocument();
 });
 
 test("the money stays pending until a payload about this campaign arrives", async () => {
@@ -397,7 +428,7 @@ test("the money stays pending until a payload about this campaign arrives", asyn
 test("a null ledger count says it could not be counted", async () => {
   // The shell read succeeded but the ledger could not be counted: that is
   // neither "Loading…" forever nor "Nothing is owed." (zero-for-unknown).
-  (api.getShell as any).mockResolvedValue(shell({ ledger_open: null }));
+  (api.getShell as any).mockResolvedValue({ ...shell({ ledger_open: null }), todo: 0 });
   renderHub();
   expect(await screen.findByText("Open commitments")).toBeInTheDocument();
   expect(await screen.findByText("Could not be counted.")).toBeInTheDocument();
@@ -709,9 +740,20 @@ test("a closed branch on the scenes card says closed, not open", async () => {
     within(scenesCard().getByRole("link", { name: title }).closest(".hub-row") as HTMLElement);
   expect(row("The second (branch)").getByText("closed")).toHaveAttribute(
     "title", "A sibling branch was absorbed");
-  expect(row("The second (branch)").queryByText("open")).toBeNull();
-  expect(row("The third").getByText("open")).toBeInTheDocument();
+  expect(row("The second (branch)").queryByText("in play")).toBeNull();
+  expect(row("The third").getByText("in play")).toBeInTheDocument();
   expect(row("The second").getByText("absorbed")).toBeInTheDocument();
+});
+
+test("a scene's state is a status, not something that looks like its button", async () => {
+  // A filled accent "OPEN" was the loudest thing on the card and read as an
+  // instruction; the scene's title is the link.
+  renderHub();
+  await screen.findByText("The third");
+  const chip = within(scenesCard().getByRole("link", { name: "The third" })
+    .closest(".hub-row") as HTMLElement).getByText("in play");
+  expect(chip).toHaveClass("chip", "status", "live");
+  expect(chip).not.toHaveClass("on");
 });
 
 test("deleting a scene from the hub confirms, deletes, and re-reads", async () => {
@@ -861,4 +903,51 @@ test("every appeared face is shown, however many there are", async () => {
   // 14 faces plus the card's own "Everyone →" foot link
   expect(within(card).getAllByRole("link")).toHaveLength(15);
   expect(within(card).queryByText(/more\./)).not.toBeInTheDocument();
+});
+
+test("a notification whose scene is gone says so once on arrival", async () => {
+  // `OpenScene` falls back to the campaign. It used to do it in silence.
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/campaigns/run", state: { openedFrom: "gone" } }]}>
+      <WithShell>
+        <Routes><Route path="/campaigns/:cid" element={<CampaignHub />} /></Routes>
+      </WithShell>
+    </MemoryRouter>);
+  expect(await screen.findByText(/that notification was about is not in this campaign/i))
+    .toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+  expect(screen.queryByText(/that notification was about/i)).toBeNull();
+});
+
+test("an ordinary arrival says nothing about a notification", async () => {
+  renderHub();
+  await screen.findByRole("heading", { name: "Run One" });
+  expect(screen.queryByText(/that notification was about/i)).toBeNull();
+});
+
+test("a notification banner belongs only to the campaign it opened", async () => {
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/campaigns/run", state: { openedFrom: "gone" } }]}>
+      <WithShell>
+        <Link to="/campaigns/realm">Open Realm</Link>
+        <Routes><Route path="/campaigns/:cid" element={<CampaignHub />} /></Routes>
+      </WithShell>
+    </MemoryRouter>);
+  expect(await screen.findByText(/that notification was about is not in this campaign/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("link", { name: "Open Realm" }));
+  await waitFor(() => expect(api.getCampaign).toHaveBeenCalledWith("realm"));
+  expect(screen.queryByText(/that notification was about/i)).not.toBeInTheDocument();
+});
+
+test("a busy notification lookup says it could not open the scene, rather than calling it gone", async () => {
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/campaigns/run", state: { openedFrom: "busy" } }]}>
+      <WithShell>
+        <Routes><Route path="/campaigns/:cid" element={<CampaignHub />} /></Routes>
+      </WithShell>
+    </MemoryRouter>);
+  expect(await screen.findByText(/could not be opened just now/i)).toBeInTheDocument();
+  expect(screen.queryByText(/not in this campaign any more/i)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+  expect(screen.queryByText(/that notification was about/i)).not.toBeInTheDocument();
 });

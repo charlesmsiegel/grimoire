@@ -113,3 +113,15 @@ export function setupFix(err: unknown): "/providers" | "/models" | null {
     : undefined;
   return kind === "missing_key" ? "/providers" : kind === "incapable" ? "/models" : null;
 }
+
+/** Did the server say there is no such thing?
+ *
+ *  Read structurally, like the rest of this file, off the `status` an
+ *  `ApiError` carries. Its use is telling "this could not be read" from "this
+ *  is not there": the first is worth a Try again, and the second never
+ *  answers one -- a campaign page offered a retry for an id that names no
+ *  campaign, and every press asked the same question again. */
+export function isNotFound(err: unknown): boolean {
+  return typeof err === "object" && err !== null
+    && (err as { status?: unknown }).status === 404;
+}

@@ -495,6 +495,21 @@ def get_world_pcs(wid: str):
     return store.pcs.list_pcs(_world_root_or_404(wid))
 
 
+@router.get("/worlds/{wid}/campaign-pc-name")
+def get_campaign_pc_name(wid: str, name: str):
+    """Whether a campaign begun in this world could seat a new PC called
+    `name`: `{"refusal": null}` when it could, and otherwise the sentence
+    `POST /campaigns/{cid}/pcs` would refuse it with.
+
+    The campaign wizard asks before it creates anything, because asking the PC
+    route meant asking after the campaign existed (`actor_names.
+    refusal_in_new_campaign`). A read, and unlocked: the answer can be stale by
+    the time the wizard commits, so the PC route's own check, under the
+    campaign lock, is still the one that binds."""
+    _world_root_or_404(wid)
+    return {"refusal": store.actor_names.refusal_in_new_campaign(name, wid)}
+
+
 @router.post("/worlds/{wid}/pcs")
 def post_world_pc(wid: str, body: PCCreate):
     root = _world_root_or_404(wid)

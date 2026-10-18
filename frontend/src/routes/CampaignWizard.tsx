@@ -1,16 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import Markdown from "react-markdown";
 import { useNavigate } from "react-router-dom";
+import remarkGfm from "remark-gfm";
 import {
   api, type Availability, type ModuleSummary, type PCSummary, type Persona, type WorldMeta,
 } from "../api/client";
 import type { ChatEvent, OpenerContribution, OpenerSpeaker } from "../api/stream";
 import { ErrorNote } from "../components/ErrorNote";
 import { GreetingAvailabilityPreview } from "../components/GreetingAvailabilityPreview";
+import { generatedCount } from "../components/OpenerComposer";
 import { PlainShell } from "../components/PageShell";
 import { byName } from "../sortByName";
 import { NeedsModel } from "../components/inference/NeedsModel";
 
-type LocationDraft = { name: string; body: string; keys: string };
+/** One starting location as typed. `made` once `commit` has written it, after
+ *  which a retry skips it -- see `Made`. */
+type LocationDraft = { name: string; body: string; keys: string; made?: boolean };
+type CastRef = { kind: "pcs"; id: string; version?: string };
+/** What `commit` has written so far, so Create pressed again after a failure
+ *  picks up where the last attempt stopped.
+ *
+ *  A campaign is five kinds of write -- the campaign, its PC, the opening
+ *  scene, the PC's seat in it, the locations -- and they are separate
+ *  requests. Every Create used to start again from the first, so a failure at
+ *  any later one left the campaign it had made behind, and the retry made the
+ *  next one beside it (`-2`, `-3`, one per click). Remembering what landed is
+ *  the whole fix; nothing is undone, because a half-made campaign the reader
+ *  is about to finish is not garbage.
+ *
+ *  It does change what the earlier steps may offer. A retry uses these
+ *  records, not the fields they were made from, so a step whose record exists
+ *  is no longer one the reader can go back and edit: Back is not offered into
+ *  it, and a written location's fields are locked. A step that wrote nothing
+ *  -- a PC the server refused -- stays open, which is how a refused name is
+ *  fixed. */
+type Made = { cid?: string; cast?: CastRef; sid?: string; seated?: boolean };
 const blankPersona: Persona = { name: "", pronouns: "", summary: "", description: "" };
 const STEPS = ["Backdrop", "Character", "Locations", "Opening"];
 const showOpener = (parts: OpenerContribution[]) =>
@@ -48,8 +72,22 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
   const [worldPCs, setWorldPCs] = useState<PCSummary[]>([]);
   const [pickedPC, setPickedPC] = useState<string | null>(null); // an existing world PC to play
 
+  /** Why the typed name cannot be this campaign's PC, from the check Next
+   *  makes before leaving step 2; cleared by typing. */
+  const [nameRefusal, setNameRefusal] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const nameCheck = useRef({ generation: 0 });
+  useEffect(() => {
+    const checks = nameCheck.current;
+    setChecking(false);
+    // A late answer belongs to the checked name/world and character step.
+    // Editing or navigating away cancels its authority to advance the wizard.
+    return () => { checks.generation++; };
+  }, [world, persona.name, pickedPC, step]);
+
   // step 3
   const [locations, setLocations] = useState<LocationDraft[]>([{ name: "", body: "", keys: "" }]);
+  const [made, setMade] = useState<Made>({});
 
   // step 4 (live campaign)
   const [committed, setCommitted] = useState<{ cid: string; sid: string } | null>(null);
@@ -150,29 +188,75 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     setLocations(locations.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   }
 
+  /** Leave step 2, once the server has said the new PC's name is free.
+   *
+   *  Asked here rather than learned from the commit, because the commit can
+   *  only learn it from `createCampaignPC` -- after the campaign exists. A
+   *  check that cannot be answered lets the reader on: the PC route's own
+   *  refusal still binds, and `Made` turns a refusal there into a fix on this
+   *  step rather than a second campaign. A picked world PC is not a new name,
+   *  so it is not asked about. */
+  async function leaveCharacterStep() {
+    const request = ++nameCheck.current.generation;
+    if (pickedPC === null) {
+      setChecking(true);
+      let refusal: string | null = null;
+      try {
+        refusal = (await api.checkCampaignPCName(world, persona.name.trim())).refusal;
+      } catch {
+        // Advice that did not arrive; see above.
+      } finally {
+        if (request === nameCheck.current.generation) setChecking(false);
+      }
+      if (request !== nameCheck.current.generation) return;
+      if (refusal) { setNameRefusal(refusal); return; }
+    }
+    setStep(3);
+  }
+
   async function commit() {
     setError(null);
     setBusy(true);
+    // Updated as each write lands, and published at once, so a throw at any
+    // point leaves `made` saying exactly what exists.
+    const progress: Made = { ...made };
+    const landed = (patch: Partial<Made>) => { Object.assign(progress, patch); setMade({ ...progress }); };
     try {
       const usesRegion = calendar === "gregorian" || calendar === "hebrew";
-      const { id: cid } = await api.createCampaign(
-        name.trim(), world, usesRegion ? region || undefined : undefined, calendar,
-        moduleId || undefined, climate || undefined);
-      // an existing world PC is already copied into the new campaign — just seat it
-      let cast: { kind: "pcs"; id: string; version?: string };
-      if (pickedPC) {
-        cast = { kind: "pcs", id: pickedPC };
-      } else {
-        const { pc, version } = await api.createCampaignPC(cid, {
-          name: persona.name.trim(), tags, persona: { ...persona, name: persona.name.trim() },
-        });
-        cast = { kind: "pcs", id: pc, version };
+      let cid = progress.cid;
+      if (cid === undefined) {
+        cid = (await api.createCampaign(
+          name.trim(), world, usesRegion ? region || undefined : undefined, calendar,
+          moduleId || undefined, climate || undefined)).id;
+        landed({ cid });
       }
-      const { id: sid } = await api.createScene(cid);
-      await api.addToCast(cid, sid, cast);
-      for (const loc of locations.filter((l) => l.name.trim())) {
+      let cast = progress.cast;
+      if (cast === undefined) {
+        // an existing world PC is already copied into the new campaign — just seat it
+        if (pickedPC) {
+          cast = { kind: "pcs", id: pickedPC };
+        } else {
+          const { pc, version } = await api.createCampaignPC(cid, {
+            name: persona.name.trim(), tags, persona: { ...persona, name: persona.name.trim() },
+          });
+          cast = { kind: "pcs", id: pc, version };
+        }
+        landed({ cast });
+      }
+      let sid = progress.sid;
+      if (sid === undefined) {
+        sid = (await api.createScene(cid)).id;
+        landed({ sid });
+      }
+      if (!progress.seated) {
+        await api.addToCast(cid, sid, cast);
+        landed({ seated: true });
+      }
+      for (const [i, loc] of locations.entries()) {
+        if (loc.made || !loc.name.trim()) continue;
         await api.createEntity({ kind: "campaign", id: cid }, "locations",
           { name: loc.name.trim(), body: loc.body, keys: loc.keys });
+        setLocations((ls) => ls.map((l, j) => (j === i ? { ...l, made: true } : l)));
       }
       setCommitted({ cid, sid });
       api.availableGreetings(cid).then(setAvail).catch(() => setAvail([]));
@@ -196,6 +280,32 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
       navigate(`/campaigns/${committed.cid}`);
     } catch (err: unknown) {
       setError(err);
+    }
+  }
+
+  /** An opener whole enough to post: the run finished and every speaker it
+   *  expected has a part. Only this is offered to the scene. */
+  const openerReady = openerComplete && !busy && openerParts.length > 0
+    && openerParts.length === generatedCount(openerSnapshot);
+
+  /** Leave the wizard. With a whole opener on screen it is posted first, as
+   *  the opening scene's first post, through the call the play view's Use
+   *  makes (`firstPost`) -- it used to be dropped here, so the reader landed
+   *  on an empty scene having paid for a preview nothing kept. Then to the
+   *  scene it now opens, rather than to the hub. Without one, to the hub as
+   *  before. */
+  async function finish(useOpener: boolean) {
+    if (!committed) return;
+    if (!useOpener) { navigate(`/campaigns/${committed.cid}`); return; }
+    setError(null);
+    setBusy(true);
+    try {
+      await api.firstPost(committed.cid, committed.sid, opener, openerParts, openerSnapshot);
+      navigate(`/campaigns/${committed.cid}/scenes/${committed.sid}`);
+    } catch (err: unknown) {
+      setError(err);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -237,7 +347,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
   }
 
   const canNext1 = name.trim() !== "" && world !== "";
-  const canNext2 = pickedPC !== null || persona.name.trim() !== "";
+  const canNext2 = (pickedPC !== null || persona.name.trim() !== "") && !checking;
   const previewTags = pickedPC ? worldPCs.find((p) => p.id === pickedPC)?.tags ?? [] : tags;
   const who = (pickedPC && worldPCs.find((p) => p.id === pickedPC)?.name)
     || persona.name.trim() || "your character";
@@ -245,7 +355,8 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
   return (
     <PlainShell>
       <div className="page page-narrow view-anim wizard">
-        <h1 className="page-h1">New Campaign</h1>
+        <div className="eyebrow">Campaigns</div>
+        <h1 className="screen-title">New campaign</h1>
 
         <ol className="wizard-steps">
           {STEPS.map((label, i) => {
@@ -337,7 +448,10 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
               )}
             </div>
             <div className="wizard-footer">
-              <span />
+              {/* The way out. The rail is not drawn beside a wizard, so without
+                  this the only exit was the browser's Back. Nothing is written
+                  before step 3, so nothing is left behind. */}
+              <button className="subtle" onClick={() => navigate("/")}>Cancel</button>
               <button className="btn-accent" disabled={!canNext1} onClick={() => setStep(2)}>Next ▸</button>
             </div>
           </div>
@@ -367,7 +481,16 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
             <div className="field">
               <label htmlFor="wiz-pc-name">Character name</label>
               <input id="wiz-pc-name" type="text" value={persona.name}
-                     onChange={(e) => setPersona({ ...persona, name: e.target.value })} />
+                     aria-describedby={nameRefusal ? "wiz-pc-name-refusal" : undefined}
+                     onChange={(e) => {
+                       setPersona({ ...persona, name: e.target.value });
+                       setNameRefusal(null);
+                     }} />
+              {nameRefusal && (
+                <div id="wiz-pc-name-refusal" className="field-hint error" role="alert">
+                  {nameRefusal}
+                </div>
+              )}
             </div>
             <div className="field">
               <label htmlFor="wiz-pc-pronouns">Pronouns</label>
@@ -412,8 +535,15 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
             <GreetingAvailabilityPreview key={JSON.stringify([world, previewTags])}
                                          world={world} tags={previewTags} />
             <div className="wizard-footer">
-              <button className="subtle" onClick={() => setStep(1)}>Back</button>
-              <button className="btn-accent" disabled={!canNext2} onClick={() => setStep(3)}>Next ▸</button>
+              {/* Not back into a backdrop the campaign was already made from;
+                  see `Made`. */}
+              {made.cid === undefined ? (
+                <button className="subtle" onClick={() => setStep(1)}>Back</button>
+              ) : <span />}
+              <button className="btn-accent" disabled={!canNext2}
+                      onClick={() => void leaveCharacterStep()}>
+                {checking ? "Checking…" : "Next ▸"}
+              </button>
             </div>
           </div>
         )}
@@ -425,12 +555,13 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
             {locations.map((loc, i) => (
               <div className="wizard-location" key={i}>
                 <input aria-label="Location name" type="text" placeholder="Location name…" value={loc.name}
-                       onChange={(e) => setLoc(i, { name: e.target.value })} />
+                       disabled={loc.made} onChange={(e) => setLoc(i, { name: e.target.value })} />
                 <textarea aria-label="Location description" rows={3} placeholder="Description…" value={loc.body}
-                          onChange={(e) => setLoc(i, { body: e.target.value })} />
+                          disabled={loc.made} onChange={(e) => setLoc(i, { body: e.target.value })} />
                 <input aria-label="Location keys" type="text" placeholder="Keys to match in play (comma-separated, optional)"
-                       value={loc.keys} onChange={(e) => setLoc(i, { keys: e.target.value })} />
-                {locations.length > 1 && (
+                       value={loc.keys} disabled={loc.made} onChange={(e) => setLoc(i, { keys: e.target.value })} />
+                {loc.made && <div className="field-hint">Saved to the campaign.</div>}
+                {locations.length > 1 && !loc.made && (
                   <button className="subtle remove" onClick={() => setLocations(locations.filter((_, j) => j !== i))}>
                     Remove
                   </button>
@@ -442,7 +573,10 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
               + Add another location
             </button>
             <div className="wizard-footer">
-              <button className="subtle" onClick={() => setStep(2)} disabled={busy}>Back</button>
+              {/* Not back into a character that is already written; see `Made`. */}
+              {made.cast === undefined ? (
+                <button className="subtle" onClick={() => setStep(2)} disabled={busy}>Back</button>
+              ) : <span />}
               <button className="btn-accent" onClick={commit} disabled={busy}>
                 {busy ? "Creating…" : "Create campaign"}
               </button>
@@ -460,16 +594,27 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
               <div className="role">Start from a greeting</div>
               {avail.length === 0
                 ? <div className="field-hint">No greetings available in this world.</div>
-                : (
-                  <div className="chips">
-                    {avail.map((g) => (
-                      <button key={g.id} className="chip" disabled={!g.available}
-                              title={g.available ? "" : g.reasons.join("; ")} onClick={() => startGreeting(g.id)}>
-                        {g.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                : <>
+                  {avail.some((g) => g.available) ? (
+                    <div className="chips">
+                      {avail.filter((g) => g.available).map((g) => (
+                        <button key={g.id} className="chip" onClick={() => startGreeting(g.id)}>
+                          {g.name}
+                        </button>
+                      ))}
+                    </div>
+                  ) : <div className="field-hint">None of them can open this campaign yet.</div>}
+                  {/* Named with the reason, as step 2's preview names them --
+                      the reason used to be a tooltip on a disabled chip, which
+                      a touch screen never shows. */}
+                  {avail.some((g) => !g.available) && (
+                    <ul className="field-hint wizard-blocked" aria-label="Greetings that cannot open it">
+                      {avail.filter((g) => !g.available).map((g) => (
+                        <li key={g.id}><span>{g.name}</span> — {g.reasons.join("; ")}</li>
+                      ))}
+                    </ul>
+                  )}
+                </>}
             </div>
             <div className="field">
               <div className="role">Generate an opener</div>
@@ -481,14 +626,36 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
                   {busy ? "…" : "Generate"}
                 </button>
               </div>
-              {opener && <div className="opener-preview">{opener}</div>}
+              {/* Rendered, because each part is `**Speaker:** text` and the
+                  reply itself is markdown -- shown raw, the asterisks were the
+                  first thing the reader saw. */}
+              {opener && (
+                <div className="opener-preview rendered">
+                  <Markdown remarkPlugins={[remarkGfm]}>{opener}</Markdown>
+                </div>
+              )}
               {!openerComplete && openerParts.length > 0 && !busy && (
-                <button type="button" onClick={() => void generate(true)}>Retry remaining speakers</button>
+                <button type="button" className="subtle" onClick={() => void generate(true)}>
+                  Retry remaining speakers
+                </button>
+              )}
+              {opener && !busy && (
+                <div className="field-hint">
+                  {openerReady
+                    ? "Begin with it and it is the opening scene's first post."
+                    : "Not saved: only a finished opener can begin the scene."}
+                </div>
               )}
             </div>
             <div className="wizard-footer">
-              <span />
-              <button className="btn-chrome" style={{ boxShadow: "var(--sh4)" }} onClick={() => navigate(`/campaigns/${committed.cid}`)}>Finish ▸</button>
+              {openerReady ? (
+                <button className="subtle" disabled={busy} onClick={() => void finish(false)}>
+                  Finish without it
+                </button>
+              ) : <span />}
+              <button className="btn-accent" disabled={busy} onClick={() => void finish(openerReady)}>
+                {openerReady ? "Begin with this opener ▸" : "Finish ▸"}
+              </button>
             </div>
           </div>
         )}

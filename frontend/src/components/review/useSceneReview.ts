@@ -936,6 +936,9 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
                            resolve: "replace" | "merge", after?: string) {
     setEditRows((rows) => rows.map((r, j) => (j === i
       ? { ...r, resolve, resolve_from: conflict.stored,
+          // Replace and Merge explicitly accept this proposal, including a
+          // low-band row that arrived unticked. Count the answer as a verdict.
+          approved: true, rejected: false, judged: true,
           ...(after === undefined ? {} : { after }) }
       : r)));
     // By row, not by edit id — the duplicate-id case: a sibling row sharing
@@ -943,13 +946,20 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setConflicts((cs) => cs.filter((c) => c.row !== i));
   }
 
-  /** Approve every proposal the transcript backs, and leave the ones it does
-   *  not. The whole routing argument in one button: a cited row is one the
-   *  reviewer can check *later* if they want to; an uncited one is the only
-   *  kind they cannot, so it is the only kind this refuses to answer for. */
+  /** Approve every proposal the transcript backs that nobody has answered
+   *  yet, and leave the rest. The whole routing argument in one button: a
+   *  cited row is one the reviewer can check *later* if they want to; an
+   *  uncited one is the only kind they cannot, so it is the only kind this
+   *  refuses to answer for.
+   *
+   *  It is the reviewer's verdict, so the rows it approves are judged, and
+   *  fold like any row approved by hand. It used to leave them unjudged -- so
+   *  after it the footer still counted them as nobody having looked -- and to
+   *  approve every cited row, a Reject the reviewer had given one included. A
+   *  bulk action answers what is unanswered; it does not overrule an answer. */
   function approveAllCited() {
     setEditRows((rows) => rows.map((r) =>
-      (isUncited(r) ? r : { ...r, approved: true, rejected: false })));
+      (isUncited(r) || r.judged ? r : { ...r, approved: true, rejected: false, judged: true })));
   }
 
   /** Swap row `i` wholesale for its identity check's alternative `k`.
@@ -1218,9 +1228,22 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   const budgetCutPhases = useMemo(
     () => (absorb?.phases ?? []).filter((p) => p.budget_exhausted),
     [absorb?.phases]);
-  const approvedCount = editRows.filter((e) => e.approved).length;
+  // Four states a row can be in, counted apart because each says something
+  // different about what the save will do and who decided it. `approved` is
+  // the reviewer's yes. `preApproved` arrived ticked by band and nobody has
+  // answered it: the save accepts it, which is not the same claim as somebody
+  // approving it -- counting the two together had the column reporting every
+  // row of a fresh review "approved" over a drawer saying they needed you.
+  // `undecided` arrived unticked (the `low` band) and is accepted by the save
+  // too, since only a Reject excludes. `untouched` is the two unanswered
+  // states together: what the save is about to accept on nobody's word.
+  const approvedCount = editRows.filter((e) => e.approved && e.judged).length;
+  const preApprovedCount = editRows.filter((e) => e.approved && !e.judged).length;
   const rejectedCount = editRows.filter((e) => e.rejected).length;
-  const undecidedCount = editRows.length - approvedCount - rejectedCount;
+  const undecidedCount = editRows.filter((e) => !e.approved && !e.rejected).length;
+  const untouchedCount = preApprovedCount + undecidedCount;
+  /** Cited rows nobody has answered: what Approve all cited would act on. */
+  const citedOpenCount = editRows.filter((e) => !isUncited(e) && !e.judged).length;
   const uncitedRows = editRows.flatMap((e, i) => (isUncited(e) ? [[e, i] as const] : []));
   /** What each store drawer holds, and how much of it a person has answered.
    *
@@ -1231,14 +1254,13 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
    *  the same six numbers from open to save — and a count that does not move
    *  as you work is a count you stop reading.
    *
-   *  **`unjudged` is not the footer's `undecidedCount`, and the difference is
-   *  deliberate.** The footer counts what the save is about to accept without
-   *  a verdict, and a row that arrived pre-approved is already ticked on
-   *  screen, so it is not "remaining" to a reader looking at it. This counts
-   *  what nobody has *read*, which is the question a section rail answers:
-   *  every row starts here, including the pre-approved ones, and the section
-   *  ticks when the reviewer has been through it. Sharing one number between
-   *  the two would make every store section read ✓ the moment a review opened.
+   *  **`unjudged` is not `undecidedCount`, and the difference is
+   *  deliberate.** Undecided is only the rows that arrived unticked; this
+   *  counts what nobody has *answered*, which is the question a section rail
+   *  answers: every row starts here, including the pre-approved ones, and the
+   *  section ticks when the reviewer has been through it. Counting undecided
+   *  rows instead would make every store section read ✓ the moment a review
+   *  opened. Summed over every drawer it is `untouchedCount`, the footer's.
    *
    *  Sections with nothing in them are dropped rather than shown at zero: an
    *  absorb that proposed no sheet changes has no Sheets section, which is not
@@ -1307,7 +1329,8 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     endScene, stopAbsorb, saveAbsorb, discard, decide, editRow, editPayload,
     resolveConflict, switchToAlternative, targetClashRows,
     approveAllCited, retryAudit, retryDossiers, sceneRenamed,
-    budgetCutPhases, approvedCount, rejectedCount, undecidedCount,
+    budgetCutPhases, approvedCount, preApprovedCount, rejectedCount, undecidedCount,
+    untouchedCount, citedOpenCount,
     uncitedRows, lowRows, groupCounts, shownRows,
   };
 }

@@ -45,6 +45,9 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
   // imported scene brings its own title, cast, moment and transcript, so
   // there is nothing to suggest and nothing to open it with (#92).
   const [mode, setMode] = useState<"pc" | "offscreen" | "import" | null>(null);
+  // The mode cards are navigation, not a different suggestion question. Keep
+  // the last playable mode alive there, including its in-flight generation.
+  const [suggestionMode, setSuggestionMode] = useState<"pc" | "offscreen">("pc");
   const [draft, setDraft] = useState<SceneDraft | null>(null);
   // Bumped every time a new draft is set. A late `onPicked` (an extraction
   // that resolves after the user already clicked a card) can replace `draft`
@@ -248,7 +251,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
   const pressureSnap = driversRead && driversRead.cid === cid && !driversRead.failed
     ? driversRead.snap : null;
   const suggestionsState = useSceneSuggestions(
-    cid, afterSid, ready && playable, mode === "offscreen", {
+    cid, afterSid, ready && playable, suggestionMode === "offscreen", {
       // Only what the reader can see steers: with the disclosure hidden (no
       // read, or a failed one) the request carries no pressure at all.
       controls: () => toRequest(pressureSnap ? pressure : NO_PRESSURE, pressureSnap),
@@ -270,6 +273,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
   if (cid !== seenCid) {
     setSeenCid(cid);
     setMode(null);
+    setSuggestionMode("pc");
     setDraft(null);
     setNotice(null);
     setDraftGen((n) => n + 1);
@@ -361,11 +365,11 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
         {mode === null ? (
           <>
             <div className="role">What kind of scene?</div>
-            <button className="chooser-card" onClick={() => setMode("pc")}>
+            <button className="chooser-card" onClick={() => { setMode("pc"); setSuggestionMode("pc"); }}>
               <span className="chooser-card-title">With your PC</span>
               <span className="chooser-card-premise">Your player character takes part.</span>
             </button>
-            <button className="chooser-card" onClick={() => setMode("offscreen")}>
+            <button className="chooser-card" onClick={() => { setMode("offscreen"); setSuggestionMode("offscreen"); }}>
               <span className="chooser-card-title">Offscreen (NPCs only)</span>
               <span className="chooser-card-premise">
                 What happens away from your PC — NPC plans, motivations, and events you don't witness.
@@ -405,7 +409,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
                              setDraft(d); setNotice(warning ?? null);
                              setDraftGen((n) => n + 1);
                            }}
-                           onCancel={dismiss} />
+                           onBack={() => setMode(null)} onCancel={dismiss} />
         ) : (
           <SceneConfirmForm key={draftGen} cid={cid} draft={draft} notice={notice} ready={ready}
                             onBack={() => setDraft(null)} onCancel={dismiss} onCreated={onCreated}

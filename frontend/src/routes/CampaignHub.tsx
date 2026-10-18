@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, type CampaignBudget, type CampaignMeta, type CharacterSummary,
          type ChronicleEntry, type PCSummary, type RecordChange,
          type SceneIdea, type SceneMeta } from "../api/client";
@@ -7,7 +7,7 @@ import { THUMB } from "../api/thumbs";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { useCampaignShell } from "../shell/ShellPayloadContext";
 import { PageShell, ColumnSection } from "../components/PageShell";
-import { errorText } from "../api/errors";
+import { errorText, isNotFound } from "../api/errors";
 import { MoneyColumns, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { CalendarConfig } from "../components/CalendarConfig";
@@ -18,8 +18,10 @@ import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { TrackerFieldsEditor } from "../components/tracker/TrackerFieldsEditor";
 import { QuickReplyEditor } from "../components/QuickReplyEditor";
 import { DefaultPromptEditor } from "../components/DefaultPromptEditor";
+import { reportHref } from "../shell/rail";
 import { sectionHref } from "../worldPaths";
 import { intentProps } from "../api/prefetch";
+import type { OpenedFrom } from "./OpenScene";
 
 /** The campaign's front door.
  *
@@ -142,6 +144,13 @@ export default function CampaignHub() {
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   const [chronicle, setChronicle] = useState<ChronicleEntry[]>([]);
   const [failed, setFailed] = useState(false);
+  /** The campaign read said there is no such campaign: not a failure to
+   *  retry, and not an empty campaign either. */
+  const [missing, setMissing] = useState(false);
+  /** Bumped by Try again, so both reads below run again. It used to clear
+   *  `failed` and nothing else, so the press re-rendered the same failed page
+   *  -- with every card on it still waiting for a read nobody re-sent. */
+  const [reload, setReload] = useState(0);
   /** Why the last scene delete did not happen, or null. */
   const [delFailed, setDelFailed] = useState<string | null>(null);
   /** The three cards that need a read of their own, each `null` until it has
@@ -173,10 +182,27 @@ export default function CampaignHub() {
 
   usePublishShellContext(meta ? { campaign: meta.name, scene: "" } : null);
 
+  // A notification tap whose scene is gone lands here (`OpenScene`), and the
+  // page says why once. Adopted and then cleared off the history entry, as the
+  // scenes list adopts the Story Graph's handoff: Back into this entry, or a
+  // reload of it, must not say it again.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [notification, setNotification] = useState<{ cid: string; why: OpenedFrom } | null>(null);
+  const openedFrom = notification?.cid === cid ? notification.why : null;
+  useEffect(() => { setNotification(null); }, [cid]);
+  const handoff = (location.state as { openedFrom?: unknown } | null)?.openedFrom;
+  useEffect(() => {
+    if (!cid || (handoff !== "gone" && handoff !== "busy" && handoff !== "unreadable")) return;
+    setNotification({ cid, why: handoff });
+    navigate(location.pathname + location.search + location.hash, { replace: true, state: null });
+  }, [cid, handoff, location.pathname, location.search, location.hash, navigate]);
+
   useEffect(() => {
     if (!cid) return;
     let live = true;
     setFailed(false);
+    setMissing(false);
     // Three reads rather than one aggregate: each already exists and answers
     // its own question, and inventing a hub-shaped endpoint would be another
     // place the same counts are derived. The counts themselves -- what is
@@ -192,9 +218,13 @@ export default function CampaignHub() {
     ]).then(([m, sc, ch]) => {
       if (!live) return;
       setMeta(m); setScenes(sc); setChronicle(ch);
-    }).catch(() => { if (live) setFailed(true); });
+    }).catch((err: unknown) => {
+      if (!live) return;
+      if (isNotFound(err)) setMissing(true);
+      else setFailed(true);
+    });
     return () => { live = false; };
-  }, [cid]);
+  }, [cid, reload]);
 
   // The cards that are worth having but not worth waiting for. Separate from
   // the effect above so a slow change journal cannot hold up "what to do
@@ -252,7 +282,7 @@ export default function CampaignHub() {
       })
       .catch(() => { if (live) setIdeasFailed(true); });
     return () => { live = false; };
-  }, [cid]);
+  }, [cid, reload]);
 
   const camp = shell?.campaign ?? null;
   const open = camp?.open ?? [];
@@ -352,6 +382,29 @@ export default function CampaignHub() {
     </>
   );
 
+  if (missing) {
+    // An id that names no campaign: a link to one since deleted or renamed, or
+    // a typo. It used to be "could not be read" with a Try again that could
+    // never succeed, and behind it a hub titled "…" whose cards waited
+    // forever and whose empty states made claims about a campaign that is not
+    // there. The column holds only the way back -- the hub's own links would
+    // all name the missing campaign.
+    return (
+      <PageShell column={<Link className="column-back" to="/">‹ All campaigns</Link>}
+                 columnLabel="Campaigns">
+        <div className="page-wide view-anim">
+          <div className="eyebrow">Campaigns</div>
+          <h1 className="screen-title">No such campaign</h1>
+          <p className="empty-state">
+            <span className="empty-what">There is no campaign called “{cid}”.</span>{" "}
+            It may have been deleted, or renamed since this link was made.{" "}
+            <Link to="/">Back to Campaigns →</Link>
+          </p>
+        </div>
+      </PageShell>
+    );
+  }
+
   if (failed) {
     return (
       <PageShell column={column} columnLabel="This campaign">
@@ -361,7 +414,7 @@ export default function CampaignHub() {
               nothing in it" are opposite answers. */}
           <div className="banner error-banner">
             This campaign could not be read.{" "}
-            <button className="subtle" onClick={() => setFailed(false)}>Try again</button>
+            <button className="subtle" onClick={() => setReload((n) => n + 1)}>Try again</button>
           </div>
         </div>
       </PageShell>
@@ -381,6 +434,18 @@ export default function CampaignHub() {
             open.length ? `${open.length} open` : null].filter(Boolean).join(" · ")}
         </div>
         <h1 className="screen-title">{meta?.name ?? "…"}</h1>
+
+        {openedFrom && (
+          <div className="banner" role="status">
+            {openedFrom === "gone"
+              ? "The scene that notification was about is not in this campaign any more."
+              : openedFrom === "busy"
+                ? "The scene that notification was about could not be opened just now — "
+                  + "it is still in the scenes list."
+                : "The scene that notification was about could not be read just now. Try opening it again when the connection is available."}{" "}
+            <button className="subtle" onClick={() => setNotification(null)}>Dismiss</button>
+          </div>
+        )}
 
         {/* The shell read failing costs its counts and nothing else: the page's
             own reads answered, and a banner saying the campaign could not be
@@ -511,9 +576,10 @@ export default function CampaignHub() {
             {/* One offer per waiting scene, each carrying that scene's name.
                 Two scenes used to render two buttons reading the same four
                 words, which is a choice with nothing to choose between. */}
+            {/* To the review's own address, as the rail's Wrap-up row goes. */}
             {pending.map((p) => (
               <Link key={p.sid} className="hub-primary"
-                    to={`/campaigns/${cid}/scenes/${p.sid}`}>
+                    to={`/campaigns/${cid}/scenes/${p.sid}/wrap-up`}>
                 {sceneTitle.has(p.sid)
                   ? `Wrap up ${sceneTitle.get(p.sid)} →`
                   : "Open wrap-up →"}
@@ -549,11 +615,14 @@ export default function CampaignHub() {
                 {/* A closed branch is not open work -- the headline above
                     already leaves it out -- so it says what the scene list
                     and the play view say. */}
+                {/* A status, not a control: outlined, and an adjective. Filled
+                    accent "OPEN" was the loudest thing on the card and read as
+                    a button telling you to open it. */}
                 {!s.done && s.closed_by ? (
-                  <span className="chip" title="A sibling branch was absorbed">closed</span>
+                  <span className="chip status" title="A sibling branch was absorbed">closed</span>
                 ) : (
-                  <span className={"chip" + (s.done ? "" : " on")}>
-                    {s.done ? "absorbed" : "open"}
+                  <span className={"chip status" + (s.done ? "" : " live")}>
+                    {s.done ? "absorbed" : "in play"}
                   </span>
                 )}
                 <button className="hub-row-del" aria-label={`Delete ${s.title}`}
@@ -708,21 +777,23 @@ export default function CampaignHub() {
           </Card>
 
           {/* What the app noticed. The hub already reads `shell` for every
-              other count on this page and `/todo` is a real route, so the one
-              thing the reader had to go out to the rail for was the list of
-              what is worth doing next -- which is the question this page
-              claims to answer.
+              other count on this page and the campaign has a to-do page of
+              its own, so the one thing the reader had to go out to the rail
+              for was the list of what is worth doing next -- which is the
+              question this page claims to answer. That page, not the global
+              one: a campaign's front door that linked out to every
+              campaign's chores was answering a different question.
               The count goes through `count` rather than a truthiness test:
               `0` is "nothing outstanding" and renders, `null` is "nobody
               computed it" and must draw no tail at all. The body says which
               of the two it is, because a card with no tail and no sentence
               cannot -- and a third thing while the payload is still out. */}
           <Card title="To do" tail={count(todo)}
-                foot={<Link to="/todo">Everything noticed →</Link>}>
+                foot={<Link to={reportHref("todo", cid)}>Everything noticed →</Link>}>
             {todo === undefined ? unknown : (
               <p className="field-hint">
                 {todo === null
-                  ? "No count was reported."
+                  ? "Could not be counted."
                   : todo
                     ? `${todo} still to answer.`
                     : "Nothing outstanding."}

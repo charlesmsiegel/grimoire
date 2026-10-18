@@ -2528,6 +2528,15 @@ export const api = {
   // "default"), exactly as `createCharacter` already names a character's.
   createCampaignPC: (cid: string, body: PCCreateBody) =>
     request<{ pc: string; version: string }>("POST", `/api/campaigns/${cid}/pcs`, body),
+  /** What a campaign begun in world `wid` would refuse a new PC called `name`
+   *  with, or `null` when it would take it. The campaign wizard asks before it
+   *  creates anything, because `createCampaignPC` can only answer once the
+   *  campaign exists. Advice: that route's own check still binds. `fresh`, so
+   *  a name asked about again is asked again. */
+  checkCampaignPCName: (wid: string, name: string) =>
+    request<{ refusal: string | null }>("GET",
+      `/api/worlds/${encodeSegment(wid)}/campaign-pc-name?name=${encodeURIComponent(name)}`,
+      undefined, { fresh: true }),
   listCampaignPCs: (cid: string) => request<PCSummary[]>("GET", `/api/campaigns/${cid}/pcs`),
   createPC: (wid: string, body: PCCreateBody) =>
     request<{ pc: string; version: string }>("POST", `/api/worlds/${wid}/pcs`, body),
@@ -3559,7 +3568,7 @@ export const api = {
       // a right one, which is worse than the failure it replaced.
       const recovered = await api.pendingReview(cid, sid).catch(() => null);
       if (!recovered?.review || recovered.generation !== started.generation) throw err;
-      return { review: recovered.review, generation: recovered.generation };
+      return notifyShell({ review: recovered.review, generation: recovered.generation });
     }
     const pending = await api.pendingReview(cid, sid);
     if (!pending.review || pending.generation !== started.generation) {
@@ -3573,7 +3582,10 @@ export const api = {
         + "prepared — end the scene again", "review_stale",
         pending.stale ?? undefined);
     }
-    return { review: pending.review, generation: pending.generation };
+    // The detached run changed the pending-review queue after its POST
+    // settled. Refresh chrome only once this generation is known to be stored,
+    // before the caller opens its /wrap-up address against an old empty queue.
+    return notifyShell({ review: pending.review, generation: pending.generation });
   },
   saveChronicle: (cid: string, sid: string,
                   body: { one_line: string; summary: string; keywords: string[];

@@ -1,5 +1,7 @@
 import { memo } from "react";
+import { Link } from "react-router-dom";
 import { api, type Casefile, type Provenance } from "../../api/client";
+import { ledgerHref } from "../../ledgerPaths";
 import { thumbSet } from "../../api/thumbs";
 import { Portrait } from "../Portrait";
 import { TrackerNow, type NowTracker } from "../tracker/TrackerNow";
@@ -125,7 +127,7 @@ function DossierColumn(
       {(c.dossier || c.tagline) && (
         <div className="dossier-para">
           <p>{c.dossier || c.tagline}</p>
-          <span className="dossier-source">{c.dossier ? "dossier.md" : "tagline.md"}</span>
+          <span className="dossier-source">{c.dossier ? "dossier" : "tagline — no dossier yet"}</span>
         </div>
       )}
       {!c.dossier && !c.tagline && !c.standing && (
@@ -147,7 +149,9 @@ function DossierColumn(
         <div className="column-section">
           <div className="column-section-head">
             <span className="section-label">Feels toward</span>
-            <span className="column-count">relationships.json</span>
+            <Link className="column-count" to={ledgerHref(cid, { section: "relationships" })}>
+              Ledger →
+            </Link>
           </div>
           {c.feels_toward.map((f) => (
             <div className="feeling-card" key={f.ref}>
@@ -169,7 +173,9 @@ function DossierColumn(
         <div className="column-section">
           <div className="column-section-head">
             <span className="section-label">Standing facts</span>
-            <span className="column-count">facts.json</span>
+            <Link className="column-count" to={ledgerHref(cid, { section: "facts" })}>
+              Ledger →
+            </Link>
           </div>
           {c.standing_facts.map((f) => (
             <div className="fact-row" key={f.id}>

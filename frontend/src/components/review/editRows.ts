@@ -61,6 +61,18 @@ export function isUncited(e: StagedEdit): boolean {
   return !e.review || !e.review.quote.trim();
 }
 
+/** A staged `before` -- or a conflict's `stored` -- as the reviewer reads it.
+ *
+ *  A commitment's ends in its fingerprint's stamp, `[N beats, last moved in
+ *  <scene id>]` (`conflicts.commitment_line`), and the save compares the whole
+ *  string byte for byte, so the row keeps it exactly. But a scene id is a file
+ *  name, not something a reader can place ("001--the-tide-comes-in"), so the
+ *  panel shows the stamp without it; the beat count, which is what says the
+ *  record moved, stays. */
+export function shownLine(text: string): string {
+  return text.replace(/, last moved in [^\]]*\]$/, "]");
+}
+
 // Staged edit kinds whose payload stamps the scene the beat came from, and so
 // have to follow a scene rename made while the review is open — see
 // `useSceneReview`'s `sceneRenamed`.

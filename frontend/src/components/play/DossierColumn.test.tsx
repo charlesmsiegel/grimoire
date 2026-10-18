@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import DossierColumn from "./DossierColumn";
 import type { Casefile, Provenance, TrackerRecord } from "../../api/client";
 import type { NowTracker } from "../tracker/TrackerNow";
@@ -41,12 +42,14 @@ function renderDossier(casefile: Casefile | null = AUD, busy = false,
                       provenance: Provenance = {}, tracker: NowTracker | null = null) {
   changed.length = 0;
   opened.length = 0; removed.length = 0;
+  // A wrapper rather than a parent, so `rerender` keeps the router too.
   return render(
     <DossierColumn cid="saltmarch" casefile={casefile} busy={busy} provenance={provenance}
                    onBack={() => opened.push("back")}
                    onOpenActor={(kind, id) => opened.push(`${kind}/${id}`)}
                    onRemove={() => removed.push(1)}
                    tracker={tracker} onTrackerChanged={() => changed.push(1)} />,
+    { wrapper: MemoryRouter },
   );
 }
 
@@ -67,19 +70,21 @@ test("an unrecorded row is dropped, not shown blank", () => {
   expect(screen.getByText("Knows")).toBeInTheDocument();
 });
 
-test("names the file each block came from", () => {
+test("names the record each block came from, and the way to the ledger's", () => {
   // The panel's claim is that these are records you can go and read, not a
-  // summary the app invented.
+  // summary the app invented -- said by name, and as a link, rather than as
+  // the store's file names ("relationships.json"), which go nowhere.
   renderDossier();
-  expect(screen.getByText("dossier.md")).toBeInTheDocument();
-  expect(screen.getByText("relationships.json")).toBeInTheDocument();
-  expect(screen.getByText("facts.json")).toBeInTheDocument();
+  expect(screen.getByText("dossier")).toBeInTheDocument();
+  expect(screen.getAllByRole("link", { name: /ledger/i }).map((a) => a.getAttribute("href")))
+    .toEqual(["/campaigns/saltmarch/ledger/relationships", "/campaigns/saltmarch/ledger"]);
+  expect(screen.queryByText(/\.(json|md)$/)).toBeNull();
 });
 
-test("falls back to the tagline for someone never played, and says which file", () => {
+test("falls back to the tagline for someone never played, and says so", () => {
   renderDossier({ ...AUD, dossier: "", tagline: "A novice who counts the tide." });
   expect(screen.getByText("A novice who counts the tide.")).toBeInTheDocument();
-  expect(screen.getByText("tagline.md")).toBeInTheDocument();
+  expect(screen.getByText("tagline — no dossier yet")).toBeInTheDocument();
 });
 
 test("a character with nothing recorded says what would record it", () => {

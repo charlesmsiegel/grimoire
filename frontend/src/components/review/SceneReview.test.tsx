@@ -29,7 +29,7 @@ vi.mock("../../api/models", () => ({ getModels: vi.fn() }));
 import { api } from "../../api/client";
 import {
   absorbs, here, installCampaignMocks, ONE_SCENE, openScene, PHASES_NONE_CUT,
-  playRoutes, renderCampaign, reviewResult, withPalette,
+  playRoutes, renderCampaign, reviewResult, visited, withPalette,
 } from "../../testkit/campaignHarness";
 
 beforeEach(installCampaignMocks);
@@ -238,11 +238,16 @@ const PACT_CONFLICT = {
 };
 
 /** Absorb the scene, hit Save, and have the server refuse the batch. */
-async function reviewIntoConflict() {
+async function reviewIntoConflict(band?: "medium" | "low") {
   const { ApiError } = await vi.importActual<typeof import("../../api/client")>("../../api/client");
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  absorbs(LORE_REVIEW);
+  absorbs(band === undefined ? LORE_REVIEW : {
+    ...LORE_REVIEW,
+    edits: LORE_REVIEW.edits.map((edit) => ({ ...edit,
+      review: { certainty: 0.6, quote: "Signed at dusk.", speaker: "Mara",
+                authority: "other", score: 0.3, band } })),
+  });
   (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
     409, "some proposed changes no longer match what is stored", "edit_conflicts",
     { conflicts: [PACT_CONFLICT] }));
@@ -304,6 +309,28 @@ test("Replace authorizes the staged text and the next save carries it", async ()
                               // moves again is refused rather than overwritten
                               resolve_from: "Witnessed by the watch.",
                               after: "Signed at dusk.\n\nBroken by morning." })]);
+});
+
+test.each(["medium", "low"] as const)("resolving a %s-band conflict counts as a decision", async (band) => {
+  await reviewIntoConflict(band);
+  fireEvent.click(screen.getByRole("button", { name: /Replace stored The Pact/ }));
+  expect(screen.getByRole("img", { name: "1 of 1 judged" })).toBeInTheDocument();
+  expect(screen.getByText("Every proposal has a decision. Nothing will be accepted silently."))
+    .toBeInTheDocument();
+  if (band === "medium") expect(within(screen.getByRole("button", { name: /World records & cards/ }))
+    .getByLabelText("all 1 answered")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Save 1 decisions" })).toBeEnabled();
+});
+
+test("merging a conflict counts as an approval before the next save", async () => {
+  await reviewIntoConflict("medium");
+  fireEvent.click(screen.getByRole("button", { name: /Merge stored The Pact/ }));
+  expect(screen.getByRole("img", { name: "1 of 1 judged" })).toBeInTheDocument();
+  expect(screen.getByText("Every proposal has a decision. Nothing will be accepted silently."))
+    .toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Save 1 decisions" })).toBeEnabled();
+  expect(screen.getByLabelText("After The Pact — lore"))
+    .toHaveValue("Witnessed by the watch.\n\nBroken by morning.");
 });
 
 test("answering one row leaves its duplicate-id sibling unanswered", async () => {
@@ -397,11 +424,16 @@ test("Merge prefills the editable text with the server's draft", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Merge stored The Pact/ }));
   expect(screen.getByLabelText("After The Pact — lore")).toHaveValue(
     "Witnessed by the watch.\n\nBroken by morning.");
+  // Resolving counts as a decision while this draft remains available to
+  // trim. Editing it must keep the authorization against the stored value.
+  fireEvent.change(screen.getByLabelText("After The Pact — lore"),
+    { target: { value: "Broken by morning." } });
   fireEvent.click(screen.getByRole("button", { name: /accept all .* & save|save \d+ decisions/i }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
   expect((api.saveChronicle as any).mock.calls[1][2].edits).toEqual([
     expect.objectContaining({ id: "lore:the-pact", resolve: "merge",
-                              after: "Witnessed by the watch.\n\nBroken by morning." })]);
+                              resolve_from: "Witnessed by the watch.",
+                              after: "Broken by morning." })]);
 });
 
 test("Keep stored drops the row from the batch entirely", async () => {
@@ -2061,10 +2093,16 @@ test("renaming the reviewed scene repoints an UNANSWERED conflict snapshot", asy
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
 
-  // What the reviewer is shown moved with the rename — the conflict's `stored`
-  // panel and the row's own `before` both carry the fingerprint, so both move.
+  // The review moved with the rename, address and all (this harness's scene
+  // list never learns the new id, so the view is sent back to `s1` after).
+  // The conflict's `stored` panel and the row's own `before` both carry the
+  // fingerprint, so both move -- though neither SHOWS the scene id it ends
+  // in, which is a file name and not something a reader can place: the panel
+  // reads the beat count.
   const moved = "promise, open — She swore it. [1 beat, last moved in s1-renamed]";
-  await waitFor(() => expect(screen.getAllByText(moved).length).toBeGreaterThan(0));
+  await waitFor(() => expect(visited()).toContain("/campaigns/run/scenes/s1-renamed/wrap-up"));
+  expect(screen.getAllByText("promise, open — She swore it. [1 beat]").length).toBeGreaterThan(0);
+  expect(screen.queryByText(/last moved in/)).toBeNull();
 
   // ...and so does what Replace sends as the value they answered over.
   fireEvent.click(screen.getByRole("button", { name: /Replace stored/i }));
@@ -2376,7 +2414,7 @@ async function openRoutedReview(review: any = ROUTED_REVIEW) {
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  await screen.findByText(/accepted ·/i);
+  await screen.findByRole("button", { name: SAVE_BUTTON });
 }
 
 test("a low-confidence proposal is filed apart and starts unapproved", async () => {
@@ -2421,8 +2459,11 @@ test("an untouched low-confidence proposal is accepted, and the button said so",
   // looking identical to accepting it. What makes this safe enough is that the
   // count is on the button before it is pressed, which this asserts first.
   await openRoutedReview();
-  const save = screen.getByRole("button", { name: /accept all 1 remaining & save/i });
-  expect(screen.getByText(/saving accepts the 1 you have not touched/i)).toBeInTheDocument();
+  // All three are untouched: the low one arrived unticked, and the two the
+  // band pre-approved have not been answered by anybody either.
+  const save = screen.getByRole("button", { name: /accept all 3 untouched & save/i });
+  expect(screen.getByText(/saving accepts the 3 you have not touched, 2 of them pre-approved/i))
+    .toBeInTheDocument();
   fireEvent.click(save);
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   expect((api.saveChronicle as any).mock.calls[0][2].edits.map((e: any) => e.id))
@@ -2433,8 +2474,9 @@ test("a rejected proposal is the one thing the save leaves out", async () => {
   await openRoutedReview();
   fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
   fireEvent.click(screen.getByLabelText(/Reject The forged map/));
-  // Everything decided, so the button stops offering to accept anything.
-  fireEvent.click(screen.getByRole("button", { name: /save 3 decisions/i }));
+  // The two pre-approved rows are still nobody's decision, and the button
+  // still says it is about to accept them.
+  fireEvent.click(screen.getByRole("button", { name: /accept all 2 untouched & save/i }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   expect((api.saveChronicle as any).mock.calls[0][2].edits.map((e: any) => e.id))
     .toEqual(["character_state:seraphine", "lore:the-pact"]);
@@ -2444,7 +2486,14 @@ test("once everything has a verdict the footer says nothing is implicit", async 
   await openRoutedReview();
   fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
   fireEvent.click(screen.getByLabelText(/Reject The forged map/));
+  // Not yet: the pre-approved rows are ticked, not answered, and a footer
+  // saying nothing will be accepted silently over them was the page
+  // contradicting its own NEEDS YOU drawer.
+  expect(screen.queryByText(/nothing will be accepted silently/i)).toBeNull();
+  fireEvent.click(cardFor(/Seraphine/).querySelector("[aria-label^='Approve']")!);
+  fireEvent.click(cardFor(/The Pact/).querySelector("[aria-label^='Approve']")!);
   expect(screen.getByText(/nothing will be accepted silently/i)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /save 3 decisions/i })).toBeInTheDocument();
 });
 
 test("each routed row shows its band, why it was banded, and its citation", async () => {
@@ -2501,11 +2550,14 @@ test("the review's column counts what is judged and what is left", async () => {
   await openRoutedReview();
   const column = reviewColumn();
   expect(column.getByText("3 edits")).toBeInTheDocument();
-  // Two pre-approved by band, the low one left for a person.
-  expect(column.getByText(/2 approved · 0 rejected · 1 left/)).toBeInTheDocument();
-  // The footer counts the same three states, and names the untouched one --
-  // that is the count the save button is about to act on.
-  expect(screen.getByText(/2 accepted · 0 rejected · 1 untouched/)).toBeInTheDocument();
+  // Two pre-approved by band and one low, and nobody has answered any of
+  // them: a row ticked on arrival is not one somebody approved.
+  expect(column.getByText(/^0 approved · 0 rejected · 3 untouched$/)).toBeInTheDocument();
+  // The footer counts the same, which is the count the save is about to act on.
+  const footer = within(document.querySelector(".review-footer") as HTMLElement);
+  expect(footer.getByText(/^0 approved · 0 rejected · 3 untouched$/)).toBeInTheDocument();
+  fireEvent.click(cardFor(/Seraphine/).querySelector("[aria-label^='Approve']")!);
+  expect(column.getByText(/^1 approved · 0 rejected · 2 untouched$/)).toBeInTheDocument();
 });
 
 test("the progress bar fills with work judged, not work approved", async () => {
@@ -2513,11 +2565,12 @@ test("the progress bar fills with work judged, not work approved", async () => {
   // progress would be lying about the only thing it measures.
   await openRoutedReview();
   const bar = () => reviewColumn().getByRole("img", { name: /of 3 judged/i });
-  expect(bar()).toHaveAccessibleName("2 of 3 judged");
+  // Rows ticked on arrival are no work done.
+  expect(bar()).toHaveAccessibleName("0 of 3 judged");
   fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
   fireEvent.click(screen.getByLabelText(/Reject The forged map/));
-  expect(bar()).toHaveAccessibleName("3 of 3 judged");
-  expect(reviewColumn().getByText(/2 approved · 1 rejected · 0 left/)).toBeInTheDocument();
+  expect(bar()).toHaveAccessibleName("1 of 3 judged");
+  expect(reviewColumn().getByText(/^0 approved · 1 rejected · 2 untouched$/)).toBeInTheDocument();
 });
 
 test("approving a row folds it to a line you can undo, and undoing brings it back", async () => {
@@ -2572,8 +2625,53 @@ test("Approve all cited leaves the uncited rows alone", async () => {
   ] });
   fireEvent.click(screen.getByRole("button", { name: /approve all cited/i }));
   expect(cardFor(/standing fact/)).not.toHaveClass("approved");
+  // The cited row is approved by the reviewer's own bulk verdict, so it folds
+  // like any row approved by hand -- and nothing cited is left to approve.
   fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
-  expect(cardFor(/The forged map/)).toHaveClass("approved");
+  expect(screen.getByText(/APPROVED · The forged map/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /approve all cited/i })).toBeDisabled();
+});
+
+test("Approve all cited answers what is unanswered and leaves a Reject standing", async () => {
+  await openRoutedReview();
+  fireEvent.click(reviewColumn().getByRole("button", { name: /low confidence/i }));
+  fireEvent.click(screen.getByLabelText(/Reject The forged map/));
+  fireEvent.click(screen.getByRole("button", { name: /approve all cited/i }));
+  expect(screen.getByLabelText(/Reject The forged map/)).toHaveAttribute("aria-pressed", "true");
+  expect(reviewColumn().getByText(/^2 approved · 1 rejected · 0 untouched$/)).toBeInTheDocument();
+});
+
+test("Approve all cited is not offered when nothing is cited", async () => {
+  await openRoutedReview({ ...ROUTED_REVIEW, edits: [
+    { id: "fact:f1", kind: "fact", target: { kind: "fact", id: "f1" },
+      label: "A standing fact", field: "text", before: "", after: "The priory owes the Reeve",
+      authored: false,
+      review: { certainty: 0.4, quote: "", speaker: "", authority: "uncited",
+                score: 0.1, band: "low" } },
+  ] });
+  expect(screen.getByRole("button", { name: /approve all cited/i })).toBeDisabled();
+  // ...and every row is in a NEEDS YOU drawer, so there is no store to list.
+  expect(reviewColumn().queryByText(/by store/i)).toBeNull();
+});
+
+test("a pre-approved row says so, and its Approve reads as already pressed", async () => {
+  // `.approved` had no look of its own, so a row the save was going to write
+  // sat in NEEDS YOU looking as undecided as the low one beside it.
+  await openRoutedReview();
+  const card = cardFor(/Seraphine/);
+  expect(within(card).getByText("pre-approved")).toBeInTheDocument();
+  const approve = within(card).getByLabelText(/Approve Seraphine/);
+  expect(approve).toHaveAttribute("aria-pressed", "true");
+  expect(approve).toHaveTextContent("Approved");
+  expect(within(card).getByLabelText(/Reject Seraphine/)).toHaveAttribute("aria-pressed", "false");
+
+  const low = cardFor(/The forged map/);
+  expect(within(low).queryByText("pre-approved")).toBeNull();
+  expect(within(low).getByLabelText(/Approve The forged map/)).toHaveAttribute("aria-pressed", "false");
+
+  // Answering it is the reviewer's own yes: the stamp's claim is over.
+  fireEvent.click(within(cardFor(/Seraphine/)).getByLabelText(/Approve Seraphine/));
+  expect(screen.getByText(/APPROVED · Seraphine/)).toBeInTheDocument();
 });
 
 test("a review replaces the scene rather than stacking on top of it", async () => {
@@ -2592,7 +2690,7 @@ test("a review replaces the scene rather than stacking on top of it", async () =
   // The play view, before: composer, scene actions, the live stream.
   expect(screen.getByPlaceholderText(/Speak your intent/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  await screen.findByText(/accepted ·/i);
+  await screen.findByRole("button", { name: SAVE_BUTTON });
 
   // None of it survives into the review.
   expect(screen.queryByPlaceholderText(/Speak your intent/)).toBeNull();
@@ -2622,7 +2720,7 @@ test("the transcript sits beside the review, and a row's quote lights its line",
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  await screen.findByText(/accepted ·/i);
+  await screen.findByRole("button", { name: SAVE_BUTTON });
 
   const pane = within(screen.getByRole("complementary", { name: /for checking/i }));
   expect(pane.getByText("She pressed a hand to her side.")).toBeInTheDocument();
@@ -2646,7 +2744,7 @@ test("the pane shows a post as its display rules do, and a quote only the rule's
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  await screen.findByText(/accepted ·/i);
+  await screen.findByRole("button", { name: SAVE_BUTTON });
 
   const pane = within(screen.getByRole("complementary", { name: /for checking/i }));
   expect(pane.getByText("She pressed a hand to her side.")).toBeInTheDocument();
@@ -3753,6 +3851,37 @@ test("the scene url still opens a waiting review, exactly as before", async () =
   renderCampaign("/campaigns/run/scenes/s1");
 
   expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
+  // ...and the address says it is the review now, so the rail's Wrap-up row
+  // lights for what is on screen.
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1/wrap-up"));
+});
+
+test("End scene opens the review at its own address, and saving it returns to the scene", async () => {
+  // The review used to open at the transcript's URL, so the reader judged it
+  // while the rail said Scenes. And once saved at `/wrap-up`, the page would
+  // say "Nothing to wrap up" about the review just finished.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByLabelText("Scene summary");
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1/wrap-up"));
+
+  fireEvent.click(screen.getByRole("button", { name: SAVE_BUTTON }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1"));
+  expect(screen.queryByText(/nothing to wrap up/i)).toBeNull();
+});
+
+test("discarding a review at its address returns to the scene too", async () => {
+  withScene();
+  (api.pendingReview as any).mockResolvedValue(
+    { review: STORED_REVIEW, generation: "gen-stored", stale: null });
+  renderCampaign("/campaigns/run/scenes/s1/wrap-up");
+  await screen.findByDisplayValue("A stored summary.");
+  fireEvent.click(screen.getByRole("button", { name: "Discard all" }));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1"));
 });
 
 
@@ -3837,7 +3966,7 @@ test("moving to the wrap-up url does not throw away decisions in progress", asyn
       ],
     },
     generation: "gen-stored", stale: null });
-  renderCampaign("/campaigns/run/scenes/s1");
+  renderCampaign("/campaigns/run/scenes/s1/wrap-up");
 
   // Judge it, so there is something to lose.
   fireEvent.click(await screen.findByRole("button", { name: "Reject A — lore" }));
@@ -3845,10 +3974,13 @@ test("moving to the wrap-up url does not throw away decisions in progress", asyn
     within(screen.getByRole("button", { name: /World records & cards/ }))
       .getByLabelText("all 1 answered")).toBeInTheDocument());
 
-  // Now go to the review's own address, the way the rail's Wrap-up row does.
-  expect(here()).toBe("/campaigns/run/scenes/s1");
-  fireEvent.click(screen.getByTestId("go-wrap-up"));
+  // Now ask for the scene's own address, the way a link to the transcript
+  // does. While the review is open that address shows the review, so the view
+  // moves itself back -- two route switches, and the verdict has to survive
+  // both.
+  fireEvent.click(screen.getByTestId("go-scene"));
   // The navigation really happened, so what follows is not vacuous.
+  await waitFor(() => expect(visited()).toContain("/campaigns/run/scenes/s1"));
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1/wrap-up"));
 
   // Same element, same state: still answered, and still rejected. React
@@ -3858,7 +3990,7 @@ test("moving to the wrap-up url does not throw away decisions in progress", asyn
   expect(await screen.findByDisplayValue("A stored summary.")).toBeInTheDocument();
   expect(within(screen.getByRole("button", { name: /World records & cards/ }))
     .getByLabelText("all 1 answered")).toBeInTheDocument();
-  expect(screen.getByText(/0 accepted · 1 rejected/)).toBeInTheDocument();
+  expect(screen.getByText(/^0 approved · 1 rejected$/)).toBeInTheDocument();
 });
 
 // ---- the existing-record check (continuity identity, Slice C) -------------

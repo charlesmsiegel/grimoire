@@ -6,7 +6,8 @@
 // line that decided it.
 import {
   approvedByDefault, dossierNotice, drawerKey, editBand, groupOf, IDENTITY_NO_ALTERNATIVE_HINT,
-  IDENTITY_UNCERTAIN_HINT, identityChip, identityHint, isCandidateAlternative, isUncited, wireEdit,
+  IDENTITY_UNCERTAIN_HINT, identityChip, identityHint, isCandidateAlternative, isUncited, shownLine,
+  wireEdit,
 } from "./editRows";
 import type { Dossiers, IdentityCheck, StagedEdit } from "../../api/client";
 
@@ -219,4 +220,13 @@ test("an alternative that writes a stored record is never the as-new variant", (
   // it); a non-empty `before` still says it writes a record that exists.
   expect(isCandidateAlternative(ontoLedger, check({ candidates: [] }))).toBe(true);
   expect(isCandidateAlternative(asNew, check({ candidates: [] }))).toBe(false);
+});
+
+test("a commitment's stamp is shown without the scene id the save compares", () => {
+  // The fingerprint keeps the id; the reader is shown the beat count alone.
+  const line = "promise, open — She swore it. [1 beat, last moved in 001--the-tide-comes-in]";
+  expect(shownLine(line)).toBe("promise, open — She swore it. [1 beat]");
+  // A beat that quotes "last moved in" mid-sentence is left alone: only the stamp is.
+  expect(shownLine("open — it last moved in spring [2 beats]")).toBe("open — it last moved in spring [2 beats]");
+  expect(shownLine("active — The bridge stands.")).toBe("active — The bridge stands.");
 });

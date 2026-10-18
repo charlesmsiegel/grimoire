@@ -54,6 +54,30 @@ def _rows(scope: str, scope_id: str) -> list[dict]:
     return found
 
 
+#: What each kind of actor is called in a sentence a reader sees. The refs
+#: (`characters:mara`) are the store's spelling, and the 409 this module raises
+#: is shown verbatim -- the campaign wizard printed one at a player who had
+#: only typed a name.
+_KIND_WORDS = {"characters": "a character", "pcs": "a player character"}
+
+
+def _holder(normalized: str, at_scope: str, at_id: str, *, actor_ref: str | None,
+            ignore_campaign: str | None) -> dict | None:
+    """The first actor in this one scope already called `normalized`."""
+    for row in _rows(at_scope, at_id):
+        own_actor = row["ref"] == actor_ref and (
+            ignore_campaign is None or (at_scope == "campaign" and at_id == ignore_campaign))
+        if not own_actor and row["name"].strip().casefold() == normalized:
+            return row
+    return None
+
+
+def _refusal(row: dict, where: str) -> str:
+    kind = _KIND_WORDS.get(row["ref"].split(":", 1)[0], "an actor")
+    return (f"There is already {kind} called \"{row['name'].strip()}\" {where}. A transcript "
+            "could not tell the two apart, so this one needs another name.")
+
+
 def require_unique(name: str, *, scope: str, scope_id: str,
                    actor_ref: str | None = None,
                    ignore_campaign: str | None = None) -> None:
@@ -61,14 +85,36 @@ def require_unique(name: str, *, scope: str, scope_id: str,
     normalized = name.strip().casefold()
     if not normalized:
         return
-    scopes = [(scope, scope_id)]
+    scopes = [(scope, scope_id, f"in this {scope}")]
     if scope == "world":
-        scopes.extend(("campaign", row["id"]) for row in campaigns.list_campaigns()
-                      if row.get("world") == scope_id)
-    for at_scope, at_id in scopes:
-        for row in _rows(at_scope, at_id):
-            own_actor = row["ref"] == actor_ref and (
-                ignore_campaign is None or (at_scope == "campaign" and at_id == ignore_campaign))
-            if not own_actor and row["name"].strip().casefold() == normalized:
-                raise ActorNameError(
-                    f"{name!r} is already used by {row['ref']} in {at_scope} {at_id}")
+        scopes.extend(("campaign", row["id"],
+                       f"in {row.get('name') or row['id']}, a campaign of this world")
+                      for row in campaigns.list_campaigns() if row.get("world") == scope_id)
+    for at_scope, at_id, where in scopes:
+        row = _holder(normalized, at_scope, at_id, actor_ref=actor_ref,
+                      ignore_campaign=ignore_campaign)
+        if row is not None:
+            raise ActorNameError(_refusal(row, where))
+
+
+def refusal_in_new_campaign(name: str, wid: str) -> str | None:
+    """What a campaign just begun in world `wid` would refuse a new PC called
+    `name` with, or None when it would take it.
+
+    The campaign wizard asks this BEFORE it creates anything. It used to learn
+    the answer from `POST /campaigns/{cid}/pcs`, after `POST /campaigns` had
+    already made the campaign, so every refused name left a half-made campaign
+    behind. A new campaign is an overlay with nothing of its own yet, so the
+    actors it can see are exactly its world's -- this one scope, and NOT the
+    world's campaigns as well: `require_unique` widens a WORLD write to those
+    because a world actor is visible in every one of them, and a campaign PC is
+    visible in none but its own. Both spellings `POST /campaigns/{cid}/pcs`
+    checks are asked: the name as typed, and the persona's whitespace-folded one.
+    """
+    for candidate in dict.fromkeys((name.strip(), persona_name({"name": name}))):
+        if not candidate:
+            continue
+        row = _holder(candidate.casefold(), "world", wid, actor_ref=None, ignore_campaign=None)
+        if row is not None:
+            return _refusal(row, "in this world")
+    return None

@@ -70,9 +70,9 @@ export function TaglineSection(
       <div className="identity-tagline">
         {text ? <>
           <p>{text}</p>
-          {/* Named the way the dossier column names its sources: a file you can
-              go and read, not prose the app made up. */}
-          <span className="dossier-source">tagline.md</span>
+          {/* Named the way the dossier column names its sources: a record,
+              not prose the app made up. */}
+          <span className="dossier-source">tagline</span>
         </> : <p className="field-hint">No tagline — the off-scene cast lists them by name alone.</p>}
         <div className="column-actions">
           <button className="subtle" type="button" onClick={() => setEditing(true)}>

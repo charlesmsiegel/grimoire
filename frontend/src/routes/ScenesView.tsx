@@ -3,8 +3,9 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { NewSceneChooser } from "../components/NewSceneChooser";
 import { sanitizeSeed, type ChooserSeed } from "../components/pressureControls";
 import { SceneImport } from "../components/SceneImport";
-import { api, type CampaignMeta, type CampaignSceneCosts,
+import { api, type CalendarMonth, type CampaignMeta, type CampaignSceneCosts,
          type SceneMeta } from "../api/client";
+import { dateLabel, dateParts } from "../calendarDates";
 import { PageShell, ColumnSection } from "../components/PageShell";
 import { errorText } from "../api/errors";
 import { bucketPrice, estimatedTokensTitle, UNPRICED } from "../components/cost";
@@ -12,7 +13,7 @@ import { usePublishShellContext } from "../components/ShellStatus";
 import { useCampaignShell } from "../shell/ShellPayloadContext";
 import { sceneNumber } from "./sceneNumber";
 
-/** Every scene in the campaign, newest first.
+/** Every scene in the campaign, the one played most recently first.
  *
  *  The rail says how many there are and the hub shows the last five; this is
  *  the list you read top to bottom. Its one real job is the **state-dependent
@@ -87,6 +88,16 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
    *  read behind it scans the ledger's whole history, which is the right cost
    *  for the Costs page and the wrong one to put in front of a list. */
   const [costs, setCosts] = useState<CampaignSceneCosts | null>(null);
+  /** What a row's "when" and "where" are called, rather than how the store
+   *  spells them. A scene records its place as a location ID and its date in
+   *  its calendar's native form (`2026-01-02`, a month KEY), and the list used
+   *  to print both as stored: "TIDEWATCH-KEEP". Names come from the campaign's
+   *  locations; month names from its calendar, a year at a time. Read after
+   *  the list, like the spend, and dropped silently: until they land, or if
+   *  they fail, a date reads as written and a place is left out -- an id is
+   *  not a name, and "somewhere" is the honest rendering of not knowing. */
+  const [places, setPlaces] = useState<Map<string, string> | null>(null);
+  const [months, setMonths] = useState<Map<string, CalendarMonth[]>>(new Map());
   const [meta, setMeta] = useState<CampaignMeta | null>(null);
   const [scenes, setScenes] = useState<SceneMeta[] | null>(null);
   /** The rail's shell read, only when it is about this campaign. */
@@ -161,6 +172,36 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
       .catch(() => {});
     return () => { live = false; };
   }, [cid]);
+
+  useEffect(() => {
+    if (!cid) return;
+    let live = true;
+    setPlaces(null);
+    api.listEntities({ kind: "campaign", id: cid }, "locations")
+      .then((rows) => { if (live) setPlaces(new Map(rows.map((r) => [r.id, r.name]))); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [cid]);
+
+  // One months read per year the list's dates fall in -- usually one.
+  const years = useMemo(() => [...new Set((scenes ?? [])
+    .map((s) => (s.date ? dateParts(s.date).year : ""))
+    .filter((y) => /^-?\d+$/.test(y)))].sort().join(","), [scenes]);
+  useEffect(() => {
+    // Month keys belong to this campaign's calendar. An overlapping key in
+    // the next campaign must read as written until its own names arrive.
+    setMonths(new Map());
+    if (!cid || !years) return;
+    let live = true;
+    const scope = { kind: "campaign", id: cid } as const;
+    void Promise.allSettled(years.split(",").map((y) =>
+      api.getCalendarMonths(scope, Number(y)).then((r) => [y, r.months] as const)))
+      .then((results) => {
+        if (!live) return;
+        setMonths(new Map(results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []))));
+      });
+    return () => { live = false; };
+  }, [cid, years]);
 
   // Which scenes are holding a review, and how many proposals each is
   // holding — a map rather than a set, so the chip can say "how many" instead
@@ -264,7 +305,9 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
     <PageShell column={column} columnLabel="Scenes">
       <div className="page-wide view-anim">
         <div className="eyebrow">
-          {[meta?.name, "every scene, newest first", counts.open ? `${counts.open} open` : null]
+          {/* The order the server sorts by: a turn moves its scene to the top,
+              so this is not creation order, and "newest first" said it was. */}
+          {[meta?.name, "last played first", counts.open ? `${counts.open} open` : null]
             .filter(Boolean).join(" · ")}
         </div>
         <div className="scenes-head">
@@ -390,6 +433,8 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
             // scene the ledger has no rows for at all draws nothing, because
             // "never generated against" is not "cost nothing".
             const price = row ? bucketPrice(row) : null;
+            const parts = s.date ? dateParts(s.date) : null;
+            const when = parts && dateLabel(parts, months.get(parts.year) ?? []);
             return (
               <li key={s.id} className={"scene-item" + (s.done || s.closed_by ? "" : " open")}>
                 {/* Six cells, each fact written ONCE. At full width they are
@@ -408,22 +453,25 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
                 {/* One cell for the chips: the status, and `branch` when the
                     scene has a sibling. A closed branch says so in place of
                     "open" -- unless a review is waiting, which still wins. */}
+                {/* Statuses, outlined: a filled "OPEN" outweighed the row's
+                    real action at its end, and read as one itself. */}
                 <span className="scene-item-chips">
                   {!waiting.has(s.id) && !s.done && s.closed_by ? (
-                    <span className="chip" title="A sibling branch was absorbed">closed</span>
+                    <span className="chip status" title="A sibling branch was absorbed">closed</span>
                   ) : (
-                    <span className={"chip" + (s.done ? "" : " on")}>
+                    <span className={"chip status"
+                                     + (waiting.has(s.id) ? " alert" : s.done ? "" : " live")}>
                       {waiting.has(s.id)
                         ? `${waiting.get(s.id)} unreviewed`
-                        : s.done ? "absorbed" : "open"}
+                        : s.done ? "absorbed" : "in play"}
                     </span>
                   )}
                   {s.branch_group && (groupSize.get(s.branch_group) ?? 0) > 1 && (
-                    <span className="chip">branch</span>
+                    <span className="chip status">branch</span>
                   )}
                 </span>
                 <span className="scene-item-when">
-                  {[s.date, s.place, s.pcless ? "no PC" : null]
+                  {[when, s.place ? places?.get(s.place) : null, s.pcless ? "no PC" : null]
                     .filter(Boolean).join(" · ")}
                 </span>
                 {/* Turns and spend: neither is frontmatter, so either can be

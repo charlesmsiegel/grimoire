@@ -73,19 +73,26 @@ export function CalendarDatePicker({ scope, value, onChange, ariaLabel, disabled
   const dayCount = entry?.days ?? 0;
   return (
     <span className="date-picker">
-      <input type="number" aria-label={`${ariaLabel} year`} value={year} disabled={disabled}
+      {/* Says what it is for: the month and day name themselves with their
+          empty options, and an empty number box beside them said nothing. */}
+      <input type="number" aria-label={`${ariaLabel} year`} placeholder="Year" value={year}
+             disabled={disabled}
              onChange={(e) => { setYear(e.target.value); emit(e.target.value, month, day); }} />
-      <select aria-label={`${ariaLabel} month`} value={month} disabled={disabled || !months.length}
-              onChange={(e) => { setMonth(e.target.value); setDay(""); emitChange(""); }}>
-        <option value="">— month —</option>
-        {months.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}
-      </select>
-      <select aria-label={`${ariaLabel} day`} value={day} disabled={disabled || !entry}
-              onChange={(e) => { setDay(e.target.value); emit(year, month, e.target.value); }}>
-        <option value="">—</option>
-        {Array.from({ length: dayCount }, (_, i) => String(i + 1)).map((d) =>
-          <option key={d} value={d}>{d}</option>)}
-      </select>
+      {/* Month and day wrap together or not at all -- a day select alone on
+          a line is a number with nothing to say what it is the day of. */}
+      <span className="date-picker-md">
+        <select aria-label={`${ariaLabel} month`} value={month} disabled={disabled || !months.length}
+                onChange={(e) => { setMonth(e.target.value); setDay(""); emitChange(""); }}>
+          <option value="">— month —</option>
+          {months.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}
+        </select>
+        <select aria-label={`${ariaLabel} day`} value={day} disabled={disabled || !entry}
+                onChange={(e) => { setDay(e.target.value); emit(year, month, e.target.value); }}>
+          <option value="">—</option>
+          {Array.from({ length: dayCount }, (_, i) => String(i + 1)).map((d) =>
+            <option key={d} value={d}>{d}</option>)}
+        </select>
+      </span>
     </span>
   );
 }

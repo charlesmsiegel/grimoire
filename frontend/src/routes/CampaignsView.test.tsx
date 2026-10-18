@@ -71,8 +71,8 @@ test("a campaign card carries the shelf line, the blurb and one primary action",
   expect(c.getByText(/2\/4 scenes/i)).toBeInTheDocument();
   expect(c.getByText(/last played 2 days ago/i)).toBeInTheDocument();
   expect(c.getByText(/drowned cousin/i)).toBeInTheDocument();
-  expect(c.getByRole("link", { name: /continue/i })).toHaveAttribute("href", "/campaigns/c1");
-  expect(c.getByText("Verdigris & Ash")).toBeInTheDocument();
+  expect(c.getByRole("link", { name: /^open/i })).toHaveAttribute("href", "/campaigns/c1");
+  expect(c.getByText(/Verdigris & Ash/)).toBeInTheDocument();
 });
 
 test("a campaign nothing has been absorbed from counts zero rather than nothing", async () => {
@@ -86,7 +86,8 @@ test("a campaign nothing has been absorbed from counts zero rather than nothing"
   // to read as "none of three" rather than trailing off into the total.
   expect(c.getByText(/0\/3 scenes/i)).toBeInTheDocument();
   expect(c.getByText(/never played/i)).toBeInTheDocument();
-  // no last scene to continue into, so the action names what it really does
+  // the action names what it does, with or without a last scene: it opens
+  // the campaign
   expect(c.getByRole("link", { name: /open/i })).toBeInTheDocument();
 });
 
@@ -246,15 +247,65 @@ test("an empty world says which world is empty, not just that nothing is here", 
   expect(screen.getByText(/no campaigns in Saltmarch yet/i)).toBeInTheDocument();
 });
 
-test("deletes a campaign after confirm", async () => {
+test("deletes a campaign after a confirm that says it cannot be undone", async () => {
   (api.listCampaigns as any).mockResolvedValue([
     { id: "c1", name: "Doomed", world: "w1", created: "", updated: "", scenes: 0, last_scene: "" },
   ]);
-  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   renderView();
   await screen.findByText("Doomed");
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   await waitFor(() => expect(api.deleteCampaign).toHaveBeenCalledWith("c1"));
+  expect(confirm.mock.calls[0][0]).toMatch(/every scene in it\? This cannot be undone/);
+});
+
+test("a delete the server refuses is said, not swallowed", async () => {
+  // It was an unhandled rejection: the card stayed, with no word on why.
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "c1", name: "Doomed", world: "w1", created: "", updated: "", scenes: 0, last_scene: "" },
+  ]);
+  (api.deleteCampaign as any).mockRejectedValueOnce(
+    { status: 409, detail: "the image store is being maintained" });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderView();
+  await screen.findByText("Doomed");
+  fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+  expect(await screen.findByRole("alert"))
+    .toHaveTextContent("'Doomed' was not deleted: the image store is being maintained");
+  fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("an inline rename offers Save and Cancel, and keeps the box open on a refusal", async () => {
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "c1", name: "Saltmarch", world: "w1", created: "", updated: "", scenes: 0, last_scene: "" },
+  ]);
+  (api.renameCampaign as any).mockRejectedValueOnce({ status: 409, detail: "campaign busy" });
+  renderView();
+  await screen.findByText("Saltmarch");
+  fireEvent.click(screen.getByRole("button", { name: "Rename Saltmarch" }));
+  fireEvent.change(screen.getByLabelText("Rename campaign"), { target: { value: "Saltmarch Tides" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("'Saltmarch' was not renamed: campaign busy");
+  // Still open, with what was typed, so the fix is one edit away.
+  expect(screen.getByLabelText("Rename campaign")).toHaveValue("Saltmarch Tides");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByLabelText("Rename campaign")).toBeNull();
+  expect(api.renameCampaign).toHaveBeenCalledTimes(1);
+});
+
+test("the card's button says it opens the campaign, and the last scene is labelled as such", async () => {
+  // It said "Continue" over the last scene's title and went to the hub, so it
+  // read as resuming a scene it never resumed.
+  (api.listCampaigns as any).mockResolvedValue([
+    { id: "c1", name: "Saltmarch", world: "w1", created: "", updated: "", scenes: 2,
+      last_scene: "The Long Quay" },
+  ]);
+  renderView();
+  await screen.findByText("Saltmarch");
+  expect(screen.getByRole("link", { name: /^open/i })).toHaveAttribute("href", "/campaigns/c1");
+  expect(screen.queryByRole("link", { name: /continue/i })).toBeNull();
+  expect(screen.getByText("Last played").parentElement).toHaveTextContent("Last played The Long Quay");
 });
 
 test("renders a cover for a campaign that has one and a placeholder for one that does not", async () => {
@@ -445,7 +496,7 @@ test("a remembered shelf paints on the first render, busy, with rename, fork and
   expect(c.getByRole("button", { name: "Fork Saltmarch" })).toBeDisabled();
   expect(c.getByRole("button", { name: "Delete Saltmarch" })).toBeDisabled();
   // Navigation acts on nothing and stays live.
-  expect(c.getByRole("link", { name: /continue/i })).toHaveAttribute("href", "/campaigns/c1");
+  expect(c.getByRole("link", { name: /^open/i })).toHaveAttribute("href", "/campaigns/c1");
   // New campaign waits for the worlds read to land, remembered worlds or not.
   expect(screen.getByRole("button", { name: /new campaign/i })).toBeDisabled();
 

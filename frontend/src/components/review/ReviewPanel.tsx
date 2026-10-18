@@ -8,8 +8,8 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
   const {
     absorb, editChronicle, budgetCutPhases, conflictByRow, editRows, shownRows,
     openSection, uncitedRows, saveError, saveAbsorb, discard,
-    approvedCount, rejectedCount,
-    undecidedCount, saving, reviewBusy, retryAudit, retryingAudit,
+    approvedCount, preApprovedCount, rejectedCount,
+    untouchedCount, saving, reviewBusy, retryAudit, retryingAudit,
     retryDossiers, retryingDossiers, targetClashRows,
   } = review;
   if (!absorb) return null;
@@ -195,17 +195,24 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
       {/* The footer says what the button is about to do, and counts it.
           Rejecting is the only thing that excludes a proposal, so a row left
           untouched is one that will be written -- and that has to be readable
-          BEFORE the click, not discovered afterwards in the world. */}
+          BEFORE the click, not discovered afterwards in the world. A
+          pre-approved row is untouched too: ticked by band, answered by
+          nobody. Counting it as accepted, and saying "nothing will be
+          accepted silently" over it, was the page contradicting its own
+          NEEDS YOU drawer. */}
       <div className="review-footer">
         <span className="review-left">
-          {approvedCount} accepted · {rejectedCount} rejected
-          {undecidedCount > 0 && ` · ${undecidedCount} untouched`}
+          {approvedCount} approved · {rejectedCount} rejected
+          {untouchedCount > 0 && ` · ${untouchedCount} untouched`}
         </span>
         <p className="review-explain">
-          {undecidedCount > 0
-            ? `Saving accepts the ${undecidedCount} you have not touched. `
-              + "Reject anything you do not want first."
-            : "Every proposal has a decision. Nothing will be accepted silently."}
+          {untouchedCount === 0
+            ? "Every proposal has a decision. Nothing will be accepted silently."
+            : `Saving accepts the ${untouchedCount} you have not touched`
+              + (preApprovedCount === 0 ? ""
+                : preApprovedCount === untouchedCount ? ", all of them pre-approved"
+                : `, ${preApprovedCount} of them pre-approved`)
+              + ". Reject anything you do not want first."}
         </p>
         {/* Deliberately NOT disabled by `reviewBusy`: a retry runs on the
             absorb budget, which is unbounded at 0, so Cancel is the only
@@ -215,8 +222,8 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
           Discard all</button>
         <button className="primary" onClick={saveAbsorb} disabled={reviewBusy}>
           {saving ? "Saving…"
-            : undecidedCount > 0
-              ? `Accept all ${undecidedCount} remaining & save`
+            : untouchedCount > 0
+              ? `Accept all ${untouchedCount} untouched & save`
               : `Save ${approvedCount + rejectedCount} decisions`}</button>
       </div>
     </div>

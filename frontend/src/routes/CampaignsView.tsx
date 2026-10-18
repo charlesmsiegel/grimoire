@@ -100,6 +100,8 @@ export default function CampaignsView() {
    *  earlier turn is an approximation and saying nothing would let the branch
    *  read as the past exactly. */
   const [forkNote, setForkNote] = useState("");
+  /** Why the last rename or delete did not happen, or null. */
+  const [actionError, setActionError] = useState<string | null>(null);
   // Keyed by id AND version, not id alone: a cover that failed to load must
   // not keep its replacement hidden after the next campaigns refresh.
   const [broken, setBroken] = useState<Record<string, boolean>>({});
@@ -177,16 +179,36 @@ export default function CampaignsView() {
     saveSort(next);
   }
 
+  /** Rename, and report a refusal rather than drop it. On a failure the box
+   *  stays open with what was typed, so the fix is one edit away; it used to
+   *  be an unhandled rejection that left the box open saying nothing. */
   async function rename() {
     if (!renaming) return;
-    await api.renameCampaign(renaming.id, renaming.name);
+    const before = campaigns.find((c) => c.id === renaming.id)?.name ?? renaming.name;
+    setActionError(null);
+    try {
+      await api.renameCampaign(renaming.id, renaming.name);
+    } catch (err) {
+      setActionError(`'${before}' was not renamed: ${errorText(err)}`);
+      return;
+    }
     setRenaming(null);
     await reloadCampaigns();
   }
 
+  /** Delete, after a confirm that says what goes with it. A delete is refused
+   *  while a run holds the campaign or the image store is being maintained,
+   *  so a failure is said, not swallowed: an unhandled rejection left the card
+   *  standing with no word on why. */
   async function remove(c: CampaignMeta) {
-    if (!window.confirm(`Delete '${c.name}'?`)) return;
-    await api.deleteCampaign(c.id);
+    if (!window.confirm(`Delete '${c.name}' and every scene in it? This cannot be undone.`)) return;
+    setActionError(null);
+    try {
+      await api.deleteCampaign(c.id);
+    } catch (err) {
+      setActionError(`'${c.name}' was not deleted: ${errorText(err)}`);
+      return;
+    }
     await reloadCampaigns();
   }
 
@@ -204,13 +226,11 @@ export default function CampaignsView() {
     try {
       report = await api.forkCampaign(c.id, name);
     } catch (err) {
-      // Reported, not dropped. `rename` and `remove` above let a rejection
-      // become an unhandled promise — the row simply does not change, which
-      // reads as "nothing happened" and is nearly true for them. It is not true
-      // here: a fork holds two campaign locks, so 409 CAMPAIGN BUSY is a
-      // reachable answer for a campaign being played in another window, and a
-      // silent one would look identical to a fork that worked. The campaign
-      // page reports the same failure the same way.
+      // Reported, not dropped, as `rename` and `remove` above report theirs:
+      // a fork holds two campaign locks, so 409 CAMPAIGN BUSY is a reachable
+      // answer for a campaign being played in another window, and a silent one
+      // would look identical to a fork that worked. The campaign page reports
+      // the same failure the same way.
       setForkNote(`'${c.name}' could not be forked: ${errorText(err)}`);
       return;
     }
@@ -270,10 +290,11 @@ export default function CampaignsView() {
             {/* The label this replaced said "SORT · LAST PLAYED ▾" and did
                 nothing — a control that looks like a control and is not is
                 worse than no control at all. Two states, so it cycles on click
-                rather than opening a menu over a choice of two. */}
+                rather than opening a menu over a choice of two -- which is why
+                its mark is ⇅ and not ▾: a caret promises a menu. */}
             <button type="button" className="data-label sort-toggle" onClick={toggleSort}
                     aria-label={sort === "name" ? "Sort by last played" : "Sort by name"}>
-              SORT · {sortLabel(sort)} ▾
+              SORT · {sortLabel(sort)} <span aria-hidden>⇅</span>
             </button>
           </div>
         </div>
@@ -307,6 +328,13 @@ export default function CampaignsView() {
           </p>
         )}
 
+        {actionError && (
+          <div className="banner error-banner" role="alert">
+            {actionError}{" "}
+            <button className="subtle" onClick={() => setActionError(null)}>Dismiss</button>
+          </div>
+        )}
+
         {forkNote && (
           <p className="banner" role="status">
             {forkNote}
@@ -335,15 +363,22 @@ export default function CampaignsView() {
 
               <div className="campaign-body">
                 {renaming?.id === c.id ? (
-                  <input
-                    className="row-rename" aria-label="Rename campaign" autoFocus
-                    value={renaming.name}
-                    onChange={(e) => setRenaming({ id: c.id, name: e.target.value })}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") rename();
-                      if (e.key === "Escape") setRenaming(null);
-                    }}
-                  />
+                  // Enter and Escape still work, but they are not discoverable
+                  // from a bare box, so the two outcomes are buttons too.
+                  <div className="campaign-rename">
+                    <input
+                      className="row-rename" aria-label="Rename campaign" autoFocus
+                      value={renaming.name}
+                      onChange={(e) => setRenaming({ id: c.id, name: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void rename();
+                        if (e.key === "Escape") setRenaming(null);
+                      }}
+                    />
+                    <button className="subtle" disabled={!renaming.name.trim()}
+                            onClick={() => void rename()}>Save</button>
+                    <button className="subtle" onClick={() => setRenaming(null)}>Cancel</button>
+                  </div>
                 ) : (
                   <h2 className="campaign-name">
                     <Link to={`/campaigns/${c.id}`}>{c.name}</Link>
@@ -376,21 +411,30 @@ export default function CampaignsView() {
               </div>
 
               <div className="campaign-actions">
+                {/* To the campaign's front door, which names every open scene
+                    and offers each -- so the button says it opens the
+                    campaign. It said "Continue" over the last scene's title,
+                    which read as resuming that scene, and it never did. */}
                 <Link className="btn-accent continue" to={`/campaigns/${c.id}`}>
-                  {c.last_scene ? "Continue" : "Open"} <span aria-hidden>→</span>
+                  Open <span aria-hidden>→</span>
                 </Link>
-                {c.last_scene && <div className="campaign-last">{c.last_scene}</div>}
+                {c.last_scene && (
+                  <div className="campaign-last">
+                    <span className="campaign-last-label">Last played</span> {c.last_scene}
+                  </div>
+                )}
                 <div className="row-actions">
-                  <button aria-label={`Rename ${c.name}`} disabled={stale}
+                  <button aria-label={`Rename ${c.name}`} title="Rename this campaign"
+                          disabled={stale}
                           onClick={() => setRenaming({ id: c.id, name: c.name })}>✎</button>
                   {/* Fork sits with the other two because it is the third thing
                       you do to a campaign from outside it. Forking from here
                       branches at the campaign as it stands; forking at a chosen
                       turn is on the campaign's own page. */}
                   <button aria-label={`Fork ${c.name}`} title="Fork this campaign"
-                          disabled={stale} onClick={() => forkFromNow(c)}>⑂</button>
-                  <button aria-label={`Delete ${c.name}`} disabled={stale}
-                          onClick={() => remove(c)}>✕</button>
+                          disabled={stale} onClick={() => void forkFromNow(c)}>⑂</button>
+                  <button aria-label={`Delete ${c.name}`} title="Delete this campaign"
+                          disabled={stale} onClick={() => void remove(c)}>✕</button>
                 </div>
               </div>
             </article>

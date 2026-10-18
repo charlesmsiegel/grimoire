@@ -53,7 +53,9 @@ import { ComposerMeta } from "../components/play/ComposerMeta";
 import { PlayBanners, type PlayError } from "../components/play/PlayBanners";
 import { SceneMenu } from "../components/play/SceneMenu";
 import CastColumn from "../components/play/CastColumn";
-import ReviewColumn from "../components/review/ReviewColumn";
+import ReviewColumn, { ApproveCitedButton } from "../components/review/ReviewColumn";
+import NothingToWrapUp from "../components/review/NothingToWrapUp";
+import { useReviewAddress } from "../components/review/useReviewAddress";
 import ReviewPanel from "../components/review/ReviewPanel";
 import ReviewTranscript from "../components/review/ReviewTranscript";
 import { useSceneReview } from "../components/review/useSceneReview";
@@ -717,6 +719,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     dismissError: (from) => setError((e) => (e?.from === from ? null : e)),
     onSaved: () => setCtxKey((n) => n + 1),
   });
+  useReviewAddress({ cid, activeId, wrapUp, review });
 
   // A live REVIEW holds the scene on exactly the same terms as a turn -- `turn`
   // and `review` share one exclusion key server-side -- so an absorb in flight
@@ -5027,37 +5030,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   // re-read whole rather than the cast alone.
                   onCastChanged={onCastChanged} />;
 
-  // The wrap-up address with nothing to wrap up. Reached by a bookmark, a back
-  // button after a save, or a link to a review somebody else already decided --
-  // all ordinary, none of them errors. Rendering the transcript here would
-  // answer "what is waiting?" with a scene, which is a different question; the
-  // scene is one click away and named, so nothing is lost by saying so.
+  // The wrap-up address with nothing to wrap up -- see `NothingToWrapUp`.
   //
   // `review.absorbing` covers the window where an absorb IS running and its
   // payload has not landed: that is a review arriving, not one that is absent.
   if (wrapUp && !absorb && !review.absorbing) {
-    return (
-      <PageShell column={null} columnLabel="Wrap-up">
-        <div className="page-wide view-anim">
-          <div className="eyebrow">{name}</div>
-          <h1 className="screen-title">Nothing to wrap up</h1>
-          <p className="empty-state">
-            {sceneTitle
-              ? `${sceneTitle} is not holding a review. Every proposal from it `
-                + "has been decided, or it has not been ended yet."
-              : "This scene is not holding a review."}
-          </p>
-          <div className="form-actions">
-            {activeId && (
-              <Link className="hub-primary" to={sceneUrl(cid, activeId)}>
-                Open the scene →
-              </Link>
-            )}
-            <Link to={`/campaigns/${cid}`}>Back to the campaign</Link>
-          </div>
-        </div>
-      </PageShell>
-    );
+    return <NothingToWrapUp cid={cid} campaignName={name} sid={activeId}
+                            sceneTitle={sceneTitle} scenes={scenes} />;
   }
 
   return (
@@ -5066,9 +5045,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       columnLabel={absorb ? "Proposals" : selectedActor ? "Dossier" : "Cast and continuity"}
       column={absorb ? <ReviewColumn review={review} /> : column}
       footer={absorb
-        ? <button className="column-primary" onClick={review.approveAllCited}>
-            Approve all cited
-          </button>
+        ? <ApproveCitedButton review={review} />
         : <Conditions cid={cid} worldName={worldName} location={sceneLocation}
                       datetime={dt} weather={weather} />}
     >
