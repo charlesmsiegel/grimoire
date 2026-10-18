@@ -605,8 +605,15 @@ def test_a_decide_cut_by_the_wall_files_no_error_row_and_marks_no_connection():
     judge = _SlowJudge(30.0, [[decision_reply({"choice": "truth"})]])
     spec, _ = decision_tool(TASK, _resolved(), judge, cid="c")
     view = _View()
-    with pytest.raises(ToolError, match="timeout"):
-        asyncio.run(spec.fn(ARGS, _walled(view, 1.5)))
+
+    async def decide():
+        # The case is a wall expiring AFTER send. Construct its deadline once
+        # the event loop exists: Windows loop startup can spend the whole short
+        # wall under load, exercising the separate pre-send refusal instead.
+        with pytest.raises(ToolError, match="timeout"):
+            await spec.fn(ARGS, _walled(view, 1.5))
+
+    asyncio.run(decide())
     assert judge.started is not None and view.noted == [("failed", None)]
     assert _task_errors() == [] and judge.noted == []
 
