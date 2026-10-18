@@ -399,6 +399,23 @@ def _vector_kind(kind: str) -> tuple[Projection, str] | None:
     return projection, digest
 
 
+@dataclass(frozen=True)
+class _VectorSource:
+    """One hot row against the bytes this batch read, before any projection.
+
+    The path comes from the pinned root, not the old history row's path (a
+    stated rename may have copied it). Keep this snapshot through the reply:
+    a later edit must never vouch for text made from these earlier bytes.
+    """
+
+    rel: str
+    path: Path
+    row: compiled.Materialized
+    projection: Projection
+    digest: str
+    data: bytes
+
+
 @dataclass
 class _Wanted:
     """One text the batch would embed: who pays (one campaign, or "" for
@@ -407,7 +424,7 @@ class _Wanted:
 
     task: str
     claims: set[str] = field(default_factory=set)
-    rows: list[tuple[str, str, Path, bytes, str, object]] = field(default_factory=list)
+    rows: list[tuple[_VectorSource, object]] = field(default_factory=list)
     #: The projection whose task this text is sent under (`_wanted`).
     projection: str = ""
 
@@ -484,21 +501,22 @@ class _VectorsHook:
             parsed = _vector_kind(row.kind)
             assert parsed is not None
             projection, digest = parsed
-            outcome = self._row(ctx, rel, path, row, projection, digest, data, plan, spent, result)
+            source = _VectorSource(rel, path, row, projection, digest, data)
+            outcome = self._row(ctx, source, plan, spent, result)
             result.outcomes[(rel, row.kind)] = _worse(result.outcomes.get((rel, row.kind)), outcome) \
                 if (rel, row.kind) in result.outcomes else outcome
 
-    def _row(self, ctx: WarmContext, rel: str, path: Path, row: compiled.Materialized,
-             projection: Projection, digest: str, data: bytes, plan: dict[str, _Wanted],
+    def _row(self, ctx: WarmContext, source: _VectorSource, plan: dict[str, _Wanted],
              spent: dict[str, int], result: LocalResult) -> str:
+        projection = source.projection
         if ctx.mode == "write" and (projection.on_write == "explicit" or not _enabled(projection)):
             return "deferred"
-        if (problem := self._space_problem(ctx, digest)) is not None:
+        if (problem := self._space_problem(ctx, source.digest)) is not None:
             result.embedding[problem] = result.embedding.get(problem, 0) + 1
             return "skipped"
         try:
-            instance = _instance(row)
-            texts = projection.texts(path, data, instance)
+            instance = _instance(source.row)
+            texts = projection.texts(source.path, source.data, instance)
         except Exception as exc:                          # noqa: BLE001 -- the reader's failure
             return f"failed:{type(exc).__name__}"
         text = self._unit(projection, texts, instance)
@@ -506,12 +524,12 @@ class _VectorsHook:
             return "skipped"
         assert ctx.space is not None                      # `_space_problem` said so
         space_id = ctx.space["space"]
-        source = compiled.WrittenInput("source", path, data)
+        written = compiled.WrittenInput("source", source.path, source.data)
         if vectors.load(space_id, [text]):
             if not ctx.dry_run:
                 # Held already: only its row moves to the current bytes, so a
                 # scoped sync can prove this file current next time.
-                vectors.load(space_id, [text], sources={text: source}, projection=projection.name,
+                vectors.load(space_id, [text], sources={text: written}, projection=projection.name,
                              instances={text: instance})
             result.embedding["held"] = result.embedding.get("held", 0) + 1
             return "hit"
@@ -520,11 +538,10 @@ class _VectorsHook:
         # could, and a held text costs nothing.
         if not self._within_limit(projection, text, plan, spent):
             return "lazy"
-        return self._plan(ctx, rel, path, row, projection, text, instance, data, plan, result)
+        return self._plan(ctx, source, text, instance, plan, result)
 
     @staticmethod
-    def _plan(ctx: WarmContext, rel: str, path: Path, row: compiled.Materialized,
-              projection: Projection, text: str, instance: object, data: bytes,
+    def _plan(ctx: WarmContext, source: _VectorSource, text: str, instance: object,
               plan: dict[str, _Wanted], result: LocalResult) -> str:
         """A text the cache lacks, within the limit: deferred with embeddings
         off, counted once in a dry run, otherwise planned with its claim."""
@@ -534,13 +551,13 @@ class _VectorsHook:
         if ctx.dry_run:
             # Coalesced as a real run would: a text two rows want counts once.
             if text not in plan:
-                _wanted(plan, text, projection)
+                _wanted(plan, text, source.projection)
                 result.embedding["would_send"] = result.embedding.get("would_send", 0) + 1
             return "planned"
-        wanted = _wanted(plan, text, projection)
+        wanted = _wanted(plan, text, source.projection)
         campaign = instance.get("campaign", "") if isinstance(instance, dict) else ""
         wanted.claims.add(campaign if isinstance(campaign, str) else "")
-        wanted.rows.append((rel, row.kind, path, data, projection.name, instance))
+        wanted.rows.append((source, instance))
         return "planned"
 
     @staticmethod
@@ -647,11 +664,12 @@ class _VectorsHook:
         """Section 7.7 for a vector kind: every text this batch reports built
         now has a vector."""
         built = [text for text, wanted in plan.items()
-                 if any(result.outcomes.get((rel, kind)) == "built" for rel, kind, *_ in wanted.rows)]
+                 if any(result.outcomes.get((source.rel, source.row.kind)) == "built"
+                        for source, _instance in wanted.rows)]
         held = vectors.load(space_id, built) if built else {}
         for text in built:
             if text not in held:
-                result.verify_failed.update(rel for rel, *_ in plan[text].rows)
+                result.verify_failed.update(source.rel for source, _instance in plan[text].rows)
                 _log.warning("cache sync verify: a built vector is missing")
 
     def _arrived(self, space_id: str, chunk: list[str], plan: dict[str, _Wanted],
@@ -695,21 +713,21 @@ class _VectorsHook:
     def _save(space_id: str, text: str, raw: list[float] | None, wanted: _Wanted) -> None:
         """Store the vector, and rewrite each row it replaces against the
         bytes it was made from (`built_from`)."""
-        for _rel, _kind, path, data, projection, instance in wanted.rows:
-            source = compiled.WrittenInput("source", path, data)
+        for source, instance in wanted.rows:
+            written = compiled.WrittenInput("source", source.path, source.data)
             if raw is not None:
-                vectors.save(space_id, text, raw, source=source, projection=projection,
+                vectors.save(space_id, text, raw, source=written, projection=source.projection.name,
                              instance=instance)
             else:
-                vectors.load(space_id, [text], sources={text: source}, projection=projection,
+                vectors.load(space_id, [text], sources={text: written}, projection=source.projection.name,
                              instances={text: instance})
 
     @staticmethod
     def _settle(result: NetworkResult, plan: Mapping[str, _Wanted], texts: Iterable[str],
                 outcome: str) -> None:
         for text in texts:
-            for rel, kind, *_ in plan[text].rows:
-                key = (rel, kind)
+            for source, _instance in plan[text].rows:
+                key = (source.rel, source.row.kind)
                 result.outcomes[key] = _worse(result.outcomes.get(key), outcome) \
                     if key in result.outcomes else outcome
 
@@ -1558,15 +1576,8 @@ def _run_hooks(root: Path, mode: str, hooks: tuple[WarmHook, ...],
                embed: bool, dry_run: bool, verify: bool, stop: Callable[[], bool]) -> None:
     by_rel = {item.rel: item for item in report.paths if item.rel is not None and item.rel in hot}
     _mark_lazy(hooks, hot, by_rel)
-    if mode == "explicit":
-        # Waits for a write-through batch on the lane, asking the stop signal
-        # between short waits, so a cancel or a moved root is heard here too.
-        while not _lane.acquire(timeout=LANE_POLL_S):
-            if (halt := _halted(root, stop)) is not None:
-                report.stopped = halt
-                return
-    elif not _lane.acquire(timeout=LANE_WAIT_S):
-        report.stopped = "lane_busy"
+    if (halt := _take_lane(root, mode, stop)) is not None:
+        report.stopped = halt
         return
     try:
         ctx = _context(root, mode, dry_run=dry_run, verify=verify, embed=embed, stop=stop)
@@ -1575,6 +1586,25 @@ def _run_hooks(root: Path, mode: str, hooks: tuple[WarmHook, ...],
             _network_phases(ctx, plans, by_rel, report)
     finally:
         _lane.release()
+    _settle_paths(hot, by_rel, report, dry_run=dry_run)
+
+
+def _take_lane(root: Path, mode: str, stop: Callable[[], bool]) -> str | None:
+    """Acquire the sync lane, or say why this batch gave up before acquiring it."""
+    if mode == "explicit":
+        # Waits for a write-through batch on the lane, asking the stop signal
+        # between short waits, so a cancel or a moved root is heard here too.
+        while not _lane.acquire(timeout=LANE_POLL_S):
+            if (halt := _halted(root, stop)) is not None:
+                return halt
+    elif not _lane.acquire(timeout=LANE_WAIT_S):
+        return "lane_busy"
+    return None
+
+
+def _settle_paths(hot: Mapping[str, tuple[compiled.Materialized, ...]],
+                  by_rel: Mapping[str, PathReport], report: SyncReport, *, dry_run: bool) -> None:
+    """After releasing the lane, distinguish completed paths from unreached work."""
     for rel, item in by_rel.items():
         if item.status != "pending":
             continue
@@ -1606,26 +1636,33 @@ def _local_phases(ctx: WarmContext, hooks: tuple[WarmHook, ...],
                 if (owned := tuple(r for r in rows if hook.owns(r.kind)))}
         if not mine:
             continue
-        summary = report.hooks.setdefault(hook.name, {})
-        if ctx.mode == "write" and hook.on_write == "explicit":
-            _merge(by_rel, {(rel, row.kind): "deferred" for rel, rows in mine.items() for row in rows},
-                   summary)
-            continue
-        try:
-            result = hook.local(ctx, mine)
-        except Exception as exc:                          # noqa: BLE001 -- one hook's failure is a status
-            _warn_once(f"hook:{hook.name}")
-            result = LocalResult(outcomes={(rel, row.kind): f"failed:{type(exc).__name__}"
-                                           for rel, rows in mine.items() for row in rows})
-        _merge(by_rel, result.outcomes, summary)
-        if (halt := ctx.halted()) is not None:     # the hook may have stopped part-way
-            report.stopped = halt
-        for rel in result.verify_failed & by_rel.keys():
-            by_rel[rel].status = "verify_failed"
-        _add_embedding(report, result.embedding)
-        if result.plan is not None:
-            plans.append((hook, result.plan))
+        if (plan := _local_phase(ctx, hook, mine, by_rel, report)) is not None:
+            plans.append((hook, plan))
     return plans
+
+
+def _local_phase(ctx: WarmContext, hook: WarmHook,
+                 mine: Mapping[str, tuple[compiled.Materialized, ...]],
+                 by_rel: Mapping[str, PathReport], report: SyncReport) -> object:
+    """Run and account for one owner's local work; return only its network plan."""
+    summary = report.hooks.setdefault(hook.name, {})
+    if ctx.mode == "write" and hook.on_write == "explicit":
+        _merge(by_rel, {(rel, row.kind): "deferred" for rel, rows in mine.items() for row in rows},
+               summary)
+        return None
+    try:
+        result = hook.local(ctx, mine)
+    except Exception as exc:                              # noqa: BLE001 -- one hook's failure is a status
+        _warn_once(f"hook:{hook.name}")
+        result = LocalResult(outcomes={(rel, row.kind): f"failed:{type(exc).__name__}"
+                                       for rel, rows in mine.items() for row in rows})
+    _merge(by_rel, result.outcomes, summary)
+    if (halt := ctx.halted()) is not None:         # the hook may have stopped part-way
+        report.stopped = halt
+    for rel in result.verify_failed & by_rel.keys():
+        by_rel[rel].status = "verify_failed"
+    _add_embedding(report, result.embedding)
+    return result.plan
 
 
 def _network_phases(ctx: WarmContext, plans: list[tuple[WarmHook, object]],
@@ -1638,7 +1675,7 @@ def _network_phases(ctx: WarmContext, plans: list[tuple[WarmHook, object]],
             return
         try:
             net = hook.network(ctx, plan)
-        except Exception as exc:                          # noqa: BLE001 -- see `_local_phases`
+        except Exception as exc:                          # noqa: BLE001 -- see `_local_phase`
             _warn_once(f"hook:{hook.name}:network")
             report.embedding["failure"] = type(exc).__name__
             continue

@@ -191,6 +191,56 @@ def test_a_failing_hook_is_a_status_and_the_next_hook_runs(home):
     assert SENTINEL not in json.dumps(report.as_dict())
 
 
+def test_a_network_failure_keeps_local_verification_and_runs_the_next_plan(home):
+    """A failed network owner cannot erase a local mismatch or block another owner."""
+    rel = "worlds/realm/lore/pact.md"
+    path = _write(home, rel, "The pact")
+    with compiled.batch(home) as request:
+        request.mark_materialized(path, "a:one")
+        request.mark_materialized(path, "b:two")
+    calls = []
+
+    class Broken:
+        name, on_write = "broken", "quiet"
+
+        def owns(self, kind):
+            return kind == "a:one"
+
+        def local(self, ctx, hot):
+            calls.append("broken.local")
+            return cache_sync.LocalResult(outcomes={(rel, "a:one"): "planned"},
+                                          verify_failed={rel}, plan="first", embedding={"held": 2})
+
+        def network(self, ctx, plan):
+            calls.append(("broken.network", plan))
+            raise ValueError(SENTINEL)
+
+    class Fine(Broken):
+        name = "fine"
+
+        def owns(self, kind):
+            return kind == "b:two"
+
+        def local(self, ctx, hot):
+            calls.append("fine.local")
+            return cache_sync.LocalResult(outcomes={(rel, "b:two"): "planned"}, plan="second")
+
+        def network(self, ctx, plan):
+            calls.append(("fine.network", plan))
+            return cache_sync.NetworkResult(outcomes={(rel, "b:two"): "built"},
+                                            embedding={"sent": 1, "requests": 1})
+
+    report = cache_sync.sync_paths([rel], mode="explicit", hooks=(Broken(), Fine()), verify=True)
+
+    assert calls == ["broken.local", "fine.local", ("broken.network", "first"), ("fine.network", "second")]
+    assert report.paths[0].status == "verify_failed" and not report.ok
+    assert report.paths[0].kinds == {"a:one": "planned", "b:two": "built"}
+    assert report.embedding["failure"] == "ValueError" and report.embedding["held"] == 2
+    assert report.hooks["fine"] == {"kinds": ["b:two"], "built": 1}
+    assert report.embedding["sent"] == report.embedding["requests"] == 1
+    assert SENTINEL not in json.dumps(report.as_dict())
+
+
 # -- validation (section 8) ---------------------------------------------------
 
 

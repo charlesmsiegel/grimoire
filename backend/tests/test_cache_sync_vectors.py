@@ -44,6 +44,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.context import art, layout, semantic
+from grimoire.store.inference import embed
 from grimoire.store.inference import settings as inference_settings
 from tests import cache_sync_fixtures as fx
 from tests.inference_fixtures import embedding
@@ -809,3 +810,120 @@ def test_a_text_two_producers_want_is_sent_once_under_a_fixed_task():
         cache_sync._wanted(plan, "One shared text.", second)
         assert list(plan) == ["One shared text."]
         assert plan["One shared text."].task == "semantic-recall"
+
+
+@pytest.mark.parametrize("gate", ["explicit_only", "disabled", "stale_space", "embedding_off"])
+def test_a_deferred_vector_row_never_decodes_its_instance_or_projects(home, monkeypatch, gate):
+    """The spend/space gates precede readers, including readers of obsolete history."""
+    rel = "worlds/realm/lore/pact.md"
+    path = home / rel
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"The pact binds the coast.")
+    projected = []
+    original = cache_sync.VECTOR_PROJECTIONS[semantic.PROJECTION]
+    projection = cache_sync.Projection(
+        original.name, original.task, "explicit" if gate == "explicit_only" else "quiet",
+        lambda *args: projected.append(args) or ["The pact"], original.limit,
+        enabled=lambda: gate != "disabled")
+    monkeypatch.setitem(cache_sync.VECTOR_PROJECTIONS, projection.name, projection)
+    digest = "a" * 64
+    row = compiled.Materialized(path, f"vector:{projection.name}:{digest}", "{invalid", "", 0)
+    ctx = cache_sync.WarmContext(
+        root=home, mode="write", dry_run=False, verify=False, embedding=True,
+        space=None if gate == "embedding_off" else {"space": "unused"},
+        space_digest="b" * 64 if gate == "stale_space" else digest, stop=lambda: False)
+
+    result = cache_sync.VECTORS.local(ctx, {rel: (row,)})
+
+    expected = "deferred" if gate in ("explicit_only", "disabled") else "skipped"
+    assert result.outcomes == {(rel, row.kind): expected}
+    assert result.plan is None and projected == []
+    assert result.embedding == ({gate: 1} if expected == "skipped" else {})
+
+
+def test_a_vector_reply_keeps_the_local_source_snapshot_when_the_record_changes(home, fake, monkeypatch):
+    """An in-flight edit must stay stale: its new bytes never vouch for the earlier text."""
+    _configure()
+    wid, cid = _realm()
+    eid, path = _lore(home, wid)
+    _recall(wid, cid, eid)
+    entities.update_entity(worlds.world_root(wid), "lore", eid, body="Edited before the request.")
+    before_request = path.read_bytes()
+    earlier_text = semantic.record_text(eid, before_request)
+    real = cache_sync._embed_chunk
+
+    def edited_meanwhile(*args, **kwargs):
+        entities.update_entity(worlds.world_root(wid), "lore", eid, body="Edited during the request.")
+        return real(*args, **kwargs)
+
+    with monkeypatch.context() as during:
+        during.setattr(cache_sync, "_embed_chunk", edited_meanwhile)
+        report = cache_sync.sync_paths([_rel(home, path)], mode="explicit", verify=True)
+
+    assert report.ok and report.embedding["sent"] == 1
+    [row] = _rows_at(home, path)
+    assert row.built_from == hashlib.sha256(before_request).hexdigest()
+    assert row.built_from != hashlib.sha256(path.read_bytes()).hexdigest()
+    assert earlier_text in vectors.load(_space(), [earlier_text])
+    later_text = semantic.record_text(eid, path.read_bytes())
+    assert not vectors.load(_space(), [later_text])
+    again = cache_sync.sync_paths([_rel(home, path)], mode="explicit", verify=True)
+    assert again.ok and again.embedding["sent"] == 1 and _docs(fake)[-1] == later_text
+    [current] = _rows_at(home, path)
+    assert current.built_from == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _edited_shared_sources(home):
+    """Two independently hot records now need the same replacement text."""
+    _configure()
+    wid, cid = _realm()
+    records = [_lore(home, wid) for _ in range(2)]
+    semantic.recall_scored([_candidate(wid, cid, eid) for eid, _path in records],
+                           "Somebody speaks of the coast.", campaign=cid)
+    for eid, _path in records:
+        entities.update_entity(worlds.world_root(wid), "lore", eid, body="One edit, two source records.")
+    texts = {semantic.record_text(eid, path.read_bytes()) for eid, path in records}
+    assert len(texts) == 1
+    return [path for _eid, path in records], texts.pop()
+
+
+def test_a_vector_arriving_before_send_rewrites_every_claimed_sources_history(home, fake, monkeypatch):
+    paths, text = _edited_shared_sources(home)
+    real = cache_sync._VectorsHook.network
+    space = _space()
+
+    def arrived_meanwhile(self, ctx, plan):
+        vectors.save(space, text, [1.0, 0.0])       # another reader won the race, without these rows
+        return real(self, ctx, plan)
+
+    monkeypatch.setattr(cache_sync._VectorsHook, "network", arrived_meanwhile)
+    before = len(fake.calls)
+    report = cache_sync.sync_paths([_rel(home, path) for path in paths], mode="explicit", verify=True)
+
+    assert report.ok and len(fake.calls) == before
+    assert report.embedding["sent"] == report.embedding["requests"] == 0
+    assert [item.status for item in report.paths] == ["current", "current"]
+    assert all(list(item.kinds.values()) == ["hit"] for item in report.paths)
+    for path in paths:
+        [row] = _rows_at(home, path)
+        assert row.built_from == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("reply", [None, [], [[1.0, 0.0], [1.0, 0.0]]], ids=["missing", "short", "long"])
+def test_a_malformed_chunk_reply_fails_all_sources_without_rewriting_history(home, fake, reply):
+    """The grouped door's result is still checked before any of its vectors can land."""
+    paths, text = _edited_shared_sources(home)
+    before = {path: _rows_at(home, path) for path in paths}
+    ctx = cache_sync._context(home, "explicit", dry_run=False, verify=True, embed=True, stop=lambda: False)
+    local = cache_sync.VECTORS.local(ctx, {_rel(home, path): before[path] for path in paths})
+    result = cache_sync.NetworkResult()
+
+    failure = cache_sync.VECTORS._landed(_space(), [text], embed.GroupResult(reply), True, local.plan, result)
+
+    assert failure == ""                  # an input's bad reply does not stop later chunks
+    assert result.embedding == {"requests": 1, "sent": 1}
+    assert result.outcomes == {(_rel(home, path), row.kind): "failed:bad_response"
+                               for path, rows in before.items() for row in rows}
+    assert not vectors.load(_space(), [text])
+    for path in paths:
+        assert _rows_at(home, path) == before[path]
