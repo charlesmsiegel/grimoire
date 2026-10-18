@@ -29,6 +29,7 @@ vi.mock("./CalendarDatePicker", () => ({
     <input aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />,
 }));
 import { api, ApiError } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 function driver(ref: string, kind: Driver["kind"], label: string,
                 state: Driver["pressure"]["state"], in_days: number | null = null): Driver {
@@ -57,30 +58,30 @@ function snapshot(over: Partial<DriversSnapshot> = {}): DriversSnapshot {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listAppearances as any).mockResolvedValue([]);
-  (api.getCampaignClock as any).mockResolvedValue({ now: "", friendly: "", log: [] });
-  (api.availableGreetings as any).mockResolvedValue(
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
+  vi.mocked(api.getCampaignClock).mockResolvedValue(fixture({ now: "", friendly: "", log: [] }));
+  vi.mocked(api.availableGreetings).mockResolvedValue(
     [{ id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true }]);
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [], greeting_picks: [], next_date: "2026-01-01" });
-  (api.createScene as any).mockResolvedValue({ id: "s9" });
-  (api.startFromGreeting as any).mockResolvedValue({ ok: true, id: "s9" });
-  (api.renameScene as any).mockResolvedValue({ id: "s9", title: "Reckoning" });
-  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, id: "s9" });
-  (api.deleteScene as any).mockResolvedValue({ ok: true });
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listCampaignPCs as any).mockResolvedValue([]);
-  (api.listSceneIdeas as any).mockResolvedValue([]);
-  (api.setSceneIdeaStatus as any).mockResolvedValue({ ok: true });
-  (api.sceneImportParse as any).mockResolvedValue(
+  vi.mocked(api.createScene).mockResolvedValue({ id: "s9" });
+  vi.mocked(api.startFromGreeting).mockResolvedValue({ ok: true, id: "s9" });
+  vi.mocked(api.renameScene).mockResolvedValue({ id: "s9", title: "Reckoning" });
+  vi.mocked(api.setSceneDatetime).mockResolvedValue(fixture({ ok: true, id: "s9" }));
+  vi.mocked(api.deleteScene).mockResolvedValue({ ok: true });
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([]);
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([]);
+  vi.mocked(api.setSceneIdeaStatus).mockResolvedValue({ ok: true });
+  vi.mocked(api.sceneImportParse).mockResolvedValue(
     { title: "The Long Quay", date: "", location: "", pcless: false,
       messages: [{ role: "user", content: "hi" }], turn_sizes: null,
       cast: [], unmatched: [], warnings: [] });
-  (api.sceneImport as any).mockResolvedValue({ id: "s9", messages: 1, cast: 0 });
-  (api.campaignNotices as any).mockResolvedValue({ notices: [], now: "", warn_days: 7 });
-  (api.dismissNotices as any).mockResolvedValue({ ok: true, marked: [] });
-  (api.continuityDrivers as any).mockResolvedValue(snapshot());
+  vi.mocked(api.sceneImport).mockResolvedValue({ id: "s9", messages: 1, cast: 0 });
+  vi.mocked(api.campaignNotices).mockResolvedValue({ notices: [], now: "", warn_days: 7 });
+  vi.mocked(api.dismissNotices).mockResolvedValue({ ok: true, marked: [] });
+  vi.mocked(api.continuityDrivers).mockResolvedValue(snapshot());
 });
 
 test("picking a mode asks the ranked question, which is what fills the picker", async () => {
@@ -137,7 +138,7 @@ test("the mode cards themselves spend nothing", async () => {
 });
 
 test("Regenerate makes a second, unranked call carrying the typed direction", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [{ title: "At sea", premise: "", cast: [], location: null }],
       greeting_picks: [], next_date: "2026-01-01" });
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
@@ -159,7 +160,7 @@ test("Regenerate makes a second, unranked call carrying the typed direction", as
 test("an offscreen chooser asks for offscreen ideas", async () => {
   // The mode is part of the question, not a filter on the answer: an
   // offscreen scene casts nobody the player can be.
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [], greeting_picks: [], next_date: "" });
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
@@ -169,7 +170,7 @@ test("an offscreen chooser asks for offscreen ideas", async () => {
 });
 
 test("a campaign switch drops the ideas the last one earned", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [{ title: "Campaign A's idea", premise: "", cast: [], location: null }],
       greeting_picks: [], next_date: "2026-01-01" });
   const { rerender } = render(
@@ -179,7 +180,7 @@ test("a campaign switch drops the ideas the last one earned", async () => {
 
   // A ranking that outlived its campaign would be ideas cast from a world the
   // reader has left, so the old answer is dropped and the new one asked for.
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [{ title: "Campaign B's idea", premise: "", cast: [], location: null }],
       greeting_picks: [], next_date: "" });
   rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
@@ -224,8 +225,8 @@ test("Escape and the backdrop are ignored while an import is in flight", async (
   // once it is gone, so a dismissal here would leave a real scene that the
   // campaign is never told about -- the same reason the create sequence is
   // gated.
-  let release: (v: any) => void = () => {};
-  (api.sceneImport as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.sceneImport>>) => void = () => {};
+  vi.mocked(api.sceneImport).mockReturnValue(new Promise((r) => { release = r; }));
   const onClose = vi.fn();
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Import a transcript"));
@@ -264,7 +265,7 @@ test("what is imminent is shown while the scene is being planned", async () => {
   // The second surface of #106, and the one the feature is for: "the coronation
   // is in three days" is a thing to know BEFORE deciding what the scene is
   // about, not after.
-  (api.campaignNotices as any).mockResolvedValue({
+  vi.mocked(api.campaignNotices).mockResolvedValue({
     notices: [{ key: "event:739437:the-coronation", kind: "event",
                 name: "The coronation", in_days: 3, friendly: "6 July 2026" }],
     now: "2026-07-03", warn_days: 7 });
@@ -281,7 +282,7 @@ test("a campaign change clears the last campaign's notices before the new read l
   // and the banner already holds the new `cid` — so a notice carried over from
   // campaign A would record A's occurrence key in B's ledger, silencing a
   // warning B never showed.
-  (api.campaignNotices as any).mockResolvedValue({
+  vi.mocked(api.campaignNotices).mockResolvedValue({
     notices: [{ key: "event:739437:the-coronation", kind: "event",
                 name: "The coronation", in_days: 3, friendly: "6 July 2026" }],
     now: "2026-07-03", warn_days: 7 });
@@ -289,7 +290,7 @@ test("a campaign change clears the last campaign's notices before the new read l
     <NewSceneChooser cid="a" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   await screen.findByText("The coronation");
   // Campaign b's read never settles, so only the synchronous clear can help.
-  (api.campaignNotices as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.campaignNotices).mockReturnValue(new Promise(() => {}));
   rerender(
     <NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   expect(screen.queryByText("The coronation")).toBeNull();
@@ -298,7 +299,7 @@ test("a campaign change clears the last campaign's notices before the new read l
 test("a failed notice read leaves the chooser usable", async () => {
   // A banner is the least important thing in this modal; it must never be what
   // stops a scene being made.
-  (api.campaignNotices as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.campaignNotices).mockRejectedValue(new Error("offline"));
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(await screen.findByText("With your PC"));
   await screen.findByText("Reckoning");
@@ -399,7 +400,7 @@ test("the confirm pane is told whether an LLM is connected", async () => {
 // lived in the unmounted picker's own state too. The fix lifts both up into
 // NewSceneChooser, which survives Back untouched.
 test("Back preserves the typed direction and the regenerated cards, and issues no further sceneSuggestions call", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [{ title: "Undirected", premise: "", cast: [], location: null }],
       greeting_picks: [], next_date: "2026-01-01" });
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
@@ -408,7 +409,7 @@ test("Back preserves the typed direction and the regenerated cards, and issues n
   expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
 
   fireEvent.change(screen.getByLabelText("Direction"), { target: { value: "something at sea" } });
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [{ title: "At sea", premise: "", cast: [], location: null }],
       greeting_picks: [], next_date: "2026-01-01" });
   fireEvent.click(screen.getByRole("button", { name: /regenerate/i }));
@@ -435,8 +436,8 @@ test("Back preserves the typed direction and the regenerated cards, and issues n
 // against the campaign the reader just left, and `onCreated` would report a
 // scene id into a CampaignView now showing a different one.
 test("a cid change mid-create-sequence stops further writes and never reports the scene", async () => {
-  let releaseCreate: (v: any) => void = () => {};
-  (api.createScene as any).mockReturnValue(new Promise((r) => { releaseCreate = r; }));
+  let releaseCreate: (v: Awaited<ReturnType<typeof api.createScene>>) => void = () => {};
+  vi.mocked(api.createScene).mockReturnValue(new Promise((r) => { releaseCreate = r; }));
   const onCreated = vi.fn();
   const { rerender } = render(
     <NewSceneChooser cid="a" afterSid="s1" ready onClose={() => {}} onCreated={onCreated} />);
@@ -466,8 +467,8 @@ test("a cid change mid-create-sequence stops further writes and never reports th
 // Escape, the backdrop, and every Cancel button while `writing` is true --
 // for the NEW campaign's freshly reset chooser, not just the abandoned one.
 test("a cid change mid-write does not leave the new campaign's chooser stuck undismissable", async () => {
-  let releaseCreate: (v: any) => void = () => {};
-  (api.createScene as any).mockReturnValue(new Promise((r) => { releaseCreate = r; }));
+  let releaseCreate: (v: Awaited<ReturnType<typeof api.createScene>>) => void = () => {};
+  vi.mocked(api.createScene).mockReturnValue(new Promise((r) => { releaseCreate = r; }));
   const onClose = vi.fn();
   const { rerender } = render(
     <NewSceneChooser cid="a" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
@@ -514,7 +515,7 @@ test("StrictMode's mount cycle does not wedge the create sequence", async () => 
 });
 
 test("offscreen mode asks for pcless greetings and pcless scenes", async () => {
-  (api.availableGreetings as any).mockResolvedValue(
+  vi.mocked(api.availableGreetings).mockResolvedValue(
     [{ id: "cabal", name: "Cabal", available: true, reasons: [], unlocked: false, pcless: true }]);
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
@@ -536,8 +537,8 @@ test("Cancel from the picker writes nothing", async () => {
 });
 
 test("Escape and the backdrop are ignored while the create sequence is writing", async () => {
-  let release: (v: any) => void = () => {};
-  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.createScene>>) => void = () => {};
+  vi.mocked(api.createScene).mockReturnValue(new Promise((r) => { release = r; }));
   const onClose = vi.fn();
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={onClose} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("With your PC"));
@@ -566,7 +567,7 @@ test("creating reports the scene and Escape closes while idle", async () => {
 // draft picked in campaign A would still be showing -- and creatable --
 // once the prop moves to campaign B.
 test("changing cid discards the draft and returns to the mode step", async () => {
-  (api.availableGreetings as any).mockImplementation((cid: string) =>
+  vi.mocked(api.availableGreetings).mockImplementation((cid) =>
     Promise.resolve(cid === "a"
       ? [{ id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true }]
       : [{ id: "vow", name: "Vow of silence", available: true, reasons: [], unlocked: true }]));
@@ -703,19 +704,19 @@ function chooseTime(name: string) {
 }
 
 function lastOptions() {
-  const calls = (api.sceneSuggestions as any).mock.calls as unknown[][];
+  const calls = vi.mocked(api.sceneSuggestions).mock.calls as unknown[][];
   return calls[calls.length - 1][1] as Record<string, unknown>;
 }
 
 async function regenerate() {
-  const before = (api.sceneSuggestions as any).mock.calls.length as number;
+  const before = vi.mocked(api.sceneSuggestions).mock.calls.length;
   fireEvent.click(await screen.findByRole("button", { name: /regenerate/i }));
   await waitFor(() => expect(api.sceneSuggestions).toHaveBeenCalledTimes(before + 1));
 }
 
 /** Mode picked and the open call settled with one card on screen. */
 async function pickerReady(container: HTMLElement, mode = "With your PC") {
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [CARD], greeting_picks: [], next_date: "2026-01-01" });
   fireEvent.click(screen.getByText(mode));
   await screen.findByText("At sea");
@@ -723,7 +724,7 @@ async function pickerReady(container: HTMLElement, mode = "With your PC") {
 }
 
 test("the drivers read happens once on open", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [CARD], greeting_picks: [], next_date: "2026-01-01" });
   renderChooser();
   fireEvent.click(screen.getByText("Import a transcript"));
@@ -769,8 +770,8 @@ test("story pressure is a collapsed disclosure under Direction", async () => {
 });
 
 test("a failed drivers read hides Story pressure and Suggest still works", async () => {
-  (api.continuityDrivers as any).mockRejectedValue(new Error("offline"));
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.continuityDrivers).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [CARD], greeting_picks: [], next_date: "2026-01-01" });
   const { container } = renderChooser();
   fireEvent.click(screen.getByText("With your PC"));
@@ -808,7 +809,7 @@ test("changing a control starts no generation", async () => {
 });
 
 test("Must is disabled for temporal drivers and after three", async () => {
-  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+  vi.mocked(api.continuityDrivers).mockResolvedValue(snapshot({
     drivers: [
       driver("thread:mara-s-map", "thread", "Mara's map", "stale"),
       driver("thread:find-the-ledger", "thread", "Find the ledger", "ok"),
@@ -832,7 +833,7 @@ test("Must is disabled for temporal drivers and after three", async () => {
 });
 
 test("with no anchors, Choose anchor is disabled and says why", async () => {
-  (api.continuityDrivers as any).mockResolvedValue(snapshot({ anchors: [] }));
+  vi.mocked(api.continuityDrivers).mockResolvedValue(snapshot({ anchors: [] }));
   const { container } = renderChooser();
   await pickerReady(container);
   expect(within(screen.getByRole("radiogroup", { name: "Time" }))
@@ -843,7 +844,7 @@ test("with no anchors, Choose anchor is disabled and says why", async () => {
 const UNDATED_HINT = /no current date/;
 
 test("in an undated campaign, Stay near and Let time move are disabled and say why", async () => {
-  (api.continuityDrivers as any).mockResolvedValue(
+  vi.mocked(api.continuityDrivers).mockResolvedValue(
     snapshot({ now: "", friendly: "", fixed: null }));
   const { container } = renderChooser();
   await pickerReady(container);
@@ -855,7 +856,7 @@ test("in an undated campaign, Stay near and Let time move are disabled and say w
 });
 
 test("in an undated campaign, a dated anchor shows its day and never reads undated", async () => {
-  (api.continuityDrivers as any).mockResolvedValue(
+  vi.mocked(api.continuityDrivers).mockResolvedValue(
     snapshot({ now: "", friendly: "", fixed: null,
                anchors: [{ ...CORONATION, in_days: null }] }));
   const { container } = renderChooser();
@@ -881,9 +882,9 @@ test("a held near falls back to any date when a re-read has no current date", as
   await pickerReady(container);
   choose("Mara's map", "Focus");
   chooseTime("Stay near current date");
-  (api.sceneSuggestions as any).mockRejectedValueOnce(
+  vi.mocked(api.sceneSuggestions).mockRejectedValueOnce(
     new ApiError(409, "stale", "stale_drivers", { refs: ["thread:mara-s-map"] }));
-  (api.continuityDrivers as any).mockResolvedValue(
+  vi.mocked(api.continuityDrivers).mockResolvedValue(
     snapshot({ now: "", friendly: "", fixed: null }));
   await regenerate();
   await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalledTimes(2));
@@ -891,14 +892,14 @@ test("a held near falls back to any date when a re-read has no current date", as
     .toHaveTextContent(/Mara's map, near date/);
   await waitFor(() => expect(within(screen.getByRole("radiogroup", { name: "Time" }))
     .getByRole("radio", { name: "Any date" })).toBeChecked());
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [CARD], greeting_picks: [], next_date: "" });
   await regenerate();
   expect(lastOptions()).toEqual(expect.objectContaining({ time_mode: "auto" }));
 });
 
 test("anchor mode sends the anchor and relation", async () => {
-  (api.continuityDrivers as any).mockResolvedValue(
+  vi.mocked(api.continuityDrivers).mockResolvedValue(
     snapshot({ anchors: [CORONATION, MONTH_BIRTHDAY] }));
   const { container } = renderChooser();
   await pickerReady(container);
@@ -958,7 +959,7 @@ test("the summary counts drivers and names the time separately", async () => {
 });
 
 test("driver chips read naturally", async () => {
-  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+  vi.mocked(api.continuityDrivers).mockResolvedValue(snapshot({
     drivers: [
       driver("commitment:mara-s-oath", "commitment", "Mara's oath", "overdue", -3),
       driver("event:the-coronation", "event", "The coronation", "today", 0),
@@ -1023,7 +1024,7 @@ test("an anchor seed sends anchor mode on the open call", async () => {
 
 test("a seed waits for the drivers read before the open call", async () => {
   let release: (v: DriversSnapshot) => void = () => {};
-  (api.continuityDrivers as any).mockReturnValue(new Promise((r) => { release = r; }));
+  vi.mocked(api.continuityDrivers).mockReturnValue(new Promise((r) => { release = r; }));
   renderChooser({ seed: { drivers: { "thread:mara-s-map": "focus" } } });
   fireEvent.click(screen.getByText("With your PC"));
   await screen.findByText(/blank scene/i);
@@ -1048,7 +1049,7 @@ test("a seed naming a missing driver is dropped with a note", async () => {
 });
 
 test("a seed after a failed read is dropped with a note and the open call goes unsteered", async () => {
-  (api.continuityDrivers as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.continuityDrivers).mockRejectedValue(new Error("offline"));
   const { container } = renderChooser({ seed: { drivers: { "thread:mara-s-map": "focus" } } });
   fireEvent.click(screen.getByText("With your PC"));
   await waitFor(() => expect(api.sceneSuggestions).toHaveBeenCalledTimes(1));
@@ -1064,9 +1065,9 @@ test("a stale_drivers refusal re-reads drivers and says what dropped", async () 
   const { container } = renderChooser();
   await pickerReady(container);
   choose("Mara's map", "Focus");
-  (api.sceneSuggestions as any).mockRejectedValue(
+  vi.mocked(api.sceneSuggestions).mockRejectedValue(
     new ApiError(409, "stale", "stale_drivers", { refs: ["thread:mara-s-map"] }));
-  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+  vi.mocked(api.continuityDrivers).mockResolvedValue(snapshot({
     drivers: [driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2)],
   }));
   await regenerate();
@@ -1087,16 +1088,16 @@ test("a refused ref spelled differently is still cleared", async () => {
   choose("Mara's map", "Focus");
   // The server names its canonical spelling, which is not what the chooser
   // holds; the re-read's prune is what clears the held one.
-  (api.sceneSuggestions as any).mockRejectedValueOnce(
+  vi.mocked(api.sceneSuggestions).mockRejectedValueOnce(
     new ApiError(409, "stale", "stale_drivers", { refs: ["thread:find-the-ledger"] }));
-  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+  vi.mocked(api.continuityDrivers).mockResolvedValue(snapshot({
     drivers: [driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2)],
   }));
   await regenerate();
   await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(screen.queryByRole("radiogroup",
     { name: "Mara's map: story pressure" })).toBeNull());
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [CARD], greeting_picks: [], next_date: "" });
   await regenerate();
   expect(JSON.stringify(lastOptions())).not.toContain("thread:mara-s-map");
@@ -1110,9 +1111,9 @@ test("a failed re-read after a stale refusal resets what it can no longer show",
   chooseTime("Stay near current date");
   // A refusal naming a spelling the chooser does not hold clears nothing, and
   // the re-read that would have pruned the held refs fails.
-  (api.sceneSuggestions as any).mockRejectedValueOnce(
+  vi.mocked(api.sceneSuggestions).mockRejectedValueOnce(
     new ApiError(409, "stale", "stale_drivers", { refs: ["thread:find-the-ledger"] }));
-  (api.continuityDrivers as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.continuityDrivers).mockRejectedValue(new Error("offline"));
   await regenerate();
   await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(container.querySelector("details.story-pressure")).toBeNull());
@@ -1120,7 +1121,7 @@ test("a failed re-read after a stale refusal resets what it can no longer show",
   expect(await screen.findByText(/Story pressure could not be read/))
     .toHaveTextContent(/Mara's map.*Mara's oath/);
   // ...and hidden controls send nothing.
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [CARD], greeting_picks: [], next_date: "" });
   await regenerate();
   expect(lastOptions()).toEqual(expect.objectContaining({
@@ -1137,16 +1138,16 @@ test("a stale note clears once the next request goes out", async () => {
   const { container } = renderChooser();
   await pickerReady(container);
   choose("Mara's map", "Focus");
-  (api.sceneSuggestions as any).mockRejectedValueOnce(
+  vi.mocked(api.sceneSuggestions).mockRejectedValueOnce(
     new ApiError(409, "stale", "stale_drivers", { refs: ["thread:mara-s-map"] }));
-  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+  vi.mocked(api.continuityDrivers).mockResolvedValue(snapshot({
     drivers: [driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2)],
   }));
   await regenerate();
   expect(await screen.findByText(/press Regenerate\./)).toHaveTextContent("Mara's map");
   // Regenerate works this time: the cards land, and "press Regenerate" is
   // not left under them.
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [{ ...CARD, title: "Ashore" }], greeting_picks: [], next_date: "" });
   await regenerate();
   expect(await screen.findByText("Ashore")).toBeInTheDocument();
@@ -1160,9 +1161,9 @@ test("a second stale cycle names only what it reset", async () => {
   choose("Mara's map", "Focus");
   choose("Mara's oath", "Avoid");
   // The first refusal names Mara's map, and the re-read drops it.
-  (api.sceneSuggestions as any).mockRejectedValueOnce(
+  vi.mocked(api.sceneSuggestions).mockRejectedValueOnce(
     new ApiError(409, "stale", "stale_drivers", { refs: ["thread:mara-s-map"] }));
-  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+  vi.mocked(api.continuityDrivers).mockResolvedValue(snapshot({
     drivers: [driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2),
               driver("event:the-coronation", "event", "The coronation", "upcoming", 10)],
   }));
@@ -1170,9 +1171,9 @@ test("a second stale cycle names only what it reset", async () => {
   expect(await screen.findByText(/press Regenerate\./)).toHaveTextContent("Mara's map");
   // The second names a spelling the chooser does not hold; the re-read's
   // prune is what drops Mara's oath, and the note names that alone.
-  (api.sceneSuggestions as any).mockRejectedValueOnce(
+  vi.mocked(api.sceneSuggestions).mockRejectedValueOnce(
     new ApiError(409, "stale", "stale_drivers", { refs: ["commitment:the-oath"] }));
-  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+  vi.mocked(api.continuityDrivers).mockResolvedValue(snapshot({
     drivers: [driver("event:the-coronation", "event", "The coronation", "upcoming", 10)],
   }));
   await regenerate();
@@ -1184,7 +1185,7 @@ test("a second stale cycle names only what it reset", async () => {
 test("a seed's dropped-ref note outlives the open call and clears on a control change", async () => {
   const { container } = renderChooser(
     { seed: { drivers: { "thread:ghost": "focus", "thread:mara-s-map": "focus" } } });
-  (api.sceneSuggestions as any).mockResolvedValue(
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(
     { suggestions: [CARD], greeting_picks: [], next_date: "" });
   fireEvent.click(screen.getByText("With your PC"));
   await screen.findByText("At sea");

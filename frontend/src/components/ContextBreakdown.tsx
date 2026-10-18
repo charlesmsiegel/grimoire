@@ -26,7 +26,7 @@ export function ContextBreakdown({ ctx, models, acceptCid }: {
   ctx: SceneContext; models: Model[];
   /** A captured turn's campaign: offers the history accept (11-S3). The live
    *  panel passes none, so it offers nothing. */
-  acceptCid?: string;
+  acceptCid?: string | undefined;
 }) {
   const ctxLen = contextLimit(ctx, models);
   const pct = (t: number) => (ctxLen > 0 ? ` · ${Math.round((t / ctxLen) * 100)}%` : "");
@@ -229,7 +229,7 @@ export function contextPercent(ctx: SceneContext, models: Model[]): number {
  *  stage knows or suspects it; for an NPC, what it has and why, its withheld
  *  parts included. The basis codes are shown here and sent nowhere. */
 function EpistemicRows({ detail, acceptCid, carried }: {
-  detail: EpistemicDetail; acceptCid?: string; carried: Set<string>;
+  detail: EpistemicDetail; acceptCid?: string | undefined; carried: Set<string>;
 }) {
   const actor = detail.perspective === "narrator" ? null : detail.perspective.replace(/^actor:/, "");
   const names = detail.names ?? {};
@@ -308,7 +308,7 @@ function carriedPosts(sections: ContextSection[]): Set<string> {
 }
 
 function HistoryEntries({ section, acceptCid, carried }: {
-  section: ContextSection; acceptCid?: string; carried: Set<string>;
+  section: ContextSection; acceptCid?: string | undefined; carried: Set<string>;
 }) {
   const history = section.history;
   if (!history) return null;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type ModuleDetail, type ModuleTheme } from "../api/client";
+import { api, type LayoutNode, type ModuleDetail, type ModuleTheme } from "../api/client";
 import SheetLayout, { themeStyle } from "./SheetLayout";
 import { ErrorList, useModuleDryRun, type SaveFn } from "./moduleEditShared";
 
@@ -21,20 +21,33 @@ export const MAX_LAYOUT_DEPTH = 32;
  *  The cap counts every structural step -- a `row`/`column` nesting as much as
  *  a `use` hop -- because a draft that nests raw columns a thousand deep is the
  *  same runaway recursion with no fragment in it. */
-export function splice(node: any, fragments: Record<string, any>, seen: string[] = [],
-                       depth = 0): any {
-  if (!node || typeof node !== "object") return node;
-  if (depth > MAX_LAYOUT_DEPTH) return {};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function splice(node: unknown, fragments: Record<string, unknown>, seen: string[] = [],
+                       depth = 0): LayoutNode {
+  if (!isRecord(node) || depth > MAX_LAYOUT_DEPTH) return {};
   if (typeof node.use === "string") {
     if (seen.includes(node.use)) return {};
     return splice(fragments[node.use] ?? {}, fragments, [...seen, node.use], depth + 1);
   }
-  const out: any = { ...node };
-  for (const arr of ["row", "column"] as const) {
-    if (Array.isArray(out[arr])) {
-      out[arr] = out[arr].map((k: any) => splice(k, fragments, seen, depth + 1));
-    }
+  // This is an unvalidated JSON draft. Only the renderer's supported values
+  // reach the preview; the original draft still goes to the server for its
+  // authoritative validation, including diagnostics for unknown properties.
+  const out: LayoutNode = {};
+  for (const key of ["row", "column"] as const) {
+    const children = node[key];
+    if (Array.isArray(children)) out[key] = children.map((child: unknown) => splice(child, fragments, seen, depth + 1));
   }
+  for (const key of ["group", "title"] as const) {
+    if (typeof node[key] === "string") out[key] = node[key];
+  }
+  for (const key of ["fields", "derived"] as const) {
+    const names = node[key];
+    if (Array.isArray(names)) out[key] = names.filter((name: unknown): name is string => typeof name === "string");
+  }
+  if (typeof node.grid === "boolean") out.grid = node.grid;
   return out;
 }
 
@@ -70,12 +83,12 @@ function SheetTypeSelect({ pack, value, onChange }: {
 }
 
 function Preview({ pack, sheetType, tree, theme }: {
-  pack: ModuleDetail; sheetType: string; tree?: unknown; theme?: ModuleTheme;
+  pack: ModuleDetail; sheetType: string; tree?: LayoutNode; theme?: ModuleTheme | undefined;
 }) {
   const sample = sampleSheet(pack, sheetType);
   const previewModule: ModuleDetail = tree === undefined
     ? pack
-    : { ...pack, layout: { sheet_types: { [sheetType]: tree as any } } };
+    : { ...pack, layout: { sheet_types: { [sheetType]: tree } } };
   return (
     <div className="sheet-arranged-preview" style={themeStyle(theme)}
          data-dots={theme?.dots} data-corners={theme?.corners}>
@@ -94,12 +107,12 @@ export function LayoutSection({ pack, reload }: {
 }) {
   const [text, setText] = useState(() => JSON.stringify(pack.layout_source ?? {}, null, 2));
   const [sheetType, setSheetType] = useState(() => Object.keys(pack.sheets.sheet_types)[0] ?? "");
-  const [lastGood, setLastGood] = useState<any>(pack.layout_source ?? {});
+  const [lastGood, setLastGood] = useState<Record<string, unknown>>(pack.layout_source ?? {});
 
-  const parsed = useMemo<any>(() => {
+  const parsed = useMemo<Record<string, unknown> | undefined>(() => {
     try {
-      const v = JSON.parse(text);
-      return v && typeof v === "object" && !Array.isArray(v) ? v : undefined;
+      const v: unknown = JSON.parse(text);
+      return isRecord(v) ? v : undefined;
     } catch {
       return undefined;
     }
@@ -116,8 +129,9 @@ export function LayoutSection({ pack, reload }: {
   const dr = useModuleDryRun(save, [text]);
 
   const active = parsed !== undefined ? parsed : lastGood;
-  const fragments = (active && typeof active === "object" ? active.fragments : undefined) ?? {};
-  const tree = splice((active?.sheet_types ?? {})[sheetType] ?? {}, fragments);
+  const fragments = isRecord(active.fragments) ? active.fragments : {};
+  const types = isRecord(active.sheet_types) ? active.sheet_types : {};
+  const tree = splice(types[sheetType] ?? {}, fragments);
 
   return (
     <div className="detail-main">
@@ -155,14 +169,14 @@ function themeFormOf(theme: ModuleTheme | undefined): ThemeForm {
 }
 
 function themeTokenOf(form: ThemeForm): ModuleTheme {
-  const colors: ModuleTheme["colors"] = {};
-  if (form.useCustomColors) { colors!.bg = form.bg; colors!.ink = form.ink; }
-  if (form.accent) colors!.accent = form.accent;
-  if (form.muted) colors!.muted = form.muted;
-  if (form.rule) colors!.rule = form.rule;
+  const colors: NonNullable<ModuleTheme["colors"]> = {};
+  if (form.useCustomColors) { colors.bg = form.bg; colors.ink = form.ink; }
+  if (form.accent) colors.accent = form.accent;
+  if (form.muted) colors.muted = form.muted;
+  if (form.rule) colors.rule = form.rule;
   return {
     colors,
-    fonts: { display: form.display as any, body: form.body as any },
+    fonts: { display: form.display, body: form.body },
     dots: form.dots, corners: form.corners,
   };
 }

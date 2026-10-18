@@ -14,13 +14,16 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { ApiError, api } from "../api/client";
+import { fixture } from "../testkit/fixture";
+import type { ImageGcReport, ImageMigrationReport } from "../api/types";
+import type { RunHandle } from "../api/stream";
 
-const run = (over: Record<string, unknown> = {}) => ({
+const run = (over: Partial<RunHandle> = {}): RunHandle => ({
   id: "r".repeat(32), attempt_id: "a1", state: "landed", next_index: 0,
   cls: "maintenance", kind: "migrate", ...over,
 });
 
-const migration = (over: Record<string, unknown> = {}) => ({
+const migration = (over: Partial<ImageMigrationReport> = {}): ImageMigrationReport => ({
   kind: "image-migration", dry_run: true, outcome: "done", error: null,
   legacy_files: 12, unique_images: 7, exact_duplicates: 4, pixel_variants: 1,
   bytes_before: 5_242_880, bytes_after: 2_097_152, bytes_reclaimed: 3_145_728,
@@ -36,7 +39,7 @@ const DUE = Date.UTC(2026, 10, 14, 12, 34) / 1000;
 const DUE_TEXT = new Date(DUE * 1000).toLocaleTimeString();
 const BIN = { ok: true, code: null, message: null };
 
-const scan = (over: Record<string, unknown> = {}) => ({
+const scan = (over: Partial<ImageGcReport> = {}): ImageGcReport => fixture({
   kind: "image-gc", mode: "scan", run_id: "g".repeat(32), state: "complete",
   grace_hours: 1,
   counts: { placements: 20, objects: 9, blobs: 9, unreferenced: 5, collectable: 3,
@@ -56,12 +59,12 @@ const scan = (over: Record<string, unknown> = {}) => ({
 const confirm = vi.fn(() => true);
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [] });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run() });
-  (api.cancelGlobalRun as any).mockResolvedValue({ run: run({ state: "cancelled" }) });
-  (api.startImageMigration as any).mockResolvedValue({ run: run() });
-  (api.startImageGc as any).mockResolvedValue({ run: run({ kind: "gc" }) });
-  (api.getImageMaintenanceReport as any).mockResolvedValue(migration());
+  vi.mocked(api.listGlobalRuns).mockResolvedValue({ runs: [] });
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run() }));
+  vi.mocked(api.cancelGlobalRun).mockResolvedValue(fixture({ run: run({ state: "cancelled" }) }));
+  vi.mocked(api.startImageMigration).mockResolvedValue(fixture({ run: run() }));
+  vi.mocked(api.startImageGc).mockResolvedValue(fixture({ run: run({ kind: "gc" }) }));
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(migration());
   confirm.mockReset();
   confirm.mockReturnValue(true);
   vi.stubGlobal("confirm", confirm);
@@ -85,7 +88,7 @@ test("check shows the dry-run report", async () => {
 });
 
 test("migrate asks to confirm first", async () => {
-  (confirm as any).mockReturnValueOnce(false);
+  vi.mocked(confirm).mockReturnValueOnce(false);
   render(<ImageStoreCard />);
   const migrate = await screen.findByRole("button", { name: "Migrate" });
 
@@ -100,7 +103,7 @@ test("migrate asks to confirm first", async () => {
 });
 
 test("find unused images shows the time objects become collectable", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan());
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
 
@@ -120,7 +123,7 @@ test("find unused images shows the time objects become collectable", async () =>
 
 test("a burst of too-new images is one line, naming the latest time", async () => {
   const times = [DUE, DUE + 7, DUE + 61, DUE + 600];
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     protected: times.map((t, i) => (
       { id: `p${i}`, blob: `q${i}`, why: "grace", collectable_at: t })),
   }));
@@ -134,7 +137,7 @@ test("a burst of too-new images is one line, naming the latest time", async () =
 });
 
 test("a single too-new image reads in the singular", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     protected: [{ id: "p", blob: "q", why: "grace", collectable_at: DUE }],
   }));
   render(<ImageStoreCard />);
@@ -144,7 +147,7 @@ test("a single too-new image reads in the singular", async () => {
 });
 
 test("nothing collectable offers no delete", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     collectable: [], counts: { ...scan().counts, collectable: 0 },
     reclaimable_bytes: 0, token: null, token_expires_at: null,
   }));
@@ -156,12 +159,12 @@ test("nothing collectable offers no delete", async () => {
 });
 
 test("sending carries the token, after a confirmation that says what happens", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan());
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
   const del = await screen.findByRole("button", { name: "Send 3 unused images to the recycle bin" });
 
-  (confirm as any).mockReturnValueOnce(false);
+  vi.mocked(confirm).mockReturnValueOnce(false);
   fireEvent.click(del);
   expect(api.startImageGc).toHaveBeenCalledTimes(1);          // declined: nothing sent
   const asked = String((confirm.mock.calls as unknown[][])[0][0]);
@@ -169,7 +172,7 @@ test("sending carries the token, after a confirmation that says what happens", a
   expect(asked).toMatch(/descriptions and tags are not kept/);
   expect(asked).toMatch(/another device linked but has not synced yet/);
 
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     mode: "collect", token: null, token_expires_at: null,
     deleted: { objects: [], bytes: 0 },
     recycled: ["x", "y", "z"].map((blob) => (
@@ -185,11 +188,11 @@ test("sending carries the token, after a confirmation that says what happens", a
 });
 
 test("a live run is rediscovered on mount", async () => {
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
     run({ id: "o".repeat(32), state: "landed", kind: "gc" }),
     run({ id: "l".repeat(32), state: "running", kind: "migrate" }),
-  ] });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), state: "running" }) });
+  ] }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ id: "l".repeat(32), state: "running" }) }));
   render(<ImageStoreCard />);
 
   expect(await screen.findByText(/An image-store run is in progress/)).toBeInTheDocument();
@@ -200,10 +203,10 @@ test("a live run is rediscovered on mount", async () => {
 });
 
 test("a rediscovered run that finishes shows its report", async () => {
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
-    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), kind: "gc" }) });
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
+    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ id: "l".repeat(32), kind: "gc" }) }));
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan());
   render(<ImageStoreCard />);
 
   expect(await screen.findByText(/3 unused images can be sent to the recycle bin now/)).toBeInTheDocument();
@@ -216,8 +219,8 @@ function held<T>() {
 }
 
 test("a retained scan restores its report and unspent collection token on mount", async () => {
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [run({ kind: "gc" })] });
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [run({ kind: "gc" })] }));
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan());
   render(<ImageStoreCard />);
 
   fireEvent.click(await screen.findByRole("button", {
@@ -228,13 +231,13 @@ test("a retained scan restores its report and unspent collection token on mount"
 });
 
 test("the newest retained GC result wins over an older scan and unrelated runs", async () => {
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
     run({ id: "s".repeat(32), kind: "gc" }),
     run({ id: "c".repeat(32), kind: "gc" }),
     run({ id: "m".repeat(32), kind: "migrate" }),
     run({ id: "f".repeat(32), kind: "migrate", state: "failed" }),
-  ] });
-  (api.getImageMaintenanceReport as any).mockImplementation((id: string) => Promise.resolve(
+  ] }));
+  vi.mocked(api.getImageMaintenanceReport).mockImplementation((id) => Promise.resolve(
     id === "c".repeat(32) ? scan({ mode: "collect", token: null, recycled: binned(2) }) : scan()));
   render(<ImageStoreCard />);
 
@@ -242,12 +245,12 @@ test("the newest retained GC result wins over an older scan and unrelated runs",
   expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
 });
 
-test.each(["failed", "cancelled"])("a newer %s collection supersedes an older scan token", async (state) => {
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+test.each(["failed", "cancelled"] as const)("a newer %s collection supersedes an older scan token", async (state) => {
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
     run({ id: "s".repeat(32), kind: "gc" }),
     run({ id: "c".repeat(32), kind: "gc", state }),
-  ] });
-  (api.getImageMaintenanceReport as any).mockImplementation((id: string) => Promise.resolve(
+  ] }));
+  vi.mocked(api.getImageMaintenanceReport).mockImplementation((id) => Promise.resolve(
     id === "c".repeat(32)
       ? scan({ mode: "collect", state, token: null, token_expires_at: null, recycled: binned(1) })
       : scan()));
@@ -259,12 +262,12 @@ test.each(["failed", "cancelled"])("a newer %s collection supersedes an older sc
 });
 
 test("a newer failed GC with no report shows its failure rather than an older token", async () => {
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
     run({ id: "s".repeat(32), kind: "gc" }),
     run({ id: "c".repeat(32), kind: "gc", state: "failed",
       error: { detail: "maintenance is running elsewhere", kind: "maintenance_elsewhere" } }),
-  ] });
-  (api.getImageMaintenanceReport as any).mockImplementation((id: string) =>
+  ] }));
+  vi.mocked(api.getImageMaintenanceReport).mockImplementation((id) =>
     id === "c".repeat(32) ? Promise.reject(new ApiError(404, "no such report"))
       : Promise.resolve(scan()));
   render(<ImageStoreCard />);
@@ -275,12 +278,12 @@ test("a newer failed GC with no report shows its failure rather than an older to
 
 test("a delayed mount listing cannot replace a run started and finished on this visit", async () => {
   const listing = held<{ runs: ReturnType<typeof run>[] }>();
-  (api.listGlobalRuns as any).mockReturnValue(listing.promise);
+  vi.mocked(api.listGlobalRuns).mockReturnValue(listing.promise);
   render(<ImageStoreCard />);
   fireEvent.click(screen.getByRole("button", { name: "Check" }));
   expect(await screen.findByText(/12 legacy files/)).toBeInTheDocument();
 
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan());
   await act(async () => { listing.resolve({ runs: [run({ kind: "gc" })] }); });
   expect(screen.getByText(/12 legacy files/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
@@ -289,9 +292,9 @@ test("a delayed mount listing cannot replace a run started and finished on this 
 test("a start owns the card before its reservation answers", async () => {
   const listing = held<{ runs: ReturnType<typeof run>[] }>();
   const start = held<{ run: ReturnType<typeof run> }>();
-  (api.listGlobalRuns as any).mockReturnValue(listing.promise);
-  (api.startImageMigration as any).mockReturnValue(start.promise);
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ state: "running" }) });
+  vi.mocked(api.listGlobalRuns).mockReturnValue(listing.promise);
+  vi.mocked(api.startImageMigration).mockReturnValue(start.promise);
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ state: "running" }) }));
   render(<ImageStoreCard />);
   fireEvent.click(screen.getByRole("button", { name: "Check" }));
   await act(async () => { listing.resolve({ runs: [run({ state: "running", kind: "gc" })] }); });
@@ -304,8 +307,8 @@ test("a start owns the card before its reservation answers", async () => {
 
 test("a delayed rediscovered report cannot replace a newer result", async () => {
   const stored = held<ReturnType<typeof scan>>();
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [run({ kind: "gc" })] });
-  (api.getImageMaintenanceReport as any).mockReturnValueOnce(stored.promise)
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [run({ kind: "gc" })] }));
+  vi.mocked(api.getImageMaintenanceReport).mockReturnValueOnce(stored.promise)
     .mockResolvedValue(migration());
   render(<ImageStoreCard />);
   await waitFor(() => expect(api.getImageMaintenanceReport).toHaveBeenCalled());
@@ -319,12 +322,12 @@ test("a delayed rediscovered report cannot replace a newer result", async () => 
 
 test("a finished run's late report cannot paint over a newer active run", async () => {
   const stored = held<ReturnType<typeof scan>>();
-  (api.getImageMaintenanceReport as any).mockReturnValue(stored.promise);
+  vi.mocked(api.getImageMaintenanceReport).mockReturnValue(stored.promise);
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
   await waitFor(() => expect(api.getImageMaintenanceReport).toHaveBeenCalled());
-  (api.startImageMigration as any).mockResolvedValue({ run: run({ state: "running" }) });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ state: "running" }) });
+  vi.mocked(api.startImageMigration).mockResolvedValue(fixture({ run: run({ state: "running" }) }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ state: "running" }) }));
   fireEvent.click(screen.getByRole("button", { name: "Check" }));
   expect(await screen.findByText(/Checking legacy images/)).toBeInTheDocument();
 
@@ -336,17 +339,17 @@ test("a finished run's late report cannot paint over a newer active run", async 
 test("an old cancel response cannot finish a newer run", async () => {
   const poll = held<{ run: ReturnType<typeof run> }>();
   const cancelled = held<{ run: ReturnType<typeof run> }>();
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [run({ state: "running", kind: "gc" })] });
-  (api.getGlobalRun as any).mockReturnValueOnce(poll.promise);
-  (api.cancelGlobalRun as any).mockReturnValue(cancelled.promise);
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [run({ state: "running", kind: "gc" })] }));
+  vi.mocked(api.getGlobalRun).mockReturnValueOnce(poll.promise);
+  vi.mocked(api.cancelGlobalRun).mockReturnValue(cancelled.promise);
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan());
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
   await act(async () => { poll.resolve({ run: run({ kind: "gc" }) }); });
   expect(await screen.findByText(/3 unused images can be sent/)).toBeInTheDocument();
 
-  (api.startImageMigration as any).mockResolvedValue({ run: run({ state: "running" }) });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ state: "running" }) });
+  vi.mocked(api.startImageMigration).mockResolvedValue(fixture({ run: run({ state: "running" }) }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ state: "running" }) }));
   fireEvent.click(screen.getByRole("button", { name: "Check" }));
   expect(await screen.findByText(/Checking legacy images/)).toBeInTheDocument();
   await act(async () => { cancelled.resolve({ run: run({ state: "cancelled", kind: "gc" }) }); });
@@ -354,8 +357,8 @@ test("an old cancel response cannot finish a newer run", async () => {
   expect(screen.getByRole("button", { name: "Check" })).toBeDisabled();
 });
 
-test.each(["scan", "collect"])("%s reports show staging paths that still protect images", async (mode) => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+test.each(["scan", "collect"] as const)("%s reports show staging paths that still protect images", async (mode) => {
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     mode, staging: [
       { path: ".world-staging/saltmarch", reason: "staging-leftover" },
       { path: ".world-staging/realm", reason: "staging-in-progress" },
@@ -374,10 +377,10 @@ test.each(["scan", "collect"])("%s reports show staging paths that still protect
 
 /** A finished collection rediscovered on mount, with the report's fields as given. */
 function showCollection(over: Record<string, unknown>) {
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
-    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), kind: "gc" }) });
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
+    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ id: "l".repeat(32), kind: "gc" }) }));
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     mode: "collect", token: null, token_expires_at: null, ...over }));
   render(<ImageStoreCard />);
 }
@@ -437,7 +440,7 @@ test("a bin that refused a file says how many wait, and that nothing more was co
 });
 
 test("waiting and foreign outbox files are listed with where they are", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     outbox: ["grimoire - Mara - ab12cd34.png"], foreign_outboxes: 2,
   }));
   render(<ImageStoreCard />);
@@ -459,7 +462,7 @@ test("waiting and foreign outbox files are listed with where they are", async ()
 });
 
 test("waiting files alone can be sent", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     collectable: [], counts: { ...scan().counts, collectable: 0 }, protected: [],
     outbox: ["grimoire - ab12cd34.png"],
   }));
@@ -474,7 +477,7 @@ test("waiting files alone can be sent", async () => {
 });
 
 test("a blocked scan still offers to send what waits in the outbox", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     state: "blocked", collectable: [], counts: { ...scan().counts, collectable: 0 },
     protected: [], outbox: ["grimoire - ab12cd34.png", "grimoire - ef56ab78.png"],
     blocking: [{ path: "worlds/realm/image-refs/avatar.json", reason: "unparseable" }],
@@ -491,7 +494,7 @@ test("a blocked scan still offers to send what waits in the outbox", async () =>
 });
 
 test("held images say why they are kept, one line per reason", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     protected: [
       { id: "a", blob: "x", why: "unarrived-objects", collectable_at: null },
       { id: "b", blob: "y", why: "unarrived-objects", collectable_at: null },
@@ -512,7 +515,7 @@ test("held images say why they are kept, one line per reason", async () => {
 
 test("a scan that finds no recycle bin offers nothing and says why", async () => {
   const message = "This computer has no recycle bin Grimoire can use, so nothing is collected.";
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     recycle_bin: { ok: false, code: "not_installed", message },
   }));
   render(<ImageStoreCard />);
@@ -527,7 +530,7 @@ test("a drive that can't make hard links offers nothing and shows the server's s
   const message = "This library's drive can't make hard links (for example exFAT, FAT, or some "
     + "network and cloud drives), so unused pictures can't be safely moved to the recycle bin "
     + "from it. Move the library to a drive that supports them to collect from it.";
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     recycle_bin: { ok: false, code: "no_hard_links", message },
   }));
   render(<ImageStoreCard />);
@@ -540,7 +543,7 @@ test("a drive that can't make hard links offers nothing and shows the server's s
 
 test("a bin that is not known either way does not hide the button as 'no bin'", async () => {
   // `ok: null` is what a report that ended before it asked carries.
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     recycle_bin: { ok: null, code: null, message: null },
   }));
   render(<ImageStoreCard />);
@@ -552,33 +555,33 @@ test("a bin that is not known either way does not hide the button as 'no bin'", 
 
 test("a 409 no_recycle_bin on start shows its sentence", async () => {
   const sentence = "This computer has no recycle bin Grimoire can use, so nothing is collected.";
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan());
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
   const send = await screen.findByRole("button", { name: "Send 3 unused images to the recycle bin" });
 
-  (api.startImageGc as any).mockRejectedValueOnce(new ApiError(409, sentence, "no_recycle_bin"));
+  vi.mocked(api.startImageGc).mockRejectedValueOnce(new ApiError(409, sentence, "no_recycle_bin"));
   fireEvent.click(send);
 
   expect(await screen.findByText(sentence)).toBeInTheDocument();
 });
 
 test("a legacy report still reads: grace_days, deleted.blobs and no recycled", async () => {
-  const { recycled, released, outbox, unverified, recycle_bin, foreign_outboxes, ...old } =
+  const { recycled, released, outbox, unverified, recycle_bin, foreign_outboxes, grace_hours, ...old } =
     scan({ mode: "collect", token: null, token_expires_at: null }) as Record<string, any>;
   void recycled; void released; void outbox; void unverified; void recycle_bin;
-  void foreign_outboxes;
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
-    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), kind: "gc" }) });
-  (api.getImageMaintenanceReport as any).mockResolvedValue({
-    ...old, grace_hours: undefined, grace_days: 30, kept_blobs: [],
+  void foreign_outboxes; void grace_hours;
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
+    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ id: "l".repeat(32), kind: "gc" }) }));
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(fixture({
+    ...old, grace_days: 30, kept_blobs: [],
     deleted: {
       objects: [{ id: "a", blob: "x", bytes: 100 }, { id: "b", blob: "y", bytes: 100 }],
       blobs: [{ id: "a", blob: "x", bytes: 1024 }, { id: null, blob: "z", bytes: 1024 }],
       bytes: 2248,
     },
-  });
+  }));
   render(<ImageStoreCard />);
 
   // Objects plus orphan blobs, not an object's own blob; and it says deleted,
@@ -588,10 +591,10 @@ test("a legacy report still reads: grace_days, deleted.blobs and no recycled", a
 });
 
 test("cancel calls the global cancel route", async () => {
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
-    run({ id: "l".repeat(32), state: "running", kind: "migrate" }) ] });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), state: "running" }) });
-  (api.getImageMaintenanceReport as any).mockResolvedValue(
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
+    run({ id: "l".repeat(32), state: "running", kind: "migrate" }) ] }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ id: "l".repeat(32), state: "running" }) }));
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(
     migration({ dry_run: false, outcome: "cancelled", placed: 2 }));
   render(<ImageStoreCard />);
 
@@ -605,7 +608,7 @@ test("cancel calls the global cancel route", async () => {
 });
 
 test("blocking paths and maintenance elsewhere are shown", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     state: "blocked", token: null, token_expires_at: null, collectable: [],
     counts: { ...scan().counts, collectable: 0 }, protected: [],
     blocking: [{ path: "worlds/realm/image-refs/avatar.json", reason: "unparseable" },
@@ -624,7 +627,7 @@ test("blocking paths and maintenance elsewhere are shown", async () => {
   expect(screen.queryByRole("button", { name: /^Send \d+ unused/ })).toBeNull();
 
   const elsewhere = "image-store maintenance is running on another device that shares this library; wait for it to finish";
-  (api.startImageMigration as any).mockRejectedValue(
+  vi.mocked(api.startImageMigration).mockRejectedValue(
     new ApiError(409, elsewhere, "maintenance_elsewhere"));
   fireEvent.click(screen.getByRole("button", { name: "Check" }));
   expect(await screen.findByText(elsewhere)).toBeInTheDocument();
@@ -633,7 +636,7 @@ test("blocking paths and maintenance elsewhere are shown", async () => {
 
 test("a refusal because the store is busy is shown verbatim", async () => {
   const busy = "a fork, delete, export or backup is using the store; try again when it finishes";
-  (api.startImageGc as any).mockRejectedValue(new ApiError(409, busy, "busy"));
+  vi.mocked(api.startImageGc).mockRejectedValue(new ApiError(409, busy, "busy"));
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
 
@@ -641,7 +644,7 @@ test("a refusal because the store is busy is shown verbatim", async () => {
 });
 
 test("a refused collection says why instead of reporting a deletion", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     mode: "collect", state: "refused", token: null, token_expires_at: null,
     error: "unknown or already used", collectable: [],
   }));
@@ -654,7 +657,7 @@ test("a refused collection says why instead of reporting a deletion", async () =
 
 test("a collection refused for want of a bin shows the sentence, never the code", async () => {
   const message = "This computer has no recycle bin Grimoire can use, so nothing is collected.";
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan({
     mode: "collect", state: "refused", token: null, token_expires_at: null,
     error: "no_recycle_bin", collectable: [],
     recycle_bin: { ok: false, code: "not_installed", message },
@@ -668,10 +671,10 @@ test("a collection refused for want of a bin shows the sentence, never the code"
 });
 
 test("a run that failed with no report shows its error", async () => {
-  (api.startImageMigration as any).mockResolvedValue({ run: run({ state: "running" }) });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({
-    state: "failed", error: { detail: "the pass stopped unexpectedly", kind: "run_failed" } }) });
-  (api.getImageMaintenanceReport as any).mockRejectedValue(new ApiError(404, "no such report"));
+  vi.mocked(api.startImageMigration).mockResolvedValue(fixture({ run: run({ state: "running" }) }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({
+    state: "failed", error: { detail: "the pass stopped unexpectedly", kind: "run_failed" } }) }));
+  vi.mocked(api.getImageMaintenanceReport).mockRejectedValue(new ApiError(404, "no such report"));
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Check" }));
 
@@ -679,13 +682,13 @@ test("a run that failed with no report shows its error", async () => {
 });
 
 test("a delete refused as busy keeps the scan, its token and its button", async () => {
-  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(scan());
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
   const del = await screen.findByRole("button", { name: "Send 3 unused images to the recycle bin" });
 
   const busy = "a fork, delete, export or backup is using the store; try again when it finishes";
-  (api.startImageGc as any).mockRejectedValueOnce(new ApiError(409, busy, "busy"));
+  vi.mocked(api.startImageGc).mockRejectedValueOnce(new ApiError(409, busy, "busy"));
   fireEvent.click(del);
 
   expect(await screen.findByText(busy)).toBeInTheDocument();
@@ -695,11 +698,11 @@ test("a delete refused as busy keeps the scan, its token and its button", async 
 
 test("a start that finds a run already going adopts it and drops the refusal", async () => {
   const msg = "image-store maintenance is already running";
-  (api.startImageMigration as any).mockRejectedValue(new ApiError(409, msg, "run_in_flight"));
-  (api.listGlobalRuns as any)
+  vi.mocked(api.startImageMigration).mockRejectedValue(new ApiError(409, msg, "run_in_flight"));
+  vi.mocked(api.listGlobalRuns)
     .mockResolvedValueOnce({ runs: [] })
-    .mockResolvedValue({ runs: [run({ id: "l".repeat(32), state: "running" })] });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32) }) });
+    .mockResolvedValue(fixture({ runs: [run({ id: "l".repeat(32), state: "running" })] }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ id: "l".repeat(32) }) }));
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Check" }));
 
@@ -708,9 +711,9 @@ test("a start that finds a run already going adopts it and drops the refusal", a
 });
 
 test("a rediscovered collection is not described as a search", async () => {
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
-    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), state: "running", kind: "gc" }) });
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
+    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ id: "l".repeat(32), state: "running", kind: "gc" }) }));
   render(<ImageStoreCard />);
 
   expect(await screen.findByText(/An image-store run is in progress/)).toBeInTheDocument();
@@ -718,8 +721,8 @@ test("a rediscovered collection is not described as a search", async () => {
 });
 
 test("a run this card started names its own mode", async () => {
-  (api.startImageGc as any).mockResolvedValue({ run: run({ state: "running", kind: "gc" }) });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ state: "running", kind: "gc" }) });
+  vi.mocked(api.startImageGc).mockResolvedValue(fixture({ run: run({ state: "running", kind: "gc" }) }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ state: "running", kind: "gc" }) }));
   render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
 
@@ -729,10 +732,10 @@ test("a run this card started names its own mode", async () => {
 test("a minimal failure report renders rather than crashing the card", async () => {
   // What a pass that raised before writing its own report used to leave: no
   // lists and no counts. The card shows the failure and treats the rest as empty.
-  (api.getImageMaintenanceReport as any).mockResolvedValue({
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(fixture({
     kind: "image-migration", dry_run: false, outcome: "failed", state: "failed",
     error: "OSError",
-  });
+  }));
   const { unmount } = render(<ImageStoreCard />);
   fireEvent.click(await screen.findByRole("button", { name: "Check" }));
 
@@ -741,10 +744,10 @@ test("a minimal failure report renders rather than crashing the card", async () 
   expect(screen.queryByRole("list", { name: "Left alone" })).not.toBeInTheDocument();
   unmount();
 
-  for (const mode of ["scan", "collect"]) {
-    (api.getImageMaintenanceReport as any).mockResolvedValue({
+  for (const mode of ["scan", "collect"] as const) {
+    vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(fixture({
       kind: "image-gc", mode, state: "failed", error: "OSError",
-    });
+    }));
     const view = render(<ImageStoreCard />);
     fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
 
@@ -782,12 +785,12 @@ test("a refused collection says nothing was sent to the bin", async () => {
 
 test("a stop in a report from an older build still says deleted", async () => {
   const { recycled, ...old } = scan({ mode: "collect", state: "root-changed",
-                                       token: null, token_expires_at: null }) as Record<string, any>;
+                                       token: null, token_expires_at: null });
   void recycled;
-  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
-    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] });
-  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), kind: "gc" }) });
-  (api.getImageMaintenanceReport as any).mockResolvedValue(old);
+  vi.mocked(api.listGlobalRuns).mockResolvedValue(fixture({ runs: [
+    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] }));
+  vi.mocked(api.getGlobalRun).mockResolvedValue(fixture({ run: run({ id: "l".repeat(32), kind: "gc" }) }));
+  vi.mocked(api.getImageMaintenanceReport).mockResolvedValue(fixture(old));
   render(<ImageStoreCard />);
 
   expect(await screen.findByText(

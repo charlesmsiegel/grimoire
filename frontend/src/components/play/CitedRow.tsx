@@ -39,11 +39,11 @@ export default function CitedRow(
     label: string;
     value: string;
     /** Absent means uncited, which is a normal state and shown as one. */
-    citation?: Citation;
+    citation?: Citation | undefined;
     /** Called with the quote while the popover is open, and with "" when it
      *  closes, so the transcript can highlight the line this came from. */
-    onHoverQuote?: (quote: string) => void;
-    onGoToTurn?: (quote: string) => void;
+    onHoverQuote?: ((quote: string) => void) | undefined;
+    onGoToTurn?: ((quote: string) => void) | undefined;
   },
 ) {
   const [open, setOpen] = useState(false);

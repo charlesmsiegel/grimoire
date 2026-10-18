@@ -212,19 +212,22 @@ function useStableCallback<A extends unknown[], R>(fn: (...args: A) => R): (...a
  *  the first render whose members forward to the latest render's. The keys are
  *  fixed by that first render, so a call site hands in the same set every
  *  time. */
+type StableHandlers<T extends { [K in keyof T]: (...args: never[]) => void }> = {
+  [K in keyof T]: (...args: Parameters<T[K]>) => void;
+};
+
 function useStableHandlers<T extends { [K in keyof T]: (...args: never[]) => void }>(
   handlers: T,
-): T {
+): StableHandlers<T> {
   const ref = useRef(handlers);
   useLayoutEffect(() => { ref.current = handlers; });
   const [stable] = useState(() => {
-    const out: Partial<T> = {};
-    for (const key of Object.keys(handlers) as (keyof T)[]) {
-      const forward = (...args: unknown[]) =>
-        (ref.current[key] as unknown as (...a: unknown[]) => void)(...args);
-      out[key] = forward as unknown as T[keyof T];
+    const out: StableHandlers<T> = { ...handlers };
+    for (const key in handlers) {
+      if (!Object.prototype.hasOwnProperty.call(handlers, key)) continue;
+      out[key] = (...args: Parameters<T[typeof key]>) => ref.current[key](...args);
     }
-    return out as T;
+    return out;
   });
   return stable;
 }
@@ -527,7 +530,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  next turn which works can tell it otherwise. Recovery is only visible if
    *  something announces it, and the shell has no other way to hear. */
   const sawProviderFailure = useRef(false);
-  const fail = (e: any, retryable = true, from?: string) => {
+  const fail = (e: unknown, retryable = true, from?: string) => {
     // A refusal of the model settings is not retried: the same request meets
     // the same refusal. A missing installation may need repairing outside the
     // app, so whether a settings page can fix it does not decide retryability.
@@ -650,7 +653,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // whenever the view stops being busy.
   const [roundProgress, setRoundProgress] = useState<{ index: number; of: number } | null>(null);
   useEffect(() => { if (!busy) setRoundProgress(null); }, [busy]);
-  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string; seed?: string }[]>([]);
+  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string; seed?: string | undefined }[]>([]);
   const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
@@ -1034,9 +1037,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const p = selectScene(id);
     // Minted synchronously by the call above, before its first await.
     const token = windowTokenRef.current;
-    p.catch((err: any) => {
+    p.catch((err: unknown) => {
       if (windowTokenRef.current !== token) return;   // a later select retired it
-      setError({ text: `The scene could not be read: ` + (err?.detail ?? String(err)),
+      setError({ text: `The scene could not be read: ` + errorText(err),
                  retryable: false });
     });
   }
@@ -1924,7 +1927,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       api.getCast(cid, activeId).then(setCast).catch(() => {});
       // A join/leave appends a transition post (#85), so the transcript moved.
       readScene(activeId);
-    } catch (err: any) {
+    } catch (err: unknown) {
       fail(err, false);
     }
   }
@@ -1990,10 +1993,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   function closeChooser(createdSid?: string) {
     setChooserOpen(false);
     if (!createdSid) return;
-    loadScenes().catch((err: any) => {
+    loadScenes().catch((err: unknown) => {
       if (cidRef.current === cid) {
         setError({ text: `The scene was created, but the scene list could not be `
-                         + `refreshed: ` + (err?.detail ?? String(err)), retryable: false });
+                         + `refreshed: ` + errorText(err), retryable: false });
       }
     });
   }
@@ -2003,7 +2006,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (initialPrompt) setSeedPrompt({ cid, sid: id, prompt: initialPrompt });
     try {
       await loadScenes();
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Reports rather than throws, for the reason `renameScene` does: the
       // chooser calls this from an event handler and drops the promise, so
       // anything escaping is an unhandled rejection the player never sees —
@@ -2016,7 +2019,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // (codex review).
       if (cidRef.current === cid) {
         setError({ text: `The scene was created, but the scene list could not be `
-                         + `refreshed: ` + (err?.detail ?? String(err)), retryable: false });
+                         + `refreshed: ` + errorText(err), retryable: false });
       }
       return;
     }
@@ -2189,11 +2192,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       adoptSceneId(id, newId);
       try {
         await loadScenes();
-      } catch (err: any) {
+      } catch (err: unknown) {
         // The rename LANDED; only the rail is stale. Not retryable — the
         // banner's Retry generates, and there is nothing here to generate.
         setError({ text: `Renamed, but the scene list could not be refreshed: `
-                         + (err?.detail ?? String(err)), retryable: false });
+                         + errorText(err), retryable: false });
       } finally {
         // Re-read the transcript, not only the ids that point at it. A swap in
         // flight against the OLD id finds `activeIdRef` already moved on and
@@ -2219,7 +2222,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // the first-date path makes, for the same reason.
         if (activeIdRef.current === newId) await selectScene(newId, undefined, true);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       fail(err, false);   // the rename itself; generating is not its recovery
     } finally {
       markRenaming(false);
@@ -2234,9 +2237,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (initiator) adoptSceneId(initiator, id);
     try {
       await loadScenes();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError({ text: `Renamed, but the scene list could not be refreshed: `
-                       + (err?.detail ?? String(err)), retryable: false });
+                       + errorText(err), retryable: false });
     } finally {
       // Only pull the renamed scene onto the screen if it is still the one being
       // read. A slow first-date request can land after the reader has moved to
@@ -2260,9 +2263,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       if (initiator && activeIdRef.current === id) {
         try {
           await selectScene(id, undefined, true);
-        } catch (err: any) {
+        } catch (err: unknown) {
           setError({ text: `Renamed, but the scene could not be re-read: `
-                           + (err?.detail ?? String(err)), retryable: false });
+                           + errorText(err), retryable: false });
         }
       }
     }
@@ -2368,7 +2371,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       report = fromIndex === undefined
         ? await api.forkCampaign(cid, forkName, sid)
         : await api.forkCampaign(cid, forkName, sid, {}, fromIndex);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Not retryable: the banner's Retry generates, and there is nothing here
       // to generate — the same call `deleteMessagesFrom` makes for the same
       // reason.
@@ -3115,7 +3118,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // by every heartbeat and replay text mid-reply.
         if (runRef.current?.id) registry.consume(runRef.current.id, index);
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       // A cancel is the user getting what they asked for, so it raises no error
       // banner. `done` is parsed before the body reports EOF and Stop stays live
       // until it does, so a press in that gap aborts a turn that is already
@@ -3144,7 +3147,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // back to the browser. Deciding now would put text in the composer that
       // is also in the transcript, and the next Send would duplicate it. The
       // refresh below settles it (review, #95).
-      if (err?.beforeResponse) unreached = true;
+      if (typeof err === "object" && err !== null && "beforeResponse" in err && err.beforeResponse) unreached = true;
       // A refusal reaches the server but may still leave nothing behind: every
       // 4xx `post_chat` raises comes from a check that runs *before* the post is
       // appended, so the prompt was cleared out of a composer and stored
@@ -3297,14 +3300,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         try {
           seen = await selectScene(id, () => !abortRef.current);
           refreshed = true;
-        } catch (err: any) {
+        } catch (err: unknown) {
           // Keep whatever the turn itself reported; say something if it reported
           // nothing, since the view is now showing a transcript it could not
           // confirm (a cancel raises no banner of its own).
           // Built here rather than through `fail`, which overwrites: the rule is
           // to keep whatever the turn reported. Retryable — this is the failure
           // path of a *generation*, so generating again is the right recovery.
-          setError((cur) => cur ?? { text: err?.detail ?? String(err), retryable: true });
+          setError((cur) => cur ?? { text: errorText(err), retryable: true });
         }
         // Anything that ended without `done` may have left a partial the backend
         // is still flushing — a cancel, or a body cut short. An error frame is
@@ -3757,7 +3760,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     let report;
     try {
       report = await api.retconMessage(cid, activeId, editing.index, editing.text);
-    } catch (err: any) {
+    } catch (err: unknown) {
       fail(err, false);            // not retryable: Retry re-runs the CHAT retry
       return;
     } finally {
@@ -3927,7 +3930,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     let report;
     try {
       report = await api.deleteMessagesFrom(cid, activeId, index);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Not retryable: Retry re-runs the CHAT retry, which would generate a
       // reply into the scene the player was trying to cut back.
       fail(err, false);
@@ -4051,7 +4054,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // override would have doubled again. The pending one-shot response override
     // rides regenerate here for the reason retry carries it: it is the promise
     // both make.
-    const body = { guidance, response: pendingResponse ?? undefined, ...rerollOverrides(route) };
+    const body = { guidance, ...(pendingResponse == null ? {} : { response: pendingResponse }),
+                   ...rerollOverrides(route) };
     const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
       // `rerolling`: a reroll that fails wants a different recovery offered
       // than a failed send does — see `runStream`.
@@ -4100,7 +4104,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     try {
       try {
         await api.pickAlternate(cid, sid, target.id);
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Scoped like every other write this component reports. Switching
         // scenes clears the banner deliberately — one scene's failure must not
         // offer its Retry against another — and a swap rejecting after the move
@@ -4140,7 +4144,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       let seen = -1;
       try {
         seen = await selectScene(sid);
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Asked again, not only before the first read. `selectScene` calls
         // `setActive`, so a retry issued after the reader moved on does not
         // merely refresh the wrong scene — it navigates them back to it, or in
@@ -4159,7 +4163,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           // indexes, and say what actually happened.
           setLoaded(null);
           setError({ text: `The take was swapped, but the scene could not be re-read: `
-                           + (err?.detail ?? String(err)), retryable: false });
+                           + errorText(err), retryable: false });
         }
       }
       // A swap replaces the reply in place: the transcript is no longer than it
@@ -4261,8 +4265,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       setRollForm(null);
       const seen = await selectScene(activeId);
       askAfterPost(activeId, seen);   // as is a check (#85, #84)
-    } catch (err: any) {
-      setRollForm({ ...rollForm, error: err.detail ?? String(err) });
+    } catch (err: unknown) {
+      setRollForm({ ...rollForm, error: errorText(err) });
     } finally {
       releaseLatch();
     }

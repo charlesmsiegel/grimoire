@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { ClockPanel } from "./ClockPanel";
 import { api, type AdvanceDigest, type CampaignClock,
          type ForkReport } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -85,10 +86,10 @@ beforeEach(() => {
   vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
   vi.mocked(api.forkCampaign).mockResolvedValue(FORK_REPORT);
   vi.mocked(api.getCampaign).mockResolvedValue(
-    { meta: { name: "Before 24 March 2027" }, body: "" } as never);
-  vi.mocked(api.getCalendarConfig).mockResolvedValue({
+    fixture({ meta: { name: "Before 24 March 2027" }, body: "" }));
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: true } as never);
+    secondary: null, confirmed: true }));
 });
 
 test("shows where the campaign's present is", async () => {
@@ -106,9 +107,9 @@ test("refuses to move time until the campaign has a calendar", async () => {
   // The same nudge the neighbouring When section gives. Recording a moment in the
   // default calendar's notation before the reader picks a different one leaves the
   // whole campaign holding a date its own calendar cannot read.
-  vi.mocked(api.getCalendarConfig).mockResolvedValue({
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: false } as never);
+    secondary: null, confirmed: false }));
   render(<ClockPanel cid="c" />);
   expect(await screen.findByText(/Select a calendar in the When section/)).toBeInTheDocument();
   expect(screen.queryByText("Advance time")).not.toBeInTheDocument();
@@ -163,12 +164,12 @@ test("advances by days with the reason, then reports what it crossed", async () 
 });
 
 test("a confirmed advance the clock was already at does not claim to have moved", async () => {
-  vi.mocked(api.advanceTime).mockResolvedValue({
+  vi.mocked(api.advanceTime).mockResolvedValue(fixture({
     ok: true, moved: false, now: "2026-12-24", friendly: "24 December 2026",
     digest: { ...DIGEST, from: "2026-12-24", to: "2026-12-24",
               to_friendly: "24 December 2026", elapsed_days: 0,
               holidays: [], birthdays: [] },
-  } as never);
+  }));
   render(<ClockPanel cid="c" />);
   await screen.findByText(/Now: 24 December 2026/);
   fireEvent.change(screen.getByLabelText("Days"), { target: { value: "0" } });
@@ -619,8 +620,8 @@ test("a checkpoint of the campaign you left is never recorded against the new on
   expect(screen.queryByText(/Checkpoint saved/)).not.toBeInTheDocument();
   // ...so a large skip here is offered a checkpoint of its own, not a retry.
   vi.mocked(api.advanceTime).mockResolvedValue(
-    { ok: true, moved: true, now: "2027-03-24", friendly: "24 March 2027",
-      digest: BIG } as never);
+    fixture({ ok: true, moved: true, now: "2027-03-24", friendly: "24 March 2027",
+      digest: BIG }));
   fireEvent.change(screen.getByLabelText("Days"), { target: { value: "90" } });
   fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "onwards" } });
   fireEvent.click(screen.getByText("Advance time"));
@@ -895,7 +896,7 @@ test("a replayed checkpoint is named by the fork that exists", async () => {
   vi.mocked(api.previewAdvance).mockResolvedValue({ revision: REV, digest: BIG });
   vi.mocked(api.forkCampaign).mockResolvedValue({ ...FORK_REPORT, replayed: true });
   vi.mocked(api.getCampaign).mockResolvedValue(
-    { meta: { name: "Winifred's last quiet week" }, body: "" } as never);
+    fixture({ meta: { name: "Winifred's last quiet week" }, body: "" }));
 
   await askToAdvance("90");
   await screen.findByText(/large time skip/);

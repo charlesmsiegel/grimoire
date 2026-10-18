@@ -5,7 +5,7 @@ import { initialsOf } from "./Portrait";
  * in main as well. The action is offered even before the first upload. */
 export function MobileArtEntry({ name, image, focus, onOpenArt, onOpenPreview }: {
   onOpenPreview?: (opener: HTMLElement) => void;
-  name: string; image: ((w?: number) => string) | null; focus?: number | null; onOpenArt: () => void;
+  name: string; image: ((w?: number) => string) | null; focus?: number | null | undefined; onOpenArt: () => void;
 }) {
   return <div className="mobile-art-entry">
     <button type="button" className="mobile-art-preview" aria-label={`View ${name} art`}

@@ -110,7 +110,8 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     setStale(false);
     pressure.current?.onDispatch?.();
     const controls = pressure.current?.controls?.() ?? {};
-    api.sceneSuggestions(cid, { after: afterSid ?? undefined, offscreen, direction, rank,
+    api.sceneSuggestions(cid, { ...(afterSid == null ? {} : { after: afterSid }),
+                                offscreen, direction, rank,
                                 ...controls })
       .then((r) => {
         if (mine !== seq.current) return;

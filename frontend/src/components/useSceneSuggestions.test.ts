@@ -9,12 +9,15 @@ vi.mock("../api/client", async () => ({
   api: { sceneSuggestions: vi.fn() },
 }));
 import { api, ApiError } from "../api/client";
+import type { SceneSuggestion } from "../api/types";
+import { fixture, type DeepPartial } from "../testkit/fixture";
 
-const R = (suggestions: any[], picks: string[] = [], next_date = "") =>
-  ({ suggestions, greeting_picks: picks, next_date });
+const R = (suggestions: DeepPartial<SceneSuggestion>[], picks: string[] = [], next_date = ""):
+  Awaited<ReturnType<typeof api.sceneSuggestions>> =>
+  fixture({ suggestions, greeting_picks: picks, next_date });
 
 /** A call that never settles: the hook stays in its pending state. */
-const pending = () => new Promise(() => {});
+const pending = (): ReturnType<typeof api.sceneSuggestions> => new Promise(() => {});
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -55,7 +58,7 @@ test.each(["campaign", "scene", "offscreen"])("scope change %s retires captured 
 // ---- the call the picker opens on ----
 
 test("opening asks the ranked question, with no direction", () => {
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   // rank=true: the picker's four slots are 2 greetings + 2 ideas, and the
   // greeting half is an ordering only this call returns.
@@ -69,7 +72,7 @@ test("opening asks the ranked question, with no direction", () => {
 });
 
 test("opening asks once, however often the hook re-renders", () => {
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   const { rerender } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   rerender();
   rerender();
@@ -77,7 +80,7 @@ test("opening asks once, however often the hook re-renders", () => {
 });
 
 test("an offscreen hook asks the offscreen question", () => {
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   renderHook(() => useSceneSuggestions("c", "s1", true, true));
   expect(api.sceneSuggestions).toHaveBeenCalledWith("c", { after: "s1", offscreen: true, direction: "", rank: true });
 });
@@ -94,7 +97,7 @@ test("without a connection nothing is asked, and suggest stays a no-op", () => {
 });
 
 test("ready arriving late asks then, and only once", () => {
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   const { rerender } = renderHook(
     ({ ready }) => useSceneSuggestions("c", "s1", ready, false),
     { initialProps: { ready: false } },
@@ -112,11 +115,11 @@ test("ready arriving late asks then, and only once", () => {
 // ---- the button, which regenerates what the open call already ranked ----
 
 test("a press after the ranking lands regenerates without re-ranking", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }], ["g1"], "2026-01-01"));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "A" }], ["g1"], "2026-01-01"));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   await waitFor(() => expect(result.current.picks).toEqual(["g1"]));
 
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "B" }], [], ""));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "B" }], [], ""));
   act(() => result.current.suggest("something at sea"));
   await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "B" }]));
   // rank=false: the greeting order is earned, and re-ranking would reshuffle
@@ -127,11 +130,11 @@ test("a press after the ranking lands regenerates without re-ranking", async () 
 });
 
 test("a press does not reset existing suggestions to pending while it is in flight", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }], ["g1"]));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "A" }], ["g1"]));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "A" }]));
 
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   act(() => result.current.suggest(""));
   // What is on screen stays there while the new ideas load: only the FIRST
   // (ranking) call reports pending, because only it has nothing to replace.
@@ -143,7 +146,7 @@ test("a press does not reset existing suggestions to pending while it is in flig
 // ---- failures ----
 
 test("a failure empties the suggestions and reports the error", async () => {
-  (api.sceneSuggestions as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.sceneSuggestions).mockRejectedValue(new Error("nope"));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   await waitFor(() => expect(result.current.error).toBeTruthy());
   expect(result.current.suggestions).toEqual([]);
@@ -152,7 +155,7 @@ test("a failure empties the suggestions and reports the error", async () => {
 });
 
 test("an open call that failed leaves the next press ranked", async () => {
-  (api.sceneSuggestions as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.sceneSuggestions).mockRejectedValue(new Error("nope"));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   await waitFor(() => expect(result.current.error).toBeTruthy());
 
@@ -160,18 +163,18 @@ test("an open call that failed leaves the next press ranked", async () => {
   // request fetches it, so a failed open must not promote the button to an
   // unranked regenerate -- a picker with more than two greetings would then
   // never get the ordering it is waiting on.
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }], ["g1"]));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "A" }], ["g1"]));
   act(() => result.current.suggest(""));
   await waitFor(() => expect(result.current.picks).toEqual(["g1"]));
   expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", { after: "s1", offscreen: false, direction: "", rank: true });
 });
 
 test("a press after a failure is pending again rather than showing the failure's empty list", async () => {
-  (api.sceneSuggestions as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.sceneSuggestions).mockRejectedValue(new Error("nope"));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   await waitFor(() => expect(result.current.suggestions).toEqual([]));
 
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   act(() => result.current.suggest(""));
   expect(result.current.suggestions).toBeNull();
   expect(result.current.picks).toBeNull();
@@ -180,11 +183,11 @@ test("a press after a failure is pending again rather than showing the failure's
 // ---- races ----
 
 test("a stale response that resolves after a newer one is discarded", async () => {
-  let releaseFirst: (v: any) => void = () => {};
-  (api.sceneSuggestions as any).mockReturnValueOnce(new Promise((r) => { releaseFirst = r; }));
+  let releaseFirst: (v: Awaited<ReturnType<typeof api.sceneSuggestions>>) => void = () => {};
+  vi.mocked(api.sceneSuggestions).mockReturnValueOnce(new Promise((r) => { releaseFirst = r; }));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
 
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "newest" }]));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "newest" }]));
   act(() => result.current.suggest("x"));
   await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "newest" }]));
 
@@ -195,13 +198,13 @@ test("a stale response that resolves after a newer one is discarded", async () =
 });
 
 test("a stale response's finally does not clear busy while a newer request is still in flight", async () => {
-  let releaseFirst: (v: any) => void = () => {};
-  let releaseSecond: (v: any) => void = () => {};
-  (api.sceneSuggestions as any).mockReturnValueOnce(new Promise((r) => { releaseFirst = r; }));
+  let releaseFirst: (v: Awaited<ReturnType<typeof api.sceneSuggestions>>) => void = () => {};
+  let releaseSecond: (v: Awaited<ReturnType<typeof api.sceneSuggestions>>) => void = () => {};
+  vi.mocked(api.sceneSuggestions).mockReturnValueOnce(new Promise((r) => { releaseFirst = r; }));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   expect(result.current.busy).toBe(true);
 
-  (api.sceneSuggestions as any).mockReturnValueOnce(new Promise((r) => { releaseSecond = r; }));
+  vi.mocked(api.sceneSuggestions).mockReturnValueOnce(new Promise((r) => { releaseSecond = r; }));
   act(() => result.current.suggest("x"));
   expect(result.current.busy).toBe(true);
 
@@ -218,14 +221,14 @@ test("a stale response's finally does not clear busy while a newer request is st
 // ---- one question, one answer ----
 
 test("a different reference scene asks the new question rather than keeping the old answer", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }], ["g1"], "2026-01-01"));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "A" }], ["g1"], "2026-01-01"));
   const { result, rerender } = renderHook(
     ({ after }) => useSceneSuggestions("c", after, true, false),
     { initialProps: { after: "s1" } },
   );
   await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "A" }]));
 
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   rerender({ after: "s2" });
   // Cards ranked against one scene answer the wrong question about another, so
   // the old answer is cleared and the new one asked for.
@@ -235,7 +238,7 @@ test("a different reference scene asks the new question rather than keeping the 
 });
 
 test("switching between PC and offscreen asks again too", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }]));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "A" }]));
   const { result, rerender } = renderHook(
     ({ off }) => useSceneSuggestions("c", "s1", true, off),
     { initialProps: { off: false } },
@@ -244,21 +247,21 @@ test("switching between PC and offscreen asks again too", async () => {
 
   // An offscreen scene casts nobody the player can be: a PC ranking is the
   // wrong answer, not a stale one.
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   rerender({ off: true });
   expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", { after: "s1", offscreen: true, direction: "", rank: true });
 });
 
 test("a reply to the old question cannot land on the new one", async () => {
-  let releaseFirst: (v: any) => void = () => {};
-  (api.sceneSuggestions as any).mockReturnValueOnce(new Promise((r) => { releaseFirst = r; }));
+  let releaseFirst: (v: Awaited<ReturnType<typeof api.sceneSuggestions>>) => void = () => {};
+  vi.mocked(api.sceneSuggestions).mockReturnValueOnce(new Promise((r) => { releaseFirst = r; }));
   const { result, rerender } = renderHook(
     ({ cid }) => useSceneSuggestions(cid, "s1", true, false),
     { initialProps: { cid: "a" } },
   );
   expect(result.current.busy).toBe(true);
 
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   rerender({ cid: "b" });
 
   await act(async () => { releaseFirst(R([{ title: "campaign A" }], ["g1"])); });
@@ -270,7 +273,7 @@ test("a reply to the old question cannot land on the new one", async () => {
 // ---- story pressure (capstone §16, plan Decision 19) ----
 
 test("the open call carries the controls getter's value", () => {
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   renderHook(() => useSceneSuggestions("c", "s1", true, false, {
     controls: () => ({ focus_refs: ["thread:mara-s-map"], time_mode: "near" }),
   }));
@@ -281,7 +284,7 @@ test("the open call carries the controls getter's value", () => {
 });
 
 test("changing controls starts no call", () => {
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   const { rerender } = renderHook(
     ({ focus }) => useSceneSuggestions("c", "s1", true, false, {
       controls: () => ({ focus_refs: focus }),
@@ -297,7 +300,7 @@ test("changing controls starts no call", () => {
 });
 
 test("hold delays the open call until released, then asks once", () => {
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   const { result, rerender } = renderHook(
     ({ hold }) => useSceneSuggestions("c", "s1", true, false, {
       hold, controls: () => ({ focus_refs: ["thread:mara-s-map"] }),
@@ -316,7 +319,7 @@ test("hold delays the open call until released, then asks once", () => {
 });
 
 test("suggest during a hold makes no call, and the release asks exactly once", () => {
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   const { result, rerender } = renderHook(
     ({ hold }) => useSceneSuggestions("c", "s1", true, false, { hold }),
     { initialProps: { hold: true } },
@@ -332,7 +335,7 @@ test("suggest during a hold makes no call, and the release asks exactly once", (
 });
 
 test("a stale_drivers refusal calls onStale with its refs and sets no error", async () => {
-  (api.sceneSuggestions as any).mockRejectedValue(
+  vi.mocked(api.sceneSuggestions).mockRejectedValue(
     new ApiError(409, "stale", "stale_drivers", { refs: ["thread:ghost"] }));
   const onStale = vi.fn();
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false, { onStale }));
@@ -344,7 +347,7 @@ test("a stale_drivers refusal calls onStale with its refs and sets no error", as
   expect(result.current.busy).toBe(false);
 
   // Until the next request starts, and no longer.
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   act(() => result.current.suggest(""));
   expect(result.current.stale).toBe(false);
   // Nothing ranked landed, so the next press still ranks.
@@ -353,7 +356,7 @@ test("a stale_drivers refusal calls onStale with its refs and sets no error", as
 });
 
 test("a refusal with no refs list still reports stale, with an empty list", async () => {
-  (api.sceneSuggestions as any).mockRejectedValue(new ApiError(409, "stale", "stale_drivers", {}));
+  vi.mocked(api.sceneSuggestions).mockRejectedValue(new ApiError(409, "stale", "stale_drivers", {}));
   const onStale = vi.fn();
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false, { onStale }));
   await waitFor(() => expect(result.current.stale).toBe(true));
@@ -361,7 +364,7 @@ test("a refusal with no refs list still reports stale, with an empty list", asyn
 });
 
 test("any other refusal is an error, not stale", async () => {
-  (api.sceneSuggestions as any).mockRejectedValue(
+  vi.mocked(api.sceneSuggestions).mockRejectedValue(
     new ApiError(400, "bad", "bad_controls", { reason: "must_cap" }));
   const onStale = vi.fn();
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false, { onStale }));
@@ -371,7 +374,7 @@ test("any other refusal is an error, not stale", async () => {
 });
 
 test("controlled follows the batch on screen", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }], ["g1"]));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "A" }], ["g1"]));
   const { result, rerender } = renderHook(
     ({ focus }) => useSceneSuggestions("c", "s1", true, false, {
       controls: () => ({ focus_refs: focus, time_mode: "auto" }),
@@ -386,14 +389,14 @@ test("controlled follows the batch on screen", async () => {
   expect(result.current.controlled).toBe(true);
 
   // The next reply, to an unsteered request, is an unsteered batch.
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "B" }]));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "B" }]));
   act(() => result.current.suggest(""));
   await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "B" }]));
   expect(result.current.controlled).toBe(false);
 });
 
 test("a time setting alone counts as controlled", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }]));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "A" }]));
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false, {
     controls: () => ({ focus_refs: [], avoid_refs: [], must_refs: [], time_mode: "move" }),
   }));
@@ -402,7 +405,7 @@ test("a time setting alone counts as controlled", async () => {
 });
 
 test("a new question resets controlled", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }]));
+  vi.mocked(api.sceneSuggestions).mockResolvedValue(R([{ title: "A" }]));
   const { result, rerender } = renderHook(
     ({ after }) => useSceneSuggestions("c", after, true, false, {
       controls: () => ({ must_refs: ["commitment:mara-s-oath"] }),
@@ -410,7 +413,7 @@ test("a new question resets controlled", async () => {
     { initialProps: { after: "s1" } },
   );
   await waitFor(() => expect(result.current.controlled).toBe(true));
-  (api.sceneSuggestions as any).mockReturnValue(pending());
+  vi.mocked(api.sceneSuggestions).mockReturnValue(pending());
   rerender({ after: "s2" });
   expect(result.current.controlled).toBe(false);
 });

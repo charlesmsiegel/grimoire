@@ -15,7 +15,7 @@ const HARPTOS_1492 = [
 ];
 
 test("year entry loads months; picking month+day emits the native date", async () => {
-  (api.getCalendarMonths as any).mockResolvedValue({ months: HARPTOS_1492 });
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: HARPTOS_1492 });
   const onChange = vi.fn();
   render(<CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value=""
                              onChange={onChange} ariaLabel="Scene date" />);
@@ -29,7 +29,7 @@ test("year entry loads months; picking month+day emits the native date", async (
 });
 
 test("festival pseudo-months offer a single day", async () => {
-  (api.getCalendarMonths as any).mockResolvedValue({ months: HARPTOS_1492 });
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: HARPTOS_1492 });
   const onChange = vi.fn();
   render(<CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value=""
                              onChange={onChange} ariaLabel="Scene date" />);
@@ -40,7 +40,7 @@ test("festival pseudo-months offer a single day", async () => {
 });
 
 test("an external value change re-syncs the fields", async () => {
-  (api.getCalendarMonths as any).mockResolvedValue({ months: HARPTOS_1492 });
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: HARPTOS_1492 });
   const { rerender } = render(
     <CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value=""
                         onChange={() => {}} ariaLabel="Scene date" />);
@@ -54,7 +54,7 @@ test("an external value change re-syncs the fields", async () => {
 });
 
 test("a prefill arriving mid-edit does not clobber typed input", async () => {
-  (api.getCalendarMonths as any).mockResolvedValue({ months: HARPTOS_1492 });
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: HARPTOS_1492 });
   const onChange = vi.fn();
   const { rerender } = render(
     <CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value=""
@@ -70,8 +70,8 @@ test("a prefill arriving mid-edit does not clobber typed input", async () => {
 test("a year change that shortens the month clears a day that no longer fits", async () => {
   const CHESHVAN_30 = [{ key: "Cheshvan", name: "Cheshvan", days: 30 }];
   const CHESHVAN_29 = [{ key: "Cheshvan", name: "Cheshvan", days: 29 }];
-  (api.getCalendarMonths as any).mockImplementation(
-    (_scope: unknown, year: number) =>
+  vi.mocked(api.getCalendarMonths).mockImplementation(
+    (_scope, year) =>
       Promise.resolve({ months: year === 5785 ? CHESHVAN_30 : CHESHVAN_29 }));
   const onChange = vi.fn();
   render(<CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value=""
@@ -93,7 +93,7 @@ test("a year change that shortens the month clears a day that no longer fits", a
 });
 
 test("an existing value pre-fills the controls", async () => {
-  (api.getCalendarMonths as any).mockResolvedValue({ months: HARPTOS_1492 });
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: HARPTOS_1492 });
   render(<CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value="1492-Mirtul-05"
                              onChange={() => {}} ariaLabel="Scene date" />);
   expect(screen.getByLabelText("Scene date year")).toHaveValue(1492);

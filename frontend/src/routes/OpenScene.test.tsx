@@ -46,7 +46,7 @@ describe("opening a scene from a notification", () => {
     // The renamed case, which is the reason the intent carries an identity at
     // all: the notification was posted when the scene was `001--mara`, and by
     // the time it is tapped the scene has been renamed.
-    (api.sceneByIdentity as any).mockResolvedValue({ id: "002--winifred" });
+    vi.mocked(api.sceneByIdentity).mockResolvedValue({ id: "002--winifred" });
     open("/open?campaign=saltmarch&identity=" + "f".repeat(32));
 
     expect(await screen.findByText("scene page")).toBeInTheDocument();
@@ -75,7 +75,7 @@ describe("opening a scene from a notification", () => {
   );
 
   it("says it is opening the scene while the lookup runs, rather than showing nothing", () => {
-    (api.sceneByIdentity as any).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.sceneByIdentity).mockReturnValue(new Promise(() => {}));
     open("/open?campaign=saltmarch&identity=" + "f".repeat(32));
     expect(screen.getByRole("status")).toHaveTextContent("Opening the scene…");
   });
@@ -92,19 +92,19 @@ describe("opening a scene from a notification", () => {
     // sent the tap to the campaign because a transient sharing violation
     // happened to land on that one read -- and the scene it was posted for was
     // sitting right there.
-    (api.sceneByIdentity as any)
+    vi.mocked(api.sceneByIdentity)
       .mockRejectedValueOnce(new ApiError(409, "the scene could not be read", "busy"))
       .mockResolvedValue({ id: "002--winifred" });
     open("/open?campaign=saltmarch&identity=" + "f".repeat(32));
 
     expect(await screen.findByText("scene page")).toBeInTheDocument();
-    expect((api.sceneByIdentity as any).mock.calls).toHaveLength(2);
+    expect(vi.mocked(api.sceneByIdentity).mock.calls).toHaveLength(2);
   });
 
   it("gives up on a lookup that keeps saying busy", async () => {
     // Bounded, because this is a blank screen the player is looking at. The
     // campaign is a useful place to be; a spinner that never resolves is not.
-    (api.sceneByIdentity as any).mockRejectedValue(
+    vi.mocked(api.sceneByIdentity).mockRejectedValue(
       new ApiError(409, "the scene could not be read", "busy"));
     open("/open?campaign=saltmarch&identity=" + "f".repeat(32));
 

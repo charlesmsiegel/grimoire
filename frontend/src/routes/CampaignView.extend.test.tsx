@@ -21,6 +21,7 @@ vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api, type Message, type ResponseSwipe } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { installCampaignMocks, ONE_SCENE, renderCampaign } from "../testkit/campaignHarness";
+import { fixture } from "../testkit/fixture";
 
 beforeEach(installCampaignMocks);
 
@@ -35,12 +36,12 @@ function scene(messages: Message[]) {
   return { meta: { id: "s1", title: "Old" }, messages };
 }
 function playing(last: Message = LAST) {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue(scene([
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue(scene([
     { role: "user", content: "hi" }, EARLIER, { role: "user", content: "and then?" }, last]));
 }
 function reads(over: Partial<ResponseSwipe> = {}) {
-  (api.getResponseSwipe as any).mockResolvedValue({
+  vi.mocked(api.getResponseSwipe).mockResolvedValue({
     active: 0, variants: [{ id: "v1", status: "complete" }],
     settings: null, resume_settings: null,
     can_reroll: true, editable: true, round_open: false, edited: false, ...over });
@@ -65,10 +66,10 @@ test("keep writing is offered on the trailing response only and calls the extend
   expect(within(last).getByRole("button", { name: "Keep writing ▸" })).toBeEnabled();
   fireEvent.click(keepWriting());
   await waitFor(() => expect(api.extendResponse).toHaveBeenCalledOnce());
-  const call = (api.extendResponse as any).mock.calls[0];
+  const call = vi.mocked(api.extendResponse).mock.calls[0];
   expect(call.slice(0, 3)).toEqual(["run", "s1", "response-b"]);
   expect(call[4]).toEqual({ guidance: "" });
-  expect(call[4].response).toBeUndefined();
+  expect(call[4]?.response).toBeUndefined();
   expect(api.regenerateResponse).not.toHaveBeenCalled();
 });
 
@@ -77,14 +78,14 @@ test("keep writing on a chosen route sends that route's overrides", async () => 
   // reach the extend body too, not only the reroll's.
   playing();
   reads();
-  (api.readConnectionCapabilities as any).mockImplementation(
-    (_provider: string, need: string) => Promise.resolve({
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
+    (_provider, need) => Promise.resolve(fixture({
       provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
                          url_locked: true, billing: "metered", reports_price: true,
                          always: [], possible: [], never: [] },
       need, reason: null, hidden: [],
       groups: { unverified: [], fits: [{ id: "vendor/saltmarch", name: "Saltmarch", context: null,
-        prompt: null, completion: null, reason: "the catalog says so", capabilities: {} }] } }));
+        prompt: null, completion: null, reason: "the catalog says so", capabilities: {} }] } })));
   renderCampaign();
   await screen.findByText("The accepted response.");
   await waitFor(() => expect(api.getResponseSwipe).toHaveBeenCalledWith("run", "s1", "response-b"));
@@ -97,7 +98,7 @@ test("keep writing on a chosen route sends that route's overrides", async () => 
   fireEvent.click(keepWriting());
 
   await waitFor(() => expect(api.extendResponse).toHaveBeenCalledOnce());
-  const call = (api.extendResponse as any).mock.calls[0];
+  const call = vi.mocked(api.extendResponse).mock.calls[0];
   expect(call.slice(0, 3)).toEqual(["run", "s1", "response-b"]);
   expect(call[4]).toEqual({ guidance: "", provider: "openrouter", model: "vendor/saltmarch" });
   expect(api.regenerateResponse).not.toHaveBeenCalled();
@@ -108,11 +109,11 @@ test("the extend bubble retains its seed and hidden target across a focus save",
   reads();
   let emit: (e: ChatEvent) => void = () => {};
   let finish: () => void = () => {};
-  (api.extendResponse as any).mockImplementation(
-    (_c: string, _s: string, _r: string, onEvent: (e: ChatEvent) => void) => new Promise<void>((resolve) => {
+  vi.mocked(api.extendResponse).mockImplementation(
+    (_c, _s, _r, onEvent: (e: ChatEvent) => void) => new Promise<void>((resolve) => {
       emit = onEvent;
       finish = () => {
-        (api.getScene as any).mockResolvedValue(scene([
+        vi.mocked(api.getScene).mockResolvedValue(scene([
           { role: "user", content: "hi" }, EARLIER, { role: "user", content: "and then?" },
           { ...LAST, content: "The accepted response. Then more. Again." }]));
         onEvent({ done: true }); resolve();
@@ -205,10 +206,10 @@ test("a re-attached Keep writing run rebuilds its bubble from the seed", async (
   // growing after it, and the target row hidden behind it.
   playing();
   reads();
-  (api.findRun as any).mockResolvedValue(
+  vi.mocked(api.findRun).mockResolvedValue(
     { run: { id: "r-extend", attempt_id: "someone-elses", state: "running", next_index: 0 } });
-  (api.attachRun as any).mockImplementation(
-    async (_c: string, _s: string, _r: string, _from: number, onEvent: (e: ChatEvent) => void) => {
+  vi.mocked(api.attachRun).mockImplementation(
+    async (_c, _s, _r, _from, onEvent: (e: ChatEvent) => void) => {
       onEvent({ response_start: { id: "response-b", speaker: "Mara", actor_ref: "characters:mara",
                                   extend: { seed: "The accepted response." } } });
       onEvent({ delta: "Then more." });
@@ -219,6 +220,6 @@ test("a re-attached Keep writing run rebuilds its bubble from the seed", async (
   expect(bubble.closest(".streaming-response")).not.toBeNull();
   expect(screen.queryByText("The accepted response.")).toBeNull();
   expect(screen.getByText("The first answer.")).toBeInTheDocument();
-  expect((api.attachRun as any).mock.calls[0][2]).toBe("r-extend");
+  expect(vi.mocked(api.attachRun).mock.calls[0][2]).toBe("r-extend");
   expect(api.extendResponse).not.toHaveBeenCalled();
 });

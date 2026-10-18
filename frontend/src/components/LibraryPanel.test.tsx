@@ -27,14 +27,14 @@ const STATUS = {
 };
 
 function show(status: (typeof STATUS)[keyof typeof STATUS], onMoved?: () => void) {
-  (api.libraryStatus as any).mockResolvedValue(status);
+  vi.mocked(api.libraryStatus).mockResolvedValue(status);
   return render(<LibraryPanel cid="run" kind="locations" id="saltmarch" onMoved={onMoved} />);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.promoteToLibrary as any).mockResolvedValue({ ok: true });
-  (api.pushToLibrary as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.promoteToLibrary).mockResolvedValue({ ok: true });
+  vi.mocked(api.pushToLibrary).mockResolvedValue({ ok: true });
 });
 
 test("a campaign-local record offers publishing", async () => {
@@ -88,8 +88,8 @@ test("a record the campaign only inherits shows nothing at all", async () => {
 
 test("a push conflict offers an explicit overwrite rather than retrying", async () => {
   show(STATUS.diverged);
-  (api.pushToLibrary as any).mockRejectedValueOnce(
-    new (ApiError as any)(409, "changed in the library since this campaign copied it",
+  vi.mocked(api.pushToLibrary).mockRejectedValueOnce(
+    new (ApiError)(409, "changed in the library since this campaign copied it",
                           "push_conflict"));
 
   fireEvent.click(await screen.findByRole("button", { name: "Save to library" }));
@@ -102,8 +102,8 @@ test("a push conflict offers an explicit overwrite rather than retrying", async 
 
 test("the overwrite forces the push", async () => {
   show(STATUS.diverged);
-  (api.pushToLibrary as any).mockRejectedValueOnce(
-    new (ApiError as any)(409, "moved", "push_conflict"));
+  vi.mocked(api.pushToLibrary).mockRejectedValueOnce(
+    new (ApiError)(409, "moved", "push_conflict"));
   fireEvent.click(await screen.findByRole("button", { name: "Save to library" }));
 
   fireEvent.click(await screen.findByRole("button", { name: "Overwrite the library anyway" }));
@@ -114,8 +114,8 @@ test("the overwrite forces the push", async () => {
 
 test("a refusal that is not a conflict is shown as a message with no overwrite", async () => {
   show(STATUS.local);
-  (api.promoteToLibrary as any).mockRejectedValueOnce(
-    new (ApiError as any)(409, "the library already has locations/saltmarch",
+  vi.mocked(api.promoteToLibrary).mockRejectedValueOnce(
+    new (ApiError)(409, "the library already has locations/saltmarch",
                           "library_move_refused"));
 
   fireEvent.click(await screen.findByRole("button", { name: "Publish to library" }));
@@ -131,11 +131,11 @@ test("a completed move re-reads the status and tells the parent", async () => {
 
   await waitFor(() => expect(onMoved).toHaveBeenCalled());
   // once on mount, once after the move
-  expect((api.libraryStatus as any).mock.calls.length).toBeGreaterThanOrEqual(2);
+  expect(vi.mocked(api.libraryStatus).mock.calls.length).toBeGreaterThanOrEqual(2);
 });
 
 test("a status that cannot be read renders nothing rather than a broken panel", async () => {
-  (api.libraryStatus as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.libraryStatus).mockRejectedValue(new Error("offline"));
   const { container } = render(<LibraryPanel cid="run" kind="locations" id="saltmarch" />);
   await waitFor(() => expect(api.libraryStatus).toHaveBeenCalled());
   expect(container.querySelector(".side-section")).toBeNull();

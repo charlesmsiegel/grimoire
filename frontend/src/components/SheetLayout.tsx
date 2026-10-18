@@ -50,16 +50,16 @@ type Ctx = {
   values: Record<string, unknown>;
   derived: Record<string, unknown>;
   mode: WidgetMode;
-  onChange?: (key: string, v: unknown) => void;
+  onChange?: ((key: string, v: unknown) => void) | undefined;
   placedFields: Set<string>;
   placedDerived: Set<string>;
   scope: EntityScope;
   module: ModuleDetail;
-  onOpenRef?: (kind: string, id: string) => void;
+  onOpenRef?: ((kind: string, id: string) => void) | undefined;
   // Set only in campaign scope when the sheet type has an advancement block;
   // a field key present here is advancement-eligible.
-  advancementCosts?: Record<string, string>;
-  onAdvance?: (key: string) => void;
+  advancementCosts?: Record<string, string> | undefined;
+  onAdvance?: ((key: string) => void) | undefined;
 };
 
 function fieldSet(keys: string[], grid: boolean | undefined, ctx: Ctx): ReactNode {
@@ -70,7 +70,7 @@ function fieldSet(keys: string[], grid: boolean | undefined, ctx: Ctx): ReactNod
     const advEligible = ctx.mode === "view" && !!ctx.advancementCosts && k in ctx.advancementCosts;
     return (
       <FieldWidget key={k} def={def} value={ctx.values[k]} mode={ctx.mode} grid={grid}
-                   onChange={ctx.onChange ? (v) => ctx.onChange!(k, v) : undefined}
+                   onChange={ctx.onChange ? (v) => ctx.onChange?.(k, v) : undefined}
                    scope={ctx.scope} module={ctx.module} onOpenRef={ctx.onOpenRef}
                    onAdvance={advEligible ? () => ctx.onAdvance?.(k) : undefined} />
     );
@@ -106,9 +106,9 @@ function renderNode(node: LayoutNode, ctx: Ctx, key: number): ReactNode {
 export default function SheetLayout({ module, sheetType, mode, values, derived, onChange, scope, onOpenRef, onAdvance }: {
   module: ModuleDetail; sheetType: string; mode: WidgetMode;
   values: Record<string, unknown>; derived: Record<string, unknown>;
-  onChange?: (key: string, v: unknown) => void;
-  scope: EntityScope; onOpenRef?: (kind: string, id: string) => void;
-  onAdvance?: (key: string) => void;
+  onChange?: ((key: string, v: unknown) => void) | undefined;
+  scope: EntityScope; onOpenRef?: ((kind: string, id: string) => void) | undefined;
+  onAdvance?: ((key: string) => void) | undefined;
 }) {
   const tree = module.layout?.sheet_types?.[sheetType] ?? defaultLayout(module, sheetType);
   const typeDef = module.sheets.sheet_types[sheetType];

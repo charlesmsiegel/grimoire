@@ -12,7 +12,7 @@ const WINIFRED = { id: "winifreds-war", name: "Winifred's War",
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.worldCampaigns as any).mockResolvedValue([]);
+  vi.mocked(api.worldCampaigns).mockResolvedValue([]);
 });
 
 async function renderPanel() {
@@ -21,7 +21,7 @@ async function renderPanel() {
 }
 
 test("lists each campaign for the world with its three pending counts", async () => {
-  (api.worldCampaigns as any).mockResolvedValue([SALTMARCH, WINIFRED]);
+  vi.mocked(api.worldCampaigns).mockResolvedValue([SALTMARCH, WINIFRED]);
   await renderPanel();
   expect(api.worldCampaigns).toHaveBeenCalledWith("realm");
   const row = screen.getByRole("link", { name: /Saltmarch Nights/ });
@@ -32,14 +32,14 @@ test("lists each campaign for the world with its three pending counts", async ()
 });
 
 test("each row links to the campaign, where the changes are reviewed", async () => {
-  (api.worldCampaigns as any).mockResolvedValue([SALTMARCH]);
+  vi.mocked(api.worldCampaigns).mockResolvedValue([SALTMARCH]);
   await renderPanel();
   expect(screen.getByRole("link", { name: /Saltmarch Nights/ }))
     .toHaveAttribute("href", "/campaigns/saltmarch-nights");
 });
 
 test("a campaign with conflicts is distinguished from one without", async () => {
-  (api.worldCampaigns as any).mockResolvedValue([SALTMARCH, WINIFRED]);
+  vi.mocked(api.worldCampaigns).mockResolvedValue([SALTMARCH, WINIFRED]);
   await renderPanel();
   const clean = screen.getByRole("link", { name: /Saltmarch Nights/ });
   const conflicted = screen.getByRole("link", { name: /Winifred's War/ });
@@ -50,7 +50,7 @@ test("a campaign with conflicts is distinguished from one without", async () => 
 });
 
 test("a campaign with nothing pending says so", async () => {
-  (api.worldCampaigns as any).mockResolvedValue([
+  vi.mocked(api.worldCampaigns).mockResolvedValue([
     { id: "quiet", name: "Quiet Season", pending: { new: 0, update: 0, conflict: 0 } }]);
   await renderPanel();
   expect(screen.getByRole("link", { name: /Quiet Season/ }).textContent).toContain("up to date");
@@ -63,7 +63,7 @@ test("shows an empty state when the world has no campaigns", async () => {
 });
 
 test("a failed read reports the failure rather than reading as no campaigns", async () => {
-  (api.worldCampaigns as any).mockRejectedValue(new Error("world not found"));
+  vi.mocked(api.worldCampaigns).mockRejectedValue(new Error("world not found"));
   await renderPanel();
   expect(screen.getByText("world not found")).toBeInTheDocument();
   expect(screen.queryByText(/No campaigns are played/)).not.toBeInTheDocument();

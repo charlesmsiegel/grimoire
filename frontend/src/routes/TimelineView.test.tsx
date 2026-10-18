@@ -8,6 +8,8 @@ vi.mock("../api/client", () => ({
   api: { getCampaign: vi.fn(), campaignTimeline: vi.fn() },
 }));
 import { api } from "../api/client";
+import type { Timeline } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
 const EMPTY = { scenes: [], threads: [] };
 
@@ -43,8 +45,8 @@ const PLAYED = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch" }, body: "" });
-  (api.campaignTimeline as any).mockResolvedValue(EMPTY);
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "run", name: "Saltmarch" }, body: "" }));
+  vi.mocked(api.campaignTimeline).mockResolvedValue(EMPTY);
 });
 
 function renderTimeline(entry = "/campaigns/run/timeline") {
@@ -86,7 +88,7 @@ const cardFor = (text: RegExp): HTMLElement => {
 // ---- the cards -------------------------------------------------------------
 
 test("every scene is a card, in play order, dated and titled", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   await waitFor(() => expect(cards()).toHaveLength(3));
   // Play order, which is the server's order — not recency, and not by date.
@@ -102,7 +104,7 @@ test("every scene is a card, in play order, dated and titled", async () => {
 test("a scene that was never absorbed still gets a card, and says so", async () => {
   // The ordinary case: a campaign being played is a scene ahead of its absorb,
   // so a blank card would be the state most people see most of the time.
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   const open = await waitFor(() => cardFor(/Verdigris/));
   expect(open).toHaveTextContent(/Not absorbed yet/);
@@ -113,7 +115,7 @@ test("a closed branch is not in play, and the not-absorbed filter leaves it out"
   async () => {
     // A sibling whose branch group was absorbed is a road not taken: read-only,
     // and not open work -- the same "closed" the play view and scene list say.
-    (api.campaignTimeline as any).mockResolvedValue({
+    vi.mocked(api.campaignTimeline).mockResolvedValue({
       ...PLAYED,
       scenes: [...PLAYED.scenes,
                scene({ id: "001--first-light-branch", title: "First Light (branch)",
@@ -132,7 +134,7 @@ test("a closed branch is not in play, and the not-absorbed filter leaves it out"
 test("an offscreen scene is marked as one", async () => {
   // A director-driven scene seats no PC, and on a play history that is a fact
   // about the scene rather than a gap in it.
-  (api.campaignTimeline as any).mockResolvedValue({
+  vi.mocked(api.campaignTimeline).mockResolvedValue({
     threads: [],
     scenes: [scene({ id: "001", title: "The Reeve Alone", pcless: true })],
   });
@@ -142,14 +144,14 @@ test("an offscreen scene is marked as one", async () => {
 });
 
 test("a card is the way back into its scene", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   const link = await screen.findByRole("link", { name: "The Long Tide" });
   expect(link).toHaveAttribute("href", "/campaigns/run/scenes/002--the-long-tide");
 });
 
 test("beats render on the scene they landed in, each naming its thread", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   const tide = await waitFor(() => cardFor(/The Long Tide/));
   expect(tide).toHaveTextContent(/The sea wall · closed/);
@@ -163,7 +165,7 @@ test("beats render on the scene they landed in, each naming its thread", async (
 // ---- the filters -----------------------------------------------------------
 
 test("a thread chip narrows the timeline to the scenes it moved in", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   await waitFor(() => expect(cards()).toHaveLength(3));
 
@@ -174,7 +176,7 @@ test("a thread chip narrows the timeline to the scenes it moved in", async () =>
 });
 
 test("threads are multi-select, and OR — two chips widen rather than narrow", async () => {
-  (api.campaignTimeline as any).mockResolvedValue({
+  vi.mocked(api.campaignTimeline).mockResolvedValue({
     ...PLAYED,
     scenes: [...PLAYED.scenes,
              scene({ id: "004--the-turning", title: "The Turning", date: "5 Reaping",
@@ -196,7 +198,7 @@ test("a thread's count follows the other filters rather than contradicting the p
     // The column must not read "2" beside a chip that produces nothing when
     // clicked. Counting over the whole campaign did exactly that the moment a
     // second filter was on — the same lesson SHOW RETIRED taught the ledger.
-    (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+    vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
     renderTimeline();
     await waitFor(() => expect(cards()).toHaveLength(3));
     const seaWall = () => column().getByRole("button", { name: /the sea wall/i });
@@ -211,7 +213,7 @@ test("a thread's count follows the other filters rather than contradicting the p
   });
 
 test("the thread chip on a beat is a filter, not a label", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   const tide = await waitFor(() => cardFor(/The Long Tide/));
   fireEvent.click(within(tide).getByRole("button", { name: /a debt unpaid/i }));
@@ -221,7 +223,7 @@ test("the thread chip on a beat is a filter, not a label", async () => {
 });
 
 test("absorbed and not-absorbed are the two halves of the campaign", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   await waitFor(() => expect(cards()).toHaveLength(3));
 
@@ -232,7 +234,7 @@ test("absorbed and not-absorbed are the two halves of the campaign", async () =>
 });
 
 test("the span bounds the timeline by the campaign's own moments", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   await waitFor(() => expect(cards()).toHaveLength(3));
 
@@ -254,7 +256,7 @@ test("an undated scene keeps the place the dated scene before it gave it", async
   // The carry-forward. Without it every scene that has not been given a
   // datetime — most of an in-progress campaign — would drop out of any span
   // the reader picked, which is the opposite of what a span is for.
-  (api.campaignTimeline as any).mockResolvedValue({
+  vi.mocked(api.campaignTimeline).mockResolvedValue({
     threads: [],
     scenes: [
       scene({ id: "001", title: "Before Time", done: true }),
@@ -282,7 +284,7 @@ test("an undated scene keeps the place the dated scene before it gave it", async
 });
 
 test("filters that match nothing say so, and offer the way out", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   await waitFor(() => expect(cards()).toHaveLength(3));
 
@@ -296,7 +298,7 @@ test("filters that match nothing say so, and offer the way out", async () => {
 
 test("the pinned control clears every filter at once, and is dead until there is one",
   async () => {
-    (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+    vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
     renderTimeline();
     await waitFor(() => expect(cards()).toHaveLength(3));
     expect(column().getByRole("button", { name: /no filters/i })).toBeDisabled();
@@ -326,7 +328,7 @@ test("a campaign with no scenes names what fills the page", async () => {
 
 test("a campaign whose threads have never moved says so rather than showing a gap",
   async () => {
-    (api.campaignTimeline as any).mockResolvedValue({
+    vi.mocked(api.campaignTimeline).mockResolvedValue({
       threads: [], scenes: [scene({ id: "001", title: "First Light" })],
     });
     renderTimeline();
@@ -334,20 +336,20 @@ test("a campaign whose threads have never moved says so rather than showing a ga
   });
 
 test("a failed read degrades to the empty state, never a stuck reading line", async () => {
-  (api.campaignTimeline as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.campaignTimeline).mockRejectedValue(new Error("nope"));
   renderTimeline();
   expect(await screen.findByText(/The timeline fills in as you play/)).toBeInTheDocument();
   expect(screen.queryByText(/Reading the timeline/)).not.toBeInTheDocument();
 });
 
 test("cards never outlive the campaign they came from", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   const { unmount } = renderTimeline();
   await waitFor(() => expect(cards()).toHaveLength(3));
   unmount();
 
-  let settle: (v: unknown) => void = () => {};
-  (api.campaignTimeline as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: Timeline) => void = () => {};
+  vi.mocked(api.campaignTimeline).mockReturnValue(new Promise((r) => { settle = r; }));
   renderTimeline("/campaigns/other/timeline");
   expect(await screen.findByText(/Reading the timeline/)).toBeInTheDocument();
   expect(screen.queryByText(/First Light/)).not.toBeInTheDocument();
@@ -357,7 +359,7 @@ test("cards never outlive the campaign they came from", async () => {
 // ---- ⌘K --------------------------------------------------------------------
 
 test("the threads are offered to the palette", async () => {
-  (api.campaignTimeline as any).mockResolvedValue(PLAYED);
+  vi.mocked(api.campaignTimeline).mockResolvedValue(PLAYED);
   renderTimeline();
   await waitFor(() => expect(cards()).toHaveLength(3));
 

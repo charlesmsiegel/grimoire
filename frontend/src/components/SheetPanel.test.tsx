@@ -78,11 +78,11 @@ test("renders nothing without module or matching type", () => {
 });
 
 test("unsheeted: create with picked type then editor opens", async () => {
-  (api.getSheet as any).mockResolvedValue({ sheet: null });
-  (api.putSheet as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
+  vi.mocked(api.putSheet).mockResolvedValue({ ok: true });
   render(<SheetPanel scope={CAMP} module={MOD} kind="characters" eid="mara" />);
   fireEvent.change(await screen.findByLabelText("Sheet type"), { target: { value: "medium" } });
-  (api.getSheet as any).mockResolvedValue({ sheet: FRESH_SHEET });
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: FRESH_SHEET });
   fireEvent.click(screen.getByText("Create"));
   await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
     CAMP, "pool-basic", "characters", "mara", { sheet_type: "medium", fields: null, expected: null }));
@@ -90,7 +90,7 @@ test("unsheeted: create with picked type then editor opens", async () => {
 });
 
 test("sheeted: summary chips + open", async () => {
-  (api.getSheet as any).mockResolvedValue({ sheet: SHEET });  // medium, essence 6/10, sight_pool 6
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: SHEET });  // medium, essence 6/10, sight_pool 6
   render(<SheetPanel scope={CAMP} module={MOD} kind="characters" eid="mara" />);
   expect(await screen.findByText("Medium")).toBeInTheDocument();       // type chip
   expect(screen.getByText(/essence 6\/10/)).toBeInTheDocument();       // resource summary
@@ -100,7 +100,7 @@ test("sheeted: summary chips + open", async () => {
 });
 
 test("invalid: error hints listed", async () => {
-  (api.getSheet as any).mockResolvedValue({
+  vi.mocked(api.getSheet).mockResolvedValue({
     sheet: { ...SHEET, errors: ["unknown sheet type 'medium'"] } });
   render(<SheetPanel scope={CAMP} module={MOD} kind="characters" eid="mara" />);
   expect(await screen.findByText(/unknown sheet type/)).toBeInTheDocument();
@@ -108,7 +108,7 @@ test("invalid: error hints listed", async () => {
 });
 
 test("fetch failure shows an error hint instead of throwing", async () => {
-  (api.getSheet as any).mockRejectedValue({ detail: "boom" });
+  vi.mocked(api.getSheet).mockRejectedValue({ detail: "boom" });
   render(<SheetPanel scope={CAMP} module={MOD} kind="characters" eid="mara" />);
   expect(await screen.findByText("boom")).toBeInTheDocument();
 });

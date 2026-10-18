@@ -8,6 +8,7 @@ vi.mock("../api/client", () => ({
   api: { listBackups: vi.fn(), createBackup: vi.fn(), createImageBackup: vi.fn() },
 }));
 import { ApiError, api } from "../api/client";
+import type { BackupRun } from "../api/types";
 
 const listing = {
   dir: "/home/u/.grimoire/backups",
@@ -20,7 +21,7 @@ const listing = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listBackups as any).mockResolvedValue(listing);
+  vi.mocked(api.listBackups).mockResolvedValue(listing);
 });
 
 test("shows where the archives live and lists them newest first", async () => {
@@ -36,7 +37,7 @@ test("shows where the archives live and lists them newest first", async () => {
 });
 
 test("a store with no archives says so rather than showing an empty box", async () => {
-  (api.listBackups as any).mockResolvedValue({ dir: "/x/backups", backups: [], image_backups: [] });
+  vi.mocked(api.listBackups).mockResolvedValue({ dir: "/x/backups", backups: [], image_backups: [] });
   render(<BackupsPanel dir="" />);
 
   expect(await screen.findByText("No full backups yet.")).toBeInTheDocument();
@@ -44,7 +45,7 @@ test("a store with no archives says so rather than showing an empty box", async 
 });
 
 test("a folder that cannot be read is reported, never shown as no backups", async () => {
-  (api.listBackups as any).mockRejectedValue(new ApiError(500, "could not list backups: denied"));
+  vi.mocked(api.listBackups).mockRejectedValue(new ApiError(500, "could not list backups: denied"));
   render(<BackupsPanel dir="" />);
 
   expect(await screen.findByText(/could not list backups: denied/)).toBeInTheDocument();
@@ -52,7 +53,7 @@ test("a folder that cannot be read is reported, never shown as no backups", asyn
 });
 
 test("Back up now adopts the response as the new listing", async () => {
-  (api.createBackup as any).mockResolvedValue({
+  vi.mocked(api.createBackup).mockResolvedValue({
     dir: "/home/u/.grimoire/backups",
     created: "grimoire-20260816T090000Z.zip",
     swept: [],
@@ -71,7 +72,7 @@ test("Back up now adopts the response as the new listing", async () => {
 });
 
 test("image backup creates and displays a separate archive", async () => {
-  (api.createImageBackup as any).mockResolvedValue({
+  vi.mocked(api.createImageBackup).mockResolvedValue({
     ...listing,
     created: "grimoire-images-20260816T090000Z.zip",
     listing_error: null,
@@ -88,7 +89,7 @@ test("image backup creates and displays a separate archive", async () => {
 });
 
 test("a listing failure after writing reports the archive as written", async () => {
-  (api.createImageBackup as any).mockResolvedValue({
+  vi.mocked(api.createImageBackup).mockResolvedValue({
     dir: "/home/u/.grimoire/backups",
     created: "grimoire-images-20260816T090000Z.zip",
     listing_error: "image archive written, but backups could not be listed: denied",
@@ -103,7 +104,7 @@ test("a listing failure after writing reports the archive as written", async () 
 });
 
 test("retention is reported, because nobody sees a file get deleted", async () => {
-  (api.createBackup as any).mockResolvedValue({
+  vi.mocked(api.createBackup).mockResolvedValue({
     dir: "/home/u/.grimoire/backups",
     created: "grimoire-20260816T090000Z.zip",
     swept: ["grimoire-20260814T210000Z.zip", "grimoire-20260815T210000Z.zip"],
@@ -119,7 +120,7 @@ test("retention is reported, because nobody sees a file get deleted", async () =
 });
 
 test("a failed backup says why and leaves the previous listing standing", async () => {
-  (api.createBackup as any).mockRejectedValue(new ApiError(500, "no space left on device"));
+  vi.mocked(api.createBackup).mockRejectedValue(new ApiError(500, "no space left on device"));
   render(<BackupsPanel dir="" />);
   fireEvent.click(await screen.findByRole("button", { name: /back up now/i }));
 
@@ -128,8 +129,8 @@ test("a failed backup says why and leaves the previous listing standing", async 
 });
 
 test("the button is held while a backup is in flight", async () => {
-  let release: (v: unknown) => void = () => {};
-  (api.createBackup as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: BackupRun) => void = () => {};
+  vi.mocked(api.createBackup).mockReturnValue(new Promise((r) => { release = r; }));
   render(<BackupsPanel dir="" />);
   const button = await screen.findByRole("button", { name: /back up now/i });
   fireEvent.click(button);
@@ -151,7 +152,7 @@ test("a newly saved backup folder re-reads the listing", async () => {
 });
 
 test("a backup that landed but could not be pruned is not called a failure", async () => {
-  (api.createBackup as any).mockResolvedValue({
+  vi.mocked(api.createBackup).mockResolvedValue({
     dir: "/home/u/.grimoire/backups",
     created: "grimoire-20260816T090000Z.zip",
     swept: [],

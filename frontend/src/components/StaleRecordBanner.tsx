@@ -16,7 +16,7 @@
 export function StaleRecordBanner(
   { label, rev, onReload, onOverwrite, overwriteLabel = "Overwrite with mine" }:
   { label: string; rev: string | null; onReload: () => void; onOverwrite: () => void;
-    overwriteLabel?: string },
+    overwriteLabel?: string | undefined },
 ) {
   return (
     <div className="banner stale-banner" role="alert">

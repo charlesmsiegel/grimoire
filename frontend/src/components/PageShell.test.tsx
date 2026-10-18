@@ -55,8 +55,8 @@ test("a route that only changes its params still opens main at the top", () => {
     </MemoryRouter>,
   );
   const main = screen.getByRole("main");
-  const scrollTo = vi.fn();
-  main.scrollTo = scrollTo as any;
+  const scrollTo = vi.fn<(...args: [options?: ScrollToOptions | undefined] | [x: number, y: number]) => void>();
+  main.scrollTo = scrollTo;
 
   fireEvent.click(screen.getByText("go"));
   expect(screen.getByRole("main")).toBe(main);   // same port, not a remount
@@ -75,7 +75,7 @@ test("an explicit scrollKey opens a new section at the top without resetting on 
   </PageShell></MemoryRouter>;
   const { rerender } = render(page("context"));
   const main = screen.getByRole("main");
-  const scrollTo = vi.fn();
+  const scrollTo = vi.fn<(...args: [options?: ScrollToOptions | undefined] | [x: number, y: number]) => void>();
   main.scrollTo = scrollTo;
   rerender(page("context"));
   expect(scrollTo).not.toHaveBeenCalled();

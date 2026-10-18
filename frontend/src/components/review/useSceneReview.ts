@@ -10,12 +10,13 @@
 // and the fact that a saved review invalidates every panel on the page.
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, type EditConflict, type SceneAbsorb, type StagedEdit,
+  api, ApiError, type EditConflict, type SceneAbsorb, type StagedEdit,
 } from "../../api/client";
 import {
   approvedByDefault, drawerKey, EDIT_GROUPS, editBand, isUncited, SCENE_STAMPED,
   targetClashes, wireEdit, type EditRow,
 } from "./editRows";
+import { errorText } from "../../api/errors";
 
 export type SceneReview = ReturnType<typeof useSceneReview>;
 
@@ -33,7 +34,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   /** The page's shared error banner. `from` tags the operation, because the
    *  banner outlives a scene switch and this review's failures have to be
    *  separable from a chat error raised somewhere else. */
-  fail: (e: any, retryable?: boolean, from?: string) => void;
+  fail: (e: unknown, retryable?: boolean, from?: string) => void;
   /** Clear the banner outright — what End scene does on the way in, because it
    *  is the page's own recovery from whatever was last on screen. */
   clearError: () => void;
@@ -585,8 +586,8 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       let a;
       try {
         a = await api.absorbScene(cid, activeId, false, hold);
-      } catch (err: any) {
-        if (err?.kind !== "already_absorbed") throw err;
+      } catch (err: unknown) {
+        if (!(err instanceof ApiError) || err.kind !== "already_absorbed") throw err;
         if (!window.confirm(
           "This scene has already been absorbed. Absorbing again re-proposes every " +
           "change from scratch, so appended lore and plot beats can end up duplicated. " +
@@ -614,7 +615,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       // them with `approvedByDefault`.
       if (hasReviewRef.current) return;
       openReview(a.review, activeId, a.generation);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Same guard on the failure path: A's banner over B is the same category
       // of wrong answer, just a cheaper one.
       if (campaignRef.current !== cid) return;
@@ -725,13 +726,13 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       setConflicts([]);
       setClashRefused(false);
       onSaved();
-    } catch (err: any) {
+    } catch (err: unknown) {
       // A contradiction is not a failed save (#111): the server refused the
       // batch before writing anything, so the review stands exactly as it was
       // and the same commit token is still good. Show the rows, let the
       // reviewer answer each one, and save again -- no `saveError`, whose
       // "Try saving again" would just re-post the batch that was refused.
-      if (err?.kind === "edit_conflicts") {
+      if (err instanceof ApiError && err.kind === "edit_conflicts") {
         // Resolve each verdict to the ROW it belongs to, here and now, while
         // `editRows` is still the exact array this batch was built from
         // (`saving` latches the panel for the whole round-trip). The server
@@ -763,7 +764,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         setSaveError(null);
         return;
       }
-      setSaveError(err.detail ?? String(err));
+      setSaveError(errorText(err));
     } finally {
       setSaving(false);
     }
@@ -992,10 +993,11 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         identity_check: _ic, ...displaced
       } = r;
       const others = (ic.alternatives ?? []).filter((_, n) => n !== k);
+      const review = alt.review ?? r.review;
       return {
         ...alt,
         after: r.after,
-        review: alt.review ?? r.review,
+        ...(review === undefined ? {} : { review }),
         identity_check: { ...ic, alternatives: [...others, displaced] },
         approved: true, rejected: false, judged: true,
       };
@@ -1065,7 +1067,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         // over; the next save re-reports whatever is still drifted.
         setConflicts([]);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // The same two guards the success path takes, for the same reason: an
       // answer -- failure included -- that belongs to a superseded retry or a
       // review that is gone must not reach the screen. Cancel stays enabled
@@ -1148,7 +1150,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       // and are untouched; the unanswered badges dropped here come back on the
       // next save, which re-checks every edit against what is stored.
       setConflicts([]);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (dossierRetryRef.current !== gen || openReviewRef.current !== review) return;
       fail(err, false, "dossiers");   // retryAudit's reasons, both of them
     } finally {

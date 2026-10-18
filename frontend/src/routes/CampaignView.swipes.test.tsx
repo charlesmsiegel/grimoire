@@ -25,6 +25,7 @@ import { api, ApiError, type Message, type ResponseSwipe } from "../api/client";
 import { installCampaignMocks, ONE_SCENE, renderCampaign } from "../testkit/campaignHarness";
 import { TestPointerEvent } from "../testkit/pointer";
 import { bodiesOf, declares, stylesheet } from "../testkit/stylesheet";
+import { fixture } from "../testkit/fixture";
 
 beforeEach(installCampaignMocks);
 
@@ -41,8 +42,8 @@ function scene(messages: Message[]) {
   return { meta: { id: "s1", title: "Old" }, messages };
 }
 function playing(last: Message = LAST) {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue(scene([
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue(scene([
     { role: "user", content: "hi" }, EARLIER, { role: "user", content: "and then?" }, last]));
 }
 
@@ -54,7 +55,7 @@ function swipeRead(over: Partial<ResponseSwipe> = {}): ResponseSwipe {
     can_reroll: true, editable: true, round_open: false, edited: false, ...over };
 }
 function reads(over: Partial<ResponseSwipe> = {}) {
-  (api.getResponseSwipe as any).mockResolvedValue(swipeRead(over));
+  vi.mocked(api.getResponseSwipe).mockResolvedValue(swipeRead(over));
 }
 
 /** A touch drag right-to-left on `el`: the gesture's ›. */
@@ -87,13 +88,14 @@ test("the arrows hang off the last response only, counting complete variants", a
 test("‹ activates the previous complete variant, skipping an incomplete one, and the counter follows", async () => {
   playing();
   reads({ active: 2, variants: [v("v1"), v("v2", "incomplete"), v("v3")] });
-  (api.activateResponseVariant as any).mockImplementation(async () => {
+  vi.mocked(api.activateResponseVariant).mockImplementation(async () => {
     // Same rid, new content: what an activate does to the post on screen.
-    (api.getScene as any).mockResolvedValue(scene([
+    const activated = scene([
       { role: "user", content: "hi" }, EARLIER, { role: "user", content: "and then?" },
-      { ...LAST, content: "The older take." }]));
+      { ...LAST, content: "The older take." }]);
+    vi.mocked(api.getScene).mockResolvedValue(activated);
     reads({ active: 0, variants: [v("v1"), v("v2", "incomplete"), v("v3")] });
-    return { ok: true };
+    return activated;
   });
   renderCampaign();
   expect(await screen.findByText("2/2")).toBeInTheDocument();
@@ -109,16 +111,16 @@ test("‹ activates the previous complete variant, skipping an incomplete one, a
 test("an activate refused with 409 shows the refusal and refetches the swipe read", async () => {
   playing();
   reads();
-  (api.activateResponseVariant as any).mockRejectedValue(
+  vi.mocked(api.activateResponseVariant).mockRejectedValue(
     new ApiError(409, "a roll was applied after this response"));
   renderCampaign();
   expect(await screen.findByText("2/3")).toBeInTheDocument();
-  const before = (api.getResponseSwipe as any).mock.calls.length;
+  const before = vi.mocked(api.getResponseSwipe).mock.calls.length;
   fireEvent.click(previous());
   await waitFor(() => expect(api.activateResponseVariant).toHaveBeenCalledWith("run", "s1", "rB", "v1"));
   expect(await screen.findByText(/a roll was applied after this response/)).toBeInTheDocument();
-  await waitFor(() => expect((api.getResponseSwipe as any).mock.calls.length).toBeGreaterThan(before));
-  expect((api.getResponseSwipe as any).mock.calls.at(-1)).toEqual(["run", "s1", "rB"]);
+  await waitFor(() => expect(vi.mocked(api.getResponseSwipe).mock.calls.length).toBeGreaterThan(before));
+  expect(vi.mocked(api.getResponseSwipe).mock.lastCall).toEqual(["run", "s1", "rB"]);
   // Unchanged content: the refetch came from the refresh, not from the text.
   expect(screen.getByText("The second answer.")).toBeInTheDocument();
 });
@@ -127,8 +129,8 @@ test("› at the newest generates once, with no guidance, and keeps the pending 
   playing();
   reads({ active: 2 });
   let finish: (() => void) | undefined;
-  (api.regenerateResponse as any).mockImplementation(
-    (_c: string, _s: string, _r: string, onEvent: (e: unknown) => void) => new Promise<void>((resolve) => {
+  vi.mocked(api.regenerateResponse).mockImplementation(
+    (_c, _s, _r, onEvent) => new Promise<void>((resolve) => {
       finish = () => { onEvent({ done: true }); resolve(); };
     }));
   renderCampaign();
@@ -149,10 +151,10 @@ test("› at the newest generates once, with no guidance, and keeps the pending 
     vi.unstubAllGlobals();
   }
   expect(row("The second answer.")).toHaveClass("swipe-target");
-  const call = (api.regenerateResponse as any).mock.calls[0];
+  const call = vi.mocked(api.regenerateResponse).mock.calls[0];
   expect(call[2]).toBe("rB");
   expect(call[4]).toEqual({ guidance: "" });
-  expect(call[4].response).toBeUndefined();
+  expect(call[4]?.response).toBeUndefined();
   await act(async () => finish?.());
   await waitFor(() => expect(screen.getByText("The second answer.")).toBeInTheDocument());
   expect(picker).toHaveValue(120);
@@ -165,8 +167,8 @@ test("while a turn runs the count stays under its post, with both arrows disable
   playing();
   reads({ active: 2 });
   let finish: (() => void) | undefined;
-  (api.regenerateResponse as any).mockImplementation(
-    (_c: string, _s: string, _r: string, onEvent: (e: unknown) => void) => new Promise<void>((resolve) => {
+  vi.mocked(api.regenerateResponse).mockImplementation(
+    (_c, _s, _r, onEvent) => new Promise<void>((resolve) => {
       finish = () => { onEvent({ done: true }); resolve(); };
     }));
   renderCampaign();
@@ -198,7 +200,7 @@ test.each([
 test("every arrow is disabled while a roll proposal is pending", async () => {
   playing();
   reads();
-  (api.getRollProposal as any).mockResolvedValue({
+  vi.mocked(api.getRollProposal).mockResolvedValue({
     record: { id: "p1", status: "pending", resolution: null,
               payload: { id: "p1", check: "wits", check_label: "Wits", problems: [] } } });
   renderCampaign();
@@ -265,8 +267,8 @@ test("one complete variant that can be rerolled shows 1/1, with › generating",
 // `canReroll` is false where the transcript holds no player post to answer
 // (an offscreen or all-assistant scene), so › would have nothing to generate.
 test("one complete variant in a scene with no player post shows no arrows, even if the ledger can reroll", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue(scene([EARLIER, LAST]));
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue(scene([EARLIER, LAST]));
   reads({ active: 0, variants: [v("v1")], can_reroll: true });
   renderCampaign();
   await screen.findByText("The second answer.");
@@ -323,8 +325,8 @@ describe("the keys", () => {
     playing();
     reads({ active: 2 });
     let finish: (() => void) | undefined;
-    (api.regenerateResponse as any).mockImplementation(
-      (_c: string, _s: string, _r: string, onEvent: (e: unknown) => void) => new Promise<void>((resolve) => {
+    vi.mocked(api.regenerateResponse).mockImplementation(
+      (_c, _s, _r, onEvent) => new Promise<void>((resolve) => {
         finish = () => { onEvent({ done: true }); resolve(); };
       }));
     renderCampaign();
@@ -336,10 +338,10 @@ describe("the keys", () => {
     fireEvent.change(await screen.findByLabelText("Reroll guidance"), { target: { value: "Colder" } });
     fireEvent.click(screen.getByRole("button", { name: "Reroll ▸" }));
     await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
-    const call = (api.regenerateResponse as any).mock.calls[0];
+    const call = vi.mocked(api.regenerateResponse).mock.calls[0];
     expect(call[2]).toBe("rB");
     expect(call[4]).toEqual({ guidance: "Colder" });
-    expect(call[4].response).toBeUndefined();
+    expect(call[4]?.response).toBeUndefined();
     await act(async () => finish?.());
     await waitFor(() => expect(screen.getByText("The second answer.")).toBeInTheDocument());
     expect(picker).toHaveValue(120);
@@ -387,15 +389,15 @@ describe("the keys", () => {
   test("neither fires from a model radio in the open reroll box", async () => {
     playing();
     reads({ active: 2 });
-    (api.readConnectionCapabilities as any).mockImplementation(
-      (_provider: string, need: string) => Promise.resolve({
+    vi.mocked(api.readConnectionCapabilities).mockImplementation(
+      (_provider, need) => Promise.resolve(fixture({
         provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
                            url_locked: true, billing: "metered", reports_price: true,
                            always: [], possible: [], never: [] },
         need, reason: null, hidden: [],
         groups: { unverified: [], fits: ["Saltmarch One", "Saltmarch Two"].map((name) => ({
           id: name.toLowerCase().replace(" ", "-"), name, context: null, prompt: null,
-          completion: null, reason: "the catalog says so", capabilities: {} })) } }));
+          completion: null, reason: "the catalog says so", capabilities: {} })) } })));
     renderCampaign();
     expect(await screen.findByText("3/3")).toBeInTheDocument();
     press("ArrowRight");
@@ -432,13 +434,13 @@ describe("the keys", () => {
   test("Reroll ▸ waits for a typed model id to be taken, and Enter does too", async () => {
     playing();
     reads({ active: 2 });
-    (api.readConnectionCapabilities as any).mockImplementation(
-      (_provider: string, need: string) => Promise.resolve({
+    vi.mocked(api.readConnectionCapabilities).mockImplementation(
+      (_provider, need) => Promise.resolve({
         provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
                            url_locked: true, billing: "metered", reports_price: true,
                            always: [], possible: [], never: [] },
         need, reason: null, hidden: [], groups: { unverified: [], fits: [] } }));
-    (api.regenerateResponse as any).mockResolvedValue(undefined);
+    vi.mocked(api.regenerateResponse).mockResolvedValue(undefined);
     renderCampaign();
     expect(await screen.findByText("3/3")).toBeInTheDocument();
     press("ArrowRight");
@@ -453,7 +455,7 @@ describe("the keys", () => {
     fireEvent.click(screen.getByRole("button", { name: "Use this id" }));
     fireEvent.click(screen.getByRole("button", { name: "Reroll ▸" }));
     await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
-    expect((api.regenerateResponse as any).mock.calls[0][4]).toEqual(
+    expect(vi.mocked(api.regenerateResponse).mock.calls[0][4]).toEqual(
       expect.objectContaining({ provider: "openrouter", model: "vendor/typed" }));
   });
 
@@ -463,15 +465,15 @@ describe("the keys", () => {
   test("neither fires from a model radio in the reply's own route picker", async () => {
     playing();
     reads();
-    (api.readConnectionCapabilities as any).mockImplementation(
-      (_provider: string, need: string) => Promise.resolve({
+    vi.mocked(api.readConnectionCapabilities).mockImplementation(
+      (_provider, need) => Promise.resolve(fixture({
         provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
                            url_locked: true, billing: "metered", reports_price: true,
                            always: [], possible: [], never: [] },
         need, reason: null, hidden: [],
         groups: { unverified: [], fits: ["Saltmarch One", "Saltmarch Two"].map((name) => ({
           id: name.toLowerCase().replace(" ", "-"), name, context: null, prompt: null,
-          completion: null, reason: "the catalog says so", capabilities: {} })) } }));
+          completion: null, reason: "the catalog says so", capabilities: {} })) } })));
     renderCampaign();
     expect(await screen.findByText("2/3")).toBeInTheDocument();
     const last = row("The second answer.");
@@ -523,7 +525,7 @@ describe("the touch swipe", () => {
     expect(await screen.findByText("3/3")).toBeInTheDocument();
     drag(screen.getByText("The second answer."), -90);
     await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
-    expect((api.regenerateResponse as any).mock.calls[0][4]).toEqual(
+    expect(vi.mocked(api.regenerateResponse).mock.calls[0][4]).toEqual(
       { guidance: "" });
   });
 });
@@ -532,10 +534,10 @@ describe("the touch swipe", () => {
 // scene can still hold one without a response id -- and that one keeps the
 // arrows it always had.
 test("a trailing reply with no response id keeps the legacy alternates arrows", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue(scene([
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue(scene([
     { role: "user", content: "hi" }, { role: "assistant", content: "an old reply" }]));
-  (api.getAlternates as any).mockResolvedValue({ active: 0, alternates: [
+  vi.mocked(api.getAlternates).mockResolvedValue({ active: 0, alternates: [
     { id: "a1", created: "", guidance: "", model: "", posts: 1, preview: "one" },
     { id: "a2", created: "", guidance: "", model: "", posts: 1, preview: "two" }] });
   renderCampaign();

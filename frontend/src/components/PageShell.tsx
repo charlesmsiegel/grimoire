@@ -59,7 +59,7 @@ export function PageShell(
     /** Main is showing an answer remembered from an earlier visit while the
      *  page's own read is on the wire (`useRevalidated`'s `stale`). Said as
      *  `aria-busy` and nothing else: no spinner, no greyed-out list. */
-    busy?: boolean;
+    busy?: boolean | undefined;
   },
 ) {
   // Two library sections in a row render the same component tree, so React

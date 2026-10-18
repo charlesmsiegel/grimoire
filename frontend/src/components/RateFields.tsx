@@ -98,7 +98,7 @@ export function RateFields({ value, onChange, idPrefix, subject, disabled, input
   subject?: string;
   disabled?: boolean;
   /** The Input box, for a page that puts the caret there. */
-  inputRef?: Ref<HTMLInputElement>;
+  inputRef?: Ref<HTMLInputElement> | undefined;
 }) {
   return (
     <div className="pricing-rates">

@@ -34,7 +34,7 @@ export function SceneSettingField({ cid, sid, onMoved, onError }: {
       setLocId("");
       await reload();
       onMoved();
-    } catch (err: any) {
+    } catch (err: unknown) {
       onError(err);
     }
   }

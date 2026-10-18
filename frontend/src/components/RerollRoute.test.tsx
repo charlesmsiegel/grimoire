@@ -13,8 +13,10 @@ import { api, PRESET_CLEAR, type CapabilityNeed } from "../api/client";
 import RerollRoutePicker, { NO_REROLL_ROUTE, rerollOverrides, type RerollRoute } from "./RerollRoute";
 import { forgetModelTests } from "./inference/TestCallDialog";
 import { bodiesOf, declares, stylesheet } from "../testkit/stylesheet";
+import { fixture } from "../testkit/fixture";
+import type { InferenceSettings, ModelCapabilities, ProviderPreset, RouteRow } from "../api/types";
 
-const PROVIDERS = [
+const PROVIDERS: InferenceSettings["providers"] = [
   { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter", usable: true, problem: null },
   { id: "realm", name: "Realm Local", kind: "openai_compatible", preset: "custom", usable: true, problem: null },
   { id: "winifred", name: "Winifred Anthropic", kind: "anthropic", preset: "anthropic", usable: true, problem: null },
@@ -22,45 +24,45 @@ const PROVIDERS = [
 ];
 
 /** The scene route as the campaign's view resolves it: what Default runs. */
-const SCENE_ROUTE = {
+const SCENE_ROUTE = fixture<RouteRow>({
   key: "scene", label: "Scene turns", hint: "", operation: "generate", default_role: "primary",
   tasks: ["chat", "retry", "regenerate", "extend"], requires: [], campaign_scoped: true,
   use: "", pin: { provider: "", model: "", preset: "" }, preset: "", problem: null, role: "primary",
   resolves: { provider: "saltmarch", provider_name: "Saltmarch Router", model: "vendor/campaign",
               preset: "warm", preset_name: "Warm", via: "role", scope: "global" },
   inherits: null,
-};
+});
 
-function view(over: Record<string, unknown> = {}) {
-  return {
+function view(over: Record<string, unknown> = {}): InferenceSettings {
+  return fixture({
     format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
     roles: {}, routes: [SCENE_ROUTE], providers: PROVIDERS,
     presets: [{ id: "warm", name: "Warm" }, { id: "cold", name: "Cold" }],
     preset_clear: PRESET_CLEAR, ...over,
-  };
+  });
 }
 
-const PRESET = {
+const PRESET: ProviderPreset = {
   id: "custom", label: "Custom", kind: "openai_compatible", base_url: "", url_locked: false,
   billing: "metered", reports_price: false, always: [], possible: [], never: [],
 };
 
-function answer(need: CapabilityNeed, fits: { id: string; name: string }[]) {
-  return {
+function answer(need: CapabilityNeed, fits: { id: string; name: string }[]): ModelCapabilities {
+  return fixture({
     provider_preset: PRESET, need, reason: null, hidden: [],
     groups: {
       fits: fits.map((m) => ({ ...m, context: null, prompt: null, completion: null,
                                reason: "the catalog says so", capabilities: {} })),
       unverified: [],
     },
-  };
+  });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   forgetModelTests();
-  (api.getCampaignInference as any).mockResolvedValue(view());
-  (api.readConnectionCapabilities as any).mockResolvedValue(answer("generate", []));
+  vi.mocked(api.getCampaignInference).mockResolvedValue(view());
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(answer("generate", []));
 });
 
 /** The picker, controlled the way the reroll popover holds it. */
@@ -72,7 +74,7 @@ function Harness({ start = NO_REROLL_ROUTE, spy = vi.fn() }:
 }
 
 test("the reroll picker sends provider, model and preset", async () => {
-  (api.readConnectionCapabilities as any).mockImplementation((provider: string) =>
+  vi.mocked(api.readConnectionCapabilities).mockImplementation((provider) =>
     Promise.resolve(answer("generate", provider === "realm" ? [{ id: "qwen3", name: "Qwen 3" }] : [])));
   const spy = vi.fn();
   render(<Harness spy={spy} />);
@@ -114,7 +116,7 @@ test("Default sends no override", async () => {
 });
 
 test("an anthropic provider offers its models", async () => {
-  (api.readConnectionCapabilities as any).mockImplementation((provider: string) =>
+  vi.mocked(api.readConnectionCapabilities).mockImplementation((provider) =>
     Promise.resolve(answer("generate", provider === "winifred"
       ? [{ id: "claude-opus-4-8", name: "Claude Opus 4.8" },
          { id: "claude-haiku-4-5", name: "Claude Haiku 4.5" }]
@@ -163,7 +165,7 @@ test("the providers, presets and Default are this campaign's, read fresh on open
 test("a store still on the legacy layout keeps the per-reroll preset", async () => {
   // `override_inference` applies a reroll's preset in either layout, so a
   // format-1 store is offered it too.
-  (api.getCampaignInference as any).mockResolvedValue(view({ format: "1" }));
+  vi.mocked(api.getCampaignInference).mockResolvedValue(view({ format: "1" }));
   const spy = vi.fn();
   render(<Harness spy={spy} />);
 
@@ -173,7 +175,7 @@ test("a store still on the legacy layout keeps the per-reroll preset", async () 
 });
 
 test("a view that cannot be read still offers Default, and says why nothing else is", async () => {
-  (api.getCampaignInference as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getCampaignInference).mockRejectedValue(new Error("offline"));
   render(<Harness />);
 
   expect(await screen.findByText(/Couldn't read the providers/)).toBeInTheDocument();
@@ -184,7 +186,7 @@ test("Enter on the picker's own controls does not reach the popover; Escape does
   // The popover commits the reroll on Enter. On a select, a button or the
   // typed-id box Enter already means something, and letting it bubble sent the
   // reroll through the route the reader was in the middle of choosing.
-  (api.readConnectionCapabilities as any).mockResolvedValue(
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(
     answer("generate", [{ id: "qwen3", name: "Qwen 3" }]));
   const onOuterEnter = vi.fn();
   const onOuterEscape = vi.fn();
@@ -219,7 +221,7 @@ test("a provider chosen without a model says which model it keeps", async () => 
   // `{provider}` alone runs the scene route's standing model on that provider
   // (spec 5.6) -- so the box says which one, rather than leaving the reader to
   // find out from the reply.
-  (api.readConnectionCapabilities as any).mockImplementation((provider: string) =>
+  vi.mocked(api.readConnectionCapabilities).mockImplementation((provider) =>
     Promise.resolve(answer("generate", provider === "realm" ? [{ id: "qwen3", name: "Qwen 3" }] : [])));
   render(<Harness />);
   await screen.findByText(/Saltmarch Router · vendor\/campaign/);
@@ -233,7 +235,7 @@ test("a provider chosen without a model says which model it keeps", async () => 
 });
 
 test("a provider alone, where the route names no model to keep, says to choose one", async () => {
-  (api.getCampaignInference as any).mockResolvedValue(view({
+  vi.mocked(api.getCampaignInference).mockResolvedValue(view({
     routes: [{ ...SCENE_ROUTE, resolves: null }] }));
   render(<Harness start={{ provider: "realm", model: "", preset: "" }} />);
 
@@ -244,7 +246,7 @@ test("at format 1 a provider alone says it runs that provider's own model", asyn
   // A store whose upgrade is pending or failed resolves a provider-only reroll
   // through the legacy keys: the provider's OWN model, not the scene route's
   // standing one -- possibly another, pricier one. The caption says which.
-  (api.getCampaignInference as any).mockResolvedValue(view({
+  vi.mocked(api.getCampaignInference).mockResolvedValue(view({
     format: "1", migration: { state: "pending", reason: "", skipped: [] },
     providers: PROVIDERS.map((p) => (p.id === "realm" ? { ...p, own_model: "qwen3-max" }
                                                      : { ...p, own_model: "" })) }));
@@ -256,7 +258,7 @@ test("at format 1 a provider alone says it runs that provider's own model", asyn
 });
 
 test("at format 1 a provider naming no model of its own says to choose one", async () => {
-  (api.getCampaignInference as any).mockResolvedValue(view({
+  vi.mocked(api.getCampaignInference).mockResolvedValue(view({
     format: "1", providers: PROVIDERS }));
   render(<Harness start={{ provider: "realm", model: "", preset: "" }} />);
 

@@ -15,7 +15,7 @@ vi.mock("../api/client", async () => ({
 beforeEach(() => vi.clearAllMocks());
 
 test("typing then Save calls PUT and not generate", async () => {
-  (api.setCharacterTagline as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.setCharacterTagline).mockResolvedValue({ ok: true });
   const onClose = vi.fn();
   render(<TaglinePrompt wid="w" cid="aese" name="Aese" onClose={onClose} />);
   fireEvent.change(screen.getByLabelText("Tagline"), { target: { value: "A snowleopardgirl." } });
@@ -26,7 +26,7 @@ test("typing then Save calls PUT and not generate", async () => {
 });
 
 test("Generate fills the field from the endpoint", async () => {
-  (api.generateCharacterTagline as any).mockResolvedValue({ tagline: "A generated line." });
+  vi.mocked(api.generateCharacterTagline).mockResolvedValue({ tagline: "A generated line." });
   render(<TaglinePrompt wid="w" cid="aese" name="Aese" onClose={vi.fn()} />);
   fireEvent.click(screen.getByText("Generate"));
   await screen.findByDisplayValue("A generated line.");
@@ -43,7 +43,7 @@ test("Skip closes without saving", async () => {
 test("a Generate that cannot reach the provider offers the local-model recovery", async () => {
   // The generate endpoint 502s with `{detail, kind}`; the kind used to be
   // dropped on the floor here and the modal showed the socket error alone.
-  (api.generateCharacterTagline as any).mockRejectedValue(
+  vi.mocked(api.generateCharacterTagline).mockRejectedValue(
     new ApiError(502, "connection refused", "network"));
   render(<MemoryRouter><TaglinePrompt wid="w" cid="aese" name="Aese" onClose={vi.fn()} /></MemoryRouter>);
   fireEvent.click(screen.getByText("Generate"));
@@ -52,7 +52,7 @@ test("a Generate that cannot reach the provider offers the local-model recovery"
 });
 
 test("any other Generate failure still shows the endpoint's own message", async () => {
-  (api.generateCharacterTagline as any).mockRejectedValue(
+  vi.mocked(api.generateCharacterTagline).mockRejectedValue(
     new ApiError(409, "No LLM connection selected", "missing_key"));
   render(<MemoryRouter><TaglinePrompt wid="w" cid="aese" name="Aese" onClose={vi.fn()} /></MemoryRouter>);
   fireEvent.click(screen.getByText("Generate"));
@@ -67,7 +67,7 @@ test("any other Generate failure still shows the endpoint's own message", async 
 test("Escape skips mid-generation, exactly as Skip does", async () => {
   const onClose = vi.fn();
   // A generate that never settles, so the dialog stays `busy`.
-  (api.generateCharacterTagline as any).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.generateCharacterTagline).mockImplementation(() => new Promise(() => {}));
   render(<TaglinePrompt wid="w" cid="mara" name="Mara" onClose={onClose} />);
   fireEvent.click(screen.getByRole("button", { name: /generate/i }));
   await screen.findByRole("button", { name: /generating/i });

@@ -5,20 +5,22 @@ vi.mock("../api/client", () => ({
   api: { getComposition: vi.fn(), setSyncPin: vi.fn() },
 }));
 import { api } from "../api/client";
+import type { CompositionRow } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
-const CONFLICT = {
+const CONFLICT: CompositionRow = {
   ref: { kind: "locations", id: "saltmarch-harbor" }, name: "Saltmarch Harbour",
   state: "conflict", pinned: false, lock: null,
 };
-const UPDATE = {
+const UPDATE: CompositionRow = {
   ref: { kind: "lore", id: "winifred" }, name: "Winifred",
   state: "update", pinned: false, lock: null,
 };
-const DIVERGED = {
+const DIVERGED: CompositionRow = {
   ref: { kind: "items", id: "sunblade" }, name: "Sunblade",
   state: "diverged", pinned: false, lock: null,
 };
-const INSYNC = {
+const INSYNC: CompositionRow = {
   ref: { kind: "locations", id: "quay" }, name: "Quay",
   state: "insync", pinned: false, lock: null,
 };
@@ -29,8 +31,8 @@ const onPinned = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getComposition as any).mockResolvedValue({ rows: [] });
-  (api.setSyncPin as any).mockResolvedValue({ pinned: [] });
+  vi.mocked(api.getComposition).mockResolvedValue({ rows: [] });
+  vi.mocked(api.setSyncPin).mockResolvedValue({ pinned: [] });
 });
 
 async function renderPanel() {
@@ -47,8 +49,8 @@ const sidebar = (container: HTMLElement) =>
   container.querySelector(".detail-sidebar") as HTMLElement;
 
 test("one endpoint serves one row per ref, quiescent refs included", async () => {
-  (api.getComposition as any).mockResolvedValue(
-    { rows: [CONFLICT, UPDATE, DIVERGED, INSYNC] });
+  vi.mocked(api.getComposition).mockResolvedValue(
+    fixture({ rows: [CONFLICT, UPDATE, DIVERGED, INSYNC] }));
   await renderPanel();
 
   expect(screen.getByRole("button", { name: /Saltmarch Harbour/ }).textContent)
@@ -64,7 +66,7 @@ test("one endpoint serves one row per ref, quiescent refs included", async () =>
 });
 
 test("a version lock rides beside the state rather than replacing it", async () => {
-  (api.getComposition as any).mockResolvedValue({ rows: [
+  vi.mocked(api.getComposition).mockResolvedValue({ rows: [
     { ref: { kind: "characters", id: "seraphine" }, name: "Seraphine",
       state: "update", pinned: false, lock: LOCK }] });
   const container = await renderPanel();
@@ -83,7 +85,7 @@ test("a version lock rides beside the state rather than replacing it", async () 
 });
 
 test("an actor with a lock and nothing pending is listed as following the world", async () => {
-  (api.getComposition as any).mockResolvedValue({ rows: [
+  vi.mocked(api.getComposition).mockResolvedValue({ rows: [
     { ref: { kind: "characters", id: "seraphine" }, name: "Seraphine",
       state: "insync", pinned: false, lock: LOCK }] });
   const container = await renderPanel();
@@ -94,14 +96,14 @@ test("an actor with a lock and nothing pending is listed as following the world"
 });
 
 test("the banner counts what is pending and says how much of it is contested", async () => {
-  (api.getComposition as any).mockResolvedValue({ rows: [CONFLICT, UPDATE] });
+  vi.mocked(api.getComposition).mockResolvedValue(fixture({ rows: [CONFLICT, UPDATE] }));
   await renderPanel();
   const banner = screen.getByText(/2 updates pending/);
   expect(banner.textContent).toContain("1 of them in conflict");
 });
 
 test("the banner hands the review a ref rather than accepting anything itself", async () => {
-  (api.getComposition as any).mockResolvedValue({ rows: [CONFLICT, UPDATE] });
+  vi.mocked(api.getComposition).mockResolvedValue(fixture({ rows: [CONFLICT, UPDATE] }));
   await renderPanel();
   // No Accept anywhere: taking a world change is destructive and has no undo,
   // and the panel that owns that decision is the one that shows the diff.
@@ -111,7 +113,7 @@ test("the banner hands the review a ref rather than accepting anything itself", 
 });
 
 test("a row's detail sends the review to that ref", async () => {
-  (api.getComposition as any).mockResolvedValue({ rows: [CONFLICT, UPDATE] });
+  vi.mocked(api.getComposition).mockResolvedValue(fixture({ rows: [CONFLICT, UPDATE] }));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
   await act(async () => {});
@@ -121,7 +123,7 @@ test("a row's detail sends the review to that ref", async () => {
 });
 
 test("a diverged record has nothing to review, and is told where its moves live", async () => {
-  (api.getComposition as any).mockResolvedValue({ rows: [DIVERGED] });
+  vi.mocked(api.getComposition).mockResolvedValue(fixture({ rows: [DIVERGED] }));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: /Sunblade/ }));
   await act(async () => {});
@@ -131,12 +133,12 @@ test("a diverged record has nothing to review, and is told where its moves live"
 });
 
 test("pinning a ref writes the pin, re-reads, and tells the panel next door", async () => {
-  (api.getComposition as any).mockResolvedValue({ rows: [UPDATE] });
+  vi.mocked(api.getComposition).mockResolvedValue(fixture({ rows: [UPDATE] }));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
   await act(async () => {});
 
-  (api.getComposition as any).mockResolvedValue({ rows: [{ ...UPDATE, pinned: true }] });
+  vi.mocked(api.getComposition).mockResolvedValue(fixture({ rows: [{ ...UPDATE, pinned: true }] }));
   fireEvent.click(screen.getByRole("button", { name: "Stop offering world updates" }));
   await act(async () => {});
 
@@ -148,8 +150,8 @@ test("pinning a ref writes the pin, re-reads, and tells the panel next door", as
 });
 
 test("a pinned ref keeps its state on show but leaves the pending count and review", async () => {
-  (api.getComposition as any).mockResolvedValue(
-    { rows: [{ ...UPDATE, pinned: true }, CONFLICT] });
+  vi.mocked(api.getComposition).mockResolvedValue(
+    fixture({ rows: [{ ...UPDATE, pinned: true }, CONFLICT] }));
   const container = await renderPanel();
   // The banner advertises what the review panel will show, and the pin holds
   // the update out of it — one pending, not two.
@@ -164,13 +166,13 @@ test("a pinned ref keeps its state on show but leaves the pending count and revi
 });
 
 test("a resolve landing elsewhere re-reads the composition", async () => {
-  (api.getComposition as any).mockResolvedValue({ rows: [CONFLICT, UPDATE] });
+  vi.mocked(api.getComposition).mockResolvedValue(fixture({ rows: [CONFLICT, UPDATE] }));
   const { rerender } = render(
     <CompositionPanel cid="saltmarch-nights" onReview={onReview} refreshKey={0} />);
   await act(async () => {});
   expect(api.getComposition).toHaveBeenCalledTimes(1);
 
-  (api.getComposition as any).mockResolvedValue({ rows: [UPDATE] });
+  vi.mocked(api.getComposition).mockResolvedValue(fixture({ rows: [UPDATE] }));
   rerender(<CompositionPanel cid="saltmarch-nights" onReview={onReview} refreshKey={1} />);
   await act(async () => {});
   expect(api.getComposition).toHaveBeenCalledTimes(2);
@@ -185,12 +187,12 @@ test("a campaign holding nothing of its own says what would put a row here", asy
 });
 
 test("a failed read is reported, because 'nothing outstanding' is the wrong answer", async () => {
-  (api.getComposition as any).mockRejectedValue(new Error("campaign not found"));
+  vi.mocked(api.getComposition).mockRejectedValue(new Error("campaign not found"));
   await renderPanel();
   expect(screen.getByRole("alert").textContent).toContain("campaign not found");
   expect(screen.queryByText(/A record joins the composition/)).not.toBeInTheDocument();
 
-  (api.getComposition as any).mockResolvedValue({ rows: [UPDATE] });
+  vi.mocked(api.getComposition).mockResolvedValue(fixture({ rows: [UPDATE] }));
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await act(async () => {});
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();

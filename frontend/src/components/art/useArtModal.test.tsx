@@ -17,7 +17,7 @@ test("Back unmounts nested art dialogs without leaving the next route inert or l
   }
   const NativeRequest = globalThis.Request;
   class RouteRequest extends NativeRequest {
-    constructor(input: RequestInfo | URL, init?: RequestInit) { super(input, { ...init, signal: undefined }); }
+    constructor(input: RequestInfo | URL, init?: RequestInit) { const options = { ...init }; delete options.signal; super(input, options); }
   }
   vi.stubGlobal("Request", RouteRequest);
   const overflow = document.body.style.overflow;

@@ -27,10 +27,10 @@ export type PhoneTab = {
   to: string | null;
   /** The count on the tab, or `undefined` for none. Read through the rail's
    *  own `tail`, so a badge cannot say something the rail contradicts. */
-  badge?: string;
+  badge?: string | undefined;
   /** What a screen reader hears after the label, so the badge is never the
    *  only carrier. */
-  badgeLabel?: string;
+  badgeLabel?: string | undefined;
   match: (pathname: string, ctx: RailCtx) => boolean;
   /** The one tab that navigates nowhere: it opens the rail drawer. */
   opensRail?: boolean;

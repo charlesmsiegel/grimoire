@@ -1,3 +1,5 @@
+import type { UsageBucket } from "../api/types";
+import { fixture } from "../testkit/fixture";
 import { render, screen } from "@testing-library/react";
 import { EQUIVALENT, Footnotes, PostCost, SUBSCRIPTION_NOT_BILLED, TOKENS_ESTIMATED, UNPRICED,
          about, bound, bucketPrice, headlineIsEstimate, money, perMillionRate, perThousand,
@@ -230,11 +232,11 @@ test("the three columns are separate, and none of them sums the others", () => {
   // recover. There is no total on screen because a UI that offers one gets
   // quoted.
   const { container } = render(
-    <MoneyColumns bucket={{
+    <MoneyColumns bucket={fixture<UsageBucket>({
       calls: 4, priced_calls: 2, subscription_calls: 1, unpriced_calls: 1,
       cost_usd: 4.82, estimated_usd: 1.1, modelled_usd: 0.36,
       total_tokens: 0, prompt_tokens: 0, completion_tokens: 0,
-    } as any} />);
+    })} />);
   const figures = [...container.querySelectorAll(".money-figure")]
     .map((n) => n.textContent);
   expect(figures).toEqual(["$4.82", "≈ $1.10", "≈ $0.36"]);
@@ -246,11 +248,11 @@ test("a bucket nobody priced does not render spend as $0.00", () => {
   // The one claim this module exists to prevent, in the column most likely to
   // make it: `money(0)` is a perfectly good "$0.00" and a lie here.
   const { container } = render(
-    <MoneyColumns bucket={{
+    <MoneyColumns bucket={fixture<UsageBucket>({
       calls: 2, priced_calls: 0, subscription_calls: 0, unpriced_calls: 2,
       cost_usd: 0, estimated_usd: 0, modelled_usd: 0,
       total_tokens: 0, prompt_tokens: 0, completion_tokens: 0,
-    } as any} />);
+    })} />);
   expect(container.querySelector(".money-figure")?.textContent).toBe("not reported");
   expect(container.textContent).not.toMatch(/\$0\.00/);
 });

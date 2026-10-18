@@ -15,6 +15,7 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import type { SceneIntentResult } from "../api/types";
 
 const GREETINGS = [
   { id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: true },
@@ -28,11 +29,11 @@ const SUGGESTION: SceneSuggestion = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.availableGreetings as any).mockResolvedValue(GREETINGS);
-  (api.listSceneIdeas as any).mockResolvedValue([]);
-  (api.saveSceneIdea as any).mockResolvedValue({ id: "the-creditor" });
-  (api.setSceneIdeaStatus as any).mockResolvedValue({ ok: true });
-  (api.sceneIntent as any).mockResolvedValue({
+  vi.mocked(api.availableGreetings).mockResolvedValue(GREETINGS);
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([]);
+  vi.mocked(api.saveSceneIdea).mockResolvedValue({ id: "the-creditor" });
+  vi.mocked(api.setSceneIdeaStatus).mockResolvedValue({ ok: true });
+  vi.mocked(api.sceneIntent).mockResolvedValue({
     title: "The morning after", date: "2026-03-04",
     location: { id: "saltmarch", name: "Saltmarch" }, cast: [] });
 });
@@ -71,7 +72,7 @@ function Wrapper(props: StateOverrides) {
                      busy={props.busy ?? false}
                      error={props.error ?? null}
                      controlled={props.controlled ?? false}
-                     promptFieldStatuses={props.promptFieldStatuses}
+                     promptFieldStatuses={props.promptFieldStatuses ?? {}}
                      suggest={props.suggest ?? vi.fn()}
                      onPicked={props.onPicked ?? vi.fn()}
                      onCancel={props.onCancel ?? vi.fn()} />
@@ -177,7 +178,7 @@ test("empty intent combines its own field warning with the existing empty-result
 test("a picker with a ranking shows two greetings and two ideas", async () => {
   // The default view, and the whole point of asking on open: at most two
   // greetings, the two the ranking chose, beside two generated ideas.
-  (api.availableGreetings as any).mockResolvedValue(
+  vi.mocked(api.availableGreetings).mockResolvedValue(
     [1, 2, 3, 4, 5].map((n) => (
       { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));
   renderPicker({
@@ -197,7 +198,7 @@ test("a picker with a ranking shows two greetings and two ideas", async () => {
 });
 
 test("fewer than two greetings gives the slots to the ideas", async () => {
-  (api.availableGreetings as any).mockResolvedValue(
+  vi.mocked(api.availableGreetings).mockResolvedValue(
     [{ id: "g1", name: "Greeting 1", available: true, reasons: [], unlocked: false }]);
   renderPicker({
     picks: [],
@@ -244,7 +245,7 @@ test("the greeting group gets all four slots when nothing will generate", async 
   // The 4-slot budget is 2 greetings + 2 generated only when something will
   // generate. With no connection nothing will, so the greetings should not be
   // squeezed into half a modal to reserve room for cards that are not coming.
-  (api.availableGreetings as any).mockResolvedValue(
+  vi.mocked(api.availableGreetings).mockResolvedValue(
     [1, 2, 3, 4, 5].map((n) => (
       { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));
   renderPicker({ asked: false, suggestions: [] });
@@ -256,7 +257,7 @@ test("an unasked picker does not sit on Choosing… over the greeting cards", as
   // `picks` is `[]` (no ranking to come), not `null` (one is running), so the
   // greetings render in the order they arrived rather than waiting on a call
   // that nobody is making.
-  (api.availableGreetings as any).mockResolvedValue(
+  vi.mocked(api.availableGreetings).mockResolvedValue(
     [1, 2, 3].map((n) => (
       { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));
   renderPicker({ asked: false, suggestions: [], picks: [] });
@@ -311,7 +312,7 @@ test("empty text creates a blank draft with no LLM call", async () => {
 });
 
 test("a failed extraction opens with the typed text AND hands the warning on", async () => {
-  (api.sceneIntent as any).mockRejectedValue({ detail: "no key" });
+  vi.mocked(api.sceneIntent).mockRejectedValue({ detail: "no key" });
   const { onPicked } = renderPicker();
   await screen.findByText("Reckoning");
   fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
@@ -345,8 +346,8 @@ test("a delayed date estimate reaches an emitted greeting draft", async () => {
 });
 
 test("a typed pick that outlasts a slow date estimate still carries the fresh date", async () => {
-  let releaseIntent: (v: any) => void = () => {};
-  (api.sceneIntent as any).mockReturnValue(new Promise((r) => { releaseIntent = r; }));
+  let releaseIntent: (v: SceneIntentResult) => void = () => {};
+  vi.mocked(api.sceneIntent).mockReturnValue(new Promise((r) => { releaseIntent = r; }));
   const onPicked = vi.fn();
   const { rerender } = render(
     <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
@@ -370,7 +371,7 @@ test("a typed pick that outlasts a slow date estimate still carries the fresh da
 });
 
 test("an extraction that returns nothing still hands on a hint that metadata could not be inferred", async () => {
-  (api.sceneIntent as any).mockResolvedValue({ title: "", date: "", location: null, cast: [] });
+  vi.mocked(api.sceneIntent).mockResolvedValue({ title: "", date: "", location: null, cast: [] });
   const { onPicked } = renderPicker();
   await screen.findByText("Reckoning");
   fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
@@ -381,8 +382,8 @@ test("an extraction that returns nothing still hands on a hint that metadata cou
 });
 
 test("greeting and generated cards are disabled while an extraction is in flight", async () => {
-  let releaseIntent: (v: any) => void = () => {};
-  (api.sceneIntent as any).mockReturnValue(new Promise((r) => { releaseIntent = r; }));
+  let releaseIntent: (v: SceneIntentResult) => void = () => {};
+  vi.mocked(api.sceneIntent).mockReturnValue(new Promise((r) => { releaseIntent = r; }));
   renderPicker();
   await screen.findByText("Reckoning");
   fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
@@ -411,7 +412,7 @@ test("a generation refused for any other reason still shows that reason", async 
 });
 
 test("a stale greetings-fetch error banner is cleared when Regenerate starts", async () => {
-  (api.availableGreetings as any).mockRejectedValue({ detail: "greetings unreachable" });
+  vi.mocked(api.availableGreetings).mockRejectedValue({ detail: "greetings unreachable" });
   renderPicker();
   await screen.findByText(/greetings unreachable/i);
   fireEvent.click(screen.getByRole("button", { name: /regenerate/i }));
@@ -465,8 +466,8 @@ test("the picker asks for the saved half alone", async () => {
 });
 
 test("a save in flight cannot be fired twice", async () => {
-  let release: (v: any) => void = () => {};
-  (api.saveSceneIdea as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.saveSceneIdea>>) => void = () => {};
+  vi.mocked(api.saveSceneIdea).mockReturnValue(new Promise((r) => { release = r; }));
   renderPicker();
   const b = await screen.findByRole("button", { name: "Save The creditor" });
   fireEvent.click(b);
@@ -476,7 +477,7 @@ test("a save in flight cannot be fired twice", async () => {
 });
 
 test("a saved idea is pickable and emits a draft carrying its ledger id", async () => {
-  (api.listSceneIdeas as any).mockResolvedValue([SAVED]);
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([SAVED]);
   const { onPicked } = renderPicker();
   fireEvent.click(await screen.findByText("The tide-book"));
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
@@ -489,14 +490,14 @@ test("a saved idea's fossil date does not beat this minute's estimate", async ()
   // been played since. set_datetime accepts a date before the campaign's
   // current moment without complaint, so pre-filling the confirm form with the
   // stored one would date the new scene behind the one it follows.
-  (api.listSceneIdeas as any).mockResolvedValue([SAVED]);
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([SAVED]);
   const { onPicked } = renderPicker({ nextDate: "2026-09-09" });
   fireEvent.click(await screen.findByText("The tide-book"));
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ date: "2026-09-09" }));
 });
 
 test("...but the stored date is still the fallback when nothing was estimated", async () => {
-  (api.listSceneIdeas as any).mockResolvedValue([SAVED]);
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([SAVED]);
   const { onPicked } = renderPicker({ nextDate: "" });
   fireEvent.click(await screen.findByText("The tide-book"));
   expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({ date: "2026-03-04" }));
@@ -505,7 +506,7 @@ test("...but the stored date is still the fallback when nothing was estimated", 
 test("saved ideas for the other mode, and ones already used, are not offered", async () => {
   // an offscreen idea casts nobody the player can be; a used one is a scene
   // that already exists in the rail behind this modal
-  (api.listSceneIdeas as any).mockResolvedValue([
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([
     { ...SAVED, id: "offscreen", title: "While she sleeps", pcless: true },
     { ...SAVED, id: "spent", title: "Already played", status: "used" },
     { ...SAVED, id: "greet", title: "Reckoning greeting", source: "greeting" },
@@ -556,8 +557,8 @@ test("a save that lands after a regenerate does not label the card that replaced
   // sits at index 0 as "Saved" and refused to file it, over an idea nothing
   // had persisted (Codex, review).
   const OTHER: SceneSuggestion = { ...SUGGESTION, title: "The tide turns", premise: "Q" };
-  let releaseSave: (v: any) => void = () => {};
-  (api.saveSceneIdea as any).mockReturnValue(new Promise((r) => { releaseSave = r; }));
+  let releaseSave: (v: Awaited<ReturnType<typeof api.saveSceneIdea>>) => void = () => {};
+  vi.mocked(api.saveSceneIdea).mockReturnValue(new Promise((r) => { releaseSave = r; }));
   const { rerender } = render(
     <SceneIdeaPicker cid="c" afterSid="s1" ready pcless={false}
                      direction="" onDirectionChange={() => {}}
@@ -579,8 +580,8 @@ test("the suggest control is disabled while an extraction is in flight", async (
   // The extraction is a draft on its way to the confirm form, and this pane
   // unmounts the moment it arrives -- a generation started here would be paid
   // for and thrown away with the component.
-  let releaseIntent: (v: any) => void = () => {};
-  (api.sceneIntent as any).mockReturnValue(new Promise((r) => { releaseIntent = r; }));
+  let releaseIntent: (v: SceneIntentResult) => void = () => {};
+  vi.mocked(api.sceneIntent).mockReturnValue(new Promise((r) => { releaseIntent = r; }));
   renderPicker();
   await screen.findByText("Reckoning");
   fireEvent.change(screen.getByLabelText("Your own scene"), { target: { value: "a storm" } });
@@ -608,11 +609,11 @@ test("Save for later is disabled with nothing typed", async () => {
 });
 
 test("dismissing a saved idea moves it behind the toggle, and Restore brings it back", async () => {
-  (api.listSceneIdeas as any).mockResolvedValue([SAVED]);
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([SAVED]);
   renderPicker();
   await screen.findByText("The tide-book");
 
-  (api.listSceneIdeas as any).mockResolvedValue([{ ...SAVED, status: "dismissed" }]);
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([{ ...SAVED, status: "dismissed" }]);
   fireEvent.click(screen.getByRole("button", { name: "Dismiss The tide-book" }));
   expect(api.setSceneIdeaStatus).toHaveBeenCalledWith("c", "the-tide-book", "dismissed");
 
@@ -627,7 +628,7 @@ test("dismissing a saved idea moves it behind the toggle, and Restore brings it 
 test("each Restore names the idea it restores", async () => {
   // several stack, and "Restore, Restore, Restore" is what a screen reader
   // would otherwise read out
-  (api.listSceneIdeas as any).mockResolvedValue([
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([
     { ...SAVED, id: "a", title: "Idea A", status: "dismissed" },
     { ...SAVED, id: "b", title: "Idea B", status: "dismissed" }]);
   renderPicker();
@@ -639,7 +640,7 @@ test("each Restore names the idea it restores", async () => {
 test("the saved group has a slot budget, with everything behind a toggle", async () => {
   // nothing prunes the ledger, so an unbounded group would push the greeting
   // and generated cards off the bottom of the modal
-  (api.listSceneIdeas as any).mockResolvedValue(
+  vi.mocked(api.listSceneIdeas).mockResolvedValue(
     [1, 2, 3, 4, 5].map((n) => ({ ...SAVED, id: `idea-${n}`, title: `Idea ${n}` })));
   renderPicker();
   await screen.findByText("Idea 1");
@@ -649,7 +650,7 @@ test("the saved group has a slot budget, with everything behind a toggle", async
 });
 
 test("a ledger that will not load costs its own group and nothing else", async () => {
-  (api.listSceneIdeas as any).mockRejectedValue({ detail: "ledger unreachable" });
+  vi.mocked(api.listSceneIdeas).mockRejectedValue({ detail: "ledger unreachable" });
   const { onPicked } = renderPicker();
   await screen.findByText(/ledger unreachable/i);
   // greetings, generated cards and the typed path all still work
@@ -659,7 +660,7 @@ test("a ledger that will not load costs its own group and nothing else", async (
 
 
 test("greeting cards identify direct and same-phase recommendations", async () => {
-  (api.availableGreetings as any).mockResolvedValue([
+  vi.mocked(api.availableGreetings).mockResolvedValue([
     { id: "next", name: "Next", available: true, reasons: [], unlocked: true,
       recommendation: "successor" },
     { id: "aside", name: "Aside", available: true, reasons: [], unlocked: false,
@@ -786,7 +787,7 @@ test("a rejected date names the rule that refused it, not whether the card is an
 });
 
 test("every generated suggestion shows while controls produced the batch", async () => {
-  (api.availableGreetings as any).mockResolvedValue(
+  vi.mocked(api.availableGreetings).mockResolvedValue(
     [1, 2, 3].map((n) => (
       { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));
   renderPicker({
@@ -813,7 +814,7 @@ test("a saved idea shows what it advances and what it is anchored to", async () 
   // The read derives labels and state for the saved provenance (§17); the row
   // shows it as a generated card does (§16.4, §17.1), so a saved idea is not
   // left saying nothing about why it was kept until it goes stale.
-  (api.listSceneIdeas as any).mockResolvedValue([{
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([{
     ...SAVED, id: "the-bells", title: "Before the bells",
     time_anchor: { ref: "event:the-coronation", kind: "event", relation: "before",
                    native: "2026-05-12", label: "The coronation", friendly: "12 May 2026",
@@ -855,7 +856,7 @@ test("a birthday anchor names the birthday, so a passed one is no death notice",
   // would read as a death notice.
   const BIRTHDAY = { ref: "birthday:characters:mara:2026-06-01", kind: "birthday" as const,
                      native: "2026-06-01", label: "Mara", friendly: "1 Jun 2026" };
-  (api.listSceneIdeas as any).mockResolvedValue([
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([
     // a finished `after` anchor is live, so this sits in the main list
     { ...SAVED, id: "after-cake", title: "After the cake",
       time_anchor: { ...BIRTHDAY, relation: "after", state: "finished" }, drivers: [] },
@@ -887,7 +888,7 @@ test("a birthday anchor names the birthday, so a passed one is no death notice",
 test("stale ideas sit under a collapsed Stale group outside the budget", async () => {
   const STALE: SceneIdea = { ...SAVED, id: "the-bells", title: "Before the bells",
                              stale_reason: "The coronation has passed" };
-  (api.listSceneIdeas as any).mockResolvedValue([
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([
     STALE,
     ...[1, 2, 3, 4, 5].map((n) => ({ ...SAVED, id: `idea-${n}`, title: `Idea ${n}` })),
   ]);

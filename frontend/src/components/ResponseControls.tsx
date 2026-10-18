@@ -10,16 +10,16 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
   disabled = false, generationDisabled = false, onDelete, onReroll, onExtend, extendDisabled = false, onActivate, onReplay,
   onCreateCharacter }: {
   cid: string; sid: string; responseId: string; canReroll: boolean;
-  status?: string; contextChanged?: boolean; disabled?: boolean;
+  status?: string | undefined; contextChanged?: boolean | undefined; disabled?: boolean;
   /** The standing route may refuse; an explicit provider can recover it. */
   generationDisabled?: boolean;
   onDelete: (id: string) => void; onReroll: (id: string, guidance: string, route: RerollRoute) => void;
   /** Keep writing: offered (on the trailing response only) by passing it.
    *  Shares the steer box and the route picker with Reroll response. */
-  onExtend?: (id: string, guidance: string, route: RerollRoute) => void;
+  onExtend?: ((id: string, guidance: string, route: RerollRoute) => void) | undefined;
   extendDisabled?: boolean;
   onActivate: (id: string, variant: string) => void; onReplay: () => void;
-  onCreateCharacter?: () => void;
+  onCreateCharacter?: (() => void) | undefined;
 }) {
   const [guidance, setGuidance] = useState("");
   const [route, setRoute] = useState<RerollRoute>(NO_REROLL_ROUTE);

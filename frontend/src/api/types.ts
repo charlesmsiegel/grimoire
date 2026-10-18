@@ -3538,6 +3538,9 @@ export type ModuleDetail = {
   display_errors?: DisplayError[];
 };
 export type ModuleContentEntry = {
+  // The backend keeps custom string-scalar frontmatter beside these fixed
+  // fields (store/modules/content.py), so editing content must retain it.
+  [key: string]: unknown;
   kind: string; id: string; name: string; body: string; keys: string;
   sheet_type: string | null; fields: Record<string, unknown>;
 };

@@ -21,24 +21,25 @@ vi.mock("../api/client", async () => (await import("../testkit/campaignMocks")).
 vi.mock("../components/PostImagePicker", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.PostImagePicker());
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
-import { api, ApiError, type QuickReply } from "../api/client";
+import { api, ApiError, type Message, type QuickReply } from "../api/client";
 import { campaignInference, installCampaignMocks, ONE_SCENE, playRoutes, renderCampaign, withPalette }
   from "../testkit/campaignHarness";
 import { RunRegistryProvider } from "../runs/RunRegistryProvider";
+import { fixture } from "../testkit/fixture";
 
 beforeEach(installCampaignMocks);
 
-const POSTS = [{ role: "user", content: "hi" }, { role: "assistant", content: "a reply" }];
+const POSTS: Message[] = [{ role: "user", content: "hi" }, { role: "assistant", content: "a reply" }];
 const LOOK: QuickReply = { id: "q1", label: "Look around", kind: "send", text: "I take in the room.", mode: "send" };
 const STEER: QuickReply = { id: "q4", label: "Steer", kind: "direct", text: "Bring in the rain.", mode: "send" };
 
-function withPosts(messages: unknown[] = POSTS) {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages });
+function withPosts(messages: Message[] = POSTS) {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages });
 }
 
 function offer(...replies: QuickReply[]) {
-  (api.getEffectiveQuickReplies as any).mockResolvedValue({ replies });
+  vi.mocked(api.getEffectiveQuickReplies).mockResolvedValue({ replies });
 }
 
 const speakBox = () => screen.getByPlaceholderText("Speak your intent…");
@@ -85,7 +86,7 @@ test("direct sends a director note without flipping the composer", async () => {
 test("a failed quick send does not hand the canned text back", async () => {
   withPosts();
   offer(LOOK, STEER);
-  (api.chat as any).mockRejectedValue(new Error("boom"));
+  vi.mocked(api.chat).mockRejectedValue(new Error("boom"));
   renderCampaign();
   await screen.findByText("a reply");
   fireEvent.click(await screen.findByRole("button", { name: "Look around" }));
@@ -150,7 +151,7 @@ test("insert is refused rather than parked over words already waiting", async ()
   withPosts();
   offer({ ...STEER, mode: "insert" });
   let fail: (e: Error) => void = () => {};
-  (api.chat as any).mockImplementation(() => new Promise<void>((_res, rej) => { fail = rej; }));
+  vi.mocked(api.chat).mockImplementation(() => new Promise<void>((_res, rej) => { fail = rej; }));
   renderCampaign();
   await screen.findByText("a reply");
   // A typed note fails while a Speak draft holds the box: the note is parked.
@@ -171,8 +172,8 @@ test("insert is refused rather than parked over words already waiting", async ()
 });
 
 test("a send reply is disabled in a PC-less scene", async () => {
-  (api.listScenes as any).mockResolvedValue([{ ...ONE_SCENE[0], pcless: true }]);
-  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: POSTS });
+  vi.mocked(api.listScenes).mockResolvedValue([{ ...ONE_SCENE[0], pcless: true }]);
+  vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: POSTS });
   offer(LOOK, STEER);
   renderCampaign();
   await screen.findByText("a reply");
@@ -183,8 +184,8 @@ test("a send reply is disabled in a PC-less scene", async () => {
 });
 
 test("the strip goes with the composer on a finished scene", async () => {
-  (api.listScenes as any).mockResolvedValue([{ ...ONE_SCENE[0], done: true }]);
-  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: POSTS });
+  vi.mocked(api.listScenes).mockResolvedValue([{ ...ONE_SCENE[0], done: true }]);
+  vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: POSTS });
   offer(LOOK);
   renderCampaign();
   await screen.findByText("a reply");
@@ -201,9 +202,9 @@ const NEXT: QuickReply = { id: "q6", label: "Next scene", kind: "task", task: "n
 
 test("roll calls the roll route with the saved notation, and is offered without a bound module", async () => {
   withPosts();
-  (api.getCampaignModule as any).mockResolvedValue({ setting: "", resolved: null, source: null });
+  vi.mocked(api.getCampaignModule).mockResolvedValue({ setting: "", resolved: null, source: null });
   offer(ROLL);
-  (api.roll as any).mockResolvedValue({ ok: true, roll: { id: "r1" }, message: "🎲" });
+  vi.mocked(api.roll).mockResolvedValue(fixture({ ok: true, roll: { id: "r1" }, message: "🎲" }));
   renderCampaign();
   await screen.findByText("a reply");
   const search = await screen.findByRole("button", { name: "Search" });
@@ -216,7 +217,7 @@ test("roll calls the roll route with the saved notation, and is offered without 
 
 test("roll is disabled while the module read is out", async () => {
   withPosts();
-  (api.getCampaignModule as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getCampaignModule).mockReturnValue(new Promise(() => {}));
   offer(ROLL);
   renderCampaign();
   await screen.findByText("a reply");
@@ -233,7 +234,7 @@ test("roll is disabled on an empty scene", async () => {
 test("a failed saved roll says so in the composer", async () => {
   withPosts();
   offer(ROLL);
-  (api.roll as any).mockRejectedValue(new ApiError(400, "bad"));
+  vi.mocked(api.roll).mockRejectedValue(new ApiError(400, "bad"));
   renderCampaign();
   await screen.findByText("a reply");
   fireEvent.click(await screen.findByRole("button", { name: "Search" }));
@@ -243,13 +244,13 @@ test("a failed saved roll says so in the composer", async () => {
 test("summary task forces a bounded fold and bumps the context on success", async () => {
   withPosts();
   offer(SUMMARIZE);
-  (api.refreshRollingSummary as any).mockResolvedValue({
+  vi.mocked(api.refreshRollingSummary).mockResolvedValue({
     summary: "Folded.", at: 2, total: 2, stale: false, every: 10, due: false, refreshed: true });
   renderCampaign();
   await screen.findByText("a reply");
   // A `ctxKey` beat is what re-reads everything keyed on it; the budget read
   // is one of those, so its call count is the beat made visible.
-  const reads = () => (api.getCampaignBudget as any).mock.calls.length;
+  const reads = () => vi.mocked(api.getCampaignBudget).mock.calls.length;
   const before = reads();
   fireEvent.click(await screen.findByRole("button", { name: "Summarize" }));
   await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("run", "s1", true, 2));
@@ -258,8 +259,8 @@ test("summary task forces a bounded fold and bumps the context on success", asyn
 });
 
 test("a task's bound is absolute in a windowed transcript", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: POSTS,
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: POSTS,
     offset: 40, total: 42, has_older: true });
   offer(BREAK);
   renderCampaign();
@@ -282,7 +283,7 @@ test("a declined fold or question is a notice", async () => {
 test("a failed task says so in the composer", async () => {
   withPosts();
   offer(SUMMARIZE);
-  (api.refreshRollingSummary as any).mockRejectedValue(new ApiError(502, "provider down"));
+  vi.mocked(api.refreshRollingSummary).mockRejectedValue(new ApiError(502, "provider down"));
   renderCampaign();
   await screen.findByText("a reply");
   fireEvent.click(await screen.findByRole("button", { name: "Summarize" }));
@@ -292,7 +293,7 @@ test("a failed task says so in the composer", async () => {
 test("tasks wait for a connection", async () => {
   withPosts();
   offer(SUMMARIZE);
-  (api.getCampaignInference as any).mockResolvedValue(
+  vi.mocked(api.getCampaignInference).mockResolvedValue(
     campaignInference({ problem: "No LLM connection selected" }));
   render(
     <RunRegistryProvider>
@@ -310,7 +311,7 @@ test("tasks wait for a connection", async () => {
 test("a task running from the strip disables the inspector's button", async () => {
   withPosts();
   offer(SUMMARIZE);
-  (api.refreshRollingSummary as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.refreshRollingSummary).mockReturnValue(new Promise(() => {}));
   renderCampaign();
   await screen.findByText("a reply");
   fireEvent.click(screen.getByRole("button", { name: /What the model saw/ }));
@@ -325,7 +326,7 @@ test("a task running from the strip disables the inspector's button", async () =
 test("a task running from the inspector disables the strip's button", async () => {
   withPosts();
   offer(SUMMARIZE);
-  (api.refreshRollingSummary as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.refreshRollingSummary).mockReturnValue(new Promise(() => {}));
   renderCampaign();
   await screen.findByText("a reply");
   fireEvent.click(screen.getByRole("button", { name: /What the model saw/ }));

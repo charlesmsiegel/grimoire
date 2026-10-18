@@ -5,7 +5,7 @@ import type { CampaignMeta, WorldMeta } from "../api/types";
 
 const navigate = vi.fn();
 vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual<any>("react-router-dom");
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return { ...actual, useNavigate: () => navigate };
 });
 
@@ -23,20 +23,21 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import { fixture, type DeepPartial } from "../testkit/fixture";
 
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  (api.listCampaigns as any).mockResolvedValue([]);
-  (api.rememberedCampaigns as any).mockReturnValue(undefined);
-  (api.rememberedWorlds as any).mockReturnValue(undefined);
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([]));
+  vi.mocked(api.rememberedCampaigns).mockReturnValue(undefined);
+  vi.mocked(api.rememberedWorlds).mockReturnValue(undefined);
+  vi.mocked(api.listWorlds).mockResolvedValue([
     { id: "w1", name: "Realm", created: "", updated: "", counts: {} },
   ]);
-  (api.renameCampaign as any).mockResolvedValue({ id: "c1", name: "New" });
-  (api.deleteCampaign as any).mockResolvedValue({ ok: true });
-  (api.forkCampaign as any).mockResolvedValue({
-    id: "c2", from_scene: "", removed_scenes: [], records: 0, refused: [], failed: [] });
+  vi.mocked(api.renameCampaign).mockResolvedValue({ id: "c1", name: "New" });
+  vi.mocked(api.deleteCampaign).mockResolvedValue({ ok: true });
+  vi.mocked(api.forkCampaign).mockResolvedValue(fixture({
+    id: "c2", from_scene: "", removed_scenes: [], records: 0, refused: [], failed: [] }));
 });
 
 function renderView() {
@@ -52,7 +53,7 @@ const card = (name: string) =>
   screen.getByText(name).closest(".campaign-card") as HTMLElement;
 
 test("a campaign card carries the shelf line, the blurb and one primary action", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Ashes of the Verdigris Crown", world: "w1", created: "", updated: "",
       // The store's own format: UTC with the Z. Dropping it -- as this fixture
       // once did -- leaves a form `Date.parse` reads as LOCAL time, so the
@@ -61,7 +62,7 @@ test("a campaign card carries the shelf line, the blurb and one primary action",
       activity: new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 19) + "Z",
       scenes: 4, last_scene: "Verdigris & Ash", absorbed: 2,
       blurb: "Wyle came for a drowned cousin and stayed for the nail." },
-  ]);
+  ]));
   renderView();
   await screen.findByText("Ashes of the Verdigris Crown");
   const c = within(card("Ashes of the Verdigris Crown"));
@@ -76,9 +77,9 @@ test("a campaign card carries the shelf line, the blurb and one primary action",
 });
 
 test("a campaign nothing has been absorbed from counts zero rather than nothing", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Tidewrack", world: "w1", scenes: 3, absorbed: 0, last_scene: "" },
-  ]);
+  ]));
   renderView();
   await screen.findByText("Tidewrack");
   const c = within(card("Tidewrack"));
@@ -97,10 +98,10 @@ test("every campaign card carries rename and delete, not just the one you played
   // confirm naming the campaign, not the scarcity of the button. The glow
   // still marks one card -- that is which campaign you meant, not which one
   // you may act on.
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "old", name: "Saltmarch", world: "w1", activity: "2026-01-01", scenes: 1, last_scene: "" },
     { id: "new", name: "Tidewrack", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
-  ]);
+  ]));
   renderView();
   await screen.findByText("Tidewrack");
   expect(card("Tidewrack")).toHaveClass("active");
@@ -114,10 +115,10 @@ test("every campaign card carries rename and delete, not just the one you played
 test("deletes a campaign that is not the most recently played one", async () => {
   // The whole point of lifting the gate: the id that reaches the API is the
   // card you clicked, not the glowing one.
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "old", name: "Saltmarch", world: "w1", activity: "2026-01-01", scenes: 1, last_scene: "" },
     { id: "new", name: "Tidewrack", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
-  ]);
+  ]));
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderView();
   await screen.findByText("Saltmarch");
@@ -129,12 +130,12 @@ test("the shelf defaults to A-Z", async () => {
   // The order you want when you came here to find a campaign by name, which is
   // the only question the shelf could not previously answer without reading
   // every card. Recency is still on each card's own line, and one click away.
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "t", name: "Tidewrack", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
     { id: "a", name: "ashfall", world: "w1", activity: "2026-05-01", scenes: 1, last_scene: "" },
     { id: "s", name: "The Saltmarch", world: "w1", activity: "2026-01-01", scenes: 1,
       last_scene: "" },
-  ]);
+  ]));
   renderView();
   await screen.findByText("The Saltmarch");
   const names = Array.from(document.querySelectorAll(".campaign-name")).map((n) => n.textContent);
@@ -150,12 +151,12 @@ test("the sort control switches to last played and back, and ranks by activity",
   // `updated` only moves on metadata writes, so ordering by it would rank a
   // campaign renamed months ago above one played into last night. The recency
   // mode reads `activity`, which is the whole campaign's high-water mark.
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "renamed", name: "Ashfall", world: "w1", updated: "2026-06-01",
       activity: "2026-01-01", scenes: 1, last_scene: "" },
     { id: "played", name: "Tidewrack", world: "w1", updated: "2026-01-01",
       activity: "2026-06-01", scenes: 1, last_scene: "" },
-  ]);
+  ]));
   renderView();
   await screen.findByText("Tidewrack");
   const names = () =>
@@ -172,10 +173,10 @@ test("the sort control switches to last played and back, and ranks by activity",
 test("the chosen sort survives leaving the page", async () => {
   // A preference about how a page reads, so it is remembered -- and not keyed
   // by store root, unlike an id that names a record inside one library.
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "a", name: "Ashfall", world: "w1", activity: "2026-01-01", scenes: 1, last_scene: "" },
     { id: "t", name: "Tidewrack", world: "w1", activity: "2026-06-01", scenes: 1, last_scene: "" },
-  ]);
+  ]));
   renderView();
   await screen.findByText("Tidewrack");
   fireEvent.click(screen.getByRole("button", { name: /sort by last played/i }));
@@ -189,14 +190,14 @@ test("the chosen sort survives leaving the page", async () => {
 });
 
 test("the column's worlds filter the shelf without leaving the page", async () => {
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue(fixture([
     { id: "w1", name: "Realm", counts: {} },
     { id: "w2", name: "Saltmarch", counts: {} },
-  ]);
-  (api.listCampaigns as any).mockResolvedValue([
+  ]));
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "a", name: "In Realm", world: "w1", scenes: 1, last_scene: "" },
     { id: "b", name: "In Saltmarch", world: "w2", scenes: 1, last_scene: "" },
-  ]);
+  ]));
   renderView();
   await screen.findByText("In Realm");
   // each world carries its own campaign count
@@ -226,7 +227,7 @@ test("the column's footer leads to the providers, not the old connections page",
 });
 
 test("with no worlds the empty state names what is missing and where to go", async () => {
-  (api.listWorlds as any).mockResolvedValue([]);
+  vi.mocked(api.listWorlds).mockResolvedValue([]);
   renderView();
   await screen.findByText(/no worlds yet/i);
   expect(screen.getByRole("link", { name: /create a world/i })).toHaveAttribute("href", "/worlds");
@@ -234,13 +235,13 @@ test("with no worlds the empty state names what is missing and where to go", asy
 });
 
 test("an empty world says which world is empty, not just that nothing is here", async () => {
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue(fixture([
     { id: "w1", name: "Realm", counts: {} },
     { id: "w2", name: "Saltmarch", counts: {} },
-  ]);
-  (api.listCampaigns as any).mockResolvedValue([
+  ]));
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "a", name: "In Realm", world: "w1", scenes: 1, last_scene: "" },
-  ]);
+  ]));
   renderView();
   await screen.findByText("In Realm");
   fireEvent.click(column().getByRole("button", { name: /^Saltmarch/ }));
@@ -248,9 +249,9 @@ test("an empty world says which world is empty, not just that nothing is here", 
 });
 
 test("deletes a campaign after a confirm that says it cannot be undone", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Doomed", world: "w1", created: "", updated: "", scenes: 0, last_scene: "" },
-  ]);
+  ]));
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   renderView();
   await screen.findByText("Doomed");
@@ -261,10 +262,10 @@ test("deletes a campaign after a confirm that says it cannot be undone", async (
 
 test("a delete the server refuses is said, not swallowed", async () => {
   // It was an unhandled rejection: the card stayed, with no word on why.
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Doomed", world: "w1", created: "", updated: "", scenes: 0, last_scene: "" },
-  ]);
-  (api.deleteCampaign as any).mockRejectedValueOnce(
+  ]));
+  vi.mocked(api.deleteCampaign).mockRejectedValueOnce(
     { status: 409, detail: "the image store is being maintained" });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderView();
@@ -277,10 +278,10 @@ test("a delete the server refuses is said, not swallowed", async () => {
 });
 
 test("an inline rename offers Save and Cancel, and keeps the box open on a refusal", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Saltmarch", world: "w1", created: "", updated: "", scenes: 0, last_scene: "" },
-  ]);
-  (api.renameCampaign as any).mockRejectedValueOnce({ status: 409, detail: "campaign busy" });
+  ]));
+  vi.mocked(api.renameCampaign).mockRejectedValueOnce({ status: 409, detail: "campaign busy" });
   renderView();
   await screen.findByText("Saltmarch");
   fireEvent.click(screen.getByRole("button", { name: "Rename Saltmarch" }));
@@ -297,10 +298,10 @@ test("an inline rename offers Save and Cancel, and keeps the box open on a refus
 test("the card's button says it opens the campaign, and the last scene is labelled as such", async () => {
   // It said "Continue" over the last scene's title and went to the hub, so it
   // read as resuming a scene it never resumed.
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Saltmarch", world: "w1", created: "", updated: "", scenes: 2,
       last_scene: "The Long Quay" },
-  ]);
+  ]));
   renderView();
   await screen.findByText("Saltmarch");
   expect(screen.getByRole("link", { name: /^open/i })).toHaveAttribute("href", "/campaigns/c1");
@@ -309,12 +310,12 @@ test("the card's button says it opens the campaign, and the last scene is labell
 });
 
 test("renders a cover for a campaign that has one and a placeholder for one that does not", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "saltmarch", name: "Saltmarch Nights", world: "w1", activity: "2026-06-01",
       scenes: 3, last_scene: "Arrival", cover: "v1" },
     { id: "winifred", name: "Winifred's War", world: "w1", activity: "2026-01-01",
       scenes: 1, last_scene: "", cover: "" },
-  ]);
+  ]));
   render(<MemoryRouter><CampaignsView /></MemoryRouter>);
 
   const img = await screen.findByAltText("Saltmarch Nights cover");
@@ -327,9 +328,9 @@ test("renders a cover for a campaign that has one and a placeholder for one that
 });
 
 test("a cover that fails to load falls back to the placeholder box", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "saltmarch", name: "Saltmarch Nights", world: "w1", scenes: 3, last_scene: "", cover: "v1" },
-  ]);
+  ]));
   render(<MemoryRouter><CampaignsView /></MemoryRouter>);
   const img = await screen.findByAltText("Saltmarch Nights cover");
   fireEvent.error(img);
@@ -338,13 +339,13 @@ test("a cover that fails to load falls back to the placeholder box", async () =>
 });
 
 test("a replacement cover is not hidden by the previous version's broken mark", async () => {
-  (api.listCampaigns as any)
-    .mockResolvedValueOnce([
+  vi.mocked(api.listCampaigns)
+    .mockResolvedValueOnce(fixture([
       { id: "saltmarch", name: "Saltmarch Nights", world: "w1", scenes: 3, last_scene: "", cover: "v1" },
-    ])
-    .mockResolvedValueOnce([
+    ]))
+    .mockResolvedValueOnce(fixture([
       { id: "saltmarch", name: "Saltmarch Nights", world: "w1", scenes: 3, last_scene: "", cover: "v2" },
-    ]);
+    ]));
   render(<MemoryRouter><CampaignsView /></MemoryRouter>);
 
   const v1img = await screen.findByAltText("Saltmarch Nights cover");
@@ -369,12 +370,12 @@ const FAMILY = [
     updated: "2026-08-02 10:00:00" },
   { id: "c2", name: "Saltmarch (fork)", world: "w1", scenes: 1, last_scene: "",
     updated: "2026-08-03 10:00:00", parent: "c1", forked_from_scene: "001--the-oath" },
-];
+] satisfies DeepPartial<CampaignMeta[]>;
 
 test("a fork is nested under the campaign it came from, however it ranks", async () => {
   // c2 was played more recently, so the flat shelf would put it first. The tree
   // groups it under its parent without re-ranking anything else.
-  (api.listCampaigns as any).mockResolvedValue(FAMILY);
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture(FAMILY));
   renderView();
   await screen.findByText("Saltmarch (fork)");
   const cards = document.querySelectorAll(".campaign-card");
@@ -385,7 +386,7 @@ test("a fork is nested under the campaign it came from, however it ranks", async
 });
 
 test("a fork says which campaign it came from, and that it was cut at a scene", async () => {
-  (api.listCampaigns as any).mockResolvedValue(FAMILY);
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture(FAMILY));
   renderView();
   await screen.findByText("Saltmarch (fork)");
   const c = within(card("Saltmarch (fork)"));
@@ -396,9 +397,9 @@ test("a fork says which campaign it came from, and that it was cut at a scene", 
 });
 
 test("a fork whose parent is gone still sits on the shelf and still names it", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c2", name: "Orphan", world: "w1", scenes: 1, last_scene: "", parent: "deleted-one" },
-  ]);
+  ]));
   renderView();
   await screen.findByText("Orphan");
   expect(document.querySelectorAll(".campaign-card")).toHaveLength(1);
@@ -406,9 +407,9 @@ test("a fork whose parent is gone still sits on the shelf and still names it", a
 });
 
 test("forking from the shelf names the fork and relists", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Saltmarch", world: "w1", scenes: 3, last_scene: "" },
-  ]);
+  ]));
   const prompt = vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
   renderView();
   await screen.findByText("Saltmarch");
@@ -422,9 +423,9 @@ test("forking from the shelf names the fork and relists", async () => {
 });
 
 test("a cancelled fork prompt forks nothing", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Saltmarch", world: "w1", scenes: 3, last_scene: "" },
-  ]);
+  ]));
   vi.spyOn(window, "prompt").mockReturnValue(null);
   renderView();
   await screen.findByText("Saltmarch");
@@ -433,13 +434,13 @@ test("a cancelled fork prompt forks nothing", async () => {
 });
 
 test("what a fork could not put back is reported on the shelf", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Saltmarch", world: "w1", scenes: 3, last_scene: "" },
-  ]);
-  (api.forkCampaign as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.forkCampaign).mockResolvedValue(fixture({
     id: "c2", from_scene: "001--the-oath", removed_scenes: ["002--the-debt"], records: 2,
     refused: [{ label: "The Pact — lore", reason: "this record changed after the edit" }],
-    failed: [] });
+    failed: [] }));
   vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
   renderView();
   await screen.findByText("Saltmarch");
@@ -452,10 +453,10 @@ test("a fork the server refuses is reported rather than silently doing nothing",
   // 409 CAMPAIGN BUSY is reachable: a fork holds two campaign locks, and the
   // source may be being played in another window. Dropped, that looks exactly
   // like a fork that worked.
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Saltmarch", world: "w1", scenes: 3, last_scene: "" },
-  ]);
-  (api.forkCampaign as any).mockRejectedValue({ detail: "campaign is busy" });
+  ]));
+  vi.mocked(api.forkCampaign).mockRejectedValue({ detail: "campaign is busy" });
   vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
   renderView();
   await screen.findByText("Saltmarch");
@@ -482,12 +483,12 @@ const SALTMARCH_RUN = [
 ];
 
 test("a remembered shelf paints on the first render, busy, with rename, fork and delete held", async () => {
-  (api.rememberedCampaigns as any).mockReturnValue(SALTMARCH_RUN);
-  (api.rememberedWorlds as any).mockReturnValue(REALM);
+  vi.mocked(api.rememberedCampaigns).mockReturnValue(SALTMARCH_RUN);
+  vi.mocked(api.rememberedWorlds).mockReturnValue(REALM);
   const campaigns = held<CampaignMeta[]>();
   const worlds = held<WorldMeta[]>();
-  (api.listCampaigns as any).mockReturnValue(campaigns.promise);
-  (api.listWorlds as any).mockReturnValue(worlds.promise);
+  vi.mocked(api.listCampaigns).mockReturnValue(campaigns.promise);
+  vi.mocked(api.listWorlds).mockReturnValue(worlds.promise);
   renderView();
   // Synchronously, before any await: the frame painted from memory.
   const c = within(card("Saltmarch"));
@@ -517,8 +518,8 @@ test("no empty state is said before the reads have landed", async () => {
   // worlds to go and create one.
   const campaigns = held<CampaignMeta[]>();
   const worlds = held<WorldMeta[]>();
-  (api.listCampaigns as any).mockReturnValue(campaigns.promise);
-  (api.listWorlds as any).mockReturnValue(worlds.promise);
+  vi.mocked(api.listCampaigns).mockReturnValue(campaigns.promise);
+  vi.mocked(api.listWorlds).mockReturnValue(worlds.promise);
   renderView();
   expect(screen.queryByText(/no worlds yet/i)).toBeNull();
   expect(screen.queryByText(/no campaigns yet/i)).toBeNull();
@@ -533,9 +534,9 @@ test("no empty state is said before the reads have landed", async () => {
 });
 
 test("a remembered empty world list says nothing until its read lands", async () => {
-  (api.rememberedWorlds as any).mockReturnValue([]);
+  vi.mocked(api.rememberedWorlds).mockReturnValue([]);
   const worlds = held<WorldMeta[]>();
-  (api.listWorlds as any).mockReturnValue(worlds.promise);
+  vi.mocked(api.listWorlds).mockReturnValue(worlds.promise);
   renderView();
   expect(screen.queryByText(/no worlds yet/i)).toBeNull();
   worlds.resolve(REALM);
@@ -544,14 +545,14 @@ test("a remembered empty world list says nothing until its read lands", async ()
 });
 
 test("a failed worlds read shows its banner, says no empty state, and keeps New campaign off", async () => {
-  (api.listWorlds as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.listWorlds).mockRejectedValue(new Error("offline"));
   renderView();
   expect(await screen.findByText(/the worlds could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText(/no worlds yet/i)).toBeNull();
   expect(screen.queryByText(/no campaigns yet/i)).toBeNull();
   expect(screen.getByRole("button", { name: /new campaign/i })).toBeDisabled();
 
-  (api.listWorlds as any).mockResolvedValue(REALM);
+  vi.mocked(api.listWorlds).mockResolvedValue(REALM);
   fireEvent.click(screen.getByRole("button", { name: /try again/i }));
   await waitFor(() => expect(screen.getByRole("button", { name: /new campaign/i })).toBeEnabled());
   expect(api.listWorlds).toHaveBeenLastCalledWith(true);
@@ -559,22 +560,22 @@ test("a failed worlds read shows its banner, says no empty state, and keeps New 
 });
 
 test("a failed campaigns read drops the remembered shelf, shows its banner, and Try again re-reads", async () => {
-  (api.rememberedCampaigns as any).mockReturnValue(SALTMARCH_RUN);
-  (api.listCampaigns as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.rememberedCampaigns).mockReturnValue(SALTMARCH_RUN);
+  vi.mocked(api.listCampaigns).mockRejectedValue(new Error("offline"));
   renderView();
   expect(await screen.findByText(/the campaigns could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText("Saltmarch")).toBeNull();
   expect(screen.queryByText(/no campaigns yet/i)).toBeNull();
   expect(screen.queryByText(/0 campaigns/i)).toBeNull();
 
-  (api.listCampaigns as any).mockResolvedValue(SALTMARCH_RUN);
+  vi.mocked(api.listCampaigns).mockResolvedValue(SALTMARCH_RUN);
   fireEvent.click(screen.getByRole("button", { name: /try again/i }));
   expect(await screen.findByText("Saltmarch")).toBeInTheDocument();
   expect(api.listCampaigns).toHaveBeenLastCalledWith(true);
 });
 
 test("every refresh after a change is a fresh read", async () => {
-  (api.listCampaigns as any).mockResolvedValue(SALTMARCH_RUN);
+  vi.mocked(api.listCampaigns).mockResolvedValue(SALTMARCH_RUN);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   vi.spyOn(window, "prompt").mockReturnValue("A Second Run");
   renderView();

@@ -12,12 +12,12 @@ export const REMOVED_IMAGE_NOTICE = "This image is no longer available.";
  *  occurrence, while version names the bytes whose geometry is being shown. */
 export type ImageDescriptor = {
   key: string; originalUrl: string; thumbnailUrl: string; label: string; alt: string; version: string;
-  recordLabel?: string; primaryLabel?: "Avatar" | "Primary image";
-  downloadUrl?: string; recordDestination?: string; destinationLabel?: string; imageId?: string | null;
-  width?: number | null; height?: number | null; animated?: boolean;
-  description?: string; described?: boolean; descriptionAvailable?: boolean; descriptionState?: DescriptionState;
+  recordLabel?: string; primaryLabel?: "Avatar" | "Primary image" | undefined;
+  downloadUrl?: string | undefined; recordDestination?: string | undefined; destinationLabel?: string | undefined; imageId?: string | null | undefined;
+  width?: number | null | undefined; height?: number | null | undefined; animated?: boolean | undefined;
+  description?: string | undefined; described?: boolean | undefined; descriptionAvailable?: boolean | undefined; descriptionState?: DescriptionState | undefined;
   role?: "primary" | "gallery" | "related" | "library" | "inline";
-  provenance?: ArtProvenance;
+  provenance?: ArtProvenance | undefined;
   /** Present only where the opening surface can remove this picture: the
    *  sentence its inline confirmation asks. */
   removal?: { question: string };
@@ -25,7 +25,7 @@ export type ImageDescriptor = {
 
 export type RecordArtAdapter = {
   target: RecordArtTarget;
-  read(options?: { fresh?: boolean; signal?: AbortSignal }): Promise<RecordArtRead>;
+  read(options?: { fresh?: boolean; signal?: AbortSignal | undefined }): Promise<RecordArtRead>;
   append(file: File): Promise<ArtCreated>;
   reuse(source: ArtSourceRef, intent: "gallery" | "primary", expectedPrimary?: string | null): Promise<ArtLinkResult>;
   /** Takes only what the delete and its placement check read, so a gallery row

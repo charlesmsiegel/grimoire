@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Climate, type ClimateEntry, type ClimateSeason, type ClimateSummary } from "../api/client";
 import { Field } from "./Field";
+import { errorText } from "../api/errors";
 
 const BLANK_SEASON: ClimateSeason = {
   name: "all year", from: 0, to: 0,
@@ -83,10 +84,10 @@ export function ClimateEditor() {
       await api.saveClimate(target, { ...form, id: target });
       await reload();
       await select(target);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // The resolver is lenient so bad data cannot take a turn down, which
       // makes this the only place a mistake is ever reported.
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     }
   }
 

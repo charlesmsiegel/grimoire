@@ -254,7 +254,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       // warning here, nor to manual, saved or verbatim-greeting selections.
       pick(draft, [empty ? "Nothing could be inferred from that — fill in the details below." : "",
                    promptFieldWarning(intent?.prompt_field_statuses)].filter(Boolean).join(" "));
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (mine !== intentGeneration.current) return;
       // A miss must leave a usable form, never a dead end — and the warning
       // travels with the draft, because this pane is about to unmount.

@@ -31,20 +31,22 @@ vi.mock("../components/RegexRulesEditor", () => ({
     <div data-testid="regex-rules" data-scope={JSON.stringify(scope)} />,
 }));
 import { api } from "../api/client";
+import type { Config, PromptSnapshot, SendImagesReach } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
-const cfg = {
+const cfg = fixture<Config>({
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
   data_dir: "/home/u/.grimoire",
   llm_timeout: "120", absorb_budget: "600", llm_call_budget: "300",
-  llm_retries: "2", fallback_connection_id: "",
+  llm_retries: "2",
   context_budget: "0", context_scan_depth: "6", lore_recursion_depth: "0", archive_depth: "3",
   prompt_log_depth: "50", offscene_known_limit: "40",
   rolling_summary_every: "10",
   scene_break_every: "20", replay_fork_threshold: "10",
   advance_fork_threshold: "30",
-  embeddings_connection_id: "", embeddings_model: "", semantic_recall_depth: "0",
+  semantic_recall_depth: "0",
   semantic_recall_threshold: "0.4",
   history_recall_depth: "0", history_recall_budget: "1200",
   history_recall_threshold: "0.35", history_recall_rerank: "off",
@@ -62,31 +64,30 @@ const cfg = {
     },
     embedding_on: false,
   },
-};
+});
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
   is_default: true, source: "default" as const, exists: true,
 };
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getConfig as any).mockResolvedValue(cfg);
-  (api.putConfig as any).mockResolvedValue(cfg);
-  (api.getDataDir as any).mockResolvedValue(dataDir);
-  (api.putDataDir as any).mockResolvedValue(dataDir);
-  (api.getStoreConflicts as any).mockResolvedValue({ conflicts: [], truncated: false });
-  (api.listStyles as any).mockResolvedValue([
+  vi.mocked(api.getConfig).mockResolvedValue(cfg);
+  vi.mocked(api.putConfig).mockResolvedValue(cfg);
+  vi.mocked(api.getDataDir).mockResolvedValue(dataDir);
+  vi.mocked(api.putDataDir).mockResolvedValue(dataDir);
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({ conflicts: [], truncated: false });
+  vi.mocked(api.listStyles).mockResolvedValue([
     { id: "gothic-horror", name: "Gothic Horror", description: "", tags: [], built_in: true },
     { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
   ]);
-  (api.listBackups as any).mockResolvedValue({
+  vi.mocked(api.listBackups).mockResolvedValue({
     dir: "/home/u/.grimoire/backups", backups: [], image_backups: [],
   });
   // The context bar's source: no campaigns unless a test says otherwise, which
   // is also the "nothing to draw" case.
-  (api.listCampaigns as any).mockResolvedValue([]);
-  (api.listScenes as any).mockResolvedValue([]);
-  (api.listScenePrompts as any).mockResolvedValue({ entries: [] });
-  (api.getScenePrompt as any).mockResolvedValue(null);
+  vi.mocked(api.listCampaigns).mockResolvedValue([]);
+  vi.mocked(api.listScenes).mockResolvedValue([]);
+  vi.mocked(api.listScenePrompts).mockResolvedValue({ entries: [] });
 });
 
 // ConfigView renders a <Link to="/connections">, which throws outside a
@@ -197,7 +198,7 @@ test("a theme the store refuses is rolled back rather than left on screen", asyn
   // A look left applied after a failed write looks chosen for the session and
   // is gone at the next reload -- the same trade this page's Save already made
   // for it, now made in the one place every control shares.
-  (api.putConfig as any).mockRejectedValueOnce({ detail: "nope" });
+  vi.mocked(api.putConfig).mockRejectedValueOnce({ detail: "nope" });
   renderView();
   await screen.findByText("LIGHT");
   fireEvent.click(screen.getByText("DARK"));
@@ -278,14 +279,14 @@ test("Save commits every dirty field, across sections, in one call", async () =>
 test("an edit made while the write is in flight is not swallowed by it", async () => {
   // Save disables its own buttons, not the fields. Adopting the response
   // wholesale would revert whatever was typed in the gap.
-  let land: (c: unknown) => void = () => {};
-  (api.putConfig as any).mockReturnValue(new Promise((r) => { land = r; }));
+  let land: (c: Config) => void = () => {};
+  vi.mocked(api.putConfig).mockReturnValue(new Promise((r) => { land = r; }));
   renderView();
   await open(/^Transcript/);
   fireEvent.change(screen.getByLabelText(/your label/i), { target: { value: "Kestrel" } });
   save();
   fireEvent.change(screen.getByLabelText(/narrator label/i), { target: { value: "The Loom" } });
-  land({ ...cfg, user_label: "Kestrel" });
+  land(fixture({ ...cfg, user_label: "Kestrel" }));
 
   await waitFor(() => expect(screen.getByText("1 unsaved change")).toBeInTheDocument());
   expect(screen.getByLabelText(/your label/i)).toHaveValue("Kestrel");   // committed
@@ -337,7 +338,7 @@ test("mounts the response targets picker for the global scope", async () => {
 test("moving the storage location still saves immediately", async () => {
   // The one exception to the one-Save rule, and deliberately so: the move
   // relocates the file Save writes to.
-  (api.putDataDir as any).mockResolvedValue({ ...dataDir, data_dir: "/sync/grimoire", is_default: false, source: "custom" });
+  vi.mocked(api.putDataDir).mockResolvedValue({ ...dataDir, data_dir: "/sync/grimoire", is_default: false, source: "custom" });
   renderView();
   const input = await screen.findByLabelText(/storage location/i);
   fireEvent.change(input, { target: { value: "/sync/grimoire" } });
@@ -489,7 +490,7 @@ test("saves the checkpoint threshold the clock nudges at (#107)", async () => {
 
 // ---- the context budget bar ----
 
-const snapshot = {
+const snapshot = fixture<PromptSnapshot>({
   model: "m", total_tokens: 13_180, dropped_tokens: 0, budget_tokens: 32_000,
   sections: [
     { label: "Character descriptions", text: "", tokens: 2_700, tier: "lock-in", dropped: false, trimmed: 0 },
@@ -500,20 +501,20 @@ const snapshot = {
     // the stack — the verdict is where a drop is reported.
     { label: "Message examples", text: "", tokens: 900, tier: "background", dropped: true, trimmed: 0 },
   ],
-};
+});
 
 function withLastPrompt() {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "old-realm", name: "Realm", world: "w", created: "", updated: "2024-01-01", scenes: 2, last_scene: "", activity: "2024-01-01" },
     { id: "saltmarch", name: "Saltmarch", world: "w", created: "", updated: "2024-05-01", scenes: 11, last_scene: "", activity: "2024-06-02" },
-  ]);
-  (api.listScenes as any).mockResolvedValue([
+  ]));
+  vi.mocked(api.listScenes).mockResolvedValue([
     { id: "s11", title: "The long tide", model: "m", created: "", updated: "2024-06-02", date: "" },
   ]);
-  (api.listScenePrompts as any).mockResolvedValue({
+  vi.mocked(api.listScenePrompts).mockResolvedValue({
     entries: [{ id: "e9", scene: "s11", ts: "", model: "m", task: "chat", total_tokens: 13_180, dropped_tokens: 0, budget_tokens: 32_000 }],
   });
-  (api.getScenePrompt as any).mockResolvedValue(snapshot);
+  vi.mocked(api.getScenePrompt).mockResolvedValue(snapshot);
 }
 
 test("draws the last prompt against the budget, and names whose it is", async () => {
@@ -534,7 +535,7 @@ test("draws the last prompt against the budget, and names whose it is", async ()
 
 test("the bar is the last TURN's, never a decision's", async () => {
   withLastPrompt();
-  (api.listScenePrompts as any).mockResolvedValue({
+  vi.mocked(api.listScenePrompts).mockResolvedValue({
     entries: [
       { id: "e10", scene: "s11", ts: "", model: "m", task: "scene-break", operation: "decide",
         total_tokens: 900, dropped_tokens: 0, budget_tokens: 32_000 },
@@ -560,7 +561,7 @@ test("the bar is only fetched by the section that shows it", async () => {
 
 test("reports what the packer actually dropped", async () => {
   withLastPrompt();
-  (api.getScenePrompt as any).mockResolvedValue({ ...snapshot, dropped_tokens: 900 });
+  vi.mocked(api.getScenePrompt).mockResolvedValue({ ...snapshot, dropped_tokens: 900 });
   renderView();
   await open(/^Context/);
   expect(await screen.findByText("900 TOKENS DROPPED")).toBeInTheDocument();
@@ -575,7 +576,7 @@ test("no stored prompt, no bar — the numbers are never invented", async () => 
 });
 
 test("the Prompt layout section carries the toggle and the editor", async () => {
-  (api.getPromptLayout as any).mockResolvedValue({
+  vi.mocked(api.getPromptLayout).mockResolvedValue({
     enabled: false,
     sections: [{ id: "world_info", label: "", default_label: "World info",
                  tier: "spotlight", enabled: true }],
@@ -588,8 +589,8 @@ test("the Prompt layout section carries the toggle and the editor", async () => 
 });
 
 test("the section order toggle saves as on/off", async () => {
-  (api.getPromptLayout as any).mockResolvedValue({ enabled: false, sections: [] });
-  (api.putConfig as any).mockResolvedValue({ ...cfg, prompt_layout_enabled: "on" });
+  vi.mocked(api.getPromptLayout).mockResolvedValue({ enabled: false, sections: [] });
+  vi.mocked(api.putConfig).mockResolvedValue({ ...cfg, prompt_layout_enabled: "on" });
   renderView();
   await open(/^Prompt layout/);
   fireEvent.click(await screen.findByRole("checkbox", { name: /use my section order/i }));
@@ -599,7 +600,7 @@ test("the section order toggle saves as on/off", async () => {
 });
 
 test("the active-speaker toggle lives in Context and saves as on/off", async () => {
-  (api.putConfig as any).mockResolvedValue({ ...cfg, speaker_turn_taking: "on" });
+  vi.mocked(api.putConfig).mockResolvedValue({ ...cfg, speaker_turn_taking: "on" });
   renderView();
   await open(/^Context/);
   fireEvent.click(await screen.findByRole("checkbox", { name: /name an active speaker/i }));
@@ -609,7 +610,7 @@ test("the active-speaker toggle lives in Context and saves as on/off", async () 
 });
 
 test("tracker settings toggle and save", async () => {
-  (api.putConfig as any).mockResolvedValue({ ...cfg, tracker: "off" });
+  vi.mocked(api.putConfig).mockResolvedValue({ ...cfg, tracker: "off" });
   renderView();
   await open(/^Scene tracker/);
   fireEvent.click(await screen.findByRole("checkbox",
@@ -620,10 +621,10 @@ test("tracker settings toggle and save", async () => {
 });
 
 test("the play decisions save each switch, the speaker draw on by default", async () => {
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.getConfig).mockResolvedValue({
     ...cfg, decide_speaker_sampling: "on", decide_turn_plan: "off", decide_play_tool: "off" });
-  (api.getPlayDecisionsInfo as any).mockResolvedValue({ pick_samples: false });
-  (api.putConfig as any).mockResolvedValue(cfg);
+  vi.mocked(api.getPlayDecisionsInfo).mockResolvedValue({ pick_samples: false });
+  vi.mocked(api.putConfig).mockResolvedValue(cfg);
   renderView();
   await open(/^Play decisions/);
   const draw = await screen.findByRole("checkbox", { name: /draw the next speaker/i });
@@ -639,8 +640,8 @@ test("the play decisions save each switch, the speaker draw on by default", asyn
 });
 
 test("the perception rider toggle saves as off, never blank", async () => {
-  (api.getConfig as any).mockResolvedValue({ ...cfg, perception_rider: "on" });
-  (api.putConfig as any).mockResolvedValue({ ...cfg, perception_rider: "off" });
+  vi.mocked(api.getConfig).mockResolvedValue({ ...cfg, perception_rider: "on" });
+  vi.mocked(api.putConfig).mockResolvedValue({ ...cfg, perception_rider: "off" });
   renderView();
   await open(/^Scene tracker/);
   fireEvent.click(await screen.findByRole("checkbox",
@@ -673,7 +674,7 @@ test("reordering a section counts as an unsaved change on the page", async () =>
   /** The trap this replaced: the panel held its own draft, so a reordered
    *  section left the footer reading "No unsaved changes" while the page's
    *  Save wrote everything except the reordering. */
-  (api.getPromptLayout as any).mockResolvedValue(twoRows());
+  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
   renderView();
   await open(/^Prompt layout/);
   await screen.findByLabelText("Label for World info");
@@ -684,8 +685,8 @@ test("reordering a section counts as an unsaved change on the page", async () =>
 });
 
 test("the page's Save writes the layout, and writes no config when only it moved", async () => {
-  (api.getPromptLayout as any).mockResolvedValue(twoRows());
-  (api.putPromptLayout as any).mockImplementation((sections: any[]) =>
+  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
+  vi.mocked(api.putPromptLayout).mockImplementation((sections) =>
     Promise.resolve({ enabled: false, sections: sections.map((s) => ({
       ...s, default_label: s.id === "weather" ? "Weather" : "World info",
       tier: "spotlight" })) }));
@@ -696,7 +697,7 @@ test("the page's Save writes the layout, and writes no config when only it moved
   save();
 
   await waitFor(() => expect(api.putPromptLayout).toHaveBeenCalled());
-  expect((api.putPromptLayout as any).mock.calls[0][0].map((s: any) => s.id))
+  expect(vi.mocked(api.putPromptLayout).mock.calls[0][0].map((s) => s.id))
     .toEqual(["weather", "world_info"]);
   // config.md is untouched: an empty patch is a read-modify-write storing nothing
   expect(api.putConfig).not.toHaveBeenCalled();
@@ -704,7 +705,7 @@ test("the page's Save writes the layout, and writes no config when only it moved
 });
 
 test("Revert puts a reordered layout back", async () => {
-  (api.getPromptLayout as any).mockResolvedValue(twoRows());
+  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
   renderView();
   await open(/^Prompt layout/);
   await screen.findByLabelText("Label for World info");
@@ -719,8 +720,8 @@ test("Revert puts a reordered layout back", async () => {
 });
 
 test("Reset writes immediately and clears the pending reorder", async () => {
-  (api.getPromptLayout as any).mockResolvedValue(twoRows());
-  (api.putPromptLayout as any).mockResolvedValue(twoRows());
+  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
+  vi.mocked(api.putPromptLayout).mockResolvedValue(twoRows());
   renderView();
   await open(/^Prompt layout/);
   await screen.findByLabelText("Label for World info");
@@ -732,7 +733,7 @@ test("Reset writes immediately and clears the pending reorder", async () => {
 });
 
 test("the layout is fetched only when its section is opened", async () => {
-  (api.getPromptLayout as any).mockResolvedValue(twoRows());
+  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
   renderView();
   await screen.findByRole("button", { name: /^Storage/ });
   expect(api.getPromptLayout).not.toHaveBeenCalled();
@@ -743,8 +744,8 @@ test("the layout is fetched only when its section is opened", async () => {
 test("a failed layout write reports itself and leaves the settings unwritten", async () => {
   /** One Save, one outcome: the settings must not land while the layout the
    *  same click was meant to store did not. */
-  (api.getPromptLayout as any).mockResolvedValue(twoRows());
-  (api.putPromptLayout as any).mockRejectedValue({ detail: "disk full" });
+  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
+  vi.mocked(api.putPromptLayout).mockRejectedValue({ detail: "disk full" });
   renderView();
   await open(/^Prompt layout/);
   await screen.findByLabelText("Label for World info");
@@ -793,13 +794,13 @@ test("the backup settings save as one patch of only what changed", async () => {
 });
 
 test("the archives are listed, and Back up now writes one", async () => {
-  (api.listBackups as any).mockResolvedValue({
+  vi.mocked(api.listBackups).mockResolvedValue({
     dir: "/home/u/.grimoire/backups",
     backups: [{ name: "grimoire-20260814T210000Z.zip", size: 2_097_152,
                 created: "2026-08-14T21:00:00Z" }],
     image_backups: [],
   });
-  (api.createBackup as any).mockResolvedValue({
+  vi.mocked(api.createBackup).mockResolvedValue({
     dir: "/home/u/.grimoire/backups", created: "grimoire-20260815T090000Z.zip",
     swept: [], retention_error: null,
     backups: [{ name: "grimoire-20260815T090000Z.zip", size: 2_097_152,
@@ -832,7 +833,7 @@ test("the backups list is only read by the section that shows it", async () => {
 });
 
 test("the Storage section reports sync-conflict files in the library (#35)", async () => {
-  (api.getStoreConflicts as any).mockResolvedValue({
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({
     conflicts: [{ path: "worlds/realm/lore/pact.sync-conflict-1.md",
                   name: "pact.sync-conflict-1.md", tool: "syncthing",
                   kind: "file", size: 40, modified: "2026-01-01T00:00:00Z" }],
@@ -844,12 +845,12 @@ test("the Storage section reports sync-conflict files in the library (#35)", asy
 });
 
 describe("sending post images (#377)", () => {
-  const images = (reach: string, send = "on") =>
-    ({ ...cfg, send_images: send, send_images_limit: "3", send_images_reach: reach });
+  const images = (reach: SendImagesReach, send = "on"): Config =>
+    fixture({ ...cfg, send_images: send, send_images_limit: "3", send_images_reach: reach });
 
   test("the switch saves on and unlocks the limit", async () => {
-    (api.getConfig as any).mockResolvedValue(images("off", "off"));
-    (api.putConfig as any).mockResolvedValue(images("unknown"));
+    vi.mocked(api.getConfig).mockResolvedValue(images("off", "off"));
+    vi.mocked(api.putConfig).mockResolvedValue(images("unknown"));
     renderView();
     await open(/^Context/);
     const limit = await screen.findByLabelText("Images sent");
@@ -863,21 +864,21 @@ describe("sending post images (#377)", () => {
   });
 
   test("an unknown model says images are not being sent", async () => {
-    (api.getConfig as any).mockResolvedValue(images("unknown"));
+    vi.mocked(api.getConfig).mockResolvedValue(images("unknown"));
     renderView();
     await open(/^Context/);
     expect(await screen.findByText(/not known to read images/i)).toBeInTheDocument();
   });
 
   test("a text-only model says so", async () => {
-    (api.getConfig as any).mockResolvedValue(images("no"));
+    vi.mocked(api.getConfig).mockResolvedValue(images("no"));
     renderView();
     await open(/^Context/);
     expect(await screen.findByText(/cannot read images/i)).toBeInTheDocument();
   });
 
   test("no connection yet says that, not that the model cannot read images", async () => {
-    (api.getConfig as any).mockResolvedValue(images("none"));
+    vi.mocked(api.getConfig).mockResolvedValue(images("none"));
     renderView();
     await open(/^Context/);
     expect(await screen.findByText(/no connection is set up/i)).toBeInTheDocument();
@@ -885,7 +886,7 @@ describe("sending post images (#377)", () => {
   });
 
   test("a model that reads images needs no hint", async () => {
-    (api.getConfig as any).mockResolvedValue(images("yes"));
+    vi.mocked(api.getConfig).mockResolvedValue(images("yes"));
     renderView();
     await open(/^Context/);
     await screen.findByLabelText("Images sent");

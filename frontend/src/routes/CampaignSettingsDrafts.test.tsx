@@ -3,6 +3,8 @@ import { createMemoryRouter, RouterProvider, Route, Routes } from "react-router-
 import { ArtNavigationProvider } from "../components/art/ArtNavigationProvider";
 import { api, ApiError } from "../api/client";
 import CampaignSettingsView from "./CampaignSettingsView";
+import { fixture } from "../testkit/fixture";
+import type { InferenceSettings, ResolvedSelection, RoleCard } from "../api/types";
 
 // These are the real reused editors: mocked panels cannot prove that their
 // dirty state reaches the page's route/unload protection (#73).
@@ -23,12 +25,12 @@ class TestRequest extends NativeRequest {
   }
 }
 const EMPTY = { provider: "", model: "", preset: "" };
-function inference() {
-  const resolves = { provider: "realm", provider_name: "Realm", model: "realm/small", preset: "",
+function inference(): InferenceSettings {
+  const resolves: ResolvedSelection = { provider: "realm", provider_name: "Realm", model: "realm/small", preset: "",
     preset_name: "", via: "role", scope: "global" };
-  const role = { stored: EMPTY, fallback: EMPTY, resolves, inherits: resolves, problem: null,
+  const role: Partial<RoleCard> = { stored: EMPTY, fallback: EMPTY, resolves, inherits: resolves, problem: null,
     fallback_missing: [], fallback_problem: null, rate: null, limits: null };
-  return {
+  return fixture({
     format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
     roles: { primary: { ...role, stored: { provider: "realm", model: "realm/small", preset: "" } },
       fast: role, decision: role },
@@ -38,7 +40,7 @@ function inference() {
       role: "primary", resolves, inherits: resolves }],
     providers: [{ id: "realm", name: "Realm", kind: "openai_compatible", preset: "custom", usable: true, problem: null }],
     presets: [], preset_clear: "⁣none", retirement_notes: [],
-  };
+  });
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -64,15 +66,15 @@ beforeEach(() => {
   const values = { context_scan_depth: "8", context_budget: "12000", recap_depth: "5", archive_depth: "3",
     rolling_summary_every: "10", scene_break_every: "6", system_prompt: "", user_label: "You", assistant_label: "Grimoire" };
   vi.mocked(api.getCampaignSettings).mockResolvedValue({ overrides: {}, inherited: values, effective: values });
-  (api.getCalendarConfig as any).mockResolvedValue({ primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+  vi.mocked(api.getCalendarConfig).mockResolvedValue({ primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: false, stale_after_days: 30, warn_days: 7 });
   vi.mocked(api.getCalendarProviders).mockResolvedValue({ providers: [{ id: "gregorian", name: "Gregorian" }] });
   vi.mocked(api.setCalendarConfig).mockResolvedValue({ ok: true });
-  (api.getCampaignInference as any).mockResolvedValue(inference());
-  (api.putCampaignInference as any).mockResolvedValue(inference());
-  (api.readConnectionCapabilities as any).mockResolvedValue({ need: "generate", reason: null, hidden: [],
-    groups: { fits: [{ id: "realm/small", name: "realm/small", capabilities: {} }], unverified: [] } });
-  (api.previewControls as any).mockResolvedValue({ controls: {} });
+  vi.mocked(api.getCampaignInference).mockResolvedValue(inference());
+  vi.mocked(api.putCampaignInference).mockResolvedValue(inference());
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(fixture({ need: "generate", reason: null, hidden: [],
+    groups: { fits: [{ id: "realm/small", name: "realm/small", capabilities: {} }], unverified: [] } }));
+  vi.mocked(api.previewControls).mockResolvedValue(fixture({ controls: {} }));
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -173,7 +175,7 @@ test.each(["role", "route"] as const)("real Models %s edits protect route/unload
 
 test.each(["role", "route"] as const)("Models %s keeps failed edits and clears protection on successful save", async (kind) => {
   const pending = deferred<ReturnType<typeof inference>>();
-  (api.putCampaignInference as any).mockRejectedValueOnce(new Error("offline")).mockReturnValueOnce(pending.promise);
+  vi.mocked(api.putCampaignInference).mockRejectedValueOnce(new Error("offline")).mockReturnValueOnce(pending.promise);
   const { input, changed } = await editModel(kind);
   fireEvent.change(input, { target: { value: changed } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -207,7 +209,7 @@ test("each retained editor contributes independently to the page guard", async (
 
 test("a confirmed Models row switch retires a pending save without closing a newer form", async () => {
   const pending = deferred<ReturnType<typeof inference>>();
-  (api.putCampaignInference as any).mockReturnValueOnce(pending.promise);
+  vi.mocked(api.putCampaignInference).mockReturnValueOnce(pending.promise);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const { input, changed } = await editModel("role");
   fireEvent.change(input, { target: { value: changed } });
@@ -234,7 +236,7 @@ test("an unapplied typed model id is protected and must be chosen before Save", 
 test("an untouched legacy fallback preset is clean when its model form opens", async () => {
   const settings = inference();
   settings.roles.primary.fallback = { ...EMPTY, preset: "terse" };
-  (api.getCampaignInference as any).mockResolvedValue(settings);
+  vi.mocked(api.getCampaignInference).mockResolvedValue(settings);
   await editModel("role");
   expect(unloadBlocked()).toBe(false);
 });

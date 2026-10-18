@@ -9,6 +9,8 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
+import type { Greeting } from "../api/types";
 
 const SCOPE = { kind: "world" as const, id: "w" };
 
@@ -16,14 +18,14 @@ type EdgeMap = Record<string, { leads_to: string[]; excludes: string[] }>;
 
 /** A greeting summary as `listGreetings` returns one: its plot-map edges ride
  *  on the row. `edges: undefined` is a row whose map the server could not read. */
-function greeting(id: string, name: string, extra: Record<string, unknown> = {}) {
-  return { id, name, character: "seraphine", version: "default", present: [],
+function greeting(id: string, name: string, extra: Partial<Greeting> = {}): Greeting {
+  return fixture({ id, name, character: "seraphine", version: "default", present: [],
            requires_tags: [], predecessor_join: "all" as const,
-           edges: { leads_to: [], excludes: [] }, ...extra };
+           edges: { leads_to: [], excludes: [] }, ...extra });
 }
 
 /** The list rows for `names`, each carrying its edges from `map`. */
-function rows(names: [string, string][], map: EdgeMap, extra: Record<string, Record<string, unknown>> = {}) {
+function rows(names: [string, string][], map: EdgeMap, extra: Record<string, Record<string, unknown>> = {}): Greeting[] {
   return names.map(([id, name]) =>
     greeting(id, name, { edges: map[id] ?? { leads_to: [], excludes: [] }, ...extra[id] }));
 }
@@ -40,12 +42,12 @@ const NAMES: [string, string][] = [
   ["dawn", "Saltmarch Dawn"], ["ledger", "The Ledger"], ["word", "A Quiet Word"]];
 
 function plot(map: EdgeMap = PLOT, extra: Record<string, Record<string, unknown>> = {}) {
-  (api.listGreetings as any).mockResolvedValue(rows(NAMES, map, extra));
+  vi.mocked(api.listGreetings).mockResolvedValue(rows(NAMES, map, extra));
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.setEdges as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.setEdges).mockResolvedValue({ ok: true });
   plot();
 });
 
@@ -55,7 +57,7 @@ const edge = (label: RegExp | string) => screen.getByRole("button", { name: labe
  *  two links between DIFFERENT pairs (every pair in PLOT is already taken, and
  *  this view refuses to draw a second line between one). */
 function plot4() {
-  (api.listGreetings as any).mockResolvedValue(
+  vi.mocked(api.listGreetings).mockResolvedValue(
     rows([...NAMES, ["vow", "Vow of Silence"]], PLOT));
 }
 
@@ -186,7 +188,8 @@ test("only one write is on the wire at a time, whichever greeting it is for", as
   // plotmap.json holding every greeting's edges, so two requests in flight at
   // once -- even for different greetings -- can lose one of the two.
   const gate: (() => void)[] = [];
-  (api.setEdges as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
+  vi.mocked(api.setEdges).mockImplementation(() =>
+    new Promise<Awaited<ReturnType<typeof api.setEdges>>>((res) => gate.push(() => res({ ok: true }))));
   plot4();
   render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
@@ -206,7 +209,7 @@ test("only one write is on the wire at a time, whichever greeting it is for", as
   fireEvent.click(screen.getByRole("button", { name: "Link from The Ledger" }));
   fireEvent.click(screen.getByRole("button", { name: "Link The Ledger to Vow of Silence" }));
   await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(2));
-  expect((api.setEdges as any).mock.calls[1][1]).toBe("ledger");
+  expect(vi.mocked(api.setEdges).mock.calls[1][1]).toBe("ledger");
   gate.forEach((res) => res());
 });
 
@@ -217,7 +220,7 @@ test("both directions of one exclusion cannot be converted at once", async () =>
     word: { leads_to: [], excludes: [] },
   });
   const gate: (() => void)[] = [];
-  (api.setEdges as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
+  vi.mocked(api.setEdges).mockImplementation(() => new Promise<Awaited<ReturnType<typeof api.setEdges>>>((res) => gate.push(() => res({ ok: true }))));
   render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
   fireEvent.click(edge("Excludes: Saltmarch Dawn ↮ The Ledger"));
@@ -234,7 +237,7 @@ test("both directions of one exclusion cannot be converted at once", async () =>
 
 test("a failed write re-reads the map rather than keeping what it guessed", async () => {
   const refused = Object.assign(new Error("refused"), { detail: "plot map is locked" });
-  (api.setEdges as any).mockRejectedValue(refused);
+  vi.mocked(api.setEdges).mockRejectedValue(refused);
   render(<PlotMapEditor scope={SCOPE} />);
   fireEvent.click(await screen.findByRole("button", { name: "Unlocks: Saltmarch Dawn → The Ledger" }));
   fireEvent.click(screen.getByRole("button", { name: /delete link/i }));
@@ -251,7 +254,7 @@ test("a mutation half-done when the scope changes does not finish into the old o
     word: { leads_to: [], excludes: [] },
   });
   const gate: (() => void)[] = [];
-  (api.setEdges as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
+  vi.mocked(api.setEdges).mockImplementation(() => new Promise<Awaited<ReturnType<typeof api.setEdges>>>((res) => gate.push(() => res({ ok: true }))));
   const { rerender } = render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
 
@@ -260,7 +263,7 @@ test("a mutation half-done when the scope changes does not finish into the old o
   fireEvent.click(screen.getByRole("button", { name: /delete link/i }));
   await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(1));
 
-  (api.listGreetings as any).mockResolvedValue([]);
+  vi.mocked(api.listGreetings).mockResolvedValue([]);
   rerender(<PlotMapEditor scope={{ kind: "world", id: "other" }} />);
   gate[0]();
 
@@ -272,7 +275,7 @@ test("a mutation half-done when the scope changes does not finish into the old o
 });
 
 test("a write that fails says so and leaves the drawn map alone", async () => {
-  (api.setEdges as any).mockRejectedValue({ detail: "plot map is locked" });
+  vi.mocked(api.setEdges).mockRejectedValue({ detail: "plot map is locked" });
   render(<PlotMapEditor scope={SCOPE} />);
   fireEvent.click(await screen.findByRole("button", { name: "Unlocks: Saltmarch Dawn → The Ledger" }));
   fireEvent.click(screen.getByRole("button", { name: /delete link/i }));
@@ -313,7 +316,7 @@ test("a scope change clears the map instead of leaving the old one clickable", a
   // The next scope's list has not answered yet -- and while it has not, a node
   // still on screen is one whose id and edges would be written into the world
   // the reader has moved to.
-  (api.listGreetings as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.listGreetings).mockReturnValue(new Promise(() => {}));
   rerender(<PlotMapEditor scope={{ kind: "world", id: "other" }} />);
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "Open Saltmarch Dawn" })).toBeNull());
@@ -357,7 +360,7 @@ test("two links between one pair are drawn apart so each can be selected", async
 });
 
 test("ids that contain spaces cannot collide into one exclusion", async () => {
-  (api.listGreetings as any).mockResolvedValue(rows(
+  vi.mocked(api.listGreetings).mockResolvedValue(rows(
     [["a", "A"], ["b c", "B C"], ["a b", "A B"], ["c", "C"]],
     { a: { leads_to: [], excludes: ["b c"] }, "a b": { leads_to: [], excludes: ["c"] } }));
   const { container } = render(<PlotMapEditor scope={SCOPE} />);
@@ -394,9 +397,9 @@ test("flipping a mutual exclusion clears the far half before the unlock lands", 
   await waitFor(() => expect(api.setEdges).toHaveBeenCalledTimes(2));
   // The far half first: until it is gone, an unlock on the near half would
   // coexist with an exclusion that still blocks the greeting it opens.
-  expect((api.setEdges as any).mock.calls[0].slice(1))
+  expect(vi.mocked(api.setEdges).mock.calls[0].slice(1))
     .toEqual(["ledger", { leads_to: [], excludes: [] }]);
-  expect((api.setEdges as any).mock.calls[1].slice(1))
+  expect(vi.mocked(api.setEdges).mock.calls[1].slice(1))
     .toEqual(["dawn", { leads_to: ["ledger"], excludes: [] }]);
 });
 
@@ -414,17 +417,17 @@ test("selecting an edge from the keyboard leaves link mode, as the pointer does"
 });
 
 test("with no greetings the map says so rather than drawing an empty grid", async () => {
-  (api.listGreetings as any).mockResolvedValue([]);
+  vi.mocked(api.listGreetings).mockResolvedValue([]);
   const { container } = render(<PlotMapEditor scope={SCOPE} />);
   await screen.findByText(/no greetings/i);
   expect(container.querySelector(".pm-canvas")).toBeNull();
 });
 
 test("a campaign's marks ride along on the nodes", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     greeting("dawn", "Saltmarch Dawn", { mark: "completed" }),
     greeting("ledger", "The Ledger", { mark: "skipped" }),
-  ]);
+  ]));
   const { container } = render(<PlotMapEditor scope={{ kind: "campaign", id: "run" }} />);
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
   const node = container.querySelector(".pm-node.completed") as HTMLElement;
@@ -461,13 +464,13 @@ test("the edge toolbar is gone while the map is re-reading", async () => {
   // Retry, held open: the reload will replace every greeting's edges with what
   // the server says, so an edit made against the old ones in the meantime is
   // one the snapshot would silently undo.
-  (api.listGreetings as any).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.listGreetings).mockImplementation(() => new Promise(() => {}));
   fireEvent.click(screen.getByRole("button", { name: /retry/i }));
   await waitFor(() => expect(screen.queryByRole("button", { name: /delete link/i })).toBeNull());
 });
 
 test("a list that failed is not reported as a map with nothing in it", async () => {
-  (api.listGreetings as any).mockRejectedValue({ detail: "world not found" });
+  vi.mocked(api.listGreetings).mockRejectedValue({ detail: "world not found" });
   render(<PlotMapEditor scope={SCOPE} />);
 
   await screen.findByText("world not found");
@@ -500,7 +503,7 @@ test("the map holds still while the other view says to, and says which", async (
 
 test("a write in flight is reported outward, so it outlives this view", async () => {
   const gate: (() => void)[] = [];
-  (api.setEdges as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
+  vi.mocked(api.setEdges).mockImplementation(() => new Promise<Awaited<ReturnType<typeof api.setEdges>>>((res) => gate.push(() => res({ ok: true }))));
   const onBusy = vi.fn();
   const { unmount } = render(<PlotMapEditor scope={SCOPE} onBusy={onBusy} />);
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });

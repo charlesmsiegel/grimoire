@@ -1,3 +1,5 @@
+import { fixture } from "../testkit/fixture";
+import type { CharacterSummary } from "../api/types";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { OpenerComposer } from "./OpenerComposer";
 
@@ -7,13 +9,13 @@ vi.mock("../api/client", async () => {
 });
 import { api } from "../api/client";
 
-const CHARS = [{ id: "mara", name: "Mara", versions: [{ id: "v1", name: "v1" }],
-                 default_version: "v1" }] as any;
+const CHARS = fixture<CharacterSummary[]>([{ id: "mara", name: "Mara", versions: [{ id: "v1", name: "v1" }],
+                 default_version: "v1" }]);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.opener as any).mockImplementation(
-    async (_c: string, _s: string, _p: string, on: (e: any) => void) => {
+  vi.mocked(api.opener).mockImplementation(
+    async (_c, _s, _p, on) => {
       on({ delta: "Rain on the marsh road." });
     });
 });
@@ -83,15 +85,15 @@ test("a scene started from a greeting offers to adapt it", async () => {
 
 test("an adaptation is adopted through the same first post as any opener", async () => {
   const cast = [{ actor_ref: "grimoire", speaker: "Grimoire", version: "" }];
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string,
-                                              on: (e: any) => void) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p,
+                                              on) => {
     on({ snapshot: cast });
     on({ speaker_start: cast[0] });
     on({ delta: "The gate stands open." });
     on({ speaker_done: { ...cast[0], content: "The gate stands open." } });
     on({ done: true });
   });
-  (api.firstPost as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.firstPost).mockResolvedValue({ ok: true });
   renderComposer({ greeting: "reck" });
   fireEvent.click(screen.getByRole("button", { name: "Adapt the greeting" }));
   await screen.findByText("The gate stands open.");
@@ -116,14 +118,14 @@ test("retrying an adaptation keeps adapting, whatever the prompt box holds", asy
     { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
     { actor_ref: "characters:mara", speaker: "Mara", version: "v1" },
   ];
-  (api.opener as any).mockImplementationOnce(async (_c: string, _s: string, _p: string,
-                                                  on: (e: any) => void) => {
+  vi.mocked(api.opener).mockImplementationOnce(async (_c, _s, _p,
+                                                  on) => {
     on({ snapshot: cast });
     on({ speaker_start: cast[0] });
     on({ speaker_done: { ...cast[0], content: "Rain falls." } });
     on({ error: { kind: "rate_limit", detail: "Wait" } });
-  }).mockImplementationOnce(async (_c: string, _s: string, _p: string,
-                                  on: (e: any) => void) => {
+  }).mockImplementationOnce(async (_c, _s, _p,
+                                  on) => {
     on({ snapshot: cast });
     on({ speaker_start: cast[1] });
     on({ speaker_done: { ...cast[1], content: "I wait." } });
@@ -143,8 +145,8 @@ test("actor-scoped preview adopts complete labeled contributions", async () => {
     { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
     { actor_ref: "characters:mara", speaker: "Mara", version: "v1" },
   ];
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string,
-                                              on: (e: any) => void) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p,
+                                              on) => {
     on({ snapshot: cast });
     for (const [speaker, content] of [[cast[0], "Rain falls."], [cast[1], "I wait."]] as const) {
       on({ speaker_start: speaker });
@@ -153,7 +155,7 @@ test("actor-scoped preview adopts complete labeled contributions", async () => {
     }
     on({ done: true });
   });
-  (api.firstPost as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.firstPost).mockResolvedValue({ ok: true });
   renderComposer({ initialPrompt: "A meeting.",
     characters: [{ ...CHARS[0], has_avatar: true, avatar_v: "v1-token" }] });
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));
@@ -171,14 +173,14 @@ test("a failed later contribution keeps Use disabled and retries only the missin
     { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
     { actor_ref: "characters:mara", speaker: "Mara", version: "v1" },
   ];
-  (api.opener as any).mockImplementationOnce(async (_c: string, _s: string, _p: string,
-                                                  on: (e: any) => void) => {
+  vi.mocked(api.opener).mockImplementationOnce(async (_c, _s, _p,
+                                                  on) => {
     on({ snapshot: cast });
     on({ speaker_start: cast[0] });
     on({ speaker_done: { ...cast[0], content: "Rain falls." } });
     on({ error: { kind: "rate_limit", detail: "Wait" } });
-  }).mockImplementationOnce(async (_c: string, _s: string, _p: string,
-                                  on: (e: any) => void) => {
+  }).mockImplementationOnce(async (_c, _s, _p,
+                                  on) => {
     on({ snapshot: cast });
     on({ speaker_start: cast[1] });
     on({ speaker_done: { ...cast[1], content: "I wait." } });
@@ -199,8 +201,8 @@ test("a failed contribution leaves only completed speakers in the preview", asyn
     { actor_ref: "grimoire", speaker: "Grimoire", version: "" },
     { actor_ref: "characters:mara", speaker: "Mara", version: "v1" },
   ];
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string,
-                                             on: (e: any) => void) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p,
+                                             on) => {
     on({ snapshot: cast });
     on({ speaker_start: cast[0] });
     on({ speaker_done: { ...cast[0], content: "Rain falls." } });

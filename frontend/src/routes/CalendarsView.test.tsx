@@ -37,12 +37,12 @@ function renderCalendars() {
 }
 
 beforeEach(() => {
-  (api.listCalendarProviders as any).mockResolvedValue([
+  vi.mocked(api.listCalendarProviders).mockResolvedValue([
     { id: "gregorian", name: "Gregorian" },
     { id: "hebrew", name: "Hebrew" },
     { id: "harptos", name: "Calendar of Harptos" },
   ]);
-  (api.getCalendarYear as any).mockResolvedValue(GREG);
+  vi.mocked(api.getCalendarYear).mockResolvedValue(GREG);
 });
 
 test("every registered calendar is offered, plugins included", async () => {
@@ -68,7 +68,7 @@ test("grouping uses the month key, not the month number", async () => {
   // "Tishrei") and `describe()` a NUMBER (1, 12). Grouping by the number finds
   // no month and renders a year that observes nothing — which looks like an
   // answer, so nothing would report it.
-  (api.getCalendarYear as any).mockResolvedValue(HEB);
+  vi.mocked(api.getCalendarYear).mockResolvedValue(HEB);
   renderCalendars();
   await screen.findByText("Tishrei");
   const month = screen.getByText("Tishrei").closest("li")!;
@@ -76,7 +76,7 @@ test("grouping uses the month key, not the month number", async () => {
 });
 
 test("a calendar with no observances says so rather than showing an empty year", async () => {
-  (api.getCalendarYear as any).mockResolvedValue({ ...GREG, region: "", holidays: [] });
+  vi.mocked(api.getCalendarYear).mockResolvedValue({ ...GREG, region: "", holidays: [] });
   renderCalendars();
   expect(await screen.findByText(/no observances in this year/i)).toBeInTheDocument();
   // ...and where the calendar takes a region, it says that is why.
@@ -90,7 +90,7 @@ test("the region control only appears for calendars that take one", async () => 
 
   // Harptos is a homebrew calendar: its holidays are its own, and offering it
   // a country picker would be asking a question it has no answer to.
-  (api.getCalendarYear as any).mockResolvedValue({
+  vi.mocked(api.getCalendarYear).mockResolvedValue({
     id: "harptos", name: "Calendar of Harptos", year: 2026, region: "",
     months: [{ key: "01", name: "Hammer", days: 30 }], holidays: [],
   });
@@ -107,20 +107,20 @@ test("the year is the calendar's own, and switching calendars does not carry it 
   await screen.findByText("January");
   expect(screen.getByLabelText("Year")).toHaveValue(2026);
 
-  (api.getCalendarYear as any).mockResolvedValue(HEB);
+  vi.mocked(api.getCalendarYear).mockResolvedValue(HEB);
   fireEvent.click(screen.getByRole("button", { name: "Hebrew" }));
   await waitFor(() => expect(screen.getByLabelText("Year")).toHaveValue(5786));
   // The FIRST request for the new calendar named no year at all — that is what
   // makes the server resolve its own. (A second follows once the answer is
   // adopted, naming 5786; that one is the page echoing what it was told.)
-  const hebrewCalls = (api.getCalendarYear as any).mock.calls
+  const hebrewCalls = vi.mocked(api.getCalendarYear).mock.calls
     .filter((c: unknown[]) => c[0] === "hebrew");
   expect(hebrewCalls[0][1]).toBeUndefined();
 });
 
 test("a calendar that cannot answer says so instead of showing an empty year", async () => {
   const { ApiError } = await vi.importActual<typeof import("../api/client")>("../api/client");
-  (api.getCalendarYear as any).mockRejectedValue(
+  vi.mocked(api.getCalendarYear).mockRejectedValue(
     new ApiError(400, "bad hebrew year: 1"));
   renderCalendars();
   expect(await screen.findByText(/bad hebrew year/i)).toBeInTheDocument();

@@ -8,9 +8,9 @@ import { api } from "../api/client";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getGroupState as any).mockResolvedValue({
+  vi.mocked(api.getGroupState).mockResolvedValue({
     goals: "Expand.", resources: "", focus: "", public_perception: "", secrets: "The abbot.", updated: "t" });
-  (api.putGroupState as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.putGroupState).mockResolvedValue({ ok: true });
 });
 
 test("shows non-empty sections read-only; edit + save round-trips", async () => {
@@ -27,7 +27,7 @@ test("shows non-empty sections read-only; edit + save round-trips", async () => 
 });
 
 test("empty state shows a hint instead of sections", async () => {
-  (api.getGroupState as any).mockResolvedValue({
+  vi.mocked(api.getGroupState).mockResolvedValue({
     goals: "", resources: "", focus: "", public_perception: "", secrets: "", updated: "" });
   render(<GroupStatePanel cid="c" gid="salt-circle" />);
   expect(await screen.findByText(/no campaign state yet/i)).toBeInTheDocument();

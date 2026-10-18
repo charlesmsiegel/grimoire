@@ -10,6 +10,7 @@ vi.mock("../api/client", async () => {
   } };
 });
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 function Destination() {
   const location = useLocation();
@@ -27,10 +28,10 @@ function renderIndex(campaign = false) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listPCs as any).mockResolvedValue([{ id: "mara", name: "Mara",
-    default_version: "default", has_avatar: false }]);
-  (api.createPC as any).mockResolvedValue({ pc: "winifred" });
-  (api.createCampaignPC as any).mockResolvedValue({ pc: "winifred" });
+  vi.mocked(api.listPCs).mockResolvedValue(fixture([{ id: "mara", name: "Mara",
+    default_version: "default", has_avatar: false }]));
+  vi.mocked(api.createPC).mockResolvedValue(fixture({ pc: "winifred" }));
+  vi.mocked(api.createCampaignPC).mockResolvedValue(fixture({ pc: "winifred" }));
 });
 
 test("the PC section lists records at their own URLs", async () => {
@@ -40,9 +41,9 @@ test("the PC section lists records at their own URLs", async () => {
 });
 
 test("creating a world PC opens its record in edit mode", async () => {
-  (api.createPC as any).mockImplementation(async (world: string, input: { name: string }) => {
+  vi.mocked(api.createPC).mockImplementation(async (world, input) => {
     if (world !== "realm" || input.name !== "Winifred") throw new Error("wrong create scope");
-    return { pc: "winifred" };
+    return fixture({ pc: "winifred" });
   });
   const prompt = vi.spyOn(window, "prompt").mockReturnValueOnce("Winifred");
   renderIndex();
@@ -52,9 +53,9 @@ test("creating a world PC opens its record in edit mode", async () => {
 });
 
 test("creating a campaign PC keeps campaign scope", async () => {
-  (api.createCampaignPC as any).mockImplementation(async (campaign: string, input: { name: string }) => {
+  vi.mocked(api.createCampaignPC).mockImplementation(async (campaign, input) => {
     if (campaign !== "saltmarch" || input.name !== "Winifred") throw new Error("wrong create scope");
-    return { pc: "winifred" };
+    return fixture({ pc: "winifred" });
   });
   const prompt = vi.spyOn(window, "prompt").mockReturnValueOnce("Winifred");
   renderIndex(true);
@@ -64,7 +65,7 @@ test("creating a campaign PC keeps campaign scope", async () => {
 });
 
 test("a list read failure is visible", async () => {
-  (api.listPCs as any).mockRejectedValueOnce(new Error("unavailable"));
+  vi.mocked(api.listPCs).mockRejectedValueOnce(new Error("unavailable"));
   renderIndex();
   expect(await screen.findByText(/unavailable/i)).toBeInTheDocument();
 });

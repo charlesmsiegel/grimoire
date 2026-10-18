@@ -7,7 +7,7 @@ import { api } from "../api/client";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "a", name: "Exile", owners: "characters:tanaka" },
     { id: "b", name: "World fact" },
     { id: "c", name: "Duel", owners: "characters:tanaka, locations:dojo" },

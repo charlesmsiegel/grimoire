@@ -14,13 +14,13 @@ export function SceneDateField({ cid, sid, sceneLocked, onAdvanced, onRenamed, o
   sid: string;
   /** A turn is streaming into this scene: moving its file mid-turn strands the
    *  abort write that saves the partial (#95), so the control waits. */
-  sceneLocked?: boolean;
+  sceneLocked?: boolean | undefined;
   /** The date moved without a rename — the host refreshes to show the
    *  transition line. */
   onAdvanced: () => void;
   /** The first date set re-slugged the file; the host adopts the new id. */
-  onRenamed?: (id: string) => void;
-  onRenaming?: (active: boolean) => void;
+  onRenamed?: ((id: string) => void) | undefined;
+  onRenaming?: ((active: boolean) => void) | undefined;
   /** Raw, not stringified — see `OpenerComposer` (#210). */
   onError: (err: unknown) => void;
 }) {
@@ -31,7 +31,8 @@ export function SceneDateField({ cid, sid, sceneLocked, onAdvanced, onRenamed, o
     () => api.getSceneDatetime(cid, sid).then((w) => {
       setWhen(w);
       // dateless scene with a suggestion: pre-fill the input, but never clobber typing
-      if (!w.current && w.suggested) setDateInput((prev) => prev || w.suggested!);
+      const suggested = w.suggested;
+        if (!w.current && suggested) setDateInput((prev) => prev || suggested);
     }).catch(() => setWhen(null)),
     [cid, sid]);
 
@@ -52,7 +53,7 @@ export function SceneDateField({ cid, sid, sceneLocked, onAdvanced, onRenamed, o
       }
       await reload();
       onAdvanced(); // surface the transition line in the stream
-    } catch (err: any) {
+    } catch (err: unknown) {
       onError(err);
     } finally {
       onRenaming?.(false);

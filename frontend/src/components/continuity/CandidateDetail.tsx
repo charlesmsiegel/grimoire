@@ -103,7 +103,7 @@ type Props = {
   onBack: () => void;
   onRefresh: () => void;
   /** Investigate this finding (roadmap 12, E2); absent while the switch is off. */
-  onInvestigate?: () => void;
+  onInvestigate?: (() => void) | undefined;
   /** An investigation of this finding is running. */
   investigating?: boolean;
   /** One of ANOTHER finding in this campaign is running: the server takes

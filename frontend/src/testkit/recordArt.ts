@@ -37,6 +37,7 @@ export function artAdapter(target = artTarget(), data = artRead(target)) {
 export function galleryRow(image: RecordArtImage): GalleryImage {
   return { kind: image.placement.target.kind, id: image.placement.target.record_id, vid: image.placement.target.version ?? "",
     name: image.name, record_name: image.placement.target.record_id, ext: image.ext, url: image.url, thumb: image.thumb,
-    description: image.description, described: image.described, image_id: image.image_id, v: image.v,
+    description: image.description, described: image.described,
+    ...(image.image_id === undefined ? {} : { image_id: image.image_id }), v: image.v,
     placement: image.placement, provenance: image.provenance };
 }

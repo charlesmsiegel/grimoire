@@ -1,3 +1,4 @@
+import { fixture } from "../testkit/fixture";
 import { api, ApiError, invalidateConfigCache, RefreshRefused } from "./client";
 import { onArtChanged, onCampaignsChanged, onConfigChanged, onShellChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
@@ -5,7 +6,7 @@ import type { DriverLink, GraphEdge, LinkRelation, ReconcileRunError, StoryGraph
 import { THUMB_REV } from "./thumbs";
 
 test("referenced image subjects send the full URL in the body rather than a route segment", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
   globalThis.fetch = fetchMock;
   const image = "/api/worlds/realm/characters/seraphine/versions/default/images/embed-art";
   await api.setImageSubjects("realm", "open", image, ["mara"]);
@@ -13,29 +14,28 @@ test("referenced image subjects send the full URL in the body rather than a rout
     expect.objectContaining({ method: "PUT", body: JSON.stringify({ image, subjects: ["mara"] }) }));
 });
 
-function sseResponse(chunks: string[]) {
+function sseResponse(chunks: string[]): Response {
   let i = 0;
-  return {
-    ok: true,
-    body: {
-      getReader() {
-        return {
-          read: async () =>
-            i < chunks.length
-              ? { value: new TextEncoder().encode(chunks[i++]), done: false }
-              : { value: undefined, done: true },
-        };
-      },
+  const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    pull(controller) {
+      if (i < chunks.length) controller.enqueue(new TextEncoder().encode(chunks[i++]));
+      else controller.close();
     },
-  };
+  }, { highWaterMark: 0 });
+  return fixture({ ok: true, body });
 }
 
-function jsonOk(value: unknown) {
-  return { ok: true, json: async () => value };
+function jsonOk(value: unknown): Response {
+  return fixture({ ok: true, json: async () => value });
+}
+
+function jsonBody(init: RequestInit | undefined): unknown {
+  if (typeof init?.body !== "string") throw new Error("Expected a JSON request body");
+  return JSON.parse(init.body) as unknown;
 }
 
 test("campaign settings reads are fresh even when requests overlap", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ overrides: {}, inherited: {}, effective: {} }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ overrides: {}, inherited: {}, effective: {} }));
   globalThis.fetch = fetchMock;
   await Promise.all([api.getCampaignSettings("saltmarch"), api.getCampaignSettings("saltmarch")]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -45,7 +45,7 @@ test("campaign settings reads are fresh even when requests overlap", async () =>
 test("campaign settings saves notify only after success and preserve null, zero and empty prompt", async () => {
   const changed = vi.fn();
   const stop = onConfigChanged(changed);
-  const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({ detail: "invalid" }) })
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(fixture({ ok: false, status: 400, json: async () => ({ detail: "invalid" }) }))
     .mockResolvedValueOnce(jsonOk({ overrides: {}, inherited: {}, effective: {} }));
   globalThis.fetch = fetchMock;
   try {
@@ -63,15 +63,16 @@ test.each<{ tags: string[]; query: string }>([
   { tags: [], query: "" },
 ])("greeting preview encodes proposed tags in a read-only world GET: $tags", async ({ tags, query }) => {
   const rows = [{ id: "open", name: "Open", available: true, reasons: [], pcless: false, location: "" }];
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(rows));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(rows));
   globalThis.fetch = fetchMock;
   expect(await api.previewGreetings("realm", tags)).toEqual(rows);
   expect(fetchMock).toHaveBeenCalledWith(`/api/worlds/realm/greeting-availability?tags=${query}`,
-    expect.objectContaining({ method: "GET", body: undefined }));
+    expect.objectContaining({ method: "GET" }));
+  expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
 });
 
 test("scene creation carries reviewed initial focus in the same request", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "mara" }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "mara" }));
   globalThis.fetch = fetchMock;
   await api.createScene("saltmarch", "Mara", undefined, false, "Let Mara choose.");
   expect(fetchMock).toHaveBeenCalledWith("/api/campaigns/saltmarch/scenes", expect.objectContaining({
@@ -84,7 +85,7 @@ test.each([
   ["campaign", "/api/campaigns/saltmarch/default-prompt", () => api.getCampaignDefaultPrompt("saltmarch")],
   ["focus", "/api/campaigns/saltmarch/scenes/mara/focus", () => api.getSceneFocus("saltmarch", "mara")],
 ] as const)("%s prompt-field reads never join a pre-save request", async (_name, path, read) => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ text: "", status: "empty" }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ text: "", status: "empty" }));
   globalThis.fetch = fetchMock;
   await Promise.all([read(), read()]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -96,7 +97,7 @@ test.each([
   ["campaign", "/api/campaigns/saltmarch/default-prompt", (text: string) => api.setCampaignDefaultPrompt("saltmarch", text)],
   ["focus", "/api/campaigns/saltmarch/scenes/mara/focus", (text: string) => api.setSceneFocus("saltmarch", "mara", text)],
 ] as const)("%s prompt-field saves send only the addressed text", async (_name, path, save) => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ text: "Let Mara choose.", status: "ok" }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ text: "Let Mara choose.", status: "ok" }));
   globalThis.fetch = fetchMock;
   await save("Let Mara choose.");
   expect(fetchMock).toHaveBeenCalledWith(path, expect.objectContaining({
@@ -105,8 +106,8 @@ test.each([
 });
 
 test("fresh context after focus publication does not join a pre-save request", async () => {
-  let finishOld: (value: unknown) => void = () => {};
-  const fetchMock = vi.fn()
+  let finishOld: (value: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>()
     .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
     .mockResolvedValueOnce(jsonOk({ text: "Seraphine chooses.", status: "ok" }))
     .mockResolvedValueOnce(jsonOk({ sections: [{ id: "scene_focus", text: "Seraphine chooses." }] }));
@@ -124,8 +125,8 @@ test("fresh context after focus publication does not join a pre-save request", a
 });
 
 test("createCampaign POSTs name + world", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "run" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "run" }));
+  globalThis.fetch = fetchMock;
   await api.createCampaign("Run One", "drowned-realm");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns",
@@ -137,8 +138,8 @@ test("createCampaign POSTs name + world", async () => {
 });
 
 test("setSceneDatetime PUTs the datetime under its scene", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true, advanced: true, friendly: "4 July 2026" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true, advanced: true, friendly: "4 July 2026" }));
+  globalThis.fetch = fetchMock;
   await api.setSceneDatetime("run", "s1", "2026-07-04");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/scenes/s1/datetime",
@@ -147,8 +148,8 @@ test("setSceneDatetime PUTs the datetime under its scene", async () => {
 });
 
 test("getSceneDatetime GETs the scene datetime", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ current: null, history: [] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ current: null, history: [] }));
+  globalThis.fetch = fetchMock;
   await api.getSceneDatetime("run", "s1");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/scenes/s1/datetime",
@@ -157,8 +158,8 @@ test("getSceneDatetime GETs the scene datetime", async () => {
 });
 
 test("createCampaign includes region when given", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "run" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "run" }));
+  globalThis.fetch = fetchMock;
   await api.createCampaign("Run One", "w1", "GB");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns",
@@ -167,8 +168,8 @@ test("createCampaign includes region when given", async () => {
 });
 
 test("createWorld POSTs the name", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "w" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "w" }));
+  globalThis.fetch = fetchMock;
   await api.createWorld("Drowned Realm");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds",
@@ -177,8 +178,8 @@ test("createWorld POSTs the name", async () => {
 });
 
 test("renameScene PUTs to the scene under its campaign", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "s2", title: "New" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "s2", title: "New" }));
+  globalThis.fetch = fetchMock;
   await api.renameScene("run", "s1", "New");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/scenes/s1",
@@ -187,8 +188,8 @@ test("renameScene PUTs to the scene under its campaign", async () => {
 });
 
 test("deleteScene issues DELETE under its campaign", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
   await api.deleteScene("run", "s1");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/scenes/s1",
@@ -198,9 +199,9 @@ test("deleteScene issues DELETE under its campaign", async () => {
 
 test("chat posts to the scene chat endpoint and forwards SSE events", async () => {
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockResolvedValue(sseResponse(['data: {"delta":"hi"}\n\n', 'data: {"done":true}\n\n']));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
   const events: unknown[] = [];
   await api.chat("run", "s1", "hello", (e) => events.push(e));
   expect(fetchMock).toHaveBeenCalledWith(
@@ -215,9 +216,9 @@ test("chat hands its abort signal to fetch, and ignores heartbeat comments", asy
   // endpoint, so a signal that never reaches fetch is a Stop button that does
   // nothing. The heartbeat frames ride the same stream and must stay invisible.
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockResolvedValue(sseResponse([": heartbeat\n\n", 'data: {"delta":"hi"}\n\n']));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
   const controller = new AbortController();
   const events: unknown[] = [];
   await api.chat("run", "s1", "hello", (e) => events.push(e), undefined, controller.signal);
@@ -230,9 +231,9 @@ test("chat hands its abort signal to fetch, and ignores heartbeat comments", asy
 
 test("identical in-flight GETs are shared", async () => {
   // The general rule, pinned so the exception below reads as an exception.
-  let release: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn().mockImplementation(() => new Promise((r) => { release = r; }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  let release: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => new Promise((r) => { release = r; }));
+  globalThis.fetch = fetchMock;
   const a = api.getSceneDatetime("run", "s1");
   const b = api.getSceneDatetime("run", "s1");
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -250,12 +251,12 @@ test("alternate reads never coalesce, so a set matches the transcript it was rea
   //
   // Here rather than in CampaignView, whose suite mocks `api.*` wholesale and
   // so never executes the coalescing layer at all.
-  let releaseFirst: (v: unknown) => void = () => {};
+  let releaseFirst: (v: Response) => void = () => {};
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
     .mockResolvedValue(jsonOk({ active: 1, alternates: [{ id: "b" }] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const older = api.getAlternates("run", "s1");   // in flight, unresolved
   const newer = api.getAlternates("run", "s1");   // issues its own, not shared
@@ -271,9 +272,9 @@ test("swipe reads never coalesce, so a refresh after a swipe sees the swipe", as
   // shared read is as old as the request it joined, so a refresh issued while
   // the pre-mutation GET is still open would install that older state: the
   // counter names the take the swipe just replaced.
-  let releaseFirst: (v: unknown) => void = () => {};
+  let releaseFirst: (v: Response) => void = () => {};
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
     .mockResolvedValue(jsonOk({ active: 1, variants: [{ id: "a" }, { id: "b" }] }));
   globalThis.fetch = fetchMock;
@@ -299,12 +300,12 @@ test("scene reads never coalesce, so a refresh after a mutation sees the mutatio
   // Opted out for every caller rather than at each mutation's call site: the
   // one thing this PR has learned repeatedly is that a rule each caller must
   // remember is a rule the next caller forgets.
-  let releaseFirst: (v: unknown) => void = () => {};
+  let releaseFirst: (v: Response) => void = () => {};
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
     .mockResolvedValue(jsonOk({ messages: [{ role: "assistant", content: "new" }] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const older = api.getScene("run", "s1", { limit: 40 });   // in flight, unresolved
   const newer = api.getScene("run", "s1", { limit: 40 });   // issues its own, not shared
@@ -326,12 +327,12 @@ test("scene list reads never coalesce, so issue order is request order", async (
   //
   // Here rather than in CampaignView, whose suite mocks `api.*` wholesale and
   // so never executes the coalescing layer at all.
-  let releaseFirst: (v: unknown) => void = () => {};
+  let releaseFirst: (v: Response) => void = () => {};
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
     .mockResolvedValue(jsonOk([{ id: "s1-renamed" }]));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const older = api.listScenes("run");    // in flight, pre-rename
   const newer = api.listScenes("run");    // issues its own, not shared
@@ -352,12 +353,12 @@ test("proposal reads never coalesce, so claim order is request order", async () 
   // Tested here and not in CampaignView, whose suite mocks `api.*` wholesale
   // and so never executes the coalescing layer at all — the reason the first
   // version of this fix looked verified while doing nothing.
-  let releaseFirst: (v: unknown) => void = () => {};
+  let releaseFirst: (v: Response) => void = () => {};
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
     .mockResolvedValue(jsonOk({ record: { id: "pr-1" } }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const older = api.getRollProposal("run", "s1");   // in flight, unresolved
   const newer = api.getRollProposal("run", "s1");   // issues its own, not shared
@@ -370,14 +371,14 @@ test("proposal reads never coalesce, so claim order is request order", async () 
 
 test("localizeImages posts to the localize endpoint and forwards SSE events", async () => {
   const changed = vi.fn(); const unsubscribe = onArtChanged(changed);
-  const fetchMock = vi.fn().mockResolvedValue(
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
     sseResponse([
       'data: {"total":1}\n\n',
       'data: {"done":1,"total":1}\n\n',
       'data: {"summary":{"total":1,"localized":1,"skipped":0,"failed":0,"capped":false}}\n\n',
     ]),
   );
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
   const events: LocalizeEvent[] = [];
   await api.localizeImages("w", "c", "v", (e) => events.push(e));
   expect(fetchMock).toHaveBeenCalledWith(
@@ -393,8 +394,8 @@ test("localizeImages posts to the localize endpoint and forwards SSE events", as
 });
 
 test("retry posts to the scene retry endpoint", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(sseResponse(['data: {"done":true}\n\n']));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(sseResponse(['data: {"done":true}\n\n']));
+  globalThis.fetch = fetchMock;
   await api.retry("run", "s1", () => {});
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/scenes/s1/retry",
@@ -403,8 +404,8 @@ test("retry posts to the scene retry endpoint", async () => {
 });
 
 test("addTag POSTs the name to the world tags endpoint", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "student" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "student" }));
+  globalThis.fetch = fetchMock;
   await api.addTag("w", "Student");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/w/tags",
@@ -413,15 +414,15 @@ test("addTag POSTs the name to the world tags endpoint", async () => {
 });
 
 test("listEntities resolves the scope base path", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk([]));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk([]));
+  globalThis.fetch = fetchMock;
   await api.listEntities({ kind: "campaign", id: "run" }, "lore");
   expect(fetchMock).toHaveBeenCalledWith("/api/campaigns/run/lore", expect.objectContaining({ method: "GET" }));
 });
 
 test("updateEntity PUTs keys", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
   await api.updateEntity({ kind: "world", id: "w" }, "lore", "salt", { keys: "pact,salt" });
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/w/lore/salt",
@@ -430,8 +431,8 @@ test("updateEntity PUTs keys", async () => {
 });
 
 test("addToCast POSTs kind+id to the scene cast endpoint", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
   await api.addToCast("run", "s1", { kind: "pcs", id: "elara" });
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/scenes/s1/cast",
@@ -440,8 +441,8 @@ test("addToCast POSTs kind+id to the scene cast endpoint", async () => {
 });
 
 test("setEdges PUTs to the greeting edges endpoint", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
   await api.setEdges({ kind: "world", id: "w" }, "g1", { leads_to: ["g2"] });
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/w/greetings/g1/edges",
@@ -450,8 +451,8 @@ test("setEdges PUTs to the greeting edges endpoint", async () => {
 });
 
 test("lorebookImport POSTs the entries array", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ created: [] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ created: [] }));
+  globalThis.fetch = fetchMock;
   const entries = [{ name: "A", keys: ["k"], body: "b", category: "lore" as const }];
   await api.lorebookImport("w", entries);
   expect(fetchMock).toHaveBeenCalledWith(
@@ -461,13 +462,13 @@ test("lorebookImport POSTs the entries array", async () => {
 });
 
 test("lorebookParse posts multipart form data", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ entries: [] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ entries: [] }));
+  globalThis.fetch = fetchMock;
   await api.lorebookParse("w", new File(["{}"], "wi.json"), "lorebook");
   const [path, opts] = fetchMock.mock.calls[0];
   expect(path).toBe("/api/worlds/w/lorebook/parse");
-  expect(opts.method).toBe("POST");
-  expect(opts.body).toBeInstanceOf(FormData);
+  expect(opts?.method).toBe("POST");
+  expect(opts?.body).toBeInstanceOf(FormData);
 });
 
 test("campaignChanges GETs the campaign changes endpoint", async () => {
@@ -475,8 +476,8 @@ test("campaignChanges GETs the campaign changes endpoint", async () => {
     scene: { id: "s1", title: "S", date: "" },
     fields: [{ field: "body", label: "The Pact — lore",
       diff: [{ op: "insert", text: "new" }] }] }];
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(rows));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(rows));
+  globalThis.fetch = fetchMock;
   const out = await api.campaignChanges("c1");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/c1/changes",
@@ -486,8 +487,8 @@ test("campaignChanges GETs the campaign changes endpoint", async () => {
 });
 
 test("promoteImage POSTs the promote route", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
   await api.promoteImage({ kind: "world", id: "w" }, "sera", "v1", "gallery_2");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/w/characters/sera/versions/v1/images/gallery_2/promote",
@@ -499,8 +500,8 @@ test("entity image helpers hit the scope-aware routes", async () => {
   const scope = { kind: "campaign", id: "run" } as const;
   expect(api.entityImageUrl(scope, "locations", "crypt", "avatar"))
     .toBe("/api/campaigns/run/locations/crypt/images/avatar");
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk([]));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk([]));
+  globalThis.fetch = fetchMock;
   await api.listEntityImages({ kind: "world", id: "w" }, "locations", "crypt");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/w/locations/crypt/images",
@@ -514,8 +515,8 @@ test("entity image helpers hit the scope-aware routes", async () => {
 });
 
 test("scope-parameterized calls route to worlds or campaigns", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk([]));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk([]));
+  globalThis.fetch = fetchMock;
   await api.listCharacters({ kind: "campaign", id: "run" });
   expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/characters",
     expect.objectContaining({ method: "GET" }));
@@ -527,8 +528,8 @@ test("scope-parameterized calls route to worlds or campaigns", async () => {
 test("a fresh greeting list never joins one already on the wire", async () => {
   // The plot map writes back what this read hands it, so an answer started
   // before somebody's edge write would be sent back over it.
-  let settleOld: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn()
+  let settleOld: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>()
     .mockReturnValueOnce(new Promise((res) => { settleOld = res; }))
     .mockResolvedValue(jsonOk([{ id: "new" }]));
   globalThis.fetch = fetchMock;
@@ -544,8 +545,8 @@ test("a fresh greeting list never joins one already on the wire", async () => {
 });
 
 test("greeting marks and version picks POST to their campaign routes", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
   await api.markGreeting("run", "g1", "skipped");
   expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/greetings/g1/mark",
     expect.objectContaining({ method: "POST", body: JSON.stringify({ status: "skipped" }) }));
@@ -555,8 +556,8 @@ test("greeting marks and version picks POST to their campaign routes", async () 
 });
 
 test("the scene ledger routes carry the idea and its status", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
   await api.saveSceneIdea("run", { title: "The tide-book", premise: "P", source: "llm" });
   expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/scene-ideas",
     expect.objectContaining({ method: "POST",
@@ -579,9 +580,9 @@ const CFG = {
 };
 
 test("concurrent identical GETs share one request; later calls fetch fresh", async () => {
-  let release: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn().mockReturnValue(new Promise((r) => { release = r; }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  let release: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(new Promise((r) => { release = r; }));
+  globalThis.fetch = fetchMock;
   const a = api.getCast("run", "s1");
   const b = api.getCast("run", "s1");
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -594,17 +595,17 @@ test("concurrent identical GETs share one request; later calls fetch fresh", asy
 });
 
 test("concurrent GETs to different URLs are not coalesced", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk([]));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk([]));
+  globalThis.fetch = fetchMock;
   await Promise.all([api.getCast("run", "s1"), api.getCast("run", "s2")]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
 test("a failed GET is not reused by the next call", async () => {
-  const fetchMock = vi.fn()
-    .mockResolvedValueOnce({ ok: false, status: 500, statusText: "boom", json: async () => ({}) })
+  const fetchMock = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(fixture({ ok: false, status: 500, statusText: "boom", json: async () => ({}) }))
     .mockResolvedValue(jsonOk([]));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
   await expect(api.getCast("run", "s1")).rejects.toThrow();
   await expect(api.getCast("run", "s1")).resolves.toEqual([]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -612,8 +613,8 @@ test("a failed GET is not reused by the next call", async () => {
 
 test("getConfig is cached across sequential calls until a config write", async () => {
   invalidateConfigCache();
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock;
   await api.getConfig();
   await api.getConfig();
   expect(fetchMock).toHaveBeenCalledTimes(1); // App + CampaignView share one fetch
@@ -627,8 +628,8 @@ test("getConfig is cached across sequential calls until a config write", async (
 
 test("updating a connection invalidates the config cache", async () => {
   invalidateConfigCache();
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock;
   await api.getConfig();
   await api.getConfig();
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -648,8 +649,8 @@ test("creating a connection also invalidates the config cache", async () => {
   // silently change what's active) — still proves the client doesn't rely
   // solely on that server-side guarantee to stay correct.
   invalidateConfigCache();
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock;
   await api.getConfig();
   expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -666,7 +667,7 @@ test("a model-facts write invalidates the config cache and announces", async () 
   // A capability override on Primary's model can move `ready`, which the
   // header reads off the cached config -- so the write has to drop it.
   invalidateConfigCache();
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(CFG));
   globalThis.fetch = fetchMock;
   await api.getConfig();
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -709,7 +710,7 @@ test("every mutator of what a model view reads drops the cached config and annou
   ];
   for (const [name, call, body] of mutators) {
     invalidateConfigCache();
-    const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(CFG));
     globalThis.fetch = fetchMock;
     await api.getConfig();
 
@@ -734,8 +735,8 @@ test("every mutator of what a model view reads drops the cached config and annou
 });
 
 test("addCastBatch POSTs every ref to the batch endpoint", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true, added: 2, skipped: [] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true, added: 2, skipped: [] }));
+  globalThis.fetch = fetchMock;
   await api.addCastBatch("run", "s1", [
     { kind: "pcs", id: "elara" },
     { kind: "characters", id: "sera" },
@@ -750,8 +751,8 @@ test("addCastBatch POSTs every ref to the batch endpoint", async () => {
 });
 
 test("getScene without a window GETs the scene bare", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ meta: {}, messages: [] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ meta: {}, messages: [] }));
+  globalThis.fetch = fetchMock;
   await api.getScene("run", "s1");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/scenes/s1",
@@ -760,8 +761,8 @@ test("getScene without a window GETs the scene bare", async () => {
 });
 
 test("getScene passes the window as limit/before query params", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ meta: {}, messages: [], offset: 0, total: 0, has_older: false }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ meta: {}, messages: [], offset: 0, total: 0, has_older: false }));
+  globalThis.fetch = fetchMock;
   await api.getScene("run", "s1", { limit: 40 });
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/scenes/s1?limit=40",
@@ -782,9 +783,9 @@ test("overlapping identical GETs share one request", async () => {
   // exemplar because opening a scene fires it from several components at once,
   // which is what the sharing is for — `listScenes` used to stand here and no
   // longer coalesces at all (#87).
-  let settle: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn().mockReturnValue(new Promise((res) => { settle = res; }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  let settle: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(new Promise((res) => { settle = res; }));
+  globalThis.fetch = fetchMock;
   const a = api.getCast("run", "s1");
   const b = api.getCast("run", "s1");
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -797,9 +798,9 @@ test("a ledger read never joins an in-flight one", async () => {
   // absorb save, a scene rename. Sharing the pre-change request would answer
   // the refresh with exactly the data it was asked to replace, and nothing
   // would fetch again afterwards.
-  let settle: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn().mockReturnValue(new Promise((res) => { settle = res; }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  let settle: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(new Promise((res) => { settle = res; }));
+  globalThis.fetch = fetchMock;
   const first = api.campaignLedger("run");
   const second = api.campaignLedger("run");
   expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -815,8 +816,8 @@ test("moving the store announces on both channels — everything changed", async
   const seen: string[] = [];
   const offC = onCampaignsChanged(() => seen.push("campaigns"));
   const offK = onConfigChanged(() => seen.push("config"));
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    jsonOk({ data_dir: "/sync/grimoire", is_default: false, source: "custom" })) as any;
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(
+    jsonOk({ data_dir: "/sync/grimoire", is_default: false, source: "custom" }));
 
   await api.putDataDir("/sync/grimoire");
   expect(seen.sort()).toEqual(["campaigns", "config"]);
@@ -829,8 +830,8 @@ test("a rejected store move announces nothing", async () => {
   // not look like a successful one.
   const seen: string[] = [];
   const off = onConfigChanged(() => seen.push("config"));
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    { ok: false, status: 400, json: async () => ({ detail: "not a directory" }) }) as any;
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(
+    fixture<Response>({ ok: false, status: 400, json: async () => ({ detail: "not a directory" }) }));
 
   await expect(api.putDataDir("/nope")).rejects.toThrow();
   expect(seen).toEqual([]);
@@ -848,10 +849,10 @@ test("refreshing a catalog announces, so a cached model list is dropped", async 
   // catalog is its result. Landed on arrival is the duplicate-delivery shape --
   // a re-POST of an attempt that already finished adopts its outcome -- which
   // is the one that needs no timers to express.
-  globalThis.fetch = vi.fn().mockResolvedValue(
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(
     jsonOk({ run: { id: "r1", attempt_id: "a1", state: "landed", next_index: 0,
                     cls: "draft", kind: "models-refresh",
-                    result: { models: [], fetched_at: "2026-08-21", rev: "r1" } } })) as any;
+                    result: { models: [], fetched_at: "2026-08-21", rev: "r1" } } }));
 
   await api.refreshConnectionModels("openrouter");
   expect(seen).toEqual(["config"]);
@@ -864,8 +865,8 @@ test("a provider failure announces on the config channel — the status bar is s
   // to before the next navigation.
   const seen: string[] = [];
   const off = onConfigChanged(() => seen.push("config"));
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    { ok: false, status: 502, json: async () => ({ detail: "bad key", kind: "auth" }) }) as any;
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(
+    fixture<Response>({ ok: false, status: 502, json: async () => ({ detail: "bad key", kind: "auth" }) }));
 
   await expect(api.generateCharacterTagline("realm", "mara")).rejects.toThrow();
   expect(seen).toEqual(["config"]);
@@ -878,8 +879,8 @@ test("a failure that is not a provider's announces nothing", async () => {
   // is not an LLM going down.
   const seen: string[] = [];
   const off = onConfigChanged(() => seen.push("config"));
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    { ok: false, status: 400, json: async () => ({ detail: "not a directory", kind: "data_dir" }) }) as any;
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(
+    fixture<Response>({ ok: false, status: 400, json: async () => ({ detail: "not a directory", kind: "data_dir" }) }));
 
   await expect(api.putDataDir("/nope")).rejects.toThrow();
   expect(seen).toEqual([]);
@@ -890,11 +891,11 @@ test("a fresh read retires the pending one, so the next caller cannot adopt it",
   // The fresh read bypasses the share, but leaving the pre-mutation GET in the
   // map means the *next* caller joins it and stores the very answer the fresh
   // read replaced — the refresh undone by whoever asks next.
-  let settleOld: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn()
+  let settleOld: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>()
     .mockReturnValueOnce(new Promise((res) => { settleOld = res; }))
     .mockResolvedValue(jsonOk([{ id: "new" }]));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const stale = api.listCampaigns();            // in flight, pre-mutation
   await api.listCampaigns(true);                 // fresh: must retire the above
@@ -909,11 +910,11 @@ test("a fresh read retires the pending one, so the next caller cannot adopt it",
 test("invalidating the config cache retires the in-flight config GET too", async () => {
   // The resolved cache is only half of what is stale: with the cache cleared,
   // the next getConfig() would otherwise join a read issued before the change.
-  let settleOld: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn()
+  let settleOld: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>()
     .mockReturnValueOnce(new Promise((res) => { settleOld = res; }))
     .mockResolvedValue(jsonOk({ theme: "codex", active_connection_id: "new" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const stale = api.getConfig();
   invalidateConfigCache();
@@ -929,18 +930,18 @@ test("moving the store retires every pending read, not just config and campaigns
   // The Library hub fires five section counts. Any still in flight when the
   // root changes would resolve with the previous store's totals, and the hub
   // would adopt them.
-  let settleWorlds: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn()
+  let settleWorlds: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>()
     .mockReturnValueOnce(new Promise((res) => { settleWorlds = res; }))
     .mockResolvedValue(jsonOk([{ id: "new-store-world" }]));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const stale = api.listWorlds();                       // in flight against the old root
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    jsonOk({ data_dir: "/sync/grimoire", is_default: false, source: "custom" })) as any;
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(
+    jsonOk({ data_dir: "/sync/grimoire", is_default: false, source: "custom" }));
   await api.putDataDir("/sync/grimoire");
 
-  globalThis.fetch = vi.fn().mockResolvedValue(jsonOk([{ id: "new-store-world" }])) as any;
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(jsonOk([{ id: "new-store-world" }]));
   const after = api.listWorlds();                        // must not rejoin the pre-move read
   settleWorlds(jsonOk([{ id: "old-store-world" }]));
   expect((await after)[0].id).toBe("new-store-world");
@@ -951,12 +952,12 @@ test("a retired read settling does not evict the replacement that took its place
   // A retired GET still settles. If its cleanup deletes unconditionally it
   // removes whatever entry is live by then, and every later caller issues its
   // own request — on /api/campaigns that is a full scan per caller.
-  let settleOld: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn()
+  let settleOld: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>()
     .mockReturnValueOnce(new Promise((res) => { settleOld = res; }))   // 1: pre-mutation
     .mockReturnValueOnce(new Promise(() => {}))                        // 2: fresh, never settles
     .mockReturnValueOnce(new Promise(() => {}));                       // 3: the replacement
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const stale = api.listCampaigns();       // installed in the map
   api.listCampaigns(true);                  // fresh: retires the entry above
@@ -973,12 +974,12 @@ test("prompt-list reads never coalesce, so a post-generation refresh sees the ne
   // turn that generation just captured is the entire reason for the re-read. A
   // shared in-flight GET from before the turn answers with a list that cannot
   // contain the new row, leaving Turn history a turn behind (#157).
-  let releaseFirst: (v: unknown) => void = () => {};
+  let releaseFirst: (v: Response) => void = () => {};
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
     .mockResolvedValue(jsonOk({ entries: [{ id: "000002" }] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  globalThis.fetch = fetchMock;
 
   const older = api.listScenePrompts("run", "s1");   // opened before the turn landed
   const newer = api.listScenePrompts("run", "s1");   // issues its own, not shared
@@ -994,7 +995,7 @@ test("exportWorldUrl is a plain href the browser can download", () => {
 });
 
 test("forkWorld POSTs the new name to the source world's fork route", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "saltmarch-fork" }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "saltmarch-fork" }));
   // No `as unknown as typeof fetch`, for the reason the turn-producer test
   // below gives: the ratchet counts that assertion and this file already
   // carries sixty of them.
@@ -1013,7 +1014,7 @@ test("a fork does not invalidate the cached config", async () => {
   // Unlike createWorld and importWorld: forking needs a world to fork, so
   // `first_run` was already false and the cached config still says so.
   invalidateConfigCache();
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(CFG));
   globalThis.fetch = fetchMock;
   await api.getConfig();
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1028,8 +1029,8 @@ test("a fork does not invalidate the cached config", async () => {
 });
 
 test("importWorld POSTs the raw zip body", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "saltmarch-2" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "saltmarch-2" }));
+  globalThis.fetch = fetchMock;
   const file = new Blob([new Uint8Array([0x50, 0x4b])], { type: "application/zip" });
   expect(await api.importWorld(file)).toEqual({ id: "saltmarch-2" });
   expect(fetchMock).toHaveBeenCalledWith(
@@ -1043,10 +1044,10 @@ test("importWorld POSTs the raw zip body", async () => {
 });
 
 test("importWorld surfaces the server's rejection as an ApiError", async () => {
-  globalThis.fetch = vi.fn().mockResolvedValue({
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(fixture<Response>({
     ok: false, status: 400, statusText: "Bad Request",
     json: async () => ({ detail: "not a world bundle: no grimoire-bundle.json" }),
-  }) as unknown as typeof fetch;
+  }));
   // toBeInstanceOf, not toMatchObject: a plain object carrying the same two
   // fields would satisfy a shape match while callers that branch on ApiError
   // stopped working.
@@ -1060,8 +1061,8 @@ test("a successful world import invalidates the cached config", async () => {
   // Importing into an empty store flips `first_run`, exactly as createWorld
   // does -- a stale cached config would leave the setup wizard showing.
   invalidateConfigCache();
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock;
   await api.getConfig();
   await api.getConfig();
   expect(fetchMock).toHaveBeenCalledTimes(1);   // cached
@@ -1078,9 +1079,9 @@ test("a successful world import invalidates the cached config", async () => {
 test("one frozen snapshot IS shared, because it cannot go stale", async () => {
   // The exception to the exception: a captured prompt never changes, so two
   // readers of the same entry may share one answer.
-  let release: (v: unknown) => void = () => {};
-  const fetchMock = vi.fn().mockImplementation(() => new Promise((r) => { release = r; }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  let release: (v: Response) => void = () => {};
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => new Promise((r) => { release = r; }));
+  globalThis.fetch = fetchMock;
   const a = api.getScenePrompt("run", "s1", "000001");
   const b = api.getScenePrompt("run", "s1", "000001");
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1101,8 +1102,8 @@ test("exportUrl points at the version's export route, one URL per format", () =>
 });
 
 test("search builds the query string and omits what was not asked for", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ hits: [] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ hits: [] }));
+  globalThis.fetch = fetchMock;
   await api.search("the salt pact");
   expect(fetchMock.mock.calls[0][0]).toBe("/api/search?q=the+salt+pact");
 
@@ -1114,19 +1115,19 @@ test("search builds the query string and omits what was not asked for", async ()
 test("two searches for the same query are two requests, not one shared read", async () => {
   // The shared-promise cache is keyed on the path, so an edit-and-undo would
   // otherwise be answered by the read issued before the edit.
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ hits: [] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ hits: [] }));
+  globalThis.fetch = fetchMock;
   await Promise.all([api.search("salt"), api.search("salt")]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
 test("a search can be aborted by the page that asked for it", async () => {
   // Safe only because a search is `fresh`: the promise is nobody else's.
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ hits: [] }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ hits: [] }));
   globalThis.fetch = fetchMock;
   const controller = new AbortController();
   await api.search("salt", {}, controller.signal);
-  expect(fetchMock.mock.calls[0][1].signal).toBe(controller.signal);
+  expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
 });
 
 
@@ -1134,8 +1135,8 @@ test("setCharacterName PUTs the rename under whichever scope is open", async () 
   // Scope-aware on purpose (#13): the Name field is editable in campaign scope
   // too, where the write must land on the campaign's own copy rather than the
   // world record every campaign inherits from.
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
 
   await api.setCharacterName({ kind: "world", id: "w" }, "seraphine", "Winifred");
   expect(fetchMock).toHaveBeenLastCalledWith(
@@ -1155,8 +1156,8 @@ test("both PC creates carry version_name through to their own route", async () =
   // types left it out, so no caller could name a PC's first version without
   // casting past the client (#14). Sent verbatim, and to the endpoint whose
   // scope was asked for -- world PCs and a campaign's own are separate records.
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ pc: "winifred", version: "young" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ pc: "winifred", version: "young" }));
+  globalThis.fetch = fetchMock;
 
   await api.createPC("w", { name: "Winifred", version_name: "Young" });
   expect(fetchMock).toHaveBeenLastCalledWith(
@@ -1178,8 +1179,8 @@ test("both PC creates carry version_name through to their own route", async () =
 });
 
 test("a PC create that names no version sends none, leaving the server's default", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ pc: "winifred", version: "default" }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ pc: "winifred", version: "default" }));
+  globalThis.fetch = fetchMock;
   await api.createPC("w", { name: "Winifred" });
   expect(fetchMock).toHaveBeenLastCalledWith(
     "/api/worlds/w/pcs",
@@ -1195,10 +1196,10 @@ test("a 502 from an LLM route reaches the caller with its kind intact", async ()
   // (`already_absorbed`, `edit_conflicts`) have always read it too, and until
   // now nothing proved `request` populated it at all -- every test that
   // branches on a kind hands its component a hand-built object.
-  globalThis.fetch = vi.fn().mockResolvedValue({
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(fixture<Response>({
     ok: false, status: 502, statusText: "Bad Gateway",
     json: async () => ({ detail: "connection reset", kind: "network" }),
-  }) as unknown as typeof fetch;
+  }));
   await expect(api.generateCharacterTagline("w", "seraphine")).rejects.toMatchObject({
     status: 502, detail: "connection reset", kind: "network",
   });
@@ -1207,10 +1208,10 @@ test("a 502 from an LLM route reaches the caller with its kind intact", async ()
 test("a stream that is refused before any body carries its kind too", async () => {
   // `streamPost`'s non-2xx path builds its own ApiError; the opener composer
   // and the chat view both read `kind` off it.
-  globalThis.fetch = vi.fn().mockResolvedValue({
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(fixture<Response>({
     ok: false, status: 502, statusText: "Bad Gateway",
     json: async () => ({ detail: "connection reset", kind: "network" }),
-  }) as unknown as typeof fetch;
+  }));
   await expect(api.opener("run", "s1", "a foggy harbor", () => {}))
     .rejects.toMatchObject({ status: 502, kind: "network" });
 });
@@ -1222,16 +1223,16 @@ test("a stream that is refused before any body carries its kind too", async () =
 // pin — a scope that silently fell back to /api/campaigns would edit some other
 // record's calendar and still resolve.
 test("getCalendarConfig GETs the campaign's calendar", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ confirmed: false }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ confirmed: false }));
+  globalThis.fetch = fetchMock;
   await api.getCalendarConfig({ kind: "campaign", id: "run" });
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/calendar", expect.objectContaining({ method: "GET" }));
 });
 
 test("getCalendarConfig GETs the world's calendar", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ confirmed: false }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ confirmed: false }));
+  globalThis.fetch = fetchMock;
   await api.getCalendarConfig({ kind: "world", id: "realm" });
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/realm/calendar", expect.objectContaining({ method: "GET" }));
@@ -1240,8 +1241,8 @@ test("getCalendarConfig GETs the world's calendar", async () => {
 test("setCalendarConfig PUTs to the scope it was given", async () => {
   const cfg = { primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
                 secondary: null, confirmed: true, stale_after_days: 30, warn_days: 7 };
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
   await api.setCalendarConfig({ kind: "world", id: "realm" }, cfg);
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/realm/calendar",
@@ -1249,8 +1250,8 @@ test("setCalendarConfig PUTs to the scope it was given", async () => {
 });
 
 test("getCalendarMonths asks the scope's own calendar for its months", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ months: [] }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ months: [] }));
+  globalThis.fetch = fetchMock;
   await api.getCalendarMonths({ kind: "campaign", id: "run" }, 2026);
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/campaigns/run/calendar/months?year=2026", expect.objectContaining({ method: "GET" }));
@@ -1290,8 +1291,8 @@ test("the campaign image library's four URLs are the four routes that serve it",
   // fetched, it is WRITTEN INTO A POST and saved (#376). A wrong template here
   // does not fail a request — it files a permanently broken reference into a
   // transcript, and every export that reads it degrades the image to alt text.
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
 
   expect(api.campaignImageUrl("run", "coastline")).toBe("/api/campaigns/run/images/coastline");
   expect(api.campaignImageUrl("run", "coastline", { w: 160 }))
@@ -1337,12 +1338,12 @@ const TURN_PRODUCERS: [string,
 ];
 
 test("extendResponse posts its overrides to the response's extend route", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(sseResponse(['data: {"done":true}\n\n']));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(sseResponse(['data: {"done":true}\n\n']));
   globalThis.fetch = fetchMock;
   await api.extendResponse("c1", "s1", "r1", () => {},
                            { guidance: "Colder", provider: "realm", model: "qwen3", preset: "cold" });
   expect(fetchMock.mock.calls[0][0]).toBe("/api/campaigns/c1/scenes/s1/responses/r1/extend");
-  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual(
+  expect(jsonBody(fetchMock.mock.calls[0][1])).toEqual(
     { guidance: "Colder", provider: "realm", model: "qwen3", preset: "cold" });
 });
 
@@ -1352,16 +1353,14 @@ test.each(TURN_PRODUCERS)(
     // the server mint its own, so the id the caller recorded names a run that
     // never existed -- Stop addresses nothing and recovery asks about an
     // attempt no route ever heard of. Four of the five dropped it (codex, P1).
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       sseResponse(['id: 4\ndata: {"delta":"The lamps are lit."}\n\n']));
-    // No `as unknown as typeof fetch` here, unlike its neighbours: the ratchet
-    // counts that assertion and this file is already carrying 61 of them.
     globalThis.fetch = fetchMock;
     const indexes: number[] = [];
 
     await call(() => {}, "a-7", (i) => indexes.push(i));
 
-    expect(fetchMock.mock.calls[0][1].headers["X-Grimoire-Attempt"]).toBe("a-7");
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("X-Grimoire-Attempt")).toBe("a-7");
     // and the resume cursor is fed the WIRE index, which is the other half of
     // the pair -- a producer that forwarded one and not the other would leave
     // a reattach resuming from zero and replaying the whole reply.
@@ -1369,7 +1368,7 @@ test.each(TURN_PRODUCERS)(
   });
 
 test("reclassifyEntity posts the destination kind under the record's current one", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "tidewatch", campaigns: ["saltmarch"] }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "tidewatch", campaigns: ["saltmarch"] }));
   vi.stubGlobal("fetch", fetchMock);
   const out = await api.reclassifyEntity({ kind: "world", id: "realm" }, "lore", "tidewatch",
                                          "locations", "r1");
@@ -1384,7 +1383,7 @@ test("reclassifyEntity posts the destination kind under the record's current one
 });
 
 test("reclassifyEntity omits an absent rev rather than sending a null precondition", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "tidewatch" }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "tidewatch" }));
   vi.stubGlobal("fetch", fetchMock);
   await api.reclassifyEntity({ kind: "campaign", id: "saltmarch" }, "lore", "tidewatch", "items");
   expect(fetchMock).toHaveBeenCalledWith(
@@ -1410,7 +1409,7 @@ function runResponse(state: string, extra: Record<string, unknown> = {}) {
 test("absorbScene polls the run and answers with the stored review", async () => {
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
@@ -1476,7 +1475,7 @@ test("an absorb whose review no longer matches does not announce a landed review
 test("a failed run raises the failure the synchronous route used to raise", async () => {
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
@@ -1506,7 +1505,7 @@ test("a landed absorb whose record is gone is reported as stale, not as an empty
   // that had nothing to say.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "landed", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
@@ -1522,7 +1521,7 @@ test("a landed absorb whose record is gone is reported as stale, not as an empty
 });
 
 test("discardReview names the generation, and only that", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ removed: true, stopped: 1 }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ removed: true, stopped: 1 }));
   globalThis.fetch = fetchMock;
   await api.discardReview("run", "s1", "gen/1");
   expect(fetchMock.mock.calls[0][0])
@@ -1534,14 +1533,14 @@ test("discardReview names the generation, and only that", async () => {
 test("liveReview ignores a live run that is not a review", async () => {
   // The newest run on a scene is as likely to be a chat turn, and adopting one
   // of those as a review would leave End Scene spinning over a reply.
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(
     { run: { id: "r1", state: "running", cls: "turn", attempt_id: "a", next_index: 3 } }));
   globalThis.fetch = fetchMock;
   expect(await api.liveReview("run", "s1")).toBeNull();
 });
 
 test("liveReview answers with a review still being prepared", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk(
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk(
     { run: { id: "r1", state: "running", cls: "review", attempt_id: null,
              next_index: 0, review_generation: "gen1" } }));
   globalThis.fetch = fetchMock;
@@ -1555,13 +1554,13 @@ test("an absorb whose run was reaped is recovered from the store", async () => {
   // loss the durable review was built to prevent.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
-      .mockResolvedValueOnce({ ok: false, status: 404,
+      .mockResolvedValueOnce(fixture({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
-                                                    kind: "run_gone" }) })
+                                                    kind: "run_gone" }) }))
       .mockResolvedValueOnce(jsonOk({ review: { one_line: "They met." },
                                       generation: "gen1", stale: null }));
     globalThis.fetch = fetchMock;
@@ -1580,7 +1579,7 @@ test("a failed run does not hand back the review that was already there", async 
   // absorb's result -- a wrong answer presented as a right one.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen2" }))
@@ -1603,7 +1602,7 @@ test("a landed run whose record belongs to another review is refused", async () 
   // record on disk is a review, and it is not this one's.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "landed", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
@@ -1624,13 +1623,13 @@ test("a reaped run with nothing on disk still reports the failure", async () => 
   // silence. Nothing stored means the absorb really is gone.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
-      .mockResolvedValueOnce({ ok: false, status: 404,
+      .mockResolvedValueOnce(fixture({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
-                                                    kind: "run_gone" }) })
+                                                    kind: "run_gone" }) }))
       .mockResolvedValueOnce(jsonOk({ review: null, generation: null, stale: null }));
     globalThis.fetch = fetchMock;
     const failed = api.absorbScene("run", "s1").then(
@@ -1650,7 +1649,7 @@ test("a failed poll is not a failed run", async () => {
   // holding, and nothing to open the review when it lands.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
@@ -1673,7 +1672,7 @@ test("a poll that keeps failing does give up", async () => {
   // forever on a server that is gone.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
@@ -1697,7 +1696,7 @@ test("an absorb whose 202 never arrived is adopted, not reported as failed", asy
   // with, because `onStarted` never fired.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))        // the lost 202
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              kind: "absorb", attempt_id: null,
@@ -1725,10 +1724,10 @@ test("an absorb the server refused in words is not adopted", async () => {
   // server answered -- `already_absorbed`, a missing key, a busy scene -- and
   // every one of those is the caller's to handle. Adopting a live run there
   // would swallow the confirmation prompt a re-absorb depends on.
-  const fetchMock = vi.fn()
-    .mockResolvedValueOnce({ ok: false, status: 409,
+  const fetchMock = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(fixture({ ok: false, status: 409,
                              json: async () => ({ detail: "already absorbed",
-                                                  kind: "already_absorbed" }) });
+                                                  kind: "already_absorbed" }) }));
   globalThis.fetch = fetchMock;
 
   const failed = await api.absorbScene("run", "s1").then(
@@ -1743,7 +1742,7 @@ test("a live retry of an OLDER review is not adopted as this absorb", async () =
   // some earlier review's phase wears it too. Adopted here, it would install
   // that review's generation and hand its summary back as this End scene's
   // result -- a stale review presented as the one just asked for.
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockRejectedValueOnce(new TypeError("Failed to fetch"))
     .mockResolvedValueOnce(jsonOk({ run: { id: "r9", state: "running", cls: "review",
                                            kind: "audit", attempt_id: null,
@@ -1761,7 +1760,7 @@ test("an absorb that failed with no run to find still reports the failure", asyn
   // The counterweight: a POST that never reached the server has nothing to
   // adopt, and silence there would leave the reader looking at a scene that
   // never started ending.
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockRejectedValueOnce(new TypeError("Failed to fetch"))
     .mockResolvedValueOnce(jsonOk({ run: null }));
   globalThis.fetch = fetchMock;
@@ -1781,13 +1780,13 @@ test("a reaped audit retry is read back off the stored review", async () => {
   // nothing said so.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r2", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
-      .mockResolvedValueOnce({ ok: false, status: 404,
+      .mockResolvedValueOnce(fixture({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
-                                                    kind: "run_gone" }) })
+                                                    kind: "run_gone" }) }))
       .mockResolvedValueOnce(jsonOk({
         review: { mechanics: { status: "ok" },
                   edits: [{ id: "sheet:mara", kind: "sheet" },
@@ -1814,13 +1813,13 @@ test("a reaped dossier retry hands back only the rows it re-proposed", async () 
   // where they are.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r2", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
-      .mockResolvedValueOnce({ ok: false, status: 404,
+      .mockResolvedValueOnce(fixture({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
-                                                    kind: "run_gone" }) })
+                                                    kind: "run_gone" }) }))
       .mockResolvedValueOnce(jsonOk({
         review: { dossiers: { status: "ok", proposed: ["aese"] },
                   edits: [{ id: "d:aese", kind: "dossier", target: { id: "aese" } },
@@ -1844,7 +1843,7 @@ test("a retry that FAILED is not answered with the phase it was retrying", async
   // one, and the reviewer never learns the retry did not run.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r2", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
@@ -1871,13 +1870,13 @@ test("a reaped retry whose review has been replaced still reports the failure", 
   // holding a review this retry has nothing to do with.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r2", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
-      .mockResolvedValueOnce({ ok: false, status: 404,
+      .mockResolvedValueOnce(fixture({ ok: false, status: 404,
                                json: async () => ({ detail: "no such run",
-                                                    kind: "run_gone" }) })
+                                                    kind: "run_gone" }) }))
       .mockResolvedValueOnce(jsonOk({ review: { mechanics: { status: "ok" }, edits: [] },
                                       generation: "gen2", stale: null }));
     globalThis.fetch = fetchMock;
@@ -1898,7 +1897,7 @@ test("a transient failure on the read after a landed run is not a lost review", 
   // stays selected. A dropped fetch there loses a review that is on disk.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "landed", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
@@ -1918,10 +1917,10 @@ test("a transient failure on the read after a landed run is not a lost review", 
 test("a definite answer from the store is not asked for again", async () => {
   // Retrying is for the failures that clear on their own. `review_unreadable`
   // is an answer, and asking again only spends time before reporting it.
-  const fetchMock = vi.fn()
-    .mockResolvedValue({ ok: false, status: 409,
+  const fetchMock = vi.fn<typeof fetch>()
+    .mockResolvedValue(fixture({ ok: false, status: 409,
                          json: async () => ({ detail: "the stored review could not be read",
-                                              kind: "review_unreadable" }) });
+                                              kind: "review_unreadable" }) }));
   globalThis.fetch = fetchMock;
 
   const failed = await api.pendingReview("run", "s1").then(
@@ -1938,7 +1937,7 @@ test("a run still reported as running outlives a run of failed polls", async () 
   // for as long as an unbounded budget allows.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }));
@@ -1966,7 +1965,7 @@ test("a run nothing can find any more still reports the failure", async () => {
   // gone and the original failure stands rather than looping forever.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              attempt_id: null, next_index: 0 },
                                       generation: "gen1" }))
@@ -1988,7 +1987,7 @@ test("a scoped retry whose 202 was lost is adopted, not reported as failed", asy
   // rows over the completed retry.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))          // the lost 202
       .mockResolvedValueOnce(jsonOk({ run: { id: "r2", state: "running", cls: "review",
                                              kind: "audit", attempt_id: null,
@@ -2010,7 +2009,7 @@ test("a retry does not adopt a live absorb as its own run", async () => {
   // They share the `review` class, so `kind` is the only thing that tells one
   // review run from another: a retry adopting an absorb would hand the panel a
   // whole review where it asked for one phase.
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockRejectedValueOnce(new TypeError("Failed to fetch"))
     .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                            kind: "absorb", attempt_id: null,
@@ -2030,7 +2029,7 @@ test("a transient failure discovering a live review is retried, not answered", a
   // until the reader changes scenes is a poor answer to a blip.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
       .mockResolvedValueOnce(jsonOk({ run: { id: "r1", state: "running", cls: "review",
                                              kind: "absorb", attempt_id: null,
@@ -2058,23 +2057,15 @@ test("a transient failure discovering a live review is retried, not answered", a
  *
  *  `sseResponse` reaches a clean EOF, which is a stream that ENDED rather than
  *  one that was cut, and a client has no reason to pick that back up. */
-function sseCutOff(chunks: string[]) {
+function sseCutOff(chunks: string[]): Response {
   let i = 0;
-  return {
-    ok: true,
-    body: {
-      getReader() {
-        return {
-          read: async () => {
-            if (i < chunks.length) {
-              return { value: new TextEncoder().encode(chunks[i++]), done: false };
-            }
-            throw new TypeError("Failed to fetch");
-          },
-        };
-      },
+  const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    pull(controller) {
+      if (i < chunks.length) controller.enqueue(new TextEncoder().encode(chunks[i++]));
+      else controller.error(new TypeError("Failed to fetch"));
     },
-  };
+  }, { highWaterMark: 0 });
+  return fixture({ ok: true, body });
 }
 
 function draftRunResponse(state: string, extra: Record<string, unknown> = {}) {
@@ -2085,7 +2076,7 @@ function draftRunResponse(state: string, extra: Record<string, unknown> = {}) {
 test("a draft polls its own subject's runs and unwraps the result", async () => {
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(draftRunResponse("running"))
       .mockResolvedValueOnce(draftRunResponse("running"))
       .mockResolvedValueOnce(draftRunResponse("landed",
@@ -2108,7 +2099,7 @@ test("a draft polls its own subject's runs and unwraps the result", async () => 
 
 test("the start carries an attempt id, so a duplicate delivery is not paid for twice",
      async () => {
-  const fetchMock = vi.fn().mockResolvedValue(
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
     draftRunResponse("landed", { result: { tagline: "x" } }));
   globalThis.fetch = fetchMock;
 
@@ -2151,7 +2142,7 @@ test("a Refresh refused at its start says so; a run gone from its poll does not"
 test("a failed draft raises the failure the synchronous route used to raise", async () => {
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(draftRunResponse("running"))
       .mockResolvedValueOnce(draftRunResponse("failed", {
         error: { kind: "rate_limit", detail: "slow down", status: 429 } }));
@@ -2176,7 +2167,7 @@ test("a start whose reply never arrived adopts the run it may have made", async 
   // back. Reported as a failure, the user starts it again and pays twice.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
       .mockResolvedValueOnce(jsonOk({ runs: [
         { id: "r1", attempt_id: "a1", state: "running", next_index: 0, cls: "draft" }] }))
@@ -2189,7 +2180,7 @@ test("a start whose reply never arrived adopts the run it may have made", async 
     expect(await pending).toEqual({ tagline: "x" });
     // Found by the ATTEMPT, never by the kind: drafts overlap on one coarse
     // subject by design, so "the world's in-flight tagline run" is ambiguous.
-    expect(String(fetchMock.mock.calls[1][0])).toContain("/api/worlds/realm/runs?attempt=");
+    expect(fetchMock.mock.calls[1][0]).toContain("/api/worlds/realm/runs?attempt=");
   } finally {
     vi.useRealTimers();
   }
@@ -2202,7 +2193,7 @@ test("a lookup that could not be made is not read as 'there is no run'", async (
   // it -- so the run started before the network went is still adopted.
   vi.useFakeTimers();
   try {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
       .mockResolvedValueOnce(jsonOk({ runs: [
@@ -2223,8 +2214,8 @@ test("a server that answered is the caller's to handle, never a run to adopt", a
   // An `ApiError` means the request was received and refused -- a 404 for a
   // character that is gone, a 409 for a missing key. Adopting a run for one of
   // those would hide a setup mistake behind a wait that never ends.
-  const fetchMock = vi.fn().mockResolvedValue(
-    { ok: false, status: 404, json: async () => ({ detail: "character not found" }) });
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    fixture({ ok: false, status: 404, json: async () => ({ detail: "character not found" }) }));
   globalThis.fetch = fetchMock;
 
   await expect(api.generateCharacterTagline("realm", "nobody")).rejects.toThrow();
@@ -2238,7 +2229,7 @@ test("an opener whose connection dies is picked back up where it stopped", async
   // opener used to lose it outright, because the only copy of each frame was
   // the one already on the wire.
   const seen: string[] = [];
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockResolvedValueOnce(sseCutOff([
       'data: {"run":{"id":"r1","attempt_id":"a1","state":"running","next_index":0}}\n\n',
       'id: 0\ndata: {"delta":"The "}\n\n',
@@ -2258,16 +2249,16 @@ test("an opener whose connection dies is picked back up where it stopped", async
   expect(seen.join("")).toBe("The quay.");
   // Found by the attempt, so a second opener on the same scene cannot be
   // mistaken for this one.
-  expect(String(fetchMock.mock.calls[1][0])).toContain("attempt=");
+  expect(fetchMock.mock.calls[1][0]).toContain("attempt=");
   // From ONE PAST the last frame actually delivered, never from the run's
   // `next_index`: that is the live tail, and resuming there drops the reply.
-  expect(String(fetchMock.mock.calls[2][0]))
+  expect(fetchMock.mock.calls[2][0])
     .toBe("/api/campaigns/run/scenes/s1/runs/r1/stream?from=1");
 });
 
 test("an opener the server never heard of reports the failure it really had",
      async () => {
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockRejectedValueOnce(new TypeError("Failed to fetch"))
     .mockResolvedValueOnce(jsonOk({ run: null }));
   globalThis.fetch = fetchMock;
@@ -2280,7 +2271,7 @@ test("an opener lookup that could not be made does not end the recovery", async 
   // abandon a generation that is still going -- and the reader would see a
   // half-written opener with no way back to the rest of it.
   const seen: string[] = [];
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockResolvedValueOnce(sseCutOff([
       'data: {"run":{"id":"r1","attempt_id":"a1","state":"running","next_index":0}}\n\n',
       'id: 0\ndata: {"delta":"The "}\n\n',
@@ -2304,7 +2295,7 @@ test("an opener stream closed cleanly mid-generation is still picked back up", a
   // exception alone returns happily and leaves a half-written opener on screen
   // while the server finishes the rest into a buffer nobody reads.
   const seen: string[] = [];
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockResolvedValueOnce(sseResponse([
       'data: {"run":{"id":"r1","attempt_id":"a1","state":"running","next_index":0}}\n\n',
       'id: 0\ndata: {"delta":"The "}\n\n',
@@ -2324,7 +2315,7 @@ test("an opener stream closed cleanly mid-generation is still picked back up", a
 test("an opener that really did finish is not re-attached to", async () => {
   // The other half of the same rule: a `done` frame IS the end, and a client
   // that went back for more would spend a request per opener forever.
-  const fetchMock = vi.fn().mockResolvedValueOnce(sseResponse([
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(sseResponse([
     'data: {"run":{"id":"r1","attempt_id":"a1","state":"running","next_index":0}}\n\n',
     'id: 0\ndata: {"delta":"The quay."}\n\n', 'id: 1\ndata: {"done":true}\n\n',
   ]));
@@ -2381,18 +2372,19 @@ test("a model refresh whose run was reaped reads its catalog back off the store"
     // that have not settled, so a read that resolves promptly could never be
     // joined by anything.
     let release = () => {};
-    const held = new Promise((r) => { release = () => r(jsonOk(before)); });
+    const held = new Promise<Response>((r) => { release = () => r(jsonOk(before)); });
     let asked = 0;
-    const fetchMock = vi.fn().mockImplementation(
-      (path: string, init?: { headers?: Record<string, string> }) => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      (input, init) => {
+        const path = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
         if (path.endsWith("/models/refresh")) {
-          sent = init?.headers?.["X-Grimoire-Attempt"] ?? "";
+          sent = new Headers(init?.headers).get("X-Grimoire-Attempt") ?? "";
           return Promise.resolve(draftRunResponse("running"));
         }
         if (path.includes("/runs/")) {
-          return Promise.resolve({ ok: false, status: 404,
+          return Promise.resolve(fixture<Response>({ ok: false, status: 404,
                                    json: async () => ({ detail: "no such run",
-                                                        kind: "run_gone" }) });
+                                                        kind: "run_gone" }) }));
         }
         return asked++ === 0 ? held : Promise.resolve(jsonOk(
           { id: "openrouter", models: [{ id: "m-1" }], fetched_at: "2026-08-27",
@@ -2482,7 +2474,7 @@ test("an opener whose scene was renamed under it is still picked back up", async
   // identity, so the old id resolves to no run and every re-attach would
   // abandon a generation the server is still buffering.
   const seen: string[] = [];
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockResolvedValueOnce(sseCutOff([
       'data: {"run":{"id":"r1","attempt_id":"a1","state":"running",'
         + '"next_index":0,"scene_identity":"ident-1"}}\n\n',
@@ -2502,10 +2494,10 @@ test("an opener whose scene was renamed under it is still picked back up", async
   await api.opener("run", "s1", "begin", (e) => { if (e.delta) seen.push(e.delta); });
 
   expect(seen.join("")).toBe("The quay.");
-  expect(String(fetchMock.mock.calls[2][0])).toContain("scene-by-identity?identity=ident-1");
+  expect(fetchMock.mock.calls[2][0]).toContain("scene-by-identity?identity=ident-1");
   // And the re-attach goes to the scene's CURRENT id, not the one the stream
   // was opened on.
-  expect(String(fetchMock.mock.calls[4][0]))
+  expect(fetchMock.mock.calls[4][0])
     .toBe("/api/campaigns/run/scenes/s2-renamed/runs/r1/stream?from=1");
 });
 
@@ -2515,7 +2507,7 @@ test("an opener renamed between the lookup and the attach is still picked back u
   // attach goes out, and then it is the attach that 404s. Re-resolving only on
   // an empty lookup leaves that window open.
   const seen: string[] = [];
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockResolvedValueOnce(sseCutOff([
       'data: {"run":{"id":"r1","attempt_id":"a1","state":"running",'
         + '"next_index":0,"scene_identity":"ident-1"}}\n\n',
@@ -2526,9 +2518,9 @@ test("an opener renamed between the lookup and the attach is still picked back u
                                            state: "running", next_index: 2,
                                            cls: "draft" } }))
     // ...and the attach is what finds it gone.
-    .mockResolvedValueOnce({ ok: false, status: 404,
+    .mockResolvedValueOnce(fixture({ ok: false, status: 404,
                              json: async () => ({ detail: "no such run",
-                                                  kind: "run_gone" }) })
+                                                  kind: "run_gone" }) }))
     .mockResolvedValueOnce(jsonOk({ id: "s2-renamed" }))
     .mockResolvedValueOnce(jsonOk({ run: { id: "r1", attempt_id: "a1",
                                            state: "running", next_index: 2,
@@ -2541,7 +2533,7 @@ test("an opener renamed between the lookup and the attach is still picked back u
   await api.opener("run", "s1", "begin", (e) => { if (e.delta) seen.push(e.delta); });
 
   expect(seen.join("")).toBe("The quay.");
-  expect(String(fetchMock.mock.calls[5][0]))
+  expect(fetchMock.mock.calls[5][0])
     .toBe("/api/campaigns/run/scenes/s2-renamed/runs/r1/stream?from=1");
 });
 
@@ -2570,7 +2562,7 @@ test("an identity lookup that could not be made does not end the opener recovery
   // that the scene stayed put, so concluding no-move abandons an opener still
   // buffered under the new id. Only a 404 is an answer.
   const seen: string[] = [];
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockResolvedValueOnce(sseCutOff([
       'data: {"run":{"id":"r1","attempt_id":"a1","state":"running",'
         + '"next_index":0,"scene_identity":"ident-1"}}\n\n',
@@ -2579,8 +2571,8 @@ test("an identity lookup that could not be made does not end the opener recovery
     .mockResolvedValueOnce(jsonOk({ run: null }))
     // The resolver itself falls over -- a 409 while the scan could not read
     // every candidate is the server's own "ask me again".
-    .mockResolvedValueOnce({ ok: false, status: 409,
-                             json: async () => ({ detail: "busy", kind: "busy" }) })
+    .mockResolvedValueOnce(fixture({ ok: false, status: 409,
+                             json: async () => ({ detail: "busy", kind: "busy" }) }))
     // Second attempt: the lookup answers, and the scene has moved.
     .mockResolvedValueOnce(jsonOk({ run: null }))
     .mockResolvedValueOnce(jsonOk({ id: "s2-renamed" }))
@@ -2602,15 +2594,15 @@ test("a scene that really is gone ends the opener recovery rather than looping",
   // The other half: a 404 from `scene-by-identity` IS an answer -- nothing
   // carries that identity any more -- so the original failure stands instead
   // of burning every remaining attempt on a scene that is not coming back.
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockResolvedValueOnce(sseCutOff([
       'data: {"run":{"id":"r1","attempt_id":"a1","state":"running",'
         + '"next_index":0,"scene_identity":"ident-1"}}\n\n',
     ]))
     .mockResolvedValueOnce(jsonOk({ run: null }))
-    .mockResolvedValueOnce({ ok: false, status: 404,
+    .mockResolvedValueOnce(fixture({ ok: false, status: 404,
                              json: async () => ({ detail: "no scene carries that identity",
-                                                  kind: "scene_gone" }) });
+                                                  kind: "scene_gone" }) }));
   globalThis.fetch = fetchMock;
 
   await expect(api.opener("run", "s1", "begin", () => {}))
@@ -2723,7 +2715,7 @@ test("a scene datetime write announces only when it moved the clock", async () =
 });
 
 test("editMessage sends restore only when asked, so every plain edit is unchanged", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
   globalThis.fetch = fetchMock;
   await api.editMessage("run", "s1", 2, "plain");
   await api.editMessage("run", "s1", 2, "the original", { restore: true });
@@ -2735,7 +2727,7 @@ test("editMessage sends restore only when asked, so every plain edit is unchange
 });
 
 test("branchScene POSTs the branch point, and a title only when given", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "s1-b", scene: { meta: {}, messages: [] } }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "s1-b", scene: { meta: {}, messages: [] } }));
   globalThis.fetch = fetchMock;
   await api.branchScene("c1", "s1", 2);
   expect(fetchMock).toHaveBeenCalledWith("/api/campaigns/c1/scenes/s1/branch",
@@ -2746,25 +2738,25 @@ test("branchScene POSTs the branch point, and a title only when given", async ()
 });
 
 test("forkCampaign sends from_index only when it is given", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "b" }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "b" }));
   globalThis.fetch = fetchMock;
   await api.forkCampaign("c1", "B", "s1", {}, 3);
-  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(
+  expect(jsonBody(fetchMock.mock.calls[0][1])).toEqual(
     { name: "B", from_scene: "s1", from_index: 3 });
   await api.forkCampaign("c1", "B", "s1");
-  expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ name: "B", from_scene: "s1" });
+  expect(jsonBody(fetchMock.mock.calls[1][1])).toEqual({ name: "B", from_scene: "s1" });
   await api.forkCampaign("c1", "B", "s1", {}, 0);
-  expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual(
+  expect(jsonBody(fetchMock.mock.calls[2][1])).toEqual(
     { name: "B", from_scene: "s1", from_index: 0 });
 });
 
 test("startReplay asks for a branch only when told to", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ cut: 2, cascade: {} }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ cut: 2, cascade: {} }));
   globalThis.fetch = fetchMock;
   await api.startReplay("c1", "s1", 2, true);
-  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ index: 2, branch: true });
+  expect(jsonBody(fetchMock.mock.calls[0][1])).toEqual({ index: 2, branch: true });
   await api.startReplay("c1", "s1", 2);
-  expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ index: 2 });
+  expect(jsonBody(fetchMock.mock.calls[1][1])).toEqual({ index: 2 });
 });
 
 // ---- the continuity review (Slice D) ---------------------------------------
@@ -2799,7 +2791,7 @@ describe("staleCurrent", () => {
 });
 
 test("the continuity mutators address their routes, encoding what is not a slug", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
   globalThis.fetch = fetchMock;
   await api.removeAlias("run", "thread:mara/map");
   expect(fetchMock).toHaveBeenLastCalledWith(
@@ -2825,7 +2817,7 @@ test("the continuity mutators address their routes, encoding what is not a slug"
 });
 
 test("a ledger delete asks for force only when told to", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
   globalThis.fetch = fetchMock;
   await api.ledgerDeleteThread("run", "mara-s-map");
   expect(fetchMock).toHaveBeenLastCalledWith(
@@ -2843,7 +2835,7 @@ test("a ledger delete asks for force only when told to", async () => {
 test("sceneSuggestions sends its options as one JSON body", async () => {
   // A body rather than a query string: the controls are lists, and the server
   // ignores the query whenever a body is present (§16.3).
-  const fetchMock = vi.fn().mockResolvedValue(
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
     draftRunResponse("landed", { kind: "scene-suggestions", result: { suggestions: [] } }));
   globalThis.fetch = fetchMock;
 
@@ -2867,7 +2859,7 @@ test("sceneSuggestions sends its options as one JSON body", async () => {
 test("continuityDrivers reads fresh", async () => {
   // The chooser reads again after a stale refusal; a shared read would hand it
   // the answer it was refused against.
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ drivers: [], anchors: [] }));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ drivers: [], anchors: [] }));
   globalThis.fetch = fetchMock;
 
   await Promise.all([api.continuityDrivers("c"), api.continuityDrivers("c")]);
@@ -2885,9 +2877,9 @@ test("continuityGraph reads fresh and encodes the campaign", async () => {
   const graph: StoryGraph = {
     now: { native: "", friendly: "", fixed: null }, nodes: [], edges: [], omitted: [],
   };
-  let releaseFirst: (v: unknown) => void = () => {};
+  let releaseFirst: (v: Response) => void = () => {};
   const fetchMock = vi
-    .fn()
+    .fn<typeof fetch>()
     .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
     .mockResolvedValue(jsonOk(graph));
   globalThis.fetch = fetchMock;
@@ -2931,13 +2923,13 @@ test("removeAlias and removeLink tell the shell", async () => {
   // Ledger count moves without the pathname moving.
   const spy = vi.fn();
   const off = onShellChanged(spy);
-  globalThis.fetch = vi.fn().mockResolvedValue(jsonOk({ ok: true })) as any;
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
   await api.removeAlias("run", "thread:mara-s-map");
   expect(spy).toHaveBeenCalledTimes(1);
   await api.removeLink("run", "l1");
   expect(spy).toHaveBeenCalledTimes(2);
-  globalThis.fetch = vi.fn().mockResolvedValue(
-    { ok: false, status: 409, json: async () => ({ detail: "busy", kind: "busy" }) }) as any;
+  globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(
+    fixture<Response>({ ok: false, status: 409, json: async () => ({ detail: "busy", kind: "busy" }) }));
   await expect(api.removeAlias("run", "thread:mara-s-map")).rejects.toThrow();
   await expect(api.removeLink("run", "l1")).rejects.toThrow();
   expect(spy).toHaveBeenCalledTimes(2);
@@ -2951,8 +2943,8 @@ test("a continuity apply or dismiss answered partial_* still tells the shell", a
   // nothing.
   const spy = vi.fn();
   const off = onShellChanged(spy);
-  const failing = (body: object) => vi.fn().mockResolvedValue(
-    { ok: false, status: 500, json: async () => body }) as any;
+  const failing = (body: object) => vi.fn<typeof fetch>().mockResolvedValue(
+    fixture<Response>({ ok: false, status: 500, json: async () => body }));
   globalThis.fetch = failing({ kind: "partial_apply", landed: ["status"],
                                detail: "the finding was only partly applied" });
   await expect(api.applyCandidate("run", "possible_thread_closure-01", { op: "close" }))
@@ -2980,7 +2972,7 @@ test("a failed reconcile run's body has a type", () => {
 
 // ---- inference settings (slice C) ----
 test("an Embedding change carries its confirmation only when the reader gave it", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({}));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({}));
   globalThis.fetch = fetchMock;
   const body = { roles: { embedding: { selection: { provider: "saltmarch", model: "e" } } } };
 
@@ -2988,13 +2980,13 @@ test("an Embedding change carries its confirmation only when the reader gave it"
   await api.putInferenceSettings(body, { confirmEmbedding: true });
 
   expect(fetchMock.mock.calls[0][0]).toBe("/api/inference/settings");
-  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual(body);
-  expect(JSON.parse(fetchMock.mock.calls[1][1].body as string))
+  expect(jsonBody(fetchMock.mock.calls[0][1])).toEqual(body);
+  expect(jsonBody(fetchMock.mock.calls[1][1]))
     .toEqual({ ...body, confirm_embedding: true });
 });
 
 test("a campaign's roles and routes are read and written under the campaign", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonOk({}));
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({}));
   globalThis.fetch = fetchMock;
   await api.getCampaignInference("run");
   await api.putCampaignInference("run", { routes: { scene: { use: "fast" } } });
@@ -3005,18 +2997,18 @@ test("a campaign's roles and routes are read and written under the campaign", as
 });
 
 test("a health check sends confirm only when asked to", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
     jsonOk({ ok: true, kind: "", detail: "", checked_at: "" }));
   globalThis.fetch = fetchMock;
   await api.checkConnection("claude");
   await api.checkConnection("claude", { confirm: true });
-  expect(fetchMock.mock.calls[0][1].body).toBeUndefined();
-  expect(fetchMock.mock.calls[1][1].body).toBe(JSON.stringify({ confirm: true }));
+  expect(fetchMock.mock.calls[0][1]?.body).toBeUndefined();
+  expect(fetchMock.mock.calls[1][1]?.body).toBe(JSON.stringify({ confirm: true }));
 });
 
 test("model facts address the model in the query, and the test runs as a global draft",
      async () => {
-  const fetchMock = vi.fn()
+  const fetchMock = vi.fn<typeof fetch>()
     .mockResolvedValueOnce(jsonOk({}))
     .mockResolvedValueOnce(draftRunResponse("landed", { kind: "model-test",
       result: { provider: "saltmarch", model: "vendor/m", rev: "r", results: {},
@@ -3029,13 +3021,13 @@ test("model facts address the model in the query, and the test runs as a global 
 
   expect(fetchMock.mock.calls[0][0]).toBe("/api/llm-connections/saltmarch/facts?model=vendor%2Fm");
   expect(fetchMock.mock.calls[1][0]).toBe("/api/llm-connections/saltmarch/test");
-  expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual(
+  expect(jsonBody(fetchMock.mock.calls[1][1])).toEqual(
     { model: "vendor/m", capabilities: ["generate"], confirm: true });
   expect(result.model).toBe("vendor/m");
 });
 
 test("a model test sent under a caller's attempt id names that id", async () => {
-  const fetchMock = vi.fn().mockResolvedValueOnce(draftRunResponse("landed", {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(draftRunResponse("landed", {
     kind: "model-test",
     result: { provider: "saltmarch", model: "vendor/m", rev: "r", results: {}, recorded: false },
   }));
@@ -3047,7 +3039,7 @@ test("a model test sent under a caller's attempt id names that id", async () => 
 
   // The same id a second ask would send, which the server answers with the
   // run it already started rather than a new one.
-  expect(fetchMock.mock.calls[0][1].headers["X-Grimoire-Attempt"]).toBe("held-attempt");
+  expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("X-Grimoire-Attempt")).toBe("held-attempt");
 });
 
 test("a confirmed Chub gallery download invalidates common Art", async () => {
@@ -3103,4 +3095,26 @@ test("an abandoned draft wait announces nothing: the run is still going", async 
     vi.useRealTimers();
     off();
   }
+});
+
+test("optional transport inputs preserve JSON bytes and fetch defaults", async () => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ id: "mara" }));
+  globalThis.fetch = fetchMock;
+  await api.createScene("saltmarch", "", undefined, false, "");
+  expect(fetchMock.mock.calls[0]?.[1]?.body).toBe('{"title":"","pcless":false,"focus":""}');
+  await api.getGlobalRun("run");
+  const defaults = fetchMock.mock.calls[1]?.[1];
+  expect(defaults?.body).toBeUndefined();
+  expect(defaults?.signal).toBeUndefined();
+  expect(defaults?.headers).toEqual({});
+
+  const controller = new AbortController();
+  await api.getGlobalRun("run", controller.signal);
+  expect(fetchMock.mock.calls[2]?.[1]?.signal).toBe(controller.signal);
+});
+
+test("image query defaults accept missing values without losing a version or width", () => {
+  expect(api.worldImageUrl("realm", "map", { w: undefined, v: undefined })).toBe('/api/worlds/realm/images/map');
+  expect(api.worldImageUrl("realm", "map", { w: 0, v: "" })).toBe('/api/worlds/realm/images/map');
+  expect(api.worldImageUrl("realm", "map", { w: 160, v: "rev" })).toBe(`/api/worlds/realm/images/map?w=160&t=${THUMB_REV}&v=rev`);
 });

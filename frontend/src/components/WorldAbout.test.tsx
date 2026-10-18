@@ -3,13 +3,14 @@ import { WorldAbout } from "./WorldAbout";
 
 vi.mock("../api/client", () => ({ api: { getWorld: vi.fn(), updateWorld: vi.fn() } }));
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getWorld as any).mockResolvedValue({
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({
     meta: { id: "realm", name: "Realm", genre: "Coastal gothic", tone: "Wry dread", themes: ["salt", "debt"] },
-    body: "A **drowned** coast.\n", counts: {} });
-  (api.updateWorld as any).mockResolvedValue({ id: "realm", name: "Realm" });
+    body: "A **drowned** coast.\n", counts: {} }));
+  vi.mocked(api.updateWorld).mockResolvedValue({ id: "realm", name: "Realm" });
 });
 
 test("the profile reads as a rendered view, with no form until Edit", async () => {
@@ -23,9 +24,9 @@ test("the profile reads as a rendered view, with no form until Edit", async () =
 test("Edit opens the form; Save writes the profile and returns to the view", async () => {
   render(<WorldAbout wid="realm" />);
   // what the view shows after a save is the server's re-read, not the draft
-  (api.getWorld as any).mockResolvedValue({
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({
     meta: { id: "realm", name: "Realm", genre: "Coastal gothic", tone: "Bright", themes: ["salt", "debt"] },
-    body: "A **drowned** coast.\n", counts: {} });
+    body: "A **drowned** coast.\n", counts: {} }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   expect(screen.getByLabelText("Themes")).toHaveValue("salt, debt");
   fireEvent.change(screen.getByLabelText("Tone"), { target: { value: "Bright" } });
@@ -46,13 +47,13 @@ test("Cancel discards the draft", async () => {
 });
 
 test("a world with no profile says what one is for", async () => {
-  (api.getWorld as any).mockResolvedValue({ meta: { id: "realm", name: "Realm" }, body: "", counts: {} });
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({ meta: { id: "realm", name: "Realm" }, body: "", counts: {} }));
   render(<WorldAbout wid="realm" />);
   expect(await screen.findByText(/No description yet/)).toBeInTheDocument();
 });
 
 test("a failed save keeps the form and says why", async () => {
-  (api.updateWorld as any).mockRejectedValue(new Error("world kept changing"));
+  vi.mocked(api.updateWorld).mockRejectedValue(new Error("world kept changing"));
   render(<WorldAbout wid="realm" />);
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -61,17 +62,17 @@ test("a failed save keeps the form and says why", async () => {
 });
 
 test("a save still in flight when the world changes does not land on the next world", async () => {
-  let releasePut: (v: unknown) => void = () => {};
-  (api.updateWorld as any).mockImplementation(() => new Promise((r) => { releasePut = r; }));
+  let releasePut: (v: Awaited<ReturnType<typeof api.updateWorld>>) => void = () => {};
+  vi.mocked(api.updateWorld).mockImplementation(() => new Promise((r) => { releasePut = r; }));
   const { rerender } = render(<WorldAbout wid="realm" />);
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Genre"), { target: { value: "Realm's genre" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  (api.getWorld as any).mockImplementation(async (wid: string) => wid === "saltmarch"
+  vi.mocked(api.getWorld).mockImplementation(async (wid) => fixture(wid === "saltmarch"
     ? { meta: { id: "saltmarch", name: "Saltmarch", genre: "Harbour noir", tone: "", themes: [] },
         body: "", counts: {} }
     : { meta: { id: "realm", name: "Realm", genre: "Realm's genre", tone: "", themes: [] },
-        body: "", counts: {} });
+        body: "", counts: {} }));
   rerender(<WorldAbout wid="saltmarch" />);
   expect(await screen.findByText(/Genre: Harbour noir/)).toBeInTheDocument();
   releasePut({ id: "realm", name: "Realm" });

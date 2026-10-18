@@ -1,3 +1,4 @@
+import type { ModuleDetail } from "../api/types";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,6 +9,7 @@ vi.mock("../api/client", () => ({
 }));
 import { api } from "../api/client";
 import CreationWizard from "./CreationWizard";
+import { fixture } from "../testkit/fixture";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -15,7 +17,7 @@ beforeEach(() => {
 
 const scope = { kind: "world" as const, id: "w1" };
 
-const module = {
+const module = fixture<ModuleDetail>({
   id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
   sheets: {
     groups: { attributes: { label: "Attributes", fields: [{ key: "vigor", type: "dots", max: 5 }] } },
@@ -28,12 +30,12 @@ const module = {
     },
   },
   checks: {}, rules: [], content: [], errors: [],
-} as any;
+});
 
 describe("CreationWizard", () => {
   it("creates the record via createRecord, picks a type, spends a pool, and calls onDone", async () => {
     const createRecord = vi.fn().mockResolvedValue("sword");
-    (api.putSheetCreation as any).mockResolvedValue({ sheet: { sheet_type: "hero", fields: {}, derived: {}, errors: [] } });
+    vi.mocked(api.putSheetCreation).mockResolvedValue(fixture({ sheet: { sheet_type: "hero", fields: {}, derived: {}, errors: [] } }));
     const onDone = vi.fn();
     render(<CreationWizard scope={scope} kind="items" module={module}
                            createRecord={createRecord} onDone={onDone} onCancel={() => {}} />);
@@ -73,7 +75,7 @@ describe("CreationWizard", () => {
 
   it("a type with no creation block skips straight to a budget-free create call", async () => {
     const createRecord = vi.fn().mockResolvedValue("shield");
-    (api.putSheetCreation as any).mockResolvedValue({ sheet: { sheet_type: "plain", fields: {}, derived: {}, errors: [] } });
+    vi.mocked(api.putSheetCreation).mockResolvedValue(fixture({ sheet: { sheet_type: "plain", fields: {}, derived: {}, errors: [] } }));
     const onDone = vi.fn();
     render(<CreationWizard scope={scope} kind="items" module={module}
                            createRecord={createRecord} onDone={onDone} onCancel={() => {}} />);
@@ -105,7 +107,7 @@ describe("CreationWizard", () => {
     // "strength" is a number field with min: 1 (mirrors d20-basic's adept
     // creation pool) -- an untouched field resolves server-side to its min,
     // and spend is measured from that floor, not from 0.
-    const numberModule = {
+    const numberModule = fixture<ModuleDetail>({
       ...module,
       sheets: {
         groups: {
@@ -124,9 +126,9 @@ describe("CreationWizard", () => {
           },
         },
       },
-    } as any;
+    });
     const createRecord = vi.fn().mockResolvedValue("elara");
-    (api.putSheetCreation as any).mockResolvedValue({ sheet: { sheet_type: "hero", fields: {}, derived: {}, errors: [] } });
+    vi.mocked(api.putSheetCreation).mockResolvedValue(fixture({ sheet: { sheet_type: "hero", fields: {}, derived: {}, errors: [] } }));
     const onDone = vi.fn();
     render(<CreationWizard scope={scope} kind="items" module={numberModule}
                            createRecord={createRecord} onDone={onDone} onCancel={() => {}} />);
@@ -161,9 +163,9 @@ describe("CreationWizard", () => {
       },
     };
     const createRecord = vi.fn().mockResolvedValue("elara");
-    (api.putSheetCreation as any).mockResolvedValue({ sheet: { sheet_type: "hero", fields: {}, derived: {}, errors: [] } });
+    vi.mocked(api.putSheetCreation).mockResolvedValue(fixture({ sheet: { sheet_type: "hero", fields: {}, derived: {}, errors: [] } }));
     const onDone = vi.fn();
-    render(<CreationWizard scope={scope} kind="pcs" module={pcModule as any}
+    render(<CreationWizard scope={scope} kind="pcs" module={pcModule}
                            createRecord={createRecord} onDone={onDone} onCancel={() => {}} />);
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Elara" } });
     fireEvent.click(screen.getByText("Next"));
@@ -179,7 +181,7 @@ describe("CreationWizard", () => {
   it("rolls back the created record when putSheetCreation fails, then shows the error banner", async () => {
     const createRecord = vi.fn().mockResolvedValue("sword");
     const deleteRecord = vi.fn().mockResolvedValue(undefined);
-    (api.putSheetCreation as any).mockRejectedValue({ detail: "budget rejected" });
+    vi.mocked(api.putSheetCreation).mockRejectedValue({ detail: "budget rejected" });
     const onDone = vi.fn();
     render(<CreationWizard scope={scope} kind="items" module={module}
                            createRecord={createRecord} deleteRecord={deleteRecord}
@@ -197,7 +199,7 @@ describe("CreationWizard", () => {
 
   it("degrades gracefully when no deleteRecord is provided: still shows the error, doesn't throw", async () => {
     const createRecord = vi.fn().mockResolvedValue("sword");
-    (api.putSheetCreation as any).mockRejectedValue({ detail: "budget rejected" });
+    vi.mocked(api.putSheetCreation).mockRejectedValue({ detail: "budget rejected" });
     const onDone = vi.fn();
     render(<CreationWizard scope={scope} kind="items" module={module}
                            createRecord={createRecord}

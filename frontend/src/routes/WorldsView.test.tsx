@@ -7,7 +7,7 @@ import { announceRunSettled, bumpMemoEpoch } from "../api/memoEpoch";
 
 const navigate = vi.fn();
 vi.mock("react-router-dom", async () => ({
-  ...(await vi.importActual<any>("react-router-dom")),
+  ...(await vi.importActual<typeof import("react-router-dom")>("react-router-dom")),
   useNavigate: () => navigate,
 }));
 
@@ -27,23 +27,24 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 beforeEach(() => {
   vi.clearAllMocks();
   resetPrefetch();
-  (api.getWorld as any).mockResolvedValue({ meta: { id: "w1", name: "Saltmarch" }, body: "", counts: {} });
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.rememberedWorld as any).mockReturnValue(undefined);
-  (api.rememberedCharacters as any).mockReturnValue(undefined);
-  (api.rememberedAppearances as any).mockReturnValue(undefined);
-  (api.listWorlds as any).mockResolvedValue([]);
-  (api.rememberedWorlds as any).mockReturnValue(undefined);
-  (api.createWorld as any).mockResolvedValue({ id: "w1" });
-  (api.renameWorld as any).mockResolvedValue({ id: "w1", name: "New" });
-  (api.deleteWorld as any).mockResolvedValue({ ok: true });
-  (api.exportWorldUrl as any).mockImplementation((wid: string) => `/api/worlds/${wid}/export.zip`);
-  (api.importWorld as any).mockResolvedValue({ id: "imported" });
-  (api.forkWorld as any).mockResolvedValue({ id: "saltmarch-fork" });
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({ meta: { id: "w1", name: "Saltmarch" }, body: "", counts: {} }));
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.rememberedWorld).mockReturnValue(undefined);
+  vi.mocked(api.rememberedCharacters).mockReturnValue(undefined);
+  vi.mocked(api.rememberedAppearances).mockReturnValue(undefined);
+  vi.mocked(api.listWorlds).mockResolvedValue([]);
+  vi.mocked(api.rememberedWorlds).mockReturnValue(undefined);
+  vi.mocked(api.createWorld).mockResolvedValue({ id: "w1" });
+  vi.mocked(api.renameWorld).mockResolvedValue({ id: "w1", name: "New" });
+  vi.mocked(api.deleteWorld).mockResolvedValue({ ok: true });
+  vi.mocked(api.exportWorldUrl).mockImplementation((wid) => `/api/worlds/${wid}/export.zip`);
+  vi.mocked(api.importWorld).mockResolvedValue({ id: "imported" });
+  vi.mocked(api.forkWorld).mockResolvedValue({ id: "saltmarch-fork" });
 });
 
 function renderView() {
@@ -58,11 +59,11 @@ test("the grid is alphabetical, whatever order the listing arrives in", async ()
   // `listWorlds` answers newest-first, which is the right order for a feed and
   // the wrong one for a shelf you come to looking for one world by name. No
   // toggle: a world is a reference library rather than something you play.
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue(fixture([
     { id: "w1", name: "Tidewrack", counts: {} },
     { id: "w2", name: "ashfall", counts: {} },
     { id: "w3", name: "The Saltmarch", counts: {} },
-  ]);
+  ]));
   renderView();
   await screen.findByText("The Saltmarch");
   // Case-insensitively and past the article, so a world typed in lower case
@@ -74,7 +75,7 @@ test("the grid is alphabetical, whatever order the listing arrives in", async ()
 });
 
 test("lists worlds as cards with count footers", async () => {
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     { id: "w1", name: "Saltmarch", created: "", updated: "",
       counts: { locations: 3, lore: 12, characters: 5, pcs: 1 } },
   ]);
@@ -101,7 +102,7 @@ test("creating a world posts the name and refreshes the list", async () => {
 test("a refused create says why, keeps the name, and refreshes nothing", async () => {
   // It used to be an unhandled rejection: the grid unchanged and nothing on
   // screen to tell a refused name from a click that never landed.
-  (api.createWorld as any).mockRejectedValue({ detail: "a world named Realm already exists" });
+  vi.mocked(api.createWorld).mockRejectedValue({ detail: "a world named Realm already exists" });
   renderView();
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());
   fireEvent.change(screen.getByPlaceholderText(/world name/i), { target: { value: "Realm" } });
@@ -356,7 +357,7 @@ test("create is disabled with no name", async () => {
 });
 
 test("renames a world", async () => {
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     { id: "w1", name: "Old", created: "", updated: "", counts: {} },
   ]);
   renderView();
@@ -369,7 +370,7 @@ test("renames a world", async () => {
 });
 
 test("deletes a world after confirm", async () => {
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     { id: "w1", name: "Doomed", created: "", updated: "", counts: {} },
   ]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -380,11 +381,11 @@ test("deletes a world after confirm", async () => {
 });
 
 test("a blocked world delete shows the server's message", async () => {
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     { id: "w1", name: "W1", created: "", updated: "", counts: {} },
   ]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
-  (api.deleteWorld as any).mockRejectedValue(new Error("world is used by campaigns: C"));
+  vi.mocked(api.deleteWorld).mockRejectedValue(new Error("world is used by campaigns: C"));
   const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
   renderView();
   fireEvent.click(await screen.findByLabelText("Delete W1"));
@@ -398,7 +399,7 @@ test("a blocked world delete shows the server's message", async () => {
 test("every card offers a download link to its own export bundle", async () => {
   // Two worlds, so an implementation that renders Export on the first card
   // only -- or points every card at one world -- fails here.
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     { id: "w1", name: "Saltmarch", created: "", updated: "", counts: {} },
     { id: "w2", name: "Realm", created: "", updated: "", counts: {} },
   ]);
@@ -417,7 +418,7 @@ test.each([
   [404, "world not found"],
   [422, "image exceeds the bundle limit: worlds/realm/avatar.png"],
 ])("a refused export (%i) displays the actual GET's server detail", async (_status, detail) => {
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   renderView();
   fireEvent.click(await screen.findByLabelText("Export Saltmarch"));
 
@@ -434,7 +435,7 @@ test.each([
 });
 
 test("an export's initial blank frame is ignored and a malformed response is visible", async () => {
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   renderView();
   fireEvent.click(await screen.findByLabelText("Export Saltmarch"));
   const frame = screen.getByTitle("Export Saltmarch response");
@@ -455,7 +456,7 @@ test("an export's initial blank frame is ignored and a malformed response is vis
 });
 
 test("an export never accepts refusal text from a different document", async () => {
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   renderView();
   fireEvent.click(await screen.findByLabelText("Export Saltmarch"));
   const frame = screen.getByTitle("Export Saltmarch response");
@@ -470,7 +471,7 @@ test("an export never accepts refusal text from a different document", async () 
 });
 
 test("repeating an export issues another streamed GET without cancelling a different world", async () => {
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     ...ONE_WORLD, { id: "w2", name: "Realm", created: "", updated: "", counts: {} },
   ]);
   renderView();
@@ -500,7 +501,7 @@ test("a failed refresh after a successful import is not reported as a failure", 
   // Receiving the id is the commit point -- the world exists. Reporting the
   // refresh's failure as the import's would send the user to retry, and the
   // retry imports a second copy.
-  (api.listWorlds as any)
+  vi.mocked(api.listWorlds)
     .mockResolvedValueOnce([])
     .mockRejectedValueOnce(new Error("network"));
   renderView();
@@ -514,7 +515,7 @@ test("a failed refresh after a successful import is not reported as a failure", 
 });
 
 test("a rejected bundle shows the server's reason and creates nothing", async () => {
-  (api.importWorld as any).mockRejectedValue({ detail: "not a world bundle: no grimoire-bundle.json" });
+  vi.mocked(api.importWorld).mockRejectedValue({ detail: "not a world bundle: no grimoire-bundle.json" });
   renderView();
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());
   const file = new File(["junk"], "notes.zip", { type: "application/zip" });
@@ -534,7 +535,7 @@ test("forking prompts for a name, posts it, and refreshes the grid", async () =>
   // Refreshed rather than navigated to: `listWorlds` orders by `updated` and
   // the fork stamps its own, so the copy lands at the front of the grid the
   // user is already looking at.
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
@@ -546,7 +547,7 @@ test("forking prompts for a name, posts it, and refreshes the grid", async () =>
 });
 
 test("a dismissed or blank fork prompt copies nothing", async () => {
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   const prompt = vi.spyOn(window, "prompt").mockReturnValue(null);
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
@@ -558,8 +559,8 @@ test("a dismissed or blank fork prompt copies nothing", async () => {
 });
 
 test("a failed fork names the world and the reason, and refreshes nothing", async () => {
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
-  (api.forkWorld as any).mockRejectedValue({ detail: "could not claim a world id" });
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.forkWorld).mockRejectedValue({ detail: "could not claim a world id" });
   const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
@@ -572,12 +573,12 @@ test("a failed fork names the world and the reason, and refreshes nothing", asyn
 test("a fork in flight cannot be started twice", async () => {
   // A world runs to a gigabyte of art, so this request takes real time and a
   // second click on a pending one would make a second copy.
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     ...ONE_WORLD,
     { id: "w2", name: "Realm", created: "", updated: "", counts: {} },
   ]);
-  let release: (v: unknown) => void = () => {};
-  (api.forkWorld as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.forkWorld>>) => void = () => {};
+  vi.mocked(api.forkWorld).mockReturnValue(new Promise((r) => { release = r; }));
   const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
@@ -594,9 +595,9 @@ test("a fork in flight cannot be started twice", async () => {
 test("deleting a world is blocked while a fork is copying it", async () => {
   // The copy walks the SOURCE for as long as it runs, so deleting that world
   // mid-walk fails the fork and leaves neither the copy nor the original.
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
-  let release: (v: unknown) => void = () => {};
-  (api.forkWorld as any).mockReturnValue(new Promise((r) => { release = r; }));
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
+  let release: (v: Awaited<ReturnType<typeof api.forkWorld>>) => void = () => {};
+  vi.mocked(api.forkWorld).mockReturnValue(new Promise((r) => { release = r; }));
   const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   renderView();
@@ -617,7 +618,7 @@ test("the post-fork refresh does not join a read started before it published", a
   // `request()` shares in-flight GETs by path, so a world-list read issued
   // while the copy was running would answer with a list the fork is not in --
   // no error, button re-enabled, and the obvious retry makes a second copy.
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   const prompt = vi.spyOn(window, "prompt").mockReturnValue("Winifred");
   renderView();
   fireEvent.click(await screen.findByLabelText("Fork Saltmarch"));
@@ -632,8 +633,8 @@ test("a failed refresh after a successful fork says the copy exists", async () =
   // copying a gigabyte the retry makes a second copy. Swallowing it silently
   // is no better here: unlike an import, nothing navigates, so a quiet no-op
   // looks exactly like a fork that never happened.
-  (api.listWorlds as any)
-    .mockResolvedValue([...ONE_WORLD, { id: "winifred", name: "Winifred", counts: {} }])
+  vi.mocked(api.listWorlds)
+    .mockResolvedValue(fixture([...ONE_WORLD, { id: "winifred", name: "Winifred", counts: {} }]))
     .mockResolvedValueOnce(ONE_WORLD)
     .mockResolvedValueOnce(ONE_WORLD)
     .mockRejectedValueOnce(new Error("network"));
@@ -658,7 +659,7 @@ const SALTMARCH = { id: "w1", name: "Saltmarch", created: "", updated: "", count
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function worldCard() {
-  (api.listWorlds as any).mockResolvedValue([SALTMARCH]);
+  vi.mocked(api.listWorlds).mockResolvedValue([SALTMARCH]);
   renderView();
   await screen.findByText("Saltmarch");
   return screen.getByText("Saltmarch").closest("button") as HTMLElement;
@@ -709,8 +710,8 @@ test("keyboard focus resting on a card is intent too", async () => {
 });
 
 test("what is already remembered is not prefetched again", async () => {
-  (api.rememberedWorld as any).mockReturnValue({ meta: SALTMARCH, body: "", counts: {} });
-  (api.rememberedCharacters as any).mockReturnValue([]);
+  vi.mocked(api.rememberedWorld).mockReturnValue({ meta: SALTMARCH, body: "", counts: {} });
+  vi.mocked(api.rememberedCharacters).mockReturnValue([]);
   const card = await worldCard();
   fireEvent.pointerDown(card);
   await sleep(10);
@@ -719,8 +720,8 @@ test("what is already remembered is not prefetched again", async () => {
 });
 
 test("a prefetch that fails is swallowed -- the page's own read is the one that reports", async () => {
-  (api.getWorld as any).mockRejectedValue(new Error("offline"));
-  (api.listCharacters as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getWorld).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.listCharacters).mockRejectedValue(new Error("offline"));
   const card = await worldCard();
   fireEvent.pointerDown(card);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
@@ -729,7 +730,7 @@ test("a prefetch that fails is swallowed -- the page's own read is the one that 
 });
 
 test("a world can be created with its profile, and a card shows the genre", async () => {
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     { id: "realm", name: "Realm", genre: "Coastal gothic", created: "", updated: "", counts: {} }]);
   render(<MemoryRouter><WorldsView /></MemoryRouter>);
   expect(await screen.findByText("Coastal gothic")).toBeInTheDocument();
@@ -758,9 +759,9 @@ function held<T>() {
 }
 
 test("a remembered grid paints on the first render, busy, with rename, fork and delete held", async () => {
-  (api.rememberedWorlds as any).mockReturnValue(ONE_WORLD);
+  vi.mocked(api.rememberedWorlds).mockReturnValue(ONE_WORLD);
   const answer = held<WorldMeta[]>();
-  (api.listWorlds as any).mockReturnValue(answer.promise);
+  vi.mocked(api.listWorlds).mockReturnValue(answer.promise);
   renderView();
   // Read synchronously, before any await: this is the frame painted from
   // memory, and an await would settle past it.
@@ -786,7 +787,7 @@ test("a remembered grid paints on the first render, busy, with rename, fork and 
 
 test("no count is stated before a read has landed", async () => {
   const answer = held<WorldMeta[]>();
-  (api.listWorlds as any).mockReturnValue(answer.promise);
+  vi.mocked(api.listWorlds).mockReturnValue(answer.promise);
   renderView();
   // "0 worlds" is a statement; nothing has been read to make it.
   expect(screen.queryByText(/0 worlds/i)).toBeNull();
@@ -796,9 +797,9 @@ test("no count is stated before a read has landed", async () => {
 });
 
 test("a remembered empty grid states nothing until its read lands", async () => {
-  (api.rememberedWorlds as any).mockReturnValue([]);
+  vi.mocked(api.rememberedWorlds).mockReturnValue([]);
   const answer = held<WorldMeta[]>();
-  (api.listWorlds as any).mockReturnValue(answer.promise);
+  vi.mocked(api.listWorlds).mockReturnValue(answer.promise);
   renderView();
   expect(screen.queryByText(/0 worlds/i)).toBeNull();
   answer.resolve(ONE_WORLD);
@@ -806,15 +807,15 @@ test("a remembered empty grid states nothing until its read lands", async () => 
 });
 
 test("a failed read shows its banner and no count, and Try again re-reads", async () => {
-  (api.rememberedWorlds as any).mockReturnValue(ONE_WORLD);
-  (api.listWorlds as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.rememberedWorlds).mockReturnValue(ONE_WORLD);
+  vi.mocked(api.listWorlds).mockRejectedValue(new Error("offline"));
   renderView();
   expect(await screen.findByText(/the worlds could not be read/i)).toBeInTheDocument();
   // The remembered grid is dropped with the failure, and no count stands in.
   expect(screen.queryByText("Saltmarch")).toBeNull();
   expect(screen.queryByText(/0 worlds/i)).toBeNull();
 
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   fireEvent.click(screen.getByRole("button", { name: /try again/i }));
   expect(await screen.findByText("Saltmarch")).toBeInTheDocument();
   expect(api.listWorlds).toHaveBeenLastCalledWith(true);
@@ -823,7 +824,7 @@ test("a failed read shows its banner and no count, and Try again re-reads", asyn
 
 test("every refresh after a change is a fresh read", async () => {
   // A non-fresh read would join one the visit sent before the change.
-  (api.listWorlds as any).mockResolvedValue(ONE_WORLD);
+  vi.mocked(api.listWorlds).mockResolvedValue(ONE_WORLD);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderView();
   await screen.findByText("Saltmarch");
@@ -847,10 +848,10 @@ test("every refresh after a change is a fresh read", async () => {
 test("the visit's own read, landing late, cannot paint over a refresh after a change", async () => {
   // Create is live on a stale frame (it names no existing world), so it can
   // overtake the mount-time read: only the newest read may paint.
-  (api.rememberedWorlds as any).mockReturnValue(ONE_WORLD);
+  vi.mocked(api.rememberedWorlds).mockReturnValue(ONE_WORLD);
   const mount = held<WorldMeta[]>();
   const after = [...ONE_WORLD, { id: "w2", name: "Realm", created: "", updated: "", counts: {} }];
-  (api.listWorlds as any).mockImplementation((fresh?: boolean) =>
+  vi.mocked(api.listWorlds).mockImplementation((fresh) =>
     (fresh ? Promise.resolve(after) : mount.promise));
   renderView();
   fireEvent.change(screen.getByPlaceholderText(/world name/i), { target: { value: "Realm" } });

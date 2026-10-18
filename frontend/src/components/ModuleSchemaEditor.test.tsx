@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
-import { api } from "../api/client";
-import { GroupsSection, SheetTypesSection } from "./ModuleSchemaEditor";
+import { api, type ModuleField, type ModuleDetail } from "../api/client";
+import { fixture } from "../testkit/fixture";
+import { FieldRows, GroupsSection, SheetTypesSection } from "./ModuleSchemaEditor";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -48,7 +49,7 @@ test("group row opens read-only view; Edit reveals the form", async () => {
 });
 
 test("saving a group posts the assembled def", async () => {
-  (api.putModuleGroup as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleGroup).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<GroupsSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Attributes"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -68,7 +69,7 @@ test("+ New group opens the form directly with an id input", () => {
 });
 
 test("rename affordance dry-runs, then commits when impact is clean", async () => {
-  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+  vi.mocked(api.renameModulePart).mockResolvedValue({ ok: true, errors: [], display_errors: [],
     impact: { sheet_types: [], sheets_migrated: 0, sheets_newly_invalid: 0, dangling_refs: 0 } });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<GroupsSection pack={PACK} reload={reload} />);
@@ -89,7 +90,7 @@ test("rename affordance dry-runs, then commits when impact is clean", async () =
 });
 
 test("impactful rename shows the confirm; Cancel sends no real call", async () => {
-  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+  vi.mocked(api.renameModulePart).mockResolvedValue({ ok: true, errors: [], display_errors: [],
     impact: { sheet_types: ["warden"], sheets_migrated: 3, sheets_newly_invalid: 0, dangling_refs: 0 } });
   render(<GroupsSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Attributes"));
@@ -99,12 +100,12 @@ test("impactful rename shows the confirm; Cancel sends no real call", async () =
   fireEvent.click(screen.getByRole("button", { name: "Rename" }));
   expect(await screen.findByText(/migrates 3 sheets/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  const real = (api.renameModulePart as any).mock.calls.filter((c: any[]) => c[4] === false);
+  const real = vi.mocked(api.renameModulePart).mock.calls.filter((c: any[]) => c[4] === false);
   expect(real).toHaveLength(0);
 });
 
 test("an existing group's id is renameable (P2-1)", async () => {
-  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+  vi.mocked(api.renameModulePart).mockResolvedValue({ ok: true, errors: [], display_errors: [],
     impact: { sheet_types: [], sheets_migrated: 0, sheets_newly_invalid: 0, dangling_refs: 0 } });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<GroupsSection pack={PACK} reload={reload} />);
@@ -135,7 +136,7 @@ test("+ New group still shows an editable id input, no rename prompt", () => {
 });
 
 test("sheet-type form drives group membership and advancement pool options", async () => {
-  (api.putModuleSheetType as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleSheetType).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<SheetTypesSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Warden"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -148,7 +149,7 @@ test("sheet-type form drives group membership and advancement pool options", asy
 });
 
 test("deleting the selected group clears the selection instead of leaving a ghost view", async () => {
-  (api.deleteModuleGroup as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.deleteModuleGroup).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<GroupsSection pack={PACK} reload={reload} />);
   fireEvent.click(screen.getByText("Attributes"));
@@ -163,7 +164,7 @@ test("deleting the selected group clears the selection instead of leaving a ghos
 });
 
 test("deleting the selected sheet type clears the selection instead of leaving a ghost view", async () => {
-  (api.deleteModuleSheetType as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.deleteModuleSheetType).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<SheetTypesSection pack={PACK} reload={reload} />);
   fireEvent.click(screen.getByText("Warden"));
@@ -200,9 +201,9 @@ function GroupsWithReload({ initial }: { initial: any }) {
 }
 
 test("a successful field rename updates the still-open form, not just the refreshed pack", async () => {
-  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+  vi.mocked(api.renameModulePart).mockResolvedValue({ ok: true, errors: [], display_errors: [],
     impact: { sheet_types: [], sheets_migrated: 0, sheets_newly_invalid: 0, dangling_refs: 0 } });
-  (api.putModuleGroup as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleGroup).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<GroupsWithReload initial={PACK} />);
   fireEvent.click(screen.getByText("Attributes"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -229,33 +230,32 @@ test("a successful field rename updates the still-open form, not just the refres
 });
 
 test("creation pool budget is submitted verbatim as a string, not coerced to a number", async () => {
-  (api.putModuleSheetType as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleSheetType).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<SheetTypesSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Warden"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Budget attributes"), { target: { value: "15" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.putModuleSheetType).toHaveBeenCalled());
-  const def = (api.putModuleSheetType as any).mock.calls[0][2];
-  expect(def.creation.pools.attributes.budget).toBe("15");
-  expect(typeof def.creation.pools.attributes.budget).toBe("string");
+  const def = vi.mocked(api.putModuleSheetType).mock.calls[0][2];
+  expect(def).toHaveProperty("creation.pools.attributes.budget", "15");
 });
 
 test("a blank budget with a cost omits the budget key entirely", async () => {
-  (api.putModuleSheetType as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleSheetType).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<SheetTypesSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Warden"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Cost attributes strength"), { target: { value: "2" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.putModuleSheetType).toHaveBeenCalled());
-  const def = (api.putModuleSheetType as any).mock.calls[0][2];
-  expect(def.creation.pools.attributes).not.toHaveProperty("budget");
-  expect(def.creation.pools.attributes.costs).toEqual({ strength: 2 });
+  const def = vi.mocked(api.putModuleSheetType).mock.calls[0][2];
+  expect(def).not.toHaveProperty("creation.pools.attributes.budget");
+  expect(def).toHaveProperty("creation.pools.attributes.costs", { strength: 2 });
 });
 
 test("a group's derived sample merges from every sheet type composing it", async () => {
-  (api.putModuleGroup as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+  vi.mocked(api.putModuleGroup).mockResolvedValue({ ok: true, errors: [], display_errors: [],
     sample: { warden: { fields: {}, derived: { might: 0 } } } });
   render(<GroupsSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Attributes"));
@@ -265,9 +265,9 @@ test("a group's derived sample merges from every sheet type composing it", async
 });
 
 test("a stale pre-rename dry-run error is cleared as soon as the rename commits", async () => {
-  (api.putModuleGroup as any).mockResolvedValue({ ok: false,
+  vi.mocked(api.putModuleGroup).mockResolvedValue({ ok: false,
     errors: ["groups.attributes.might: unknown names ['strength']"], display_errors: [] });
-  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+  vi.mocked(api.renameModulePart).mockResolvedValue({ ok: true, errors: [], display_errors: [],
     impact: { sheet_types: [], sheets_migrated: 0, sheets_newly_invalid: 0, dangling_refs: 0 } });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<GroupsSection pack={PACK} reload={reload} />);
@@ -310,3 +310,42 @@ test("Save with an empty sheet type id keeps the form open, shows the error, mak
   expect(screen.getByLabelText("Sheet type id")).toBeInTheDocument(); // form still open
   expect(api.putModuleSheetType).not.toHaveBeenCalled();
 });
+
+
+test("numeric field edits keep zero and omit cleared bounds from the saved JSON", () => {
+  function NumericFields() {
+    const [fields, setFields] = useState<ModuleField[]>([{ key: "strength", type: "number", min: 1, max: 5, default: 2 }]);
+    return <><FieldRows fields={fields} setFields={setFields} existingKeys={new Set()} dirty={false} onRename={() => {}} />
+      <output data-testid="field-json">{JSON.stringify(fields)}</output></>;
+  }
+  render(<NumericFields />);
+  fireEvent.change(screen.getByLabelText("Max"), { target: { value: "0" } });
+  expect(screen.getByTestId("field-json").textContent).toBe('[{"key":"strength","type":"number","min":1,"max":0,"default":2}]');
+  fireEvent.change(screen.getByLabelText("Min"), { target: { value: "" } });
+  fireEvent.change(screen.getByLabelText("Default"), { target: { value: "" } });
+  expect(screen.getByTestId("field-json").textContent).toBe('[{"key":"strength","type":"number","max":0}]');
+});
+
+
+test.each<{ section: "group" | "sheet type" }>([{ section: "group" }, { section: "sheet type" }])(
+  "$section numeric round-trips leave Rename available, while a changed value blocks it", ({ section }) => {
+    const field = { key: "strength", label: "Strength", type: "number", max: 5, min: 0, default: 2 };
+    const pack = fixture<ModuleDetail>({ id: "realm-system", source: "user",
+      sheets: { groups: { attributes: { label: "Attributes", fields: [field], derived: {} } },
+        sheet_types: { warden: { label: "Warden", kind: "characters", groups: [], fields: [field] } } },
+      checks: {}, rules: [], content: [], errors: [], layout: { sheet_types: {} }, theme: {}, display_errors: [] });
+    render(section === "group" ? <GroupsSection pack={pack} reload={vi.fn()} />
+      : <SheetTypesSection pack={pack} reload={vi.fn()} />);
+    fireEvent.click(screen.getByText(section === "group" ? "Attributes" : "Warden"));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const renameButtons = screen.getAllByRole("button", { name: /^Rename/ });
+    expect(renameButtons.length).toBeGreaterThan(0);
+    for (const button of renameButtons) expect(button).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Max"), { target: { value: "" } });
+    for (const button of renameButtons) expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Max"), { target: { value: "5" } });
+    expect(screen.getByLabelText("Max")).toHaveValue(5);
+    for (const button of renameButtons) expect(button).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Max"), { target: { value: "4" } });
+    for (const button of renameButtons) expect(button).toBeDisabled();
+  });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { lineage } from "./campaignLineage";
 
 const rows = (...ids: [string, string?][]) =>
-  ids.map(([id, parent]) => ({ id, parent }));
+  ids.map(([id, parent]) => ({ id, ...(parent === undefined ? {} : { parent }) }));
 
 const shape = (out: ReturnType<typeof lineage>) =>
   out.map((r) => `${"  ".repeat(r.depth)}${r.item.id}`);

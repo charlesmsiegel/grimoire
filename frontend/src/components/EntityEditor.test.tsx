@@ -1,3 +1,4 @@
+import type { ModuleDetail } from "../api/types";
 import type { ComponentProps } from "react";
 import { MemoryRouter, useLocation, useParams, useSearchParams, createMemoryRouter, RouterProvider } from "react-router-dom";
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
@@ -115,10 +116,12 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { ApiError, api } from "../api/client";
+import type { EntityDetail } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
 const fail = (status: number, detail: string, kind?: string,
               body?: Record<string, unknown>) =>
-  new (ApiError as any)(status, detail, kind, body);
+  new (ApiError)(status, detail, kind, body);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -127,28 +130,28 @@ beforeEach(() => {
   vi.mocked(api.promoteRecordArt).mockResolvedValue({ ok: true });
   vi.mocked(api.setRecordArtDescription).mockResolvedValue({ ok: true });
 
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.createEntity as any).mockResolvedValue({ id: "e1" });
-  (api.updateEntity as any).mockResolvedValue({ ok: true });
-  (api.deleteEntity as any).mockResolvedValue({ ok: true });
-  (api.reclassifyEntity as any).mockResolvedValue({ id: "salt", campaigns: [] });
-  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x", rev: "r1" });
-  (api.previewAdoptSt as any).mockResolvedValue({ fields: {}, unmapped: [] });
-  (api.adoptSt as any).mockResolvedValue({ applied: {} });
-  (api.adoptStAll as any).mockResolvedValue({ applied: [], skipped: [] });
-  (api.listCharacters as any).mockResolvedValue([{ id: "tanaka", name: "Tanaka" }]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listClimates as any).mockResolvedValue({ climates: [
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.createEntity).mockResolvedValue({ id: "e1" });
+  vi.mocked(api.updateEntity).mockResolvedValue({ ok: true });
+  vi.mocked(api.deleteEntity).mockResolvedValue({ ok: true });
+  vi.mocked(api.reclassifyEntity).mockResolvedValue({ id: "salt", campaigns: [] });
+  vi.mocked(api.readEntity).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x", rev: "r1" });
+  vi.mocked(api.previewAdoptSt).mockResolvedValue({ fields: {}, unmapped: [] });
+  vi.mocked(api.adoptSt).mockResolvedValue({ applied: {} });
+  vi.mocked(api.adoptStAll).mockResolvedValue({ applied: [], skipped: [] });
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "tanaka", name: "Tanaka" }]));
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listClimates).mockResolvedValue({ climates: [
     { id: "temperate-interior", name: "Temperate interior", builtin: true, custom: false },
     { id: "saltmarch-fog", name: "Saltmarch fog", builtin: false, custom: true },
   ] });
-  (api.listEntityImages as any).mockResolvedValue([]);
-  (api.setEntityImageDescription as any).mockResolvedValue({ ok: true });
-  (api.putEntityImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
-  (api.promoteEntityImage as any).mockResolvedValue({ ok: true });
-  (api.getSheet as any).mockResolvedValue({ sheet: null });
-  (api.readModuleContent as any).mockResolvedValue(null);
-  (api.instantiateContent as any).mockResolvedValue({ id: "e1" });
+  vi.mocked(api.listEntityImages).mockResolvedValue([]);
+  vi.mocked(api.setEntityImageDescription).mockResolvedValue({ ok: true });
+  vi.mocked(api.putEntityImage).mockResolvedValue({ name: "avatar", ext: "png" });
+  vi.mocked(api.promoteEntityImage).mockResolvedValue({ ok: true });
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
+  vi.mocked(api.readModuleContent).mockRejectedValue(new Error("not found"));
+  vi.mocked(api.instantiateContent).mockResolvedValue({ id: "e1" });
 });
 
 type Props = ComponentProps<typeof EntityEditor>;
@@ -187,8 +190,18 @@ const renderEditor = (p: Partial<Props> & { kind: Props["kind"] }) => render(edi
 
 const entityFixture = (id: string, name: string) => ({ meta: { id, name }, body: "x", rev: "r1" });
 
+test("structured frontmatter keeps its content when loaded into a text field", async () => {
+  vi.mocked(api.readEntity).mockResolvedValue({
+    meta: { id: "saltmarch", name: "Saltmarch", keys: "", item_type: { category: "relic" } },
+    body: "", rev: "r1",
+  });
+  renderEditor({ kind: "items", selected: "saltmarch", isNew: false });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(await screen.findByLabelText("Type")).toHaveValue('{"category":"relic"}');
+});
+
 test("a bookmarked address that fails to read reports the failure instead of leaving a blank form", async () => {
-  (api.readEntity as any).mockRejectedValueOnce(new Error("not found"));
+  vi.mocked(api.readEntity).mockRejectedValueOnce(new Error("not found"));
   render(<Wrap wid="w" kind="lore" selected="ghost" />);
   await screen.findByText("Error: not found");
 });
@@ -208,8 +221,8 @@ test("lists entities and creates one with keys", async () => {
 });
 
 test("clicking an entity shows a read-only view; Edit reveals the form", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
-  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact,brine" }, body: "Binds **all**" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({ meta: { id: "salt", name: "Salt", keys: "pact,brine" }, body: "Binds **all**" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(screen.getByText("all")).toBeInTheDocument();          // markdown rendered
@@ -222,10 +235,10 @@ test("clicking an entity shows a read-only view; Edit reveals the form", async (
 });
 
 test("detail sidebar shows the suggested image prompt when set", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "the-crypt", name: "The Crypt" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "the-crypt", name: "The Crypt" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
     meta: { id: "the-crypt", name: "The Crypt", keys: "crypt", sd_prompt: "a dark crypt, torchlight" },
-    body: "cold" });
+    body: "cold" }));
   const { container } = render(<Wrap wid="w" kind="locations" selected="the-crypt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -234,7 +247,7 @@ test("detail sidebar shows the suggested image prompt when set", async () => {
 });
 
 test("detail sidebar omits the image prompt section when unset", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   // default readEntity mock (from beforeEach) has no sd_prompt
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -243,7 +256,7 @@ test("detail sidebar omits the image prompt section when unset", async () => {
 });
 
 test("editing an entity saves with updated keys", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
@@ -277,7 +290,7 @@ test("owners picker offers items, groups and creatures", async () => {
     groups: [{ id: "dock-union", name: "Dock Union" }],
     creatures: [{ id: "gull", name: "Gull" }],
   };
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(byKind[kind] ?? []));
   render(<Wrap isNew wid="w" kind="lore" />);
   await screen.findByLabelText("Name");
@@ -295,7 +308,7 @@ test("owners picker offers items, groups and creatures", async () => {
 });
 
 test("groups the rail by owner with an Unowned group", async () => {
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations" ? [] : [
       { id: "a", name: "Owned A", owners: "characters:tanaka" },
       { id: "b", name: "World B" },
@@ -318,8 +331,8 @@ test("?owner= pre-checks the owner for a new entry", async () => {
 });
 
 test("the route's record opens that entry in the read-only view", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "a", name: "Owned A", owners: "characters:tanaka" }]);
-  (api.readEntity as any).mockResolvedValue({ meta: { id: "a", name: "Owned A", owners: "characters:tanaka" }, body: "hi" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "a", name: "Owned A", owners: "characters:tanaka" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({ meta: { id: "a", name: "Owned A", owners: "characters:tanaka" }, body: "hi" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="a" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "a"));
   expect(await screen.findByText("hi")).toBeInTheDocument();
@@ -335,9 +348,9 @@ test("a route change away from a pre-owned form clears the owner", async () => {
 });
 
 test("owner chip in the read-only view calls onOpenOwner", async () => {
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations" ? [] : [{ id: "a", name: "Owned A", owners: "characters:tanaka" }]));
-  (api.readEntity as any).mockResolvedValue({ meta: { id: "a", name: "Owned A", owners: "characters:tanaka" }, body: "x" });
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({ meta: { id: "a", name: "Owned A", owners: "characters:tanaka" }, body: "x" }));
   const onOpenOwner = vi.fn();
   render(<Wrap wid="w" kind="lore" selected="a" onOpenOwner={onOpenOwner} />);
   // the only button labelled exactly "Tanaka" is the owner chip in the sidebar
@@ -346,7 +359,7 @@ test("owner chip in the read-only view calls onOpenOwner", async () => {
 });
 
 test("location rail rows show the primary image when one exists", async () => {
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "warehouse", name: "Warehouse Nine", has_image: true },
     { id: "reeds", name: "The Reeds", has_image: false },
   ]);
@@ -356,7 +369,7 @@ test("location rail rows show the primary image when one exists", async () => {
 });
 
 test("the owned-lore panel addresses this location's lore, and pre-owns a new entry under it", async () => {
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "lore"
       ? [{ id: "the-well", name: "The Well", owners: "locations:warehouse" }] : []));
   render(<Wrap wid="w" kind="locations" selected="warehouse" />);
@@ -407,11 +420,11 @@ test("an empty location keeps Details clean and makes Add images available from 
 });
 
 test("lore rows stack owner avatars; owners without avatars are omitted", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "maren", name: "Maren", default_version: "v1", has_avatar: true, versions: [] },
     { id: "hedde", name: "Hedde", default_version: "v1", has_avatar: false, versions: [] },
   ]);
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations" ? [] : [
       { id: "smuggling", name: "Smuggling", owners: "characters:maren, characters:hedde" },
     ]));
@@ -425,22 +438,22 @@ test("lore rows stack owner avatars; owners without avatars are omitted", async 
 });
 
 test("lore detail owner chips include an avatar or initials", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "maren", name: "Maren Voss", default_version: "v1", has_avatar: false, versions: [] },
   ]);
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations" ? [] : [
       { id: "smuggling", name: "Smuggling", owners: "characters:maren" },
     ]));
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "smuggling", name: "Smuggling", owners: "characters:maren" }, body: "quiet boats" });
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "smuggling", name: "Smuggling", owners: "characters:maren" }, body: "quiet boats" }));
   render(<Wrap wid="w" kind="lore" selected="smuggling" />);
   await screen.findByText("quiet boats");
   expect(await screen.findByText("MV")).toBeInTheDocument(); // initials inside the owner chip
 });
 
 test("deleting the open record returns to the grid rather than a blank form under its id", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   lastPath = "";
   render(<Wrap wid="w" kind="lore" selected="salt" />);
@@ -451,14 +464,14 @@ test("deleting the open record returns to the grid rather than a blank form unde
 });
 
 test("a failed listing on the browse grid says so instead of reading as an empty library", async () => {
-  (api.listEntities as any).mockRejectedValue(new Error("network down"));
+  vi.mocked(api.listEntities).mockRejectedValue(new Error("network down"));
   renderEditor({ kind: "items", isNew: false });
   expect(await screen.findByText(/network down/)).toBeInTheDocument();
   expect(screen.queryByText("No item yet.")).not.toBeInTheDocument();
 });
 
 test("deletes after confirm", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -483,10 +496,10 @@ test("new kinds render the list/detail pattern with their own label", async () =
   // Kind-aware: groups now has a `headquarters` ref field, so the editor also
   // lists locations for its picker — a blanket mock would put a second "Salt
   // Circle" on the page.
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "groups" ? [{ id: "salt-circle", name: "Salt Circle" }] : []));
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "salt-circle", name: "Salt Circle" }, body: "A quiet **cabal**" });
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "salt-circle", name: "Salt Circle" }, body: "A quiet **cabal**" }));
   const { container, rerender } = render(<Wrap isNew={false} wid="w" kind="groups" />);
   expect(await screen.findByRole("link", { name: /\+ new group/i })).toBeInTheDocument();
   rerender(<Wrap wid="w" kind="groups" selected="salt-circle" />);
@@ -507,12 +520,12 @@ test("an item uses the common Art shelf while retaining its rail preview", async
 });
 
 test("a wizard left open after its module goes away shows the grid, not a blank form", async () => {
-  const module = {
+  const module = fixture<ModuleDetail>({
     id: "m", source: "builtin", manifest: { id: "m", name: "M" },
     sheets: { groups: {}, sheet_types: { w: { kind: "items" } } }, checks: {}, rules: [],
     content: [], errors: [],
-  } as any;
-  (api.listEntities as any).mockResolvedValue([{ id: "bare", name: "Bare" }]);
+  });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "bare", name: "Bare" }]);
   const { rerender } = renderEditor({ kind: "items", isNew: false, module });
   fireEvent.click(await screen.findByRole("button", { name: /with sheet/ }));
   rerender(editorWith({ kind: "items", isNew: false, module: null }));
@@ -521,7 +534,7 @@ test("a wizard left open after its module goes away shows the grid, not a blank 
 });
 
 test("a browse card is a card whether or not its record has an image", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "bare", name: "Bare" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "bare", name: "Bare" }]);
   const { container } = renderEditor({ kind: "lore", isNew: false });
   await screen.findByRole("link", { name: /Bare/ });
   expect(container.querySelector(".entity-grid .row.loc-row")).not.toBeNull();
@@ -549,9 +562,9 @@ test("typed fields render in the form and are sent on create", async () => {
 });
 
 test("typed field values show as chips in the detail sidebar", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "marsh-wyrm", name: "Marsh Wyrm" }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "marsh-wyrm", name: "Marsh Wyrm", creature_type: "wyrm", threat: "apex" }, body: "old" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "marsh-wyrm", name: "Marsh Wyrm" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "marsh-wyrm", name: "Marsh Wyrm", creature_type: "wyrm", threat: "apex" }, body: "old" }));
   const { container } = render(<Wrap wid="w" kind="creatures" selected="marsh-wyrm" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -560,14 +573,14 @@ test("typed field values show as chips in the detail sidebar", async () => {
 });
 
 test("campaign scope with a module mounts SheetPanel with a Sheet side-section", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt-knife", name: "Salt Knife" }]);
-  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt-knife", name: "Salt Knife" }, body: "sharp" });
-  const module = {
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt-knife", name: "Salt Knife" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({ meta: { id: "salt-knife", name: "Salt Knife" }, body: "sharp" }));
+  const module = fixture<ModuleDetail>({
     id: "mod1", source: "user",
     manifest: { id: "mod1", name: "Mod One" },
     sheets: { groups: {}, sheet_types: { itemSheet: { label: "Item Sheet", kind: "items", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
-  } as any;
+  });
   const { container } = render(
     <Wrap wid="w" kind="items" scope={{ kind: "campaign", id: "run" }} module={module} selected="salt-knife" />,
   );
@@ -578,14 +591,14 @@ test("campaign scope with a module mounts SheetPanel with a Sheet side-section",
 });
 
 test("merges module content into the rail as templates and previews on click", async () => {
-  const module = {
+  const module = fixture<ModuleDetail>({
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
     sheets: { groups: {}, sheet_types: {} }, checks: {}, rules: [],
     content: [{ kind: "items", id: "lantern", name: "Lantern of Winnowing", sheet_type: null }],
     errors: [],
-  } as any;
-  (api.listEntities as any).mockResolvedValue([{ id: "sword", name: "Sword" }]);
-  (api.readModuleContent as any).mockResolvedValue({
+  });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "sword", name: "Sword" }]);
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "items", id: "lantern", name: "Lantern of Winnowing", body: "A soft lantern.",
     keys: "", sheet_type: null, fields: {},
   });
@@ -603,18 +616,18 @@ test("instantiate creates a real record and navigates to its own address", async
   // address bar has to move off the section root -- otherwise a subsequent
   // "+ New" (a `Link` to that same root) points at the screen already
   // showing and silently does nothing.
-  const module = {
+  const module = fixture<ModuleDetail>({
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
     sheets: { groups: {}, sheet_types: {} }, checks: {}, rules: [],
     content: [{ kind: "items", id: "lantern", name: "Lantern of Winnowing", sheet_type: null }],
     errors: [],
-  } as any;
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.instantiateContent as any).mockResolvedValue({ id: "lantern" });
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "lantern", name: "Lantern of Winnowing" }, body: "A soft lantern.",
   });
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.instantiateContent).mockResolvedValue({ id: "lantern" });
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "lantern", name: "Lantern of Winnowing" }, body: "A soft lantern.",
+  }));
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "items", id: "lantern", name: "Lantern of Winnowing", body: "A soft lantern.",
     keys: "", sheet_type: null, fields: {},
   });
@@ -628,14 +641,14 @@ test("instantiate creates a real record and navigates to its own address", async
 });
 
 test("a route change to a pre-owned form clears a stale content preview", async () => {
-  const module = {
+  const module = fixture<ModuleDetail>({
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
     sheets: { groups: {}, sheet_types: {} }, checks: {}, rules: [],
     content: [{ kind: "lore", id: "pact", name: "Salt Pact", sheet_type: null }],
     errors: [],
-  } as any;
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.readModuleContent as any).mockResolvedValue({
+  });
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "lore", id: "pact", name: "Salt Pact", body: "Binds all salt-related magic.",
     keys: "", sheet_type: null, fields: {},
   });
@@ -664,11 +677,11 @@ test("a route change to a pre-owned form clears a stale content preview", async 
 
 it("shows a wizard trigger only when the module has a sheet type for this kind, and opens the wizard", async () => {
   vi.mocked(api.listEntities).mockResolvedValue([]);
-  const module = {
+  const module = fixture<ModuleDetail>({
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "items", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
-  } as any;
+  });
   render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   const trigger = await screen.findByText("+ New item with sheet…");
   fireEvent.click(trigger);
@@ -677,13 +690,13 @@ it("shows a wizard trigger only when the module has a sheet type for this kind, 
 
 it("wires the wizard's deleteRecord to api.deleteEntity so a failed sheet write rolls back the entity", async () => {
   vi.mocked(api.listEntities).mockResolvedValue([]);
-  const module = {
+  const module = fixture<ModuleDetail>({
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "items", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
-  } as any;
-  (api.createEntity as any).mockResolvedValue({ id: "e1" });
-  (api.putSheetCreation as any).mockRejectedValue({ detail: "nope" });
+  });
+  vi.mocked(api.createEntity).mockResolvedValue({ id: "e1" });
+  vi.mocked(api.putSheetCreation).mockRejectedValue({ detail: "nope" });
   render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   fireEvent.click(await screen.findByText("+ New item with sheet…"));
   await screen.findByText("New item (with sheet)");
@@ -701,16 +714,16 @@ test("the sheet wizard navigates to the new record's own address on Create", asy
   // finish with `select(id)` alone, leaving the address bar on the section
   // root once the wizard closed.
   vi.mocked(api.listEntities).mockResolvedValue([]);
-  const module = {
+  const module = fixture<ModuleDetail>({
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "items", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
-  } as any;
-  (api.createEntity as any).mockResolvedValue({ id: "sword-id" });
+  });
+  vi.mocked(api.createEntity).mockResolvedValue({ id: "sword-id" });
   // A prior test in this file (deliberately) rejects this call; `beforeEach`
   // only clears call history, not a stubbed implementation, so this one has
   // to restate its own success rather than inherit that failure.
-  (api.putSheetCreation as any).mockResolvedValue({ sheet: null });
+  vi.mocked(api.putSheetCreation).mockResolvedValue(fixture({ sheet: {} }));
   lastPath = "";
   render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   fireEvent.click(await screen.findByText("+ New item with sheet…"));
@@ -725,11 +738,11 @@ test("the sheet wizard navigates to the new record's own address on Create", asy
 
 it("hides the wizard trigger when the module has no sheet type for this kind", async () => {
   vi.mocked(api.listEntities).mockResolvedValue([]);
-  const module = {
+  const module = fixture<ModuleDetail>({
     id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
     sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
     checks: {}, rules: [], content: [], errors: [],
-  } as any;
+  });
   render(<Wrap isNew={false} wid="w1" kind="items" module={module} />);
   await screen.findByText("+ New item");
   expect(screen.queryByText("+ New item with sheet…")).not.toBeInTheDocument();
@@ -758,9 +771,9 @@ test("the secrecy picker offers all three levels and starts on public", async ()
 });
 
 test("the detail sidebar badges a secret entry and the form opens on its level", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "secret" }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "twist", name: "Twist", secrecy: "secret" }, body: "the harbourmaster did it" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "secret" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "twist", name: "Twist", secrecy: "secret" }, body: "the harbourmaster did it" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="twist" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -772,8 +785,8 @@ test("the detail sidebar badges a secret entry and the form opens on its level",
 });
 
 test("an unmarked entry reads as public in the sidebar", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt" }, body: "x" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({ meta: { id: "salt", name: "Salt" }, body: "x" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -781,7 +794,7 @@ test("an unmarked entry reads as public in the sidebar", async () => {
 });
 
 test("the rail badges non-public rows only", async () => {
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations" ? [] : [
       { id: "a", name: "Open" },
       { id: "b", name: "Twist", secrecy: "secret" },
@@ -796,9 +809,9 @@ test("the rail badges non-public rows only", async () => {
 });
 
 test("switching a viewed entry back to public sends 'public', clearing the level", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "gm-only" }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "twist", name: "Twist", secrecy: "gm-only" }, body: "x" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "gm-only" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "twist", name: "Twist", secrecy: "gm-only" }, body: "x" }));
   render(<Wrap wid="w" kind="lore" selected="twist" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
@@ -811,9 +824,9 @@ test("switching a viewed entry back to public sends 'public', clearing the level
 });
 
 test("'+ New' after viewing a secret entry does not inherit its level", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "secret" }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "twist", name: "Twist", secrecy: "secret" }, body: "x" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: "secret" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "twist", name: "Twist", secrecy: "secret" }, body: "x" }));
   const { rerender } = render(<Wrap wid="w" kind="lore" selected="twist" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   rerender(<Wrap wid="w" kind="lore" selected={null} />);
@@ -825,9 +838,9 @@ test("a hand-edited secrecy value is read the way the backend reads it", async (
   // is hand-editable. Matching only the canonical spelling here badged the entry
   // Public and made the next save send "public" — a valid level, so the route
   // accepted it and the entry was silently published.
-  (api.listEntities as any).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: " Secret " }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "twist", name: "Twist", secrecy: " Secret " }, body: "x" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "twist", name: "Twist", secrecy: " Secret " }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "twist", name: "Twist", secrecy: " Secret " }, body: "x" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="twist" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -846,9 +859,9 @@ test("a hand-edited secrecy value is read the way the backend reads it", async (
 });
 
 test("an unrecognised secrecy value still reads as public", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "typo", name: "Typo", secrecy: "sercet" }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "typo", name: "Typo", secrecy: "sercet" }, body: "x" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "typo", name: "Typo", secrecy: "sercet" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "typo", name: "Typo", secrecy: "sercet" }, body: "x" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="typo" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -858,7 +871,7 @@ test("an unrecognised secrecy value still reads as public", async () => {
 // ---- per-record prompt cost (#51) ----
 
 test("rail rows carry the record's token count", async () => {
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "salt", name: "Salt", tokens: 1240 },
     { id: "brine", name: "Brine", tokens: 7 },
   ]);
@@ -874,9 +887,9 @@ test("rail rows carry the record's token count", async () => {
 test("a zero-token record still shows its count, in the rail and the detail", async () => {
   // 0 is falsy: a `{e.tokens && ...}` guard would silently blank an empty
   // record's badge, which reads identically to the field being absent.
-  (api.listEntities as any).mockResolvedValue([{ id: "stub", name: "Stub", tokens: 0 }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "stub", name: "Stub" }, body: "", tokens: 0 });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "stub", name: "Stub", tokens: 0 }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "stub", name: "Stub" }, body: "", tokens: 0 }));
   const browse = render(<Wrap wid="w" kind="lore" isNew={false} />);
   await within(browse.container.querySelector(".entity-grid") as HTMLElement).findByText("Stub");
   expect(browse.container.querySelector(".row-tokens")!.textContent).toBe("0");
@@ -888,16 +901,16 @@ test("a zero-token record still shows its count, in the rail and the detail", as
 
 test("a row with no token count renders no badge", async () => {
   // a payload from before the field existed must not render "undefined" or 0
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   const { container } = render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findByText("Salt");
   expect(container.querySelector(".row-tokens")).toBeNull();
 });
 
 test("the detail header and sidebar report the cost, keyed as per-activation", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 42 }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "salt", name: "Salt", keys: "pact" }, body: "Binds", tokens: 42 });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 42 }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "salt", name: "Salt", keys: "pact" }, body: "Binds", tokens: 42 }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   expect(container.querySelector(".detail-main h3 .token-badge")!.textContent).toBe("42 tokens");
@@ -908,9 +921,9 @@ test("the detail header and sidebar report the cost, keyed as per-activation", a
 });
 
 test("a keyless lore entry is described as always-on, a keyless location as the setting", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 3 }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 3 });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 3 }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 3 }));
   const lore = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const loreSide = lore.container.querySelector(".detail-sidebar") as HTMLElement;
@@ -928,9 +941,9 @@ test("a keyless lore entry is described as always-on, a keyless location as the 
 });
 
 test("the header badge clears when the form is reset for a new record", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 42 }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 42 });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 42 }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 42 }));
   const { container, rerender } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(container.querySelector(".token-badge")).not.toBeNull());
   rerender(<Wrap wid="w" kind="lore" selected={null} />);
@@ -940,9 +953,9 @@ test("the header badge clears when the form is reset for a new record", async ()
 test("a GM-only record's count is marked as never charged, not as a live cost", async () => {
   // #49 drops a gm-only body before every activation rule, so the number is
   // what it WOULD cost. Showing it plain would read as a standing charge.
-  (api.listEntities as any).mockResolvedValue([{ id: "vault", name: "Vault", tokens: 88, secrecy: "gm-only" }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "vault", name: "Vault", secrecy: "gm-only" }, body: "Behind the seawall.", tokens: 88 });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "vault", name: "Vault", tokens: 88, secrecy: "gm-only" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "vault", name: "Vault", secrecy: "gm-only" }, body: "Behind the seawall.", tokens: 88 }));
   const browse = render(<Wrap wid="w" kind="lore" isNew={false} />);
   // by role, not by text: the same mock feeds `loreOwnerOptions`, so "Vault"
   // is also an owner checkbox label further down the form
@@ -962,9 +975,9 @@ test("a GM-only record's count is marked as never charged, not as a live cost", 
 });
 
 test("a public record's count carries no never-charged marking", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 88 }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 88 });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt", tokens: 88 }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "salt", name: "Salt" }, body: "Binds", tokens: 88 }));
   const browse = render(<Wrap wid="w" kind="lore" isNew={false} />);
   await screen.findByRole("link", { name: /Salt.*88 tokens/ });
   expect(browse.container.querySelector(".row-tokens")!.className).not.toContain("never-charged");
@@ -977,7 +990,7 @@ test("a public record's count carries no never-charged marking", async () => {
 // ---- external edits: the save precondition (#35) ----
 
 async function openForEdit() {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
@@ -994,7 +1007,7 @@ test("a save echoes back the rev the record was read at", async () => {
 });
 
 test("a stale save is refused without discarding what was typed", async () => {
-  (api.updateEntity as any).mockRejectedValue(
+  vi.mocked(api.updateEntity).mockRejectedValue(
     fail(409, "changed on disk", "stale_record", { rev: "r2" }));
   await openForEdit();
   fireEvent.change(screen.getByLabelText("Body"), { target: { value: "mine" } });
@@ -1006,7 +1019,7 @@ test("a stale save is refused without discarding what was typed", async () => {
 });
 
 test("overwrite retries against the rev the refusal reported", async () => {
-  (api.updateEntity as any).mockRejectedValueOnce(
+  vi.mocked(api.updateEntity).mockRejectedValueOnce(
     fail(409, "changed on disk", "stale_record", { rev: "r2" }));
   await openForEdit();
   fireEvent.change(screen.getByLabelText("Body"), { target: { value: "mine" } });
@@ -1020,13 +1033,13 @@ test("overwrite retries against the rev the refusal reported", async () => {
 });
 
 test("discard-and-reload throws the edit away and re-reads the record", async () => {
-  (api.updateEntity as any).mockRejectedValue(
+  vi.mocked(api.updateEntity).mockRejectedValue(
     fail(409, "changed on disk", "stale_record", { rev: "r2" }));
   await openForEdit();
   fireEvent.change(screen.getByLabelText("Body"), { target: { value: "mine" } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
-  (api.readEntity as any).mockResolvedValue(
+  vi.mocked(api.readEntity).mockResolvedValue(
     { meta: { id: "salt", name: "Salt", keys: "pact" }, body: "theirs", rev: "r2" });
   fireEvent.click(await screen.findByRole("button", { name: /discard mine and reload/i }));
 
@@ -1035,7 +1048,7 @@ test("discard-and-reload throws the edit away and re-reads the record", async ()
 });
 
 test("a record deleted underneath offers no overwrite", async () => {
-  (api.updateEntity as any).mockRejectedValue(
+  vi.mocked(api.updateEntity).mockRejectedValue(
     fail(409, "changed on disk", "stale_record", { rev: null }));
   await openForEdit();
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -1046,7 +1059,7 @@ test("a record deleted underneath offers no overwrite", async () => {
 });
 
 test("a failure that is not a conflict still reaches the error banner", async () => {
-  (api.updateEntity as any).mockRejectedValue(fail(400, "bad fields", "fields"));
+  vi.mocked(api.updateEntity).mockRejectedValue(fail(400, "bad fields", "fields"));
   await openForEdit();
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
@@ -1057,7 +1070,7 @@ test("a failure that is not a conflict still reaches the error banner", async ()
 // ---- reclassify (#119) ----
 
 test("the detail sidebar offers every kind but this one", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const picker = screen.getByLabelText<HTMLSelectElement>("Reclassify as");
@@ -1066,7 +1079,7 @@ test("the detail sidebar offers every kind but this one", async () => {
 });
 
 test("reclassifying sends the record's rev and reports where it went", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const onReclassified = vi.fn();
   render(<Wrap wid="w" kind="lore" selected="salt" onReclassified={onReclassified} />);
@@ -1079,8 +1092,8 @@ test("reclassifying sends the record's rev and reports where it went", async () 
 });
 
 test("the id the server hands back is the one navigated to", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  (api.reclassifyEntity as any).mockResolvedValue({ id: "salt-2", campaigns: [] });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.reclassifyEntity).mockResolvedValue({ id: "salt-2", campaigns: [] });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const onReclassified = vi.fn();
   render(<Wrap wid="w" kind="lore" selected="salt" onReclassified={onReclassified} />);
@@ -1090,7 +1103,7 @@ test("the id the server hands back is the one navigated to", async () => {
 });
 
 test("declining the confirm reclassifies nothing", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(false);
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1099,8 +1112,8 @@ test("declining the confirm reclassifies nothing", async () => {
 });
 
 test("a stale record refuses the move and offers to make it anyway", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  (api.reclassifyEntity as any).mockRejectedValueOnce(
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.reclassifyEntity).mockRejectedValueOnce(
     fail(409, "record changed", "stale_record", { rev: "r2" }));
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   const onReclassified = vi.fn();
@@ -1111,7 +1124,7 @@ test("a stale record refuses the move and offers to make it anyway", async () =>
   expect(onReclassified).not.toHaveBeenCalled();
   expect(screen.queryByRole("button", { name: /overwrite with mine/i })).toBeNull();
   confirm.mockClear();
-  (api.reclassifyEntity as any).mockResolvedValue({ id: "salt", campaigns: [] });
+  vi.mocked(api.reclassifyEntity).mockResolvedValue({ id: "salt", campaigns: [] });
   fireEvent.click(anyway);
   // the on-disk rev, not the one the editor loaded -- and no second confirm
   await waitFor(() =>
@@ -1122,8 +1135,8 @@ test("a stale record refuses the move and offers to make it anyway", async () =>
 });
 
 test("a refused move reports the error and leaves the record where it is", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  (api.reclassifyEntity as any).mockRejectedValue(fail(400, "already a lore record"));
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.reclassifyEntity).mockRejectedValue(fail(400, "already a lore record"));
   vi.spyOn(window, "confirm").mockReturnValue(true);
   const onReclassified = vi.fn();
   render(<Wrap wid="w" kind="lore" selected="salt" onReclassified={onReclassified} />);
@@ -1134,7 +1147,7 @@ test("a refused move reports the error and leaves the record where it is", async
 });
 
 test("the campaign hint says the world keeps its own copy", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   const { container } = render(
     <Wrap wid="w" scope={{ kind: "campaign", id: "c1" }} kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1143,7 +1156,7 @@ test("the campaign hint says the world keeps its own copy", async () => {
 });
 
 test("moving out of locations warns that scenes lose their setting", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   render(<Wrap wid="w" kind="locations" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1152,7 +1165,7 @@ test("moving out of locations warns that scenes lose their setting", async () =>
 });
 
 test("moving into locations says nothing about settings", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1168,7 +1181,7 @@ test("a long roster can be filtered, and says how much of it is showing", async 
     id: `e${i}`, name: `Record ${i}`, keys: i === 3 ? "harbour" : "",
     secrecy: "public", tokens: 10,
   }));
-  (api.listEntities as any).mockResolvedValue(many);
+  vi.mocked(api.listEntities).mockResolvedValue(many);
   render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findByText("Record 0");
   expect(screen.getByText(/12 lores?/)).toBeInTheDocument();
@@ -1188,7 +1201,7 @@ test("a filter matching nothing is not an empty world", async () => {
   const many = Array.from({ length: 12 }, (_, i) => ({
     id: `e${i}`, name: `Record ${i}`, secrecy: "public", tokens: 10,
   }));
-  (api.listEntities as any).mockResolvedValue(many);
+  vi.mocked(api.listEntities).mockResolvedValue(many);
   render(<Wrap isNew={false} wid="w" kind="lore" />);
   await screen.findByText("Record 0");
   fireEvent.change(screen.getByLabelText(/search lore/i), { target: { value: "zzz" } });
@@ -1199,9 +1212,9 @@ test("a filter matching nothing is not an empty world", async () => {
 // ---- ref-valued fields (#222) ----------------------------------------------
 
 test("a single-valued ref field offers only its own kinds, and sends the pick", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.listPCs as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.listPCs).mockResolvedValue(fixture([{ id: "winifred", name: "Winifred" }]));
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations" ? [{ id: "saltmarch", name: "Saltmarch" }] : []));
   render(<Wrap wid="w" kind="groups" />);
   fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "The Watch" } });
@@ -1221,9 +1234,9 @@ test("a single-valued ref field offers only its own kinds, and sends the pick", 
 });
 
 test("a single-valued ref field can be cleared back to none", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
   render(<Wrap wid="w" kind="groups" selected="watch" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1238,7 +1251,7 @@ test("a single-valued ref field can be cleared back to none", async () => {
 });
 
 test("a multi-valued ref field is a checkbox picker and sends a comma-joined list", async () => {
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations"
       ? [{ id: "saltmarch", name: "Saltmarch" }, { id: "realm", name: "Realm" }] : []));
   render(<Wrap wid="w" kind="creatures" />);
@@ -1256,9 +1269,9 @@ test("a multi-valued ref field is a checkbox picker and sends a comma-joined lis
 
 test("a ref shows in the sidebar as a chip that navigates to the record", async () => {
   const onOpenOwner = vi.fn();
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
   const { container } = render(<Wrap wid="w" kind="groups" selected="watch" onOpenOwner={onOpenOwner} />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1271,9 +1284,9 @@ test("a ref shows in the sidebar as a chip that navigates to the record", async 
 test("a ref whose record is gone renders as a dangling chip rather than disappearing", async () => {
   // The decided behaviour (#222): a delete does not scrub the refs that name
   // the record, so the reader has to say the holder is missing.
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
   const { container } = render(<Wrap wid="w" kind="groups" selected="watch" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1284,9 +1297,9 @@ test("a ref whose record is gone renders as a dangling chip rather than disappea
 });
 
 test("a ref field with no candidates says so instead of rendering an empty picker", async () => {
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listEntities as any).mockResolvedValue([]);
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([]);
   render(<Wrap wid="w" kind="groups" />);
   // Leader and Members each offer their own actor picker (spec 07).
   expect(await screen.findAllByText(/No characters or PCs yet/i)).toHaveLength(2);
@@ -1302,7 +1315,7 @@ test("kinds with no ref fields fetch no candidate lists", async () => {
 test("actors are listed only once something draws them", async () => {
   // Closed Activation, no known_by on the record: no listing. Opening the
   // disclosure is what asks.
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "seraphine", name: "Seraphine" }, body: "b", rev: "r1" });
   render(<Wrap wid="w" kind="creatures" selected="seraphine" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
@@ -1315,9 +1328,9 @@ test("actors are listed only once something draws them", async () => {
 test("a dangling ref is visible in the form and can be cleared", async () => {
   // Without a row of its own the field would look unset while still saving the
   // old ref — and the one thing you could not do is remove it.
-  (api.listCharacters as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
-  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "winifred", name: "Winifred" }]));
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
   render(<Wrap wid="w" kind="groups" selected="watch" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1338,16 +1351,16 @@ test("an untouched dangling ref is left alone rather than scrubbed", async () =>
   // the patch at all and the stored value stays exactly as it was found. That
   // is what keeps a value the save boundary would REFUSE — a legacy free-text
   // `leader`, say — from making the record uneditable.
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "characters:mara" }, body: "x", rev: "r1" });
   render(<Wrap wid="w" kind="groups" selected="watch" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.click(await screen.findByRole("button", { name: /^save$/i }));
   await waitFor(() => expect(api.updateEntity).toHaveBeenCalled());
-  const sent = (api.updateEntity as any).mock.calls[0][3];
+  const sent = vi.mocked(api.updateEntity).mock.calls[0][3];
   expect(sent.fields).toBeUndefined();
 });
 
@@ -1355,11 +1368,11 @@ test("a legacy free-text value in a newly-claimed key does not block an unrelate
   // `holder` was unrecognised frontmatter before ref fields existed, so a
   // hand-written `holder: Mara` is out there. Resending it on every save would
   // have the backend refuse it and make the record uneditable.
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "knife", name: "Salt Knife", holder: "Mara" }, body: "sharp", rev: "r1" });
   render(<Wrap wid="w" kind="items" selected="knife" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1367,17 +1380,17 @@ test("a legacy free-text value in a newly-claimed key does not block an unrelate
   fireEvent.change(screen.getByLabelText("Body"), { target: { value: "very sharp" } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await waitFor(() => expect(api.updateEntity).toHaveBeenCalled());
-  const sent = (api.updateEntity as any).mock.calls[0][3];
+  const sent = vi.mocked(api.updateEntity).mock.calls[0][3];
   expect(sent.body).toBe("very sharp");
   expect(sent.fields?.holder).toBeUndefined();   // never resent, so never refused
 });
 
 test("changing one field sends only that field", async () => {
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "knife", name: "Salt Knife", item_type: "weapon", rarity: "rare" },
     body: "sharp", rev: "r1" });
   render(<Wrap wid="w" kind="items" selected="knife" />);
@@ -1386,12 +1399,12 @@ test("changing one field sends only that field", async () => {
   fireEvent.change(screen.getByLabelText("Rarity"), { target: { value: "common" } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await waitFor(() => expect(api.updateEntity).toHaveBeenCalled());
-  expect((api.updateEntity as any).mock.calls[0][3].fields).toEqual({ rarity: "common" });
+  expect(vi.mocked(api.updateEntity).mock.calls[0][3].fields).toEqual({ rarity: "common" });
 });
 
 /** A promise plus the handle to settle it later, so a test can hold one
  *  scope's listing open while another lands. */
-function deferred<T>() {
+function deferred<T = EntityDetail>() {
   let resolve!: (v: T) => void;
   let reject!: (e: unknown) => void;
   const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
@@ -1404,7 +1417,7 @@ test("a scope change clears the ref candidates before the new ones arrive", asyn
   // scope's records saves a ref into a scope where it names nothing, and
   // existence is deliberately not validated server-side.
   const w2 = deferred<any[]>();
-  (api.listEntities as any).mockImplementation((s: any, kind: string) => {
+  vi.mocked(api.listEntities).mockImplementation((s, kind) => {
     if (kind !== "locations") return Promise.resolve([]);
     return s.id === "w1" ? Promise.resolve([{ id: "saltmarch", name: "Saltmarch" }]) : w2.promise;
   });
@@ -1425,7 +1438,7 @@ test("a slow listing from the previous scope cannot land on top of the current o
   // The other half: w1's request resolves SECOND. Without a request token it
   // overwrites w2's options and the stale candidates stick permanently.
   const w1 = deferred<any[]>();
-  (api.listEntities as any).mockImplementation((s: any, kind: string) => {
+  vi.mocked(api.listEntities).mockImplementation((s, kind) => {
     if (kind !== "locations") return Promise.resolve([]);
     return s.id === "w1" ? w1.promise : Promise.resolve([{ id: "realm", name: "Realm" }]);
   });
@@ -1443,7 +1456,7 @@ test("a record whose id carries the list delimiter is not offered as a candidate
   // `<kind>:<id>` in a comma-separated list, so `locations:salt,march` parses
   // as two refs and could never be saved. slugify cannot make one; an imported
   // file can. Mirrors entity_schema.referenceable.
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations"
       ? [{ id: "salt,march", name: "Salt March" }, { id: "realm", name: "Realm" }] : []));
   render(<Wrap wid="w" kind="creatures" />);
@@ -1456,9 +1469,9 @@ test("same-named candidates across kinds are told apart by kind", async () => {
   // Names are not unique — only ids are — and `holder` offers four kinds at
   // once, so two radios both reading "Mara" would be a control where you
   // cannot tell which relationship you are storing.
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "groups" ? [{ id: "mara-company", name: "Mara" }]
       : kind === "locations" ? [{ id: "saltmarch", name: "Saltmarch" }] : []));
   render(<Wrap wid="w" kind="items" />);
@@ -1471,10 +1484,10 @@ test("same-named candidates across kinds are told apart by kind", async () => {
 
 test("same-named candidates of the SAME kind fall back to the ref", async () => {
   // Two characters really can share a name, and then the kind settles nothing.
-  (api.listCharacters as any).mockResolvedValue([
-    { id: "mara", name: "Mara" }, { id: "mara-2", name: "Mara" }]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listEntities as any).mockResolvedValue([]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([
+    { id: "mara", name: "Mara" }, { id: "mara-2", name: "Mara" }]));
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([]);
   render(<Wrap wid="w" kind="items" />);
   const holder = await screen.findByRole("radiogroup", { name: "Held by" });
   expect(within(holder).getByLabelText("Mara (characters:mara)")).toBeInTheDocument();
@@ -1482,9 +1495,9 @@ test("same-named candidates of the SAME kind fall back to the ref", async () => 
 });
 
 test("one kind failing to load does not empty the whole picker", async () => {
-  (api.listCharacters as any).mockRejectedValue(new Error("network"));
-  (api.listPCs as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listCharacters).mockRejectedValue(new Error("network"));
+  vi.mocked(api.listPCs).mockResolvedValue(fixture([{ id: "winifred", name: "Winifred" }]));
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations" ? [{ id: "saltmarch", name: "Saltmarch" }] : []));
   render(<Wrap wid="w" kind="items" />);
   const holder = await screen.findByRole("radiogroup", { name: "Held by" });
@@ -1495,11 +1508,11 @@ test("one kind failing to load does not empty the whole picker", async () => {
 test("a failed candidate load does not report existing refs as deleted", async () => {
   // The harmful version: a dropped request becomes a claim about the store,
   // and the reader may act on it by clearing a relationship that is fine.
-  (api.listCharacters as any).mockRejectedValue(new Error("network"));
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listCharacters).mockRejectedValue(new Error("network"));
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "knife", name: "Salt Knife", holder: "characters:mara" }, body: "x", rev: "r1" });
   const { container } = render(<Wrap wid="w" kind="items" selected="knife" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1512,11 +1525,11 @@ test("a failed candidate load does not report existing refs as deleted", async (
 test("a ref really is reported as deleted once the lists have loaded", async () => {
   // The other side of the same coin — the load succeeded, so "gone" is a claim
   // this editor is entitled to make.
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "items" ? [{ id: "knife", name: "Salt Knife" }] : []));
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "knife", name: "Salt Knife", holder: "characters:mara" }, body: "x", rev: "r1" });
   const { container } = render(<Wrap wid="w" kind="items" selected="knife" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
@@ -1529,7 +1542,7 @@ test("an empty picker whose listing failed says so instead of claiming the store
   // A single-kind field is the sharp case: its one listing failing left the
   // picker reading "No locations yet." — a request outage presented as an
   // empty library, with no error and nothing to retry.
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     kind === "locations" ? Promise.reject(new Error("network")) : Promise.resolve([]));
   render(<Wrap wid="w" kind="creatures" />);
   expect(await screen.findByText(/could not load the list of records/i)).toBeInTheDocument();
@@ -1539,7 +1552,7 @@ test("an empty picker whose listing failed says so instead of claiming the store
 test("an empty picker whose listing succeeded still says the store is empty", async () => {
   // The claim is legitimate when a listing actually arrived, so the fix must
   // not turn every empty picker into a fake error.
-  (api.listEntities as any).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([]);
   render(<Wrap wid="w" kind="creatures" />);
   expect(await screen.findByText(/No locations yet/i)).toBeInTheDocument();
 });
@@ -1547,7 +1560,7 @@ test("an empty picker whose listing succeeded still says the store is empty", as
 test("a record whose id carries a line separator is not offered as a candidate", async () => {
   // Every separator `parse_frontmatter`'s splitlines recognises, not just \n.
   const seps = ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", " ", " "];
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "locations"
       ? [...seps.map((c, i) => ({ id: `a${c}b${i}`, name: `Bad ${i}` })),
          { id: "realm", name: "Realm" }]
@@ -1565,12 +1578,12 @@ test("a sidebar ref of a kind the field cannot name reads as unresolved", async 
   // locations fetched for headquarters and render as an ordinary clickable
   // chip — the read view calling a malformed relationship valid, while the
   // form one click away correctly showed it unresolved.
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockImplementation((_s, kind) =>
     Promise.resolve(kind === "groups" ? [{ id: "watch", name: "The Watch" }]
       : kind === "locations" ? [{ id: "realm", name: "Realm" }] : []));
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "locations:realm",
             headquarters: "locations:realm" },
     body: "x", rev: "r1" });
@@ -1592,9 +1605,9 @@ test("a record read still in flight when the scope changes does not land under t
   // now the intended behaviour (it is re-read under the new scope) -- but a
   // slow read the OLD scope started must still never land, no matter how late
   // it resolves.
-  let resolveW1!: (v: unknown) => void;
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  (api.readEntity as any)
+  let resolveW1!: (v: EntityDetail) => void;
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.readEntity)
     .mockImplementationOnce(() => new Promise((r) => { resolveW1 = r; }))
     .mockResolvedValue({ meta: { id: "salt", name: "Salt" }, body: "new scope body", rev: "r2" });
   const { rerender } = render(
@@ -1640,9 +1653,9 @@ test("a stored choice value outside the options is shown, not blanked", async ()
   // A climate since deleted, or a hand-edited file. The picker keeps it as a
   // row of its own so the value is visible and clearable -- silently showing
   // "(none)" would save a clear the user never asked for.
-  (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "fogbank", name: "Fogbank", climate: "temperate-costal" }, body: "grey" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "fogbank", name: "Fogbank", climate: "temperate-costal" }, body: "grey" }));
   render(<Wrap wid="w" kind="locations" selected="fogbank" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   const picker = await screen.findByLabelText<HTMLSelectElement>("Climate");
@@ -1654,10 +1667,10 @@ test("a stored choice value outside the options is shown, not blanked", async ()
 test("a stored choice value is not called 'not an option' while the list has not arrived", async () => {
   // A request outage is not a fact about the value: until the source answers
   // (and for good if it fails) the value is simply shown, still selected.
-  (api.listClimates as any).mockRejectedValue(new Error("offline"));
-  (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "fogbank", name: "Fogbank", climate: "temperate-interior" }, body: "grey" });
+  vi.mocked(api.listClimates).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "fogbank", name: "Fogbank", climate: "temperate-interior" }, body: "grey" }));
   render(<Wrap wid="w" kind="locations" selected="fogbank" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   const picker = await screen.findByLabelText<HTMLSelectElement>("Climate");
@@ -1672,9 +1685,9 @@ test("a stored number field value the number input cannot show gets a text box",
   // A hand-written `wet` is sanitized to blank by <input type="number">, which
   // would make the field look unfilled while it still holds the value. The
   // text box shows it, and the boundary will say what is wrong on save.
-  (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
-  (api.readEntity as any).mockResolvedValue({
-    meta: { id: "fogbank", name: "Fogbank", persistence: "wet" }, body: "grey" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
+    meta: { id: "fogbank", name: "Fogbank", persistence: "wet" }, body: "grey" }));
   render(<Wrap wid="w" kind="locations" selected="fogbank" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   const input = await screen.findByLabelText<HTMLInputElement>("Weather persistence");
@@ -1689,10 +1702,10 @@ test("a stored number field value the number input cannot show gets a text box",
 });
 
 test("the sidebar names a chosen option by its label", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "fogbank", name: "Fogbank" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
     meta: { id: "fogbank", name: "Fogbank", climate: "temperate-interior", persistence: "0.4" },
-    body: "grey" });
+    body: "grey" }));
   const { container } = render(<Wrap wid="w" kind="locations" selected="fogbank" />);
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -1707,8 +1720,8 @@ describe("selecting from the route", () => {
   // same record the read-only-view and row-link tests both need, so each test
   // states only what it is actually about. `entityFixture` mirrors this shape.
   beforeEach(() => {
-    (api.listEntities as any).mockResolvedValue([{ id: "the-salt-pact", name: "Salt Pact" }]);
-    (api.readEntity as any).mockResolvedValue(entityFixture("the-salt-pact", "The Salt Pact"));
+    vi.mocked(api.listEntities).mockResolvedValue([{ id: "the-salt-pact", name: "Salt Pact" }]);
+    vi.mocked(api.readEntity).mockResolvedValue(entityFixture("the-salt-pact", "The Salt Pact"));
   });
 
 test("a record row is a link to that record's address", async () => {
@@ -1718,7 +1731,7 @@ test("a record row is a link to that record's address", async () => {
 });
 
 test("an unowned blank form can be pre-owned by the chip that opened it", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine" }]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "seraphine", name: "Seraphine" }]));
   renderEditor({ kind: "lore", selected: null, newOwner: "characters:seraphine" });
   const seraphine = await screen.findByLabelText(/Seraphine/);
   expect((seraphine as HTMLInputElement).checked).toBe(true);
@@ -1726,7 +1739,7 @@ test("an unowned blank form can be pre-owned by the chip that opened it", async 
 
 test("leaving a record for the section root does not get reopened by its own late read", async () => {
   const slow = deferred();
-  (api.readEntity as any).mockImplementationOnce(() => slow.promise);
+  vi.mocked(api.readEntity).mockImplementationOnce(() => slow.promise);
   const { rerender } = renderEditor({ kind: "items", selected: "the-salt-pact" });
   rerender(editorWith({ kind: "items", selected: null, isNew: false }));
   slow.resolve(entityFixture("the-salt-pact", "The Salt Pact"));
@@ -1754,7 +1767,7 @@ test("the selected record opens read-only", async () => {
 
 test("a later selection wins even when the earlier read lands last", async () => {
   const slow = deferred(); const fast = deferred();
-  (api.readEntity as any)
+  vi.mocked(api.readEntity)
     .mockImplementationOnce(() => slow.promise)
     .mockImplementationOnce(() => fast.promise);
   const { rerender } = renderEditor({ kind: "items", selected: "a" });
@@ -1770,7 +1783,7 @@ test("the same id under a changed scope reads the new scope's record", async () 
   await screen.findByRole("heading", { name: "The Salt Pact" });
   rerender(editorWith({ kind: "items", selected: "the-salt-pact",
                         scope: { kind: "campaign", id: "run" } }));
-  await waitFor(() => expect((api.readEntity as any).mock.calls.at(-1)[0])
+  await waitFor(() => expect(vi.mocked(api.readEntity).mock.calls.slice(-1)[0][0])
     .toEqual({ kind: "campaign", id: "run" }));
 });
 
@@ -1780,9 +1793,9 @@ test("re-selecting the record already open leaves an unsaved draft alone", async
   await screen.findByRole("heading", { name: "The Salt Pact" });
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "Half written" } });
-  const reads = (api.readEntity as any).mock.calls.length;
+  const reads = vi.mocked(api.readEntity).mock.calls.length;
   rerender(editorWith(props));              // the same address, asked for again
-  expect((api.readEntity as any).mock.calls.length).toBe(reads);
+  expect(vi.mocked(api.readEntity).mock.calls.length).toBe(reads);
   expect(screen.getByLabelText(/Name/)).toHaveValue("Half written");
 });
 
@@ -1800,7 +1813,7 @@ test("...and Cancel is still the control that discards it", async () => {
 
 // ---- activation controls (lore activation spec 3, 4.2) --------------------
 
-const salt = (meta: Record<string, unknown> = {}) => ({
+const salt = (meta: Record<string, unknown> = {}): EntityDetail => ({
   meta: { id: "salt", name: "Salt", keys: "pact", ...meta }, body: "Binds", rev: "r1" });
 
 /** The sidebar's `.side-section` headed `heading`, or null when none is. */
@@ -1809,7 +1822,7 @@ const sideSection = (side: HTMLElement, heading: string) =>
     .find((sec) => sec.querySelector("h4")?.textContent === heading) ?? null;
 
 test("activation settings show as chips in the read-only view", async () => {
-  (api.readEntity as any).mockResolvedValue(salt({ priority: "250", sticky: "2" }));
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ priority: "250", sticky: "2" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByRole("heading", { name: "Priority" });
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -1824,8 +1837,8 @@ test("activation settings show as chips in the read-only view", async () => {
 });
 
 test("each set activation field and known_by is a side-section of its own", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.readEntity as any).mockResolvedValue(
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.readEntity).mockResolvedValue(
     salt({ sticky: "3", priority: "40", known_by: "characters:mara" }));
   const onOpenOwner = vi.fn();
   const { container } = render(
@@ -1849,7 +1862,7 @@ test("each set activation field and known_by is a side-section of its own", asyn
 });
 
 test("a record with no activation settings has no activation sections", async () => {
-  (api.readEntity as any).mockResolvedValue(salt());
+  vi.mocked(api.readEntity).mockResolvedValue(salt());
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByText("Binds");
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -1861,7 +1874,7 @@ test("a record with no activation settings has no activation sections", async ()
 });
 
 test("keep shows as Keep under budget only when it is on", async () => {
-  (api.readEntity as any).mockResolvedValue(salt({ keep: "true", scan_depth: "4" }));
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ keep: "true", scan_depth: "4" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByRole("heading", { name: "Keep under budget" });
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -1870,7 +1883,7 @@ test("keep shows as Keep under budget only when it is on", async () => {
 });
 
 test("Edit reveals the Activation disclosure and saves changed fields only", async () => {
-  (api.readEntity as any).mockResolvedValue(salt({ priority: "250", sticky: "2" }));
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ priority: "250", sticky: "2" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   const details = container.querySelector("details.activation-settings") as HTMLElement;
@@ -1884,7 +1897,7 @@ test("Edit reveals the Activation disclosure and saves changed fields only", asy
 });
 
 test("clearing keep sends a blank, never false", async () => {
-  (api.readEntity as any).mockResolvedValue(salt({ keep: "true" }));
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ keep: "true" }));
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   fireEvent.click(screen.getByLabelText("Keep under budget"));
@@ -1895,8 +1908,8 @@ test("clearing keep sends a blank, never false", async () => {
 });
 
 test("a save the server refuses as an invalid activation value shows the reason", async () => {
-  (api.readEntity as any).mockResolvedValue(salt());
-  (api.updateEntity as any).mockRejectedValueOnce(
+  vi.mocked(api.readEntity).mockResolvedValue(salt());
+  vi.mocked(api.updateEntity).mockRejectedValueOnce(
     fail(400, "invalid values for lore: sticky"));
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
@@ -1907,7 +1920,7 @@ test("a save the server refuses as an invalid activation value shows the reason"
 });
 
 test("every kind carries the Activation disclosure", async () => {
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "saltmarch-key", name: "Saltmarch Key", sticky: "1" }, body: "b", rev: "r1" });
   const { container } = render(<Wrap wid="w" kind="items" selected="saltmarch-key" />);
   await screen.findByText("1 post");
@@ -1916,8 +1929,8 @@ test("every kind carries the Activation disclosure", async () => {
 });
 
 test("known_by renders as chips that open the actor", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.readEntity as any).mockResolvedValue(
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.readEntity).mockResolvedValue(
     salt({ known_by: "characters:mara, characters:gone" }));
   const onOpenOwner = vi.fn();
   const { container } = render(
@@ -1931,10 +1944,10 @@ test("known_by renders as chips that open the actor", async () => {
 });
 
 test("the Known by picker offers characters and PCs and stores refs", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.listPCs as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.listPCs).mockResolvedValue(fixture([{ id: "winifred", name: "Winifred" }]));
   // A kind with no actor picker of its own, so "Mara" can only be this one.
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "seraphine", name: "Seraphine" }, body: "b", rev: "r1" });
   render(<Wrap wid="w" kind="creatures" selected="seraphine" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
@@ -1950,48 +1963,48 @@ test("the Known by picker offers characters and PCs and stores refs", async () =
 });
 
 test("adopt banner applies imported settings", async () => {
-  (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
-  (api.previewAdoptSt as any).mockResolvedValue(
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+  vi.mocked(api.previewAdoptSt).mockResolvedValue(
     { fields: { sticky: "2" }, unmapped: ["probability"] });
-  (api.adoptSt as any).mockResolvedValue({ applied: { sticky: "2" } });
+  vi.mocked(api.adoptSt).mockResolvedValue({ applied: { sticky: "2" } });
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   const banner = await screen.findByRole("status", { name: /imported settings/i });
   expect(within(banner).getByText("sticky")).toBeInTheDocument();
   expect(within(banner).getByText(/probability/)).toBeInTheDocument();
   expect(api.previewAdoptSt).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "salt");
-  const reads = (api.readEntity as any).mock.calls.length;
+  const reads = vi.mocked(api.readEntity).mock.calls.length;
   fireEvent.click(within(banner).getByRole("button", { name: /^apply$/i }));
   await waitFor(() => expect(api.adoptSt).toHaveBeenCalledWith(
     { kind: "world", id: "w" }, "lore", "salt"));
-  await waitFor(() => expect((api.readEntity as any).mock.calls.length).toBeGreaterThan(reads));
+  await waitFor(() => expect(vi.mocked(api.readEntity).mock.calls.length).toBeGreaterThan(reads));
 });
 
 test("no adopt banner when the preview has nothing to add, or there is no stash", async () => {
   // A stash that is fully adopted already: the preview says nothing is pending.
-  (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
   const { unmount } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await waitFor(() => expect(api.previewAdoptSt).toHaveBeenCalled());
   expect(screen.queryByRole("status", { name: /imported settings/i })).toBeNull();
   unmount();
   // No stash: the preview is never asked for.
-  (api.previewAdoptSt as any).mockClear();
-  (api.readEntity as any).mockResolvedValue(salt());
+  vi.mocked(api.previewAdoptSt).mockClear();
+  vi.mocked(api.readEntity).mockResolvedValue(salt());
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByText("Binds");
   expect(api.previewAdoptSt).not.toHaveBeenCalled();
 });
 
 test("Apply imported settings to all sits beside + New on the lore rail only", async () => {
-  (api.adoptStAll as any).mockResolvedValue({
+  vi.mocked(api.adoptStAll).mockResolvedValue({
     applied: [{ kind: "lore", id: "a", fields: { sticky: "2" } },
               { kind: "items", id: "b", fields: { priority: "5" } }],
     skipped: [{ kind: "lore", id: "c", reason: "unreadable st_extensions" }] });
   const { unmount } = render(<Wrap isNew={false} wid="w" kind="lore" />);
-  const before = (api.listEntities as any).mock.calls.length;
+  const before = vi.mocked(api.listEntities).mock.calls.length;
   fireEvent.click(await screen.findByRole("button", { name: "Apply imported settings to all" }));
   await screen.findByText("Applied to 2 entries; 1 skipped");
   expect(api.adoptStAll).toHaveBeenCalledWith({ kind: "world", id: "w" });
-  expect((api.listEntities as any).mock.calls.length).toBeGreaterThan(before);
+  expect(vi.mocked(api.listEntities).mock.calls.length).toBeGreaterThan(before);
   unmount();
   render(<Wrap isNew={false} wid="w" kind="items" />);
   await screen.findByText("No items yet.");
@@ -1999,7 +2012,7 @@ test("Apply imported settings to all sits beside + New on the lore rail only", a
 });
 
 test("chips say post for one and posts for the rest", async () => {
-  (api.readEntity as any).mockResolvedValue(salt({ cooldown: "0", sticky: "1", scan_depth: "3" }));
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ cooldown: "0", sticky: "1", scan_depth: "3" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByText("1 post");
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -2010,15 +2023,15 @@ test("chips say post for one and posts for the rest", async () => {
 });
 
 test("the activation counts step by one", async () => {
-  (api.readEntity as any).mockResolvedValue(salt({ sticky: "2" }));
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ sticky: "2" }));
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   expect(await screen.findByLabelText("Sticky")).toHaveAttribute("step", "1");
 });
 
 test("adopt-all is disabled over an open edit and never discards it", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  (api.readEntity as any).mockResolvedValue(salt());
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(salt());
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Body"), { target: { value: "unsaved words" } });
@@ -2031,19 +2044,19 @@ test("adopt-all is disabled over an open edit and never discards it", async () =
 });
 
 test("adopt-all over a viewed record applies and re-reads it", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
-  (api.readEntity as any).mockResolvedValue(salt());
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  vi.mocked(api.readEntity).mockResolvedValue(salt());
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByRole("button", { name: /^edit$/i });
-  const reads = (api.readEntity as any).mock.calls.length;
+  const reads = vi.mocked(api.readEntity).mock.calls.length;
   fireEvent.click(screen.getByRole("button", { name: "Apply imported settings to all" }));
   await screen.findByText("Applied to 0 entries; 0 skipped");
-  expect((api.readEntity as any).mock.calls.length).toBeGreaterThan(reads);
+  expect(vi.mocked(api.readEntity).mock.calls.length).toBeGreaterThan(reads);
 });
 
 test("a second click while an adopt is in flight does nothing", async () => {
   let land!: (v: { applied: []; skipped: [] }) => void;
-  (api.adoptStAll as any).mockReturnValue(new Promise((r) => { land = r; }));
+  vi.mocked(api.adoptStAll).mockReturnValue(new Promise((r) => { land = r; }));
   render(<Wrap isNew={false} wid="w" kind="lore" />);
   const all = await screen.findByRole("button", { name: "Apply imported settings to all" });
   fireEvent.click(all);
@@ -2056,10 +2069,10 @@ test("a second click while an adopt is in flight does nothing", async () => {
 });
 
 test("the per-entry Apply waits on its request too", async () => {
-  (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
-  (api.previewAdoptSt as any).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+  vi.mocked(api.previewAdoptSt).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
   let land!: (v: { applied: Record<string, string> }) => void;
-  (api.adoptSt as any).mockReturnValue(new Promise((r) => { land = r; }));
+  vi.mocked(api.adoptSt).mockReturnValue(new Promise((r) => { land = r; }));
   render(<Wrap wid="w" kind="lore" selected="salt" />);
   const banner = await screen.findByRole("status", { name: /imported settings/i });
   const apply = within(banner).getByRole("button", { name: /^apply$/i });
@@ -2075,14 +2088,14 @@ test("the per-entry Apply waits on its request too", async () => {
 
 describe("a per-entry adopt that fails", () => {
   function twoRecords() {
-    (api.listEntities as any).mockResolvedValue([
+    vi.mocked(api.listEntities).mockResolvedValue([
       { id: "salt", name: "Salt" }, { id: "seraphine", name: "Seraphine" }]);
-    (api.readEntity as any).mockImplementation((_s: unknown, _k: unknown, id: string) =>
+    vi.mocked(api.readEntity).mockImplementation((_s, _k, id) =>
       Promise.resolve({ meta: { id, name: id, st_extensions: '{"sticky":2}' },
                         body: `body of ${id}`, rev: "r1" }));
-    (api.previewAdoptSt as any).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
+    vi.mocked(api.previewAdoptSt).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
     let fail!: (e: Error) => void;
-    (api.adoptSt as any).mockReturnValue(new Promise((_r, j) => { fail = j; }));
+    vi.mocked(api.adoptSt).mockReturnValue(new Promise((_r, j) => { fail = j; }));
     return (e: Error) => fail(e);
   }
 
@@ -2111,9 +2124,9 @@ describe("a per-entry adopt that fails", () => {
 });
 
 test("the adopt-all status line goes when another record is opened", async () => {
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "salt", name: "Salt" }, { id: "seraphine", name: "Seraphine" }]);
-  (api.readEntity as any).mockImplementation((_s: unknown, _k: unknown, id: string) =>
+  vi.mocked(api.readEntity).mockImplementation((_s, _k, id) =>
     Promise.resolve({ meta: { id, name: id }, body: `body of ${id}`, rev: "r1" }));
   const { rerender } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByText("body of salt");
@@ -2134,8 +2147,8 @@ test("the adopt-all status line goes when the scope changes", async () => {
 
 
 test("a record the campaign only inherits points at the world instead of offering Apply", async () => {
-  (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
-  (api.previewAdoptSt as any).mockResolvedValue(
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+  vi.mocked(api.previewAdoptSt).mockResolvedValue(
     { fields: { sticky: "2" }, unmapped: [], inherited: true });
   render(<Wrap wid="w" scope={{ kind: "campaign", id: "c1" }} kind="lore" selected="salt" />);
   const banner = await screen.findByRole("status", { name: /imported settings/i });
@@ -2146,8 +2159,8 @@ test("a record the campaign only inherits points at the world instead of offerin
 });
 
 test("a Known-by chip is a label, not an inert button, when nothing can open the actor", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.readEntity as any).mockResolvedValue(salt({ known_by: "characters:mara" }));
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.readEntity).mockResolvedValue(salt({ known_by: "characters:mara" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByText("Binds");
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -2164,14 +2177,14 @@ describe("an adopt that completes after the scope has changed", () => {
     s.id === "w1" ? [{ id: "salt", name: "Salt" }] : [{ id: "hall", name: "Realm Hall" }]);
 
   test("per-entry Apply leaves the new scope's rail and screen alone", async () => {
-    (api.listEntities as any).mockImplementation(listings);
-    (api.readEntity as any).mockImplementation((s: { id: string }, _k: string, id: string) =>
+    vi.mocked(api.listEntities).mockImplementation(listings);
+    vi.mocked(api.readEntity).mockImplementation((s, _k, id) =>
       Promise.resolve(s.id === "w1"
         ? salt({ st_extensions: '{"sticky":2}' })
         : { meta: { id, name: "Realm Hall" }, body: "A hall.", rev: "r2" }));
-    (api.previewAdoptSt as any).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
+    vi.mocked(api.previewAdoptSt).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
     const landed = deferred<{ applied: Record<string, string> }>();
-    (api.adoptSt as any).mockReturnValue(landed.promise);
+    vi.mocked(api.adoptSt).mockReturnValue(landed.promise);
     const { rerender } = render(
       <Wrap wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" selected="salt" />);
     const banner = await screen.findByRole("status", { name: /imported settings/i });
@@ -2180,7 +2193,7 @@ describe("an adopt that completes after the scope has changed", () => {
 
     rerender(<Wrap isNew={false} wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
     await screen.findByText("Realm Hall", ROW);
-    const reads = (api.readEntity as any).mock.calls.length;
+    const reads = vi.mocked(api.readEntity).mock.calls.length;
     landed.resolve({ applied: { sticky: "2" } });
     await new Promise((r) => setTimeout(r, 0));
 
@@ -2188,17 +2201,17 @@ describe("an adopt that completes after the scope has changed", () => {
     // neither re-read nor drawn over the new screen.
     expect(screen.getByText("Realm Hall", ROW)).toBeInTheDocument();
     expect(screen.queryByText("Salt", ROW)).toBeNull();
-    expect((api.readEntity as any).mock.calls.length).toBe(reads);
+    expect(vi.mocked(api.readEntity).mock.calls.length).toBe(reads);
     expect(screen.queryByText("Binds")).toBeNull();
     expect(screen.queryByRole("status", { name: /imported settings/i })).toBeNull();
   });
 
   test("a per-entry failure from the old scope is not shown in the new one", async () => {
-    (api.listEntities as any).mockImplementation(listings);
-    (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
-    (api.previewAdoptSt as any).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
+    vi.mocked(api.listEntities).mockImplementation(listings);
+    vi.mocked(api.readEntity).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+    vi.mocked(api.previewAdoptSt).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
     const landed = deferred<never>();
-    (api.adoptSt as any).mockReturnValue(landed.promise);
+    vi.mocked(api.adoptSt).mockReturnValue(landed.promise);
     const { rerender } = render(
       <Wrap wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" selected="salt" />);
     const banner = await screen.findByRole("status", { name: /imported settings/i });
@@ -2212,9 +2225,9 @@ describe("an adopt that completes after the scope has changed", () => {
   });
 
   test("adopt-all leaves the new scope's rail, note and busy state alone", async () => {
-    (api.listEntities as any).mockImplementation(listings);
+    vi.mocked(api.listEntities).mockImplementation(listings);
     const landed = deferred<{ applied: never[]; skipped: never[] }>();
-    (api.adoptStAll as any).mockReturnValue(landed.promise);
+    vi.mocked(api.adoptStAll).mockReturnValue(landed.promise);
     const { rerender } = render(
       <Wrap isNew={false} wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" />);
     fireEvent.click(await screen.findByRole("button", { name: "Apply imported settings to all" }));
@@ -2387,7 +2400,7 @@ test("reclassification guards an Art draft before its own confirmation and write
   confirm.mockRestore();
 });
 test("removing the open record from the library returns to the grid", async () => {
-  vi.mocked(api.demoteFromLibrary).mockResolvedValue(undefined as any);
+  vi.mocked(api.demoteFromLibrary).mockResolvedValue({ copied_down: [], dependents: [] });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   lastPath = "";
   render(<Wrap wid="w" kind="locations" selected="saltmarch" />);
@@ -2485,7 +2498,7 @@ describe("spec 07 group reference consent", () => {
     meta: { id: "salt-circle", name: "Salt Circle", members: "characters:mara", leader: "characters:mara" },
     body: "A roster.", rev: "r1", membership_context,
   });
-  const fixture = () => {
+  const arrangeMembership = () => {
     vi.mocked(api.listEntities).mockResolvedValue([{ id: "salt-circle", name: "Salt Circle" }]);
     vi.mocked(api.listCharacters).mockResolvedValue([{ id: "mara", name: "Mara", default_version: "v1", versions: [] }]);
     vi.mocked(api.listPCs).mockResolvedValue([{ id: "winifred", name: "Winifred", default_version: "v1", versions: [], tags: [] }]);
@@ -2495,7 +2508,7 @@ describe("spec 07 group reference consent", () => {
   const edit = async () => fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   const sent = () => vi.mocked(api.updateEntity).mock.calls[0][3];
 
-  beforeEach(fixture);
+  beforeEach(arrangeMembership);
 
   test("shows members chips and saves only changed fields", async () => {
     vi.mocked(api.readEntity).mockResolvedValue(record(context(false)));
@@ -2541,7 +2554,7 @@ describe("spec 07 group reference consent", () => {
   });
 
   test("a body-only edit preserves legacy Members without granting any binding", async () => {
-    vi.mocked(api.readEntity).mockResolvedValue({ ...record(), meta: { ...record().meta, members: "Mara, characters:mara" } });
+    vi.mocked(api.readEntity).mockResolvedValue(fixture({ ...record(), meta: { ...record().meta, members: "Mara, characters:mara" } }));
     show(); await edit();
     fireEvent.change(screen.getByLabelText("Body"), { target: { value: "A revised roster." } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -2700,10 +2713,10 @@ describe("spec 07 group reference consent", () => {
   });
 
   test("an owned group's dangling member renders as a not-found chip", async () => {
-    vi.mocked(api.readEntity).mockResolvedValue({
+    vi.mocked(api.readEntity).mockResolvedValue(fixture({
       ...record({ ...context(false), members: ["characters:mara", "characters:ghost"] }),
       meta: { id: "salt-circle", name: "Salt Circle", members: "characters:mara, characters:ghost" },
-    });
+    }));
     show({ onOpenOwner: vi.fn() });
     await screen.findByRole("button", { name: "Edit" });
     const section = screen.getByRole("heading", { name: "Members" }).closest(".side-section") as HTMLElement;

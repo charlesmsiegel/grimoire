@@ -181,7 +181,8 @@ export function ContentSection({ pack, reload }: {
   const dirty = form != null && baseline != null && JSON.stringify(form) !== baseline;
 
   const save: SaveFn = (dryRun) => {
-    const f = form!;
+    const f = form;
+    if (!f) return Promise.resolve({ ok: false, errors: ["no record selected"], display_errors: [] });
     // A blank id must reject, not silently no-op as ok -- requestSave's
     // `!fresh.ok` guard then keeps the form open and shows the error instead
     // of Save quietly discarding the draft (with no PUT ever fired).
@@ -193,7 +194,12 @@ export function ContentSection({ pack, reload }: {
       { name: f.name, body: f.body, keys: f.keys, fields: f.meta, sheet }, dryRun);
   };
   const dr = useModuleDryRun(form ? save : emptyResult, [form]);
-  const done = () => { const f = form!; void reload(); selectContent(f.kind, f.contentId); };
+  const done = () => {
+    const selectedForm = form;
+    if (!selectedForm) return;
+    void reload();
+    selectContent(selectedForm.kind, selectedForm.contentId);
+  };
   // Delete removes the record the form/selection points at -- unlike `done`
   // (rename/save keep the same record selected) it must also clear
   // `selected`/`viewEntry`, otherwise the read-only view keeps rendering the
@@ -225,16 +231,19 @@ export function ContentSection({ pack, reload }: {
   // A content-id rename keeps the form open, so the still-mounted form must
   // resync to the new id (and `selected`, so the rail highlight + any later
   // Save/Delete address the new id) rather than keep pointing at the old one.
-  const renameContent = (to: string) =>
+  const renameContent = (to: string) => {
+    const selectedForm = form;
+    if (!selectedForm) return;
     void confirmGate(
-      () => api.renameModulePart(pack.id, "content", { from: form!.contentId, kind: form!.kind }, to, true),
-      () => api.renameModulePart(pack.id, "content", { from: form!.contentId, kind: form!.kind }, to, false),
+      () => api.renameModulePart(pack.id, "content", { from: selectedForm.contentId, kind: selectedForm.kind }, to, true),
+      () => api.renameModulePart(pack.id, "content", { from: selectedForm.contentId, kind: selectedForm.kind }, to, false),
       () => {
         setForm((f) => (f ? { ...f, contentId: to } : f));
-        setSelected({ kind: form!.kind, id: to });
+        setSelected({ kind: selectedForm.kind, id: to });
         dr.reset();
         void reload();
       });
+  };
 
   return (
     <div className="editor">

@@ -25,7 +25,7 @@ const components = {
 };
 
 export function GreetingMarkdown({ children, imageExtras }:
-    { children: string; imageExtras?: (src: string) => ReactNode }) {
+    { children: string; imageExtras?: ((src: string) => ReactNode) | undefined }) {
   const text = children.replace(/^#(.+?)#\s*$/gm, (_m, label) => `### ${label.trim()}`);
   // Context keeps the image component identity stable when extras change.
   return (

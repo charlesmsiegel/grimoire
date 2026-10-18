@@ -17,7 +17,7 @@ export type CastTile = {
   name: string;
   version: string;
   /** The roster's token for that version's avatar, for the portrait's `?v=`. */
-  avatar_v?: string | null;
+  avatar_v?: string | null | undefined;
   state: CastState;
 };
 

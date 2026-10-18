@@ -15,7 +15,7 @@ export function LibraryPanel({ cid, kind, id, onMoved }: {
   cid: string;
   kind: LibraryKind;
   id: string;
-  onMoved?: () => void;
+  onMoved?: (() => void) | undefined;
 }) {
   const [status, setStatus] = useState<LibraryStatus | null>(null);
   const [busy, setBusy] = useState(false);

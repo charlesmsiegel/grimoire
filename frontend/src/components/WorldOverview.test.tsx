@@ -12,6 +12,7 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 /** Every producer here goes through this, same as `WorldView` passes its own
  *  `hrefFor` down — a tab name becomes a path under the world this suite's
@@ -30,24 +31,24 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getWorldDefaultPrompt).mockResolvedValue({ text: "The river freezes.", status: "ok" });
   vi.mocked(api.getPromptLayout).mockResolvedValue({ enabled: false, sections: [] });
-  (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "",
-    counts: { characters: 2, pcs: 1, locations: 3, lore: 5, items: 0, groups: 1, creatures: 0, greetings: 2 } });
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({ meta: { id: "w", name: "Saltmarch" }, body: "",
+    counts: { characters: 2, pcs: 1, locations: 3, lore: 5, items: 0, groups: 1, creatures: 0, greetings: 2 } }));
   // Each row carries its plot-map edges, which is all the connections row needs.
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "g1", name: "Gala", edges: { leads_to: ["g2"], excludes: [] } },
-    { id: "g2", name: "Docks", edges: { leads_to: [], excludes: [] } }]);
-  (api.listCharacters as any).mockResolvedValue([
+    { id: "g2", name: "Docks", edges: { leads_to: [], excludes: [] } }]));
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "mara", name: "Mara", default_version: "default", versions: [], tagline: "a smuggler" },
     { id: "winifred", name: "Winifred", default_version: "default", versions: [] },  // no tagline
   ]);
-  (api.listUntaggedImages as any).mockResolvedValue([]);
-  (api.listModules as any).mockResolvedValue([]);
-  (api.setWorldModule as any).mockResolvedValue({ ok: true });
-  (api.getCalendarConfig as any).mockResolvedValue({
+  vi.mocked(api.listUntaggedImages).mockResolvedValue([]);
+  vi.mocked(api.listModules).mockResolvedValue([]);
+  vi.mocked(api.setWorldModule).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: false, stale_after_days: 30 });
-  (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
-  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+    secondary: null, confirmed: false, stale_after_days: 30 }));
+  vi.mocked(api.setCalendarConfig).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCalendarProviders).mockResolvedValue({ providers: [
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" }] });
 });
 
@@ -91,17 +92,17 @@ test("the plot map row reads the list's edges, and no greeting one by one", asyn
 });
 
 test("an exclusion is a connection too", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "g1", name: "Gala", edges: { leads_to: [], excludes: ["g2"] } },
-    { id: "g2", name: "Docks", edges: { leads_to: [], excludes: [] } }]);
+    { id: "g2", name: "Docks", edges: { leads_to: [], excludes: [] } }]));
   show();
   expect(await screen.findByText(/✓ Plot map has connections/)).toBeInTheDocument();
 });
 
 test("greetings with no edges leave the plot map row open", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "g1", name: "Gala", edges: { leads_to: [], excludes: [] } },
-    { id: "g2", name: "Docks", edges: { leads_to: [], excludes: [] } }]);
+    { id: "g2", name: "Docks", edges: { leads_to: [], excludes: [] } }]));
   show();
   expect(await screen.findByText(/○ Plot map has connections/)).toBeInTheDocument();
   expect(screen.getByText(/✓ Has a greeting/)).toBeInTheDocument();
@@ -110,7 +111,7 @@ test("greetings with no edges leave the plot map row open", async () => {
 test("a plot map the server could not read is no row at all, not an open one", async () => {
   // Rows without `edges` mean the map could not be read -- unknown, which is
   // not "no connections", and a chore that drawing a link would never clear.
-  (api.listGreetings as any).mockResolvedValue([{ id: "g1", name: "Gala" }, { id: "g2", name: "Docks" }]);
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([{ id: "g1", name: "Gala" }, { id: "g2", name: "Docks" }]));
   show();
   expect(await screen.findByText(/✓ Has a greeting/)).toBeInTheDocument();
   expect(screen.queryByText(/Plot map has connections/)).toBeNull();
@@ -131,9 +132,9 @@ test("an unconfirmed world calendar is an open checklist item", async () => {
 });
 
 test("a confirmed world calendar closes it", async () => {
-  (api.getCalendarConfig as any).mockResolvedValue({
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: true, stale_after_days: 30 });
+    secondary: null, confirmed: true, stale_after_days: 30 }));
   show();
   expect(await screen.findByText(/✓ Calendar confirmed/)).toBeInTheDocument();
 });
@@ -158,7 +159,7 @@ test("confirming the calendar closes the checklist item without a reload", async
 test("a world whose calendar cannot be read shows no calendar row at all", async () => {
   // Unknown is not "unconfirmed": a failed read must not put a chore on the
   // list that confirming would never clear.
-  (api.getCalendarConfig as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.getCalendarConfig).mockRejectedValue(new Error("nope"));
   show();
   expect(await screen.findByText(/plot map has connections/i)).toBeInTheDocument();
   expect(screen.queryByText(/Calendar confirmed/)).toBeNull();
@@ -174,10 +175,10 @@ test("switching worlds drops the previous world's calendar row", async () => {
   // The row and the section below it are one claim. Leaving the old flag up
   // while the section says "Loading calendar…" is the page contradicting itself
   // about the world whose name is at the top of it.
-  (api.getCalendarConfig as any).mockImplementation((scope: { id: string }) =>
+  vi.mocked(api.getCalendarConfig).mockImplementation((scope) =>
     scope.id === "w"
       ? Promise.resolve({ primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-                          secondary: null, confirmed: true, stale_after_days: 30 })
+                          secondary: null, confirmed: true, stale_after_days: 30, warn_days: 7 })
       : new Promise(() => {}));                    // the next world never answers
   const { rerender } = render(
     <MemoryRouter><WorldOverview wid="w" hrefFor={hrefFor} /></MemoryRouter>);

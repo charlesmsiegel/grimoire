@@ -1,3 +1,5 @@
+import type { Card, Persona } from "../api/client";
+
 /** The V3 card's prose fields, in the order a reader reads a card.
  *
  *  Label-only, and deliberately a second list rather than an import from
@@ -11,7 +13,7 @@
  *  come back identical, rather than letting a change it cannot show read as no
  *  change at all.
  */
-export const CARD_TEXT_FIELDS: { key: string; label: string }[] = [
+export const CARD_TEXT_FIELDS = [
   // The name leads, and is the one entry `character/shared`'s list does not have:
   // there it has its own control above the prose fields, but a world-side
   // rename is a change a reader has to be able to see before taking it.
@@ -24,10 +26,10 @@ export const CARD_TEXT_FIELDS: { key: string; label: string }[] = [
   { key: "system_prompt", label: "System prompt" },
   { key: "post_history_instructions", label: "Post-history instructions" },
   { key: "creator_notes", label: "Creator notes" },
-];
+] as const satisfies readonly { key: keyof Card["data"]; label: string }[];
 
 /** A PC's persona, same idea: the fields a reader compares, in reading order. */
-export const PERSONA_FIELDS: { key: string; label: string }[] = [
+export const PERSONA_FIELDS: { key: keyof Persona; label: string }[] = [
   { key: "name", label: "Name" },
   { key: "pronouns", label: "Pronouns" },
   { key: "summary", label: "Summary" },

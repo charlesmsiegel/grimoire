@@ -83,7 +83,11 @@ describe("removal questions (viewer removal design §1.2)", () => {
   test("greetings, world originals and record rows without a version or placement are not removable", () => {
     expect(galleryImageDescriptor({ ...placed(world), kind: "greetings" }, world, "Realm")).toBeNull();
     expect(galleryImageDescriptor({ ...placed(campaign), provenance: "world-original" }, campaign, "Realm")?.removal).toBeUndefined();
-    expect(galleryImageDescriptor({ ...placed(world), v: undefined }, world, "Realm")?.removal).toBeUndefined();
-    expect(galleryImageDescriptor({ ...placed(world), placement: undefined }, world, "Realm")?.removal).toBeUndefined();
+    const withoutVersion = placed(world);
+    delete withoutVersion.v;
+    expect(galleryImageDescriptor(withoutVersion, world, "Realm")?.removal).toBeUndefined();
+    const withoutPlacement = placed(world);
+    delete withoutPlacement.placement;
+    expect(galleryImageDescriptor(withoutPlacement, world, "Realm")?.removal).toBeUndefined();
   });
 });

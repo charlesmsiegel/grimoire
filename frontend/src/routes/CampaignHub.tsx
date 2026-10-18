@@ -112,7 +112,7 @@ type Face = {
    *  Never a counter: an immutable URL is never revalidated, so a token that
    *  reset on mount would pin a replaced image in the browser cache for a
    *  year. */
-  v?: string | null;
+  v?: string | null | undefined;
 };
 
 function faces(cast: { chars: CharacterSummary[]; pcs: PCSummary[] }): Face[] {

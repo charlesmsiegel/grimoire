@@ -37,9 +37,9 @@ function draft(over: Partial<SceneImportDraft> = {}): SceneImportDraft {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listEntities as any).mockResolvedValue([{ id: "the-quay", name: "The Quay" }]);
-  (api.sceneImportParse as any).mockResolvedValue(DRAFT);
-  (api.sceneImport as any).mockResolvedValue({ id: "001--the-long-quay", messages: 2, cast: 1 });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "the-quay", name: "The Quay" }]);
+  vi.mocked(api.sceneImportParse).mockResolvedValue(DRAFT);
+  vi.mocked(api.sceneImport).mockResolvedValue({ id: "001--the-long-quay", messages: 2, cast: 1 });
 });
 
 function readFile(text = "**You:** hi\n") {
@@ -74,7 +74,7 @@ test("import sends the reviewed draft, not the parsed one", async () => {
   fireEvent.click(screen.getByRole("button", { name: /import scene/i }));
 
   await waitFor(() => expect(api.sceneImport).toHaveBeenCalled());
-  const [cid, body] = (api.sceneImport as any).mock.calls[0];
+  const [cid, body] = vi.mocked(api.sceneImport).mock.calls[0];
   expect(cid).toBe("c");
   expect(body.title).toBe("A Better Title");
   expect(body.cast).toEqual([]);
@@ -84,7 +84,7 @@ test("import sends the reviewed draft, not the parsed one", async () => {
 });
 
 test("every warning the parse raised is shown before anything is imported", async () => {
-  (api.sceneImportParse as any).mockResolvedValue(draft({
+  vi.mocked(api.sceneImportParse).mockResolvedValue(draft({
     date: "", warnings: ["“2 January 2026” is not a date this campaign's calendar can read."],
   }));
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
@@ -94,7 +94,7 @@ test("every warning the parse raised is shown before anything is imported", asyn
 });
 
 test("a speaker who names nobody here is named, and does not block the import", async () => {
-  (api.sceneImportParse as any).mockResolvedValue(draft({ cast: [], unmatched: ["Mara"] }));
+  vi.mocked(api.sceneImportParse).mockResolvedValue(draft({ cast: [], unmatched: ["Mara"] }));
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
   readFile();
   await screen.findByText(/no one in this campaign is called/i);
@@ -109,7 +109,7 @@ test("a PC-named post counts as a player post, not just a **You:** block", async
   // seated player's NAME onto their posts, and `parse` resolves roles against
   // an empty player set, so those come back as role "assistant". A guard that
   // only reads the role misses every actual scene file.
-  (api.sceneImportParse as any).mockResolvedValue(draft({
+  vi.mocked(api.sceneImportParse).mockResolvedValue(draft({
     messages: [{ role: "assistant", speaker: "Seraphine", content: "I take the ledger." }],
     cast: [{ label: "Seraphine", kind: "pcs", id: "seraphine", name: "Seraphine", role: "player" }],
   }));
@@ -131,7 +131,7 @@ test("a transcript with player posts cannot be imported as offscreen", async () 
 });
 
 test("a player cannot be seated once the scene is marked offscreen", async () => {
-  (api.sceneImportParse as any).mockResolvedValue(draft({
+  vi.mocked(api.sceneImportParse).mockResolvedValue(draft({
     // No player posts: the only speaker is an NPC, so the offscreen box is
     // available to tick, and the PC below is a seat the reviewer could add.
     messages: [{ role: "assistant", speaker: "Mara", content: "She waits." }],
@@ -150,7 +150,7 @@ test("a player cannot be seated once the scene is marked offscreen", async () =>
   fireEvent.click(screen.getByRole("button", { name: /import scene/i }));
   await waitFor(() => expect(api.sceneImport).toHaveBeenCalled());
   // The player's seat is dropped; the NPC's is not.
-  expect((api.sceneImport as any).mock.calls[0][1].cast)
+  expect(vi.mocked(api.sceneImport).mock.calls[0][1].cast)
     .toEqual([{ kind: "characters", id: "mara", role: "npc" }]);
 });
 
@@ -159,7 +159,7 @@ test("a location the campaign no longer has never reaches the commit", async () 
   // matches no option reports "" whatever the state behind it says, so that
   // assertion passes just as happily while the bad id is still on its way to
   // the server. The committed body is the thing under test.
-  (api.listEntities as any).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([]);
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
   readFile();
   await screen.findByDisplayValue("The Long Quay");
@@ -167,7 +167,7 @@ test("a location the campaign no longer has never reaches the commit", async () 
 
   fireEvent.click(screen.getByRole("button", { name: /import scene/i }));
   await waitFor(() => expect(api.sceneImport).toHaveBeenCalled());
-  expect((api.sceneImport as any).mock.calls[0][1].location).toBe("");
+  expect(vi.mocked(api.sceneImport).mock.calls[0][1].location).toBe("");
 });
 
 test("the import pane is usable again after a successful import", async () => {
@@ -187,7 +187,7 @@ test("the import pane is usable again after a successful import", async () => {
 });
 
 test("a parse failure keeps the file picker and says why", async () => {
-  (api.sceneImportParse as any).mockRejectedValue({ detail: "could not parse: no blocks" });
+  vi.mocked(api.sceneImportParse).mockRejectedValue({ detail: "could not parse: no blocks" });
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
   readFile();
   await screen.findByText(/could not parse: no blocks/i);
@@ -198,7 +198,7 @@ test("a connection that failed mid-import does not offer a blind retry", async (
   // The scene may be written and only the reply lost. `commit` is
   // all-or-nothing against failures it can see; it cannot undo a reply that
   // never arrived, and retrying a long transcript would make a second copy.
-  (api.sceneImport as any).mockRejectedValue(new TypeError("Failed to fetch"));
+  vi.mocked(api.sceneImport).mockRejectedValue(new TypeError("Failed to fetch"));
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
   readFile();
   await screen.findByDisplayValue("The Long Quay");
@@ -211,7 +211,7 @@ test("a connection that failed mid-import does not offer a blind retry", async (
 test("a server refusal keeps the retry available", async () => {
   // The other half: an answered request means nothing landed, so the reviewer
   // can fix the draft and press Import again.
-  (api.sceneImport as any).mockRejectedValue(
+  vi.mocked(api.sceneImport).mockRejectedValue(
     Object.assign(new Error("actor not found"), { status: 404, detail: "actor not found" }));
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={() => {}} />);
   readFile();
@@ -224,7 +224,7 @@ test("a server refusal keeps the retry available", async () => {
 
 test("a failed import says why and does not report a scene", async () => {
   const onImported = vi.fn();
-  (api.sceneImport as any).mockRejectedValue(
+  vi.mocked(api.sceneImport).mockRejectedValue(
     Object.assign(new Error("actor not found"), { status: 404, detail: "actor not found" }));
   render(<SceneImport cid="c" onBack={() => {}} onCancel={() => {}} onImported={onImported} />);
   readFile();

@@ -1,3 +1,5 @@
+import { fixture } from "../testkit/fixture";
+import type { ComponentProps } from "react";
 import type { ReactNode } from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -15,7 +17,8 @@ vi.mock("../api/client", () => ({
 // The importer is a three-step walk with its own suite; here it only has to
 // be reachable from the header and to report back the way it ends.
 vi.mock("../components/SceneImport", () => ({
-  SceneImport: ({ onBack, onImported }: any) => (
+  SceneImport: ({ onBack, onImported }:
+                  ComponentProps<typeof import("../components/SceneImport").SceneImport>) => (
     <div data-testid="scene-import">
       <button onClick={() => onImported("s8")}>stub-import</button>
       <button onClick={() => onBack()}>stub-import-close</button>
@@ -26,7 +29,8 @@ vi.mock("../components/SceneImport", () => ({
 // The chooser is driven end-to-end by its own suite; here it only has to be
 // reachable, and to report back the two ways it can end.
 vi.mock("../components/NewSceneChooser", () => ({
-  NewSceneChooser: ({ onClose, onCreated, seed, afterSid }: any) => (
+  NewSceneChooser: ({ onClose, onCreated, seed, afterSid }:
+                      ComponentProps<typeof import("../components/NewSceneChooser").NewSceneChooser>) => (
     <div data-testid="scene-chooser">
       {/* What the chooser was opened with: a Story Graph handoff's seed, and
           the ranking reference a seeded open has to wait for. */}
@@ -44,6 +48,7 @@ vi.mock("../components/NewSceneChooser", () => ({
 
 import { api } from "../api/client";
 import ScenesView from "./ScenesView";
+import type { SceneMeta } from "../api/types";
 
 const META = { id: "run", name: "Run One", world: "w", created: "", updated: "",
                scenes: 3, last_scene: "", absorbed: 1 };
@@ -123,13 +128,13 @@ function renderScenes(opts: { state?: unknown } = {}) {
 }
 
 beforeEach(() => {
-  (api.deleteScene as any).mockReset().mockResolvedValue({ ok: true });
-  (api.getCampaign as any).mockResolvedValue({ meta: META, body: "" });
-  (api.getShell as any).mockResolvedValue(shell());
-  (api.getCampaignSceneCosts as any).mockResolvedValue(costs([]));
-  (api.listEntities as any).mockResolvedValue([{ id: "the-weir", name: "The weir" }]);
-  (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.deleteScene).mockReset().mockResolvedValue({ ok: true });
+  vi.mocked(api.getCampaign).mockResolvedValue({ meta: META, body: "" });
+  vi.mocked(api.getShell).mockResolvedValue(shell());
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue(costs([]));
+  vi.mocked(api.listEntities).mockResolvedValue(fixture([{ id: "the-weir", name: "The weir" }]));
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "003--third", title: "The third", date: "Day 41", place: "the-weir" }),
     scene({ id: "002--second", title: "The second", done: true }),
     scene({ id: "001--first", title: "The first", done: true }),
@@ -158,7 +163,7 @@ test("the eyebrow names the campaign, what this list is, and how much is open", 
 test("the eyebrow drops the open count rather than claiming zero", async () => {
   // Joining with a filter means a part with nothing to say disappears
   // instead of printing "0 open" -- matching how the hub's eyebrow behaves.
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "001--first", title: "The first", done: true }),
   ]);
   renderScenes();
@@ -167,7 +172,7 @@ test("the eyebrow drops the open count rather than claiming zero", async () => {
 });
 
 test("the action names what to do, and it is not the same verb for every state", async () => {
-  (api.getShell as any).mockResolvedValue(shell([{ sid: "002--second", proposals: 4 }]));
+  vi.mocked(api.getShell).mockResolvedValue(shell([{ sid: "002--second", proposals: 4 }]));
   renderScenes();
   await screen.findByText("The third");
   const rows = screen.getAllByRole("listitem");
@@ -180,7 +185,7 @@ test("the action names what to do, and it is not the same verb for every state",
 test("an absorbed scene holding a review is not filed away as finished", async () => {
   // "Absorbed" and "absorbed but nobody decided its proposals" are different
   // states, and calling both of them done loses the one that needs doing.
-  (api.getShell as any).mockResolvedValue(shell([{ sid: "002--second", proposals: 4 }]));
+  vi.mocked(api.getShell).mockResolvedValue(shell([{ sid: "002--second", proposals: 4 }]));
   renderScenes();
   await screen.findByText("The second");
   const row = screen.getAllByRole("listitem")[1];
@@ -191,7 +196,7 @@ test("the chip carries the proposal count, not just that some are waiting", asyn
   // The shell payload already has the count per pending scene; a bare
   // "unreviewed" would make the reader open the scene to learn whether it's
   // one proposal or thirty.
-  (api.getShell as any).mockResolvedValue(shell([{ sid: "002--second", proposals: 12 }]));
+  vi.mocked(api.getShell).mockResolvedValue(shell([{ sid: "002--second", proposals: 12 }]));
   renderScenes();
   await screen.findByText("The second");
   const row = screen.getAllByRole("listitem")[1];
@@ -210,7 +215,7 @@ test("where is the location's name, not its id", async () => {
 });
 
 test("a place nobody can name is left out rather than shown as an id", async () => {
-  (api.listEntities as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.listEntities).mockRejectedValue(new Error("offline"));
   renderScenes();
   await screen.findByText("The third");
   expect(screen.getByText("Day 41")).toBeInTheDocument();
@@ -218,11 +223,11 @@ test("a place nobody can name is left out rather than shown as an id", async () 
 });
 
 test("a date reads in its calendar's own month names, one read per year", async () => {
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "002--b", title: "B", date: "2026-01-02T18:00" }),
     scene({ id: "001--a", title: "A", date: "2026-02-14" }),
   ]);
-  (api.getCalendarMonths as any).mockResolvedValue({ months: [
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [
     { key: "01", name: "January", days: 31 }, { key: "02", name: "February", days: 28 }] });
   renderScenes();
   expect(await screen.findByText("January 2, 2026")).toBeInTheDocument();
@@ -232,8 +237,8 @@ test("a date reads in its calendar's own month names, one read per year", async 
 });
 
 test("until the months are known a date reads as written", async () => {
-  (api.listScenes as any).mockResolvedValue([scene({ id: "001--a", title: "A", date: "2026-01-02" })]);
-  (api.getCalendarMonths as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.listScenes).mockResolvedValue([scene({ id: "001--a", title: "A", date: "2026-01-02" })]);
+  vi.mocked(api.getCalendarMonths).mockReturnValue(new Promise(() => {}));
   renderScenes();
   expect(await screen.findByText("2026-01-02")).toBeInTheDocument();
 });
@@ -268,7 +273,7 @@ test("a filter matching nothing is not an empty campaign", async () => {
 test("an empty campaign says so and offers the first scene", async () => {
   // This page is where a campaign starts now: the play view mounts on a scene,
   // so there is no composer to type the first one into.
-  (api.listScenes as any).mockResolvedValue([]);
+  vi.mocked(api.listScenes).mockResolvedValue([]);
   renderScenes();
   expect(await screen.findByText(/no scenes yet/i)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /\+ new scene/i })).toBeInTheDocument();
@@ -292,16 +297,16 @@ test("a chooser pick opens the scene it made", async () => {
 test("closing the chooser leaves the list alone", async () => {
   renderScenes();
   await screen.findByText("The third");
-  const readsBefore = (api.listScenes as any).mock.calls.length;
+  const readsBefore = vi.mocked(api.listScenes).mock.calls.length;
   fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
   fireEvent.click(await screen.findByText("stub-close"));
   expect(screen.queryByTestId("scene-chooser")).toBeNull();
   expect(screen.queryByTestId("play")).toBeNull();
-  expect((api.listScenes as any).mock.calls.length).toBe(readsBefore);
+  expect(vi.mocked(api.listScenes).mock.calls.length).toBe(readsBefore);
 });
 
 test("a failed read is not an empty campaign", async () => {
-  (api.listScenes as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.listScenes).mockRejectedValue(new Error("offline"));
   renderScenes();
   expect(await screen.findByText(/the scenes could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText(/no scenes yet/i)).not.toBeInTheDocument();
@@ -313,7 +318,7 @@ test("the list does not wait on the shell read", async () => {
   // The list's own read answers in tens of milliseconds; the shell read is the
   // slowest in the chrome, and the page used to hold every row until its own
   // copy of it answered.
-  (api.getShell as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getShell).mockReturnValue(new Promise(() => {}));
   renderScenes();
   expect(await screen.findByText("The third")).toBeInTheDocument();
   expect(screen.getAllByRole("listitem")).toHaveLength(3);
@@ -326,7 +331,7 @@ test("the list does not wait on the shell read", async () => {
 });
 
 test("a failed shell read costs the counts, not the list", async () => {
-  (api.getShell as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getShell).mockRejectedValue(new Error("offline"));
   renderScenes();
   expect(await screen.findByText(/waiting reviews and turn counts could not be read/i))
     .toBeInTheDocument();
@@ -334,14 +339,14 @@ test("a failed shell read costs the counts, not the list", async () => {
   expect(screen.queryByText(/the scenes could not be read/i)).not.toBeInTheDocument();
 
   // ...and its retry asks again, and the rows take what it answers.
-  (api.getShell as any).mockResolvedValue(shell([{ sid: "002--second", proposals: 4 }]));
+  vi.mocked(api.getShell).mockResolvedValue(shell([{ sid: "002--second", proposals: 4 }]));
   fireEvent.click(screen.getByRole("button", { name: /try again/i }));
   expect(await screen.findByText("4 unreviewed")).toBeInTheDocument();
   expect(screen.queryByText(/turn counts could not be read/i)).not.toBeInTheDocument();
 });
 
 test("a payload about another campaign draws nothing on these rows", async () => {
-  (api.getShell as any).mockResolvedValue({
+  vi.mocked(api.getShell).mockResolvedValue({
     ...shell([{ sid: "002--second", proposals: 4 }]),
     campaign: { ...shell([{ sid: "002--second", proposals: 4 }]).campaign, id: "elsewhere" },
   });
@@ -357,11 +362,11 @@ test("a payload about another campaign draws nothing on these rows", async () =>
 test("an open scene with turns says Resume, one with none says Open", async () => {
   // The same click either way. What the reader gets is knowing which of the
   // two they are about to do: a conversation to come back to, or a start.
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "002--b", title: "Underway", done: false }),
     scene({ id: "001--a", title: "Not started", done: false }),
   ]);
-  (api.getShell as any).mockResolvedValue(shell([], [
+  vi.mocked(api.getShell).mockResolvedValue(shell([], [
     { sid: "002--b", title: "Underway", turns: 5 },
     { sid: "001--a", title: "Not started", turns: 0 },
   ]));
@@ -375,10 +380,10 @@ test("an open scene with turns says Resume, one with none says Open", async () =
 test("a turn count nobody could read is not zero turns", async () => {
   // `turns: null` is "the transcript could not be read". Rendering that as a
   // scene with no turns would offer Open over a scene mid-conversation.
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "001--a", title: "Unreadable", done: false }),
   ]);
-  (api.getShell as any).mockResolvedValue(shell([], [
+  vi.mocked(api.getShell).mockResolvedValue(shell([], [
     { sid: "001--a", title: "Unreadable", turns: null },
   ]));
   renderScenes();
@@ -389,10 +394,10 @@ test("a turn count nobody could read is not zero turns", async () => {
 });
 
 test("spend lands after the list and never before it", async () => {
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "001--a", title: "A scene", done: true }),
   ]);
-  (api.getCampaignSceneCosts as any).mockResolvedValue(
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue(
     costs([costRow("001--a", { cost_usd: 0.41 })]));
   renderScenes();
 
@@ -402,10 +407,10 @@ test("spend lands after the list and never before it", async () => {
 });
 
 test("a scene the ledger cannot price says so rather than showing $0.00", async () => {
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "001--a", title: "A scene", done: true }),
   ]);
-  (api.getCampaignSceneCosts as any).mockResolvedValue(
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue(
     costs([costRow("001--a", { cost_usd: 0, priced_calls: 0, unpriced_calls: 2 })]));
   renderScenes();
 
@@ -416,10 +421,10 @@ test("a scene the ledger cannot price says so rather than showing $0.00", async 
 test("a zero estimate beside calls nobody priced says not reported, not ≈ $0.00", async () => {
   // A zero-rated call next to ten unpriced ones: `≈ $0.00` would read as a
   // complete total, and the scene list has no footnote to say otherwise.
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "001--a", title: "A scene", done: true }),
   ]);
-  (api.getCampaignSceneCosts as any).mockResolvedValue(
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue(
     costs([costRow("001--a", { calls: 11, cost_usd: 0, priced_calls: 0,
                                modelled_calls: 1, modelled_usd: 0,
                                unpriced_calls: 10 })]));
@@ -430,10 +435,10 @@ test("a zero estimate beside calls nobody priced says not reported, not ≈ $0.0
 });
 
 test("a scene's price says when its token counts were estimated here", async () => {
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "001--a", title: "A scene", done: true }),
   ]);
-  (api.getCampaignSceneCosts as any).mockResolvedValue(
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue(
     costs([costRow("001--a", { calls: 2, cost_usd: 0, priced_calls: 0, modelled_calls: 2,
                                modelled_usd: 0.37, estimated_token_calls: 2 })]));
   renderScenes();
@@ -443,10 +448,10 @@ test("a scene's price says when its token counts were estimated here", async () 
 });
 
 test("a ledger read that failed costs the figures and nothing else", async () => {
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "001--a", title: "A scene", done: true }),
   ]);
-  (api.getCampaignSceneCosts as any).mockRejectedValue(new Error("busy"));
+  vi.mocked(api.getCampaignSceneCosts).mockRejectedValue(new Error("busy"));
   renderScenes();
 
   // The list is the page; the money is a column on it.
@@ -475,10 +480,10 @@ test("an imported transcript opens the scene it made", async () => {
 
 test("an unreviewed scene's row goes to the wrap-up, not the transcript", async () => {
   // The action says "Wrap up →", so it must land on the wrap-up.
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "001--a", title: "Absorbed", done: true }),
   ]);
-  (api.getShell as any).mockResolvedValue(shell([{ sid: "001--a", proposals: 8 }]));
+  vi.mocked(api.getShell).mockResolvedValue(shell([{ sid: "001--a", proposals: 8 }]));
   renderScenes();
 
   const act = await screen.findByRole("link", { name: "Wrap up →" });
@@ -502,7 +507,7 @@ test("deleting a scene confirms, deletes, and re-reads the list", async () => {
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderScenes();
   await screen.findByText("The third");
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "002--second", title: "The second", done: true }),
     scene({ id: "001--first", title: "The first", done: true }),
   ]);
@@ -530,7 +535,7 @@ test("a scene a turn is holding keeps its row and says why", async () => {
   // disables its own delete from state this page does not have -- so the
   // refusal has to arrive as an answer and be shown, not swallowed.
   vi.spyOn(window, "confirm").mockReturnValue(true);
-  (api.deleteScene as any).mockRejectedValue({
+  vi.mocked(api.deleteScene).mockRejectedValue({
     kind: "scene_busy", run_id: "r1",
     detail: "a turn or review is running on this scene; stop it first" });
   renderScenes();
@@ -564,7 +569,7 @@ test("a draft that carries no premise arrives without one", async () => {
 });
 
 test("branches carry a branch chip, and a closed one says so in place of open", async () => {
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "002--other", title: "Other" }),
     scene({ id: "001--alt", title: "Alt", branch_group: "g",
             closed_by: { sid: "001--first", title: "First" } }),
@@ -584,7 +589,7 @@ test("branches carry a branch chip, and a closed one says so in place of open", 
 });
 
 test("a group of one shows no branch chip", async () => {
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "001--first", title: "First", branch_group: "g" }),
   ]);
   renderScenes();
@@ -593,7 +598,7 @@ test("a group of one shows no branch chip", async () => {
 });
 
 test("a closed branch is not counted or listed as open", async () => {
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "002--other", title: "Other" }),
     scene({ id: "001--alt", title: "Alt", branch_group: "g",
             closed_by: { sid: "001--first", title: "First" } }),
@@ -658,8 +663,8 @@ test("a malformed chooser state is ignored and cleared", async () => {
 test("a seeded open waits for the scene list", async () => {
   // Opening before the list lands would rank against no scene, then re-ask
   // when `afterSid` arrives -- a second paid ranked call (Decision 20).
-  let resolve!: (v: unknown) => void;
-  (api.listScenes as any).mockReturnValue(new Promise((r) => { resolve = r; }));
+  let resolve!: (v: SceneMeta[]) => void;
+  vi.mocked(api.listScenes).mockReturnValue(new Promise((r) => { resolve = r; }));
   renderScenes({ state: { chooser: { drivers: { "thread:mara-s-map": "focus" } } } });
   await waitFor(() =>
     expect(screen.getByTestId("history-state")).toHaveTextContent("null"));
@@ -676,7 +681,7 @@ test("a seeded open after a failed list survives Try again, and + New scene stil
   // (Decision 20). The release is one-way: clearing the error banner must not
   // re-hold a chooser the reader is already using, and a seed left over from
   // the handoff must never hide an ordinary open.
-  (api.listScenes as any).mockRejectedValueOnce(new Error("down"));
+  vi.mocked(api.listScenes).mockRejectedValueOnce(new Error("down"));
   renderScenes({ state: { chooser: { drivers: { "thread:mara-s-map": "focus" } } } });
   const chooser = await screen.findByTestId("scene-chooser");
   expect(within(chooser).getByTestId("after")).toHaveTextContent("null");
@@ -697,7 +702,7 @@ test("a seeded open after a failed list survives Try again, and + New scene stil
 test("+ New scene during a held handoff opens the chooser unseeded", async () => {
   // While a handoff waits for the list, the ordinary entry point is not held
   // behind it: it opens at once, and with no seed.
-  (api.listScenes as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.listScenes).mockReturnValue(new Promise(() => {}));
   renderScenes({ state: { chooser: { drivers: { "thread:mara-s-map": "focus" } } } });
   await waitFor(() =>
     expect(screen.getByTestId("history-state")).toHaveTextContent("null"));
@@ -710,13 +715,13 @@ test("+ New scene during a held handoff opens the chooser unseeded", async () =>
 test("the list's Try again reads the list again", async () => {
   // The banner says "look again", so its button has to: clearing the banner
   // alone left the search tools over an empty list, with no read under way.
-  (api.listScenes as any).mockClear().mockRejectedValueOnce(new Error("offline"));
+  vi.mocked(api.listScenes).mockClear().mockRejectedValueOnce(new Error("offline"));
   renderScenes();
   expect(await screen.findByText("The scenes could not be read.", { exact: false }))
     .toBeInTheDocument();
   expect(api.listScenes).toHaveBeenCalledTimes(1);
 
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     scene({ id: "003--third", title: "The third", date: "Day 41", place: "The weir" }),
   ]);
   fireEvent.click(screen.getByRole("button", { name: /try again/i }));

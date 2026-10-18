@@ -3,6 +3,12 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ApiError, api, type CapabilityNeed } from "../api/client";
 import { forgetModelTests } from "../components/inference/TestCallDialog";
 import ProvidersView, { validReturn } from "./ProvidersView";
+import type {
+  CapabilityName, CapabilityValue, InferenceSettings, LLMConnection, LLMConnectionDetail,
+  EmbeddingOptionsBlock, MigrationStatus, ModelCapabilities, ModelFacts, ModelFactsUpdate, ProviderHealth,
+  ProviderPresetOption,
+} from "../api/types";
+import { fixture, type DeepPartial } from "../testkit/fixture";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -20,12 +26,12 @@ vi.mock("../components/RegexRulesEditor", () => ({
     <div>output rules for {scope.id}{readOnly ? " (read-only)" : ""}</div>,
 }));
 
-const preset = (over: Record<string, unknown>) => ({
+const preset = (over: Partial<ProviderPresetOption>) => fixture<ProviderPresetOption>({
   base_url: "", url_locked: false, billing: "metered", reports_price: false,
   always: [], possible: [], never: [], generating_check: false, ...over,
 });
 
-const PRESETS = [
+const PRESETS: ProviderPresetOption[] = [
   preset({ id: "openrouter", label: "OpenRouter", kind: "openrouter",
            base_url: "https://openrouter.ai/api/v1", url_locked: true, reports_price: true }),
   preset({ id: "claude", label: "Claude subscription", kind: "claude",
@@ -34,9 +40,9 @@ const PRESETS = [
            base_url: "http://localhost:11434/v1" }),
 ];
 
-const HEALTH = { state: "unknown", kind: "", detail: "", at: "" };
+const HEALTH: ProviderHealth = { state: "unknown", kind: "", detail: "", at: "" };
 
-const provider = (over: Record<string, unknown>) => ({
+const provider = (over: Partial<LLMConnection>) => fixture<LLMConnection>({
   base_url: "", model: "", effective_model: "", post_process: "none", key_set: true,
   rev: "r1", health: HEALTH, billing: "metered", sampler_support: "", ...over,
 });
@@ -50,7 +56,7 @@ const CLAUDE = provider({
   billing: "subscription", key_set: false,
 });
 
-const DETAILS: Record<string, unknown> = {
+const DETAILS: Record<string, LLMConnectionDetail> = {
   saltmarch: {
     ...SALTMARCH, models: [], fetched_at: "2026-10-01T10:00:00Z", sampling: null,
     used_by: [
@@ -61,63 +67,72 @@ const DETAILS: Record<string, unknown> = {
   "realm-claude": { ...CLAUDE, models: [], fetched_at: "", sampling: null, used_by: [] },
 };
 
-const CAPS = {
+const CAPS = fixture<Record<CapabilityName, CapabilityValue>>({
   generate: { value: "yes", source: "catalog" },
   vision: { value: "unknown", source: "unknown" },
   embed: { value: "no", source: "catalog" },
   decide_native: { value: "no", source: "adapter" },
   tools: { value: "unknown", source: "unknown" },
-};
+});
 
-function answer(need: CapabilityNeed) {
+function answer(need: CapabilityNeed): ModelCapabilities {
   const row = { id: "vendor/m", name: "Vendor M", context: null, prompt: null, completion: null,
                 reason: "the catalog says so", capabilities: CAPS };
-  return {
+  return fixture({
     provider_preset: PRESETS[0], need, reason: null,
     groups: need === "generate" ? { fits: [row], unverified: [] } : { fits: [], unverified: [] },
     hidden: need === "generate" ? [] : [{ id: "vendor/m", reason: "it does not embed" }],
-  };
+  });
 }
 
-function facts(over: Record<string, unknown> = {}) {
-  return {
+function facts(over: Partial<ModelFacts> = {}): ModelFacts {
+  return fixture({
     provider: "saltmarch", model: "vendor/m", vision: "", prefill: false, post_process: "none",
     rates: null, verified: {}, overrides: {}, capabilities: CAPS,
     context_window: null, max_output: null,
     limits: { window: { value: null, source: "unknown", catalog: null },
               max_output: { value: null, source: "unknown", catalog: null } },
     ...over,
-  };
+  });
 }
 
-function settings(over: Record<string, unknown> = {}) {
-  return {
+/** What a facts save answers with, near enough: the update read back over
+ *  `facts(over)`, a cleared override (`""`) as no override at all. */
+function saved({ overrides = {}, confirm_embedding: _confirm, ...fields }: ModelFactsUpdate,
+               over: Partial<ModelFacts> = {}): ModelFacts {
+  const stated = Object.entries(overrides)
+    .filter((e): e is [string, "yes" | "no"] => e[1] !== "");
+  return facts({ ...over, ...fields, overrides: Object.fromEntries(stated) });
+}
+
+function settings(over: DeepPartial<InferenceSettings> = {}): InferenceSettings {
+  return fixture({
     format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
     roles: {}, providers: [], presets: [], preset_clear: "",
     routes: [{ key: "summary", label: "Rolling summary" }],
     ...over,
-  };
+  });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   forgetModelTests();
-  (api.listConnections as any).mockResolvedValue([SALTMARCH, CLAUDE]);
-  (api.readConnection as any).mockImplementation((id: string) => Promise.resolve(DETAILS[id]));
-  (api.listProviderPresets as any).mockResolvedValue(PRESETS);
-  (api.getInferenceSettings as any).mockResolvedValue(settings());
-  (api.readConnectionCapabilities as any).mockImplementation(
-    (_id: string, need: CapabilityNeed) => Promise.resolve(answer(need)));
-  (api.readModelFacts as any).mockResolvedValue(facts());
-  (api.putModelFacts as any).mockImplementation(
-    (_id: string, body: Record<string, unknown>) => Promise.resolve(facts(body)));
-  (api.checkConnection as any).mockResolvedValue(
+  vi.mocked(api.listConnections).mockResolvedValue([SALTMARCH, CLAUDE]);
+  vi.mocked(api.readConnection).mockImplementation((id) => Promise.resolve(DETAILS[id]));
+  vi.mocked(api.listProviderPresets).mockResolvedValue(PRESETS);
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings());
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
+    (_id, need) => Promise.resolve(answer(need)));
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts());
+  vi.mocked(api.putModelFacts).mockImplementation(
+    (_id, body) => Promise.resolve(saved(body)));
+  vi.mocked(api.checkConnection).mockResolvedValue(
     { ok: true, kind: "", detail: "", checked_at: "2026-10-08T09:00:00Z" });
-  (api.updateConnection as any).mockImplementation(
-    (id: string) => Promise.resolve(DETAILS[id]));
-  (api.previewModelTest as any).mockResolvedValue({
+  vi.mocked(api.updateConnection).mockImplementation(
+    (id) => Promise.resolve(DETAILS[id]));
+  vi.mocked(api.previewModelTest).mockResolvedValue(fixture({
     provider: "Saltmarch Router", provider_id: "saltmarch", model: "vendor/m",
-    sends: [], estimated_cost_usd: null });
+    sends: [], estimated_cost_usd: null }));
 });
 
 /** Where the router is, so a chip's navigation can be read off the page. */
@@ -200,7 +215,7 @@ test("Edit reveals the form", async () => {
   fireEvent.change(name, { target: { value: "Saltmarch Main" } });
   fireEvent.click(main().getByRole("button", { name: "Save provider" }));
   expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
-  const [id, patch] = (api.updateConnection as any).mock.calls[0];
+  const [id, patch] = vi.mocked(api.updateConnection).mock.calls[0];
   expect(id).toBe("saltmarch");
   expect(patch).toMatchObject({ name: "Saltmarch Main" });
   // Billing was not touched, so the save says nothing about it.
@@ -211,7 +226,7 @@ test("Edit reveals the form", async () => {
 });
 
 test("+ New provider asks for a preset first", async () => {
-  (api.createConnection as any).mockResolvedValue({ id: "saltmarch-local" });
+  vi.mocked(api.createConnection).mockResolvedValue({ id: "saltmarch-local" });
   open("/providers/saltmarch");
   fireEvent.click(await column().findByRole("button", { name: "+ New provider" }));
 
@@ -230,8 +245,8 @@ test("+ New provider asks for a preset first", async () => {
                            kind: "openai_compatible", preset: "ollama",
                            base_url: "http://localhost:11434/v1", key_set: false });
   DETAILS["saltmarch-local"] = { ...local, models: [], fetched_at: "", used_by: [] };
-  (api.listConnections as any).mockResolvedValue([SALTMARCH, CLAUDE, local]);
-  (api.checkConnection as any).mockClear();
+  vi.mocked(api.listConnections).mockResolvedValue([SALTMARCH, CLAUDE, local]);
+  vi.mocked(api.checkConnection).mockClear();
   fireEvent.click(main().getByRole("button", { name: "Create provider" }));
 
   expect(await main().findByRole("heading", { name: "Saltmarch Local" })).toBeInTheDocument();
@@ -254,7 +269,7 @@ test("a locked preset's address cannot be edited", async () => {
 });
 
 test("a failed presets read asks before any check rather than sending one", async () => {
-  (api.listProviderPresets as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.listProviderPresets).mockRejectedValue(new Error("offline"));
   open("/providers/realm-claude");
   expect(await main().findByRole("button", { name: "Check (sends one short message)" }))
     .toBeInTheDocument();
@@ -292,9 +307,9 @@ test("a Used by role chip opens that role", async () => {
 });
 
 test("a campaign's Used by chip opens that campaign, not the library's record", async () => {
-  (api.readConnection as any).mockImplementation((id: string) => Promise.resolve(
+  vi.mocked(api.readConnection).mockImplementation((id) => Promise.resolve(
     id === "saltmarch"
-      ? { ...(DETAILS.saltmarch as object),
+      ? { ...DETAILS.saltmarch,
           used_by: [{ kind: "role", key: "fast", scope: "campaign", cid: "winifred-run" }] }
       : DETAILS[id]));
   open("/providers/saltmarch");
@@ -336,7 +351,7 @@ test("a model's facts are read-only until Edit", async () => {
 test("a catalog's no is offered to a test; only the adapter's rules a probe out", async () => {
   // A passing test outranks the catalog (and the user's word), and the server
   // refuses only the provider preset's `never` -- so only that leaves a probe.
-  (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({ capabilities: {
     ...CAPS, generate: { value: "no", source: "adapter" },
     vision: { value: "no", source: "catalog" }, embed: { value: "no", source: "name" },
   } }));
@@ -349,7 +364,7 @@ test("a catalog's no is offered to a test; only the adapter's rules a probe out"
 });
 
 test("Test… lists decide_native for a model whose native decisions are unknown", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({ capabilities: {
     ...CAPS, decide_native: { value: "unknown", source: "unknown" },
   } }));
   open("/providers/saltmarch/models/vendor/m");
@@ -362,7 +377,7 @@ test("Test… lists decide_native for a model whose native decisions are unknown
 });
 
 test("an adapter's no on tools leaves the tools probe out of Test…", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({ capabilities: {
     ...CAPS, tools: { value: "no", source: "adapter" } } }));
   open("/providers/saltmarch/models/vendor/m");
   expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
@@ -386,8 +401,8 @@ test("the facts form overrides tool calling", async () => {
 });
 
 test("a model the adapter rules out of every probe has nothing to test", async () => {
-  const never = { value: "no", source: "adapter" };
-  (api.readModelFacts as any).mockResolvedValue(facts({ capabilities: {
+  const never: CapabilityValue = { value: "no", source: "adapter" };
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({ capabilities: {
     ...CAPS, generate: never, vision: never, embed: never, tools: never } }));
   open("/providers/saltmarch/models/vendor/m");
   expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
@@ -398,7 +413,7 @@ const RATED = { prompt_usd_per_1k: 0.001, completion_usd_per_1k: 0.002 };
 const sidebarOf = (model: string) => within(main().getByRole("complementary", { name: model }));
 
 test("a model's rates show in its sidebar", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts({
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({
     rates: { ...RATED, cache_read_usd_per_1k: 0 } }));
   open("/providers/saltmarch/models/vendor/m");
   await main().findByRole("heading", { name: "vendor/m" });
@@ -448,7 +463,7 @@ test.each([
 ])("a negative %s rate is sent, and the store's refusal shown", async (label, field) => {
   // One policy for every box: a filled box is sent as typed and the store
   // names what is wrong with it. "Both needed" is only for a box left empty.
-  (api.putModelFacts as any).mockRejectedValue(
+  vi.mocked(api.putModelFacts).mockRejectedValue(
     new ApiError(400, `${field} must be a non-negative number`));
   open("/providers/saltmarch/models/vendor/m");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
@@ -467,7 +482,7 @@ test.each([
 });
 
 test("clearing every rate sends an empty object", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts({ rates: RATED }));
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({ rates: RATED }));
   open("/providers/saltmarch/models/vendor/m");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   fireEvent.change(await main().findByLabelText("Input rate for vendor/m"), { target: { value: "" } });
@@ -504,7 +519,7 @@ test("cache rates alone cannot be saved", async () => {
 });
 
 test("?edit=rates opens the form on the rates", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts({ rates: RATED }));
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({ rates: RATED }));
   open("/providers/saltmarch/models/vendor/m?edit=rates");
 
   const input = await main().findByLabelText("Input rate for vendor/m");
@@ -513,12 +528,12 @@ test("?edit=rates opens the form on the rates", async () => {
   expect(main().getByRole("button", { name: "Save facts" })).toBeInTheDocument();
 });
 
-test.each([
+test.each<[string, DeepPartial<InferenceSettings>]>([
   ["a newer-format store", { newer: true, migration: { state: "newer", reason: "", skipped: [] } }],
   ["a store not yet switched", { format: "1",
                                  migration: { state: "pending", reason: "", skipped: [] } }],
 ])("?edit=rates on %s stays read-only", async (_what, over) => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings(over));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings(over));
   open("/providers/saltmarch/models/vendor/m?edit=rates");
 
   expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
@@ -528,8 +543,8 @@ test.each([
 });
 
 test("?edit=rates waits for the store's format before opening the form", async () => {
-  let answer: (value: unknown) => void = () => {};
-  (api.getInferenceSettings as any).mockReturnValue(new Promise((done) => { answer = done; }));
+  let answer: (value: InferenceSettings) => void = () => {};
+  vi.mocked(api.getInferenceSettings).mockReturnValue(new Promise((done) => { answer = done; }));
   open("/providers/saltmarch/models/vendor/m?edit=rates");
 
   // Not known yet is not writable: no form, and no Save to click early.
@@ -537,7 +552,7 @@ test("?edit=rates waits for the store's format before opening the form", async (
   expect(main().getByRole("button", { name: "Edit" })).toBeDisabled();
   expect(main().queryByRole("button", { name: "Save facts" })).not.toBeInTheDocument();
 
-  await act(async () => { answer(settings()); });
+  await act(async () => { answer(fixture(settings())); });
   const input = await main().findByLabelText("Input rate for vendor/m");
   expect(input).toHaveFocus();
   expect(main().getByRole("button", { name: "Save facts" })).toBeEnabled();
@@ -567,14 +582,14 @@ test("?edit=rates is cleared on Save and on Cancel", async () => {
 });
 
 // ---- 01i: the model's size ----
-const SIZED = {
+const SIZED: Partial<ModelFacts> = {
   context_window: 32768, max_output: null,
   limits: { window: { value: 32768, source: "user", catalog: 131072 },
             max_output: { value: 16000, source: "catalog", catalog: 16000 } },
 };
 
 test("a model's size shows in its sidebar with its sources", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts(SIZED));
   open("/providers/saltmarch/models/vendor/m");
   expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
   const side = sidebarOf("vendor/m");
@@ -594,7 +609,7 @@ test("an unknown size says so", async () => {
 });
 
 test("Edit shows the two size fields with their hint", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts(SIZED));
   open("/providers/saltmarch/models/vendor/m");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   expect(await main().findByLabelText("Context window")).toHaveValue(32768);
@@ -603,7 +618,7 @@ test("Edit shows the two size fields with their hint", async () => {
 });
 
 test("clearing a stated window sends 0, and an untouched size sends nothing", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts(SIZED));
   open("/providers/saltmarch/models/vendor/m");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   fireEvent.change(await main().findByLabelText("Context window"), { target: { value: "" } });
@@ -629,7 +644,7 @@ test("a size that is not a whole number is not sent", async () => {
 });
 
 test("?edit=limits opens the form once, with the caret in the window box", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts(SIZED));
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts(SIZED));
   open("/providers/saltmarch/models/vendor/m?edit=limits");
   const box = await main().findByLabelText("Context window");
   expect(box).toHaveFocus();
@@ -646,7 +661,7 @@ test("a model id with a slash opens its facts", async () => {
 });
 
 test("a newer store disables editing", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     newer: true, migration: { state: "newer", reason: "", skipped: [] } }));
   open("/providers/saltmarch");
 
@@ -656,9 +671,15 @@ test("a newer store disables editing", async () => {
 });
 
 /** Open saltmarch's edit form, as a record stating `billing` (or none). */
-async function editSaltmarch(billing: string) {
-  (api.readConnection as any).mockImplementation((id: string) =>
-    Promise.resolve({ ...(DETAILS[id] as object), ...(id === "saltmarch" ? { billing } : {}) }));
+async function editSaltmarch(billing: LLMConnection["billing"]) {
+  vi.mocked(api.readConnection).mockImplementation((id) => {
+    const detail = { ...DETAILS[id] };
+    if (id === "saltmarch") {
+      if (billing === undefined) delete detail.billing;
+      else detail.billing = billing;
+    }
+    return Promise.resolve(detail);
+  });
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   return await main().findByRole("textbox", { name: "Name" });
@@ -668,7 +689,7 @@ async function renameAndSave(name: HTMLElement) {
   fireEvent.change(name, { target: { value: "Saltmarch Main" } });
   fireEvent.click(main().getByRole("button", { name: "Save provider" }));
   expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
-  return (api.updateConnection as any).mock.calls[0][1];
+  return vi.mocked(api.updateConnection).mock.calls[0][1];
 }
 
 test("a rename of a provider that states no billing sends no billing", async () => {
@@ -681,7 +702,7 @@ test("a rename of a provider that states no billing sends no billing", async () 
 });
 
 test("a rename when the presets read failed sends no billing", async () => {
-  (api.listProviderPresets as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.listProviderPresets).mockRejectedValue(new Error("offline"));
   const name = await editSaltmarch("");
   // With no preset to ask, the form does not guess "metered" either.
   expect(main().getByRole("combobox", { name: "Billing" })).toHaveValue("");
@@ -695,14 +716,14 @@ test("choosing a billing sends it", async () => {
                    { target: { value: "subscription" } });
   fireEvent.click(main().getByRole("button", { name: "Save provider" }));
   expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
-  expect((api.updateConnection as any).mock.calls[0][1])
+  expect(vi.mocked(api.updateConnection).mock.calls[0][1])
     .toMatchObject({ billing: "subscription" });
 });
 
 test("a saved edit checks the provider again", async () => {
   // Every read is a fresh record, as it is off the wire.
-  (api.readConnection as any).mockImplementation(
-    (id: string) => Promise.resolve({ ...(DETAILS[id] as object) }));
+  vi.mocked(api.readConnection).mockImplementation(
+    (id) => Promise.resolve(fixture({ ...(DETAILS[id] as object) })));
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   expect(api.checkConnection).toHaveBeenCalledTimes(1);
@@ -716,7 +737,7 @@ test("a saved edit checks the provider again", async () => {
 });
 
 test("a create whose list re-read fails opens the provider it made", async () => {
-  (api.createConnection as any).mockResolvedValue({ id: "saltmarch-local" });
+  vi.mocked(api.createConnection).mockResolvedValue({ id: "saltmarch-local" });
   const local = provider({ id: "saltmarch-local", name: "Saltmarch Local",
                            kind: "openai_compatible", preset: "ollama",
                            base_url: "http://localhost:11434/v1", key_set: false });
@@ -726,7 +747,7 @@ test("a create whose list re-read fails opens the provider it made", async () =>
   fireEvent.click(within(await main().findByRole("group", { name: "Provider presets" }))
     .getByRole("button", { name: "Ollama" }));
   await main().findByRole("textbox", { name: "Name" });
-  (api.listConnections as any).mockRejectedValue(new Error("the list is unreadable"));
+  vi.mocked(api.listConnections).mockRejectedValue(new Error("the list is unreadable"));
   fireEvent.click(main().getByRole("button", { name: "Create provider" }));
 
   // The provider exists, so the page shows it -- not a Create that would make
@@ -739,7 +760,7 @@ test("a create whose list re-read fails opens the provider it made", async () =>
 });
 
 test("a blocked store holds every write on the page", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     newer: true, migration: { state: "newer", reason: "", skipped: [] } }));
   open("/providers/saltmarch");
 
@@ -753,13 +774,13 @@ test("a blocked store holds every write on the page", async () => {
   expect(main().getByRole("button", { name: "Test…" })).toBeDisabled();
 });
 
-test.each([["pending", ""], ["failed", "the safety backup failed: disk full"]])(
+test.each<[MigrationStatus["state"], string]>([["pending", ""], ["failed", "the safety backup failed: disk full"]])(
   "a store not yet switched (%s) edits its providers, not their model facts",
   async (state, reason) => {
   // The server takes provider writes at format 1 (it refuses only a newer
   // store): a key revoked while the upgrade keeps failing is fixed here, or
   // nowhere. A model's facts are the new layout's own and wait for it.
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     format: "1", migration: { state, reason, skipped: [] } }));
   open("/providers/saltmarch");
 
@@ -778,7 +799,7 @@ test.each([["pending", ""], ["failed", "the safety backup failed: disk full"]])(
 test("a pending migration over a switched store leaves editing on", async () => {
   // The global switch landed (format 2); a campaign still unmarked keeps the
   // status pending, but the server takes global writes.
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     format: "2", migration: { state: "pending", reason: "", skipped: [] } }));
   open("/providers/saltmarch");
 
@@ -795,7 +816,7 @@ test("a pending migration over a switched store leaves editing on", async () => 
 });
 
 test("a pending migration over a switched store says so quietly, never as a lock", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     format: "2", migration: { state: "pending", reason: "", skipped: [] } }));
   open("/providers/saltmarch");
 
@@ -821,14 +842,14 @@ test("the page unlocks once the upgrade lands, without leaving it", async () => 
   await withFakeTimers(async () => {
     // A model's facts are what wait for the new layout (the provider record
     // does not: the server takes it at format 1).
-    (api.getInferenceSettings as any).mockResolvedValue(settings({
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
       format: "1", migration: { state: "running", reason: "", skipped: [] } }));
     open("/providers/saltmarch/models/vendor/m");
     expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
     expect(main().getByRole("button", { name: "Edit" })).toBeDisabled();
     expect(screen.getByText(/Upgrade pending/)).toBeInTheDocument();
 
-    (api.getInferenceSettings as any).mockResolvedValue(settings());
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings());
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
 
     expect(await main().findByRole("button", { name: "Edit" })).toBeEnabled();
@@ -840,14 +861,14 @@ test("a settled store is not asked again", async () => {
   await withFakeTimers(async () => {
     open("/providers/saltmarch");
     expect(await main().findByRole("heading", { name: "Saltmarch Router" })).toBeInTheDocument();
-    const reads = (api.getInferenceSettings as any).mock.calls.length;
+    const reads = vi.mocked(api.getInferenceSettings).mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-    expect((api.getInferenceSettings as any).mock.calls.length).toBe(reads);
+    expect(vi.mocked(api.getInferenceSettings).mock.calls.length).toBe(reads);
   });
 });
 
 test("a failed presets read says so on + New provider, and can be tried again", async () => {
-  (api.listProviderPresets as any).mockRejectedValueOnce(new Error("the presets are unreadable"));
+  vi.mocked(api.listProviderPresets).mockRejectedValueOnce(new Error("the presets are unreadable"));
   open();
   fireEvent.click(await column().findByRole("button", { name: "+ New provider" }));
   expect(await main().findByText(/the presets are unreadable/)).toBeInTheDocument();
@@ -862,16 +883,16 @@ test("a failed presets read says so on + New provider, and can be tried again", 
 test("a saved edit reads the catalog again, for the endpoint it now names", async () => {
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
-  const before = (api.readConnectionCapabilities as any).mock.calls.length;
+  const before = vi.mocked(api.readConnectionCapabilities).mock.calls.length;
   fireEvent.change(main().getByLabelText("API key"), { target: { value: "sk-new" } });
   fireEvent.click(main().getByRole("button", { name: "Save provider" }));
   expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
-  expect((api.readConnectionCapabilities as any).mock.calls.length).toBeGreaterThan(before);
+  expect(vi.mocked(api.readConnectionCapabilities).mock.calls.length).toBeGreaterThan(before);
 });
 
 // ---- an edit that moves the Embedding role's vector space asks first ----
 /** The library's Embedding role, resolving to `providerId`. */
-function embeddingOn(providerId: string) {
+function embeddingOn(providerId: string): InferenceSettings {
   return settings({ roles: { embedding: {
     stored: { provider: providerId, model: "vendor/embed" }, on: true, problem: null,
     resolves: { provider: providerId, provider_name: "Saltmarch Router", model: "vendor/embed",
@@ -879,7 +900,7 @@ function embeddingOn(providerId: string) {
 }
 
 test("a new key for the Embedding role's provider asks before re-embedding", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(embeddingOn("saltmarch"));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(embeddingOn("saltmarch"));
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   fireEvent.change(main().getByLabelText("API key"), { target: { value: "sk-new" } });
@@ -898,7 +919,7 @@ test("a new key for the Embedding role's provider asks before re-embedding", asy
 });
 
 test("Not now sends nothing and leaves the form as it was", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(embeddingOn("saltmarch"));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(embeddingOn("saltmarch"));
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   fireEvent.change(main().getByLabelText("API key"), { target: { value: "sk-new" } });
@@ -912,26 +933,26 @@ test("Not now sends nothing and leaves the form as it was", async () => {
 });
 
 test("a rename of the Embedding role's provider asks nothing", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(embeddingOn("saltmarch"));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(embeddingOn("saltmarch"));
   const name = await editSaltmarch("");
   const patch = await renameAndSave(name);
   expect(patch).not.toHaveProperty("confirm_embedding");
 });
 
 test("a new key for a provider the Embedding role does not use asks nothing", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(embeddingOn("realm-claude"));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(embeddingOn("realm-claude"));
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   fireEvent.change(main().getByLabelText("API key"), { target: { value: "sk-new" } });
   fireEvent.click(main().getByRole("button", { name: "Save provider" }));
   expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
-  expect((api.updateConnection as any).mock.calls[0][1]).not.toHaveProperty("confirm_embedding");
+  expect(vi.mocked(api.updateConnection).mock.calls[0][1]).not.toHaveProperty("confirm_embedding");
 });
 
 test("an unreadable facts file is said, and Save stays off", async () => {
   // Nothing stated is what the server could read, not what the user said:
   // a save would replace their word, so the panel never offers one.
-  (api.readModelFacts as any).mockResolvedValue(facts({ unreadable: true }));
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({ unreadable: true }));
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("link", { name: "vendor/m" }));
 
@@ -945,7 +966,7 @@ test("an unreadable facts file is said, and Save stays off", async () => {
 test("a mangled facts file says it needs fixing by hand, and Save stays off", async () => {
   // Not the transient case: waiting for a sync will not help, and a save
   // would replace every other model's facts with this one entry.
-  (api.readModelFacts as any).mockResolvedValue(
+  vi.mocked(api.readModelFacts).mockResolvedValue(
     facts({ unreadable: true, unreadable_reason: "mangled" }));
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("link", { name: "vendor/m" }));
@@ -959,12 +980,12 @@ test("a mangled facts file says it needs fixing by hand, and Save stays off", as
 });
 
 test("a facts save that turns embedding on is asked, then resent with the yes", async () => {
-  (api.putModelFacts as any)
+  vi.mocked(api.putModelFacts)
     .mockRejectedValueOnce(new ApiError(400,
       "This turns embedding on through Saltmarch Router: your library will be embedded.",
       "confirm_embedding"))
     .mockImplementation(
-      (_id: string, body: Record<string, unknown>) => Promise.resolve(facts(body)));
+      (_id, body) => Promise.resolve(saved(body)));
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("link", { name: "vendor/m" }));
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
@@ -983,11 +1004,11 @@ test("a facts save that turns embedding on is asked, then resent with the yes", 
 
 test("the server's own confirm_embedding refusal is asked, then resent with the yes", async () => {
   // The page's view says nothing embeds through it; another tab moved that.
-  (api.updateConnection as any)
+  vi.mocked(api.updateConnection)
     .mockRejectedValueOnce(new ApiError(400,
       "This edit changes what the Embedding role embeds with, which re-embeds the library.",
       "confirm_embedding"))
-    .mockImplementation((id: string) => Promise.resolve(DETAILS[id]));
+    .mockImplementation((id) => Promise.resolve(DETAILS[id]));
   open("/providers/saltmarch");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   fireEvent.change(main().getByLabelText("API key"), { target: { value: "sk-new" } });
@@ -1079,7 +1100,7 @@ test("a refreshed /providers/new still returns to where it came from, search and
 
 // ---- embedding options (01h-S4) ----
 
-const EMBEDS = { ...CAPS, embed: { value: "unknown", source: "unknown" } };
+const EMBEDS: ModelFacts["capabilities"] = { ...CAPS, embed: { value: "unknown", source: "unknown" } };
 const NOMIC_MODEL = "vendor/nomic-embed-text-v1.5";
 
 test("the embedding options are only for a model that may embed", async () => {
@@ -1091,10 +1112,10 @@ test("the embedding options are only for a model that may embed", async () => {
 });
 
 test("Suggest fills the options and saves nothing; Save asks, and the yes is resent", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts({ model: NOMIC_MODEL, capabilities: EMBEDS }));
-  (api.putModelFacts as any).mockImplementation((_id: string, body: Record<string, unknown>) =>
-    Promise.resolve(facts({ ...body, capabilities: EMBEDS })));
-  (api.putModelFacts as any).mockRejectedValueOnce(new ApiError(
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({ model: NOMIC_MODEL, capabilities: EMBEDS }));
+  vi.mocked(api.putModelFacts).mockImplementation((_id, body) =>
+    Promise.resolve(saved(body, { capabilities: EMBEDS })));
+  vi.mocked(api.putModelFacts).mockRejectedValueOnce(new ApiError(
     400, "This moves the Embedding role to a new vector space.", "confirm_embedding"));
   open(`/providers/saltmarch/models/${NOMIC_MODEL}`);
   await main().findByRole("heading", { name: NOMIC_MODEL });
@@ -1125,7 +1146,7 @@ test("Suggest fills the options and saves nothing; Save asks, and the yes is res
 });
 
 test("a save that leaves the options alone does not send them", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts({
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({
     capabilities: EMBEDS, embedding: { input: "param", param_field: "task",
                                        query_value: "q", document_value: "d" } }));
   open("/providers/saltmarch/models/vendor/m");
@@ -1140,18 +1161,20 @@ test("a save that leaves the options alone does not send them", async () => {
   expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", { model: "vendor/m", prefill: true });
 });
 
-test.each([
+// `stored` is whatever is on disk, which the facts type does not describe: the
+// server hands back a block its validator refuses exactly as it found it.
+test.each<[string, unknown, EmbeddingOptionsBlock]>([
   ["an unknown input type", { input: "bogus" }, {}],
   ["a block that is not an object", "prefix", {}],
   ["a request field with no name", { input: "param" },
    { input: "param", param_field: "", query_value: "", document_value: "" }],
 ])("a save over an invalid block (%s) sends the form, so it is repaired",
    async (_label, stored, sent) => {
-  (api.readModelFacts as any).mockResolvedValue(facts({
-    capabilities: EMBEDS, embedding: stored, embedding_invalid: true,
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({
+    capabilities: EMBEDS, embedding: stored as EmbeddingOptionsBlock, embedding_invalid: true,
     embedding_invalid_reason: "the embedding options are not valid" }));
-  (api.putModelFacts as any).mockImplementation((_id: string, body: Record<string, unknown>) =>
-    Promise.resolve(facts({ ...body, capabilities: EMBEDS })));
+  vi.mocked(api.putModelFacts).mockImplementation((_id, body) =>
+    Promise.resolve(saved(body, { capabilities: EMBEDS })));
   open("/providers/saltmarch/models/vendor/m");
   await main().findByRole("heading", { name: "vendor/m" });
   fireEvent.click(main().getByRole("button", { name: "Edit" }));
@@ -1163,7 +1186,7 @@ test.each([
 });
 
 test("an invalid block and a width the endpoint ignored are both said", async () => {
-  (api.readModelFacts as any).mockResolvedValue(facts({
+  vi.mocked(api.readModelFacts).mockResolvedValue(facts({
     capabilities: EMBEDS, embedding: { input: "param" }, embedding_invalid: true,
     embedding_invalid_reason: "the request-field input type needs a field name",
     verified: { embed: { ok: false, error: "ignored", requested_dims: 512,

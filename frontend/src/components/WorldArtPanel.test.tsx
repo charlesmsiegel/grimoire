@@ -7,6 +7,7 @@ import { WorldArtPanel } from "./WorldArtPanel";
 import { ApiError, api } from "../api/client";
 import { artChanged } from "../appEvents";
 import { IN_COLLECTION } from "./art/removal";
+import { fixture } from "../testkit/fixture";
 vi.mock("../api/client", async (importOriginal) => ({ ApiError: (await importOriginal<typeof import("../api/client")>()).ApiError, api: {
   listWorldLibrary: vi.fn(), getWorld: vi.fn(), worldCoverUrl: vi.fn(),
   putWorldCover: vi.fn(), deleteWorldCover: vi.fn(), putWorldImage: vi.fn(), deleteWorldImage: vi.fn(),
@@ -16,7 +17,7 @@ vi.mock("../api/client", async (importOriginal) => ({ ApiError: (await importOri
 } }));
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.getWorld).mockResolvedValue({ meta: { cover: "" } } as never);
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({ meta: { cover: "" } }));
   vi.mocked(api.listWorldLibrary).mockResolvedValue([{ name: "Saltmarch", ext: "png", v: "bytes", described: true, description: "A wide map." }]);
   vi.mocked(api.setWorldImageDescription).mockResolvedValue({ ok: true });
   vi.mocked(api.putWorldImage).mockResolvedValue({ name: "Saltmarch-2", ext: "png", v: "new" });

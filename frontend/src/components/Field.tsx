@@ -1,6 +1,6 @@
 import { cloneElement, isValidElement, useId, type ReactElement, type ReactNode } from "react";
 
-export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
+export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string | undefined }) {
   const id = useId();
   const control = isValidElement(children)
     ? cloneElement(children as ReactElement<{ id?: string }>, { id })

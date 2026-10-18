@@ -64,12 +64,14 @@ export function RegexImportDialog({ scope, held = false, onDone, onClose }: {
   const toggle = (index: number, on: boolean) =>
     setPicked((p) => { const n = new Set(p); if (on) n.add(index); else n.delete(index); return n; });
 
-  const chosen = (rows ?? []).filter((r) => picked.has(r.index) && r.rule !== null);
+  const chosen = (rows ?? []).filter(
+    (r): r is RegexImportRow & { rule: NonNullable<RegexImportRow["rule"]> } =>
+      picked.has(r.index) && r.rule !== null);
 
   async function submit() {
     setBusy(true); setError(null);
     try {
-      await api.importRegex(scope, chosen.map((r) => r.rule!));
+      await api.importRegex(scope, chosen.map((r) => r.rule));
       onDone();
     } catch (err) {
       setError(errorText(err));

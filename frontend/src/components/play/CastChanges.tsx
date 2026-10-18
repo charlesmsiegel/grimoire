@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type CastChanges as Changes } from "../../api/client";
+import { errorText } from "../../api/errors";
 
 const EMPTY: Changes = { enter: [], leave: [], unknown: [] };
 
@@ -107,8 +108,8 @@ export default function CastChanges(
       await what();
       onChanged();
       reload();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     } finally {
       setBusy(false);
     }

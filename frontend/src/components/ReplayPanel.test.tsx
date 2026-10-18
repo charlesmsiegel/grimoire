@@ -15,6 +15,7 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 const SESSION = {
   scene: "s1", cut: 3, done: 0, steps: 4, turns_left: 2,
@@ -28,13 +29,13 @@ const PREVIEW = { posts: 3, turns: 2, threshold: 10, fork: false, blocked: "" };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getReplay as any).mockResolvedValue(null);
-  (api.replayPreview as any).mockResolvedValue(PREVIEW);
-  (api.startReplay as any).mockResolvedValue({ cut: 3, cascade: {} });
-  (api.replayTurn as any).mockResolvedValue(undefined);
-  (api.acceptReplay as any).mockResolvedValue(SESSION);
-  (api.cancelReplay as any).mockResolvedValue({ scene: "s1", restored: 3, dropped: 0 });
-  (api.regenerate as any).mockResolvedValue(undefined);
+  vi.mocked(api.getReplay).mockResolvedValue(null);
+  vi.mocked(api.replayPreview).mockResolvedValue(PREVIEW);
+  vi.mocked(api.startReplay).mockResolvedValue(fixture({ cut: 3, cascade: {} }));
+  vi.mocked(api.replayTurn).mockResolvedValue(undefined);
+  vi.mocked(api.acceptReplay).mockResolvedValue(SESSION);
+  vi.mocked(api.cancelReplay).mockResolvedValue({ scene: "s1", restored: 3, dropped: 0 });
+  vi.mocked(api.regenerate).mockResolvedValue(undefined);
 });
 
 const noop = () => {};
@@ -74,14 +75,14 @@ test("starting the replay cuts at the asked-for post and refreshes the caller", 
 });
 
 test("a blocked span says why instead of offering the button", async () => {
-  (api.replayPreview as any).mockResolvedValue({ ...PREVIEW, blocked: "this scene moves" });
+  vi.mocked(api.replayPreview).mockResolvedValue({ ...PREVIEW, blocked: "this scene moves" });
   await renderPanel({ startAt: 3 });
   expect(screen.getByText("this scene moves")).toBeTruthy();
   expect(screen.queryByText("Replay in place")).toBeNull();
 });
 
 test("a long replay nudges a fork first (#80)", async () => {
-  (api.replayPreview as any).mockResolvedValue({ ...PREVIEW, turns: 14, fork: true, threshold: 10 });
+  vi.mocked(api.replayPreview).mockResolvedValue({ ...PREVIEW, turns: 14, fork: true, threshold: 10 });
   await renderPanel({ startAt: 3 });
   expect(screen.getByText(/more than 10 turns/)).toBeTruthy();
   // Both are still offered: the nudge is a recommendation, not a gate.
@@ -90,7 +91,7 @@ test("a long replay nudges a fork first (#80)", async () => {
 });
 
 test("forking hands the new campaign back rather than replaying in it", async () => {
-  (api.forkCampaign as any).mockResolvedValue({ id: "c2", name: "Run (retcon)" });
+  vi.mocked(api.forkCampaign).mockResolvedValue(fixture({ id: "c2" }));
   const onForked = vi.fn();
   vi.spyOn(window, "prompt").mockReturnValue("Run (retcon)");
   await renderPanel({ startAt: 3, onForked });
@@ -100,7 +101,7 @@ test("forking hands the new campaign back rather than replaying in it", async ()
 });
 
 test("shows the walk's position while a replay is running", async () => {
-  (api.getReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
   await renderPanel();
   expect(screen.getByText("Replaying — 2 turns left")).toBeTruthy();
   expect(screen.getByText("Replay next turn")).toBeTruthy();
@@ -108,11 +109,11 @@ test("shows the walk's position while a replay is running", async () => {
 });
 
 test("accept and try again appear only once a turn has been run", async () => {
-  (api.getReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
   await renderPanel();
   // The server is what says a reply is waiting, so that is what the turn moves.
-  (api.replayTurn as any).mockImplementation(async () => {
-    (api.getReplay as any).mockResolvedValue(PENDING);
+  vi.mocked(api.replayTurn).mockImplementation(async () => {
+    vi.mocked(api.getReplay).mockResolvedValue(PENDING);
   });
   fireEvent.click(screen.getByText("Replay next turn"));
   await waitFor(() => expect(screen.getByText("Accept")).toBeTruthy());
@@ -121,8 +122,8 @@ test("accept and try again appear only once a turn has been run", async () => {
   fireEvent.click(screen.getByText("Try again"));
   await waitFor(() => expect(api.regenerate).toHaveBeenCalled());
 
-  (api.acceptReplay as any).mockImplementation(async () => {
-    (api.getReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.acceptReplay).mockImplementation(async () => {
+    vi.mocked(api.getReplay).mockResolvedValue(SESSION);
     return SESSION;
   });
   fireEvent.click(screen.getByText("Accept"));
@@ -134,7 +135,7 @@ test("a reply left waiting is still waiting after a reload", async () => {
   // The regression this pins: the verdict used to be local state, so a reload
   // offered "Replay next turn" for a turn already run — and the second
   // generation landed beside the first.
-  (api.getReplay as any).mockResolvedValue(PENDING);
+  vi.mocked(api.getReplay).mockResolvedValue(PENDING);
   await renderPanel();
   expect(screen.getByText("Accept")).toBeTruthy();
   expect(screen.getByText("Try again")).toBeTruthy();
@@ -144,11 +145,11 @@ test("a reply left waiting is still waiting after a reload", async () => {
 test("a turn holds the transcript's write latch for the whole request", async () => {
   // A replayed turn is a generation into the scene on screen; while one runs,
   // the composer, the gutter and Retry must not offer to start a second.
-  (api.getReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
   let held = 0;
   const latch = () => { held += 1; return () => { held -= 1; }; };
   let land: () => void = () => {};
-  (api.replayTurn as any).mockReturnValue(new Promise<void>((res) => { land = res; }));
+  vi.mocked(api.replayTurn).mockReturnValue(new Promise<void>((res) => { land = res; }));
   render(<ReplayPanel cid="c1" sid="s1" startAt={null} onStartHandled={noop}
                       onChanged={noop} onForked={noop} latch={latch} />);
   await act(async () => {});
@@ -163,8 +164,8 @@ test("a turn that fails mid-stream is reported, not counted as run", async () =>
   // `streamPost` resolves normally on an error frame — that is how a failed
   // generation reports itself — so ignoring frames reads failure as success and
   // offers Accept for a reply that was never written.
-  (api.getReplay as any).mockResolvedValue(SESSION);
-  (api.replayTurn as any).mockImplementation(async (_c: string, _s: string, on: any) => {
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
+  vi.mocked(api.replayTurn).mockImplementation(async (_c, _s, on) => {
     on({ error: { detail: "the model refused", kind: "provider" } });
   });
   await renderPanel();
@@ -176,8 +177,8 @@ test("a turn that fails mid-stream is reported, not counted as run", async () =>
 test("a replay turn the model could not be reached for offers the recovery", async () => {
   // A replay re-runs model turns, so it goes dark offline exactly like the
   // composer does -- and used to say so with a bare socket error (#210).
-  (api.getReplay as any).mockResolvedValue(SESSION);
-  (api.replayTurn as any).mockImplementation(async (_c: string, _s: string, on: any) => {
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
+  vi.mocked(api.replayTurn).mockImplementation(async (_c, _s, on) => {
     on({ error: { detail: "connection refused", kind: "network" } });
   });
   await renderPanel();
@@ -187,7 +188,7 @@ test("a replay turn the model could not be reached for offers the recovery", asy
 });
 
 test("stopping asks whether to put the rest of the scene back", async () => {
-  (api.getReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   await renderPanel();
   fireEvent.click(screen.getByText("Stop"));
@@ -195,7 +196,7 @@ test("stopping asks whether to put the rest of the scene back", async () => {
 });
 
 test("declining the restore still stops the replay, keeping what was replayed", async () => {
-  (api.getReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
   vi.spyOn(window, "confirm").mockReturnValue(false);
   await renderPanel();
   fireEvent.click(screen.getByText("Stop"));
@@ -203,7 +204,7 @@ test("declining the restore still stops the replay, keeping what was replayed", 
 });
 
 test("a session whose scene is gone offers only to discard it", async () => {
-  (api.getReplay as any).mockResolvedValue({ ...SESSION, gone: true });
+  vi.mocked(api.getReplay).mockResolvedValue({ ...SESSION, gone: true });
   await renderPanel();
   expect(screen.getByText(/scene this replay belongs to is gone/)).toBeTruthy();
   expect(screen.queryByText("Replay next turn")).toBeNull();
@@ -213,8 +214,8 @@ test("a session whose scene is gone offers only to discard it", async () => {
 
 test("a refused step is reported in the panel rather than thrown away", async () => {
   const { ApiError } = await import("../api/client");
-  (api.getReplay as any).mockResolvedValue(SESSION);
-  (api.replayTurn as any).mockRejectedValue(new ApiError(409, "this replay has no model turn left"));
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
+  vi.mocked(api.replayTurn).mockRejectedValue(new ApiError(409, "this replay has no model turn left"));
   await renderPanel();
   fireEvent.click(screen.getByText("Replay next turn"));
   await waitFor(() => expect(screen.getByText("this replay has no model turn left")).toBeTruthy());
@@ -241,7 +242,7 @@ test("a price taken for one post is not shown for another", async () => {
   await act(async () => {});
   expect(screen.getByText("Replay 2 turns")).toBeTruthy();
 
-  (api.replayPreview as any).mockReturnValue(new Promise(() => {}));   // still in flight
+  vi.mocked(api.replayPreview).mockReturnValue(new Promise(() => {}));   // still in flight
   rerender(<ReplayPanel cid="c1" sid="s1" startAt={9} onStartHandled={noop}
                         onChanged={noop} onForked={noop} />);
   await act(async () => {});
@@ -252,7 +253,7 @@ test("the confirm and prompt do not run while the transcript is latched", async 
   // Both are modal and synchronous: asked inside the guard, the write latch —
   // which greys out the composer and the gutter for the whole app — would be
   // held for as long as the reader looks at the dialog.
-  (api.getReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
   let heldWhenAsked: number | null = null;
   let held = 0;
   const latch = () => { held += 1; return () => { held -= 1; }; };
@@ -270,10 +271,10 @@ test("the confirm and prompt do not run while the transcript is latched", async 
 test("a request that outlives the panel tells nobody its transcript moved", async () => {
   // The reader switched scene mid-turn. `onChanged` refreshes the scene THIS
   // panel was for, which by then is not the one they are looking at.
-  (api.getReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
   const onChanged = vi.fn();
   let land: () => void = () => {};
-  (api.replayTurn as any).mockReturnValue(new Promise<void>((res) => { land = res; }));
+  vi.mocked(api.replayTurn).mockReturnValue(new Promise<void>((res) => { land = res; }));
   const { unmount } = render(
     <ReplayPanel cid="c1" sid="s1" startAt={null} onStartHandled={noop}
                  onChanged={onChanged} onForked={noop} />);
@@ -297,9 +298,9 @@ test("a replayed turn is recorded in the run registry before it is sent", async 
   // recovering from is the one where the server accepted the work and no frame
   // ever came back.
   const seen: { attempt: string | null } = { attempt: null };
-  (api.getReplay as any).mockResolvedValue(SESSION);
-  (api.replayTurn as any).mockImplementation(
-    async (_c: string, _s: string, _on: unknown, _sig: unknown, attempt: string) => {
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
+  vi.mocked(api.replayTurn).mockImplementation(
+    async (_c, _s, _on, _sig, attempt) => {
       // Asked DURING the request, which is the whole point: a record written
       // after the stream returns is written after the window it is for.
       seen.attempt = registry.pending("c1", "s1")?.attempt ?? null;
@@ -332,9 +333,9 @@ test("a replay stream that ends with no answer hands the run to recovery", async
   //
   // The parent already knows how to adopt such a run. This is telling it now.
   const unanswered = vi.fn();
-  (api.getReplay as any).mockResolvedValue(SESSION);
-  (api.replayTurn as any).mockImplementation(
-    async (_c: string, _s: string, on: any) => {
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
+  vi.mocked(api.replayTurn).mockImplementation(
+    async (_c, _s, on) => {
       on({ run: { id: "r-1", attempt_id: "a", state: "running", next_index: 1 } });
       on({ delta: "The lamps " });        // and then the socket simply stops
     });
@@ -356,9 +357,9 @@ test("a replay stream that finished properly does not", async () => {
   // The counterweight: an answered stream is resolved, and asking the parent to
   // adopt it would have the recovery pass re-litigate a turn that is over.
   const unanswered = vi.fn();
-  (api.getReplay as any).mockResolvedValue(SESSION);
-  (api.replayTurn as any).mockImplementation(
-    async (_c: string, _s: string, on: any) => {
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
+  vi.mocked(api.replayTurn).mockImplementation(
+    async (_c, _s, on) => {
       on({ run: { id: "r-1", attempt_id: "a", state: "running", next_index: 1 } });
       on({ done: true });
     });
@@ -388,7 +389,7 @@ test("a reroll tells the caller its follow-ups are already scheduled", async () 
   // Every other action here still reports `asked` falsy: `/replay/turn`
   // deliberately schedules nothing, and a cut, an accept or a cancel is no turn
   // at all.
-  (api.getReplay as any).mockResolvedValue(PENDING);
+  vi.mocked(api.getReplay).mockResolvedValue(PENDING);
   const onChanged = vi.fn();
   await renderPanel({ onChanged });
 
@@ -397,7 +398,7 @@ test("a reroll tells the caller its follow-ups are already scheduled", async () 
   expect(onChanged).toHaveBeenCalledWith(true);
 
   onChanged.mockClear();
-  (api.acceptReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.acceptReplay).mockResolvedValue(SESSION);
   fireEvent.click(screen.getByText("Accept"));
   await waitFor(() => expect(api.acceptReplay).toHaveBeenCalled());
   expect(onChanged).toHaveBeenCalled();
@@ -405,7 +406,7 @@ test("a reroll tells the caller its follow-ups are already scheduled", async () 
 });
 
 test("a branchable scene replays in a branch by default, and hands over the sibling", async () => {
-  (api.startReplay as any).mockResolvedValue({ cut: 3, cascade: {}, branched: "s1-b" });
+  vi.mocked(api.startReplay).mockResolvedValue(fixture({ cut: 3, cascade: {}, branched: "s1-b" }));
   const onBranched = vi.fn();
   const onChanged = vi.fn();
   await renderPanel({ startAt: 3, branchable: true, onBranched, onChanged });
@@ -434,7 +435,7 @@ test("on a closed branch every generation is disabled; accept and stop stay open
   // The server refuses a replay turn, a reroll and a replay start on a closed
   // branch (`branch_closed`) and keeps accept and cancel open, so the panel
   // mirrors exactly that rather than offering clicks it knows will 409.
-  (api.getReplay as any).mockResolvedValue(SESSION);
+  vi.mocked(api.getReplay).mockResolvedValue(SESSION);
   await renderPanel({ closed: true });
   expect(screen.getByRole("button", { name: "Replay next turn" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
@@ -443,7 +444,7 @@ test("on a closed branch every generation is disabled; accept and stop stay open
 });
 
 test("on a closed branch a waiting reply can be accepted but not tried again", async () => {
-  (api.getReplay as any).mockResolvedValue(PENDING);
+  vi.mocked(api.getReplay).mockResolvedValue(PENDING);
   await renderPanel({ closed: true });
   expect(screen.getByRole("button", { name: "Try again" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();

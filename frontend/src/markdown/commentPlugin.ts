@@ -66,12 +66,14 @@ function withoutComments(value: string): string {
   return out.trim() ? out : "";
 }
 
-function walk(node: any): void {
-  if (!node || !Array.isArray(node.children)) return;
-  const next: any[] = [];
-  for (const child of node.children) {
-    if (child?.type === "comment") continue;              // a parsed comment: gone
-    if (child?.type === "raw" && typeof child.value === "string") {
+function walk(node: unknown): void {
+  if (typeof node !== "object" || node === null || !("children" in node) || !Array.isArray(node.children)) return;
+  const children: unknown[] = node.children;
+  const next: unknown[] = [];
+  for (const child of children) {
+    if (typeof child === "object" && child !== null && "type" in child && child.type === "comment") continue;              // a parsed comment: gone
+    if (typeof child === "object" && child !== null && "type" in child && child.type === "raw"
+        && "value" in child && typeof child.value === "string") {
       const rest = withoutComments(child.value);
       if (!rest) continue;                                // nothing but notes
       if (rest !== child.value) child.value = rest;       // notes cut, prose kept
@@ -83,5 +85,5 @@ function walk(node: any): void {
 }
 
 export function commentPlugin() {
-  return (tree: any) => walk(tree);
+  return (tree: unknown) => walk(tree);
 }

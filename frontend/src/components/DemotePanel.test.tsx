@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { DemotePanel } from "./DemotePanel";
+import type { LibraryDependent } from "../api/types";
 
 vi.mock("../api/client", () => ({
   ApiError: class extends Error {
@@ -21,13 +22,13 @@ const DEPS = [
 ];
 
 function show(deps = DEPS, onDemoted?: () => void) {
-  (api.libraryDependents as any).mockResolvedValue(deps);
+  vi.mocked(api.libraryDependents).mockResolvedValue(deps);
   return render(<DemotePanel wid="w" kind="locations" id="saltmarch" onDemoted={onDemoted} />);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.demoteFromLibrary as any).mockResolvedValue({ copied_down: ["run"], dependents: ["run"] });
+  vi.mocked(api.demoteFromLibrary).mockResolvedValue({ copied_down: ["run"], dependents: ["run"] });
 });
 
 test("the destructive action is behind a first click", async () => {
@@ -73,7 +74,7 @@ test("unchecking it changes both the wording and the request", async () => {
 test("opening it re-reads the dependents rather than trusting the mount", async () => {
   show();
   await waitFor(() => expect(api.libraryDependents).toHaveBeenCalledTimes(1));
-  (api.libraryDependents as any).mockResolvedValue(
+  vi.mocked(api.libraryDependents).mockResolvedValue(
     [...DEPS, { id: "new", name: "Saltmarch Run", has_copy: false }]);
 
   fireEvent.click(screen.getByRole("button", { name: "Remove from library…" }));
@@ -86,8 +87,8 @@ test("the destructive button is not live while that re-read is in flight", async
   // campaign they are about to take the record away from
   show();
   await waitFor(() => expect(api.libraryDependents).toHaveBeenCalledTimes(1));
-  let settle: (v: unknown) => void = () => {};
-  (api.libraryDependents as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: LibraryDependent[]) => void = () => {};
+  vi.mocked(api.libraryDependents).mockReturnValue(new Promise((r) => { settle = r; }));
 
   fireEvent.click(screen.getByRole("button", { name: "Remove from library…" }));
 
@@ -122,8 +123,8 @@ test("cancelling closes without calling anything", async () => {
 test("a refusal is shown and the record is not reported gone", async () => {
   const onDemoted = vi.fn();
   show(DEPS, onDemoted);
-  (api.demoteFromLibrary as any).mockRejectedValueOnce(
-    new (ApiError as any)(409, "characters cannot be demoted", "library_move_refused"));
+  vi.mocked(api.demoteFromLibrary).mockRejectedValueOnce(
+    new (ApiError)(409, "characters cannot be demoted", "library_move_refused"));
 
   fireEvent.click(await screen.findByRole("button", { name: "Remove from library…" }));
   fireEvent.click(await screen.findByRole("button", { name: "Remove and copy down" }));
@@ -142,7 +143,7 @@ test("a successful demote tells the parent so the rail can drop the row", async 
 });
 
 test("dependents that cannot be read render nothing rather than a broken panel", async () => {
-  (api.libraryDependents as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.libraryDependents).mockRejectedValue(new Error("offline"));
   const { container } = render(<DemotePanel wid="w" kind="locations" id="saltmarch" />);
   await waitFor(() => expect(api.libraryDependents).toHaveBeenCalled());
   expect(container.querySelector(".side-section")).toBeNull();
@@ -151,8 +152,8 @@ test("dependents that cannot be read render nothing rather than a broken panel",
 test("a refresh that fails leaves a way out instead of checking forever", async () => {
   show();
   await waitFor(() => expect(api.libraryDependents).toHaveBeenCalledTimes(1));
-  (api.libraryDependents as any).mockRejectedValueOnce(
-    new (ApiError as any)(500, "the world could not be read", undefined));
+  vi.mocked(api.libraryDependents).mockRejectedValueOnce(
+    new (ApiError)(500, "the world could not be read", undefined));
 
   fireEvent.click(screen.getByRole("button", { name: "Remove from library…" }));
 
@@ -160,7 +161,7 @@ test("a refresh that fails leaves a way out instead of checking forever", async 
   expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
   // and retrying really re-asks
-  (api.libraryDependents as any).mockResolvedValue(DEPS);
+  vi.mocked(api.libraryDependents).mockResolvedValue(DEPS);
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
   expect(await screen.findByRole("button", { name: "Remove and copy down" })).toBeTruthy();
 });

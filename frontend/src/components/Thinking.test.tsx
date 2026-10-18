@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { Thinking, SavedThinking } from "./Thinking";
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 vi.mock("../api/client", () => ({ api: { getResponse: vi.fn() } }));
 
@@ -19,9 +20,9 @@ test("thinking is collapsed, updates while open, and treats markup as text", () 
 });
 
 test("saved thinking is fetched on expansion and selects the displayed variant", async () => {
-  vi.mocked(api.getResponse).mockResolvedValue({ variants: [
+  vi.mocked(api.getResponse).mockResolvedValue(fixture({ variants: [
     {id:"old", reasoning:"Earlier thought"}, {id:"new", reasoning:"Current thought"}
-  ] } as any);
+  ] }));
   render(<SavedThinking cid="c" sid="s" responseId="r" variantId="old" />);
   expect(api.getResponse).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText("Thinking"));

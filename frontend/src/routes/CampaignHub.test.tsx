@@ -48,8 +48,9 @@ vi.mock("../api/client", () => ({
   },
 }));
 
-import { api } from "../api/client";
+import { api, type SceneIdea } from "../api/client";
 import CampaignHub from "./CampaignHub";
+import { fixture } from "../testkit/fixture";
 
 test("the hub links to campaign settings alongside its existing panels", async () => {
   renderHub();
@@ -122,23 +123,23 @@ function renderHub() {
 }
 
 beforeEach(() => {
-  (api.deleteScene as any).mockReset().mockResolvedValue({ ok: true });
-  (api.getCampaign as any).mockResolvedValue({ meta: META, body: "" });
-  (api.getShell as any).mockResolvedValue(shell());
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.deleteScene).mockReset().mockResolvedValue({ ok: true });
+  vi.mocked(api.getCampaign).mockResolvedValue({ meta: META, body: "" });
+  vi.mocked(api.getShell).mockResolvedValue(shell());
+  vi.mocked(api.listScenes).mockResolvedValue([
     { id: "s3", title: "The third", done: false, model: "", created: "", updated: "", date: "" },
     { id: "s2", title: "The second", done: true, model: "", created: "", updated: "", date: "" },
   ]);
-  (api.getChronicle as any).mockResolvedValue([
-    { sid: "s2", one_line: "It ended.", summary: "It ended, and the tide went out." },
-  ]);
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listCampaignPCs as any).mockResolvedValue([]);
-  (api.listAppearances as any).mockResolvedValue([]);
-  (api.campaignChanges as any).mockResolvedValue([]);
-  (api.getCampaignBudget as any).mockResolvedValue({ level: "off", limit_usd: 0,
-                                                     period: "monthly" });
-  (api.listSceneIdeas as any).mockResolvedValue([]);
+  vi.mocked(api.getChronicle).mockResolvedValue(fixture([
+    { id: "s2", one_line: "It ended.", summary: "It ended, and the tide went out." },
+  ]));
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([]);
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
+  vi.mocked(api.campaignChanges).mockResolvedValue([]);
+  vi.mocked(api.getCampaignBudget).mockResolvedValue(fixture({ level: "off", limit_usd: 0,
+                                                     period: "monthly" }));
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([]);
 });
 
 test("the layout picker is gone; the hub is one column", async () => {
@@ -151,7 +152,7 @@ test("the layout picker is gone; the hub is one column", async () => {
 });
 
 test("the hub leads with what to do next, not with state", async () => {
-  (api.getShell as any).mockResolvedValue(
+  vi.mocked(api.getShell).mockResolvedValue(
     shell({ open: [{ sid: "s3", title: "The third", turns: null }] }));
   renderHub();
   await screen.findByText("Run One");
@@ -165,7 +166,7 @@ test("with several scenes open it offers each rather than resuming one", async (
   // The behaviour this whole page replaced: opening a campaign used to navigate
   // straight to whichever scene was played last. Picking one inside a card
   // would be the same mistake with a nicer border.
-  (api.getShell as any).mockResolvedValue(shell({
+  vi.mocked(api.getShell).mockResolvedValue(shell({
     open: [{ sid: "s3", title: "The third", turns: null },
             { sid: "s4", title: "The fourth", turns: null }],
   }));
@@ -188,7 +189,7 @@ test("starting a scene is offered whether or not one is open", async () => {
   // The regression this covers: the new-scene link used to render only in the
   // empty branch, so a reader with a scene in flight could not start another
   // from the front door -- which is the one thing a front door is for.
-  (api.getShell as any).mockResolvedValue(
+  vi.mocked(api.getShell).mockResolvedValue(
     shell({ open: [{ sid: "s3", title: "The third", turns: null }] }));
   renderHub();
   await screen.findByText("Run One");
@@ -211,7 +212,7 @@ test("with nothing open the new-scene link is the primary offer", async () => {
 });
 
 test("unreviewed proposals are named as holding the world back", async () => {
-  (api.getShell as any).mockResolvedValue(
+  vi.mocked(api.getShell).mockResolvedValue(
     shell({ unreviewed: 8, pending: [{ sid: "s2", proposals: 8 }] }));
   renderHub();
   await screen.findByText("Run One");
@@ -225,7 +226,7 @@ test("each waiting scene is named on its own wrap-up link", async () => {
   // scene was absorbed short of opening one. The sids travel in the payload
   // for exactly this, and the scene list the page already fetches has the
   // titles.
-  (api.getShell as any).mockResolvedValue(shell({
+  vi.mocked(api.getShell).mockResolvedValue(shell({
     unreviewed: 5,
     pending: [{ sid: "s2", proposals: 3 }, { sid: "s3", proposals: 2 }],
   }));
@@ -244,7 +245,7 @@ test("each waiting scene is named on its own wrap-up link", async () => {
 test("a waiting scene the list cannot name still offers its wrap-up", async () => {
   // A review sidecar can outlive the scene it belongs to. The route still
   // answers, so the offer stands -- unnamed rather than invented.
-  (api.getShell as any).mockResolvedValue(
+  vi.mocked(api.getShell).mockResolvedValue(
     shell({ unreviewed: 2, pending: [{ sid: "gone", proposals: 2 }] }));
   renderHub();
   await screen.findByText("Run One");
@@ -256,7 +257,7 @@ test("the to-do card renders a zero and links at the list", async () => {
   // `0` is an answer -- nothing outstanding -- and the card says so with the
   // count showing, which is the half of the rule that is easy to lose by
   // writing a truthiness test.
-  (api.getShell as any).mockResolvedValue({ ...shell(), todo: 0 });
+  vi.mocked(api.getShell).mockResolvedValue({ ...shell(), todo: 0 });
   renderHub();
   await screen.findByText("Run One");
   const card = screen.getByText("To do").closest("section")!;
@@ -271,7 +272,7 @@ test("a to-do count nobody computed draws no count at all", async () => {
   // The other half: `null` means the field was never answered, and a zero
   // there would read as a measurement nobody made. Same sentence as the cost
   // rule one domain over.
-  (api.getShell as any).mockResolvedValue({ ...shell(), todo: null });
+  vi.mocked(api.getShell).mockResolvedValue({ ...shell(), todo: null });
   renderHub();
   await screen.findByText("Run One");
   const card = screen.getByText("To do").closest("section")!;
@@ -281,7 +282,7 @@ test("a to-do count nobody computed draws no count at all", async () => {
 });
 
 test("the to-do card carries what is still outstanding", async () => {
-  (api.getShell as any).mockResolvedValue({ ...shell(), todo: 4 });
+  vi.mocked(api.getShell).mockResolvedValue({ ...shell(), todo: 4 });
   renderHub();
   await screen.findByText("Run One");
   const card = screen.getByText("To do").closest("section")!;
@@ -302,7 +303,7 @@ test("a review holding no proposals is still a scene waiting", async () => {
   // on that sum, this panel answered "Nothing waiting -- every proposal has
   // been decided" over a scene that was waiting, which is the one thing it
   // must never say. `ScenesView` keys off `pending` and was always right.
-  (api.getShell as any).mockResolvedValue(
+  vi.mocked(api.getShell).mockResolvedValue(
     shell({ unreviewed: 0, pending: [{ sid: "s2", proposals: 0 }] }));
   renderHub();
   await screen.findByText("Run One");
@@ -324,7 +325,7 @@ test("with no mechanics module there is no sheets card and no sheets link", asyn
 });
 
 test("with a module bound the sheets card carries its coverage", async () => {
-  (api.getShell as any).mockResolvedValue(shell({ sheets: { sheeted: 4, total: 7 } }));
+  vi.mocked(api.getShell).mockResolvedValue(shell({ sheets: { sheeted: 4, total: 7 } }));
   renderHub();
   await screen.findByText("Run One");
   expect(screen.getByText("4 of 7")).toBeInTheDocument();
@@ -358,7 +359,7 @@ test("the ledger is reachable from the hub", async () => {
 test("a failed read is not an empty campaign", async () => {
   // Opposite answers, and the difference has to survive: "could not be read"
   // must never render as "there is nothing here".
-  (api.getCampaign as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getCampaign).mockRejectedValue(new Error("offline"));
   renderHub();
   expect(await screen.findByText(/this campaign could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText("Next up")).not.toBeInTheDocument();
@@ -367,7 +368,7 @@ test("a failed read is not an empty campaign", async () => {
 test("Try again reads the campaign again", async () => {
   // It used to clear the banner and send nothing, so the page it uncovered
   // was a hub titled "…" whose cards waited for a read that never came.
-  (api.getCampaign as any).mockRejectedValueOnce(new Error("offline"));
+  vi.mocked(api.getCampaign).mockRejectedValueOnce(new Error("offline"));
   renderHub();
   const retry = await screen.findByRole("button", { name: /try again/i });
   const reads = (fn: unknown) => (fn as { mock: { calls: unknown[] } }).mock.calls.length;
@@ -383,7 +384,7 @@ test("Try again reads the campaign again", async () => {
 
 test("a campaign that is not there says so, and offers the way back", async () => {
   // A link to a deleted campaign, or a typo: a Try again can never answer it.
-  (api.getCampaign as any).mockRejectedValue({ status: 404, detail: "campaign not found" });
+  vi.mocked(api.getCampaign).mockRejectedValue({ status: 404, detail: "campaign not found" });
   renderHub();
   expect(await screen.findByRole("heading", { name: /no such campaign/i })).toBeInTheDocument();
   expect(screen.getByText(/no campaign called “run”/i)).toBeInTheDocument();
@@ -398,7 +399,7 @@ test("the page does not wait on the shell read", async () => {
   // The slowest read in the chrome, library-scaled. The hub used to hold its
   // title, its scene rows and its recap -- all of which had arrived -- until
   // its own copy of it answered.
-  (api.getShell as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getShell).mockReturnValue(new Promise(() => {}));
   renderHub();
   expect(await screen.findByRole("heading", { name: "Run One" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "The third" })).toBeInTheDocument();
@@ -415,7 +416,7 @@ test("the money stays pending until a payload about this campaign arrives", asyn
   // A payload about another campaign is not a payload about this one -- the
   // rail can hold one for a moment on the way in -- and the cost rule says a
   // figure nobody reported for THIS campaign is never drawn at all.
-  (api.getShell as any).mockResolvedValue({
+  vi.mocked(api.getShell).mockResolvedValue({
     ...withMoney({}), campaign: { ...withMoney({}).campaign, id: "elsewhere" },
   });
   renderHub();
@@ -428,7 +429,7 @@ test("the money stays pending until a payload about this campaign arrives", asyn
 test("a null ledger count says it could not be counted", async () => {
   // The shell read succeeded but the ledger could not be counted: that is
   // neither "Loading…" forever nor "Nothing is owed." (zero-for-unknown).
-  (api.getShell as any).mockResolvedValue({ ...shell({ ledger_open: null }), todo: 0 });
+  vi.mocked(api.getShell).mockResolvedValue({ ...shell({ ledger_open: null }), todo: 0 });
   renderHub();
   expect(await screen.findByText("Open commitments")).toBeInTheDocument();
   expect(await screen.findByText("Could not be counted.")).toBeInTheDocument();
@@ -439,7 +440,7 @@ test("a null ledger count says it could not be counted", async () => {
 });
 
 test("a failed shell read costs the counts, not the page", async () => {
-  (api.getShell as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getShell).mockRejectedValue(new Error("offline"));
   renderHub();
   expect(await screen.findByText(/counts on this page could not be read/i)).toBeInTheDocument();
   // The page itself stands: its own reads answered.
@@ -452,11 +453,11 @@ test("a failed shell read costs the counts, not the page", async () => {
   expect(screen.queryByText(/every scene has been wrapped up/i)).not.toBeInTheDocument();
 
   // ...and the notice's retry asks again.
-  (api.getShell as any).mockResolvedValue(shell({ ledger_open: 2 }));
-  const calls = (api.getShell as any).mock.calls.length;
+  vi.mocked(api.getShell).mockResolvedValue(shell({ ledger_open: 2 }));
+  const calls = vi.mocked(api.getShell).mock.calls.length;
   fireEvent.click(screen.getByRole("button", { name: /try again/i }));
   expect(await screen.findByText("2 still open.")).toBeInTheDocument();
-  expect((api.getShell as any).mock.calls.length).toBeGreaterThan(calls);
+  expect(vi.mocked(api.getShell).mock.calls.length).toBeGreaterThan(calls);
   expect(screen.queryByText(/counts on this page could not be read/i)).not.toBeInTheDocument();
 });
 
@@ -497,8 +498,8 @@ test("Settings opens the campaign's quick replies", async () => {
 });
 
 test("the Tracker panel holds the campaign's switch and its field editor", async () => {
-  (api.getCampaignTracker as any).mockResolvedValue({ setting: "", enabled: true });
-  (api.setCampaignTracker as any).mockResolvedValue({ setting: "off", enabled: false });
+  vi.mocked(api.getCampaignTracker).mockResolvedValue({ setting: "", enabled: true });
+  vi.mocked(api.setCampaignTracker).mockResolvedValue({ setting: "off", enabled: false });
   renderHub();
   await screen.findByText("Run One");
   fireEvent.click(screen.getByRole("button", { name: "Tracker" }));
@@ -519,7 +520,7 @@ test("the three money columns are shown and never summed", async () => {
   // The complaint the redesign opened with. Each column is labelled with what
   // it actually is, so a campaign whose spend is $0 can still be seen to have
   // used a subscription's worth of generation.
-  (api.getShell as any).mockResolvedValue(withMoney({}));
+  vi.mocked(api.getShell).mockResolvedValue(withMoney({}));
   renderHub();
 
   const card = (await screen.findByRole("heading", { name: "Costs" }))
@@ -533,7 +534,7 @@ test("the three money columns are shown and never summed", async () => {
 });
 
 test("an unpriced call is flagged rather than counted as zero", async () => {
-  (api.getShell as any).mockResolvedValue(withMoney({ unpriced_calls: 3 }));
+  vi.mocked(api.getShell).mockResolvedValue(withMoney({ unpriced_calls: 3 }));
   renderHub();
 
   const card = (await screen.findByRole("heading", { name: "Costs" }))
@@ -542,7 +543,7 @@ test("an unpriced call is flagged rather than counted as zero", async () => {
 });
 
 test("an aggregate that could not be totalled says so instead of showing $0.00", async () => {
-  (api.getShell as any).mockResolvedValue(withMoney({ partial: true }));
+  vi.mocked(api.getShell).mockResolvedValue(withMoney({ partial: true }));
   renderHub();
 
   const card = (await screen.findByRole("heading", { name: "Costs" }))
@@ -552,7 +553,7 @@ test("an aggregate that could not be totalled says so instead of showing $0.00",
 });
 
 test("the budget bar draws only where a budget is set", async () => {
-  (api.getShell as any).mockResolvedValue(withMoney({}));
+  vi.mocked(api.getShell).mockResolvedValue(withMoney({}));
   renderHub();
   await screen.findByRole("heading", { name: "Costs" });
   // `level: "off"` from the default mock: no cap, so no fraction, so no bar.
@@ -560,10 +561,10 @@ test("the budget bar draws only where a budget is set", async () => {
 });
 
 test("a budget that is set draws its bar", async () => {
-  (api.getShell as any).mockResolvedValue(withMoney({}));
-  (api.getCampaignBudget as any).mockResolvedValue({
+  vi.mocked(api.getShell).mockResolvedValue(withMoney({}));
+  vi.mocked(api.getCampaignBudget).mockResolvedValue(fixture({
     level: "warn", limit_usd: 10, spent_usd: 4.82, fraction: 0.482,
-    period: "monthly", unpriced_calls: 0 });
+    period: "monthly", unpriced_calls: 0 }));
   renderHub();
 
   expect(await screen.findByRole("img", { name: /\$4\.82 of \$10\.00 budget/ }))
@@ -579,15 +580,15 @@ function appeared(kind: string, id: string) {
 }
 
 test("the cast card names faces and marks the PCs", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "mara", name: "Mara Vance", default_version: "v1", versions: [],
       has_avatar: false },
   ]);
-  (api.listCampaignPCs as any).mockResolvedValue([
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "v1", versions: [],
       tags: [], has_avatar: false },
   ]);
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue([
     appeared("characters", "mara"), appeared("pcs", "seraphine"),
   ]);
   renderHub();
@@ -611,11 +612,11 @@ test("the cast card points at the campaign's own world copy", async () => {
 });
 
 test("a face points at that character inside it", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "v1", versions: [],
       has_avatar: false },
   ]);
-  (api.listAppearances as any).mockResolvedValue([appeared("characters", "seraphine")]);
+  vi.mocked(api.listAppearances).mockResolvedValue([appeared("characters", "seraphine")]);
   renderHub();
   expect(await screen.findByRole("link", { name: "Seraphine" }))
     .toHaveAttribute("href", "/campaigns/run/world/characters/seraphine");
@@ -629,7 +630,7 @@ test("the sidebar's World row lands directly on the cast rather than a redirect 
 
 test("a cast that could not be read is not an empty cast", async () => {
   // Opposite answers, and they must never render the same way.
-  (api.listCharacters as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.listCharacters).mockRejectedValue(new Error("nope"));
   renderHub();
 
   const card = (await screen.findByRole("heading", { name: "Cast" }))
@@ -641,10 +642,11 @@ test("a cast that could not be read is not an empty cast", async () => {
 // ---- world changes ----
 
 test("world changes lists what play moved", async () => {
-  (api.campaignChanges as any).mockResolvedValue([
+  vi.mocked(api.campaignChanges).mockResolvedValue([
     { ref: { kind: "lore", id: "the-salt-pact" }, name: "The Salt Pact",
       scene: { id: "s2", title: "The second", date: "" },
-      fields: [{ field: "body", from: "a", to: "b" }] },
+      fields: [{ field: "body", label: "body",
+                 diff: [{ op: "delete", text: "a" }, { op: "insert", text: "b" }] }] },
   ]);
   renderHub();
 
@@ -664,7 +666,7 @@ test("a world nothing has changed says so", async () => {
 // ---- play next ----
 
 test("play next offers saved ideas and spends nothing to do it", async () => {
-  (api.listSceneIdeas as any).mockResolvedValue([
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([
     { id: "i1", title: "The lower step", premise: "An owed thread is past due.",
       status: "active", source: "llm", date: "", cast: [], location: null,
       pcless: false, created: "", used_scene: "" },
@@ -682,17 +684,17 @@ test("play next offers saved ideas and spends nothing to do it", async () => {
   expect(within(card).queryByText("Used already")).not.toBeInTheDocument();
   // The whole reason this card shows saved ideas rather than generated ones:
   // opening a campaign must not spend a generation.
-  expect((api as any).sceneSuggestions).toBeUndefined();
+  expect(api).not.toHaveProperty("sceneSuggestions");
 });
 
 test("play next skips stale ideas", async () => {
   // A stale idea stays active -- the picker's Stale group still offers it --
   // but the front door's offer is what is worth playing now.
-  const idea = (id: string, title: string, stale_reason?: string) => ({
+  const idea = (id: string, title: string, stale_reason?: string) => fixture<SceneIdea>({
     id, title, premise: "", status: "active", source: "llm", date: "", cast: [],
     location: null, pcless: false, created: "", used_scene: "",
     ...(stale_reason === undefined ? {} : { stale_reason }) });
-  (api.listSceneIdeas as any).mockResolvedValue([
+  vi.mocked(api.listSceneIdeas).mockResolvedValue([
     idea("i1", "Before the bells", "The coronation has passed"),
     idea("i2", "Mara's map", ""),
     idea("i3", "Saltmarch Eve"),
@@ -706,7 +708,7 @@ test("play next skips stale ideas", async () => {
   expect(within(card).queryByText("Before the bells")).not.toBeInTheDocument();
   // the tail counts only what the card offers
   expect(card.querySelector(".hub-card-tail")).toHaveTextContent(/^2$/);
-  expect((api as any).sceneSuggestions).toBeUndefined();
+  expect(api).not.toHaveProperty("sceneSuggestions");
 });
 
 /** The Scenes card, by the heading it renders. */
@@ -728,7 +730,7 @@ test("a scene row on the hub opens the scene and offers to delete it", async () 
 
 test("a closed branch on the scenes card says closed, not open", async () => {
   // The headline above already leaves it out of "open"; the card must agree.
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     { id: "s3", title: "The third", done: false, model: "", created: "", updated: "", date: "" },
     { id: "s2-branch", title: "The second (branch)", done: false, model: "", created: "",
       updated: "", date: "", closed_by: { sid: "s2", title: "The second" } },
@@ -760,7 +762,7 @@ test("deleting a scene from the hub confirms, deletes, and re-reads", async () =
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderHub();
   await screen.findByText("The third");
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue([
     { id: "s2", title: "The second", done: true, model: "", created: "", updated: "", date: "" },
   ]);
 
@@ -780,7 +782,7 @@ test("a declined confirm on the hub deletes nothing", async () => {
 
 test("a scene a turn is holding keeps its hub row and says why", async () => {
   vi.spyOn(window, "confirm").mockReturnValue(true);
-  (api.deleteScene as any).mockRejectedValue({
+  vi.mocked(api.deleteScene).mockRejectedValue({
     kind: "scene_busy", run_id: "r1",
     detail: "a turn or review is running on this scene; stop it first" });
   renderHub();
@@ -799,17 +801,17 @@ test("a scene a turn is holding keeps its hub row and says why", async () => {
 // world's population, including PCs belonging to a different game entirely.
 // Who is in a campaign is a question only the appearance record answers.
 test("the cast card shows only actors who have appeared", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "mara", name: "Mara Vance", default_version: "v1", versions: [], has_avatar: false },
     { id: "winifred", name: "Winifred", default_version: "v1", versions: [], has_avatar: false },
   ]);
-  (api.listCampaignPCs as any).mockResolvedValue([
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "v1", versions: [], tags: [],
       has_avatar: false },
     { id: "other", name: "Someone Elses PC", default_version: "v1", versions: [], tags: [],
       has_avatar: false },
   ]);
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue([
     appeared("characters", "mara"),
     { ...appeared("characters", "winifred"), scenes: [], appeared: false },
     appeared("pcs", "seraphine"),
@@ -831,15 +833,15 @@ test("the cast card shows only actors who have appeared", async () => {
 test("a face is a face-sized thumbnail, token and all", async () => {
   // 48px faces used to be drawn from full-size originals, a front door
   // moving every cast member's whole file to show a thumbnail of it.
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "mara", name: "Mara Vance", default_version: "v1", versions: [], has_avatar: true,
       avatar_v: "abc" },
   ]);
-  (api.listCampaignPCs as any).mockResolvedValue([
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "v2", versions: [], tags: [],
       has_avatar: true, avatar_v: "def" },
   ]);
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue([
     appeared("characters", "mara"), appeared("pcs", "seraphine"),
   ]);
   renderHub();
@@ -858,10 +860,10 @@ test("a face is a face-sized thumbnail, token and all", async () => {
 });
 
 test("a campaign whose cast has never been on stage reads as empty, not as the world", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "winifred", name: "Winifred", default_version: "v1", versions: [], has_avatar: false },
   ]);
-  (api.listAppearances as any).mockResolvedValue([]);
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
   renderHub();
 
   const card = (await screen.findByRole("heading", { name: "Cast" })).closest("section")!;
@@ -872,8 +874,8 @@ test("a campaign whose cast has never been on stage reads as empty, not as the w
 // The appearance read is the one that decides membership, so losing it must
 // read as "could not be read" -- never as a silent fallback to the world list.
 test("a failed appearance read is not an empty cast", async () => {
-  (api.listAppearances as any).mockRejectedValue(new Error("nope"));
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "winifred", name: "Winifred", default_version: "v1", versions: [], has_avatar: false },
   ]);
   renderHub();
@@ -892,8 +894,8 @@ test("every appeared face is shown, however many there are", async () => {
     id: `c${i}`, name: `Character ${i}`, default_version: "v1", versions: [],
     has_avatar: false,
   }));
-  (api.listCharacters as any).mockResolvedValue(many);
-  (api.listAppearances as any).mockResolvedValue(
+  vi.mocked(api.listCharacters).mockResolvedValue(many);
+  vi.mocked(api.listAppearances).mockResolvedValue(
     many.map((c) => appeared("characters", c.id)));
   renderHub();
 

@@ -1,18 +1,20 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { api } from "../../api/client";
 import { TokenRates } from "./TokenRates";
+import { fixture, type DeepPartial } from "../../testkit/fixture";
+import type { PricingEntry, PricingTable } from "../../api/types";
 
 vi.mock("../../api/client", async () => {
   const actual = await vi.importActual<typeof import("../../api/client")>("../../api/client");
   return { ...actual, api: { getPricing: vi.fn(), setPricing: vi.fn() } };
 });
 
-const BOTH = { prompt_usd_per_1k: 0.003, completion_usd_per_1k: 0.015 };
-const TABLE = { rates: { "vendor/m": BOTH, "": BOTH } };
+const BOTH = { prompt_usd_per_1k: 0.003, completion_usd_per_1k: 0.015 } satisfies PricingEntry;
+const TABLE = { rates: { "vendor/m": BOTH, "": BOTH } } satisfies DeepPartial<PricingTable>;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.getPricing).mockResolvedValue(TABLE as any);
+  vi.mocked(api.getPricing).mockResolvedValue(fixture(TABLE));
   vi.mocked(api.setPricing).mockImplementation(async (rates) => ({ rates }));
 });
 
@@ -69,7 +71,7 @@ test("a saved table goes back to reading, and says so to the page", async () => 
 });
 
 test("a table that could not be read offers nothing to edit", async () => {
-  vi.mocked(api.getPricing).mockResolvedValue({ rates: {}, unreadable: true } as any);
+  vi.mocked(api.getPricing).mockResolvedValue(fixture({ rates: {}, unreadable: true }));
   render(<TokenRates onSaved={() => {}} />);
   expect(await block().findByText(/Could not read the rate table/)).toBeInTheDocument();
   expect(block().queryByRole("button", { name: "Edit rates" })).toBeNull();

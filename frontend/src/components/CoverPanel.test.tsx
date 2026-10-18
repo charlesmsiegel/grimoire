@@ -16,14 +16,15 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 const file = () => new File(["png"], "cover.png", { type: "image/png" });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch Nights", cover: "" }, body: "" });
-  (api.putCampaignCover as any).mockResolvedValue({ ext: "png", v: "abc" });
-  (api.deleteCampaignCover as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "run", name: "Saltmarch Nights", cover: "" }, body: "" }));
+  vi.mocked(api.putCampaignCover).mockResolvedValue({ ext: "png", v: "abc" });
+  vi.mocked(api.deleteCampaignCover).mockResolvedValue({ ok: true });
 });
 
 test("shows the placeholder when there is no cover", async () => {
@@ -42,7 +43,7 @@ test("uploading a file stores it and shows it at the new version", async () => {
 });
 
 test("shows an existing cover and removes it", async () => {
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch Nights", cover: "v1" }, body: "" });
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "run", name: "Saltmarch Nights", cover: "v1" }, body: "" }));
   render(<CampaignCover cid="run" />);
   expect((await screen.findByRole("img")).getAttribute("src")).toBe("/api/campaigns/run/cover?v=v1");
   fireEvent.click(screen.getByRole("button", { name: /remove/i }));
@@ -51,8 +52,8 @@ test("shows an existing cover and removes it", async () => {
 });
 
 test("a rejected upload shows the error and keeps the current cover", async () => {
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch Nights", cover: "v1" }, body: "" });
-  (api.putCampaignCover as any).mockRejectedValue({ detail: "not a readable image" });
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "run", name: "Saltmarch Nights", cover: "v1" }, body: "" }));
+  vi.mocked(api.putCampaignCover).mockRejectedValue({ detail: "not a readable image" });
   render(<CampaignCover cid="run" />);
   const input = await screen.findByLabelText(/cover image/i);
   fireEvent.change(input, { target: { files: [file()] } });
@@ -64,8 +65,8 @@ test("a rejected removal shows the error and keeps the current cover", async () 
   // The backend confirms the unlink before answering, so a failed DELETE
   // means the cover is genuinely still there -- clearing it here would tell
   // the user something false.
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch Nights", cover: "v1" }, body: "" });
-  (api.deleteCampaignCover as any).mockRejectedValue({ detail: "cover could not be removed" });
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "run", name: "Saltmarch Nights", cover: "v1" }, body: "" }));
+  vi.mocked(api.deleteCampaignCover).mockRejectedValue({ detail: "cover could not be removed" });
   render(<CampaignCover cid="run" />);
   await screen.findByRole("img");
   fireEvent.click(screen.getByRole("button", { name: /remove/i }));
@@ -99,12 +100,12 @@ test("uploading resets the file input so the same file can be re-picked", async 
 // here can resolve after the reader has moved to another campaign, and this
 // component is not remounted across that move — only its `cid` prop changes.
 
-const byCover = (covers: Record<string, string>) => (cid: string) =>
-  Promise.resolve({ meta: { id: cid, name: "N", cover: covers[cid] ?? "" }, body: "" });
+const byCover = (covers: Record<string, string>) => (cid: string): ReturnType<typeof api.getCampaign> =>
+  Promise.resolve(fixture({ meta: { id: cid, name: "N", cover: covers[cid] ?? "" }, body: "" }));
 
 test("a slow load for one campaign is never applied to the next", async () => {
-  let releaseA: (v: any) => void = () => {};
-  (api.getCampaign as any).mockImplementation((cid: string) =>
+  let releaseA: (v: Awaited<ReturnType<typeof api.getCampaign>>) => void = () => {};
+  vi.mocked(api.getCampaign).mockImplementation((cid) =>
     cid === "a" ? new Promise((r) => { releaseA = r; }) : byCover({})(cid));
   const { rerender } = render(<CampaignCover cid="a" />);
   await waitFor(() => expect(api.getCampaign).toHaveBeenCalledWith("a"));
@@ -112,7 +113,7 @@ test("a slow load for one campaign is never applied to the next", async () => {
   rerender(<CampaignCover cid="b" />);
   expect(await screen.findByText(/no cover/i)).toBeTruthy();
 
-  await act(async () => { releaseA({ meta: { id: "a", name: "One", cover: "vA" }, body: "" }); });
+  await act(async () => { releaseA(fixture({ meta: { id: "a", name: "One", cover: "vA" }, body: "" })); });
   // Unguarded, campaign a's version lands on campaign b's panel and the panel
   // renders /api/campaigns/b/cover?v=vA — an image that does not exist.
   expect(screen.queryByRole("img")).toBeNull();
@@ -120,9 +121,9 @@ test("a slow load for one campaign is never applied to the next", async () => {
 });
 
 test("an upload in flight for one campaign leaves the next one usable", async () => {
-  let releasePut: (v: any) => void = () => {};
-  (api.putCampaignCover as any).mockReturnValue(new Promise((r) => { releasePut = r; }));
-  (api.getCampaign as any).mockImplementation(byCover({ b: "vB" }));
+  let releasePut: (v: Awaited<ReturnType<typeof api.putCampaignCover>>) => void = () => {};
+  vi.mocked(api.putCampaignCover).mockReturnValue(new Promise((r) => { releasePut = r; }));
+  vi.mocked(api.getCampaign).mockImplementation(byCover({ b: "vB" }));
   const { rerender } = render(<CampaignCover cid="a" />);
   fireEvent.change(await screen.findByLabelText(/cover image/i), { target: { files: [file()] } });
   await waitFor(() => expect(api.putCampaignCover).toHaveBeenCalledWith("a", expect.any(File)));
@@ -141,9 +142,9 @@ test("an upload in flight for one campaign leaves the next one usable", async ()
 });
 
 test("a removal in flight for one campaign does not clear the next one's cover", async () => {
-  let releaseDel: (v: any) => void = () => {};
-  (api.deleteCampaignCover as any).mockReturnValue(new Promise((r) => { releaseDel = r; }));
-  (api.getCampaign as any).mockImplementation(byCover({ a: "vA", b: "vB" }));
+  let releaseDel: (v: Awaited<ReturnType<typeof api.deleteCampaignCover>>) => void = () => {};
+  vi.mocked(api.deleteCampaignCover).mockReturnValue(new Promise((r) => { releaseDel = r; }));
+  vi.mocked(api.getCampaign).mockImplementation(byCover({ a: "vA", b: "vB" }));
   const { rerender } = render(<CampaignCover cid="a" />);
   await screen.findByRole("img");
   fireEvent.click(screen.getByRole("button", { name: /remove/i }));
@@ -161,7 +162,7 @@ test("a removal in flight for one campaign does not clear the next one's cover",
 test("a cover that fails to load falls back to the placeholder, like the list does", async () => {
   // Removed in another tab: the panel would otherwise show the browser's
   // broken-image glyph next to a live "Remove cover" button.
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch Nights", cover: "v1" }, body: "" });
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "run", name: "Saltmarch Nights", cover: "v1" }, body: "" }));
   render(<CampaignCover cid="run" />);
   fireEvent.error(await screen.findByRole("img"));
 
@@ -179,11 +180,11 @@ test("a cover that fails to load falls back to the placeholder, like the list do
 // ---- the same panel, pointed at a world ------------------------------------
 
 test("a world cover loads, uploads and removes through the world routes", async () => {
-  (api.getWorld as any).mockResolvedValue({ meta: { cover: "" } });
-  (api.putWorldCover as any).mockResolvedValue({ ext: "png", v: "w1" });
-  (api.deleteWorldCover as any).mockResolvedValue({ ok: true });
-  (api.worldCoverUrl as any).mockImplementation(
-    (wid: string, o: any) => `/api/worlds/${wid}/cover?v=${o.v}`);
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({ meta: { cover: "" } }));
+  vi.mocked(api.putWorldCover).mockResolvedValue({ ext: "png", v: "w1" });
+  vi.mocked(api.deleteWorldCover).mockResolvedValue({ ok: true });
+  vi.mocked(api.worldCoverUrl).mockImplementation(
+    (wid, o) => `/api/worlds/${wid}/cover?v=${o?.v ?? ""}`);
 
   render(<CoverPanel scope={{ kind: "world", id: "realm" }} />);
   expect(await screen.findByText(/No cover set/)).toBeTruthy();
@@ -206,9 +207,9 @@ test("a world cover loads, uploads and removes through the world routes", async 
 test("a world cover that will not load falls back to the placeholder", async () => {
   // The case is a cover removed in another tab: a placeholder beside a live
   // "Remove cover" button is the same contradiction the broken-image glyph was.
-  (api.getWorld as any).mockResolvedValue({ meta: { cover: "w1" } });
-  (api.worldCoverUrl as any).mockImplementation(
-    (wid: string, o: any) => `/api/worlds/${wid}/cover?v=${o.v}`);
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({ meta: { cover: "w1" } }));
+  vi.mocked(api.worldCoverUrl).mockImplementation(
+    (wid, o) => `/api/worlds/${wid}/cover?v=${o?.v ?? ""}`);
 
   render(<CoverPanel scope={{ kind: "world", id: "realm" }} />);
   const img = await screen.findByAltText("World cover");

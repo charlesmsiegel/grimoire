@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WeatherWidget } from "./WeatherWidget";
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
+import type { SceneWeather } from "../api/types";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -14,7 +16,7 @@ vi.mock("../api/client", async () => {
   } };
 });
 
-const BASE = {
+const BASE: SceneWeather = {
   weather: { condition: "overcast", temperature: "cold", wind: "breeze" },
   source: { condition: "procedural", temperature: "procedural", wind: "procedural" },
   procedural: { condition: "overcast", temperature: "cold", wind: "breeze" },
@@ -37,11 +39,11 @@ beforeEach(() => {
   // "was not called" / "the first call" — both of which read a previous test's
   // calls without this.
   vi.clearAllMocks();
-  vi.mocked(api.getSceneWeather).mockResolvedValue(BASE as never);
-  vi.mocked(api.setWeatherOverride).mockResolvedValue({ id: "ovr-1" } as never);
+  vi.mocked(api.getSceneWeather).mockResolvedValue(BASE);
+  vi.mocked(api.setWeatherOverride).mockResolvedValue(fixture({ id: "ovr-1" }));
   vi.mocked(api.clearWeather).mockResolvedValue({ cleared: 1 });
   vi.mocked(api.resumeWeather).mockResolvedValue({ resumed: 1 });
-  vi.mocked(api.replaceWeatherOverride).mockResolvedValue({ id: "ovr-1" } as never);
+  vi.mocked(api.replaceWeatherOverride).mockResolvedValue(fixture({ id: "ovr-1" }));
 });
 
 test("reads as one line of the three axes", async () => {
@@ -53,19 +55,19 @@ test("renders nothing when there is no location or moment", async () => {
   // Matches how the neighbouring When and Location widgets degrade — no
   // placeholder, no error.
   vi.mocked(api.getSceneWeather).mockResolvedValue(
-    { weather: null, location: null, native: null } as never);
+    { weather: null, location: null, native: null });
   const { container } = render(<WeatherWidget cid="c" sid="s" />);
   await waitFor(() => expect(container).toBeEmptyDOMElement());
 });
 
 test("marks an authored axis and shows its note on hover", async () => {
-  vi.mocked(api.getSceneWeather).mockResolvedValue({
+  vi.mocked(api.getSceneWeather).mockResolvedValue(fixture({
     ...BASE,
     weather: { ...BASE.weather, condition: "blizzard" },
     source: { ...BASE.source, condition: "manual" },
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14", to: null,
               condition: "blizzard", note: "the Wintertide storm" }],
-  } as never);
+  }));
   render(<WeatherWidget cid="c" sid="s" />);
   const chip = await screen.findByTitle("the Wintertide storm");
   expect(chip).toHaveTextContent("Condition set");
@@ -83,13 +85,13 @@ test("an authored value off the table is still offered, marked as authored", asy
   // Overrides are deliberately not confined to the table, and the extractor
   // writes whatever the narration invented. Without this the select shows
   // blank and saving another axis quietly discards this one.
-  vi.mocked(api.getSceneWeather).mockResolvedValue({
+  vi.mocked(api.getSceneWeather).mockResolvedValue(fixture({
     ...BASE,
     weather: { ...BASE.weather, condition: "blizzard" },
     source: { ...BASE.source, condition: "manual" },
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
               to: null, condition: "blizzard" }],
-  } as never);
+  }));
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   const select = await screen.findByLabelText("Condition");
@@ -115,13 +117,13 @@ test("saving an axis writes an override for the chosen duration", async () => {
 test("leave to chance clears that axis rather than omitting it", async () => {
   // A user selecting it on an overridden axis means "stop overriding this";
   // omitting would let the setting appear to do nothing.
-  vi.mocked(api.getSceneWeather).mockResolvedValue({
+  vi.mocked(api.getSceneWeather).mockResolvedValue(fixture({
     ...BASE,
     weather: { ...BASE.weather, condition: "blizzard" },
     source: { ...BASE.source, condition: "manual" },
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
               to: null, condition: "blizzard" }],
-  } as never);
+  }));
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "__chance__" } });
@@ -140,11 +142,11 @@ test("Clear override appears only when something is authored", async () => {
 test("Clear override clears all three axes through the same operation", async () => {
   // Deleting only the winners would promote a shadowed span, so the sky would
   // change rather than return to generated.
-  vi.mocked(api.getSceneWeather).mockResolvedValue({
+  vi.mocked(api.getSceneWeather).mockResolvedValue(fixture({
     ...BASE, source: { ...BASE.source, condition: "manual" },
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
               to: null, condition: "blizzard" }],
-  } as never);
+  }));
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.click(await screen.findByRole("button", { name: "Clear override" }));
@@ -157,11 +159,11 @@ test("a suppressed axis offers Resume inheriting", async () => {
   // Without it the clear is a one-way door: the axis looks generated, so
   // Clear override does not appear, and setting a value only writes another
   // local exception rather than restoring the campaign-wide one.
-  vi.mocked(api.getSceneWeather).mockResolvedValue({
+  vi.mocked(api.getSceneWeather).mockResolvedValue(fixture({
     ...BASE,
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
               to: null, suppress: ["condition"] }],
-  } as never);
+  }));
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.click(await screen.findByRole("button", { name: "Resume inheriting" }));
@@ -184,7 +186,7 @@ test("the rest of today counts the blocks actually left, not a whole day", async
   // A fixed 5 would span a whole day *starting here*: at 09:00 the current
   // block is morning and only four remain, so five would also override the
   // following day's dawn.
-  vi.mocked(api.getSceneWeather).mockResolvedValue({ ...BASE, ordinal: 5 * 739781 + 1 } as never);
+  vi.mocked(api.getSceneWeather).mockResolvedValue(fixture({ ...BASE, ordinal: 5 * 739781 + 1 }));
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "clear" } });
@@ -197,13 +199,13 @@ test("the rest of today counts the blocks actually left, not a whole day", async
 test("changing only the note re-writes the authored axis", async () => {
   // Every draft axis still equals the resolved value, so a value comparison
   // alone would issue no request and the edit would vanish silently.
-  vi.mocked(api.getSceneWeather).mockResolvedValue({
+  vi.mocked(api.getSceneWeather).mockResolvedValue(fixture({
     ...BASE,
     weather: { ...BASE.weather, condition: "blizzard" },
     source: { ...BASE.source, condition: "manual" },
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
               to: null, condition: "blizzard", note: "old note" }],
-  } as never);
+  }));
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
@@ -247,7 +249,7 @@ test("a metadata-only save does not localize an inherited axis", async () => {
         condition: "blizzard", note: "old note" },
       { id: "inherited", location: "_default", from: "2026-06-14", to: null, wind: "gale" },
     ],
-  } as never);
+  });
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
@@ -262,13 +264,13 @@ test("a note-only edit replaces the span atomically instead of layering a duplic
   // One call, not delete-then-create: the pair leaves a window where the
   // original is gone and its replacement has not landed, so a failure destroys
   // an override the user was merely renaming.
-  vi.mocked(api.getSceneWeather).mockResolvedValue({
+  vi.mocked(api.getSceneWeather).mockResolvedValue(fixture({
     ...BASE,
     weather: { ...BASE.weather, condition: "blizzard" },
     source: { ...BASE.source, condition: "manual" },
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-10", to: null,
               condition: "blizzard", note: "old note" }],
-  } as never);
+  }));
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
@@ -288,13 +290,13 @@ test("changing the duration counts blocks from the moment on screen", async () =
   // A span that began days ago given "this block" here should end after *this*
   // block, keeping what it already covered — not shrink to one block back on
   // its original start date.
-  vi.mocked(api.getSceneWeather).mockResolvedValue({
+  vi.mocked(api.getSceneWeather).mockResolvedValue(fixture({
     ...BASE,
     weather: { ...BASE.weather, condition: "blizzard" },
     source: { ...BASE.source, condition: "manual" },
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-10", to: null,
               condition: "blizzard" }],
-  } as never);
+  }));
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(screen.getByLabelText("For"), { target: { value: "0" } });  // this block
@@ -321,7 +323,7 @@ test("the rest of today uses the server's count, not the ordinal", async () => {
   // At 01:00 the block is the previous date's night; deriving the count from
   // the ordinal alone would give one block with a whole day still ahead.
   vi.mocked(api.getSceneWeather).mockResolvedValue(
-    { ...BASE, native: "2026-06-15T01:00", blocks_left_today: 6 } as never);
+    fixture({ ...BASE, native: "2026-06-15T01:00", blocks_left_today: 6 }));
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "clear" } });

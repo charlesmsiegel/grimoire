@@ -25,8 +25,8 @@ const QUEUE = [
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.setCharacterImageDescription as any).mockResolvedValue({ ok: true });
-  (api.setEntityImageDescription as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.setCharacterImageDescription).mockResolvedValue({ ok: true });
+  vi.mocked(api.setEntityImageDescription).mockResolvedValue({ ok: true });
 });
 
 test("steps through the queue, saving each description against its own surface", async () => {
@@ -74,8 +74,8 @@ test("Skip writes nothing, so the image comes back next time", async () => {
 });
 
 test("a draft is asked for on whichever surface the image belongs to", async () => {
-  (api.draftCharacterImageDescription as any).mockResolvedValue({ description: "A drafted line." });
-  (api.draftEntityImageDescription as any).mockResolvedValue({ description: "Another line." });
+  vi.mocked(api.draftCharacterImageDescription).mockResolvedValue({ description: "A drafted line." });
+  vi.mocked(api.draftEntityImageDescription).mockResolvedValue({ description: "Another line." });
   render(<DescribeQueue scope={{ kind: "world", id: "w" }} wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
 
   fireEvent.click(screen.getByRole("button", { name: /Describe it for me/ }));
@@ -92,8 +92,8 @@ test("a draft is asked for on whichever surface the image belongs to", async () 
 });
 
 test("a campaign queue describes the library by name and drafts campaign-side", async () => {
-  (api.setCampaignImageDescription as any).mockResolvedValue({ ok: true });
-  (api.draftCampaignImageDescription as any).mockResolvedValue({ description: "A map." });
+  vi.mocked(api.setCampaignImageDescription).mockResolvedValue({ ok: true });
+  vi.mocked(api.draftCampaignImageDescription).mockResolvedValue({ description: "A map." });
   const lib = [{ kind: "campaign", id: "", vid: "", name: "coastline",
                  record_name: "Campaign library", url: "/img/lib" }];
   render(<DescribeQueue scope={{ kind: "campaign", id: "run" }} wid="w" queue={lib}
@@ -115,7 +115,7 @@ test("a campaign queue offers no draft for art whose bytes live in the world", a
 });
 
 test("a failed save keeps the image in the queue and says why", async () => {
-  (api.setCharacterImageDescription as any).mockRejectedValue({ detail: "image not found" });
+  vi.mocked(api.setCharacterImageDescription).mockRejectedValue({ detail: "image not found" });
   render(<DescribeQueue scope={{ kind: "world", id: "w" }} wid="w" queue={QUEUE} onClose={vi.fn()} onSaved={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 

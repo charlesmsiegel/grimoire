@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 test("stays collapsed and fetches nothing until opened", async () => {
-  (api.getImageUsage as any).mockResolvedValue(empty);
+  vi.mocked(api.getImageUsage).mockResolvedValue(empty);
   mount();
   expect(screen.getByRole("button", { name: "Used in…" })).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Used in" })).toBeNull();
@@ -46,7 +46,7 @@ test("stays collapsed and fetches nothing until opened", async () => {
 });
 
 test("lists every bucket's entries as chips after opening", async () => {
-  (api.getImageUsage as any).mockResolvedValue(report({
+  vi.mocked(api.getImageUsage).mockResolvedValue(report({
     characters: [{ scope: "world:realm", id: "seraphine", vid: "default", name: "avatar" }],
     pcs: [{ scope: "campaign:saltmarch", id: "mara", vid: "default", name: "avatar" }],
     entities: [{ scope: "world:realm", kind: "locations", id: "harbour", vid: "", name: "gallery_1" }],
@@ -69,7 +69,7 @@ test("two placements of one picture in one record version are two chips", async 
   // `avatar` and `gallery_1` of one version are distinct placements: a key that
   // left the placement name out would collide and React would drop one chip.
   const placed = { scope: "world:realm", id: "seraphine", vid: "default" };
-  (api.getImageUsage as any).mockResolvedValue(report({
+  vi.mocked(api.getImageUsage).mockResolvedValue(report({
     characters: [{ ...placed, name: "avatar" }, { ...placed, name: "gallery_1" }],
     pcs: [{ ...placed, scope: "campaign:saltmarch", id: "mara", name: "avatar" },
           { ...placed, scope: "campaign:saltmarch", id: "mara", name: "gallery_1" }],
@@ -91,7 +91,7 @@ test("two placements of one picture in one record version are two chips", async 
 });
 
 test("an image with no placements says so", async () => {
-  (api.getImageUsage as any).mockResolvedValue(empty);
+  vi.mocked(api.getImageUsage).mockResolvedValue(empty);
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Used in…" }));
   expect(await screen.findByText("No placements found.")).toHaveClass("field-hint");
@@ -119,7 +119,7 @@ const cases: [string, Partial<ImageUsageReport>, string, string][] = [
    "map", "/worlds/realm/images"],
 ];
 test.each(cases)("each bucket with a page navigates to it: %s", async (_n, part, label, path) => {
-  (api.getImageUsage as any).mockResolvedValue(report(part));
+  vi.mocked(api.getImageUsage).mockResolvedValue(report(part));
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Used in…" }));
   fireEvent.click(await screen.findByRole("button", { name: label }));
@@ -127,7 +127,7 @@ test.each(cases)("each bucket with a page navigates to it: %s", async (_n, part,
 });
 
 test("buckets with no page of their own render as spans", async () => {
-  (api.getImageUsage as any).mockResolvedValue(report({
+  vi.mocked(api.getImageUsage).mockResolvedValue(report({
     campaign_images: [{ cid: "saltmarch", name: "banner" }],
     covers: [{ scope: "campaign:saltmarch" }],
     collections: [{ wid: "realm", collection: "Maps" }],
@@ -142,7 +142,7 @@ test("buckets with no page of their own render as spans", async () => {
 });
 
 test("non-navigable chips render as spans", async () => {
-  (api.getImageUsage as any).mockResolvedValue(report({
+  vi.mocked(api.getImageUsage).mockResolvedValue(report({
     characters: [{ scope: "world:realm", id: "seraphine", vid: "v", name: "avatar" }],
   }));
   mount("img-1", false);
@@ -155,7 +155,7 @@ test("non-navigable chips render as spans", async () => {
 });
 
 test("works outside a router when it is not navigable", async () => {
-  (api.getImageUsage as any).mockResolvedValue(report({
+  vi.mocked(api.getImageUsage).mockResolvedValue(report({
     characters: [{ scope: "world:realm", id: "seraphine", vid: "v", name: "avatar" }],
   }));
   render(<ImageUsage imageId="img-1" navigable={false} />);
@@ -164,14 +164,14 @@ test("works outside a router when it is not navigable", async () => {
 });
 
 test("shows an error hint when the request fails", async () => {
-  (api.getImageUsage as any).mockRejectedValue({ detail: "usage unavailable" });
+  vi.mocked(api.getImageUsage).mockRejectedValue({ detail: "usage unavailable" });
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Used in…" }));
   expect(await screen.findByText("usage unavailable")).toHaveClass("field-hint");
 });
 
 test("an error offers a retry that clears it and asks again", async () => {
-  (api.getImageUsage as any)
+  vi.mocked(api.getImageUsage)
     .mockRejectedValueOnce({ detail: "usage unavailable" })
     .mockResolvedValueOnce(report({
       characters: [{ scope: "world:realm", id: "seraphine", vid: "v", name: "avatar" }],

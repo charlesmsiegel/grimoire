@@ -38,7 +38,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
   /** A Story Graph handoff (§16.5): drivers to focus, or an anchor. Applied
    *  once, against this chooser's first drivers read, and never across a
    *  campaign switch. */
-  seed?: ChooserSeed;
+  seed?: ChooserSeed | undefined;
 }) {
   // scene mode is picked first; nothing is fetched until then. "import" is
   // the one mode that never reaches the picker or the confirm form: an

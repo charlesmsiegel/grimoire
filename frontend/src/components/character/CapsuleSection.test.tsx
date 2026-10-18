@@ -18,7 +18,7 @@ vi.mock("../../api/client", async () => ({
 beforeEach(() => vi.clearAllMocks());
 
 function card(tags?: string[]): Card {
-  return { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara", tags } };
+  return { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara", ...(tags === undefined ? {} : { tags }) } };
 }
 
 function mount(opts: {
@@ -32,7 +32,7 @@ function mount(opts: {
 }
 
 test("shows the stored capsule and the card's tags once read", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "A gate-warden." });
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "A gate-warden." });
   mount({ tags: ["loyal", "wary"] });
   expect(await screen.findByText("A gate-warden.")).toBeTruthy();
   expect(screen.getByText("Tags: loyal, wary")).toBeTruthy();
@@ -40,8 +40,8 @@ test("shows the stored capsule and the card's tags once read", async () => {
 });
 
 test("Generate fills the draft and writes nothing until Save", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "" });
-  (api.generateCampaignCapsule as any).mockResolvedValue({
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "" });
+  vi.mocked(api.generateCampaignCapsule).mockResolvedValue({
     capsule: "A gate-warden who keeps every promise.", tags: ["loyal", "wary"],
   });
   const onSaveTags = vi.fn().mockResolvedValue(true);
@@ -58,8 +58,8 @@ test("Generate fills the draft and writes nothing until Save", async () => {
 });
 
 test("Save writes the capsule and, when they changed, the tags onto the card", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
-  (api.setCampaignCharacterTagline as any).mockImplementation(async (_c: string, _h: string, t: string) => ({ ok: true, tagline: t }));
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "Old." });
+  vi.mocked(api.setCampaignCharacterTagline).mockImplementation(async (_c: string, _h: string, t: string) => ({ ok: true, tagline: t }));
   const onSaveTags = vi.fn().mockResolvedValue(true);
   mount({ tags: ["loyal"], onSaveTags });
   await screen.findByText("Old.");
@@ -74,8 +74,8 @@ test("Save writes the capsule and, when they changed, the tags onto the card", a
 });
 
 test("Save leaves the card alone when only the capsule changed", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
-  (api.setCampaignCharacterTagline as any).mockImplementation(async (_c: string, _h: string, t: string) => ({ ok: true, tagline: t }));
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "Old." });
+  vi.mocked(api.setCampaignCharacterTagline).mockImplementation(async (_c: string, _h: string, t: string) => ({ ok: true, tagline: t }));
   const onSaveTags = vi.fn().mockResolvedValue(true);
   mount({ tags: ["loyal"], onSaveTags });
   await screen.findByText("Old.");
@@ -89,7 +89,7 @@ test("Save leaves the card alone when only the capsule changed", async () => {
 });
 
 test("Cancel discards the draft and restores what was stored", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Kept." });
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "Kept." });
   mount({ tags: ["loyal"] });
   await screen.findByText("Kept.");
 
@@ -102,7 +102,7 @@ test("Cancel discards the draft and restores what was stored", async () => {
 });
 
 test("a failed read disables Generate and Edit, so nothing can overwrite the unseen capsule", async () => {
-  (api.getCampaignCharacterTagline as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getCampaignCharacterTagline).mockRejectedValue(new Error("offline"));
   mount();
   expect(await screen.findByText(/Could not read the capsule/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
@@ -110,8 +110,8 @@ test("a failed read disables Generate and Edit, so nothing can overwrite the uns
 });
 
 test("an empty generated capsule is reported and installs no draft", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "" });
-  (api.generateCampaignCapsule as any).mockResolvedValue({ capsule: "  ", tags: [] });
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "" });
+  vi.mocked(api.generateCampaignCapsule).mockResolvedValue({ capsule: "  ", tags: [] });
   const onError = vi.fn();
   mount({ onError });
   await screen.findByText("No capsule yet.");
@@ -123,8 +123,8 @@ test("an empty generated capsule is reported and installs no draft", async () =>
 });
 
 test("Edit is disabled while a draft is being generated, so a late result cannot reopen a discarded form", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Kept." });
-  (api.generateCampaignCapsule as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "Kept." });
+  vi.mocked(api.generateCampaignCapsule).mockReturnValue(new Promise(() => {}));
   mount();
   await screen.findByText("Kept.");
 
@@ -135,8 +135,8 @@ test("Edit is disabled while a draft is being generated, so a late result cannot
 });
 
 test("a draft with no tags line keeps the card's tags rather than clearing them", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "" });
-  (api.generateCampaignCapsule as any).mockResolvedValue({ capsule: "A gate-warden.", tags: [] });
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "" });
+  vi.mocked(api.generateCampaignCapsule).mockResolvedValue({ capsule: "A gate-warden.", tags: [] });
   const onSaveTags = vi.fn().mockResolvedValue(true);
   mount({ tags: ["loyal", "wary"], onSaveTags });
   await screen.findByText("No capsule yet.");
@@ -150,8 +150,8 @@ test("a draft with no tags line keeps the card's tags rather than clearing them"
 });
 
 test("a refused tags save leaves the draft open rather than reporting it written", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
-  (api.setCampaignCharacterTagline as any).mockImplementation(async (_c: string, _h: string, t: string) => ({ ok: true, tagline: t }));
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "Old." });
+  vi.mocked(api.setCampaignCharacterTagline).mockImplementation(async (_c: string, _h: string, t: string) => ({ ok: true, tagline: t }));
   const onSaveTags = vi.fn().mockResolvedValue(false);
   mount({ tags: ["loyal"], onSaveTags });
   await screen.findByText("Old.");
@@ -166,8 +166,8 @@ test("a refused tags save leaves the draft open rather than reporting it written
 });
 
 test("a blank save shows the sentence the campaign now answers, not the blank", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Campaign's own." });
-  (api.setCampaignCharacterTagline as any).mockResolvedValue({ ok: true, tagline: "The library's sentence." });
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "Campaign's own." });
+  vi.mocked(api.setCampaignCharacterTagline).mockResolvedValue({ ok: true, tagline: "The library's sentence." });
   mount({ tags: [] });
   await screen.findByText("Campaign's own.");
 
@@ -180,9 +180,9 @@ test("a blank save shows the sentence the campaign now answers, not the blank", 
 });
 
 test("an error from a draft discarded by a version switch is not reported", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Kept." });
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "Kept." });
   let fail: (e: unknown) => void = () => {};
-  (api.generateCampaignCapsule as any).mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+  vi.mocked(api.generateCampaignCapsule).mockReturnValue(new Promise((_, reject) => { fail = reject; }));
   const onError = vi.fn();
   const { unmount } = mount({ onError });
   await screen.findByText("Kept.");
@@ -196,9 +196,9 @@ test("an error from a draft discarded by a version switch is not reported", asyn
 });
 
 test("an error from a save the section was discarded during is not reported", async () => {
-  (api.getCampaignCharacterTagline as any).mockResolvedValue({ tagline: "Old." });
+  vi.mocked(api.getCampaignCharacterTagline).mockResolvedValue({ tagline: "Old." });
   let fail: (e: unknown) => void = () => {};
-  (api.setCampaignCharacterTagline as any).mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+  vi.mocked(api.setCampaignCharacterTagline).mockReturnValue(new Promise((_, reject) => { fail = reject; }));
   const onError = vi.fn();
   const { unmount } = mount({ onError });
   await screen.findByText("Old.");

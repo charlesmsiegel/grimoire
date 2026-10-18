@@ -11,7 +11,7 @@ type Read = { rates: Record<string, PricingEntry>; unreadable: boolean } | null;
  *  Cancel goes back to reading, saves nothing, and tells the page (`onCancel`)
  *  so it can drop the Set rate address. */
 export function TokenRates({ addModel, onSaved, onCancel }:
-  { addModel?: string; onSaved: () => void; onCancel?: () => void }) {
+  { addModel?: string | undefined; onSaved: () => void; onCancel?: () => void }) {
   const [mode, setMode] = useState<"view" | "edit">(addModel ? "edit" : "view");
   const [read, setRead] = useState<Read>(null);
   const [asked, setAsked] = useState(0);

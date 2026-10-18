@@ -17,7 +17,7 @@ const conflict = (path: string, tool = "syncthing") =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getStoreConflicts as any).mockResolvedValue({ conflicts: [], truncated: false });
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({ conflicts: [], truncated: false });
 });
 
 test("a clean library says so, rather than rendering nothing", async () => {
@@ -26,7 +26,7 @@ test("a clean library says so, rather than rendering nothing", async () => {
 });
 
 test("each conflict is listed with its path and the tool that made it", async () => {
-  (api.getStoreConflicts as any).mockResolvedValue({
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({
     conflicts: [conflict("worlds/realm/lore/pact.sync-conflict-1.md"),
                 conflict("campaigns/saltmarch/locations/quay.md.orig", "merge")],
     truncated: false,
@@ -39,7 +39,7 @@ test("each conflict is listed with its path and the tool that made it", async ()
 });
 
 test("nothing is offered that would change a conflicted file", async () => {
-  (api.getStoreConflicts as any).mockResolvedValue({
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({
     conflicts: [conflict("worlds/realm/lore/pact.sync-conflict-1.md")], truncated: false,
   });
   render(<StoreConflictNotice />);
@@ -51,7 +51,7 @@ test("nothing is offered that would change a conflicted file", async () => {
 });
 
 test("a truncated scan says the list is not the whole story", async () => {
-  (api.getStoreConflicts as any).mockResolvedValue({
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({
     conflicts: [conflict("worlds/realm/lore/pact.sync-conflict-1.md")], truncated: true,
   });
   render(<StoreConflictNotice />);
@@ -59,8 +59,8 @@ test("a truncated scan says the list is not the whole story", async () => {
 });
 
 test("a scan that failed reports the failure instead of a clean bill", async () => {
-  (api.getStoreConflicts as any).mockRejectedValue(
-    new (ApiError as any)(500, "could not scan the store: denied"));
+  vi.mocked(api.getStoreConflicts).mockRejectedValue(
+    new (ApiError)(500, "could not scan the store: denied"));
   render(<StoreConflictNotice />);
   expect(await screen.findByText(/could not scan the store: denied/)).toBeInTheDocument();
   expect(screen.queryByText(/no conflicted copies/i)).toBeNull();
@@ -69,7 +69,7 @@ test("a scan that failed reports the failure instead of a clean bill", async () 
 test("Scan again re-reads the store", async () => {
   render(<StoreConflictNotice />);
   await screen.findByText(/no conflicted copies/i);
-  (api.getStoreConflicts as any).mockResolvedValue({
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({
     conflicts: [conflict("worlds/realm/lore/pact.sync-conflict-1.md")], truncated: false,
   });
   fireEvent.click(screen.getByRole("button", { name: /scan again/i }));
@@ -78,7 +78,7 @@ test("Scan again re-reads the store", async () => {
 });
 
 test("a truncated count is reported as a floor, not a total", async () => {
-  (api.getStoreConflicts as any).mockResolvedValue({
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({
     conflicts: [conflict("worlds/realm/lore/pact.sync-conflict-1.md")], truncated: true,
   });
   render(<StoreConflictNotice />);
@@ -86,7 +86,7 @@ test("a truncated count is reported as a floor, not a total", async () => {
 });
 
 test("a conflicted folder reads as a folder, not as zero bytes", async () => {
-  (api.getStoreConflicts as any).mockResolvedValue({
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({
     conflicts: [{ path: "worlds/Realm (conflicted copy 2026-01-01)",
                   name: "Realm (conflicted copy 2026-01-01)", tool: "dropbox",
                   kind: "directory", size: null, modified: "2026-01-01T00:00:00Z" }],

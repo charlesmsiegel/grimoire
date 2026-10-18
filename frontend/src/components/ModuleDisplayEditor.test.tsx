@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
-import { api } from "../api/client";
+import { api, type LayoutNode, type ModuleDetail } from "../api/client";
+import { fixture } from "../testkit/fixture";
 import { LayoutSection, MAX_LAYOUT_DEPTH, splice, ThemeSection } from "./ModuleDisplayEditor";
 
 vi.mock("../api/client", () => ({
@@ -10,7 +11,7 @@ vi.mock("../api/client", () => ({
   ApiError: class extends Error {},
 }));
 
-const PACK: any = {
+const PACK: ModuleDetail = fixture({
   id: "realm-system", source: "user",
   manifest: { id: "realm-system", name: "Realm System" },
   sheets: {
@@ -23,7 +24,7 @@ const PACK: any = {
   checks: {}, rules: [], content: [], errors: [],
   layout: { sheet_types: {} }, theme: {}, display_errors: [],
   layout_source: { sheet_types: { warden: { group: "attributes" } } },
-};
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -31,7 +32,7 @@ beforeEach(() => {
 });
 
 test("layout textarea seeds from layout_source and previews the selected type", async () => {
-  (api.putModuleLayout as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleLayout).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<LayoutSection pack={PACK} reload={vi.fn()} />);
   const ta = screen.getByLabelText("Layout JSON") as HTMLTextAreaElement;
   expect(ta.value).toContain('"warden"');
@@ -47,7 +48,7 @@ test("invalid JSON disables Save and shows a hint", () => {
 });
 
 test("dry-run display errors render as hints", async () => {
-  (api.putModuleLayout as any).mockResolvedValue({ ok: true, errors: [],
+  vi.mocked(api.putModuleLayout).mockResolvedValue({ ok: true, errors: [],
     display_errors: [{ source: "layout", sheet_type: "warden", message: "warden: unknown field 'ghost'" }] });
   render(<LayoutSection pack={PACK} reload={vi.fn()} />);
   fireEvent.change(screen.getByLabelText("Layout JSON"),
@@ -57,7 +58,7 @@ test("dry-run display errors render as hints", async () => {
 });
 
 test("theme controls drive the preview vars and save the token object", async () => {
-  (api.putModuleTheme as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleTheme).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ThemeSection pack={PACK} reload={vi.fn()} />);
   fireEvent.change(screen.getByLabelText("Dots"), { target: { value: "diamond" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -66,7 +67,7 @@ test("theme controls drive the preview vars and save the token object", async ()
 });
 
 // Depth of a spliced tree: how many nested containers sit under the root.
-function nesting(node: any): number {
+function nesting(node: LayoutNode): number {
   const kids = node?.column ?? node?.row;
   return Array.isArray(kids) && kids.length ? 1 + Math.max(...kids.map(nesting)) : 0;
 }
@@ -75,16 +76,33 @@ test("the preview depth cap bounds raw row/column nesting, not only use-chains",
   // #227 T18. The backend caps every structural step; the client used to
   // count only `use` hops, so a draft nesting bare columns far past the cap
   // recursed all the way down.
-  let node: any = { fields: ["strength"] };
+  let node: unknown = { fields: ["strength"] };
   for (let i = 0; i < MAX_LAYOUT_DEPTH * 4; i++) node = { column: [node] };
   const out = splice(node, {});
   expect(nesting(out)).toBeLessThanOrEqual(MAX_LAYOUT_DEPTH + 1);
   // and a `use` chain past the cap still ends in an empty node, as before
-  const fragments: Record<string, any> = {};
+  const fragments: Record<string, unknown> = {};
   for (let i = 0; i < MAX_LAYOUT_DEPTH * 2; i++) fragments[`f${i}`] = { use: `f${i + 1}` };
   fragments[`f${MAX_LAYOUT_DEPTH * 2}`] = { fields: ["strength"] };
   expect(splice({ use: "f0" }, fragments)).toEqual({});
   // a self-referencing fragment is still cut at the first repeat
   expect(splice({ use: "loop" }, { loop: { column: [{ use: "loop" }] } }))
     .toEqual({ column: [{}] });
+});
+
+test("the preview accepts JSON drafts without trusting their layout field types", () => {
+  expect(splice({ row: { invalid: true }, fields: ["strength", null, 7], title: {} }, {}))
+    .toEqual({ fields: ["strength"] });
+  expect(splice({ column: [null, "text", { derived: [false, "might"] }] }, {}))
+    .toEqual({ column: [{}, {}, { derived: ["might"] }] });
+});
+
+test("a malformed layout draft still reaches server validation unchanged", async () => {
+  vi.mocked(api.putModuleLayout).mockResolvedValue({ ok: false, errors: [], display_errors: [] });
+  render(<LayoutSection pack={PACK} reload={vi.fn()} />);
+  const draft = { sheet_types: { warden: { row: "unfinished" } }, fragments: 5 };
+  fireEvent.change(screen.getByLabelText("Layout JSON"), { target: { value: JSON.stringify(draft) } });
+  await vi.advanceTimersByTimeAsync(600);
+  expect(api.putModuleLayout).toHaveBeenCalledWith(PACK.id, draft, true);
+  expect(screen.getByText("Strength")).toBeInTheDocument();
 });

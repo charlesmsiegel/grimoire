@@ -36,9 +36,9 @@ export type PickerTarget =
   | { kind: "campaign"; name: string };
 
 type Group = { key: string; label: string;
-               images: { name: string; url: string; description?: string;
+               images: { name: string; url: string; description?: string | undefined;
                         /** Identity in the image store; absent for a legacy file. */
-                        imageId?: string | null; version?: string; described?: boolean }[] };
+                        imageId?: string | null | undefined; version?: string | undefined; described?: boolean | undefined }[] };
 
 /** A stored name derived from an uploaded file's own name.
  *

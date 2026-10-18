@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
  *  store went to the trouble of keeping. */
 export type ImageDescriptionEditorState = { dirty: boolean; busy: boolean };
 export function ImageDescriptionField({ name, value, onSave, onDraft, editor, onEdit, disabled, onEditorStateChange }: {
-  disabled?: boolean; onEdit?: () => void; editor?: ControlledDescriptionEditor;
+  disabled?: boolean; onEdit?: () => void; editor?: ControlledDescriptionEditor | undefined;
   /** Library owners enroll local editors in the common navigation guard. */
   onEditorStateChange?: (state: ImageDescriptionEditorState | null) => void;
   name: string;
@@ -115,7 +115,7 @@ export function ImageDescriptionField({ name, value, onSave, onDraft, editor, on
  *  A confirmed partial save therefore retains text and recovery controls. */
 export type ControlledDescriptionEditor = {
   text: string; onChange: (text: string) => void; onCancel: () => void;
-  busy: boolean; blocked?: boolean; onDraft?: () => void;
+  busy: boolean; blocked?: boolean; onDraft?: (() => void) | undefined;
 };
 function DescriptionEditor({ name, editor, onSave }: {
   name: string; editor: ControlledDescriptionEditor; onSave: (text: string) => Promise<void>;

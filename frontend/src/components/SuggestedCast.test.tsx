@@ -1,3 +1,5 @@
+import { fixture } from "../testkit/fixture";
+import type { Actor } from "../api/types";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SuggestedCast } from "./SuggestedCast";
 
@@ -11,6 +13,7 @@ vi.mock("../api/client", async () => {
   };
 });
 import { api } from "../api/client";
+import type { Suggestion } from "../api/types";
 
 const SUGGESTIONS = [
   { character: "mara", name: "Mara", mentioned_by: ["seraphine"] },
@@ -19,15 +22,15 @@ const SUGGESTIONS = [
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getSuggestions as any).mockResolvedValue(SUGGESTIONS);
-  (api.dismissSuggestion as any).mockResolvedValue({ ok: true });
-  (api.addToCast as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.getSuggestions).mockResolvedValue(SUGGESTIONS);
+  vi.mocked(api.dismissSuggestion).mockResolvedValue({ ok: true });
+  vi.mocked(api.addToCast).mockResolvedValue({ ok: true });
 });
 
 const NAMES: Record<string, string> = { seraphine: "Seraphine", mara: "Mara" };
-const CAST = [{ kind: "characters", id: "seraphine", role: "npc", name: "Seraphine" }] as any;
+const CAST = fixture<Actor[]>([{ kind: "characters", id: "seraphine", role: "npc", name: "Seraphine" }]);
 
-function renderStrip(props: Partial<{ cast: any; onCast: () => void }> = {}) {
+function renderStrip(props: Partial<{ cast: Actor[]; onCast: () => void }> = {}) {
   render(<SuggestedCast cid="c" sid="s" cast={props.cast ?? CAST}
                         nameOf={(id) => NAMES[id] ?? id} onCast={props.onCast} />);
 }
@@ -40,14 +43,14 @@ test("renders one chip per suggestion, with who mentioned them", async () => {
 });
 
 test("renders nothing when there are no suggestions", async () => {
-  (api.getSuggestions as any).mockResolvedValue([]);
+  vi.mocked(api.getSuggestions).mockResolvedValue([]);
   const { container } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);
   await waitFor(() => expect(api.getSuggestions).toHaveBeenCalled());
   expect(container).toBeEmptyDOMElement();
 });
 
 test("a failing fetch stays silent rather than blocking the panel", async () => {
-  (api.getSuggestions as any).mockRejectedValue({ detail: "nope" });
+  vi.mocked(api.getSuggestions).mockRejectedValue({ detail: "nope" });
   const { container } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);
   await waitFor(() => expect(api.getSuggestions).toHaveBeenCalled());
   expect(container).toBeEmptyDOMElement();
@@ -78,7 +81,7 @@ test("Dismiss posts the character id and refetches", async () => {
 });
 
 test("a failed Add surfaces the reason and leaves the chip in place", async () => {
-  (api.addToCast as any).mockRejectedValue({ detail: "already cast" });
+  vi.mocked(api.addToCast).mockRejectedValue({ detail: "already cast" });
   renderStrip();
   fireEvent.click(await screen.findByRole("button", { name: "Add Mara to the scene" }));
   expect(await screen.findByText("already cast")).toBeInTheDocument();
@@ -89,7 +92,7 @@ test("a changed cast rescans; the same cast re-rendered does not", async () => {
   // The scan reads the cards of who is cast, so the cast is the only thing
   // worth re-running for — and re-running for anything else is a request per
   // turn spent to be told the same thing.
-  const grown = [...CAST, { kind: "characters", id: "mara", role: "npc", name: "Mara" }] as any;
+  const grown = fixture<Actor[]>([...CAST, { kind: "characters", id: "mara", role: "npc", name: "Mara" }]);
   const { rerender } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);
   await waitFor(() => expect(api.getSuggestions).toHaveBeenCalledTimes(1));
   rerender(<SuggestedCast cid="c" sid="s" cast={[...CAST]} nameOf={(id) => id} />);
@@ -101,7 +104,7 @@ test("a changed cast rescans; the same cast re-rendered does not", async () => {
 
 test("a swap keeps the cast's size but still rescans", async () => {
   // The bug a length-keyed reload would have: one out, one in, no refetch.
-  const swapped = [{ kind: "characters", id: "winifred", role: "npc", name: "Winifred" }] as any;
+  const swapped = fixture<Actor[]>([{ kind: "characters", id: "winifred", role: "npc", name: "Winifred" }]);
   const { rerender } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);
   await waitFor(() => expect(api.getSuggestions).toHaveBeenCalledTimes(1));
   rerender(<SuggestedCast cid="c" sid="s" cast={swapped} />);
@@ -109,9 +112,9 @@ test("a swap keeps the cast's size but still rescans", async () => {
 });
 
 test("the row being acted on is the one that says so", async () => {
-  let release: (v: any) => void = () => {};
-  (api.addToCast as any).mockImplementation(() => new Promise((r) => { release = r; }));
-  (api.getSuggestions as any).mockResolvedValue([
+  let release: (v: Awaited<ReturnType<typeof api.addToCast>>) => void = () => {};
+  vi.mocked(api.addToCast).mockImplementation(() => new Promise((r) => { release = r; }));
+  vi.mocked(api.getSuggestions).mockResolvedValue([
     ...SUGGESTIONS.slice(0, 1),
     { character: "winifred", name: "Winifred", mentioned_by: ["mara"] },
   ]);
@@ -143,8 +146,8 @@ test("a double click seats the character once", async () => {
 test("a suggestion answering the previous scene never lands on this one", async () => {
   // The reader can switch scenes mid-flight; the stale answer must not paint,
   // or scene A's suggestions offer to cast people into scene B.
-  let release: (v: any) => void = () => {};
-  (api.getSuggestions as any)
+  let release: (v: Suggestion[]) => void = () => {};
+  vi.mocked(api.getSuggestions)
     .mockImplementationOnce(() => new Promise((r) => { release = r; }))
     .mockResolvedValueOnce([]);
   const { rerender, container } = render(<SuggestedCast cid="c" sid="s" cast={CAST} />);

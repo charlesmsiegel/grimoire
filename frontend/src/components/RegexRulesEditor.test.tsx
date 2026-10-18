@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { RegexRulesEditor } from "./RegexRulesEditor";
 import { api } from "../api/client";
 import type { RegexBundle, RegexEntry, RegexLayer, RegexRule } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -43,7 +44,7 @@ beforeEach(() => {
   vi.mocked(api.getRegex).mockReset();
   vi.mocked(api.putRegex).mockReset();
   vi.mocked(api.listConnections).mockReset().mockResolvedValue(
-    [{ id: "conn-a", name: "Local Llama" }] as never);
+    fixture([{ id: "conn-a", name: "Local Llama" }]));
   vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 afterEach(() => vi.restoreAllMocks());
@@ -432,7 +433,7 @@ test("Import… opens the dialog, and a landed import reloads the rules", async 
     index: 0, name: "Fix", verdict: "exact", notes: [], original: {},
     rule: { ...rule("x", { name: "Fix" }), id: undefined } as never,
   }] });
-  vi.mocked(api.importRegex).mockResolvedValue({} as never);
+  vi.mocked(api.importRegex).mockResolvedValue(fixture({}));
   fireEvent.change(await screen.findByLabelText("SillyTavern regex file"), { target: { files: [file] } });
   const before = vi.mocked(api.getRegex).mock.calls.length;
   serve({ rules: [rule("r-new", { name: "Fix" })], off: [] });

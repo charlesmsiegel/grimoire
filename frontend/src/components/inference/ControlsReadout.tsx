@@ -22,7 +22,7 @@ function spoken(name: string): string {
  *  sends no sampling for: the server then calls every control `n/a`, and that
  *  is one line, in the server's words, rather than ten. Draws nothing until a provider is chosen. */
 export function ControlsReadout({ presetId, provider, model, operation }:
-  { presetId: string; provider: string; model: string; operation?: "decide" }) {
+  { presetId: string; provider: string; model: string; operation?: "decide" | undefined }) {
   const [preview, setPreview] = useState<ControlsPreview | null>(null);
   const [error, setError] = useState<unknown>(null);
 
@@ -71,7 +71,7 @@ export function ControlsReadout({ presetId, provider, model, operation }:
  *  form of many rows would otherwise send one preview per row on load, for
  *  answers nobody unfolded. */
 export function WhatItSends(props: { presetId: string; provider: string; model: string;
-                                     operation?: "decide" }) {
+                                     operation?: "decide" | undefined }) {
   const [open, setOpen] = useState(false);
   return (
     <details className="what-it-sends" onToggle={(e) => setOpen(e.currentTarget.open)}>

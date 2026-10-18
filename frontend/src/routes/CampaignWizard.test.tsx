@@ -4,7 +4,7 @@ import CampaignWizard from "./CampaignWizard";
 
 const navigate = vi.fn();
 vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual<any>("react-router-dom");
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return { ...actual, useNavigate: () => navigate };
 });
 
@@ -33,30 +33,31 @@ vi.mock("../api/client", () => ({
     firstPost: vi.fn(),
   },
 }));
-import { api } from "../api/client";
+import { api, type CalendarConfig } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listWorlds as any).mockResolvedValue([{ id: "w1", name: "Realm", created: "", updated: "", counts: {} }]);
-  (api.listTags as any).mockResolvedValue({ t1: "rebel", t2: "scholar" });
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+  vi.mocked(api.listWorlds).mockResolvedValue([{ id: "w1", name: "Realm", created: "", updated: "", counts: {} }]);
+  vi.mocked(api.listTags).mockResolvedValue({ t1: "rebel", t2: "scholar" });
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.getCalendarProviders).mockResolvedValue({ providers: [
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
     { id: "my-custom-calendar", name: "My Custom Calendar" },
   ] });
-  (api.getCalendarConfig as any).mockResolvedValue({
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: false, stale_after_days: 30 });
-  (api.createCampaign as any).mockResolvedValue({ id: "run" });
-  (api.createCampaignPC as any).mockResolvedValue({ pc: "mara", version: "default" });
-  (api.createScene as any).mockResolvedValue({ id: "s1" });
-  (api.addToCast as any).mockResolvedValue({ ok: true });
-  (api.createEntity as any).mockResolvedValue({ id: "tavern" });
-  (api.availableGreetings as any).mockResolvedValue([]);
+    secondary: null, confirmed: false, stale_after_days: 30 }));
+  vi.mocked(api.createCampaign).mockResolvedValue({ id: "run" });
+  vi.mocked(api.createCampaignPC).mockResolvedValue({ pc: "mara", version: "default" });
+  vi.mocked(api.createScene).mockResolvedValue({ id: "s1" });
+  vi.mocked(api.addToCast).mockResolvedValue({ ok: true });
+  vi.mocked(api.createEntity).mockResolvedValue({ id: "tavern" });
+  vi.mocked(api.availableGreetings).mockResolvedValue(fixture([]));
   vi.mocked(api.previewGreetings).mockResolvedValue([]);
-  (api.startFromGreeting as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.startFromGreeting).mockResolvedValue(fixture({ ok: true }));
   vi.mocked(api.checkCampaignPCName).mockResolvedValue({ refusal: null });
-  (api.listModules as any).mockResolvedValue([
+  vi.mocked(api.listModules).mockResolvedValue([
     { id: "pool-basic", name: "Basic Pool", description: "", version: "1", source: "builtin", valid: true },
   ]);
 });
@@ -208,15 +209,15 @@ test("a failed wizard opener retries only unfinished speakers", async () => {
     { actor_ref: "characters:mara", speaker: "Mara", version: "default" },
   ];
   const narrator = { ...cast[0], content: "Rain falls." };
-  (api.opener as any).mockImplementationOnce(async (_cid: string, _sid: string,
-                                                _prompt: string, on: (event: unknown) => void) => {
+  vi.mocked(api.opener).mockImplementationOnce(async (_cid, _sid,
+                                                _prompt, on) => {
     on({ snapshot: cast });
     on({ speaker_done: narrator });
     on({ speaker_start: cast[1] });
     on({ delta: "unfinished" });
     on({ error: { kind: "rate_limit", detail: "Wait" } });
-  }).mockImplementationOnce(async (_cid: string, _sid: string,
-                             _prompt: string, on: (event: unknown) => void) => {
+  }).mockImplementationOnce(async (_cid, _sid,
+                             _prompt, on) => {
     on({ snapshot: cast });
     on({ speaker_done: { ...cast[1], content: "I wait." } });
     on({ done: true });
@@ -243,7 +244,7 @@ test("a failed wizard opener retries only unfinished speakers", async () => {
 });
 
 test("a world with PCs offers them in step 2; picking one seats it and skips PC creation", async () => {
-  (api.listPCs as any).mockResolvedValue([
+  vi.mocked(api.listPCs).mockResolvedValue([
     { id: "mara", name: "Mara", tags: ["rebel"], default_version: "default", versions: [] },
     { id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] },
   ]);
@@ -265,7 +266,7 @@ test("a world with PCs offers them in step 2; picking one seats it and skips PC 
 });
 
 test("deselecting the picked PC restores the new-character form", async () => {
-  (api.listPCs as any).mockResolvedValue([
+  vi.mocked(api.listPCs).mockResolvedValue([
     { id: "mara", name: "Mara", tags: [], default_version: "default", versions: [] },
   ]);
   renderWizard();
@@ -308,8 +309,8 @@ test("a first-run opener the model could not be reached for offers the recovery"
   // The likeliest place to meet an unreachable model is the wizard that just
   // asked you to configure one (#210) -- and it dropped the kind out of the
   // stream frame, so it read as a bare socket error.
-  (api.opener as any).mockImplementation(
-    async (_c: string, _s: string, _p: string, on: any) => {
+  vi.mocked(api.opener).mockImplementation(
+    async (_c, _s, _p, on) => {
       on({ error: { detail: "connection refused", kind: "network" } });
     });
   renderWizard(true);
@@ -329,9 +330,9 @@ test("the calendar picker opens on the world's own calendar, not on Gregorian", 
   // it is given as an explicit choice that overwrites the world's. Seeded from
   // the world, the reader can still pick something else; unseeded, a world set
   // to Hebrew quietly produced Gregorian campaigns forever.
-  (api.getCalendarConfig as any).mockResolvedValue({
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({
     primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: true, stale_after_days: 30 });
+    secondary: null, confirmed: true, stale_after_days: 30 }));
   renderWizard();
   await screen.findByText("Realm");
   await waitFor(() => expect(screen.getByLabelText("Calendar")).toHaveValue("hebrew"));
@@ -339,7 +340,7 @@ test("the calendar picker opens on the world's own calendar, not on Gregorian", 
 });
 
 test("a world with an unreadable calendar leaves the picker on its own default", async () => {
-  (api.getCalendarConfig as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.getCalendarConfig).mockRejectedValue(new Error("nope"));
   renderWizard();
   await screen.findByText("Realm");
   expect(screen.getByLabelText("Calendar")).toHaveValue("gregorian");
@@ -352,7 +353,7 @@ test("the world picker lists A-Z but still defaults to the most recent world", a
   // last -- and `listWorlds` answers newest-first, so that is its first entry.
   // Picking whichever world happens to sort first would be a choice made by
   // spelling.
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     { id: "w2", name: "Tidewrack", created: "", updated: "", counts: {} },
     { id: "w1", name: "Ashfall", created: "", updated: "", counts: {} },
   ]);
@@ -367,22 +368,22 @@ test("the world picker lists A-Z but still defaults to the most recent world", a
 test("switching worlds mid-flight keeps the world you landed on", async () => {
   // The seed is a controlled input the reader will commit. A slower answer for
   // the world they left must not overwrite the one they are looking at.
-  (api.listWorlds as any).mockResolvedValue([
+  vi.mocked(api.listWorlds).mockResolvedValue([
     { id: "w1", name: "Realm", created: "", updated: "", counts: {} },
     { id: "w2", name: "Saltmarch", created: "", updated: "", counts: {} },
   ]);
-  let releaseFirst: (v: unknown) => void = () => {};
-  const slow = new Promise((res) => { releaseFirst = res; });
-  (api.getCalendarConfig as any).mockImplementation((scope: { id: string }) =>
-    scope.id === "w1" ? slow : Promise.resolve({
+  let releaseFirst: (v: CalendarConfig) => void = () => {};
+  const slow = new Promise<CalendarConfig>((res) => { releaseFirst = res; });
+  vi.mocked(api.getCalendarConfig).mockImplementation((scope) =>
+    scope.id === "w1" ? slow : Promise.resolve(fixture({
       primary: { provider: "gregorian", region: "GB", custom_holidays: [], anchor: null },
-      secondary: null, confirmed: true, stale_after_days: 30 }));
+      secondary: null, confirmed: true, stale_after_days: 30 })));
   renderWizard();
   await screen.findByText("Realm");
   fireEvent.change(screen.getByLabelText("World"), { target: { value: "w2" } });
   await waitFor(() => expect(screen.getByLabelText("Holidays region")).toHaveValue("GB"));
-  releaseFirst({ primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
-                 secondary: null, confirmed: true, stale_after_days: 30 });
+  releaseFirst(fixture({ primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
+                         secondary: null, confirmed: true, stale_after_days: 30 }));
   await waitFor(() => expect(screen.getByLabelText("Calendar")).toHaveValue("gregorian"));
   expect(screen.getByLabelText("Holidays region")).toHaveValue("GB");
 });
@@ -545,7 +546,7 @@ test("a commit that fails after the campaign exists resumes it rather than makin
   // Create used to start every attempt with `createCampaign`, so a failure at
   // any later step left that campaign behind -- and the retry made the next one
   // beside it, `-2`, `-3`, one per click.
-  (api.createScene as any).mockRejectedValueOnce(new Error("the scene could not be written"));
+  vi.mocked(api.createScene).mockRejectedValueOnce(new Error("the scene could not be written"));
   renderWizard();
   await fillBackdropAndPC();
   fireEvent.change(screen.getByLabelText(/location name/i), { target: { value: "The Tavern" } });
@@ -563,7 +564,7 @@ test("a commit that fails after the campaign exists resumes it rather than makin
 });
 
 test("a location written before the failure is not written twice", async () => {
-  (api.createEntity as any).mockResolvedValueOnce({ id: "tavern" })
+  vi.mocked(api.createEntity).mockResolvedValueOnce({ id: "tavern" })
     .mockRejectedValueOnce(new Error("the second location could not be written"));
   renderWizard();
   await fillBackdropAndPC();
@@ -580,7 +581,7 @@ test("a location written before the failure is not written twice", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
   await screen.findByRole("heading", { name: /opening/i });
   expect(api.createCampaign).toHaveBeenCalledTimes(1);
-  expect((api.createEntity as any).mock.calls.map((c: any[]) => c[2].name))
+  expect(vi.mocked(api.createEntity).mock.calls.map((c) => c[2].name))
     .toEqual(["The Tavern", "The Quay", "The Quay"]);
 });
 
@@ -633,7 +634,7 @@ test("a PC refused at commit is renamed on step 2 and the retry reuses the campa
   // backdrop it was made from is no longer offered for editing -- Back from
   // step 2 is gone -- while the character is, because nothing was written for
   // it.
-  (api.createCampaignPC as any)
+  vi.mocked(api.createCampaignPC)
     .mockRejectedValueOnce({ status: 409, detail: "There is already a character called \"Mara\" in this campaign." })
     .mockResolvedValueOnce({ pc: "winifred", version: "default" });
   renderWizard();
@@ -653,7 +654,7 @@ test("a PC refused at commit is renamed on step 2 and the retry reuses the campa
 });
 
 test("once the character is written, step 3 offers no way back to edit it", async () => {
-  (api.createScene as any).mockRejectedValueOnce(new Error("the scene could not be written"));
+  vi.mocked(api.createScene).mockRejectedValueOnce(new Error("the scene could not be written"));
   renderWizard();
   await fillBackdropAndPC();
   fireEvent.click(await screen.findByRole("button", { name: /create campaign/i }));
@@ -679,11 +680,11 @@ async function toOpenerStep() {
 }
 
 test("a greeting that cannot open the campaign is named with its reason, not hidden in a tooltip", async () => {
-  (api.availableGreetings as any).mockResolvedValue([
+  vi.mocked(api.availableGreetings).mockResolvedValue(fixture([
     { id: "quay", name: "On the quay", available: true, reasons: [], pcless: false, location: "" },
     { id: "keep", name: "At the keep", available: false, reasons: ["needs the scholar tag"],
       pcless: false, location: "" },
-  ]);
+  ]));
   await toOpenerStep();
   expect(await screen.findByRole("button", { name: "On the quay" })).toBeEnabled();
   expect(screen.queryByRole("button", { name: "At the keep" })).toBeNull();
@@ -697,8 +698,7 @@ const CAST = [
 const PART = { ...CAST[1], content: "Rain falls on the quay." };
 
 function aWholeOpener() {
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string,
-                                                on: (e: unknown) => void) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p, on) => {
     on({ snapshot: CAST });
     on({ speaker_done: PART });
     on({ done: true });
@@ -709,7 +709,7 @@ test("Finish with a whole opener posts it as the scene's first post and opens th
   // It used to be thrown away: the reader paid for the preview and landed on
   // an empty scene.
   aWholeOpener();
-  (api.firstPost as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.firstPost).mockResolvedValue({ ok: true });
   await toOpenerStep();
   fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "Arrive" } });
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));
@@ -731,7 +731,7 @@ test("a whole opener can still be left behind, deliberately", async () => {
 
 test("an opener the scene refuses stays on screen with the reason", async () => {
   aWholeOpener();
-  (api.firstPost as any).mockRejectedValue({ status: 409, detail: "the scene already has posts" });
+  vi.mocked(api.firstPost).mockRejectedValue({ status: 409, detail: "the scene already has posts" });
   await toOpenerStep();
   fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "Arrive" } });
   fireEvent.click(screen.getByRole("button", { name: "Generate" }));

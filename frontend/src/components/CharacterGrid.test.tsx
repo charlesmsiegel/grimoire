@@ -32,6 +32,8 @@ vi.mock("../api/client", async () => {
   };
 });
 import { api } from "../api/client";
+import type { CharacterSummary, RosterEntry } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
 const WORLD = { kind: "world", id: "realm" } as const;
 const CAMPAIGN = { kind: "campaign", id: "run" } as const;
@@ -62,24 +64,24 @@ function renderGrid(props: Partial<Parameters<typeof CharacterGrid>[0]> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listCharacters as any).mockResolvedValue([row("seraphine", "Seraphine")]);
-  (api.listUndescribedImages as any).mockResolvedValue([]);
-  (api.countUndescribedImages as any).mockResolvedValue(0);
+  vi.mocked(api.listCharacters).mockResolvedValue([row("seraphine", "Seraphine")]);
+  vi.mocked(api.listUndescribedImages).mockResolvedValue([]);
+  vi.mocked(api.countUndescribedImages).mockResolvedValue(0);
   // Nothing remembered unless a test says so: every other test here is a first
   // visit, and a first visit paints after its read.
-  (api.rememberedCharacters as any).mockReturnValue(undefined);
-  (api.rememberedAppearances as any).mockReturnValue(undefined);
-  (api.listAppearances as any).mockResolvedValue([]);
-  (api.createCharacter as any).mockResolvedValue({ character: "rook", version: "default" });
-  (api.deleteCharacter as any).mockResolvedValue({ ok: true });
-  (api.importCharacter as any).mockResolvedValue({ character: "imp", version: "default" });
-  (api.readCharacter as any).mockResolvedValue({ meta: { id: "imp", name: "Imported" }, versions: [] });
-  (api.localizeImages as any).mockImplementation(
-    (_w: string, _c: string, _v: string, cb?: (e: any) => void) => {
+  vi.mocked(api.rememberedCharacters).mockReturnValue(undefined);
+  vi.mocked(api.rememberedAppearances).mockReturnValue(undefined);
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
+  vi.mocked(api.createCharacter).mockResolvedValue({ character: "rook", version: "default" });
+  vi.mocked(api.deleteCharacter).mockResolvedValue({ ok: true });
+  vi.mocked(api.importCharacter).mockResolvedValue({ character: "imp", version: "default" });
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({ meta: { id: "imp", name: "Imported" }, versions: [] }));
+  vi.mocked(api.localizeImages).mockImplementation(
+    (_w, _c, _v, cb) => {
       cb?.({ summary: { total: 1, localized: 1, skipped: 0, failed: 0, capped: false } });
       return Promise.resolve();
     });
-  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
+  vi.mocked(api.getCharacterTagline).mockResolvedValue({ tagline: "" });
   vi.mocked(api.parseCharacterText).mockReset();
   vi.mocked(api.refineCharacterText).mockReset();
 });
@@ -295,7 +297,7 @@ test("a card's portrait is a lazy, versioned thumbnail, never the original", asy
   // A world grid drew every card from its full-size original: the whole
   // roster's files moved and decoded at full resolution to fill tiles a few
   // hundred pixels wide, the ones below the fold included.
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     row("seraphine", "Seraphine", { has_avatar: true, avatar_v: "abc" }),
     row("mara", "Mara", { has_avatar: true }),
   ]);
@@ -315,7 +317,7 @@ test("a card's portrait is a lazy, versioned thumbnail, never the original", asy
 });
 
 test("a card shows the tagline and its badges, versions included", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     row("seraphine", "Seraphine", {
       tagline: "Counts the tide.", greeting_count: 2, gallery_count: 3, localized_count: 1,
       versions: [{ id: "default", name: "default" }, { id: "veiled", name: "veiled" }],
@@ -355,9 +357,9 @@ test("a character card is a link, which is what lets it open in a new tab", asyn
 test("a campaign's card points inside that campaign's world copy", async () => {
   // Filtered to the cast that has appeared by default (see the "appeared
   // filter" tests below) — give Seraphine a scene so the card renders at all.
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", version: "default", scenes: ["001--x"] },
-  ]);
+  ]));
   renderGrid({ scope: CAMPAIGN });
   expect(await screen.findByRole("link", { name: /Seraphine/ }))
     .toHaveAttribute("href", "/campaigns/run/world/characters/seraphine");
@@ -412,7 +414,7 @@ test("the default answer is a new character, and it sends no version name", asyn
 });
 
 test("a card can be added as a NAMED version of a character found by name", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     row("seraphine", "Seraphine"), row("mara", "Mara Tolliver"),
   ]);
   renderGrid();
@@ -447,8 +449,8 @@ test("many files skip the dialog and each becomes its own character", async () =
   // A dialog per file in a thirty-card drop is worse than no dialog.
   await waitFor(() => expect(api.importCharacter).toHaveBeenCalledTimes(2));
   expect(screen.queryByText(/^Import a\.json$/)).toBeNull();
-  expect((api.importCharacter as any).mock.calls[0][2]).toBe("json");
-  expect((api.importCharacter as any).mock.calls[1][2]).toBe("png");
+  expect(vi.mocked(api.importCharacter).mock.calls[0][2]).toBe("json");
+  expect(vi.mocked(api.importCharacter).mock.calls[1][2]).toBe("png");
 });
 
 test("a bulk import localizes each card and reports one summary", async () => {
@@ -461,7 +463,7 @@ test("a bulk import localizes each card and reports one summary", async () => {
 });
 
 test("a failing file is named and the rest still import", async () => {
-  (api.importCharacter as any)
+  vi.mocked(api.importCharacter)
     .mockRejectedValueOnce(new Error("not a card"))
     .mockResolvedValue({ character: "imp", version: "default" });
   renderGrid();
@@ -475,7 +477,7 @@ test("a failing file is named and the rest still import", async () => {
 // ---------------------------------------------------------------- taglines
 
 test("the derive button counts the characters with no tagline", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     row("a", "A", { tagline: "set" }), row("b", "B"), row("c", "C"),
   ]);
   renderGrid();
@@ -483,42 +485,42 @@ test("the derive button counts the characters with no tagline", async () => {
 });
 
 test("no derive button when every tagline is set", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("a", "Astrid", { tagline: "set" })]);
+  vi.mocked(api.listCharacters).mockResolvedValue([row("a", "Astrid", { tagline: "set" })]);
   renderGrid();
   await screen.findByText("Astrid");
   expect(screen.queryByRole("button", { name: /Derive taglines/ })).toBeNull();
 });
 
 test("the derive button is absent in campaign scope — a tagline is world-level", async () => {
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", version: "default", scenes: ["001--x"] },
-  ]);
+  ]));
   render(<MemoryRouter><Spy /><CharacterGrid scope={CAMPAIGN} wid="realm" /></MemoryRouter>);
   await screen.findByText("Seraphine");
   expect(screen.queryByRole("button", { name: /Derive taglines/ })).toBeNull();
 });
 
 test("deriving reports what was written and reloads the roster", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("b", "B")]);
-  (api.generateWorldTaglines as any).mockImplementation(
-    async (_w: string, cb: (e: any) => void) => {
+  vi.mocked(api.listCharacters).mockResolvedValue([row("b", "B")]);
+  vi.mocked(api.generateWorldTaglines).mockImplementation(
+    async (_w, cb) => {
       cb({ total: 1 });
       cb({ done: 1, name: "B", tagline: "a line" });
-      cb({ summary: true });
+      cb({ summary: { total: 1, written: 1, skipped: 0, stopped: false } });
     });
   renderGrid();
   fireEvent.click(await screen.findByRole("button", { name: /Derive taglines \(1\)/ }));
   await screen.findByText(/Derived 1 tagline/);
-  expect((api.listCharacters as any).mock.calls.length).toBeGreaterThan(1);
+  expect(vi.mocked(api.listCharacters).mock.calls.length).toBeGreaterThan(1);
 });
 
 test("the report says WHY nothing was written, not just how many", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("b", "B")]);
-  (api.generateWorldTaglines as any).mockImplementation(
-    async (_w: string, cb: (e: any) => void) => {
+  vi.mocked(api.listCharacters).mockResolvedValue([row("b", "B")]);
+  vi.mocked(api.generateWorldTaglines).mockImplementation(
+    async (_w, cb) => {
       cb({ total: 1 });
       cb({ done: 1, name: "B", skipped: "already had one" });
-      cb({ summary: true });
+      cb({ summary: { total: 1, written: 0, skipped: 1, stopped: false } });
     });
   renderGrid();
   fireEvent.click(await screen.findByRole("button", { name: /Derive taglines/ }));
@@ -526,9 +528,9 @@ test("the report says WHY nothing was written, not just how many", async () => {
 });
 
 test("a run stopped part-way still reports what landed and points at the re-run", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("b", "B"), row("c", "C")]);
-  (api.generateWorldTaglines as any).mockImplementation(
-    async (_w: string, cb: (e: any) => void) => {
+  vi.mocked(api.listCharacters).mockResolvedValue([row("b", "B"), row("c", "C")]);
+  vi.mocked(api.generateWorldTaglines).mockImplementation(
+    async (_w, cb) => {
       cb({ total: 2 });
       cb({ done: 1, name: "B", tagline: "a line" });
       cb({ error: { detail: "no key", kind: "config" } });
@@ -539,8 +541,8 @@ test("a run stopped part-way still reports what landed and points at the re-run"
 });
 
 test("a refusal before the stream starts is an error banner, not a report", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("b", "B")]);
-  (api.generateWorldTaglines as any).mockRejectedValue(new Error("no connection"));
+  vi.mocked(api.listCharacters).mockResolvedValue([row("b", "B")]);
+  vi.mocked(api.generateWorldTaglines).mockRejectedValue(new Error("no connection"));
   renderGrid();
   fireEvent.click(await screen.findByRole("button", { name: /Derive taglines/ }));
   await screen.findByText(/no connection/);
@@ -548,10 +550,10 @@ test("a refusal before the stream starts is an error banner, not a report", asyn
 });
 
 test("leaving aborts the run rather than leaving it spending a call per character", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("b", "B")]);
+  vi.mocked(api.listCharacters).mockResolvedValue([row("b", "B")]);
   let signal: AbortSignal | undefined;
-  (api.generateWorldTaglines as any).mockImplementation(
-    (_w: string, cb: (e: any) => void, s: AbortSignal) => {
+  vi.mocked(api.generateWorldTaglines).mockImplementation(
+    (_w, cb, s) => {
       signal = s;
       cb({ total: 1 });
       return new Promise(() => {});   // never settles: the run is still going
@@ -566,10 +568,10 @@ test("leaving aborts the run rather than leaving it spending a call per characte
 // ------------------------------------------------------- the appeared filter
 
 test("campaign scope opens on the cast that has appeared, and All reveals the rest", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("a", "Astrid"), row("b", "Bram")]);
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([row("a", "Astrid"), row("b", "Bram")]);
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "a", version: "default", scenes: ["001--x"] },
-  ]);
+  ]));
   render(<MemoryRouter><Spy /><CharacterGrid scope={CAMPAIGN} wid="realm" /></MemoryRouter>);
   await screen.findByText("Astrid");
   expect(screen.queryByText("Bram")).toBeNull();
@@ -578,13 +580,13 @@ test("campaign scope opens on the cast that has appeared, and All reveals the re
 });
 
 test("a roster entry with no scenes has not appeared", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("a", "Astrid")]);
+  vi.mocked(api.listCharacters).mockResolvedValue([row("a", "Astrid")]);
   // `transitions.leave` keeps the entry and empties its scenes, because the
   // entry is also what locks a version. The grid's question is "who is in this
   // campaign", and the answer to that is the scene list.
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "a", version: "default", scenes: [] },
-  ]);
+  ]));
   render(<MemoryRouter><Spy /><CharacterGrid scope={CAMPAIGN} wid="realm" /></MemoryRouter>);
   await screen.findByText(/No one has appeared in this campaign yet/);
 });
@@ -597,8 +599,8 @@ test("world scope offers no filter and reads no roster", async () => {
 });
 
 test("a failed roster read leaves the campaign grid unfiltered", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("a", "Astrid"), row("b", "Bram")]);
-  (api.listAppearances as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.listCharacters).mockResolvedValue([row("a", "Astrid"), row("b", "Bram")]);
+  vi.mocked(api.listAppearances).mockRejectedValue(new Error("nope"));
   render(<MemoryRouter><Spy /><CharacterGrid scope={CAMPAIGN} wid="realm" /></MemoryRouter>);
   // An unreadable roster must not hide the records it was meant to narrow.
   await screen.findByText("Astrid");
@@ -607,21 +609,21 @@ test("a failed roster read leaves the campaign grid unfiltered", async () => {
 });
 
 test("the grid waits for the roster instead of flashing every inherited character", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("a", "Astrid"), row("b", "Bram")]);
-  let release: (v: unknown) => void = () => {};
-  (api.listAppearances as any).mockReturnValue(new Promise((r) => { release = r; }));
+  vi.mocked(api.listCharacters).mockResolvedValue([row("a", "Astrid"), row("b", "Bram")]);
+  let release: (v: RosterEntry[]) => void = () => {};
+  vi.mocked(api.listAppearances).mockReturnValue(new Promise((r) => { release = r; }));
   render(<MemoryRouter><Spy /><CharacterGrid scope={CAMPAIGN} wid="realm" /></MemoryRouter>);
   expect(screen.queryByText("Bram")).toBeNull();
   expect(screen.queryByText(/No one has appeared/)).toBeNull();
-  await act(async () => { release([{ kind: "characters", id: "a", scenes: ["001--x"] }]); });
+  await act(async () => { release(fixture([{ kind: "characters", id: "a", scenes: ["001--x"] }])); });
   await screen.findByText("Astrid");
 });
 
 test("a character handed back by their own page is not swallowed by the filter", async () => {
-  (api.listCharacters as any).mockResolvedValue([row("a", "Astrid"), row("b", "Bram")]);
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([row("a", "Astrid"), row("b", "Bram")]);
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "a", version: "default", scenes: ["001--x"] },
-  ]);
+  ]));
   render(<MemoryRouter><Spy />
     <CharacterGrid scope={CAMPAIGN} wid="realm" reveal="b" />
   </MemoryRouter>);
@@ -632,7 +634,7 @@ test("a character handed back by their own page is not swallowed by the filter",
 // ------------------------------------------------------------- the toolbar
 
 test("the describe backlog is a button only when it has entries", async () => {
-  (api.countUndescribedImages as any).mockResolvedValue(1);
+  vi.mocked(api.countUndescribedImages).mockResolvedValue(1);
   renderGrid();
   await screen.findByRole("button", { name: /Describe images \(1\)/ });
 });
@@ -640,7 +642,7 @@ test("the describe backlog is a button only when it has entries", async () => {
 test("a visit labels the describe button from the count, not the whole backlog", async () => {
   // The backlog is every undescribed image with its record's name and URL --
   // downloaded in full on every visit, to print one number on a button.
-  (api.countUndescribedImages as any).mockResolvedValue(3);
+  vi.mocked(api.countUndescribedImages).mockResolvedValue(3);
   renderGrid();
   await screen.findByRole("button", { name: /Describe images \(3\)/ });
   expect(api.countUndescribedImages).toHaveBeenCalledWith(WORLD);
@@ -648,10 +650,10 @@ test("a visit labels the describe button from the count, not the whole backlog",
 });
 
 test("a campaign's grid counts its own backlog the same way", async () => {
-  (api.countUndescribedImages as any).mockResolvedValue(2);
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.countUndescribedImages).mockResolvedValue(2);
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", version: "default", scenes: ["001--x"] },
-  ]);
+  ]));
   render(<MemoryRouter><Spy /><CharacterGrid scope={CAMPAIGN} wid="realm" /></MemoryRouter>);
   await screen.findByRole("button", { name: /Describe images \(2\)/ });
   expect(api.countUndescribedImages).toHaveBeenCalledWith(CAMPAIGN);
@@ -659,18 +661,18 @@ test("a campaign's grid counts its own backlog the same way", async () => {
 });
 
 test("opening the describe queue is what fetches it, and a save recounts", async () => {
-  (api.countUndescribedImages as any).mockResolvedValue(1);
-  (api.listUndescribedImages as any).mockResolvedValue([
+  vi.mocked(api.countUndescribedImages).mockResolvedValue(1);
+  vi.mocked(api.listUndescribedImages).mockResolvedValue([
     { kind: "characters", id: "seraphine", vid: "default", name: "avatar",
       record_name: "Seraphine", url: "/img/seraphine/avatar" },
   ]);
-  (api.setCharacterImageDescription as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.setCharacterImageDescription).mockResolvedValue({ ok: true });
   renderGrid();
   fireEvent.click(await screen.findByRole("button", { name: /Describe images \(1\)/ }));
   await screen.findByText(/Describing 1 \/ 1 — Seraphine/);
   expect(api.listUndescribedImages).toHaveBeenCalledWith(WORLD);
-  (api.countUndescribedImages as any).mockClear();
-  (api.countUndescribedImages as any).mockResolvedValue(0);
+  vi.mocked(api.countUndescribedImages).mockClear();
+  vi.mocked(api.countUndescribedImages).mockResolvedValue(0);
   fireEvent.click(screen.getByRole("button", { name: "No description" }));
   await waitFor(() => expect(api.countUndescribedImages).toHaveBeenCalledWith(WORLD));
   await waitFor(() => expect(screen.queryByRole("button", { name: /Describe images/ })).toBeNull());
@@ -683,7 +685,7 @@ test("an empty backlog shows no button", async () => {
 });
 
 test("checking chub links lists the unlinked versions and opens one on click", async () => {
-  (api.findChubUnlinked as any).mockResolvedValue({
+  vi.mocked(api.findChubUnlinked).mockResolvedValue({
     versions: [{ character: "mara", character_name: "Mara", version: "futa", version_name: "futa" }],
   });
   renderGrid();
@@ -695,22 +697,22 @@ test("checking chub links lists the unlinked versions and opens one on click", a
 });
 
 test("checking chub links with none unlinked says so", async () => {
-  (api.findChubUnlinked as any).mockResolvedValue({ versions: [] });
+  vi.mocked(api.findChubUnlinked).mockResolvedValue({ versions: [] });
   renderGrid();
   fireEvent.click(await screen.findByRole("button", { name: "Check chub.ai links" }));
   await screen.findByText(/All versions are linked/);
 });
 
 test("an empty world says what to do about it", async () => {
-  (api.listCharacters as any).mockResolvedValue([]);
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
   renderGrid();
   await screen.findByText(/No characters yet/);
 });
 
 test("world-only tooling is absent in campaign scope", async () => {
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", version: "default", scenes: ["001--x"] },
-  ]);
+  ]));
   render(<MemoryRouter><Spy /><CharacterGrid scope={CAMPAIGN} wid="realm" /></MemoryRouter>);
   await screen.findByText("Seraphine");
   expect(screen.queryByRole("button", { name: "Import card" })).toBeNull();
@@ -724,11 +726,11 @@ test("a revisit paints the remembered rows on its first render, then the fresh o
   // A world seen before used to open on an empty grid for as long as its
   // read took. The api client remembers the last answer; the grid paints it
   // at once and replaces it wholesale with the read it makes anyway.
-  (api.rememberedCharacters as any).mockImplementation(
-    (sc: { kind: string; id: string }) =>
+  vi.mocked(api.rememberedCharacters).mockImplementation(
+    (sc) =>
       (sc.kind === "world" && sc.id === "realm" ? [row("mara", "Mara")] : undefined));
-  let land: (rows: unknown) => void = () => {};
-  (api.listCharacters as any).mockReturnValue(new Promise((r) => { land = r; }));
+  let land: (rows: CharacterSummary[]) => void = () => {};
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise((r) => { land = r; }));
   renderGrid();
   // Before any await: the read has not landed, and the cast is already there.
   expect(screen.getByText("Mara")).toBeInTheDocument();
@@ -739,10 +741,10 @@ test("a revisit paints the remembered rows on its first render, then the fresh o
 });
 
 test("remembered rows are asked for by the grid's own scope, never another's", async () => {
-  (api.rememberedCharacters as any).mockImplementation(
-    (sc: { kind: string; id: string }) =>
+  vi.mocked(api.rememberedCharacters).mockImplementation(
+    (sc) =>
       (sc.kind === "world" && sc.id === "realm" ? [row("mara", "Mara")] : undefined));
-  (api.listCharacters as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise(() => {}));
   // Same id, other kind: a campaign called "realm" is not the world "realm".
   render(<MemoryRouter><Spy />
     <CharacterGrid scope={{ kind: "campaign", id: "realm" }} wid="realm" />
@@ -760,7 +762,7 @@ test("a scope switch drops the old cast in the same render, remembered or not", 
   const view = render(
     <MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
   await screen.findByText("Seraphine");
-  (api.listCharacters as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise(() => {}));
   view.rerender(
     <MemoryRouter><Spy />
       <CharacterGrid scope={{ kind: "world", id: "saltmarch" }} wid="saltmarch" />
@@ -777,9 +779,9 @@ test("a switch to a remembered scope paints that scope's rows at once", async ()
   const view = render(
     <MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
   await screen.findByText("Seraphine");
-  (api.rememberedCharacters as any).mockImplementation(
-    (sc: { kind: string; id: string }) => (sc.id === "saltmarch" ? [row("winifred", "Winifred")] : undefined));
-  (api.listCharacters as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.rememberedCharacters).mockImplementation(
+    (sc) => (sc.id === "saltmarch" ? [row("winifred", "Winifred")] : undefined));
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise(() => {}));
   view.rerender(
     <MemoryRouter><Spy />
       <CharacterGrid scope={{ kind: "world", id: "saltmarch" }} wid="saltmarch" />
@@ -794,8 +796,8 @@ test("a switch to a remembered scope paints that scope's rows at once", async ()
 });
 
 test("a revalidation that fails takes the remembered rows down and says why", async () => {
-  (api.rememberedCharacters as any).mockReturnValue([row("mara", "Mara")]);
-  (api.listCharacters as any).mockRejectedValue(new Error("store unreachable"));
+  vi.mocked(api.rememberedCharacters).mockReturnValue([row("mara", "Mara")]);
+  vi.mocked(api.listCharacters).mockRejectedValue(new Error("store unreachable"));
   renderGrid();
   expect(screen.getByText("Mara")).toBeInTheDocument();
   await screen.findByText(/store unreachable/);
@@ -803,8 +805,8 @@ test("a revalidation that fails takes the remembered rows down and says why", as
 });
 
 test("a first visit claims nothing about the roster until its read lands", async () => {
-  let land: (rows: unknown) => void = () => {};
-  (api.listCharacters as any).mockReturnValue(new Promise((r) => { land = r; }));
+  let land: (rows: CharacterSummary[]) => void = () => {};
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise((r) => { land = r; }));
   renderGrid();
   expect(screen.queryByText(/No characters yet/)).toBeNull();
   await act(async () => { land([]); });
@@ -812,12 +814,12 @@ test("a first visit claims nothing about the roster until its read lands", async
 });
 
 test("a campaign revisit filters by the remembered roster on its first render", async () => {
-  (api.rememberedCharacters as any).mockReturnValue([row("a", "Astrid"), row("b", "Bram")]);
-  (api.rememberedAppearances as any).mockReturnValue([
+  vi.mocked(api.rememberedCharacters).mockReturnValue([row("a", "Astrid"), row("b", "Bram")]);
+  vi.mocked(api.rememberedAppearances).mockReturnValue(fixture([
     { kind: "characters", id: "a", version: "default", scenes: ["001--x"] },
-  ]);
-  (api.listCharacters as any).mockReturnValue(new Promise(() => {}));
-  (api.listAppearances as any).mockReturnValue(new Promise(() => {}));
+  ]));
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.listAppearances).mockReturnValue(new Promise(() => {}));
   render(<MemoryRouter><Spy /><CharacterGrid scope={CAMPAIGN} wid="realm" /></MemoryRouter>);
   expect(screen.getByText("Astrid")).toBeInTheDocument();
   expect(screen.queryByText("Bram")).toBeNull();
@@ -827,8 +829,8 @@ test("a campaign revisit filters by the remembered roster on its first render", 
 });
 
 test("the grid says when its list has landed, and not before", async () => {
-  let land: (rows: unknown) => void = () => {};
-  (api.listCharacters as any).mockReturnValue(new Promise((r) => { land = r; }));
+  let land: (rows: CharacterSummary[]) => void = () => {};
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise((r) => { land = r; }));
   const onListed = vi.fn();
   renderGrid({ onListed });
   expect(onListed).not.toHaveBeenCalled();
@@ -847,14 +849,14 @@ test("a revalidation that confirms the painted rows re-renders no card", async (
     row("seraphine", "Seraphine", { has_avatar: true, avatar_v: "a1" }),
     row("mara", "Mara", { has_avatar: true, avatar_v: "b2" }),
   ];
-  (api.rememberedCharacters as any).mockReturnValue(rows);
-  (api.listCharacters as any).mockResolvedValue(JSON.parse(JSON.stringify(rows)));
-  (api.countUndescribedImages as any).mockResolvedValue(4);
-  (thumbSet as any).mockClear();
+  vi.mocked(api.rememberedCharacters).mockReturnValue(rows);
+  vi.mocked(api.listCharacters).mockResolvedValue(JSON.parse(JSON.stringify(rows)));
+  vi.mocked(api.countUndescribedImages).mockResolvedValue(4);
+  vi.mocked(thumbSet).mockClear();
   renderGrid();
   await screen.findByRole("button", { name: /Describe images \(4\)/ });
   expect(api.listCharacters).toHaveBeenCalled();
-  expect((thumbSet as any).mock.calls.length).toBe(2);
+  expect(vi.mocked(thumbSet).mock.calls.length).toBe(2);
 });
 
 test("a revalidation that changes one card re-renders that card", async () => {
@@ -862,15 +864,15 @@ test("a revalidation that changes one card re-renders that card", async () => {
     row("seraphine", "Seraphine", { has_avatar: true, avatar_v: "a1" }),
     row("mara", "Mara", { has_avatar: true, avatar_v: "b2" }),
   ];
-  (api.rememberedCharacters as any).mockReturnValue(rows);
+  vi.mocked(api.rememberedCharacters).mockReturnValue(rows);
   const fresh = JSON.parse(JSON.stringify(rows));
   fresh[1].avatar_v = "b3";
-  (api.listCharacters as any).mockResolvedValue(fresh);
-  (thumbSet as any).mockClear();
+  vi.mocked(api.listCharacters).mockResolvedValue(fresh);
+  vi.mocked(thumbSet).mockClear();
   const { container } = renderGrid();
   await waitFor(() => expect(container.querySelectorAll(".char-card-avatar")[1].getAttribute("src"))
     .toContain("v=b3"));
-  expect((thumbSet as any).mock.calls.length).toBe(3);
+  expect(vi.mocked(thumbSet).mock.calls.length).toBe(3);
 });
 
 test("a long roster paints its first cards at once and the rest right after", async () => {
@@ -878,8 +880,8 @@ test("a long roster paints its first cards at once and the rest right after", as
   // used to wait for the last. The first commit draws a screenful; the rest
   // follow once that has painted.
   const many = Array.from({ length: 40 }, (_, i) => row(`c${i}`, `Card ${i}`));
-  (api.rememberedCharacters as any).mockReturnValue(many);
-  (api.listCharacters as any).mockResolvedValue(many);
+  vi.mocked(api.rememberedCharacters).mockReturnValue(many);
+  vi.mocked(api.listCharacters).mockResolvedValue(many);
   const { container } = renderGrid();
   const first = container.querySelectorAll(".char-card").length;
   expect(first).toBeGreaterThan(0);
@@ -892,7 +894,7 @@ test("a long roster paints its first cards at once and the rest right after", as
 
 test("the rest of a long roster still arrives when it came from the read, not memory", async () => {
   const many = Array.from({ length: 40 }, (_, i) => row(`c${i}`, `Card ${i}`));
-  (api.listCharacters as any).mockResolvedValue(many);
+  vi.mocked(api.listCharacters).mockResolvedValue(many);
   renderGrid();
   await screen.findByText("Card 39");
 });

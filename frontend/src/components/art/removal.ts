@@ -21,7 +21,7 @@ export function slotPhrase(name: string, primaryLabel?: string): string {
 }
 
 export type RemovalSubject =
-  | { surface: "record"; scope: "world" | "campaign"; record: string; name: string; primaryLabel?: string }
+  | { surface: "record"; scope: "world" | "campaign"; record: string; name: string; primaryLabel?: string | undefined }
   | { surface: "campaign-library"; inherited: boolean; name: string }
   | { surface: "world-library"; name: string };
 

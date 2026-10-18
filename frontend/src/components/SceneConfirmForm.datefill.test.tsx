@@ -8,6 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { SceneConfirmForm } from "./SceneConfirmForm";
 import type { SceneDraft } from "./sceneDraft";
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -32,13 +33,13 @@ const MONTHS_5786 = [
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getCampaignClock as any).mockResolvedValue(
-    { now: "5786-Kislev-25", friendly: "25 Kislev 5786", log: [] });
-  (api.getCalendarMonths as any).mockResolvedValue({ months: MONTHS_5786 });
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listCampaignPCs as any).mockResolvedValue([]);
-  (api.listAppearances as any).mockResolvedValue([]);
+  vi.mocked(api.getCampaignClock).mockResolvedValue(
+    fixture({ now: "5786-Kislev-25", friendly: "25 Kislev 5786", log: [] }));
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: MONTHS_5786 });
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([]);
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
 });
 
 function renderForm(draft: SceneDraft = DRAFT) {

@@ -21,8 +21,9 @@ vi.mock("../api/client", async () => (await import("../testkit/campaignMocks")).
 vi.mock("../components/PostImagePicker", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.PostImagePicker());
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
-import { api } from "../api/client";
+import { api, type ScenePage } from "../api/client";
 import { installCampaignMocks, ONE_SCENE, renderCampaign } from "../testkit/campaignHarness";
+import { fixture } from "../testkit/fixture";
 
 beforeEach(installCampaignMocks);
 
@@ -31,11 +32,11 @@ function press(key: string, init: Partial<KeyboardEventInit> = {}, on: Window | 
   fireEvent.keyDown(on, { key, ...init });
 }
 
-const ONE_EXCHANGE = { meta: {}, messages: [
-  { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] };
+const ONE_EXCHANGE = fixture<ScenePage>({ meta: {}, messages: [
+  { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
 
 test("the send chord reaches the turn from outside the composer", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
   fireEvent.change(composer(), { target: { value: "hello" } });
@@ -54,7 +55,7 @@ test("the send chord reaches the turn from outside the composer", async () => {
 });
 
 test("the send chord sends once, not once per listener, from inside the composer", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
   fireEvent.change(composer(), { target: { value: "hello" } });
@@ -68,8 +69,8 @@ test("the send chord sends once, not once per listener, from inside the composer
 // added now sits outside the record already taken of it. A chord that still
 // sent would put one there (PR #400 review).
 test("the send chord is inert on a scene already absorbed", async () => {
-  (api.listScenes as any).mockResolvedValue(
-    [{ id: "s1", title: "Old", model: "", created: "", updated: "", done: true }]);
+  vi.mocked(api.listScenes).mockResolvedValue(
+    [{ id: "s1", title: "Old", model: "", created: "", updated: "", date: "", done: true }]);
   renderCampaign();
   await screen.findByText(/scene complete/i);
   press("Enter", { metaKey: true });
@@ -78,7 +79,7 @@ test("the send chord is inert on a scene already absorbed", async () => {
 });
 
 test("N opens the new-scene chooser", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
   press("n");
@@ -89,7 +90,7 @@ test("N opens the new-scene chooser", async () => {
 // The whole reason the dispatcher asks about focus: a scene is written in
 // prose, and half the alphabet is a shortcut somewhere.
 test("a letter typed into the composer is prose, not a shortcut", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
   composer().focus();
@@ -102,8 +103,8 @@ test("a letter typed into the composer is prose, not a shortcut", async () => {
 });
 
 test("R opens the reroll box on the reply the ↻ button hangs off", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue(ONE_EXCHANGE);
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue(ONE_EXCHANGE);
   renderCampaign();
   await screen.findByText("old reply");
   press("r");
@@ -120,8 +121,8 @@ test("R opens the reroll box on the reply the ↻ button hangs off", async () =>
 // at the same index, and Save would overwrite what was just generated. Same
 // guard `pickAlternate` takes, for the same reason (PR #400 review).
 test("R is inert while an edit form is open", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue(ONE_EXCHANGE);
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue(ONE_EXCHANGE);
   renderCampaign();
   await screen.findByText("old reply");
   fireEvent.click(screen.getAllByTitle("Edit message")[1]);   // the assistant post
@@ -136,8 +137,8 @@ test("R is inert while an edit form is open", async () => {
 // `send()` from the window, each reading the same render's `busy === false`,
 // each entering `runStream`. Two turns racing one scene (PR #400 review).
 test("the send chord does not fire alongside an inline action that owns Enter", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue(ONE_EXCHANGE);
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue(ONE_EXCHANGE);
   renderCampaign();
   await screen.findByText("old reply");
   press("r");
@@ -152,8 +153,8 @@ test("the send chord does not fire alongside an inline action that owns Enter", 
 // racing a rename is exactly what `renamesInFlight` exists to stop -- both
 // handlers read it as 0 in the render the chord lands on.
 test("the send chord does not fire alongside a scene rename either", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.renameScene as any).mockResolvedValue({ id: "s1", title: "Low tide" });
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.renameScene).mockResolvedValue({ id: "s1", title: "Low tide" });
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
   // Two rename affordances render (the scene bar and the scene head); either
@@ -172,8 +173,8 @@ test("the send chord does not fire alongside a scene rename either", async () =>
 // be stricter than the Send button beside it -- the exact fault this review
 // found twice in my Escape guards.
 test("the send chord still works while an edit form is open", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue(ONE_EXCHANGE);
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene).mockResolvedValue(ONE_EXCHANGE);
   renderCampaign();
   await screen.findByText("old reply");
   fireEvent.click(screen.getAllByTitle("Edit message")[1]);
@@ -185,7 +186,7 @@ test("the send chord still works while an edit form is open", async () => {
 });
 
 test("R is inert when there is no reply to reroll", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
   press("r");
@@ -193,12 +194,12 @@ test("R is inert when there is no reply to reroll", async () => {
 });
 
 test("T retries the turn that failed, and only while it has failed", async () => {
-  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any)
-    .mockResolvedValueOnce({ meta: {}, messages: [] })
-    .mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hello" }] });
-  (api.chat as any).mockImplementation(async (_c: string, _s: string, _t: string, onEvent: any) => {
-    onEvent({ error: { detail: "boom" } });
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+  vi.mocked(api.getScene)
+    .mockResolvedValueOnce(fixture({ meta: {}, messages: [] }))
+    .mockResolvedValue(fixture({ meta: {}, messages: [{ role: "user", content: "hello" }] }));
+  vi.mocked(api.chat).mockImplementation(async (_c, _s, _t, onEvent) => {
+    onEvent(fixture({ error: { detail: "boom" } }));
   });
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
@@ -215,8 +216,8 @@ test("T retries the turn that failed, and only while it has failed", async () =>
 
 describe("the help sheet, in a scene", () => {
   test("lists what this scene binds beside what works anywhere", async () => {
-    (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-    (api.getScene as any).mockResolvedValue(ONE_EXCHANGE);
+    vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
+    vi.mocked(api.getScene).mockResolvedValue(ONE_EXCHANGE);
     renderCampaign();
     await screen.findByText("old reply");
     press("?");
@@ -230,7 +231,7 @@ describe("the help sheet, in a scene", () => {
   // says it exists — so the sheet is offered by the one surface that answers
   // "what can I do here" without being asked.
   test("is reachable from the palette, for the reader who does not know ?", async () => {
-    (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+    vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
     renderCampaign();
     await screen.findByRole("heading", { name: /^Old$/ });
     press("k", { metaKey: true });
@@ -246,7 +247,7 @@ describe("the help sheet, in a scene", () => {
   // this, ⌘K would open a palette nobody can see, take focus into its hidden
   // search box, and answer the next Escape (PR #400 review).
   test("⌘K replaces it rather than opening behind it", async () => {
-    (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+    vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
     renderCampaign();
     await screen.findByRole("heading", { name: /^Old$/ });
     press("?");
@@ -261,7 +262,7 @@ describe("the help sheet, in a scene", () => {
   // behind it (PR #400 review). Only reachable when something WAS focused --
   // with focus on `<body>`, restoring it is a no-op and the bug hides.
   test("yielding to ⌘K leaves focus in the palette, not where the sheet found it", async () => {
-    (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+    vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
     renderCampaign();
     await screen.findByRole("heading", { name: /^Old$/ });
     screen.getByRole("button", { name: /\+ new scene/i }).focus();
@@ -274,7 +275,7 @@ describe("the help sheet, in a scene", () => {
   // The sheet is read to find out what a key IS; a row that vanished whenever
   // its control was disabled would answer "there is no such key".
   test("dims the rows whose control is disabled right now", async () => {
-    (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+    vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
     renderCampaign();
     await screen.findByRole("heading", { name: /^Old$/ });
     press("?");

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { api, type CalendarConfig as Cfg, type CalendarScope } from "../api/client";
+import { errorText } from "../api/errors";
 
 const REGIONS = ["US", "GB", "CA", "AU", "IL", ""];
 
@@ -112,9 +113,11 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
     </div>;
   }
 
+  const activeConfig = cfg;
+
   function setPrimary(patch: Partial<Cfg["primary"]>) {
     setSaved(false);
-    setCfg({ ...cfg!, primary: { ...cfg!.primary, ...patch } });
+    setCfg({ ...activeConfig, primary: { ...activeConfig.primary, ...patch } });
   }
 
   async function save() {
@@ -131,7 +134,7 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
     // box over a server that kept 14. Resolving here keeps the invariant the
     // comment below rests on: the server normalizes what the form sends, it
     // never decides a field the form is showing.
-    const outgoing = { ...cfg!, warn_days: cfg!.warn_days ?? storedWarn.current };
+    const outgoing = { ...activeConfig, warn_days: activeConfig.warn_days ?? storedWarn.current };
     // The scope this save belongs to. This component is reused across worlds and
     // campaigns, so a save still in flight when the scope changes would
     // otherwise install ITS config over the new scope's load -- leaving the
@@ -140,7 +143,7 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
     const startedIn = `${scope.kind}/${scope.id}`;
     // What was on screen when this save went out, for the same kind of check one
     // scope narrower -- see below.
-    const startedFrom = cfg!;
+    const startedFrom = activeConfig;
     try {
       await api.setCalendarConfig(scope, outgoing);
       if (current.current !== startedIn) return;
@@ -160,11 +163,11 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
       if (latest.current !== startedFrom) return;
       setCfg(outgoing);   // the control shows the number that was actually saved
       setSaved(true);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Guarded like the success path above, and for the same reason: a
       // rejection from the scope the reader has already left would otherwise
       // put its error banner over the record now on screen.
-      if (current.current === startedIn) setError(err.detail ?? String(err));
+      if (current.current === startedIn) setError(errorText(err));
     } finally {
       if (pending.current === attempt) {
         pending.current = null;
@@ -224,7 +227,7 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
             <input type="checkbox" aria-label="Confirmed" checked={cfg.confirmed}
                    onChange={(e) => {
                      setSaved(false);
-                     setCfg({ ...cfg!, confirmed: e.target.checked });
+                     setCfg({ ...activeConfig, confirmed: e.target.checked });
                    }} />
             Confirmed
           </label>
@@ -248,7 +251,7 @@ export function CalendarConfig({ scope, onConfig, onDirtyChange }: {
                    value={cfg.stale_after_days || ""}
                    onChange={(e) => {
                      setSaved(false);
-                     setCfg({ ...cfg!, stale_after_days: parseInt(e.target.value, 10) || 0 });
+                     setCfg({ ...activeConfig, stale_after_days: parseInt(e.target.value, 10) || 0 });
                    }} />
             <span className="config-unit" aria-hidden>days</span>
           </div>

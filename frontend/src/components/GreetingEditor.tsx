@@ -326,12 +326,12 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
         navigate(recordHref(id));
       }
       onChanged?.();
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof ApiError && err.kind === "stale_record") {
         setStale({ rev: (err.body?.rev as string | null) ?? null });
         return;
       }
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     } finally {
       endWrite();
     }
@@ -396,8 +396,8 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     try {
       await api.markGreeting(scope.id, gid, status);
       await reload();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -504,9 +504,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     [others, edges.excludes, toggle]);
 
   async function saveSubjects(name: string, cids: string[]) {
+    if (!gid) return;
     try {
-      await api.setImageSubjects(wid, gid!, name, cids);
-      setSubjects(await api.getGreetingSubjects(wid, gid!));
+      await api.setImageSubjects(wid, gid, name, cids);
+      setSubjects(await api.getGreetingSubjects(wid, gid));
       setPicking(null);
       setUntagged(await api.listUntaggedImages(wid, true));
     } catch (err: unknown) {
@@ -521,7 +522,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
    *  which this editor cannot turn into a `Link` because it does not know that
    *  section's address -- the callback is what asks the parent to navigate. */
   function sideList(label: string, items: string[], render: (id: string) => string,
-                    opts?: { onItem?: (id: string) => void; href?: (id: string) => string }) {
+                    opts?: { onItem?: ((id: string) => void) | undefined; href?: (id: string) => string }) {
     if (items.length === 0) return null;
     return (
       <div className="side-section">
@@ -529,7 +530,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
         <div className="chips">{items.map((id) => opts?.href
           ? <Link key={id} to={opts.href(id)} className="chip on">{render(id)}</Link>
           : opts?.onItem
-            ? <button key={id} className="chip on" onClick={() => opts.onItem!(id)}>{render(id)}</button>
+            ? <button key={id} className="chip on" onClick={() => opts.onItem?.(id)}>{render(id)}</button>
             : <span key={id} className="chip on">{render(id)}</span>)}</div>
       </div>
     );

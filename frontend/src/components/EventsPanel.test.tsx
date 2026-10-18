@@ -37,15 +37,15 @@ async function pickDate(year = "2027", month = "01", day = "5") {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.campaignEvents).mockResolvedValue(
-    { events: [FIRED, UPCOMING], now: "2026-12-24", friendly: "24 December 2026" } as never);
-  vi.mocked(api.createCampaignEvent).mockResolvedValue({ ok: true, id: "x" } as never);
-  vi.mocked(api.updateCampaignEvent).mockResolvedValue({ ok: true } as never);
-  vi.mocked(api.unfireCampaignEvent).mockResolvedValue({ ok: true } as never);
-  vi.mocked(api.deleteCampaignEvent).mockResolvedValue({ ok: true } as never);
+    { events: [FIRED, UPCOMING], now: "2026-12-24", friendly: "24 December 2026" });
+  vi.mocked(api.createCampaignEvent).mockResolvedValue({ ok: true, id: "x" });
+  vi.mocked(api.updateCampaignEvent).mockResolvedValue({ ok: true });
+  vi.mocked(api.unfireCampaignEvent).mockResolvedValue({ ok: true });
+  vi.mocked(api.deleteCampaignEvent).mockResolvedValue({ ok: true });
   // One real month, so the date control can actually compose a date: the
   // picker's day select stays disabled until the year's months are known.
   vi.mocked(api.getCalendarMonths).mockResolvedValue(
-    { months: [{ key: "01", name: "January", days: 31 }] } as never);
+    { months: [{ key: "01", name: "January", days: 31 }] });
 });
 
 test("lists what is scheduled, with the date in the campaign's own reckoning", async () => {
@@ -60,7 +60,7 @@ test("says when the clock has already reached one", async () => {
 });
 
 test("an empty campaign says so rather than showing nothing", async () => {
-  vi.mocked(api.campaignEvents).mockResolvedValue({ events: [], now: "", friendly: "" } as never);
+  vi.mocked(api.campaignEvents).mockResolvedValue({ events: [], now: "", friendly: "" });
   render(<EventsPanel cid="c" />);
   expect(await screen.findByText("Nothing scheduled.")).toBeInTheDocument();
 });
@@ -114,7 +114,7 @@ test("deleting removes it and reloads", async () => {
 test("a date the campaign's calendar cannot read still shows its raw value", async () => {
   // This row is the only place a reader can see, and fix, the value that broke.
   vi.mocked(api.campaignEvents).mockResolvedValue(
-    { events: [{ ...UPCOMING, friendly: "" }], now: "", friendly: "" } as never);
+    { events: [{ ...UPCOMING, friendly: "" }], now: "", friendly: "" });
   render(<EventsPanel cid="c" />);
   expect(await screen.findByText(/The coronation — 2026-12-26/)).toBeInTheDocument();
 });
@@ -124,7 +124,7 @@ test("an event the campaign is already past says so, and says what to do", async
   // behind it — so the label and the Edit button beside it are the whole remedy.
   vi.mocked(api.campaignEvents).mockResolvedValue(
     { events: [{ ...UPCOMING, passed: true }], now: "2026-12-31",
-      friendly: "31 December 2026" } as never);
+      friendly: "31 December 2026" });
   render(<EventsPanel cid="c" />);
   expect(await screen.findByText("missed")).toBeInTheDocument();
   expect(screen.getByText(/already past this day/)).toBeInTheDocument();

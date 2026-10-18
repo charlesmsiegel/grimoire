@@ -146,7 +146,7 @@ function FindingList(
 
 /** What a refusal carries, read structurally (`api/errors.ts`'s rule): the
  *  view meets an `ApiError`, but nothing here needs the class. */
-function refusal(err: unknown): { kind?: string; body: Record<string, unknown> } {
+function refusal(err: unknown): { kind?: string | undefined; body: Record<string, unknown> } {
   if (typeof err !== "object" || err === null) return { body: {} };
   const { kind, body } = err as { kind?: unknown; body?: unknown };
   return {
@@ -236,7 +236,7 @@ function confirmation(c: ContinuityCandidate, body: ContinuityApply | "dismiss" 
 
 export function ContinuityReview(
   { cid, group, candidate, review }: {
-    cid: string; group: ContinuityGroup; candidate?: string; review: Review;
+    cid: string; group: ContinuityGroup; candidate?: string | undefined; review: Review;
   },
 ) {
   const navigate = useNavigate();

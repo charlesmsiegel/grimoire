@@ -51,7 +51,7 @@ export function ProviderModelPicker({ needs, value, onChange, providers, disable
      *  when the picker goes: a typed id is not the value until "Use this id"
      *  takes it, so a holder whose own button sends the value -- a reroll --
      *  can hold that button until it is. */
-    onDraft?: (draft: string) => void }) {
+    onDraft?: ((draft: string) => void) | undefined }) {
   const name = useId();
   const [draft, setDraft] = useState("");
   const draftSink = useRef(onDraft);

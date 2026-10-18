@@ -6,7 +6,17 @@
 // and if this module imported `../api/client`, that import would be waiting on
 // the very factory that is waiting on this module. The defaults and helpers
 // that DO need the mocked `api` live next door in `campaignHarness`.
+import type { ComponentProps } from "react";
 import { vi } from "vitest";
+
+// The stubs below answer to the real components' props. Type-only imports are
+// erased, so naming those props imports nothing a factory could be waiting on.
+type CastPanelProps = ComponentProps<typeof import("../components/CastPanel").CastPanel>;
+type NewSceneChooserProps =
+  ComponentProps<typeof import("../components/NewSceneChooser").NewSceneChooser>;
+type ReplayPanelProps = ComponentProps<typeof import("../components/ReplayPanel").ReplayPanel>;
+type PostImagePickerProps =
+  ComponentProps<typeof import("../components/PostImagePicker").PostImagePicker>;
 
 /** The api surface every campaign-view suite drives. `vi.mock` factories are
  *  hoisted and cannot close over anything, so each suite delegates to this
@@ -148,7 +158,7 @@ export async function campaignApiMock() {
  *  campaign-view suite is measuring the page rather than five other pages. */
 export const componentStubs = {
   CastPanel: () => ({
-    CastPanel: ({ initialPrompt, greeting, onSceneRenamed, onSeeded, openerRequest }: any) => (
+    CastPanel: ({ initialPrompt, greeting, onSceneRenamed, onSeeded, openerRequest }: CastPanelProps) => (
       <div data-testid="cast-panel" data-greeting={greeting ?? ""}
            data-opener-request={openerRequest ?? 0}>
         {initialPrompt ?? ""}
@@ -158,7 +168,7 @@ export const componentStubs = {
     ),
   }),
   NewSceneChooser: () => ({
-    NewSceneChooser: ({ onCreated, onClose }: any) => (
+    NewSceneChooser: ({ onCreated, onClose }: NewSceneChooserProps) => (
       <div data-testid="scene-chooser">
         <button onClick={() => onCreated("s9", "A premise")}>stub-pick</button>
         <button onClick={() => onClose()}>stub-close</button>
@@ -178,7 +188,7 @@ export const componentStubs = {
   // the gutter hands it, so that is all the stub reports.
   ReplayPanel: () => ({
     ReplayPanel: ({ startAt, onStartHandled, onForked, onChanged, latch, branchable,
-                    onBranched, closed }: any) => (
+                    onBranched, closed }: ReplayPanelProps) => (
       <div data-testid="replay-panel" data-start-at={startAt ?? ""}
            data-branchable={branchable ? "true" : "false"}
            data-closed={closed ? "true" : "false"}>
@@ -189,7 +199,7 @@ export const componentStubs = {
         {/* The reroll's report: `/regenerate` scheduled this write's follow-ups
             server-side, so the handler must refresh without asking (#397). */}
         <button onClick={() => onChanged(true)}>stub-replay-changed-asked</button>
-        <button onClick={() => latch()}>stub-replay-latch</button>
+        <button onClick={() => latch?.()}>stub-replay-latch</button>
       </div>
     ),
   }),
@@ -200,9 +210,9 @@ export const componentStubs = {
   // picker is opened for and what an insert does to the post, so that is all
   // the stub reports back (#376).
   PostImagePicker: () => ({
-    PostImagePicker: ({ target, onInsert, onClose }: any) => (
+    PostImagePicker: ({ target, onInsert, onClose }: PostImagePickerProps) => (
       <div data-testid="image-picker" data-target={JSON.stringify(target)}>
-        <button onClick={() => onInsert("![coastline](/api/campaigns/run/images/coastline)")}>
+        <button onClick={() => onInsert?.("![coastline](/api/campaigns/run/images/coastline)")}>
           stub-insert
         </button>
         <button onClick={() => onClose()}>stub-picker-close</button>

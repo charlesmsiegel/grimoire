@@ -13,10 +13,12 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import type { ModuleDetail, SheetBulkResult } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
 /** A two-type characters kind and a one-type items kind: the two cases the
  *  bulk create treats differently, in one module. */
-const MODULE = {
+const MODULE: ModuleDetail = {
   id: "pool-basic", source: "builtin",
   manifest: { id: "pool-basic", name: "Pool Basic" },
   sheets: {
@@ -45,12 +47,12 @@ const ROSTER = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch" }, body: "" });
-  (api.getCampaignModule as any).mockResolvedValue(
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "run", name: "Saltmarch" }, body: "" }));
+  vi.mocked(api.getCampaignModule).mockResolvedValue(
     { setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
-  (api.readModule as any).mockResolvedValue(MODULE);
-  (api.getCampaignSheetRoster as any).mockResolvedValue({ roster: ROSTER });
-  (api.getSheet as any).mockResolvedValue({ sheet: null });
+  vi.mocked(api.readModule).mockResolvedValue(MODULE);
+  vi.mocked(api.getCampaignSheetRoster).mockResolvedValue({ roster: ROSTER });
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
 });
 
 function renderSheets() {
@@ -120,7 +122,7 @@ test("the rail is the cast, badged with who has a sheet and who does not", async
 });
 
 test("picking a cast member opens their sheet, read-only", async () => {
-  (api.getSheet as any).mockResolvedValue({
+  vi.mocked(api.getSheet).mockResolvedValue({
     sheet: { sheet_type: "medium", fields: {}, derived: {}, errors: [], gen: "g1" },
   });
   renderSheets();
@@ -139,7 +141,7 @@ test("picking a cast member opens their sheet, read-only", async () => {
 });
 
 test("create missing sends the chosen type per kind and reports what it did", async () => {
-  (api.createMissingSheets as any).mockResolvedValue({
+  vi.mocked(api.createMissingSheets).mockResolvedValue({
     created: [{ kind: "characters", id: "winifred", name: "Winifred",
                 sheet_type: "shifter", creation_pending: ["abilities"] }],
     skipped: [], failed: [],
@@ -199,7 +201,7 @@ test("a kind with more than one sheet type says so until one is chosen", async (
 });
 
 test("a skipped kind is reported, not swallowed", async () => {
-  (api.createMissingSheets as any).mockResolvedValue({
+  vi.mocked(api.createMissingSheets).mockResolvedValue({
     created: [], failed: [],
     skipped: [{ kind: "characters", reason: "this module has 2 sheet types for characters" }],
   });
@@ -233,7 +235,7 @@ test("a kind still owed a type is not counted, and the button says what it is wa
   });
 
 test("nothing missing leaves the bulk button disabled and offers no choice", async () => {
-  (api.getCampaignSheetRoster as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSheetRoster).mockResolvedValue({
     roster: {
       // Two sheet types, every member already sheeted: naming one of them
       // under CREATE AS would be a claim about rows nobody is creating.
@@ -260,9 +262,9 @@ test("the action row names who is missing, not just how many", async () => {
 });
 
 test("a campaign with no module bound says so instead of an empty cast", async () => {
-  (api.getCampaignModule as any).mockResolvedValue(
+  vi.mocked(api.getCampaignModule).mockResolvedValue(
     { setting: "", resolved: null, source: null });
-  (api.getCampaignSheetRoster as any).mockResolvedValue({ roster: {} });
+  vi.mocked(api.getCampaignSheetRoster).mockResolvedValue({ roster: {} });
   renderSheets();
   await screen.findByText(/no sheets to keep/);
   // and the rail says the same thing where the cast would be
@@ -276,15 +278,15 @@ test("creating one sheet in the detail pane refreshes the rail beside it", async
   // The bug this covers: `SheetPanel` refetched its own state and told nobody,
   // so the rail one metre away went on saying "Missing" about a sheet that had
   // just been created -- on the one screen whose entire job is who has a sheet.
-  (api.getSheet as any).mockResolvedValue({ sheet: null });
-  (api.putSheet as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
+  vi.mocked(api.putSheet).mockResolvedValue({ ok: true });
   renderSheets();
   await screen.findByText("Sheet coverage");
   fireEvent.click(railRow("Winifred"));
   await screen.findByRole("heading", { name: "Winifred" });
 
   // SheetPanel's own single-sheet create, and the roster it now invalidates
-  (api.getCampaignSheetRoster as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSheetRoster).mockResolvedValue({
     roster: {
       ...ROSTER,
       characters: [
@@ -293,7 +295,7 @@ test("creating one sheet in the detail pane refreshes the rail beside it", async
       ],
     },
   });
-  (api.getSheet as any).mockResolvedValue({
+  vi.mocked(api.getSheet).mockResolvedValue({
     sheet: { sheet_type: "medium", fields: {}, derived: {}, errors: [], gen: "g2" },
   });
   fireEvent.change(screen.getByLabelText("Sheet type"), { target: { value: "medium" } });
@@ -305,7 +307,7 @@ test("creating one sheet in the detail pane refreshes the rail beside it", async
 test("a module that keeps no sheets is not reported as no module", async () => {
   // A pack can be all rules and checks. Calling that "no mechanics bound"
   // sends the reader to change a binding that is already what they want.
-  (api.getCampaignSheetRoster as any).mockResolvedValue({ roster: {} });
+  vi.mocked(api.getCampaignSheetRoster).mockResolvedValue({ roster: {} });
   renderSheets();
   await screen.findByText(/declares no sheet types/);
   expect(screen.getByText(/Pool Basic declares no sheet types/)).toBeInTheDocument();
@@ -320,8 +322,8 @@ test("a slow module read is not reported as no module bound", async () => {
   // window where the cast is on the rail and the module detail has not landed.
   // Acting on whichever settled first told the reader their campaign had no
   // mechanics while the rail beside it listed the cast.
-  let releaseModule: (m: unknown) => void = () => {};
-  (api.readModule as any).mockReturnValue(
+  let releaseModule: (m: ModuleDetail) => void = () => {};
+  vi.mocked(api.readModule).mockReturnValue(
     new Promise((resolve) => { releaseModule = resolve; }));
   renderSheets();
   await screen.findByText("Sheet coverage");
@@ -336,7 +338,7 @@ test("a slow module read is not reported as no module bound", async () => {
 test("a module that will not load is named, not called an unbound campaign", async () => {
   // Permanent before the fix: `readModule` rejecting fell through to the same
   // "no mechanics bound" state, pointing the reader at a binding that is right.
-  (api.readModule as any).mockRejectedValue(new Error("pack is unreadable"));
+  vi.mocked(api.readModule).mockRejectedValue(new Error("pack is unreadable"));
   renderSheets();
   await screen.findByText(/bound to .*pool-basic.*which could not be read/);
   expect(screen.getByText(/pack is unreadable/)).toBeInTheDocument();
@@ -347,13 +349,13 @@ test("a failed roster read says so instead of claiming the module keeps no sheet
   // Swallowing the failure into `{}` rendered as "<Module> declares no sheet
   // types…" with an Edit the module link: a false statement about their
   // module, and no sign anything had gone wrong.
-  (api.getCampaignSheetRoster as any).mockRejectedValue(new Error("read timed out"));
+  vi.mocked(api.getCampaignSheetRoster).mockRejectedValue(new Error("read timed out"));
   renderSheets();
   await screen.findByText(/The cast could not be read: read timed out/);
   expect(screen.queryByText(/declares no sheet types/)).toBeNull();
   expect(column().getByText("The cast could not be read.")).toBeInTheDocument();
 
-  (api.getCampaignSheetRoster as any).mockResolvedValue({ roster: ROSTER });
+  vi.mocked(api.getCampaignSheetRoster).mockResolvedValue({ roster: ROSTER });
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
   await screen.findByRole("table");
   expect(railRow("Winifred")).toHaveTextContent("Missing");
@@ -363,13 +365,13 @@ test("the bulk report survives a reload that empties or fails the roster", async
   // The report used to render inside the table's branch, so the reload fired
   // in `createMissing`'s `finally` could erase the answer to the button the
   // reader had just pressed.
-  (api.createMissingSheets as any).mockResolvedValue({
+  vi.mocked(api.createMissingSheets).mockResolvedValue({
     created: [], failed: [],
     skipped: [{ kind: "characters", reason: "two sheet types" }],
   });
   renderSheets();
   await screen.findByText("Sheet coverage");
-  (api.getCampaignSheetRoster as any).mockRejectedValue(new Error("gone"));
+  vi.mocked(api.getCampaignSheetRoster).mockRejectedValue(new Error("gone"));
   createWithShifter();
 
   await screen.findByText(/Characters skipped/);
@@ -381,9 +383,9 @@ test("a bound module that does not validate is not called an unbound campaign", 
   // fails validation, so the route returns {setting: "pool-basic",
   // resolved: null}. Reading only `resolved` told the reader to bind a module
   // they had already bound.
-  (api.getCampaignModule as any).mockResolvedValue(
+  vi.mocked(api.getCampaignModule).mockResolvedValue(
     { setting: "pool-basic", resolved: null, source: null });
-  (api.getCampaignSheetRoster as any).mockResolvedValue({ roster: {} });
+  vi.mocked(api.getCampaignSheetRoster).mockResolvedValue({ roster: {} });
   renderSheets();
   await screen.findByText(/bound to .*pool-basic.*which is missing or does not validate/);
   expect(screen.queryByText(/no mechanics bound/i)).toBeNull();
@@ -397,7 +399,7 @@ test("a failed reload does not leave the stale cast and a live button on screen"
   // cast, with an enabled create button built from data just disclaimed.
   renderSheets();
   await screen.findByRole("table");
-  (api.getCampaignSheetRoster as any).mockRejectedValue(new Error("gone"));
+  vi.mocked(api.getCampaignSheetRoster).mockRejectedValue(new Error("gone"));
   createWithShifter();
 
   await screen.findByText(/The cast could not be read: gone/);
@@ -407,7 +409,7 @@ test("a failed reload does not leave the stale cast and a live button on screen"
 });
 
 test("a failed press does not leave the previous press's report up", async () => {
-  (api.createMissingSheets as any).mockResolvedValue({
+  vi.mocked(api.createMissingSheets).mockResolvedValue({
     created: [{ kind: "characters", id: "winifred", name: "Winifred",
                 sheet_type: "medium", creation_pending: [] }],
     skipped: [], failed: [],
@@ -417,7 +419,7 @@ test("a failed press does not leave the previous press's report up", async () =>
   createWithShifter();
   await screen.findByText("1 sheet created.");
 
-  (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
+  vi.mocked(api.createMissingSheets).mockRejectedValue(new Error("no module resolved"));
   createWithShifter();
   await screen.findByText("no module resolved");
   // The old report beside the error reads as a create that half-worked.
@@ -430,9 +432,9 @@ test("nothing from the campaign you left lands on the one you moved to", async (
   // bound to the campaign at click time, which CANCELLED the new campaign's
   // roster read and then committed the old campaign's — leaving the page stuck
   // on "Reading the cast…" with nothing left to re-fetch it.
-  let releaseCreate: (r: unknown) => void = () => {};
-  let releaseFirstRoster: (r: unknown) => void = () => {};
-  (api.createMissingSheets as any).mockReturnValue(
+  let releaseCreate: (r: SheetBulkResult) => void = () => {};
+  let releaseFirstRoster: (r: Awaited<ReturnType<typeof api.getCampaignSheetRoster>>) => void = () => {};
+  vi.mocked(api.createMissingSheets).mockReturnValue(
     new Promise((resolve) => { releaseCreate = resolve; }));
   renderSheets();
   await screen.findByText("Sheet coverage");
@@ -440,7 +442,7 @@ test("nothing from the campaign you left lands on the one you moved to", async (
 
   // The campaign we are leaving still owes us a roster read, and it will land
   // after the switch.
-  (api.getCampaignSheetRoster as any).mockReturnValueOnce(
+  vi.mocked(api.getCampaignSheetRoster).mockReturnValueOnce(
     new Promise((resolve) => { releaseFirstRoster = resolve; }));
   switchCampaign();
   await screen.findByText("Sheet coverage");
@@ -460,7 +462,7 @@ test("nothing from the campaign you left lands on the one you moved to", async (
 });
 
 test("a create that fails for the campaign you left does not banner on this one", async () => {
-  (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
+  vi.mocked(api.createMissingSheets).mockRejectedValue(new Error("no module resolved"));
   renderSheets();
   await screen.findByText("Sheet coverage");
   createWithShifter();
@@ -472,7 +474,7 @@ test("a create that fails for the campaign you left does not banner on this one"
 });
 
 test("a failed create surfaces the reason rather than a silent no-op", async () => {
-  (api.createMissingSheets as any).mockRejectedValue(new Error("no module resolved"));
+  vi.mocked(api.createMissingSheets).mockRejectedValue(new Error("no module resolved"));
   renderSheets();
   await screen.findByText("Sheet coverage");
   createWithShifter();

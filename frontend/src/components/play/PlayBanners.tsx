@@ -24,7 +24,7 @@ import { ErrorNote } from "../ErrorNote";
  *  `network` kind lives on the rejection and nowhere in the sentence. Only
  *  `fail` has one to keep: half a dozen other raisers compose their own
  *  sentence out of nothing that failed, and set `text` alone. */
-export type PlayError = { text: string; retryable: boolean; from?: string; err?: unknown };
+export type PlayError = { text: string; retryable: boolean; from?: string | undefined; err?: unknown };
 
 const SETUP_LINK: Record<"/providers" | "/models", string> = {
   "/providers": "Set it on the Providers page →",

@@ -8,10 +8,10 @@ import { api } from "../api/client";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listTags as any).mockResolvedValue({});
-  (api.addTag as any).mockResolvedValue({ id: "student" });
-  (api.renameTag as any).mockResolvedValue({ id: "student", name: "Pupil" });
-  (api.deleteTag as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.listTags).mockResolvedValue({});
+  vi.mocked(api.addTag).mockResolvedValue({ id: "student" });
+  vi.mocked(api.renameTag).mockResolvedValue({ id: "student", name: "Pupil" });
+  vi.mocked(api.deleteTag).mockResolvedValue({ ok: true });
 });
 
 test("adds a tag", async () => {
@@ -23,7 +23,7 @@ test("adds a tag", async () => {
 });
 
 test("renames and deletes a tag", async () => {
-  (api.listTags as any).mockResolvedValue({ student: "Student" });
+  vi.mocked(api.listTags).mockResolvedValue({ student: "Student" });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   render(<TagEditor wid="w" />);
   await screen.findByText("Student");

@@ -4,7 +4,7 @@ import SetupWizard from "./SetupWizard";
 
 const navigate = vi.fn();
 vi.mock("react-router-dom", async () => ({
-  ...(await vi.importActual<any>("react-router-dom")),
+  ...(await vi.importActual<typeof import("react-router-dom")>("react-router-dom")),
   useNavigate: () => navigate,
 }));
 
@@ -26,13 +26,18 @@ vi.mock("../theme/ThemeProvider", () => ({
 }));
 
 import { api } from "../api/client";
+import type {
+  Config, DataDirInfo, HealthCheckResult, InferenceSettings, ModelsRefreshResult, ProviderPresetOption,
+  WorldMeta,
+} from "../api/types";
+import { fixture, type DeepPartial } from "../testkit/fixture";
 
 const onDone = vi.fn();
 
 /** The provider presets the server lists, trimmed to the three shapes the
  *  wizard branches on: a hosted one with a fixed address and a free check, the
  *  Claude subscription (whose check generates), and an editable endpoint. */
-const PRESETS = [
+const PRESETS: ProviderPresetOption[] = [
   { id: "openrouter", label: "OpenRouter", kind: "openrouter",
     base_url: "https://openrouter.ai/api/v1", url_locked: true, billing: "metered",
     reports_price: true, always: [], possible: [], never: [], generating_check: false },
@@ -50,8 +55,8 @@ const card = (stored = BLANK) => ({
 });
 
 /** `GET /api/inference/settings` for a library at the current layout. */
-function settings(over: Record<string, unknown> = {}) {
-  return {
+function settings(over: Record<string, unknown> = {}): InferenceSettings {
+  return fixture({
     format: "2", newer: false,
     migration: { state: "done", reason: "", skipped: [] },
     roles: {
@@ -68,7 +73,7 @@ function settings(over: Record<string, unknown> = {}) {
     presets: [],
     preset_clear: "⁣none",
     ...over,
-  };
+  });
 }
 
 function capabilityRow(id: string) {
@@ -78,32 +83,32 @@ function capabilityRow(id: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.checkConnection as any).mockResolvedValue({
+  vi.mocked(api.checkConnection).mockResolvedValue({
     ok: true, kind: "", detail: "", checked_at: "2026-08-21T00:00:00Z",
   });
-  (api.getDataDir as any).mockResolvedValue({
+  vi.mocked(api.getDataDir).mockResolvedValue({
     data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
     is_default: true, source: "default", exists: true,
   });
-  (api.putDataDir as any).mockResolvedValue({
+  vi.mocked(api.putDataDir).mockResolvedValue({
     data_dir: "/sync/grimoire", default: "/home/u/.grimoire",
     is_default: false, source: "custom", exists: true,
   });
-  (api.putConfig as any).mockResolvedValue({});
-  (api.getConfig as any).mockResolvedValue({ first_run: true });
-  (api.listWorlds as any).mockResolvedValue([]);
-  (api.listProviderPresets as any).mockResolvedValue(PRESETS);
-  (api.createConnection as any).mockResolvedValue({ id: "openrouter" });
-  (api.refreshConnectionModels as any).mockResolvedValue({ models: [], fetched_at: "", rev: "" });
-  (api.getInferenceSettings as any).mockResolvedValue(settings());
-  (api.putInferenceSettings as any).mockResolvedValue(settings());
-  (api.readConnectionCapabilities as any).mockImplementation(
-    (_id: string, need: string) => Promise.resolve({
+  vi.mocked(api.putConfig).mockResolvedValue(fixture({}));
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({ first_run: true }));
+  vi.mocked(api.listWorlds).mockResolvedValue([]);
+  vi.mocked(api.listProviderPresets).mockResolvedValue(PRESETS);
+  vi.mocked(api.createConnection).mockResolvedValue({ id: "openrouter" });
+  vi.mocked(api.refreshConnectionModels).mockResolvedValue({ models: [], fetched_at: "", rev: "" });
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings());
+  vi.mocked(api.putInferenceSettings).mockResolvedValue(settings());
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
+    (_id, need) => Promise.resolve(fixture({
       provider_preset: PRESETS[0], need, reason: null, hidden: [],
       groups: { fits: [capabilityRow(need === "embed" ? "realm-embed" : "mara-large")],
                 unverified: [] },
-    }));
-  (api.createWorld as any).mockResolvedValue({ id: "saltmarch" });
+    })));
+  vi.mocked(api.createWorld).mockResolvedValue({ id: "saltmarch" });
 });
 
 function renderWizard() {
@@ -141,9 +146,9 @@ const UPGRADING = () => settings({
 /** `getInferenceSettings` answering whatever `reads.answer` says at the time
  *  it is asked, so a poll that fires early reads the same thing a late one
  *  would, and the test decides the order of answers rather than the clock. */
-function scriptReads(first: () => Promise<unknown>) {
+function scriptReads(first: () => Promise<InferenceSettings>) {
   const reads = { answer: first, count: 0 };
-  (api.getInferenceSettings as any).mockImplementation(() => {
+  vi.mocked(api.getInferenceSettings).mockImplementation(() => {
     reads.count += 1;
     return reads.answer();
   });
@@ -209,7 +214,7 @@ test("the wizard creates a provider from a preset", async () => {
   await saveProvider("openrouter", { key: "sk-or-test" });
 
   await waitFor(() => expect(api.createConnection).toHaveBeenCalledTimes(1));
-  const body = (api.createConnection as any).mock.calls[0][0];
+  const body = vi.mocked(api.createConnection).mock.calls[0][0];
   expect(body).toEqual(expect.objectContaining({
     kind: "openrouter", name: "OpenRouter", preset: "openrouter", billing: "metered",
     api_key: "sk-or-test",
@@ -227,7 +232,7 @@ test("the wizard creates a provider from a preset", async () => {
 });
 
 test("the wizard does not probe a Claude provider unasked", async () => {
-  (api.createConnection as any).mockResolvedValue({ id: "claude-subscription" });
+  vi.mocked(api.createConnection).mockResolvedValue({ id: "claude-subscription" });
   await goToStep(2);
   await saveProvider("claude");
 
@@ -245,7 +250,7 @@ test("the wizard does not probe a Claude provider unasked", async () => {
 });
 
 test("the saved provider is checked, and a refusal is said out loud", async () => {
-  (api.checkConnection as any).mockResolvedValue({
+  vi.mocked(api.checkConnection).mockResolvedValue({
     ok: false, kind: "auth", detail: "No auth credentials found",
     checked_at: "2026-08-21T09:00:00Z",
   });
@@ -259,7 +264,7 @@ test("the saved provider is checked, and a refusal is said out loud", async () =
 });
 
 test("a check that cannot be made does not undo a provider that saved", async () => {
-  (api.checkConnection as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.checkConnection).mockRejectedValue(new Error("offline"));
   await goToStep(2);
   await saveProvider("openrouter", { key: "sk-or-test" });
   expect(await screen.findByText(/saved openrouter/i)).toBeInTheDocument();
@@ -296,7 +301,7 @@ test("a Claude subscription needs neither a key nor a URL", async () => {
 });
 
 test("a provider that fails to save reports why and stays on the step", async () => {
-  (api.createConnection as any).mockRejectedValue({ detail: "name already taken" });
+  vi.mocked(api.createConnection).mockRejectedValue({ detail: "name already taken" });
   await goToStep(2);
   await saveProvider("openrouter", { key: "sk-or-test" });
   expect(await screen.findByText(/name already taken/i)).toBeInTheDocument();
@@ -304,8 +309,8 @@ test("a provider that fails to save reports why and stays on the step", async ()
 });
 
 test("Skip setup is locked while a provider is being saved", async () => {
-  let settle: (v: any) => void = () => {};
-  (api.createConnection as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: Awaited<ReturnType<typeof api.createConnection>>) => void = () => {};
+  vi.mocked(api.createConnection).mockReturnValue(new Promise((r) => { settle = r; }));
   await goToStep(2);
   await saveProvider("openrouter", { key: "sk-or-test" });
 
@@ -380,7 +385,7 @@ test("a read that fails while upgrading does not stop the asking", async () => {
 test("the steps open once the format has switched, even with a campaign left to upgrade", async () => {
   // `pending` after the global switch: a campaign skipped as busy is finished
   // on the next start, and the server takes global writes meanwhile.
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     format: "2",
     migration: { state: "pending", reason: "",
                  skipped: ["campaign realm: busy; finished on the next start"] },
@@ -443,7 +448,7 @@ test("the poll stops once the format switches, on a step change, and on unmount"
 });
 
 test("a failed upgrade says why and offers no form", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     format: "1", migration: { state: "failed", reason: "the safety backup failed: disk full", skipped: [] },
   }));
   await goToStep(2);
@@ -464,8 +469,8 @@ test("Primary is required to continue", async () => {
   fireEvent.click(save);
 
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
-  const [body, opts] = (api.putInferenceSettings as any).mock.calls[0];
-  expect(body.roles.primary).toEqual({
+  const [body, opts] = vi.mocked(api.putInferenceSettings).mock.calls[0];
+  expect(body.roles?.primary).toEqual({
     selection: { provider: "saltmarch", model: "mara-large", preset: "" } });
   expect(opts).toBeUndefined();
   expect(await screen.findByRole("heading", { name: /pick a look/i })).toBeInTheDocument();
@@ -484,9 +489,9 @@ test("Fast and Decision default to same as", async () => {
   await pick("Primary", "saltmarch", "mara-large");
   fireEvent.click(screen.getByRole("button", { name: /save and continue/i }));
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalled());
-  const [body] = (api.putInferenceSettings as any).mock.calls[0];
-  expect(body.roles.fast).toEqual({ selection: BLANK });
-  expect(body.roles.decision).toEqual({ selection: BLANK });
+  const [body] = vi.mocked(api.putInferenceSettings).mock.calls[0];
+  expect(body.roles?.fast).toEqual({ selection: BLANK });
+  expect(body.roles?.decision).toEqual({ selection: BLANK });
 });
 
 test("Fast can be given a model of its own", async () => {
@@ -499,8 +504,8 @@ test("Fast can be given a model of its own", async () => {
   await pick("Fast", "openrouter", "mara-large");
   fireEvent.click(screen.getByRole("button", { name: /save and continue/i }));
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalled());
-  const [body] = (api.putInferenceSettings as any).mock.calls[0];
-  expect(body.roles.fast).toEqual({
+  const [body] = vi.mocked(api.putInferenceSettings).mock.calls[0];
+  expect(body.roles?.fast).toEqual({
     selection: { provider: "openrouter", model: "mara-large", preset: "" } });
 });
 
@@ -524,8 +529,8 @@ test("embedding is optional and asks before saving", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: /embed and save/i }));
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
-  const [body, opts] = (api.putInferenceSettings as any).mock.calls[0];
-  expect(body.roles.embedding).toEqual({
+  const [body, opts] = vi.mocked(api.putInferenceSettings).mock.calls[0];
+  expect(body.roles?.embedding).toEqual({
     selection: { provider: "saltmarch", model: "realm-embed" } });
   expect(opts).toEqual({ confirmEmbedding: true });
 });
@@ -535,8 +540,8 @@ test("leaving embedding off saves without asking", async () => {
   await pick("Primary", "saltmarch", "mara-large");
   fireEvent.click(screen.getByRole("button", { name: /save and continue/i }));
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
-  const [body, opts] = (api.putInferenceSettings as any).mock.calls[0];
-  expect(body.roles.embedding).toEqual({ selection: { provider: "", model: "" } });
+  const [body, opts] = vi.mocked(api.putInferenceSettings).mock.calls[0];
+  expect(body.roles?.embedding).toEqual({ selection: { provider: "", model: "" } });
   expect(opts).toBeUndefined();
   expect(screen.queryByText(/may cost money/i)).not.toBeInTheDocument();
 });
@@ -552,7 +557,7 @@ test("the Primary picker starts on the provider just saved", async () => {
 test("the provider just saved is not shown as missing while its step re-reads", async () => {
   // Step 3 renders at once with the providers step 2 read, which predate the
   // create; held here, its own re-read is what used to stand between them.
-  (api.getInferenceSettings as any)
+  vi.mocked(api.getInferenceSettings)
     .mockResolvedValueOnce(settings({ providers: [
       { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter",
         usable: true, problem: null }] }))
@@ -568,17 +573,17 @@ test("the provider just saved is not shown as missing while its step re-reads", 
 test("a Claude subscription as Primary takes a typed model id", async () => {
   const claude = { id: "claude-subscription", name: "Claude subscription", kind: "claude",
                    preset: "claude", usable: true, problem: null };
-  (api.createConnection as any).mockResolvedValue({ id: "claude-subscription" });
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.createConnection).mockResolvedValue({ id: "claude-subscription" });
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     providers: [...settings().providers, claude] }));
-  (api.readConnectionCapabilities as any).mockImplementation(
-    (id: string, need: string) => Promise.resolve({
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
+    (id, need) => Promise.resolve(fixture({
       provider_preset: id === "claude-subscription" ? PRESETS[1] : PRESETS[0], need,
       reason: null, hidden: [],
       // It has no catalog: nothing is listed, whatever the need.
       groups: { fits: id === "claude-subscription" ? [] : [capabilityRow("mara-large")],
                 unverified: [] },
-    }));
+    })));
   await goToStep(2);
   await saveProvider("claude");
   fireEvent.click(await screen.findByRole("button", { name: /next/i }));
@@ -595,14 +600,14 @@ test("a Claude subscription as Primary takes a typed model id", async () => {
   await waitFor(() => expect(save).toBeEnabled());
   fireEvent.click(save);
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
-  const [body] = (api.putInferenceSettings as any).mock.calls[0];
-  expect(body.roles.primary).toEqual({
+  const [body] = vi.mocked(api.putInferenceSettings).mock.calls[0];
+  expect(body.roles?.primary).toEqual({
     selection: { provider: "claude-subscription", model: "sonnet", preset: "" } });
 });
 
 test("a Fast with a model of its own is shown as such and sent back unchanged", async () => {
   const own = { provider: "openrouter", model: "mara-large", preset: "winifred" };
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     roles: {
       primary: card({ provider: "saltmarch", model: "mara-large", preset: "" }),
       fast: card(own), decision: card(),
@@ -618,12 +623,12 @@ test("a Fast with a model of its own is shown as such and sent back unchanged", 
 
   fireEvent.click(screen.getByRole("button", { name: /save and continue/i }));
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
-  const [body] = (api.putInferenceSettings as any).mock.calls[0];
-  expect(body.roles.fast).toEqual({ selection: own });
+  const [body] = vi.mocked(api.putInferenceSettings).mock.calls[0];
+  expect(body.roles?.fast).toEqual({ selection: own });
 });
 
 test("Same as keeps a stored sampler preset", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     roles: {
       primary: card({ provider: "saltmarch", model: "mara-large", preset: "" }),
       // Already "Same as", with a preset of its own...
@@ -641,23 +646,23 @@ test("Same as keeps a stored sampler preset", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: /save and continue/i }));
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
-  const [body] = (api.putInferenceSettings as any).mock.calls[0];
-  expect(body.roles.fast).toEqual({ selection: { provider: "", model: "", preset: "winifred" } });
-  expect(body.roles.decision).toEqual({
+  const [body] = vi.mocked(api.putInferenceSettings).mock.calls[0];
+  expect(body.roles?.fast).toEqual({ selection: { provider: "", model: "", preset: "winifred" } });
+  expect(body.roles?.decision).toEqual({
     selection: { provider: "", model: "", preset: "seraphine" } });
 });
 
 test("a server that asks to confirm the embedding gets the confirmation", async () => {
   // The library's Embedding role changed elsewhere since it was read, so this
   // side thinks rewriting it re-embeds nothing; the server knows better.
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     roles: {
       primary: card({ provider: "saltmarch", model: "mara-large", preset: "" }),
       fast: card(), decision: card(),
       embedding: { stored: { provider: "saltmarch", model: "realm-embed" }, resolves: null, on: true },
     },
   }));
-  (api.putInferenceSettings as any)
+  vi.mocked(api.putInferenceSettings)
     .mockRejectedValueOnce({ status: 400, kind: "confirm_embedding",
                              detail: "Changing the Embedding role re-embeds the library." })
     .mockResolvedValue(settings());
@@ -668,13 +673,13 @@ test("a server that asks to confirm the embedding gets the confirmation", async 
   expect(await screen.findByText(/may cost money/i)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /embed and save/i }));
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(2));
-  const [, opts] = (api.putInferenceSettings as any).mock.calls[1];
+  const [, opts] = vi.mocked(api.putInferenceSettings).mock.calls[1];
   expect(opts).toEqual({ confirmEmbedding: true });
   expect(await screen.findByRole("heading", { name: /pick a look/i })).toBeInTheDocument();
 });
 
 test("roles this library already has are shown, not blanked", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     roles: {
       primary: card({ provider: "saltmarch", model: "mara-large", preset: "seraphine" }),
       fast: card(), decision: card(),
@@ -686,16 +691,16 @@ test("roles this library already has are shown, not blanked", async () => {
   expect(await within(primary).findByRole("radio", { name: "mara-large" })).toBeChecked();
   fireEvent.click(screen.getByRole("button", { name: /save and continue/i }));
   await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalled());
-  const [body, opts] = (api.putInferenceSettings as any).mock.calls[0];
+  const [body, opts] = vi.mocked(api.putInferenceSettings).mock.calls[0];
   // The preset rides along untouched, and rewriting the embedding it already
   // has re-embeds nothing, so there is nothing to confirm.
-  expect(body.roles.primary.selection.preset).toBe("seraphine");
-  expect(body.roles.embedding).toEqual({ selection: { provider: "saltmarch", model: "realm-embed" } });
+  expect(body.roles?.primary?.selection?.preset).toBe("seraphine");
+  expect(body.roles?.embedding).toEqual({ selection: { provider: "saltmarch", model: "realm-embed" } });
   expect(opts).toBeUndefined();
 });
 
 test("a roles write that is refused says why and stays on the step", async () => {
-  (api.putInferenceSettings as any).mockRejectedValue({ detail: "no such provider: saltmarch" });
+  vi.mocked(api.putInferenceSettings).mockRejectedValue({ detail: "no such provider: saltmarch" });
   await goToStep(3);
   await pick("Primary", "saltmarch", "mara-large");
   fireEvent.click(screen.getByRole("button", { name: /save and continue/i }));
@@ -713,8 +718,8 @@ test("the models step is skippable", async () => {
 // ---- storage, look, world ----
 
 test("the storage step will not advance while a move is in flight", async () => {
-  let settle: (v: any) => void = () => {};
-  (api.putDataDir as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: DataDirInfo) => void = () => {};
+  vi.mocked(api.putDataDir).mockReturnValue(new Promise((r) => { settle = r; }));
   renderWizard();
   const input = await screen.findByLabelText(/storage location/i);
   fireEvent.change(input, { target: { value: "/sync/grimoire" } });
@@ -731,8 +736,8 @@ test("the storage step will not advance while a move is in flight", async () => 
 });
 
 test("the theme step will not advance while its save is in flight", async () => {
-  let settle: (v: any) => void = () => {};
-  (api.putConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: Config) => void = () => {};
+  vi.mocked(api.putConfig).mockReturnValue(new Promise((r) => { settle = r; }));
   await goToStep(4);
   fireEvent.click(await screen.findByText("DARK"));
 
@@ -741,26 +746,26 @@ test("the theme step will not advance while its save is in flight", async () => 
   await waitFor(() => expect(screen.getByRole("button", { name: /saving/i })).toBeDisabled());
   expect(screen.getByRole("button", { name: /skip setup/i })).toBeDisabled();
 
-  settle({});
+  settle(fixture({}));
   await waitFor(() => expect(screen.getByRole("button", { name: /next/i })).toBeEnabled());
 });
 
 test("the appearance segments are locked while a pick is saving, so two picks cannot race", async () => {
-  let settle: (v: any) => void = () => {};
-  (api.putConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: Config) => void = () => {};
+  vi.mocked(api.putConfig).mockReturnValue(new Promise((r) => { settle = r; }));
   await goToStep(4);
   fireEvent.click(await screen.findByText("DARK"));
 
   await waitFor(() => expect(screen.getByText("LIGHT")).toBeDisabled());
   expect(screen.getByText("DARK")).toBeDisabled();
 
-  settle({});
+  settle(fixture({}));
   await waitFor(() => expect(screen.getByText("LIGHT")).toBeEnabled());
 });
 
 test("Finish later is locked while the world is being created", async () => {
-  let settle: (v: any) => void = () => {};
-  (api.createWorld as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: Awaited<ReturnType<typeof api.createWorld>>) => void = () => {};
+  vi.mocked(api.createWorld).mockReturnValue(new Promise((r) => { settle = r; }));
   await goToStep(5);
   fireEvent.change(await screen.findByLabelText(/world name/i), { target: { value: "Saltmarch" } });
   fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
@@ -772,8 +777,8 @@ test("Finish later is locked while the world is being created", async () => {
   await waitFor(() => expect(screen.getByText(/created saltmarch/i)).toBeInTheDocument());
 });
 
-async function moveTo(worlds: any[]) {
-  (api.listWorlds as any).mockResolvedValue(worlds);
+async function moveTo(worlds: DeepPartial<WorldMeta>[]) {
+  vi.mocked(api.listWorlds).mockResolvedValue(fixture(worlds));
   renderWizard();
   fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
   fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
@@ -794,7 +799,7 @@ test("an emptied store that merely dismissed setup is not treated as stocked", a
   // before. Calling that stocked hides the create form and hands off into
   // CampaignWizard, which cannot get past step one with no world to pick — so
   // the verdict has to come from the worlds, not from first_run.
-  (api.getConfig as any).mockResolvedValue({ first_run: false });
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({ first_run: false }));
   await moveTo([]);
   await skipToWorld();
 
@@ -805,7 +810,7 @@ test("an emptied store that merely dismissed setup is not treated as stocked", a
 test("a move forgets the provider and verdict recorded in the previous store", async () => {
   // A check is about one provider in one store (#146); carrying either across
   // a move would describe records the new store does not have.
-  (api.checkConnection as any).mockResolvedValue({
+  vi.mocked(api.checkConnection).mockResolvedValue({
     ok: false, kind: "auth", detail: "No auth credentials found",
     checked_at: "2026-08-21T09:00:00Z",
   });
@@ -841,8 +846,8 @@ async function moveFromProviderStep() {
 test("a check in flight across a move does not leave the next one stuck", async () => {
   // Its answer is dropped as belonging to the old store, so nothing else
   // would clear the flag it set: the new provider's Check read "Checking…".
-  (api.createConnection as any).mockResolvedValue({ id: "claude-subscription" });
-  (api.checkConnection as any).mockReturnValueOnce(new Promise(() => {}));
+  vi.mocked(api.createConnection).mockResolvedValue({ id: "claude-subscription" });
+  vi.mocked(api.checkConnection).mockReturnValueOnce(new Promise(() => {}));
   renderWizard();
   fireEvent.click(await screen.findByRole("button", { name: /next/i }));
   await saveProvider("claude");
@@ -850,17 +855,17 @@ test("a check in flight across a move does not leave the next one stuck", async 
   expect(await screen.findByRole("button", { name: /checking…/i })).toBeDisabled();
 
   await moveFromProviderStep();
-  (api.createConnection as any).mockClear();
+  vi.mocked(api.createConnection).mockClear();
   await saveProvider("claude");
   expect(await screen.findByRole("button", { name: /check \(sends one short message\)/i }))
     .toBeEnabled();
 });
 
 test("a check or catalog answer that lands after a move is dropped", async () => {
-  const check = held<any>();
-  const refresh = held<any>();
-  (api.checkConnection as any).mockReturnValueOnce(check.promise);
-  (api.refreshConnectionModels as any)
+  const check = held<HealthCheckResult>();
+  const refresh = held<ModelsRefreshResult>();
+  vi.mocked(api.checkConnection).mockReturnValueOnce(check.promise);
+  vi.mocked(api.refreshConnectionModels)
     .mockReturnValueOnce(refresh.promise)
     .mockReturnValue(new Promise(() => {}));   // the new store's listing, still going
   renderWizard();
@@ -868,7 +873,7 @@ test("a check or catalog answer that lands after a move is dropped", async () =>
   await saveProvider("openrouter", { key: "sk-or-dead" });
 
   await moveFromProviderStep();
-  (api.createConnection as any).mockClear();
+  vi.mocked(api.createConnection).mockClear();
   await saveProvider("openrouter", { key: "sk-or-test" });
   expect(await screen.findByText(/saved openrouter/i)).toBeInTheDocument();
 
@@ -887,8 +892,8 @@ test("a check or catalog answer that lands after a move is dropped", async () =>
 test("the move stays pending until the new store has been classified", async () => {
   // Clearing "moving" before the recheck lands lets the user reach the World
   // step while the wizard still believes it is looking at the old store.
-  let settle: (v: any) => void = () => {};
-  (api.listWorlds as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: WorldMeta[]) => void = () => {};
+  vi.mocked(api.listWorlds).mockReturnValue(new Promise((r) => { settle = r; }));
   renderWizard();
   fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
   fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
@@ -896,18 +901,18 @@ test("the move stays pending until the new store has been classified", async () 
   await waitFor(() => expect(api.putDataDir).toHaveBeenCalled());
   expect(screen.getByRole("button", { name: /next/i })).toBeDisabled();
 
-  settle([{ id: "saltmarch", name: "Saltmarch" }]);
+  settle(fixture([{ id: "saltmarch", name: "Saltmarch" }]));
   await waitFor(() => expect(screen.getByRole("button", { name: /next/i })).toBeEnabled());
 });
 
 test("Reset to default is locked while a move is already running", async () => {
   // Two pointer updates in flight: whichever returns last decides the store,
   // and the first to return clears the single pending flag.
-  (api.getDataDir as any).mockResolvedValue({
+  vi.mocked(api.getDataDir).mockResolvedValue({
     data_dir: "/sync/grimoire", default: "/home/u/.grimoire",
     is_default: false, source: "custom", exists: true,
   });
-  (api.putDataDir as any).mockReturnValue(new Promise(() => {}));   // never settles
+  vi.mocked(api.putDataDir).mockReturnValue(new Promise(() => {}));   // never settles
   renderWizard();
   fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/other/grimoire" } });
   fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
@@ -930,7 +935,7 @@ test("a move adopts the new library's theme", async () => {
   // The theme lives in the store's own config.md, so after a move the Theme
   // step must mark the new library's card active — otherwise clicking the one
   // that looks active overwrites that library's preference.
-  (api.getConfig as any).mockResolvedValue({ first_run: false, theme: "manuscript" });
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({ first_run: false, theme: "manuscript" }));
   await moveTo([{ id: "saltmarch", name: "Saltmarch" }]);
   await waitFor(() => expect(setTheme).toHaveBeenCalledWith("manuscript"));
 });
@@ -939,8 +944,8 @@ test("finishing locks the wizard until the write settles", async () => {
   // finish() is a config write like the theme's; Back-then-pick-a-theme during
   // a slow one is a second write, and clicking both destinations would make
   // the landing page depend on response order.
-  let settle: (v: any) => void = () => {};
-  (api.putConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: Config) => void = () => {};
+  vi.mocked(api.putConfig).mockReturnValue(new Promise((r) => { settle = r; }));
   await goToStep(5);
   fireEvent.click(await screen.findByRole("button", { name: /finish later/i }));
 
@@ -948,7 +953,7 @@ test("finishing locks the wizard until the write settles", async () => {
   expect(screen.getByRole("button", { name: /^back$/i })).toBeDisabled();
   expect(navigate).not.toHaveBeenCalled();
 
-  settle({});
+  settle(fixture({}));
   await waitFor(() => expect(navigate).toHaveBeenCalledWith("/", { replace: true }));
   expect(api.putConfig).toHaveBeenCalledTimes(1);   // not re-entered
 });
@@ -956,20 +961,20 @@ test("finishing locks the wizard until the write settles", async () => {
 test("a provider this library already writes through is adopted, not asked for again", async () => {
   // Reloading /welcome after setting a provider up but before making a world:
   // re-entering the form would create a uniquely-suffixed duplicate of it.
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({
     first_run: true, ready: true,
     active_connection: { id: "my-openrouter", kind: "openrouter", name: "My OpenRouter" },
-  });
+  }));
   await goToStep(2);
   expect(await screen.findByText(/already writes through my openrouter/i)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /save provider/i })).not.toBeInTheDocument();
 });
 
 test("a library that cannot generate yet is not mistaken for one that can", async () => {
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({
     first_run: true, ready: false,
     active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" },
-  });
+  }));
   await goToStep(2);
   expect(await screen.findByRole("button", { name: /save provider/i })).toBeInTheDocument();
   expect(screen.queryByText(/already writes through/i)).not.toBeInTheDocument();
@@ -978,7 +983,7 @@ test("a library that cannot generate yet is not mistaken for one that can", asyn
 test("a theme that could not be saved does not stay applied", async () => {
   // Left applied, an unsaved theme looks chosen for the session and then
   // vanishes on reload, which reads as the app losing the setting.
-  (api.putConfig as any).mockRejectedValue({ detail: "disk full" });
+  vi.mocked(api.putConfig).mockRejectedValue({ detail: "disk full" });
   await goToStep(4);
   fireEvent.click(await screen.findByText("DARK"));
   await waitFor(() => expect(screen.getByText(/disk full/i)).toBeInTheDocument());
@@ -986,7 +991,7 @@ test("a theme that could not be saved does not stay applied", async () => {
 });
 
 test("finishing reports which store the answer belongs to", async () => {
-  (api.putConfig as any).mockResolvedValue({ data_dir: "/sync/grimoire" });
+  vi.mocked(api.putConfig).mockResolvedValue(fixture({ data_dir: "/sync/grimoire" }));
   renderWizard();
   fireEvent.click(await screen.findByRole("button", { name: /skip setup/i }));
   await waitFor(() => expect(onDone).toHaveBeenCalledWith("/sync/grimoire"));
@@ -995,11 +1000,11 @@ test("finishing reports which store the answer belongs to", async () => {
 test("a move to a library with a working provider adopts it too", async () => {
   // The mount path adopted an existing provider; the move path did not, so
   // step 2 asked again for one the new library already had.
-  (api.listWorlds as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.listWorlds).mockResolvedValue(fixture([{ id: "saltmarch", name: "Saltmarch" }]));
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({
     first_run: false, theme: "codex", data_dir: "/sync/grimoire", ready: true,
     active_connection: { id: "theirs", kind: "openrouter", name: "Their OpenRouter" },
-  });
+  }));
   renderWizard();
   fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
   fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
@@ -1014,15 +1019,15 @@ test("a failed setup_done write still names the store the wizard moved to", asyn
   // Falling back to the caller's own idea of the store would key its latch on
   // the pre-move path, and the next config read would redirect straight back
   // into the wizard — the trap the latch exists to prevent.
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({
     first_run: true, theme: "codex", data_dir: "/sync/grimoire", ready: false, active_connection: null,
-  });
+  }));
   renderWizard();
   fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
   fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
   await waitFor(() => expect(api.putDataDir).toHaveBeenCalled());
 
-  (api.putConfig as any).mockRejectedValue(new Error("disk full"));
+  vi.mocked(api.putConfig).mockRejectedValue(new Error("disk full"));
   fireEvent.click(screen.getByRole("button", { name: /skip setup/i }));
   await waitFor(() => expect(onDone).toHaveBeenCalledWith("/sync/grimoire"));
 });
@@ -1070,7 +1075,7 @@ test("skipping setup records the answer and leaves for the campaigns list", asyn
 });
 
 test("a failed setup_done write still lets the user out", async () => {
-  (api.putConfig as any).mockRejectedValue(new Error("disk full"));
+  vi.mocked(api.putConfig).mockRejectedValue(new Error("disk full"));
   renderWizard();
   fireEvent.click(await screen.findByRole("button", { name: /skip setup/i }));
   await waitFor(() => expect(navigate).toHaveBeenCalledWith("/", { replace: true }));
@@ -1107,7 +1112,7 @@ test("Skip setup is offered beside the step's own Next, not only at the end", as
 test("a Primary stored on a provider that cannot send starts on the one just saved", async () => {
   // The library's Primary names a keyless provider -- the state this step is
   // for. The provider made in step 2 is the one that works.
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     roles: { ...settings().roles,
              primary: card({ provider: "saltmarch", model: "mara-large", preset: "winifred" }) },
     providers: [
@@ -1127,7 +1132,7 @@ test("a Primary stored on a provider that cannot send starts on the one just sav
 });
 
 test("a Primary stored on a provider that can send is kept", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     roles: { ...settings().roles,
              primary: card({ provider: "saltmarch", model: "mara-large", preset: "" }) },
   }));
@@ -1139,7 +1144,7 @@ test("a Primary stored on a provider that can send is kept", async () => {
 });
 
 test("a failed presets read can be tried again", async () => {
-  (api.listProviderPresets as any).mockRejectedValueOnce(
+  vi.mocked(api.listProviderPresets).mockRejectedValueOnce(
     Object.assign(new Error("offline"), { detail: "the presets are unreadable" }));
   await goToStep(2);
   expect(await screen.findByText(/Couldn't list the kinds of provider: the presets are unreadable/))

@@ -30,7 +30,7 @@ const WHOLE = /^\d+$/;
  *  message would; a connection level is its own rules, so it offers no choice. */
 export function RegexTestPane({ scope, draft, initial, connections = [] }: {
   scope: RegexScope;
-  draft?: RegexRule;
+  draft?: RegexRule | undefined;
   initial?: { text: string; role: Role; depth: number; connection?: string };
   connections?: { id: string; name: string }[];
 }) {

@@ -33,8 +33,10 @@ export function PromptLayoutEditor(
   if (failed) return <p className="config-caption">Could not load the prompt layout.</p>;
   if (!rows) return <p className="config-caption">Loading…</p>;
 
+  const activeRows = rows;
+
   function move(index: number, by: -1 | 1) {
-    const list = rows!;
+    const list = activeRows;
     const to = index + by;
     if (to < 0 || to >= list.length) return;
     const next = [...list];
@@ -43,7 +45,7 @@ export function PromptLayoutEditor(
   }
 
   function edit(id: string, patch: Partial<PromptLayoutSection>) {
-    onChange(rows!.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    onChange(activeRows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
 
   return (

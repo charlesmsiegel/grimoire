@@ -9,7 +9,7 @@ import type { ImageDescriptor, ImageViewerCloseReason, RemoveOutcome } from "./t
 
 export type ImageViewerProps = {
   images: ImageDescriptor[]; initialKey: string; opener?: HTMLElement | null;
-  fallbackFocus?: HTMLElement | null; onSelectionChange?: (key: string) => void; onClose: (reason?: ImageViewerCloseReason) => void; onOpenRecord?: (destination: string) => void;
+  fallbackFocus?: HTMLElement | null; onSelectionChange?: (key: string) => void; onClose: (reason?: ImageViewerCloseReason) => void; onOpenRecord?: ((destination: string) => void) | undefined;
   /** Removal is the opening surface's capability, never the viewer's: drawn
    *  only with this prop AND a descriptor carrying `removal`. Resolves once the
    *  request settles; rejects with an Error whose message is shown. */
@@ -132,7 +132,7 @@ const distance = (points: Pan[]) => points.length < 2 ? 0 : Math.hypot(points[0]
 /** The keyed child is a load generation: a late load/error from an old image
  *  cannot reset the next image. Retry also keys the img, retaining its URL. */
 function ActiveImage({ image, bindings, onOpenRecord, removal }: {
-  image: ImageDescriptor; bindings: Hotkey[]; onOpenRecord?: (destination: string) => void; removal: RemovalControls;
+  image: ImageDescriptor; bindings: Hotkey[]; onOpenRecord?: ((destination: string) => void) | undefined; removal: RemovalControls;
 }) {
   const stage = useRef<HTMLDivElement>(null);
   const { confirming, pending } = removal;

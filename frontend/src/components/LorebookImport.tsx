@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { api, type LoreEntryDraft } from "../api/client";
 import { LoreReviewTable } from "./LoreReviewTable";
 import { useEntityKinds } from "./useEntityKinds";
+import { errorText } from "../api/errors";
 
 const FORMATS = ["lorebook", "json", "png", "charx"];
 
@@ -21,14 +22,14 @@ export function LorebookImport({ wid, onImported }: { wid: string; onImported?: 
     try {
       const { entries } = await api.lorebookParse(wid, file, format);
       setEntries(entries);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setEntries(null);
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     }
   }
 
   function patch(i: number, patch: Partial<LoreEntryDraft>) {
-    setEntries((cur) => cur!.map((e, j) => (j === i ? { ...e, ...patch } : e)));
+    setEntries((cur) => cur?.map((e, j) => (j === i ? { ...e, ...patch } : e)) ?? null);
   }
 
   async function commit() {
@@ -40,8 +41,8 @@ export function LorebookImport({ wid, onImported }: { wid: string; onImported?: 
       setEntries(null);
       if (fileRef.current) fileRef.current.value = "";
       onImported?.();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 

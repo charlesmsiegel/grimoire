@@ -17,7 +17,9 @@ import "./index.css";
 
 const router = createAppRouter();
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) throw new Error("The app root element is missing.");
+ReactDOM.createRoot(root).render(
   <React.StrictMode>
     {/* ABOVE the router, not inside it. A provider under the router host
         remounts on navigation, and surviving navigation is the one thing this

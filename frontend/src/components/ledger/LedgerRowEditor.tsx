@@ -41,15 +41,15 @@ export function LedgerRowEditor(
     /** A refusal from the server — a 409 on a fact already retired, say. Shown
      *  in the editor rather than at the top of the page, because that is where
      *  the reader is looking and which row it belongs to is otherwise a guess. */
-    error?: string | null;
+    error?: string | null | undefined;
     /** The one way forward a refusal offers, as a button beside it -- a delete
      *  refused for merged records offers "Delete anyway". */
-    errorAction?: { label: string; run: () => void };
+    errorAction?: { label: string; run: () => void } | undefined;
     onSave: (draft: Draft) => void;
     onCancel: () => void;
     /** Absent for a record that cannot be removed — the chronicle line, whose
      *  record belongs to a scene rather than to the ledger. */
-    onDelete?: () => void;
+    onDelete?: (() => void) | undefined;
     deleteLabel?: string;
   },
 ) {

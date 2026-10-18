@@ -57,7 +57,9 @@ test("marks the total as an estimate when the tokenizer was not the model's own"
 });
 
 test("a snapshot frozen before tokenizers were recorded reads as an estimate", () => {
-  render(<ContextBudgetBar label="LAST TURN" ctx={ctx({ token_count: undefined })} />);
+  const snapshot = ctx();
+  delete snapshot.token_count;
+  render(<ContextBudgetBar label="LAST TURN" ctx={snapshot} />);
   expect(screen.getByText("≈ 1,000 / 4,000 · 25%")).toBeInTheDocument();
 });
 

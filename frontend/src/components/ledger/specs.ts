@@ -24,7 +24,7 @@ export type EditSpec = {
   pair?: { a: string; b: string };
   /** The one action worth a button on the row itself, without opening
    *  anything: the common ending for that kind of record. */
-  quick?: { label: string; title: string };
+  quick?: { label: string; title: string } | undefined;
   /** Absent where removal is not this page's to offer. */
   deletable?: boolean;
 };

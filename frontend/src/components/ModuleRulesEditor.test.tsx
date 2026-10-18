@@ -39,7 +39,7 @@ beforeEach(() => {
 });
 
 test("check row → view → Edit → save round-trip", async () => {
-  (api.putModuleCheck as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleCheck).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ChecksSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Brawl"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -51,7 +51,7 @@ test("check row → view → Edit → save round-trip", async () => {
 });
 
 test("blocked check delete shows the guard message", async () => {
-  (api.deleteModuleCheck as any).mockResolvedValue(
+  vi.mocked(api.deleteModuleCheck).mockResolvedValue(
     { ok: false, errors: ["check 'brawl' has a live roll proposal in campaign 'c1', scene 's1' — resolve or discard it first"], display_errors: [] });
   render(<ChecksSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Brawl"));
@@ -60,8 +60,8 @@ test("blocked check delete shows the guard message", async () => {
 });
 
 test("rule form loads the body and saves flags + body", async () => {
-  (api.readModuleRule as any).mockResolvedValue({ meta: {}, body: "Swing first." });
-  (api.putModuleRule as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.readModuleRule).mockResolvedValue({ meta: {}, body: "Swing first." });
+  vi.mocked(api.putModuleRule).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<RulesSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("combat"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
@@ -75,8 +75,8 @@ test("rule form loads the body and saves flags + body", async () => {
 });
 
 test("Save is absent while the rule body read is pending (P1-2)", async () => {
-  let resolveRead: (v: { meta: Record<string, unknown>; body: string }) => void = () => {};
-  (api.readModuleRule as any).mockReturnValue(new Promise((res) => { resolveRead = res; }));
+  let resolveRead: (v: Awaited<ReturnType<typeof api.readModuleRule>>) => void = () => {};
+  vi.mocked(api.readModuleRule).mockReturnValue(new Promise((res) => { resolveRead = res; }));
   render(<RulesSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("combat"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -90,7 +90,7 @@ test("Save is absent while the rule body read is pending (P1-2)", async () => {
 });
 
 test("a failed rule body fetch shows an error and keeps Save blocked (P1-2)", async () => {
-  (api.readModuleRule as any).mockRejectedValue(new Error("network down"));
+  vi.mocked(api.readModuleRule).mockRejectedValue(new Error("network down"));
   render(<RulesSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("combat"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -101,7 +101,7 @@ test("a failed rule body fetch shows an error and keeps Save blocked (P1-2)", as
 });
 
 test("a failed check delete's guard banner clears when another row is selected", async () => {
-  (api.deleteModuleCheck as any).mockResolvedValue(
+  vi.mocked(api.deleteModuleCheck).mockResolvedValue(
     { ok: false, errors: ["check 'brawl' has a live roll proposal in campaign 'c1', scene 's1' — resolve or discard it first"], display_errors: [] });
   render(<ChecksSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Brawl"));
@@ -112,7 +112,7 @@ test("a failed check delete's guard banner clears when another row is selected",
 });
 
 test("a failed rule delete's guard banner clears when another row is selected", async () => {
-  (api.deleteModuleRule as any).mockResolvedValue(
+  vi.mocked(api.deleteModuleRule).mockResolvedValue(
     { ok: false, errors: ["rule 'combat' is referenced elsewhere — resolve first"], display_errors: [] });
   const pack = { ...PACK, rules: [...PACK.rules, { id: "stealth", keys: [], always: false, on_roll: false, sheet_types: [] }] };
   render(<RulesSection pack={pack} reload={vi.fn()} />);
@@ -124,7 +124,7 @@ test("a failed rule delete's guard banner clears when another row is selected", 
 });
 
 test("deleting the selected check clears the selection instead of leaving a ghost view", async () => {
-  (api.deleteModuleCheck as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.deleteModuleCheck).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<ChecksSection pack={PACK} reload={reload} />);
   fireEvent.click(screen.getByText("Brawl"));
@@ -138,7 +138,7 @@ test("deleting the selected check clears the selection instead of leaving a ghos
 });
 
 test("deleting the selected rule clears the selection instead of leaving a ghost view", async () => {
-  (api.deleteModuleRule as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.deleteModuleRule).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<RulesSection pack={PACK} reload={reload} />);
   fireEvent.click(screen.getByText("combat"));
@@ -169,7 +169,7 @@ test("Save with an empty rule slug keeps the form open, shows the error, makes n
 });
 
 test("Defaults pseudo-row round-trips difficulty through putModuleCheckDefaults", async () => {
-  (api.putModuleCheckDefaults as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleCheckDefaults).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ChecksSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Defaults"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -181,7 +181,7 @@ test("Defaults pseudo-row round-trips difficulty through putModuleCheckDefaults"
 
 test("Defaults pseudo-row omits difficulty when cleared", async () => {
   const pack = { ...PACK, checks: { ...PACK.checks, _defaults: { difficulty: 10 } } };
-  (api.putModuleCheckDefaults as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleCheckDefaults).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ChecksSection pack={pack} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Defaults"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));

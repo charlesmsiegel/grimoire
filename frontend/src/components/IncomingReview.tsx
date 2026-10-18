@@ -49,11 +49,11 @@ const plain = (key: string, label: string, value: string): Row => ({ key, label,
 function rowsOf(blob: IncomingBlob | undefined, kind: string): Row[] {
   if (!blob) return [];
   if (blob.card) {
-    const data = blob.card.data as Record<string, unknown>;
+    const data = blob.card.data;
     return CARD_TEXT_FIELDS.map((f) => plain(f.key, f.label, String(data[f.key] ?? "")));
   }
   if (blob.persona) {
-    const persona = blob.persona as unknown as Record<string, unknown>;
+    const persona = blob.persona;
     return PERSONA_FIELDS.map((f) => plain(f.key, f.label, String(persona[f.key] ?? "")));
   }
   // The name is compared, not just printed as the heading. `entity_hash` covers

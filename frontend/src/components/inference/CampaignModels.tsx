@@ -94,7 +94,7 @@ function MigrationLine({ settings, cid }: { settings: InferenceSettings; cid: st
 export function CampaignModels({ cid, onDirtyChange }: {
   cid: string;
   /** Opt-in for the settings page, which protects all retained sections. */
-  onDirtyChange?: (dirty: boolean) => void;
+  onDirtyChange?: ((dirty: boolean) => void) | undefined;
 }) {
   const [settings, setSettings] = useState<InferenceSettings | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -348,7 +348,7 @@ function RoleDetail({ role, card, settings, blocked, onEdit }:
 function SelectionFields({ label, needs, sel, onChange, settings, blocked, presetLabel, onDraft }:
   { label: string; needs: CapabilityNeed[]; sel: InferenceSelection;
     onChange: (sel: InferenceSelection) => void; settings: InferenceSettings;
-    blocked: boolean; presetLabel: string; onDraft?: (draft: string) => void }) {
+    blocked: boolean; presetLabel: string; onDraft?: ((draft: string) => void) | undefined }) {
   // A selection with no provider is not read at all, so a preset chosen alone
   // would be stored and dormant: held until a provider is chosen, unless one
   // is already stored that way, which stays clearable.
@@ -382,7 +382,7 @@ function SelectionFields({ label, needs, sel, onChange, settings, blocked, prese
 function RoleForm({ role, card, settings, blocked, onCancel, onSave, onDirtyChange }:
   { role: GenerativeRole; card: RoleCard; settings: InferenceSettings; blocked: boolean;
     onCancel: () => void; onSave: (body: CampaignInferenceWrite) => Promise<void>;
-    onDirtyChange?: (dirty: boolean) => void }) {
+    onDirtyChange?: ((dirty: boolean) => void) | undefined }) {
   const label = ROLE_LABEL[role];
   const choiceLabel = `${label} for this campaign`;
   const [own, setOwn] = useState(overridden(card));
@@ -510,7 +510,7 @@ function RouteDetail({ row, settings, blocked, onEdit }:
 function RouteForm({ row, settings, blocked, onCancel, onSave, onDirtyChange }:
   { row: RouteRow; settings: InferenceSettings; blocked: boolean;
     onCancel: () => void; onSave: (body: CampaignInferenceWrite) => Promise<void>;
-    onDirtyChange?: (dirty: boolean) => void }) {
+    onDirtyChange?: ((dirty: boolean) => void) | undefined }) {
   const [use, setUse] = useState<RouteUse>(row.use);
   const [pin, setPin] = useState<InferenceSelection>(row.pin);
   const [preset, setPreset] = useState(row.preset);

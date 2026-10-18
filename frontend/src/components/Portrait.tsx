@@ -16,7 +16,7 @@ export function initialsOf(name: string): string {
  *  ones on screen; a lazy image already in the viewport loads as soon as it is
  *  laid out, so nothing visible waits on this. */
 export function Portrait({ src, name, focus }:
-  { src: string | ThumbSet | null; name: string; focus?: number | null }) {
+  { src: string | ThumbSet | null; name: string; focus?: number | null | undefined }) {
   const [broken, setBroken] = useState(false);
   // Keyed on the URL, never on the object: a `thumbSet` is rebuilt every
   // render, and an effect on it would clear `broken` straight after a failed

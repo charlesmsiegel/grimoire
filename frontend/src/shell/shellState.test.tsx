@@ -22,7 +22,7 @@ const withCampaign = (id: string) => ({
 
 beforeEach(() => {
   localStorage.clear();
-  (api.getShell as any).mockReset().mockResolvedValue(EMPTY);
+  vi.mocked(api.getShell).mockReset().mockResolvedValue(EMPTY);
 });
 // Storage is global to the jsdom instance, so a test that left a key behind
 // would decide the next one's answer.
@@ -53,7 +53,7 @@ const cid = () => screen.getByTestId("cid").textContent;
 
 describe("which campaign is open", () => {
   test("a campaign route sets it, and leaving does not close it", async () => {
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     const { rerender } = renderAt("/campaigns/c1");
     await waitFor(() => expect(cid()).toBe("c1"));
 
@@ -77,7 +77,7 @@ describe("which campaign is open", () => {
   });
 
   test("it survives a remount", async () => {
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     const first = renderAt("/campaigns/c1");
     await waitFor(() => expect(cid()).toBe("c1"));
     first.unmount();
@@ -87,34 +87,34 @@ describe("which campaign is open", () => {
   });
 
   test("a different store root gets its own answer", async () => {
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     const first = renderAt("/campaigns/c1", "/store/a");
     await waitFor(() => expect(cid()).toBe("c1"));
     first.unmount();
 
     // Repointing at another library must not inherit this one's campaign — the
     // id would name nothing there, or worse, something else.
-    (api.getShell as any).mockResolvedValue(EMPTY);
+    vi.mocked(api.getShell).mockResolvedValue(EMPTY);
     renderAt("/config", "/store/b");
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("ready"));
     expect(cid()).toBe("-");
   });
 
   test("a successful read that resolves nothing clears it", async () => {
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     const first = renderAt("/campaigns/c1");
     await waitFor(() => expect(cid()).toBe("c1"));
     first.unmount();
 
     // The campaign was deleted. The server says so by answering 200 with a null
     // campaign, and the memory goes with it.
-    (api.getShell as any).mockResolvedValue(EMPTY);
+    vi.mocked(api.getShell).mockResolvedValue(EMPTY);
     renderAt("/config");
     await waitFor(() => expect(cid()).toBe("-"));
   });
 
   test("a FAILED read does not clear it", async () => {
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     const first = renderAt("/campaigns/c1");
     await waitFor(() => expect(cid()).toBe("c1"));
     first.unmount();
@@ -122,7 +122,7 @@ describe("which campaign is open", () => {
     // A dropped connection is not a deleted campaign. Treating them alike is
     // how valid state gets erased — the rail would lose its second tier every
     // time the server hiccuped.
-    (api.getShell as any).mockRejectedValue(new Error("offline"));
+    vi.mocked(api.getShell).mockRejectedValue(new Error("offline"));
     renderAt("/config");
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("failed"));
     expect(cid()).toBe("c1");
@@ -131,11 +131,11 @@ describe("which campaign is open", () => {
 
 describe("the payload's own state", () => {
   test("a failure keeps the last good payload for the same key", async () => {
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     renderAt("/campaigns/c1");
     await waitFor(() => expect(screen.getByTestId("name")).toHaveTextContent("A Run"));
 
-    (api.getShell as any).mockRejectedValue(new Error("offline"));
+    vi.mocked(api.getShell).mockRejectedValue(new Error("offline"));
     act(() => { shellChanged(); });
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("failed"));
     // Stale but usable beats blank: the rail's first job is navigation.
@@ -143,14 +143,14 @@ describe("the payload's own state", () => {
   });
 
   test("a payload from the previous store root is dropped, not rendered", async () => {
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     const { rerender } = renderAt("/config", "/store/a");
     await waitFor(() => expect(screen.getByTestId("name")).toHaveTextContent("A Run"));
 
     // Repoint, and make the new library's read hang. The chrome must not go on
     // showing the previous library's campaign in the meantime — this is the
     // concrete bug the (data_dir, cid) key exists to prevent.
-    (api.getShell as any).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.getShell).mockReturnValue(new Promise(() => {}));
     rerender(
       <MemoryRouter initialEntries={["/config"]}>
         <Routes><Route path="*" element={<Harness dataDir="/store/b" />} /></Routes>
@@ -165,18 +165,18 @@ describe("the payload's own state", () => {
     // stale on screen indefinitely.
     renderAt("/config");
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("ready"));
-    const before = (api.getShell as any).mock.calls.length;
+    const before = vi.mocked(api.getShell).mock.calls.length;
     act(() => { shellChanged(); });
     await waitFor(() =>
-      expect((api.getShell as any).mock.calls.length).toBeGreaterThan(before));
+      expect(vi.mocked(api.getShell).mock.calls.length).toBeGreaterThan(before));
   });
 
   test("a mutation during a read does not adopt the read it interrupted", async () => {
     // The read in flight was issued before the write, so its answer is the one
     // the notification is trying to replace. Sharing it would be exactly the
     // stale adoption `fresh` exists to stop in the api client.
-    let settleFirst: (v: unknown) => void = () => {};
-    (api.getShell as any)
+    let settleFirst: (v: Awaited<ReturnType<typeof api.getShell>>) => void = () => {};
+    vi.mocked(api.getShell)
       .mockReturnValueOnce(new Promise((r) => { settleFirst = r; }))
       .mockResolvedValue(withCampaign("c1"));
     renderAt("/campaigns/c1");
@@ -204,10 +204,10 @@ describe("the payload's own state", () => {
       const navigate = useNavigate();
       return <button onClick={() => navigate("/campaigns/c2")}>to-c2</button>;
     }
-    (api.getShell as any).mockRejectedValue(new Error("offline"));
+    vi.mocked(api.getShell).mockRejectedValue(new Error("offline"));
     render(<MemoryRouter initialEntries={["/campaigns/c1"]}><Recorder /></MemoryRouter>);
     await waitFor(() => expect(seen).toContain("c1:failed"));
-    (api.getShell as any).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.getShell).mockReturnValue(new Promise(() => {}));
     fireEvent.click(screen.getByText("to-c2"));
     await waitFor(() => expect(seen).toContain("c2:loading"));
     expect(seen).not.toContain("c2:failed");
@@ -261,7 +261,7 @@ describe("one read per arrival", () => {
     // A different campaign remembered for this root is exactly the stale id
     // the first read used to be issued with, before the route's own id landed.
     localStorage.setItem("grimoire.openCampaign:/store/a", "c-old");
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     renderAt("/campaigns/c1/scenes/s1");
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("ready"));
     expect(api.getShell).toHaveBeenCalledTimes(1);
@@ -269,7 +269,7 @@ describe("one read per arrival", () => {
   });
 
   test("...and a browser that remembers nothing does the same", async () => {
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     renderAt("/campaigns/c1/scenes/s1");
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("ready"));
     expect(api.getShell).toHaveBeenCalledTimes(1);
@@ -277,7 +277,7 @@ describe("one read per arrival", () => {
   });
 
   test("a page that asks for a read on arrival shares the one the rail is making", async () => {
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     renderProvided("/campaigns/c1");
     await waitFor(() => expect(screen.getByTestId("page-name")).toHaveTextContent("A Run"));
     expect(api.getShell).toHaveBeenCalledTimes(1);
@@ -287,7 +287,7 @@ describe("one read per arrival", () => {
     // Dev builds mount every effect twice. A read per effect run would double
     // the most expensive request in the chrome on every cold load of the build
     // the app is developed against.
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     render(
       <StrictMode>
         <MemoryRouter initialEntries={["/campaigns/c1"]}>
@@ -303,7 +303,7 @@ describe("one read per arrival", () => {
     // turn played since its last read moved the money and the turn counts. The
     // page's arrival is what asks, so it never draws only what the rail heard
     // before the reader went off to play.
-    (api.getShell as any).mockResolvedValue(withCampaign("c1"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c1"));
     renderProvided("/campaigns/c1/ledger");
     await waitFor(() => expect(api.getShell).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByText("jump"));
@@ -315,14 +315,14 @@ describe("one read per arrival", () => {
     // The rail's read can be about a different campaign than the page beside
     // it -- the one the server resolved instead, or the one the rail
     // remembered before the route's own id reached it.
-    (api.getShell as any).mockResolvedValue(withCampaign("c2"));
+    vi.mocked(api.getShell).mockResolvedValue(withCampaign("c2"));
     renderProvided("/campaigns/c1");
     await waitFor(() => expect(api.getShell).toHaveBeenCalled());
     expect(screen.getByTestId("page-name")).toHaveTextContent("-");
   });
 
   test("a failed read is reported to the page asking about that campaign", async () => {
-    (api.getShell as any).mockRejectedValue(new Error("offline"));
+    vi.mocked(api.getShell).mockRejectedValue(new Error("offline"));
     renderProvided("/campaigns/c1");
     await waitFor(() => expect(screen.getByTestId("page-failed")).toHaveTextContent("failed"));
     expect(screen.getByTestId("page-name")).toHaveTextContent("-");

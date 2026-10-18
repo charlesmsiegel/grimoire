@@ -180,7 +180,9 @@ test("confirmed partial caption keeps its editor and exposes cleanup without rew
 
 test("unavailable description metadata stays unknown and cannot open a guarded editor", async () => {
   const target = artTarget("items"), image = artImage(target, "avatar", { description_available: false,
-    description_rev: null, effective_description: undefined, write_target_description: undefined, description: "", described: false });
+    description_rev: null, description: "", described: false });
+  delete image.effective_description;
+  delete image.write_target_description;
   const adapter = artAdapter(target, artRead(target, [image]));
   mountArt(adapter);
   await screen.findByText("Description metadata unavailable");

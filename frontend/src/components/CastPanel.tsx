@@ -26,25 +26,25 @@ export function CastPanel({
   sid: string;
   ready: boolean;
   onSeeded: () => void;
-  onSceneRenamed?: (id: string) => void;
-  initialPrompt?: string;
+  onSceneRenamed?: ((id: string) => void) | undefined;
+  initialPrompt?: string | undefined;
   /** the greeting the scene was started from -- see `OpenerComposer` */
-  greeting?: string;
+  greeting?: string | undefined;
   pcless?: boolean;
   /** A turn is streaming into this scene, so anything that can rename its file
    *  has to wait: the id is the filename, and moving it mid-turn strands the
    *  abort write that saves the partial (#95). */
-  sceneLocked?: boolean;
+  sceneLocked?: boolean | undefined;
   /** Reports a scene-renaming request in and out of flight. The parent blocks
    *  new turns while one is pending: until the PUT answers, the scene's id is
    *  in doubt, and a turn handed the old one writes nowhere (#95). */
-  onRenaming?: (active: boolean) => void;
+  onRenaming?: ((active: boolean) => void) | undefined;
   /** Bumped by a composer quick reply asking for the opener generator: the
    *  panel expands and the opener prompt takes focus. A count rather than a
    *  flag, so asking twice works; compared with the last request handled, which
    *  starts at the value the panel mounted with, so a request made before this
    *  panel existed does nothing. */
-  openerRequest?: number;
+  openerRequest?: number | undefined;
 }) {
   // Controlled, so a request can open it; the reader's own toggle still wins
   // every other time.

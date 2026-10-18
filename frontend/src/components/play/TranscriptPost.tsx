@@ -109,7 +109,7 @@ export type TranscriptSwipe = {
  *  where › makes another rather than stepping. Both disabled flags are worked
  *  out by the view, which is the one that knows every guard. */
 export type TranscriptVariantSwipe = {
-  position: number; count: number; title?: string;
+  position: number; count: number; title?: string | undefined;
   previousDisabled: boolean; nextDisabled: boolean; generates: boolean;
 };
 

@@ -28,15 +28,15 @@ const PROPOSAL = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.scenarioParse as any).mockResolvedValue(structuredClone(PROPOSAL));
-  (api.scenarioParseUrl as any).mockResolvedValue(structuredClone(PROPOSAL));
-  (api.scenarioImport as any).mockResolvedValue({
+  vi.mocked(api.scenarioParse).mockResolvedValue(structuredClone(PROPOSAL));
+  vi.mocked(api.scenarioParseUrl).mockResolvedValue(structuredClone(PROPOSAL));
+  vi.mocked(api.scenarioImport).mockResolvedValue({
     characters: [{ name: "Mara", id: "mara", version: "default", created: true }],
     entries: [{ kind: "locations", id: "the-tide-gate" }],
     greetings: [{ name: "Saltmarch", id: "saltmarch" }],
     art: { total: 1, localized: 1, skipped: 0, failed: 0, capped: false },
   });
-  (api.entityKinds as any).mockResolvedValue({ kinds: [...ENTITY_KINDS] });
+  vi.mocked(api.entityKinds).mockResolvedValue({ kinds: [...ENTITY_KINDS] });
 });
 
 function pickFile() {
@@ -64,8 +64,8 @@ test("importing sends the edited proposal, not the one that was proposed", async
   fireEvent.change(screen.getByLabelText("character name 0"), { target: { value: "Mara Vel" } });
   fireEvent.change(screen.getByLabelText("entry category 0"), { target: { value: "lore" } });
   fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
-  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
-  const [, sent, art] = (api.scenarioImport as any).mock.calls[0];
+  await waitFor(() => expect(vi.mocked(api.scenarioImport).mock.calls.length).toBe(1));
+  const [, sent, art] = vi.mocked(api.scenarioImport).mock.calls[0];
   expect(sent.characters[0].name).toBe("Mara Vel");
   expect(sent.entries[0].category).toBe("lore");
   expect(art).toBe(true);
@@ -73,7 +73,7 @@ test("importing sends the edited proposal, not the one that was proposed", async
 });
 
 test("images the import could not take are reported, not passed over in silence", async () => {
-  (api.scenarioImport as any).mockResolvedValue({
+  vi.mocked(api.scenarioImport).mockResolvedValue({
     characters: [], entries: [], greetings: [{ name: "Opener", id: "opener" }],
     art: { total: 14, localized: 10, skipped: 4, failed: 0, capped: true },
   });
@@ -87,8 +87,8 @@ test("a row the reviewer unchecks is left out of the import", async () => {
   fireEvent.click(screen.getByLabelText("keep character 1"));
   fireEvent.click(screen.getByLabelText("keep greeting 1"));
   fireEvent.click(screen.getByRole("button", { name: /import 3 records/i }));
-  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
-  const sent = (api.scenarioImport as any).mock.calls[0][1];
+  await waitFor(() => expect(vi.mocked(api.scenarioImport).mock.calls.length).toBe(1));
+  const sent = vi.mocked(api.scenarioImport).mock.calls[0][1];
   expect(sent.characters.map((c: any) => c.name)).toEqual(["Mara"]);
   expect(sent.greetings.map((g: any) => g.name)).toEqual(["Saltmarch"]);
 });
@@ -101,8 +101,8 @@ test("renaming a cast member carries every opener that named them", async () => 
   await readCard();
   fireEvent.change(screen.getByLabelText("character name 0"), { target: { value: "Mara Vel" } });
   fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
-  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
-  const sent = (api.scenarioImport as any).mock.calls[0][1];
+  await waitFor(() => expect(vi.mocked(api.scenarioImport).mock.calls.length).toBe(1));
+  const sent = vi.mocked(api.scenarioImport).mock.calls[0][1];
   expect(sent.greetings[0].character).toBe("Mara Vel");
   expect(sent.greetings[0].present).toEqual(["Mara Vel"]);
 });
@@ -116,8 +116,8 @@ test("clearing a name and retyping it does not capture the cast-less openers", a
   fireEvent.change(screen.getByLabelText("character name 0"), { target: { value: "" } });
   fireEvent.change(screen.getByLabelText("character name 0"), { target: { value: "Mara Vel" } });
   fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
-  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
-  const sent = (api.scenarioImport as any).mock.calls[0][1];
+  await waitFor(() => expect(vi.mocked(api.scenarioImport).mock.calls.length).toBe(1));
+  const sent = vi.mocked(api.scenarioImport).mock.calls[0][1];
   expect(sent.greetings[1].character).toBe("");     // the opener that named nobody, still nobody
   // ...and the one that did name her keeps the name it knows, which the screen
   // flags as not-being-imported rather than silently repointing.
@@ -125,7 +125,7 @@ test("clearing a name and retyping it does not capture the cast-less openers", a
 });
 
 test("a cast member the world already has is flagged, until the row is renamed", async () => {
-  (api.scenarioParse as any).mockResolvedValue({
+  vi.mocked(api.scenarioParse).mockResolvedValue({
     ...structuredClone(PROPOSAL),
     characters: [{ name: "Mara", description: "d", personality: "p", exists: true }],
   });
@@ -139,7 +139,7 @@ test("a cast member the world already has is flagged, until the row is renamed",
 test("a cast name proposed twice is offered once", async () => {
   // Names are the key this whole proposal is wired on: two rows sharing one is
   // a duplicated <option> key and a picker that cannot say which is meant.
-  (api.scenarioParse as any).mockResolvedValue({
+  vi.mocked(api.scenarioParse).mockResolvedValue({
     ...structuredClone(PROPOSAL),
     characters: [
       { name: "Mara", description: "Tends the gate.", personality: "Watchful." },
@@ -152,7 +152,7 @@ test("a cast name proposed twice is offered once", async () => {
 });
 
 test("repointing an opener keeps the rest of its cast present", async () => {
-  (api.scenarioParse as any).mockResolvedValue({
+  vi.mocked(api.scenarioParse).mockResolvedValue({
     ...structuredClone(PROPOSAL),
     greetings: [{ name: "Saltmarch", body: "Mara and Winifred.",
                   character: "Mara", present: ["Mara", "Winifred"] }],
@@ -160,8 +160,8 @@ test("repointing an opener keeps the rest of its cast present", async () => {
   await readCard();
   fireEvent.change(screen.getByLabelText("greeting character 0"), { target: { value: "Winifred" } });
   fireEvent.click(screen.getByRole("button", { name: /import 4 records/i }));
-  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
-  const sent = (api.scenarioImport as any).mock.calls[0][1];
+  await waitFor(() => expect(vi.mocked(api.scenarioImport).mock.calls.length).toBe(1));
+  const sent = vi.mocked(api.scenarioImport).mock.calls[0][1];
   // Winifred leads now; Mara is still in the scene rather than written out of it.
   expect(sent.greetings[0].present).toEqual(["Winifred", "Mara"]);
 });
@@ -176,8 +176,8 @@ test("an opener can be pointed at any proposed cast member", async () => {
   await readCard();
   fireEvent.change(screen.getByLabelText("greeting character 1"), { target: { value: "Winifred" } });
   fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
-  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
-  const sent = (api.scenarioImport as any).mock.calls[0][1];
+  await waitFor(() => expect(vi.mocked(api.scenarioImport).mock.calls.length).toBe(1));
+  const sent = vi.mocked(api.scenarioImport).mock.calls[0][1];
   expect(sent.greetings[1].character).toBe("Winifred");
   expect(sent.greetings[1].present).toEqual(["Winifred"]);
 });
@@ -186,8 +186,8 @@ test("art can be turned off before importing", async () => {
   await readCard();
   fireEvent.click(screen.getByLabelText(/download the openers' images/i));
   fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
-  await waitFor(() => expect((api.scenarioImport as any).mock.calls.length).toBe(1));
-  expect((api.scenarioImport as any).mock.calls[0][2]).toBe(false);
+  await waitFor(() => expect(vi.mocked(api.scenarioImport).mock.calls.length).toBe(1));
+  expect(vi.mocked(api.scenarioImport).mock.calls[0][2]).toBe(false);
 });
 
 test("a URL is read through the URL route", async () => {
@@ -196,13 +196,13 @@ test("a URL is read through the URL route", async () => {
                    { target: { value: "https://chub.ai/characters/creator/saltmarch" } });
   fireEvent.click(screen.getByRole("button", { name: /read url/i }));
   await screen.findByLabelText("character name 0");
-  expect((api.scenarioParseUrl as any).mock.calls[0][1])
+  expect(vi.mocked(api.scenarioParseUrl).mock.calls[0][1])
     .toBe("https://chub.ai/characters/creator/saltmarch");
-  expect((api.scenarioParse as any).mock.calls.length).toBe(0);
+  expect(vi.mocked(api.scenarioParse).mock.calls.length).toBe(0);
 });
 
 test("a failed read shows the error and proposes nothing", async () => {
-  (api.scenarioParse as any).mockRejectedValue({ detail: "No LLM connection selected" });
+  vi.mocked(api.scenarioParse).mockRejectedValue({ detail: "No LLM connection selected" });
   render(<ScenarioImport wid="w" />);
   pickFile();
   fireEvent.click(screen.getByRole("button", { name: /read card/i }));
@@ -211,7 +211,7 @@ test("a failed read shows the error and proposes nothing", async () => {
 });
 
 test("a card with no cast still offers its entries and openers", async () => {
-  (api.scenarioParse as any).mockResolvedValue({ ...structuredClone(PROPOSAL), characters: [] });
+  vi.mocked(api.scenarioParse).mockResolvedValue({ ...structuredClone(PROPOSAL), characters: [] });
   render(<ScenarioImport wid="w" />);
   pickFile();
   fireEvent.click(screen.getByRole("button", { name: /read card/i }));
@@ -222,7 +222,7 @@ test("a card with no cast still offers its entries and openers", async () => {
 test("a card the model could not be read for offers the local-model recovery", async () => {
   // Parsing a scenario card is a generation like any other (#210): offline it
   // failed with a bare socket error and no way forward.
-  (api.scenarioParse as any).mockRejectedValue({ detail: "connection refused", kind: "network" });
+  vi.mocked(api.scenarioParse).mockRejectedValue({ detail: "connection refused", kind: "network" });
   render(<MemoryRouter><ScenarioImport wid="w" /></MemoryRouter>);
   pickFile();
   fireEvent.click(screen.getByRole("button", { name: /read card/i }));
@@ -234,7 +234,7 @@ test("the entry category options are narrowed the same way the lorebook dialog's
   // Same contract as the lorebook dialog (#138): both review tables ask the
   // server what a row may be filed under, and neither offers a kind this build
   // could not show afterwards.
-  (api.entityKinds as any).mockResolvedValue({ kinds: ["lore", "locations", "vehicles"] });
+  vi.mocked(api.entityKinds).mockResolvedValue({ kinds: ["lore", "locations", "vehicles"] });
   await readCard();
   const select = screen.getByLabelText<HTMLSelectElement>("entry category 0");
   expect([...select.options].map((o) => o.value)).toEqual(["locations", "lore"]);
@@ -242,12 +242,12 @@ test("the entry category options are narrowed the same way the lorebook dialog's
   fireEvent.change(select, { target: { value: "lore" } });
   fireEvent.click(screen.getByRole("button", { name: /import 5 records/i }));
   await waitFor(() => {
-    expect((api.scenarioImport as any).mock.calls[0][1].entries[0].category).toBe("lore");
+    expect(vi.mocked(api.scenarioImport).mock.calls[0][1].entries[0].category).toBe("lore");
   });
 });
 
 test("a kinds read that fails leaves the entry dropdown on the build's own kinds", async () => {
-  (api.entityKinds as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.entityKinds).mockRejectedValue(new Error("offline"));
   await readCard();
   // See the note in LorebookImport.test.tsx: the built-ins are also the initial
   // state, so the call itself has to be asserted.

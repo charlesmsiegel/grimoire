@@ -50,6 +50,8 @@ vi.mock("../api/client", () => ({
   },
   api: {
     readRecordArt: vi.fn(),
+    // The greeting writes the plot-map races drive; each test says how they answer.
+    updateGreeting: vi.fn(), createGreeting: vi.fn(), setEdges: vi.fn(),
     getWorld: vi.fn(),
     getWorldDefaultPrompt: vi.fn().mockResolvedValue({ text: "", status: "empty" }),
     setWorldDefaultPrompt: vi.fn(),
@@ -103,6 +105,8 @@ vi.mock("../api/client", () => ({
 }));
 import { api } from "../api/client";
 import type { ModuleDetail } from "../api/client";
+import type { CharacterSummary, TrackerField, WorldDetail } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
 /** Reads back what the page under test offered the palette.
  *
@@ -136,76 +140,76 @@ beforeEach(() => {
   resetPrefetch();
   // The world read carries how many campaigns play the world, which is the
   // only place the page reads that number from.
-  (api.getWorld as any).mockResolvedValue(
-    { meta: { id: "w", name: "Drowned Realm" }, body: "", counts: {}, campaigns: 2 });
+  vi.mocked(api.getWorld).mockResolvedValue(
+    fixture({ meta: { id: "w", name: "Drowned Realm" }, body: "", counts: {}, campaigns: 2 }));
   // A first visit, unless a test remembers something.
-  (api.rememberedWorld as any).mockReturnValue(undefined);
-  (api.rememberedCharacters as any).mockReturnValue(undefined);
-  (api.rememberedAppearances as any).mockReturnValue(undefined);
-  (api.countUndescribedImages as any).mockResolvedValue(0);
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "c1", name: "Ashes of the Verdigris Crown", world: "w" } });
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.rememberedWorld).mockReturnValue(undefined);
+  vi.mocked(api.rememberedCharacters).mockReturnValue(undefined);
+  vi.mocked(api.rememberedAppearances).mockReturnValue(undefined);
+  vi.mocked(api.countUndescribedImages).mockResolvedValue(0);
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "c1", name: "Ashes of the Verdigris Crown", world: "w" } }));
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "c1", name: "Ashes of the Verdigris Crown", world: "w" },
     { id: "c2", name: "The Saltmarch Winter", world: "w" },
     { id: "c3", name: "Elsewhere", world: "other" },
-  ]);
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listUndescribedImages as any).mockResolvedValue([]);
+  ]));
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listUndescribedImages).mockResolvedValue([]);
   // campaign scope reads the roster to drive the Characters grid's appeared filter
-  (api.listAppearances as any).mockResolvedValue([]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listTags as any).mockResolvedValue({});
-  const trackerFields = ["clothing", "pose", "attention"].map((key) =>
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listTags).mockResolvedValue({});
+  const trackerFields = ["clothing", "pose", "attention"].map((key): TrackerField =>
     ({ key, label: key[0].toUpperCase() + key.slice(1), type: "text", aware: "present", hint: "" }));
-  (api.getTrackerFields as any).mockResolvedValue(
+  vi.mocked(api.getTrackerFields).mockResolvedValue(
     { layer: {}, effective: trackerFields, inherited: trackerFields });
-  (api.getRegex as any).mockResolvedValue({
+  vi.mocked(api.getRegex).mockResolvedValue({
     layer: { rules: [{ id: "r-1", name: "Strip asides", enabled: true, pattern: "x", flags: "g",
       replacement: "", trim: [], targets: ["model"], applies: ["display", "prompt"],
       rewrite_stored: false, min_depth: null, max_depth: null, imported: null }], off: [] },
     inherited: [], warnings: {},
   });
-  (api.listConnections as any).mockResolvedValue([]);
-  (api.getQuickReplies as any).mockResolvedValue({ version: 1, digest: "d", replies: [
+  vi.mocked(api.listConnections).mockResolvedValue([]);
+  vi.mocked(api.getQuickReplies).mockResolvedValue({ version: 1, digest: "d", replies: [
     { id: "a", label: "Look around", kind: "send", text: "I take in the room.", mode: "send" },
     { id: "b", label: "Search", kind: "roll", notation: "1d20" }] });
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
     meta: { id: "the-salt-pact", name: "The Salt Pact", keys: "", owners: "" },
     body: "Debts written in salt.",
-  });
-  (api.listEntityImages as any).mockResolvedValue([]);
-  (api.reclassifyEntity as any).mockResolvedValue({ id: "the-salt-pact", campaigns: [] });
-  (api.listGreetings as any).mockResolvedValue([]);
-  (api.readCharacter as any).mockResolvedValue({
+  }));
+  vi.mocked(api.listEntityImages).mockResolvedValue([]);
+  vi.mocked(api.reclassifyEntity).mockResolvedValue({ id: "the-salt-pact", campaigns: [] });
+  vi.mocked(api.listGreetings).mockResolvedValue([]);
+  vi.mocked(api.readCharacter).mockResolvedValue({
     meta: { id: "mira", name: "Mira", default_version: "main" },
     versions: [{ id: "main", name: "main", images: [],
                  card: { spec: "chara_card_v3", spec_version: "3.0",
                          data: { name: "Mira", description: "", alternate_greetings: [], extensions: {} } } }],
   });
-  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
-  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "" });
-  (api.listImageAppearances as any).mockResolvedValue([]);
-  (api.readGreeting as any).mockResolvedValue({
+  vi.mocked(api.getCharacterTagline).mockResolvedValue({ tagline: "" });
+  vi.mocked(api.getCharacterVoiceAnchor).mockResolvedValue({ voice_anchor: "" });
+  vi.mocked(api.listImageAppearances).mockResolvedValue([]);
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "sol-2", name: "SoL 2", character: "other", version: "main", present: ["mira"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
-  });
-  (api.getGreetingSubjects as any).mockResolvedValue({});
-  (api.listUntaggedImages as any).mockResolvedValue([]);
-  (api.listWorldImages as any).mockResolvedValue([]);
-  (api.getCalendarConfig as any).mockResolvedValue({
+  }));
+  vi.mocked(api.getGreetingSubjects).mockResolvedValue({});
+  vi.mocked(api.listUntaggedImages).mockResolvedValue([]);
+  vi.mocked(api.listWorldImages).mockResolvedValue([]);
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: false, stale_after_days: 30 });
-  (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
-  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+    secondary: null, confirmed: false, stale_after_days: 30 }));
+  vi.mocked(api.setCalendarConfig).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCalendarProviders).mockResolvedValue({ providers: [
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" }] });
-  (api.listModules as any).mockResolvedValue([]);
-  (api.setWorldModule as any).mockResolvedValue({ ok: true });
-  (api.getCampaignModule as any).mockResolvedValue({ setting: "", resolved: null, source: null });
-  (api.readModule as any).mockResolvedValue(POOL_BASIC);
-  (api.getWorldSheetsIndex as any).mockResolvedValue({ modules: [], default: "" });
-  (api.getSheet as any).mockResolvedValue({ sheet: null });
-  (api.worldCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listModules).mockResolvedValue([]);
+  vi.mocked(api.setWorldModule).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCampaignModule).mockResolvedValue({ setting: "", resolved: null, source: null });
+  vi.mocked(api.readModule).mockResolvedValue(POOL_BASIC);
+  vi.mocked(api.getWorldSheetsIndex).mockResolvedValue({ modules: [], default: "" });
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
+  vi.mocked(api.worldCampaigns).mockResolvedValue([
     { id: "c1", name: "Ashes of the Verdigris Crown", pending: { new: 1, update: 0, conflict: 2 } },
   ]);
 });
@@ -316,23 +320,23 @@ test("shows the world name and opens on the Overview", async () => {
 });
 
 /** A world read whose stored counts are the ones given, every other kind 0. */
-function worldWithCounts(counts: Record<string, number>) {
-  return {
+function worldWithCounts(counts: Record<string, number>): WorldDetail {
+  return fixture({
     meta: { id: "w", name: "Drowned Realm" }, body: "",
     counts: { characters: 0, pcs: 0, creatures: 0, groups: 0, locations: 0,
               items: 0, lore: 0, greetings: 0, ...counts },
     campaigns: 2,
-  };
+  });
 }
 
 test("the index is grouped who / where & what / writing, each row counted", async () => {
-  (api.getWorld as any).mockResolvedValue(
+  vi.mocked(api.getWorld).mockResolvedValue(
     worldWithCounts({ characters: 2, locations: 1, lore: 7, greetings: 5 }));
   // The lists say something else on purpose: on the world shape the numbers
   // come from the world read the header already makes, and a list that
   // disagreed would be answering a question nobody asked it.
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.listTags as any).mockResolvedValue({ tide: "Tide", dusk: "Dusk", salt: "Salt" });
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.listTags).mockResolvedValue({ tide: "Tide", dusk: "Dusk", salt: "Salt" });
   renderAt();
   await screen.findByText("Drowned Realm");
 
@@ -355,20 +359,20 @@ test("opening a world counts it without listing a single section", async () => {
   // beside them already carried the counts as directory tallies.
   // Opened on Items rather than the overview, whose setup checklist makes
   // reads of its own; the Items editor lists items and nothing else.
-  (api.getWorld as any).mockResolvedValue(worldWithCounts({ creatures: 4 }));
+  vi.mocked(api.getWorld).mockResolvedValue(worldWithCounts({ creatures: 4 }));
   renderAtUrl("/worlds/w/items");
   await waitFor(() => expect(indexRow("Creatures")).toHaveTextContent("4"));
   expect(api.getWorld).toHaveBeenCalledTimes(1);
-  expect((api.listEntities as any).mock.calls).toEqual([[{ kind: "world", id: "w" }, "items"]]);
+  expect(vi.mocked(api.listEntities).mock.calls).toEqual([[{ kind: "world", id: "w" }, "items"]]);
   expect(api.listCharacters).not.toHaveBeenCalled();
   expect(api.listPCs).not.toHaveBeenCalled();
   expect(api.listGreetings).not.toHaveBeenCalled();
 });
 
 test("a kind the world read did not count is a dash, not a zero", async () => {
-  (api.getWorld as any).mockResolvedValue({
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({
     meta: { id: "w", name: "Drowned Realm" }, body: "", counts: { characters: 3 },
-  });
+  }));
   renderAt();
   await waitFor(() => expect(indexRow("Characters")).toHaveTextContent("3"));
   expect(indexRow("Items")).toHaveTextContent("—");
@@ -459,7 +463,7 @@ test("picking PCs renders the PC editor", async () => {
 });
 
 test("opening a record swaps only main — the column keeps its selection", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "the-pact", name: "The Pact" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "the-pact", name: "The Pact" }]);
   renderAt();
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Lore"));
@@ -471,7 +475,7 @@ test("opening a record swaps only main — the column keeps its selection", asyn
 });
 
 test("a character leaves this page — they own a screen, not a third of one", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
   ]);
   renderAt();
@@ -516,16 +520,16 @@ test("arriving at a greeting by URL opens it, not merely its section", async () 
   // The World-greetings chip that used to drive this from a character's detail
   // pane is on the character's own page now, and it navigates here by URL --
   // so this is the half WorldView still owns.
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "sol-2", name: "SoL 2", character: "other", version: "main", present: ["mira"], requires_tags: [], predecessor_join: "all" },
-  ]);
+  ]));
   renderAtUrl("/worlds/w?section=greetings&id=sol-2");
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "sol-2"));
   expect(indexRow("Greetings")).toHaveClass("active");
 });
 
 test("campaign mode passes campaign scope and hides Tags and the Overview", async () => {
-  (api.listAppearances as any).mockResolvedValue([]);
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
   renderCampaign();
   await screen.findByText(/World Copy/);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "campaign", id: "c1" }));
@@ -542,14 +546,14 @@ test("campaign mode passes campaign scope and hides Tags and the Overview", asyn
 });
 
 test("campaign path resolves module context for the sections that take one", async () => {
-  (api.getCampaignModule as any).mockResolvedValue({ setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
-  (api.readModule as any).mockResolvedValue(POOL_BASIC);
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.getCampaignModule).mockResolvedValue({ setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
+  vi.mocked(api.readModule).mockResolvedValue(POOL_BASIC);
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
   ]);
   // she has to have appeared, or the campaign grid's default filter hides her
-  (api.listAppearances as any).mockResolvedValue(
-    [{ kind: "characters", id: "mira", version: "main", role: "npc", scenes: ["01"] }]);
+  vi.mocked(api.listAppearances).mockResolvedValue(
+    fixture([{ kind: "characters", id: "mira", version: "main", role: "npc", scenes: ["01"] }]));
   renderCampaign();
   await screen.findByText(/World Copy/);
   await waitFor(() => expect(api.getCampaignModule).toHaveBeenCalledWith("c1"));
@@ -606,7 +610,7 @@ test("the standalone world route publishes no campaign — there isn't one", asy
 // land on that record rather than on the section it lives in.
 
 test("?section=&id= opens the entity the URL names", async () => {
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "the-salt-pact", name: "The Salt Pact" },
     { id: "the-tide-table", name: "The Tide Table" },
   ]);
@@ -618,7 +622,7 @@ test("?section=&id= opens the entity the URL names", async () => {
 });
 
 test("a nav aimed at one kind is not consumed by another editor", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "the-salt-pact", name: "The Salt Pact" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "the-salt-pact", name: "The Salt Pact" }]);
   renderAtUrl("/worlds/w?section=items&id=the-salt-pact");
   // Items is what the URL asked for, so that is the section that opens --
   // every EntityEditor is the same component, and only the kind tells them
@@ -630,7 +634,7 @@ test("a nav aimed at one kind is not consumed by another editor", async () => {
 test("reclassifying a record opens it in the section it moved to", async () => {
   // The move takes it out of Lore entirely, so leaving the user on Lore would
   // read as a delete. `openEntity` is the same deep-link path a search hit uses.
-  (api.listEntities as any).mockResolvedValue([{ id: "the-salt-pact", name: "The Salt Pact" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "the-salt-pact", name: "The Salt Pact" }]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderAtUrl("/worlds/w?section=lore&id=the-salt-pact");
   const picker = await screen.findByLabelText("Reclassify as");
@@ -643,13 +647,13 @@ test("reclassifying a record opens it in the section it moved to", async () => {
 test("an old character link keeps its version", async () => {
   // Kept working rather than chased down: SearchView builds these links
   // generically, and the hub and the palette carry them too.
-  (api.listCharacters as any).mockResolvedValue([{ id: "mira", name: "Mira", versions: 1 }]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mira", name: "Mira", versions: [{ id: "main", name: "main" }] }]));
   renderAtUrl("/worlds/w?section=characters&id=mira&v=main");
   await waitFor(() => expect(lastPath + lastSearch).toBe("/worlds/w/characters/mira?v=main"));
 });
 
 test("section=characters with no id is still the grid, not an empty character", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "mira", name: "Mira", versions: 1 }]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mira", name: "Mira", versions: [{ id: "main", name: "main" }] }]));
   renderAtUrl("/worlds/w?section=characters");
   await waitFor(() => expect(lastPath).toBe("/worlds/w/characters"));
   await screen.findByText("Mira");
@@ -710,13 +714,13 @@ test("Images is offered in the command palette, like every other world section",
 });
 
 test("Greetings switches between the chip list and the plot map, and a node opens the greeting", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
       edges: { leads_to: ["sol-2"], excludes: [] } },
     { id: "sol-2", name: "SoL 2", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
       edges: { leads_to: [], excludes: [] } },
-  ]);
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+  ]));
+  vi.mocked(api.readGreeting).mockImplementation(async (_s, gid) => fixture({
     meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", rev: "r1", predecessors: [],
     edges: gid === "dawn" ? { leads_to: ["sol-2"], excludes: [] } : { leads_to: [], excludes: [] },
@@ -741,13 +745,13 @@ test("Greetings switches between the chip list and the plot map, and a node open
 });
 
 test("switching to the plot map keeps a half-written greeting, and a save reloads the map", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
-  });
+  }));
   renderAt();
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Greetings"));
@@ -765,20 +769,21 @@ test("switching to the plot map keeps a half-written greeting, and a save reload
 });
 
 test("a save that lands after the map is open makes the map re-read", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
       edges: { leads_to: [], excludes: [] } },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
-  });
+  }));
   // The save is still in flight when the reader switches views -- which is the
   // whole race: the map mounts and reads the edges as they were, and the save
   // lands afterwards with nothing to tell it.
   let landSave = () => {};
-  (api.updateGreeting as any) = vi.fn(() => new Promise<void>((res) => { landSave = res; }));
-  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
+  vi.mocked(api.updateGreeting).mockImplementation(
+    () => new Promise((res) => { landSave = () => res({ ok: true }); }));
+  vi.mocked(api.setEdges).mockResolvedValue({ ok: true });
   renderAt();
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Greetings"));
@@ -793,7 +798,7 @@ test("a save that lands after the map is open makes the map re-read", async () =
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
   // The map's own reads: its edges ride on a `fresh` list read, where the
   // chip list's are shared ones and its greeting reads are per record.
-  const mapReads = () => (api.listGreetings as any).mock.calls
+  const mapReads = () => vi.mocked(api.listGreetings).mock.calls
     .filter((c: unknown[]) => (c[1] as { fresh?: boolean } | undefined)?.fresh).length;
   const readsBefore = mapReads();
 
@@ -804,19 +809,20 @@ test("a save that lands after the map is open makes the map re-read", async () =
 });
 
 test("the map holds still while a list save is in flight", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
       edges: { leads_to: [], excludes: [] } },
     { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
       edges: { leads_to: [], excludes: [] } },
-  ]);
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+  ]));
+  vi.mocked(api.readGreeting).mockImplementation(async (_s, gid) => fixture({
     meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
   }));
   let landSave = () => {};
-  (api.updateGreeting as any) = vi.fn(() => new Promise<void>((res) => { landSave = res; }));
-  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
+  vi.mocked(api.updateGreeting).mockImplementation(
+    () => new Promise((res) => { landSave = () => res({ ok: true }); }));
+  vi.mocked(api.setEdges).mockResolvedValue({ ok: true });
   renderAt();
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Greetings"));
@@ -838,17 +844,17 @@ test("the map holds still while a list save is in flight", async () => {
 });
 
 test("a graph edit re-reads the chip list behind it", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
       edges: { leads_to: [], excludes: [] } },
     { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
       edges: { leads_to: [], excludes: [] } },
-  ]);
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+  ]));
+  vi.mocked(api.readGreeting).mockImplementation(async (_s, gid) => fixture({
     meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
   }));
-  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
+  vi.mocked(api.setEdges).mockResolvedValue({ ok: true });
   renderAt();
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Greetings"));
@@ -857,7 +863,7 @@ test("a graph edit re-reads the chip list behind it", async () => {
   fireEvent.click(await within(rail).findByText("Saltmarch Dawn"));   // open it in the list
   fireEvent.click(await screen.findByRole("button", { name: "Plot map" }));
   await screen.findByRole("button", { name: "Open Saltmarch Dawn" });
-  const readsBefore = (api.readGreeting as any).mock.calls.length;
+  const readsBefore = vi.mocked(api.readGreeting).mock.calls.length;
 
   fireEvent.click(screen.getByRole("button", { name: "Link from Saltmarch Dawn" }));
   fireEvent.click(screen.getByRole("button", { name: "Link Saltmarch Dawn to Vow of Silence" }));
@@ -865,22 +871,23 @@ test("a graph edit re-reads the chip list behind it", async () => {
   // The chip list is still mounted with this greeting's edges as they were.
   // Left alone, Edit-then-Save there would send that stale array back.
   await waitFor(() =>
-    expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
+    expect(vi.mocked(api.readGreeting).mock.calls.length).toBeGreaterThan(readsBefore));
 });
 
 test("a map remounted mid-write is held behind the write the last one left", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
       edges: { leads_to: [], excludes: [] } },
     { id: "vow", name: "Vow of Silence", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all",
       edges: { leads_to: [], excludes: [] } },
-  ]);
-  (api.readGreeting as any).mockImplementation(async (_s: unknown, gid: string) => ({
+  ]));
+  vi.mocked(api.readGreeting).mockImplementation(async (_s, gid) => fixture({
     meta: { id: gid, name: gid, character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
   }));
   const gate: (() => void)[] = [];
-  (api.setEdges as any) = vi.fn(() => new Promise<void>((res) => gate.push(res)));
+  vi.mocked(api.setEdges).mockImplementation(
+    () => new Promise((res) => { gate.push(() => res({ ok: true })); }));
   renderAt();
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Greetings"));
@@ -914,13 +921,13 @@ test("the plot map is an address, and Back returns to the list", async () => {
 });
 
 test("a greeting's own address honours ?view=graph, and the record stays selected behind it", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "tide-watch", name: "Tide Watch", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "tide-watch", name: "Tide Watch", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
-  });
+  }));
   renderAtUrl("/worlds/w/greetings/tide-watch?view=graph");
   // the graph has no detail pane -- the record is hidden, not rendered here
   expect(await screen.findByTestId("plot-map")).toBeInTheDocument();
@@ -947,13 +954,13 @@ test("switching to the map and back does not lose a half-written greeting", asyn
 // edit, `selected` goes null, and the effect's `else resetForm()` throws the
 // draft away -- proven a real regression against ce2c1fc1f.
 test("editing an existing greeting also keeps its draft across the map switch", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
-  });
+  }));
   renderAtUrl("/worlds/w/greetings/dawn");
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText(/Name/), { target: { value: "Saltmarch Dusk" } });
@@ -968,13 +975,13 @@ test("editing an existing greeting also keeps its draft across the map switch", 
 // record without touching the address -- so `+ New greeting` (a `Link` to
 // `sectionPath`) pointed at the screen already showing and did nothing.
 test("+ New greeting clears the form after a create", async () => {
-  (api.listGreetings as any).mockResolvedValue([]);
-  (api.createGreeting as any) = vi.fn().mockResolvedValue({ id: "new-greeting" });
-  (api.setEdges as any) = vi.fn().mockResolvedValue({ ok: true });
-  (api.readGreeting as any).mockResolvedValue({
+  vi.mocked(api.listGreetings).mockResolvedValue([]);
+  vi.mocked(api.createGreeting).mockResolvedValue({ id: "new-greeting" });
+  vi.mocked(api.setEdges).mockResolvedValue({ ok: true });
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "new-greeting", name: "New greeting", character: "", version: "", present: [], requires_tags: [], predecessor_join: "all" },
     body: "", rev: "r1", predecessors: [], edges: { leads_to: [], excludes: [] },
-  });
+  }));
   renderAtUrl("/worlds/w/greetings");
   fireEvent.change(await screen.findByLabelText(/Name/), { target: { value: "New greeting" } });
   fireEvent.click(screen.getByRole("button", { name: /create greeting/i }));
@@ -991,19 +998,19 @@ test("a ref chip naming a PC opens that PC, and picking PCs from the index clear
   // chip carries a record to open, choosing the section from the column means
   // the list. Without the second, the section reopens whoever a chip pointed
   // at, possibly several navigations ago.
-  (api.listPCs as any).mockResolvedValue([
+  vi.mocked(api.listPCs).mockResolvedValue([
     { id: "winifred", name: "Winifred", tags: [], default_version: "main", versions: [] }]);
-  (api.readPC as any).mockResolvedValue({
+  vi.mocked(api.readPC).mockResolvedValue({
     meta: { id: "winifred", name: "Winifred", tags: [], default_version: "main" },
     versions: [{ id: "main", name: "main",
                  persona: { name: "Winifred", pronouns: "", summary: "",
                             birthdate: "", description: "a quiet sort" } }] });
-  (api.listPCImages as any).mockResolvedValue([]);
-  (api.listTags as any).mockResolvedValue({});
-  (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
-  (api.getSheet as any).mockResolvedValue({ sheet: null });
-  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listPCImages).mockResolvedValue([]);
+  vi.mocked(api.listTags).mockResolvedValue({});
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "pcs:winifred" }, body: "x", rev: "r1" });
   renderAt();
   await screen.findByText("Drowned Realm");
@@ -1019,7 +1026,7 @@ test("a ref chip naming a PC opens that PC, and picking PCs from the index clear
   fireEvent.click(screen.getByRole("link", { name: /All PCs/ }));
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Groups"));
-  (api.readPC as any).mockClear();
+  vi.mocked(api.readPC).mockClear();
   fireEvent.click(indexRow("PCs"));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalled());
   expect(api.readPC).not.toHaveBeenCalled();
@@ -1028,19 +1035,19 @@ test("a ref chip naming a PC opens that PC, and picking PCs from the index clear
 test("a Known-by actor chip on a location opens that actor", async () => {
   // Locations once mounted their editor without the owner callback, so the chip
   // drew as a button and did nothing when pressed.
-  (api.listPCs as any).mockResolvedValue([
+  vi.mocked(api.listPCs).mockResolvedValue([
     { id: "winifred", name: "Winifred", tags: [], default_version: "main", versions: [] }]);
-  (api.readPC as any).mockResolvedValue({
+  vi.mocked(api.readPC).mockResolvedValue({
     meta: { id: "winifred", name: "Winifred", tags: [], default_version: "main" },
     versions: [{ id: "main", name: "main",
                  persona: { name: "Winifred", pronouns: "", summary: "",
                             birthdate: "", description: "a quiet sort" } }] });
-  (api.listPCImages as any).mockResolvedValue([]);
-  (api.listTags as any).mockResolvedValue({});
-  (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
-  (api.getSheet as any).mockResolvedValue({ sheet: null });
-  (api.listEntities as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listPCImages).mockResolvedValue([]);
+  vi.mocked(api.listTags).mockResolvedValue({});
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "saltmarch", name: "Saltmarch", known_by: "pcs:winifred" }, body: "x", rev: "r1" });
   renderAtUrl("/worlds/w?section=locations&id=saltmarch");
   fireEvent.click(await screen.findByRole("button", { name: /Winifred/ }));
@@ -1053,19 +1060,19 @@ test("a focused PC is not carried into another scope's render", async () => {
   // a captured scope, so there is nothing left to carry: a plain navigation to
   // another world's PCs section names no record at all, and the editor there
   // has nothing to focus.
-  (api.listPCs as any).mockResolvedValue([
+  vi.mocked(api.listPCs).mockResolvedValue([
     { id: "winifred", name: "Winifred", tags: [], default_version: "main", versions: [] }]);
-  (api.readPC as any).mockResolvedValue({
+  vi.mocked(api.readPC).mockResolvedValue({
     meta: { id: "winifred", name: "Winifred", tags: [], default_version: "main" },
     versions: [{ id: "main", name: "main",
                  persona: { name: "Winifred", pronouns: "", summary: "",
                             birthdate: "", description: "a quiet sort" } }] });
-  (api.listPCImages as any).mockResolvedValue([]);
-  (api.listTags as any).mockResolvedValue({});
-  (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
-  (api.getSheet as any).mockResolvedValue({ sheet: null });
-  (api.listEntities as any).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.listPCImages).mockResolvedValue([]);
+  vi.mocked(api.listTags).mockResolvedValue({});
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
+  vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "watch", name: "The Watch" }]);
+  vi.mocked(api.readEntity).mockResolvedValue({
     meta: { id: "watch", name: "The Watch", leader: "pcs:winifred" }, body: "x", rev: "r1" });
   render(
     <MemoryRouter initialEntries={["/worlds/w"]}>
@@ -1083,8 +1090,8 @@ test("a focused PC is not carried into another scope's render", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Winifred/ }));
   await waitFor(() => expect(api.readPC).toHaveBeenCalled());
 
-  (api.readPC as any).mockClear();
-  (api.listPCs as any).mockClear();
+  vi.mocked(api.readPC).mockClear();
+  vi.mocked(api.listPCs).mockClear();
   fireEvent.click(screen.getByRole("button", { name: "go" }));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalled());
   expect(api.readPC).not.toHaveBeenCalled();
@@ -1092,11 +1099,11 @@ test("a focused PC is not carried into another scope's render", async () => {
 
 
 test("the world header shows the world's cover, and drops it if it will not load", async () => {
-  (api.getWorld as any).mockResolvedValue({
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({
     meta: { id: "w", name: "Drowned Realm", cover: "v1" }, body: "", counts: {},
-  });
-  (api.worldCoverUrl as any).mockImplementation(
-    (wid: string, o: any) => `/api/worlds/${wid}/cover?w=${o.w}&v=${o.v}`);
+  }));
+  vi.mocked(api.worldCoverUrl).mockImplementation(
+    (wid, o) => `/api/worlds/${wid}/cover?w=${o?.w}&v=${o?.v}`);
 
   renderAt();
   const img = await screen.findByAltText("Drowned Realm cover");
@@ -1110,9 +1117,9 @@ test("the world header shows the world's cover, and drops it if it will not load
 });
 
 test("a world with no cover renders no header thumbnail", async () => {
-  (api.getWorld as any).mockResolvedValue({
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({
     meta: { id: "w", name: "Drowned Realm", cover: "" }, body: "", counts: {},
-  });
+  }));
   renderAt();
   // The eyebrow carries the world name on every section, so wait on something
   // unambiguous rather than the name itself.
@@ -1231,9 +1238,9 @@ test("an id containing a slash survives the round trip", async () => {
   // `useParams()["*"]` back as `items/a/b`, which reads as three segments and
   // is not an address at all. Rendered rather than unit-tested, because the
   // decoding this guards against happens in the router, not in the parser.
-  (api.readEntity as any).mockResolvedValue({
+  vi.mocked(api.readEntity).mockResolvedValue(fixture({
     meta: { id: "a/b", name: "A slash B", keys: "", owners: "" }, body: "Sliced clean.",
-  });
+  }));
   renderAtUrl("/worlds/w/items/a%2Fb");
   await waitFor(() => expect(lastPath).toBe("/worlds/w/items/a%2Fb"));
   await screen.findByRole("heading", { name: "A slash B" });
@@ -1255,7 +1262,7 @@ test("a campaign is sent to its cast, and cannot address a world-only section", 
 /** Forget every call so far, keeping what each mock answers. */
 function forgetCalls() {
   for (const fn of Object.values(api)) {
-    if (typeof fn === "function" && "mockClear" in fn) (fn as any).mockClear();
+    if (typeof fn === "function" && "mockClear" in fn) vi.mocked(fn).mockClear();
   }
 }
 
@@ -1264,19 +1271,19 @@ test("a section click recounts in one request, and never by listing another sect
   // that could have moved. The section being left is where a record may have
   // been added or removed; the world read counts every kind at once, so one
   // cheap request answers it -- a reclassify's destination included.
-  (api.getWorld as any).mockResolvedValue(worldWithCounts({ items: 2 }));
+  vi.mocked(api.getWorld).mockResolvedValue(worldWithCounts({ items: 2 }));
   renderAtUrl("/worlds/w/items");
   await waitFor(() => expect(indexRow("Items")).toHaveTextContent("2"));
   forgetCalls();
   // A record was made while Items was open.
-  (api.getWorld as any).mockResolvedValue(worldWithCounts({ items: 3 }));
+  vi.mocked(api.getWorld).mockResolvedValue(worldWithCounts({ items: 3 }));
 
   fireEvent.click(indexRow("Creatures"));
   await screen.findByRole("heading", { name: "Creatures" });
   await waitFor(() => expect(indexRow("Items")).toHaveTextContent("3"));
   expect(api.getWorld).toHaveBeenCalledTimes(1);
   // The only list read is the one the Creatures editor makes for its own rows.
-  expect((api.listEntities as any).mock.calls).toEqual([[{ kind: "world", id: "w" }, "creatures"]]);
+  expect(vi.mocked(api.listEntities).mock.calls).toEqual([[{ kind: "world", id: "w" }, "creatures"]]);
   expect(api.listCharacters).not.toHaveBeenCalled();
   expect(api.listPCs).not.toHaveBeenCalled();
   expect(api.listGreetings).not.toHaveBeenCalled();
@@ -1296,10 +1303,10 @@ test("a click from a section with no count asks for nothing", async () => {
 });
 
 test("leaving Tags recounts the vocabulary, which the world read does not carry", async () => {
-  (api.listTags as any).mockResolvedValue({ tide: "Tide" });
+  vi.mocked(api.listTags).mockResolvedValue({ tide: "Tide" });
   renderAtUrl("/worlds/w/tags");
   await waitFor(() => expect(indexRow("Tags")).toHaveTextContent("1"));
-  (api.listTags as any).mockResolvedValue({ tide: "Tide", dusk: "Dusk" });
+  vi.mocked(api.listTags).mockResolvedValue({ tide: "Tide", dusk: "Dusk" });
   fireEvent.click(indexRow("Items"));
   await waitFor(() => expect(indexRow("Tags")).toHaveTextContent("2"));
   expect(screen.getByText("2 tags · 2 campaigns")).toBeInTheDocument();
@@ -1317,7 +1324,7 @@ test("a campaign's copy re-lists only the rows a section change could have moved
   await screen.findByRole("heading", { name: "Creatures" });
   await waitFor(() => expect(api.listEntities).toHaveBeenCalledWith(
     { kind: "campaign", id: "c1" }, "items"));
-  const kinds = (api.listEntities as any).mock.calls.map((c: unknown[]) => c[1]);
+  const kinds = vi.mocked(api.listEntities).mock.calls.map((c: unknown[]) => c[1]);
   expect(new Set(kinds)).toEqual(new Set(["items", "creatures"]));
   expect(api.listCharacters).not.toHaveBeenCalled();
   expect(api.listPCs).not.toHaveBeenCalled();
@@ -1326,7 +1333,7 @@ test("a campaign's copy re-lists only the rows a section change could have moved
 
 test("a campaign is redirected before its world id has arrived", async () => {
   // getCampaign never settles: the redirect must not be waiting on it.
-  (api.getCampaign as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getCampaign).mockReturnValue(new Promise(() => {}));
   renderCampaignAtUrl("/campaigns/c/world");
   await waitFor(() => expect(lastPath).toBe("/campaigns/c/world/characters"));
 });
@@ -1336,7 +1343,7 @@ test("a campaign is redirected before its world id has arrived", async () => {
 test("the world shape counts its campaigns off the world read, not the campaign shelf", async () => {
   // It used to fetch every campaign's shelf row -- a scene listing each -- to
   // filter down to this world's; the world read carries the number now.
-  (api.getWorld as any).mockResolvedValue({ ...worldWithCounts({}), campaigns: 5 });
+  vi.mocked(api.getWorld).mockResolvedValue({ ...worldWithCounts({}), campaigns: 5 });
   renderAtUrl("/worlds/w/characters");
   await screen.findByText(/5 campaigns/);
   expect(indexRow("Push to campaigns")).toHaveTextContent("5");
@@ -1344,7 +1351,7 @@ test("the world shape counts its campaigns off the world read, not the campaign 
 });
 
 test("a campaign count the world read could not give is a dash, never a zero", async () => {
-  (api.getWorld as any).mockResolvedValue({ ...worldWithCounts({}), campaigns: null });
+  vi.mocked(api.getWorld).mockResolvedValue({ ...worldWithCounts({}), campaigns: null });
   renderAtUrl("/worlds/w/characters");
   await screen.findByText("Drowned Realm");
   expect(screen.getByText(/— campaigns/)).toBeInTheDocument();
@@ -1354,7 +1361,7 @@ test("a campaign count the world read could not give is a dash, never a zero", a
 
 test("a server older than the campaign count reads as unknown too", async () => {
   const { campaigns: _omitted, ...older } = worldWithCounts({});
-  (api.getWorld as any).mockResolvedValue(older);
+  vi.mocked(api.getWorld).mockResolvedValue(older);
   renderAtUrl("/worlds/w/characters");
   await screen.findByText("Drowned Realm");
   expect(screen.getByText(/— campaigns/)).toBeInTheDocument();
@@ -1363,9 +1370,9 @@ test("a server older than the campaign count reads as unknown too", async () => 
 // ---- remembered header ----
 
 test("a revisit paints the header and its numbers before the world read lands", async () => {
-  (api.rememberedWorld as any).mockImplementation((wid: string) =>
+  vi.mocked(api.rememberedWorld).mockImplementation((wid) =>
     (wid === "w" ? { ...worldWithCounts({ characters: 4 }), campaigns: 3 } : undefined));
-  (api.getWorld as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getWorld).mockReturnValue(new Promise(() => {}));
   renderAtUrl("/worlds/w/characters");
   // Before any await: nothing has been read, and the page already says what
   // it last said about this world.
@@ -1382,9 +1389,9 @@ test("moving to another campaign holds its sections until that campaign names it
   // at once and asked world-scoped questions of the WRONG world -- the
   // greetings' tag vocabulary here -- whose answers could land last (Codex
   // review).
-  let nameSecond: (c: unknown) => void = () => {};
-  (api.getCampaign as any).mockImplementation((cid: string) => (cid === "c1"
-    ? Promise.resolve({ meta: { id: "c1", name: "Winifred", world: "w1", world_name: "Realm" } })
+  let nameSecond: (c: Awaited<ReturnType<typeof api.getCampaign>>) => void = () => {};
+  vi.mocked(api.getCampaign).mockImplementation((cid) => (cid === "c1"
+    ? Promise.resolve(fixture({ meta: { id: "c1", name: "Winifred", world: "w1", world_name: "Realm" } }))
     : new Promise((r) => { nameSecond = r; })));
   function Jump() {
     const navigate = useNavigate();
@@ -1398,7 +1405,7 @@ test("moving to another campaign holds its sections until that campaign names it
   );
   await screen.findByRole("heading", { name: "Greetings" });
   await waitFor(() => expect(api.listTags).toHaveBeenCalledWith("w1"));
-  const askedOfW1 = () => (api.listTags as any).mock.calls.filter((c: unknown[]) => c[0] === "w1").length;
+  const askedOfW1 = () => vi.mocked(api.listTags).mock.calls.filter((c) => c[0] === "w1").length;
   const before = askedOfW1();
 
   fireEvent.click(screen.getByText("jump"));
@@ -1408,7 +1415,7 @@ test("moving to another campaign holds its sections until that campaign names it
   expect(askedOfW1()).toBe(before);
 
   await act(async () => {
-    nameSecond({ meta: { id: "c2", name: "Seraphine", world: "w2", world_name: "Saltmarch" } });
+    nameSecond(fixture({ meta: { id: "c2", name: "Seraphine", world: "w2", world_name: "Saltmarch" } }));
   });
   await screen.findByRole("heading", { name: "Greetings" });
   await waitFor(() => expect(api.listTags).toHaveBeenCalledWith("w2"));
@@ -1420,11 +1427,11 @@ test("a campaign whose read fails says so, and can be asked again", async () => 
   // read that fails never names one, so without this the page stayed blank
   // for good (adversarial review).
   let attempt = 0;
-  (api.getCampaign as any).mockImplementation(() => {
+  vi.mocked(api.getCampaign).mockImplementation(() => {
     attempt += 1;
     return attempt === 1
       ? Promise.reject(new Error("503"))
-      : Promise.resolve({ meta: { id: "c2", name: "Seraphine", world: "w2", world_name: "Saltmarch" } });
+      : Promise.resolve(fixture({ meta: { id: "c2", name: "Seraphine", world: "w2", world_name: "Saltmarch" } }));
   });
   renderCampaignAtUrl("/campaigns/c2/world/greetings");
   expect(await screen.findByText(/This campaign could not be read/)).toBeInTheDocument();
@@ -1437,9 +1444,9 @@ test("a campaign whose read fails says so, and can be asked again", async () => 
 });
 
 test("a world with nothing remembered opens on dashes, not on another world's numbers", async () => {
-  (api.rememberedWorld as any).mockImplementation((wid: string) =>
+  vi.mocked(api.rememberedWorld).mockImplementation((wid) =>
     (wid === "other" ? { ...worldWithCounts({ characters: 9 }), campaigns: 7 } : undefined));
-  (api.getWorld as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getWorld).mockReturnValue(new Promise(() => {}));
   renderAtUrl("/worlds/w/characters");
   expect(indexRow("Characters")).toHaveTextContent("—");
   expect(indexRow("Push to campaigns")).toHaveTextContent("—");
@@ -1455,9 +1462,9 @@ test("the roster asks for the module only once its list is in -- and still gets 
   // On a single-threaded server every read started beside the character list
   // is time the list waits behind, and the grid spends the module on one
   // button.
-  (api.getWorldSheetsIndex as any).mockResolvedValue(SHEETED);
-  let land: (rows: unknown) => void = () => {};
-  (api.listCharacters as any).mockReturnValue(new Promise((r) => { land = r; }));
+  vi.mocked(api.getWorldSheetsIndex).mockResolvedValue(SHEETED);
+  let land: (rows: CharacterSummary[]) => void = () => {};
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise((r) => { land = r; }));
   renderAtUrl("/worlds/w/characters");
   await screen.findByText("Drowned Realm");
   expect(api.getWorldSheetsIndex).not.toHaveBeenCalled();
@@ -1472,7 +1479,7 @@ test("the roster asks for the module only once its list is in -- and still gets 
 });
 
 test("a section that takes the module asks for it on arrival", async () => {
-  (api.getWorldSheetsIndex as any).mockResolvedValue(SHEETED);
+  vi.mocked(api.getWorldSheetsIndex).mockResolvedValue(SHEETED);
   renderAtUrl("/worlds/w/pcs");
   expect(await screen.findByRole("button", { name: /New PC with sheet/ })).toBeInTheDocument();
   expect(api.getWorldSheetsIndex).toHaveBeenCalledWith("w");
@@ -1489,9 +1496,9 @@ test("a section that takes no module never reads one", async () => {
 test("a roster left before its list lands asks nothing for the section it was left for", async () => {
   // The grid's "my list is in" is what asks for the module on the roster; a
   // reader already on Greetings by then gains three reads nothing there uses.
-  (api.getWorldSheetsIndex as any).mockResolvedValue(SHEETED);
-  let land: (rows: unknown) => void = () => {};
-  (api.listCharacters as any).mockReturnValue(new Promise((r) => { land = r; }));
+  vi.mocked(api.getWorldSheetsIndex).mockResolvedValue(SHEETED);
+  let land: (rows: CharacterSummary[]) => void = () => {};
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise((r) => { land = r; }));
   renderAtUrl("/worlds/w/characters");
   await screen.findByText("Drowned Realm");
   fireEvent.click(indexRow("Greetings"));
@@ -1503,7 +1510,7 @@ test("a roster left before its list lands asks nothing for the section it was le
 });
 
 test("moving from a section without the module to one with it asks then", async () => {
-  (api.getWorldSheetsIndex as any).mockResolvedValue(SHEETED);
+  vi.mocked(api.getWorldSheetsIndex).mockResolvedValue(SHEETED);
   renderAtUrl("/worlds/w/greetings");
   await screen.findByRole("heading", { name: "Greetings" });
   fireEvent.click(indexRow("PCs"));
@@ -1511,10 +1518,10 @@ test("moving from a section without the module to one with it asks then", async 
 });
 
 test("a campaign's roster defers its module the same way", async () => {
-  (api.getCampaignModule as any).mockResolvedValue(
+  vi.mocked(api.getCampaignModule).mockResolvedValue(
     { setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
-  let land: (rows: unknown) => void = () => {};
-  (api.listCharacters as any).mockReturnValue(new Promise((r) => { land = r; }));
+  let land: (rows: CharacterSummary[]) => void = () => {};
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise((r) => { land = r; }));
   renderCampaignAtUrl("/campaigns/c1/world/characters");
   await screen.findByText(/World Copy/);
   expect(api.getCampaignModule).not.toHaveBeenCalled();
@@ -1536,10 +1543,10 @@ test("pressing the Characters row starts the roster's read before the click land
 test("the Characters row prefetches nothing while it is the page already open", async () => {
   renderAtUrl("/worlds/w/characters");
   await screen.findByRole("heading", { name: "Characters" });
-  const before = (api.listCharacters as any).mock.calls.length;
+  const before = vi.mocked(api.listCharacters).mock.calls.length;
   fireEvent.pointerDown(indexRow("Characters"));
   await screen.findByRole("heading", { name: "Characters" });
-  expect((api.listCharacters as any).mock.calls.length).toBe(before);
+  expect(vi.mocked(api.listCharacters).mock.calls.length).toBe(before);
 });
 
 test.each(["world", "campaign"])("record canonicalization retains Art query in %s", async (scope) => {

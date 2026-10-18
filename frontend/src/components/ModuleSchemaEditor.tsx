@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { api, type ModuleDetail, type ModuleEditResult, type ModuleField } from "../api/client";
 // From `types`, not through `client` — see the note on ENTITY_KINDS there.
 import { ENTITY_KINDS } from "../api/types";
+import { moduleFormFingerprint } from "./moduleFormFingerprint";
 import { ErrorList, ImpactConfirm, useModuleDryRun, type SaveFn } from "./moduleEditShared";
 
 const FIELD_TYPES = ["number", "dots", "track", "resource", "text", "list", "ref"];
@@ -42,6 +43,16 @@ export function FieldRows({ fields, setFields, existingKeys, dirty, onRename }: 
 }) {
   const upd = (i: number, patch: Partial<ModuleField>) =>
     setFields(fields.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  // A blank numeric control removes the wire field; zero remains a value.
+  const setNumber = (i: number, key: "min" | "max" | "default", text: string) =>
+    setFields(fields.map((field, j) => {
+      if (j !== i) return field;
+      const next = { ...field };
+      const value = num(text);
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      return next;
+    }));
   return (
     <div>
       {fields.map((f, i) => (
@@ -60,14 +71,14 @@ export function FieldRows({ fields, setFields, existingKeys, dirty, onRename }: 
           </select>
           {["dots", "track", "resource", "number"].includes(f.type) && (
             <input aria-label="Max" type="number" value={f.max ?? ""}
-                   onChange={(e) => upd(i, { max: num(e.target.value) })} />
+                   onChange={(e) => setNumber(i, "max", e.target.value)} />
           )}
           {f.type === "number" && (
             <>
               <input aria-label="Min" type="number" value={f.min ?? ""}
-                     onChange={(e) => upd(i, { min: num(e.target.value) })} />
+                     onChange={(e) => setNumber(i, "min", e.target.value)} />
               <input aria-label="Default" type="number" value={f.default ?? ""}
-                     onChange={(e) => upd(i, { default: num(e.target.value) })} />
+                     onChange={(e) => setNumber(i, "default", e.target.value)} />
             </>
           )}
           {f.type === "ref" && (
@@ -90,7 +101,7 @@ export function DerivedRows({ derived, setDerived, existing, dirty, onRename, sa
   derived: Derived; setDerived: (d: Derived) => void;
   existing: Set<string>; dirty: boolean;
   onRename: (from: string, to: string) => void;
-  sample?: Record<string, number | boolean>;
+  sample?: Record<string, number | boolean> | undefined;
 }) {
   const entries = Object.entries(derived);
   return (
@@ -141,22 +152,25 @@ export function GroupsSection({ pack, reload }: {
     derived: { ...(groups[gid]?.derived ?? {}) },
   });
   const baseline = useMemo(
-    () => (form && !form.isNew ? JSON.stringify(seed(form.gid)) : null),
+    () => (form && !form.isNew ? moduleFormFingerprint(seed(form.gid)) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [form?.gid, pack]);
-  const dirty = form != null && baseline != null && JSON.stringify(form) !== baseline;
+  const dirty = form != null && baseline != null && moduleFormFingerprint(form) !== baseline;
 
   const save: SaveFn = (dryRun) => {
+    const selectedForm = form;
+    if (!selectedForm) return Promise.resolve({ ok: false, errors: ["no record selected"], display_errors: [] });
+
     // A blank id must reject, not silently no-op as ok -- requestSave's
     // `!fresh.ok` guard then keeps the form open and shows the error instead
     // of Save quietly discarding the draft (with no PUT ever fired).
-    if (!form!.gid) {
+    if (!selectedForm.gid) {
       return Promise.resolve(
         { ok: false, errors: ["group id is required"], display_errors: [] } as ModuleEditResult);
     }
-    return api.putModuleGroup(pack.id, form!.gid, {
-      label: form!.label, fields: form!.fields,
-      ...(Object.keys(form!.derived).length ? { derived: form!.derived } : {}),
+    return api.putModuleGroup(pack.id, selectedForm.gid, {
+      label: selectedForm.label, fields: selectedForm.fields,
+      ...(Object.keys(selectedForm.derived).length ? { derived: selectedForm.derived } : {}),
     }, dryRun);
   };
   const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] } as ModuleEditResult), [form]);
@@ -222,25 +236,31 @@ export function GroupsSection({ pack, reload }: {
       delete derived[from];
       return { ...f, derived };
     });
-  const rename = (kind: "field" | "derived") => (from: string, to: string) =>
+  const rename = (kind: "field" | "derived") => (from: string, to: string) => {
+    const selectedForm = form;
+    if (!selectedForm) return;
     void confirmGate(
-      () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, true),
-      () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, false),
+      () => api.renameModulePart(pack.id, kind, { from, group: selectedForm.gid }, to, true),
+      () => api.renameModulePart(pack.id, kind, { from, group: selectedForm.gid }, to, false),
       () => { applyRename(kind, from, to); dr.reset(); void reload(); });
+  };
   // Group ids are renameable too (backend's `group` rename op) — same
   // confirmGate as field/derived, resyncing both the still-open form's gid
   // and the sidebar selection so the rest of the form (existingKeys, the
   // group-sample lookup keyed by gid) keeps pointing at the right record.
-  const renameGroup = (to: string) =>
+  const renameGroup = (to: string) => {
+    const selectedForm = form;
+    if (!selectedForm) return;
     void confirmGate(
-      () => api.renameModulePart(pack.id, "group", { from: form!.gid }, to, true),
-      () => api.renameModulePart(pack.id, "group", { from: form!.gid }, to, false),
+      () => api.renameModulePart(pack.id, "group", { from: selectedForm.gid }, to, true),
+      () => api.renameModulePart(pack.id, "group", { from: selectedForm.gid }, to, false),
       () => {
         setForm((f) => (f ? { ...f, gid: to } : f));
         setSelected(to);
         dr.reset();
         void reload();
       });
+  };
 
   return (
     <div className="editor">
@@ -377,10 +397,10 @@ export function SheetTypesSection({ pack, reload }: {
     };
   };
   const baseline = useMemo(
-    () => (form && !form.isNew ? JSON.stringify(seed(form.tid)) : null),
+    () => (form && !form.isNew ? moduleFormFingerprint(seed(form.tid)) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [form?.tid, pack]);
-  const dirty = form != null && baseline != null && JSON.stringify(form) !== baseline;
+  const dirty = form != null && baseline != null && moduleFormFingerprint(form) !== baseline;
 
   const assembledFields = useMemo(() => {
     if (!form) return [] as ModuleField[];
@@ -391,8 +411,7 @@ export function SheetTypesSection({ pack, reload }: {
   const resourceFields = assembledFields.filter((f) => f.type === "resource");
   const poolFields = assembledFields.filter((f) => f.type === "number" || f.type === "dots");
 
-  const buildDef = () => {
-    const f = form!;
+  const buildDef = (f: NonNullable<typeof form>) => {
     // Budgets are submitted verbatim (the backend accepts an int or an
     // expression string, and a plain integer typed as text is a valid
     // expression) — never coerce to a number here. A blank budget omits the
@@ -421,14 +440,17 @@ export function SheetTypesSection({ pack, reload }: {
   };
 
   const save: SaveFn = (dryRun) => {
+    const selectedForm = form;
+    if (!selectedForm) return Promise.resolve({ ok: false, errors: ["no record selected"], display_errors: [] });
+
     // A blank id must reject, not silently no-op as ok -- requestSave's
     // `!fresh.ok` guard then keeps the form open and shows the error instead
     // of Save quietly discarding the draft (with no PUT ever fired).
-    if (!form!.tid) {
+    if (!selectedForm.tid) {
       return Promise.resolve(
         { ok: false, errors: ["sheet type id is required"], display_errors: [] } as ModuleEditResult);
     }
-    return api.putModuleSheetType(pack.id, form!.tid, buildDef(), dryRun);
+    return api.putModuleSheetType(pack.id, selectedForm.tid, buildDef(selectedForm), dryRun);
   };
   const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] } as ModuleEditResult), [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
@@ -476,16 +498,22 @@ export function SheetTypesSection({ pack, reload }: {
       delete derived[from];
       return { ...f, derived };
     });
-  const rename = (kind: "field" | "derived") => (from: string, to: string) =>
+  const rename = (kind: "field" | "derived") => (from: string, to: string) => {
+    const selectedForm = form;
+    if (!selectedForm) return;
     void confirmGate(
-      () => api.renameModulePart(pack.id, kind, { from, sheet_type: form!.tid }, to, true),
-      () => api.renameModulePart(pack.id, kind, { from, sheet_type: form!.tid }, to, false),
+      () => api.renameModulePart(pack.id, kind, { from, sheet_type: selectedForm.tid }, to, true),
+      () => api.renameModulePart(pack.id, kind, { from, sheet_type: selectedForm.tid }, to, false),
       () => { applyRename(kind, from, to); dr.reset(); void reload(); });
-  const renameType = (to: string) =>
+  };
+  const renameType = (to: string) => {
+    const selectedForm = form;
+    if (!selectedForm) return;
     void confirmGate(
-      () => api.renameModulePart(pack.id, "sheet_type", { from: form!.tid }, to, true),
-      () => api.renameModulePart(pack.id, "sheet_type", { from: form!.tid }, to, false),
+      () => api.renameModulePart(pack.id, "sheet_type", { from: selectedForm.tid }, to, true),
+      () => api.renameModulePart(pack.id, "sheet_type", { from: selectedForm.tid }, to, false),
       () => { setForm((f) => (f ? { ...f, tid: to } : f)); dr.reset(); void reload(); });
+  };
 
   const toggleGroup = (gid: string) => {
     if (!form) return;

@@ -5,6 +5,7 @@ vi.mock("../api/client", async () =>
 import { api, type KnowledgeEntry } from "../api/client";
 import { installLedgerMocks, renderLedger } from "../testkit/ledgerHarness";
 import { ledgerHref, parseLedgerTail } from "../ledgerPaths";
+import { fixture } from "../testkit/fixture";
 
 const R1 = "r-" + "1".repeat(32);
 
@@ -37,7 +38,7 @@ test("the section's address round-trips", () => {
 });
 
 test("a row opens the read-only view, with its sidebar and no form", async () => {
-  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement()], intact: true });
+  vi.mocked(api.ledgerKnowledge).mockResolvedValue({ entries: [statement()], intact: true });
   renderLedger("/campaigns/run/ledger/knowledge");
   fireEvent.click(await column().findByRole("button", { name: /Mara knows/ }));
   expect(await screen.findByText("Winifred whispers the code.")).toBeInTheDocument();
@@ -53,10 +54,10 @@ test("a row opens the read-only view, with its sidebar and no form", async () =>
 });
 
 test("Edit reveals the form, and a note edit sends only the note", async () => {
-  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement()], intact: true });
-  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.ledgerKnowledgeScene as any).mockResolvedValue({
+  vi.mocked(api.ledgerKnowledge).mockResolvedValue({ entries: [statement()], intact: true });
+  vi.mocked(api.listScenes).mockResolvedValue(fixture([{ id: "0001-pier", title: "The Pier" }]));
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.ledgerKnowledgeScene).mockResolvedValue({
     sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
     summary: "", one_line: "", keyless: 0, keyless_posts: [],
     posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16),
@@ -75,9 +76,9 @@ test("Edit reveals the form, and a note edit sends only the note", async () => {
 });
 
 test("+ New opens the form directly, and a grant posts what was shown", async () => {
-  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.ledgerKnowledgeScene as any).mockResolvedValue({
+  vi.mocked(api.listScenes).mockResolvedValue(fixture([{ id: "0001-pier", title: "The Pier" }]));
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.ledgerKnowledgeScene).mockResolvedValue({
     sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
     summary: "", one_line: "", keyless: 1,
     keyless_posts: [{ index: 0, speaker: "You", text: "An old line." }],
@@ -163,7 +164,7 @@ test.each(["saved", "refused"])("Cancel waits for a pending Knowledge creation t
   });
 
 test("a stale statement says why and confirms against the text on screen", async () => {
-  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({
+  vi.mocked(api.ledgerKnowledge).mockResolvedValue({ entries: [statement({
     stale: true, stale_reason: "changed",
     posts: [{ key: R1, part: "", index: 1, speaker: "Winifred", text: "Winifred lies.",
               missing: false, variant: "v2", digest: "f".repeat(16), shown: "g".repeat(16) }],
@@ -178,7 +179,7 @@ test("a stale statement says why and confirms against the text on screen", async
 });
 
 test("a statement about a deleted scene offers Remove", async () => {
-  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({
+  vi.mocked(api.ledgerKnowledge).mockResolvedValue({ entries: [statement({
     scene: null, stale: true, stale_reason: "gone",
     posts: [{ key: R1, part: "", index: null, speaker: "", text: "", missing: true }],
   })], intact: true });
@@ -189,7 +190,7 @@ test("a statement about a deleted scene offers Remove", async () => {
 });
 
 test("a renamed audience is confirmed under its current name", async () => {
-  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({
+  vi.mocked(api.ledgerKnowledge).mockResolvedValue({ entries: [statement({
     audience_now: "Mara Vance", stale: true, stale_reason: "audience",
   })], intact: true });
   renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
@@ -199,7 +200,7 @@ test("a renamed audience is confirmed under its current name", async () => {
 });
 
 test("an unverifiable scene is not offered for removal", async () => {
-  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({
+  vi.mocked(api.ledgerKnowledge).mockResolvedValue({ entries: [statement({
     scene: null, unverifiable: true, stale: true, stale_reason: "unverifiable",
   })], intact: true });
   renderLedger("/campaigns/run/ledger/knowledge/k-0000000a");
@@ -208,11 +209,11 @@ test("an unverifiable scene is not offered for removal", async () => {
 });
 
 test("turning a never-heard into knows names the posts again, as shown", async () => {
-  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({ status: "unaware" })],
+  vi.mocked(api.ledgerKnowledge).mockResolvedValue({ entries: [statement({ status: "unaware" })],
                                                    intact: true });
-  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.ledgerKnowledgeScene as any).mockResolvedValue({
+  vi.mocked(api.listScenes).mockResolvedValue(fixture([{ id: "0001-pier", title: "The Pier" }]));
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.ledgerKnowledgeScene).mockResolvedValue({
     sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
     summary: "", one_line: "", keyless: 0, keyless_posts: [],
     posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16),
@@ -235,7 +236,7 @@ test("turning a never-heard into knows names the posts again, as shown", async (
 });
 
 test("an unchanged edit cannot be saved, and an orphaned never-heard offers Remove", async () => {
-  (api.ledgerKnowledge as any).mockResolvedValue({ entries: [statement({
+  vi.mocked(api.ledgerKnowledge).mockResolvedValue({ entries: [statement({
     status: "unaware", scene: null, stale: true, stale_reason: "gone",
     posts: [{ key: R1, part: "", index: null, speaker: "", text: "", missing: true }],
   })], intact: true });
@@ -250,8 +251,8 @@ test("an unchanged edit cannot be saved, and an orphaned never-heard offers Remo
 
 test("the form shows each post whole, since a grant covers all of it", async () => {
   const long = "Winifred whispers the code. " + "She keeps talking. ".repeat(20) + "THE END.";
-  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
-  (api.ledgerKnowledgeScene as any).mockResolvedValue({
+  vi.mocked(api.listScenes).mockResolvedValue(fixture([{ id: "0001-pier", title: "The Pier" }]));
+  vi.mocked(api.ledgerKnowledgeScene).mockResolvedValue({
     sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
     summary: "", one_line: "", keyless: 0, keyless_posts: [],
     posts: [{ key: R1, part: "", variant: "v1", digest: "d".repeat(16), shown: "s".repeat(16),
@@ -264,9 +265,9 @@ test("the form shows each post whole, since a grant covers all of it", async () 
 });
 
 test("choosing the whole scene shows everything it covers before it can be granted", async () => {
-  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" }]);
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.ledgerKnowledgeScene as any).mockResolvedValue({
+  vi.mocked(api.listScenes).mockResolvedValue(fixture([{ id: "0001-pier", title: "The Pier" }]));
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.ledgerKnowledgeScene).mockResolvedValue({
     sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",
     summary: "Winifred poisoned the cup.", one_line: "The cup.", keyless: 1,
     keyless_posts: [{ index: 0, speaker: "You", text: "An old line with no id." }],
@@ -290,10 +291,10 @@ test("choosing the whole scene shows everything it covers before it can be grant
 });
 
 test("switching scenes drops the last one's text until the new one arrives", async () => {
-  (api.listScenes as any).mockResolvedValue([{ id: "0001-pier", title: "The Pier" },
-                                             { id: "0002-mill", title: "The Mill" }]);
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.ledgerKnowledgeScene as any).mockImplementation((_cid: string, sid: string) =>
+  vi.mocked(api.listScenes).mockResolvedValue(fixture([{ id: "0001-pier", title: "The Pier" },
+                                             { id: "0002-mill", title: "The Mill" }]));
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.ledgerKnowledgeScene).mockImplementation((_cid, sid) =>
     sid === "0001-pier"
       ? Promise.resolve({
           sid: "0001-pier", digest: "e".repeat(64), shown: "w".repeat(16), title: "The Pier",

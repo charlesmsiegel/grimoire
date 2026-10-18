@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import CharacterPage from "./CharacterPage";
 import { artImage, artRead } from "../testkit/recordArt";
 import { artChanged } from "../appEvents";
-import type { CharacterDetail } from "../api/types";
+import type { Casefile, CharacterDetail } from "../api/types";
 import { LegacyCharacterRedirect } from "../App";
 
 vi.mock("../api/client", async () => {
@@ -47,6 +47,7 @@ vi.mock("../api/client", async () => {
   };
 });
 import { api } from "../api/client";
+import { fixture, type DeepPartial } from "../testkit/fixture";
 
 const GREG_MONTHS = [
   { key: "01", name: "January", days: 31 }, { key: "02", name: "February", days: 28 },
@@ -79,7 +80,7 @@ const DETAIL = {
     { id: "veiled", name: "veiled", card: card({ description: "veiled" }), images: [],
       image_v: {}, image_descriptions: {}, importable_lore: 0 },
   ],
-};
+} satisfies DeepPartial<CharacterDetail>;
 
 test("the phone main area exposes character art and opens the Art tab", async () => {
   const width = window.innerWidth;
@@ -95,7 +96,7 @@ test("the phone main area exposes character art and opens the Art tab", async ()
 });
 
 test("a gallery-only character has a phone preview and a direct Art action", async () => {
-  (api.readCharacter as any).mockResolvedValue({ ...DETAIL, versions: [
+  vi.mocked(api.readCharacter).mockResolvedValue({ ...DETAIL, versions: [
     { ...DETAIL.versions[0], images: ["gallery_1"], image_v: { gallery_1: "g1" } },
   ] });
   const width = window.innerWidth;
@@ -109,15 +110,16 @@ test("a gallery-only character has a phone preview and a direct Art action", asy
   } finally { Object.defineProperty(window, "innerWidth", { value: width, configurable: true }); }
 });
 
-const CASEFILE = {
+const CASEFILE = fixture<Casefile>({
   kind: "characters", id: "seraphine", name: "Seraphine", version: "default", role: "npc",
-  scenes: ["001--the-tide-gate", "004--the-priory-door"],
-  last_seen: "004--the-priory-door",
+  scenes: [{ id: "001--the-tide-gate", title: "The Tide Gate" },
+           { id: "004--the-priory-door", title: "The Priory Door" }],
+  last_seen: "The Priory Door",
   standing: "Guarded. Will not be alone with the Reeve.",
   knows: "The priory's debt.", suspects: "",
   dossier: "A novice who counts the tide instead of the hours.",
   tagline: "", feels_toward: [], standing_facts: [],
-};
+});
 
 let storedBirthdate = "";
 
@@ -140,43 +142,43 @@ beforeEach(() => {
   vi.mocked(api.promoteRecordArt).mockResolvedValue({ ok: true });
   vi.mocked(api.removeRecordArt).mockResolvedValue({ ok: true });
 
-  (api.readCharacter as any).mockImplementation(async () => ({
+  vi.mocked(api.readCharacter).mockImplementation(async () => fixture({
     ...DETAIL, meta: { ...DETAIL.meta, birthdate: storedBirthdate },
   }));
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [] },
     { id: "mara", name: "Mara", default_version: "default", versions: [] },
   ]);
-  (api.updateVersion as any).mockResolvedValue({ ok: true });
-  (api.createVersion as any).mockResolvedValue({ version: "young" });
-  (api.setDefaultVersion as any).mockResolvedValue({ ok: true });
-  (api.setCharacterName as any).mockResolvedValue({ ok: true });
-  (api.setCharacterBirthdate as any).mockImplementation(async (_scope: unknown, _cid: string, value: string) => {
+  vi.mocked(api.updateVersion).mockResolvedValue({ ok: true });
+  vi.mocked(api.createVersion).mockResolvedValue({ version: "young" });
+  vi.mocked(api.setDefaultVersion).mockResolvedValue({ ok: true });
+  vi.mocked(api.setCharacterName).mockResolvedValue({ ok: true });
+  vi.mocked(api.setCharacterBirthdate).mockImplementation(async (_scope, _cid, value) => {
     storedBirthdate = value;
     return { ok: true };
   });
-  (api.deleteCharacter as any).mockResolvedValue({ ok: true });
-  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
-  (api.setCharacterTagline as any).mockResolvedValue({ ok: true });
-  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "" });
-  (api.setCharacterVoiceAnchor as any).mockResolvedValue({ ok: true });
-  (api.listGreetings as any).mockResolvedValue([]);
-  (api.listImageAppearances as any).mockResolvedValue([]);
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.listAppearances as any).mockResolvedValue([]);
-  (api.getCasefile as any).mockResolvedValue(CASEFILE);
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "The Long Tide", world: "realm" } });
-  (api.getCampaignModule as any).mockResolvedValue({ resolved: null });
-  (api.getConfig as any).mockResolvedValue({ voice_anchor_cap: 400 });
-  (api.getWorldSheetsIndex as any).mockResolvedValue({ default: "", modules: [] });
-  (api.listModules as any).mockResolvedValue([]);
-  (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
-  (api.getCalendarConfig as any).mockResolvedValue({ primary: { provider: "gregorian" } });
-  (api.entityKinds as any).mockResolvedValue({ kinds: ["locations", "lore", "items"] });
-  (api.libraryStatus as any).mockResolvedValue(
+  vi.mocked(api.deleteCharacter).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCharacterTagline).mockResolvedValue({ tagline: "" });
+  vi.mocked(api.setCharacterTagline).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCharacterVoiceAnchor).mockResolvedValue({ voice_anchor: "" });
+  vi.mocked(api.setCharacterVoiceAnchor).mockResolvedValue({ ok: true });
+  vi.mocked(api.listGreetings).mockResolvedValue([]);
+  vi.mocked(api.listImageAppearances).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
+  vi.mocked(api.getCasefile).mockResolvedValue(CASEFILE);
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "run", name: "The Long Tide", world: "realm" } }));
+  vi.mocked(api.getCampaignModule).mockResolvedValue(fixture({ resolved: null }));
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({ voice_anchor_cap: 400 }));
+  vi.mocked(api.getWorldSheetsIndex).mockResolvedValue({ default: "", modules: [] });
+  vi.mocked(api.listModules).mockResolvedValue([]);
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: GREG_MONTHS });
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({ primary: { provider: "gregorian" } }));
+  vi.mocked(api.entityKinds).mockResolvedValue({ kinds: ["locations", "lore", "items"] });
+  vi.mocked(api.libraryStatus).mockResolvedValue(
     { in_library: true, diverged: false, can_promote: false, can_push: false });
-  (api.localizeImages as any).mockResolvedValue(undefined);
-  (api.importCharacter as any).mockResolvedValue({ character: "seraphine", version: "young" });
+  vi.mocked(api.localizeImages).mockResolvedValue(undefined);
+  vi.mocked(api.importCharacter).mockResolvedValue({ character: "seraphine", version: "young" });
 });
 
 /** The address bar, so a test can assert where a click went. */
@@ -293,7 +295,7 @@ test("Edit swaps one field for a textarea and Save writes the card back", async 
   fireEvent.change(box, { target: { value: "guarded, and slower than she was" } });
   fireEvent.click(within(fieldBlock("Personality")).getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
-  const [, , , sent] = (api.updateVersion as any).mock.calls[0];
+  const [, , , sent] = vi.mocked(api.updateVersion).mock.calls[0];
   expect(sent.data.personality).toBe("guarded, and slower than she was");
   // The rest of the card rides along untouched — a field save is a whole-card
   // PUT, which is exactly why only one field may be open at a time.
@@ -321,7 +323,7 @@ test("opening a second field closes the first", async () => {
 });
 
 test("a field that failed to save stays open, holding the draft", async () => {
-  (api.updateVersion as any).mockRejectedValue(new Error("disk full"));
+  vi.mocked(api.updateVersion).mockRejectedValue(new Error("disk full"));
   await renderWorld();
   const box = await editField("Personality");
   fireEvent.change(box, { target: { value: "kept" } });
@@ -332,10 +334,10 @@ test("a field that failed to save stays open, holding the draft", async () => {
 });
 
 test("an empty field offers Add rather than Edit, and says it is unset", async () => {
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     ...DETAIL,
     versions: [{ ...DETAIL.versions[0], card: card({ scenario: "" }) }],
-  });
+  }));
   await renderWorld();
   expect(within(fieldBlock("Scenario")).getByRole("button", { name: "Add" })).toBeTruthy();
 });
@@ -347,7 +349,7 @@ test("tags edit as text and read back as chips", async () => {
   fireEvent.change(box, { target: { value: "priory, tide, ledger" } });
   fireEvent.click(within(fieldBlock("Tags")).getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
-  expect((api.updateVersion as any).mock.calls[0][3].data.tags).toEqual(["priory", "tide", "ledger"]);
+  expect(vi.mocked(api.updateVersion).mock.calls[0][3].data.tags).toEqual(["priory", "tide", "ledger"]);
 });
 
 // ----------------------------------------------------------------- the name
@@ -402,19 +404,19 @@ test("renaming a version stores the label on the card, so it survives a re-read"
   fireEvent.change(input, { target: { value: "veiled · after the vow" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
-  const [scope, cid, vid, sent] = (api.updateVersion as any).mock.calls[0];
+  const [scope, cid, vid, sent] = vi.mocked(api.updateVersion).mock.calls[0];
   expect([scope, cid, vid]).toEqual([{ kind: "world", id: "realm" }, "seraphine", "veiled"]);
-  expect(sent.data.extensions.grimoire_label).toBe("veiled · after the vow");
+  expect(sent.data.extensions?.grimoire_label).toBe("veiled · after the vow");
 });
 
 test("a blank rename clears the label rather than storing an empty one", async () => {
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     ...DETAIL,
     versions: [DETAIL.versions[0], {
       ...DETAIL.versions[1],
       card: card({ description: "veiled", extensions: { grimoire_label: "veiled" } }),
     }],
-  });
+  }));
   await renderWorld();
   fireEvent.click(screen.getByRole("button", { name: /Rename veiled/i }));
   const input = await screen.findByRole("textbox", { name: /Rename version veiled/i });
@@ -423,7 +425,7 @@ test("a blank rename clears the label rather than storing an empty one", async (
   await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
   // Deleted, not blanked: the backend's fallback chain then supplies a label,
   // and a stored "" would beat it to nothing on screen.
-  expect((api.updateVersion as any).mock.calls[0][3].data.extensions)
+  expect(vi.mocked(api.updateVersion).mock.calls[0][3].data.extensions)
     .not.toHaveProperty("grimoire_label");
 });
 
@@ -457,7 +459,7 @@ test("importing a version asks what to call it and sends that name", async () =>
 });
 
 test("importing a version from a URL sends the URL and the name", async () => {
-  (api.importCharacterFromChub as any).mockResolvedValue({
+  vi.mocked(api.importCharacterFromChub).mockResolvedValue({
     character: "seraphine", version: "after-the-flood", updated: false,
     gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] },
   });
@@ -495,10 +497,10 @@ test("world scope renders no campaign section at all", async () => {
 });
 
 test("campaign scope reads the character's state through the newest scene they are cast in", async () => {
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", version: "default",
       scenes: ["001--the-tide-gate", "004--the-priory-door"] },
-  ]);
+  ]));
   await renderCampaign();
   await screen.findByText("A novice who counts the tide instead of the hours.");
   expect(api.getCasefile).toHaveBeenCalledWith("run", "004--the-priory-door", "characters", "seraphine");
@@ -512,10 +514,10 @@ test("a character the campaign has never played is not asked about", async () =>
 });
 
 test("an unreadable casefile still reports the scenes", async () => {
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", version: "default", scenes: ["001--the-tide-gate"] },
-  ]);
-  (api.getCasefile as any).mockRejectedValue(new Error("gone"));
+  ]));
+  vi.mocked(api.getCasefile).mockRejectedValue(new Error("gone"));
   await renderCampaign();
   await screen.findByText(/Could not read Seraphine's state/i);
   expect(screen.getByText("Scene 1")).toBeTruthy();
@@ -532,9 +534,9 @@ test("campaign scope says the edit stays in the campaign", async () => {
 });
 
 test("the locked version is marked with the campaign that locked it", async () => {
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", version: "veiled", scenes: ["001--x"] },
-  ]);
+  ]));
   await renderCampaign();
   await screen.findByText("Locked in The Long Tide");
 });
@@ -561,7 +563,7 @@ test("delete says which library it removes from", async () => {
 // ------------------------------------------------------------- voice anchor
 
 test("the voice anchor loads, and a blank save is the documented opt-out", async () => {
-  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "Short declaratives." });
+  vi.mocked(api.getCharacterVoiceAnchor).mockResolvedValue({ voice_anchor: "Short declaratives." });
   await renderWorld();
   const anchor = (await screen.findByText("Short declaratives."))
     .closest(".column-section") as HTMLElement;
@@ -575,7 +577,7 @@ test("the voice anchor loads, and a blank save is the documented opt-out", async
 });
 
 test("a failed anchor read disables editing rather than offering a blank to save", async () => {
-  (api.getCharacterVoiceAnchor as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.getCharacterVoiceAnchor).mockRejectedValue(new Error("nope"));
   await renderWorld();
   const failed = (await screen.findByText(/Could not read the voice anchor/i))
     .closest(".column-section") as HTMLElement;
@@ -583,7 +585,7 @@ test("a failed anchor read disables editing rather than offering a blank to save
 });
 
 test("an empty generated anchor is a failure, not a draft", async () => {
-  (api.generateCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "  " });
+  vi.mocked(api.generateCharacterVoiceAnchor).mockResolvedValue({ voice_anchor: "  " });
   await renderWorld();
   const anchor = (await screen.findByText(/not judged for voice drift/i))
     .closest(".column-section") as HTMLElement;
@@ -593,7 +595,7 @@ test("an empty generated anchor is a failure, not a draft", async () => {
 });
 
 test("a generated anchor opens for review rather than being persisted", async () => {
-  (api.generateCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "Clipped." });
+  vi.mocked(api.generateCharacterVoiceAnchor).mockResolvedValue({ voice_anchor: "Clipped." });
   await renderWorld();
   const anchor = (await screen.findByText(/not judged for voice drift/i))
     .closest(".column-section") as HTMLElement;
@@ -604,8 +606,8 @@ test("a generated anchor opens for review rather than being persisted", async ()
 });
 
 test("the over-cap warning uses the cap the server reported, counting code points", async () => {
-  (api.getConfig as any).mockResolvedValue({ voice_anchor_cap: 4 });
-  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "𐐷𐐷𐐷" });
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({ voice_anchor_cap: 4 }));
+  vi.mocked(api.getCharacterVoiceAnchor).mockResolvedValue({ voice_anchor: "𐐷𐐷𐐷" });
   await renderWorld();
   const anchor = (await screen.findByText("𐐷𐐷𐐷"))
     .closest(".column-section") as HTMLElement;
@@ -619,7 +621,7 @@ test("the over-cap warning uses the cap the server reported, counting code point
 // ----------------------------------------------------------------- tagline
 
 test("the tagline is world-scoped and saves through its own route", async () => {
-  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "Counts the tide." });
+  vi.mocked(api.getCharacterTagline).mockResolvedValue({ tagline: "Counts the tide." });
   await renderWorld();
   const block = (await screen.findByText("Counts the tide."))
     .closest(".identity-tagline") as HTMLElement;
@@ -648,7 +650,7 @@ test("the greetings tab shows the first message and each alternate", async () =>
 });
 
 test("the greetings tab counts and links world greetings featuring the character", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue([
     {
       id: "tide-watch", name: "Tide Watch", character: "mara", version: "default",
       present: ["mara", "seraphine"], requires_tags: [], predecessor_join: "all",
@@ -676,10 +678,10 @@ test("the greetings tab counts and links world greetings featuring the character
 });
 
 test("a card with no greetings says what a greeting is for", async () => {
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     ...DETAIL,
     versions: [{ ...DETAIL.versions[0], card: card({ first_mes: "", alternate_greetings: [] }) }],
-  });
+  }));
   await renderWorld();
   fireEvent.click(screen.getByRole("tab", { name: /Greetings/ }));
   await screen.findByText(/opening a scene can start from/i);
@@ -692,7 +694,7 @@ test("editing the first message writes it back to the card", async () => {
   fireEvent.change(box, { target: { value: "You are late." } });
   fireEvent.click(within(fieldBlock("First message")).getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
-  expect((api.updateVersion as any).mock.calls[0][3].data.first_mes).toBe("You are late.");
+  expect(vi.mocked(api.updateVersion).mock.calls[0][3].data.first_mes).toBe("You are late.");
 });
 
 test("inherited character art shares one shelf and retains provenance and guarded campaign writes", async () => {
@@ -770,7 +772,7 @@ test("a character version change closes its viewer and resets management", async
 });
 
 test("the lore tab is counted from the entries that name this character as owner", async () => {
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "the-pact", name: "The Pact", owners: "characters:seraphine" },
     { id: "the-tide", name: "The Tide", owners: "characters:mara" },
   ]);
@@ -779,7 +781,7 @@ test("the lore tab is counted from the entries that name this character as owner
 });
 
 test("a lore chip points at the entry, and the new-entry chip pre-owns the form", async () => {
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "the-salt-pact", name: "The Salt Pact", owners: "characters:seraphine" },
   ]);
   await renderWorld();
@@ -793,9 +795,9 @@ test("a lore chip points at the entry, and the new-entry chip pre-owns the form"
 // ------------------------------------------------------------ embedded lore
 
 test("the embedded book opens a review table and commits with per-entry categories", async () => {
-  (api.lorebookParse as any).mockResolvedValue(
+  vi.mocked(api.lorebookParse).mockResolvedValue(
     { entries: [{ name: "pact", keys: ["pact"], body: "x", category: "lore" }] });
-  (api.lorebookImport as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
+  vi.mocked(api.lorebookImport).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
   await renderWorld();
   fireEvent.click(await screen.findByRole("button", { name: /Review 1 embedded lore entry/i }));
   await screen.findByText(/Review and route each entry/i);
@@ -805,7 +807,7 @@ test("the embedded book opens a review table and commits with per-entry categori
 });
 
 test("re-importing an unchanged book says so instead of reporting zero", async () => {
-  (api.lorebookImport as any).mockResolvedValue({ created: [] });
+  vi.mocked(api.lorebookImport).mockResolvedValue({ created: [] });
   await renderWorld();
   fireEvent.click(await screen.findByRole("button", { name: /Review 1 embedded lore entry/i }));
   await screen.findByText(/Review and route each entry/i);
@@ -822,14 +824,14 @@ test("the embedded-lore button follows the version and vanishes when it offers n
 
 test("linking a version to a URL shows a clickable link and allows unlinking", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("creator/seraphine");
-  (api.setCharacterChubSource as any).mockResolvedValue({ ok: true });
-  (api.readCharacter as any)
-    .mockResolvedValueOnce(DETAIL)
-    .mockResolvedValue({
+  vi.mocked(api.setCharacterChubSource).mockResolvedValue({ chub_source: "creator/seraphine" });
+  vi.mocked(api.readCharacter)
+    .mockResolvedValueOnce(fixture(DETAIL))
+    .mockResolvedValue(fixture({
       ...DETAIL,
       versions: [{ ...DETAIL.versions[0], chub_source: "creator/seraphine", is_chub: true },
                  DETAIL.versions[1]],
-    });
+    }));
   await renderWorld();
   fireEvent.click(screen.getByRole("button", { name: "Link to URL" }));
   const link = await screen.findByRole("link", { name: "creator/seraphine" });
@@ -838,11 +840,11 @@ test("linking a version to a URL shows a clickable link and allows unlinking", a
 });
 
 test("a sibling version does not show another version's chub link", async () => {
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     ...DETAIL,
     versions: [{ ...DETAIL.versions[0], chub_source: "creator/seraphine", is_chub: true },
                DETAIL.versions[1]],
-  });
+  }));
   await renderWorld("/worlds/realm/characters/seraphine?v=veiled");
   expect(screen.queryByRole("link", { name: "creator/seraphine" })).toBeNull();
   expect(screen.getByRole("button", { name: "Link to URL" })).toBeTruthy();
@@ -851,7 +853,7 @@ test("a sibling version does not show another version's chub link", async () => 
 // ------------------------------------------------------------------ misc
 
 test("a character that cannot be read reports the reason instead of hanging", async () => {
-  (api.readCharacter as any).mockRejectedValue(new Error("no such character"));
+  vi.mocked(api.readCharacter).mockRejectedValue(new Error("no such character"));
   render(
     <MemoryRouter initialEntries={["/worlds/realm/characters/ghost"]}>
       <Routes><Route path="/worlds/:wid/characters/:eid" element={<CharacterPage />} /></Routes>
@@ -930,9 +932,9 @@ test("a two-digit day can be typed one digit at a time", async () => {
 });
 
 test("a saved full birthdate is displayed until Edit is chosen", async () => {
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     ...DETAIL, meta: { ...DETAIL.meta, birthdate: "1985-05-09" },
-  });
+  }));
   await renderWorld();
   await screen.findByText("May 9, 1985");
   expect(screen.queryByLabelText("Birthdate month")).toBeNull();
@@ -945,8 +947,8 @@ test("a saved full birthdate is displayed until Edit is chosen", async () => {
 });
 
 test("birthdate save waits for an in-flight card write", async () => {
-  let release: (value: unknown) => void = () => {};
-  (api.updateVersion as any).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+  let release: (value: Awaited<ReturnType<typeof api.updateVersion>>) => void = () => {};
+  vi.mocked(api.updateVersion).mockReturnValue(new Promise((resolve) => { release = resolve; }));
   await renderCampaign();
   fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
   const box = await editField("Personality");
@@ -957,8 +959,8 @@ test("birthdate save waits for an in-flight card write", async () => {
 });
 
 test("a birthdate save holds other character edits", async () => {
-  let release: (value: unknown) => void = () => {};
-  (api.setCharacterBirthdate as any).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+  let release: (value: Awaited<ReturnType<typeof api.setCharacterBirthdate>>) => void = () => {};
+  vi.mocked(api.setCharacterBirthdate).mockReturnValue(new Promise((resolve) => { release = resolve; }));
   await renderCampaign();
   fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
   fireEvent.click(screen.getByRole("button", { name: "Save birthdate" }));
@@ -968,8 +970,8 @@ test("a birthdate save holds other character edits", async () => {
 });
 
 test("birthdate save waits for a default-version update", async () => {
-  let release: (value: unknown) => void = () => {};
-  (api.setDefaultVersion as any).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+  let release: (value: Awaited<ReturnType<typeof api.setDefaultVersion>>) => void = () => {};
+  vi.mocked(api.setDefaultVersion).mockReturnValue(new Promise((resolve) => { release = resolve; }));
   await renderWorld();
   fireEvent.click(screen.getByRole("button", { name: "Add birthdate" }));
   fireEvent.click(screen.getByRole("button", { name: "veiled" }));
@@ -979,11 +981,11 @@ test("birthdate save waits for a default-version update", async () => {
 });
 
 test("changing to a year without the selected month clears that month and day", async () => {
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     ...DETAIL, meta: { ...DETAIL.meta, birthdate: "--Adar1-30" },
-  });
-  (api.getCalendarConfig as any).mockResolvedValue({ primary: { provider: "hebrew" } });
-  (api.getCalendarMonths as any).mockImplementation((_scope: unknown, year: number) =>
+  }));
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({ primary: { provider: "hebrew" } }));
+  vi.mocked(api.getCalendarMonths).mockImplementation((_scope, year) =>
     Promise.resolve({ months: year === 5785
       ? [{ key: "Adar", name: "Adar", days: 29 }]
       : [{ key: "Adar1", name: "Adar I", days: 30 }] }));
@@ -1005,7 +1007,7 @@ test("walking to another character remounts rather than reusing the page", async
   // of this page's state is about ONE character: a stale card under the new
   // name, an editor belonging to whoever you left, a tagline read on mount and
   // saved against the current id.
-  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "Counts the tide." });
+  vi.mocked(api.getCharacterTagline).mockResolvedValue({ tagline: "Counts the tide." });
   render(
     <MemoryRouter initialEntries={["/worlds/realm/characters/seraphine"]}>
       <Spy />
@@ -1017,20 +1019,20 @@ test("walking to another character remounts rather than reusing the page", async
   await screen.findByRole("heading", { name: "Seraphine", level: 1 });
   await editField("Personality");            // an editor belonging to Seraphine
 
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     ...DETAIL,
     meta: { ...DETAIL.meta, id: "mara", name: "Mara" },
     versions: [{ ...DETAIL.versions[0], card: card({ name: "Mara" }) }],
-  });
-  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "Keeps the ledger." });
+  }));
+  vi.mocked(api.getCharacterTagline).mockResolvedValue({ tagline: "Keeps the ledger." });
   fireEvent.click(screen.getByRole("link", { name: /All characters/ }));  // any nav
   // Re-enter at the other character.
   await waitFor(() => expect(lastLocation).toContain("/worlds/realm/characters"));
 });
 
 test("a save in flight holds every other field's control", async () => {
-  let release: (v: unknown) => void = () => {};
-  (api.updateVersion as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.updateVersion>>) => void = () => {};
+  vi.mocked(api.updateVersion).mockReturnValue(new Promise((r) => { release = r; }));
   await renderWorld();
   const box = await editField("Personality");
   fireEvent.change(box, { target: { value: "slower" } });
@@ -1043,8 +1045,8 @@ test("a save in flight holds every other field's control", async () => {
 });
 
 test("a lore parse that lands after a version switch is dropped", async () => {
-  let release: (v: unknown) => void = () => {};
-  (api.lorebookParse as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.lorebookParse>>) => void = () => {};
+  vi.mocked(api.lorebookParse).mockReturnValue(new Promise((r) => { release = r; }));
   await renderWorld();
   fireEvent.click(await screen.findByRole("button", { name: /Review 1 embedded lore entry/i }));
   fireEvent.click(screen.getByRole("button", { name: "veiled" }));
@@ -1058,8 +1060,8 @@ test("a lore parse that lands after a version switch is dropped", async () => {
 });
 
 test("Generate is held until the anchor has actually been read", async () => {
-  let release: (v: unknown) => void = () => {};
-  (api.getCharacterVoiceAnchor as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.getCharacterVoiceAnchor>>) => void = () => {};
+  vi.mocked(api.getCharacterVoiceAnchor).mockReturnValue(new Promise((r) => { release = r; }));
   await renderWorld();
   const anchor = (await screen.findByText("Reading…")).closest(".column-section") as HTMLElement;
   // A draft that lands first is overwritten by the read; a read that then FAILS
@@ -1080,7 +1082,7 @@ test("+ Add greeting writes only once there is something to write", async () => 
   fireEvent.click(within(fieldBlock("Alternate greeting 2"))
     .getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
-  expect((api.updateVersion as any).mock.calls[0][3].data.alternate_greetings)
+  expect(vi.mocked(api.updateVersion).mock.calls[0][3].data.alternate_greetings)
     .toEqual(["Rain on the shutters.", "The council chamber."]);
 });
 
@@ -1097,24 +1099,24 @@ test("cancelling a new greeting leaves the card alone", async () => {
 });
 
 test("the creator is editable again, not just a byline", async () => {
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     ...DETAIL,
     versions: [{ ...DETAIL.versions[0], card: card({ creator: "Saltmarch archive" }) }],
-  });
+  }));
   await renderWorld();
   const box = await editField("Creator");
   fireEvent.change(box, { target: { value: "The harbour board" } });
   fireEvent.click(within(fieldBlock("Creator")).getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
-  expect((api.updateVersion as any).mock.calls[0][3].data.creator).toBe("The harbour board");
+  expect(vi.mocked(api.updateVersion).mock.calls[0][3].data.creator).toBe("The harbour board");
 });
 
 test("picking a version re-reads the lock, so the page stops offering what is gone", async () => {
   // Seated but NOT locked to a version: that is the state that offers Pick.
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", scenes: ["001--x"] },
-  ]);
-  (api.pickVersion as any).mockResolvedValue({ ok: true });
+  ]));
+  vi.mocked(api.pickVersion).mockResolvedValue({ ok: true });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   await renderCampaign();
   await screen.findByRole("button", { name: "Pick this version" });
@@ -1122,7 +1124,7 @@ test("picking a version re-reads the lock, so the page stops offering what is go
   // The lock lives in the appearance record, which `refresh()` does not read —
   // without a re-read the page kept offering "+ New version" and the backend
   // answered the button it should not have drawn with a 409.
-  await waitFor(() => expect((api.listAppearances as any).mock.calls.length).toBeGreaterThan(1));
+  await waitFor(() => expect(vi.mocked(api.listAppearances).mock.calls.length).toBeGreaterThan(1));
 });
 
 test("going back hands the grid the character, so its filter cannot swallow them", async () => {

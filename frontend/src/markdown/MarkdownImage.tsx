@@ -81,7 +81,7 @@ function localMembers(raw: unknown, world: string, id: string): string[] {
 }
 
 function CollectionImage({ src, alt = "", extras, occurrence, ...props }:
-    ImageProps & { src: string; extras?: (src: string) => ReactNode; occurrence: string }) {
+    ImageProps & { src: string; extras?: ((src: string) => ReactNode) | undefined; occurrence: string }) {
   const [collection, setCollection] = useMarkdownCollectionState(occurrence);
   const { members, selected, failed, status, fallbackFailed } = collection;
   const setSelected = (selected: string) => setCollection((old) => ({ ...old, selected }));
@@ -162,7 +162,7 @@ export function MarkdownImage({ src = "", alt = "", node, ...props }: ImageProps
   return <PlainImage {...props} src={src} alt={alt} extras={extras} occurrence={occurrence} />;
 }
 function PlainImage({ src, alt, extras, occurrence, ...props }:
-  ImageProps & { src: string; alt: string; extras?: (src: string) => ReactNode; occurrence: string }) {
+  ImageProps & { src: string; alt: string; extras?: ((src: string) => ReactNode) | undefined; occurrence: string }) {
   const images = useMemo(() => supported(src) ? [descriptor(src, alt, occurrence)] : [], [src, alt, occurrence]);
   const open = useMarkdownArtOccurrence(occurrence, images);
   const image = <img {...props} src={src} alt={alt} />;

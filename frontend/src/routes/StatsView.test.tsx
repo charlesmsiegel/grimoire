@@ -15,13 +15,15 @@ vi.mock("../api/errors", () => ({ errorText: (e: unknown) => String(e) }));
 
 import { api } from "../api/client";
 import StatsView from "./StatsView";
+import type { ErrorSummary, LogPage, Stats } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
-const bucket = (over: Record<string, unknown> = {}) => ({
+const bucket = (over: Partial<Stats["by_day"][number]> = {}): Stats["by_day"][number] => ({
   key: "chat", calls: 4, errors: 0, error_rate: 0, sampled: false, unparsed_durations: 0,
   p50: 250, p90: 380, p99: 400, min: 100, max: 400, ...over,
 });
 
-const ERRORS = {
+const ERRORS: ErrorSummary = {
   since: "2026-07-23", until: "2026-08-21", days: 30,
   total: 3,
   modules: [{ module: "dossier", count: 2,
@@ -49,7 +51,7 @@ const STATS = {
   errors: ERRORS,
 };
 
-const PAGE = {
+const PAGE: LogPage = {
   rows: [
     { ts: "2026-08-21T10:00:00.000Z", level: "error", module: "dossier",
       message: "Mara came back empty", kind: "empty_reply" },
@@ -70,16 +72,16 @@ beforeEach(() => {
   // and half the assertions here are about how many times a stream was opened.
   vi.clearAllMocks();
   vi.mocked(api.listCampaigns).mockResolvedValue([]);
-  vi.mocked(api.getStats).mockResolvedValue(structuredClone(STATS) as never);
-  vi.mocked(api.getLogs).mockResolvedValue(structuredClone(PAGE) as never);
-  vi.mocked(api.getErrorSummary).mockResolvedValue(structuredClone(ERRORS) as never);
+  vi.mocked(api.getStats).mockResolvedValue(structuredClone(STATS));
+  vi.mocked(api.getLogs).mockResolvedValue(structuredClone(PAGE));
+  vi.mocked(api.getErrorSummary).mockResolvedValue(structuredClone(ERRORS));
   vi.mocked(api.getLogLevel).mockResolvedValue(
-    { level: "info", levels: ["debug", "info", "warning", "error"] } as never);
-  vi.mocked(api.streamLogTail).mockReturnValue(new Promise(() => {}) as never);
+    { level: "info", levels: ["debug", "info", "warning", "error"] });
+  vi.mocked(api.streamLogTail).mockReturnValue(new Promise(() => {}));
 });
 
 it("filters performance, errors, log pages and the live tail to its route campaign", async () => {
-  vi.mocked(api.listCampaigns).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }] as never);
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([{ id: "saltmarch", name: "Saltmarch" }]));
   render(<MemoryRouter><StatsView cid="saltmarch" /></MemoryRouter>);
   await waitFor(() => expect(api.getStats).toHaveBeenCalledWith(30, "saltmarch"));
   fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
@@ -94,13 +96,13 @@ it("filters performance, errors, log pages and the live tail to its route campai
 });
 
 it("shows separate global campaign rows and a daily reroll rate with its denominator", async () => {
-  vi.mocked(api.listCampaigns).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }] as never);
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([{ id: "saltmarch", name: "Saltmarch" }]));
   vi.mocked(api.getStats).mockResolvedValue({ ...STATS,
     by_campaign: [bucket({ key: "saltmarch", calls: 2 }),
                   bucket({ key: "Outside a campaign", calls: 1 })],
     by_day: [bucket({ key: "2026-09-28", rerolls: 1,
       eligible_turns: 3, reroll_rate: 1 / 3 })],
-  } as never);
+  });
   view();
   expect(await screen.findByRole("heading", { name: "By campaign" })).toBeInTheDocument();
   expect(screen.getAllByText("Saltmarch").length).toBeGreaterThan(0);
@@ -141,7 +143,7 @@ it("draws a dash, never 0ms, where no call was timed, and counts the untimed", a
     by_task: [bucket(), bucket({ key: "dossier", calls: 2, unparsed_durations: 2, ...untimed })],
     by_day: [bucket({ key: "2026-08-21", calls: 2, unparsed_durations: 2, ...untimed })],
     totals: bucket({ key: "", calls: 6, unparsed_durations: 2 }),
-  } as never);
+  });
   view();
   await screen.findByRole("heading", { name: "Performance" });
 
@@ -171,7 +173,7 @@ it("says so when the window held no calls at all, rather than showing bare zeroe
   vi.mocked(api.getStats).mockResolvedValue({
     ...structuredClone(STATS), totals: bucket({ key: "", calls: 0, p50: 0, p90: 0, p99: 0, max: 0 }),
     by_task: [], by_model: [], by_day: [],
-  } as never);
+  });
   view();
 
   expect(await screen.findByText(/No calls in this window yet/)).toBeInTheDocument();
@@ -231,7 +233,7 @@ it("filters the error report to one module, from its own read", async () => {
 
 it("keeps every module in the picker after one of them is picked", async () => {
   vi.mocked(api.getErrorSummary).mockResolvedValue(
-    { ...ERRORS, total: 2, modules: [ERRORS.modules[0]] } as never);
+    { ...ERRORS, total: 2, modules: [ERRORS.modules[0]] });
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
@@ -256,7 +258,7 @@ it("keeps the module picker on screen while a filter is active", async () => {
   vi.mocked(api.getStats).mockResolvedValue({
     ...structuredClone(STATS),
     errors: { ...ERRORS, modules: [ERRORS.modules[0]] },
-  } as never);
+  });
   fireEvent.change(screen.getByLabelText("How many days to report on"),
                    { target: { value: "7" } });
 
@@ -266,9 +268,9 @@ it("keeps the module picker on screen while a filter is active", async () => {
 });
 
 it("never shows whole-library numbers under a filtered heading", async () => {
-  let release: (v: unknown) => void = () => {};
-  vi.mocked(api.getErrorSummary).mockImplementation((() =>
-    new Promise((res) => { release = res; })) as never);
+  let release: (v: ErrorSummary) => void = () => {};
+  vi.mocked(api.getErrorSummary).mockImplementation(() =>
+    new Promise((res) => { release = res; }));
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
@@ -282,7 +284,7 @@ it("never shows whole-library numbers under a filtered heading", async () => {
   await screen.findByText(/Reading the log/);
   expect(screen.queryByText("By module")).not.toBeInTheDocument();
 
-  release({ ...ERRORS, total: 2, modules: [ERRORS.modules[0]] });
+  release(fixture({ ...ERRORS, total: 2, modules: [ERRORS.modules[0]] }));
   expect(await screen.findByText("By module")).toBeInTheDocument();
 });
 
@@ -336,7 +338,7 @@ it("counts the whole window in the rail, never the module filter", async () => {
   // A rail row labelled just "Errors" showing one module's total is a number
   // that does not say what it is counting.
   vi.mocked(api.getErrorSummary).mockResolvedValue(
-    { ...ERRORS, total: 2, modules: [ERRORS.modules[0]] } as never);
+    { ...ERRORS, total: 2, modules: [ERRORS.modules[0]] });
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Errors/ }));
@@ -388,7 +390,7 @@ it("heads each day's rows with its date", async () => {
       { ts: "2026-08-21T09:17:00.000Z", level: "info", module: "runner", message: "today" },
       { ts: "2026-08-20T14:22:01.900Z", level: "info", module: "runner", message: "yesterday" },
     ],
-  } as never);
+  });
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
@@ -407,7 +409,7 @@ it("shows the traceback the bridge captured, collapsed", async () => {
     rows: [{ ts: "2026-08-21T10:00:00.000Z", level: "error", module: "store.fork",
              message: "could not fork", kind: "ValueError",
              trace: "Traceback...\nValueError: bad frontmatter" }],
-  } as never);
+  });
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
@@ -469,7 +471,7 @@ it("warns that a quieter line was never written, which is why it is not here", a
 
 it("says nothing about the threshold when everything is being recorded", async () => {
   vi.mocked(api.getLogLevel).mockResolvedValue(
-    { level: "debug", levels: PAGE.levels } as never);
+    { level: "debug", levels: PAGE.levels });
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
@@ -492,13 +494,13 @@ it("opens no stream until Live is switched on", async () => {
 });
 
 it("appends tailed rows newest first, like the page they sit above", async () => {
-  vi.mocked(api.streamLogTail).mockImplementation(((_opts: unknown, onEvent: (e: unknown) => void) => {
+  vi.mocked(api.streamLogTail).mockImplementation((_opts, onEvent) => {
     onEvent({ cursor: "2026-08.jsonl:10", rows: [
       { ts: "2026-08-21T11:00:00.000Z", level: "info", module: "runner", message: "older" },
       { ts: "2026-08-21T11:00:01.000Z", level: "warning", module: "runner", message: "newer" },
     ] });
     return new Promise(() => {});
-  }) as never);
+  });
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
@@ -515,13 +517,13 @@ it("appends tailed rows newest first, like the page they sit above", async () =>
 });
 
 it("reports a tail that cannot read the log without tearing it down", async () => {
-  vi.mocked(api.streamLogTail).mockImplementation(((_o: unknown,
-                                                    onEvent: (e: unknown) => void) => {
+  vi.mocked(api.streamLogTail).mockImplementation((_o,
+                                                    onEvent) => {
     onEvent({ cursor: "c", error: { detail: "the log went away", kind: "log_unreadable" } });
     onEvent({ cursor: "c2", rows: [
       { ts: "2026-08-21T11:00:00.000Z", level: "info", module: "runner", message: "back" }] });
     return new Promise(() => {});
-  }) as never);
+  });
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
@@ -538,12 +540,12 @@ it("reports a tail that cannot read the log without tearing it down", async () =
 it("takes the failure banner down when the log comes back, even if it is quiet", async () => {
   // Rows only arrive when there are rows, so a recovered-but-silent log used
   // to leave the banner standing until something happened to log.
-  vi.mocked(api.streamLogTail).mockImplementation(((_o: unknown,
-                                                    onEvent: (e: unknown) => void) => {
+  vi.mocked(api.streamLogTail).mockImplementation((_o,
+                                                    onEvent) => {
     onEvent({ cursor: "c", error: { detail: "the log went away", kind: "log_unreadable" } });
     onEvent({ cursor: "c2" });                       // recovery: a bare cursor
     return new Promise(() => {});
-  }) as never);
+  });
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
@@ -588,10 +590,10 @@ it("reopens the tail against the new filter rather than keeping the old one", as
 });
 
 it("does not report the abort it caused by switching Live off", async () => {
-  vi.mocked(api.streamLogTail).mockImplementation(((_o: unknown, _e: unknown, signal: AbortSignal) =>
+  vi.mocked(api.streamLogTail).mockImplementation((_o, _e, signal) =>
     new Promise((_res, rej) => {
-      signal.addEventListener("abort", () => rej(new Error("aborted")));
-    })) as never);
+      signal?.addEventListener("abort", () => rej(new Error("aborted")));
+    }));
   view();
   await screen.findByRole("heading", { name: "Performance" });
   fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
@@ -615,11 +617,11 @@ it("resumes the live tail from its last cursor when the stream ends", async () =
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
     let ends: () => void = () => {};
-    vi.mocked(api.streamLogTail).mockImplementation(((_o: unknown,
-                                                      onEvent: (e: unknown) => void) => {
+    vi.mocked(api.streamLogTail).mockImplementation((_o,
+                                                      onEvent) => {
       onEvent({ cursor: "2026-08.jsonl:4096" });
       return new Promise<void>((res) => { ends = res; });
-    }) as never);
+    });
     view();
     await screen.findByRole("heading", { name: "Performance" });
     fireEvent.click(screen.getByRole("button", { name: /Debug log/ }));
@@ -709,7 +711,7 @@ it("links the recording threshold to the setting that moves it", async () => {
 
 it("an empty log with nothing filtered says nothing was recorded, not that filters hid it", async () => {
   vi.mocked(api.getLogs).mockResolvedValue(
-    structuredClone({ ...PAGE, rows: [], total: 0, modules: [] }) as never);
+    structuredClone({ ...PAGE, rows: [], total: 0, modules: [] }));
   render(<MemoryRouter initialEntries={["/stats?section=log"]}><StatsView /></MemoryRouter>);
   expect(await screen.findByText("Nothing recorded in this window.")).toBeInTheDocument();
   expect(screen.queryByText("Nothing matches those filters.")).toBeNull();

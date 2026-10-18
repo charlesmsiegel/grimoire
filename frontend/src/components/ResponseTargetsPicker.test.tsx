@@ -2,6 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ResponseTargetsPicker } from "./ResponseTargetsPicker";
 import { api } from "../api/client";
+import { fixture, type DeepPartial } from "../testkit/fixture";
+import type { ResponseBundle } from "../api/types";
 
 vi.mock("../api/client");
 
@@ -16,12 +18,12 @@ const bundle = {
     "opening.words": { scope: "global" }, "opening.paragraphs": { scope: "default" },
     "continuation.words": { scope: "scene" }, "continuation.paragraphs": { scope: "default" },
   },
-};
+} satisfies DeepPartial<ResponseBundle>;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.getSceneResponse).mockResolvedValue(bundle as any);
-  vi.mocked(api.getGlobalResponse).mockResolvedValue(bundle as any);
+  vi.mocked(api.getSceneResponse).mockResolvedValue(fixture(bundle));
+  vi.mocked(api.getGlobalResponse).mockResolvedValue(fixture(bundle));
   vi.mocked(api.listStyles).mockResolvedValue([]);
   vi.mocked(api.setSceneResponse).mockResolvedValue({ ok: true });
   vi.mocked(api.setGlobalResponse).mockResolvedValue({ ok: true });

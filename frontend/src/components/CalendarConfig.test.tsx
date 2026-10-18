@@ -8,11 +8,11 @@ import { api } from "../api/client";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getCalendarConfig as any).mockResolvedValue({
+  vi.mocked(api.getCalendarConfig).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: false, stale_after_days: 30, warn_days: 7 });
-  (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
-  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+  vi.mocked(api.setCalendarConfig).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCalendarProviders).mockResolvedValue({ providers: [
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
     { id: "my-custom-calendar", name: "My Custom Calendar" },
   ] });
@@ -107,7 +107,7 @@ test("the config it loads and the one it saves are both reported to its owner", 
 test("a failed load says so, rather than loading forever", async () => {
   // It reports nothing either, so an owner deriving a checklist row from it
   // cannot mistake a failed read for an unconfirmed calendar.
-  (api.getCalendarConfig as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.getCalendarConfig).mockRejectedValue(new Error("nope"));
   const onConfig = vi.fn();
   render(<CalendarConfig scope={{ kind: "world", id: "realm" }} onConfig={onConfig} />);
   expect(await screen.findByText(/could not load this calendar/i)).toBeInTheDocument();
@@ -134,10 +134,10 @@ test("a scope change hides the form until the new scope's calendar has landed", 
   // Otherwise the panel shows one record's calendar under another record's
   // Save: pressing it in that window writes the world you left into the world
   // you are looking at.
-  (api.getCalendarConfig as any).mockImplementation((scope: { id: string }) =>
+  vi.mocked(api.getCalendarConfig).mockImplementation((scope) =>
     scope.id === "realm"
       ? Promise.resolve({ primary: { provider: "hebrew", region: "IL", custom_holidays: [], anchor: null },
-                          secondary: null, confirmed: true, stale_after_days: 30 })
+                          secondary: null, confirmed: true, stale_after_days: 30, warn_days: 7 })
       : new Promise(() => {}));                    // never lands
   const { rerender } = render(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
   expect(await screen.findByLabelText("Calendar")).toHaveValue("hebrew");
@@ -176,7 +176,7 @@ test("clearing the warn window sends the stored one, not the no-opinion sentinel
   // field, wrong for this form, which would be left showing an empty box over a
   // server that kept 14. The form resolves blank before the request goes out,
   // and the control then shows what was actually saved.
-  (api.getCalendarConfig as any).mockResolvedValue({
+  vi.mocked(api.getCalendarConfig).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: false, stale_after_days: 30, warn_days: 14 });
   render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
@@ -205,16 +205,16 @@ test("a save that settles after a scope change does not install itself", async (
   // flight when the scope changes would otherwise put ITS config on screen
   // under the new record's Save button, where the next edit writes the old
   // record's calendar over the new one.
-  let landOld: (v: any) => void = () => {};
-  (api.setCalendarConfig as any).mockReturnValueOnce(
-    new Promise((r: any) => { landOld = r; }));
+  let landOld: (v: Awaited<ReturnType<typeof api.setCalendarConfig>>) => void = () => {};
+  vi.mocked(api.setCalendarConfig).mockReturnValueOnce(
+    new Promise<Awaited<ReturnType<typeof api.setCalendarConfig>>>((r) => { landOld = r; }));
   const { rerender } = render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
   const input = await screen.findByLabelText("Warn ahead days");
   fireEvent.change(input, { target: { value: "21" } });
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
 
   // The reader moves to a world, whose calendar loads with a different window.
-  (api.getCalendarConfig as any).mockResolvedValue({
+  vi.mocked(api.getCalendarConfig).mockResolvedValue({
     primary: { provider: "gregorian", region: "GB", custom_holidays: [], anchor: null },
     secondary: null, confirmed: true, stale_after_days: 30, warn_days: 3 });
   rerender(<CalendarConfig scope={{ kind: "world", id: "realm" }} />);
@@ -229,8 +229,8 @@ test("a save that settles after a scope change does not install itself", async (
 test("a failed save from an earlier scope does not banner the new one", async () => {
   // The success path was guarded first; a rejection has the same reach.
   let failOld: (e: unknown) => void = () => {};
-  (api.setCalendarConfig as any).mockReturnValueOnce(
-    new Promise((_res: any, rej: any) => { failOld = rej; }));
+  vi.mocked(api.setCalendarConfig).mockReturnValueOnce(
+    new Promise<Awaited<ReturnType<typeof api.setCalendarConfig>>>((_res, rej) => { failOld = rej; }));
   const { rerender } = render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
   await screen.findByLabelText("Warn ahead days");
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
@@ -246,8 +246,8 @@ test("an edit made while the save is in flight survives it", async () => {
   // those keystrokes -- and stamps "Saved." over a form that no longer matches
   // what was saved, which is the reading a reader cannot recover from. The scope
   // guard does not catch it: editing on stays in the same scope.
-  let land: (v: any) => void = () => {};
-  (api.setCalendarConfig as any).mockReturnValue(new Promise((r) => { land = r; }));
+  let land: (v: Awaited<ReturnType<typeof api.setCalendarConfig>>) => void = () => {};
+  vi.mocked(api.setCalendarConfig).mockReturnValue(new Promise((r) => { land = r; }));
   render(<CalendarConfig scope={{ kind: "campaign", id: "run" }} />);
   const region = await screen.findByLabelText("Holidays region");
   fireEvent.click(screen.getByRole("button", { name: /save/i }));

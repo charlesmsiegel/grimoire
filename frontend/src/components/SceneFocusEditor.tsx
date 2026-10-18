@@ -5,11 +5,11 @@ import { SceneFocusInput } from "./SceneFocusInput";
 import { PromptInclusionNotice } from "./PromptInclusionNotice";
 import { useAuthorialField } from "./useAuthorialField";
 
-export function SceneFocusEditor({ cid, sid, onSaved }: { cid: string; sid: string; onSaved?: () => void }) {
+export function SceneFocusEditor({ cid, sid, onSaved }: { cid: string; sid: string; onSaved?: (() => void) | undefined }) {
   return <ScopedFocus key={`${cid}:${sid}`} cid={cid} sid={sid} onSaved={onSaved} />;
 }
 
-function ScopedFocus({ cid, sid, onSaved }: { cid: string; sid: string; onSaved?: () => void }) {
+function ScopedFocus({ cid, sid, onSaved }: { cid: string; sid: string; onSaved?: (() => void) | undefined }) {
   const read = useCallback(() => api.getSceneFocus(cid, sid), [cid, sid]);
   const write = useCallback((text: string) => api.setSceneFocus(cid, sid, normalizeSceneFocus(text)), [cid, sid]);
   const field = useAuthorialField(read, write, onSaved);

@@ -5,8 +5,10 @@ vi.mock("../api/client", () => ({
   api: { getIncoming: vi.fn(), acceptIncoming: vi.fn(), rejectIncoming: vi.fn() },
 }));
 import { api } from "../api/client";
+import type { IncomingItem } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
-const HARBOR = {
+const HARBOR: IncomingItem = {
   ref: { kind: "locations", id: "saltmarch-harbor" },
   status: "update",
   world: { name: "Saltmarch Harbor", body: "The harbour is blockaded." },
@@ -18,7 +20,7 @@ const card = (description: string, firstMes: string) => ({
   data: { name: "Seraphine", description, first_mes: firstMes },
 });
 
-const SERAPHINE = {
+const SERAPHINE: IncomingItem = {
   ref: { kind: "characters", id: "seraphine" },
   status: "conflict",
   world: { name: "Seraphine", version: "v2", card: card("Keeps the tide ledger.", "You again.") },
@@ -29,7 +31,7 @@ const SERAPHINE = {
  *  `incoming()` emits it today -- kept because the panel handles it rather than
  *  assuming it away. The shape the backend really does send for "no campaign
  *  copy" is ORPHAN below. */
-const MARA = {
+const MARA: IncomingItem = {
   ref: { kind: "pcs", id: "mara" },
   status: "new",
   world: {
@@ -42,7 +44,7 @@ const MARA = {
 /** What `_actor_incoming` sends when the campaign's copy of a locked version is
  *  gone: `mine_h` is None, which does not match the base either, so the item is
  *  graded a *conflict* with no `mine` at all (`store/sync.py`). */
-const ORPHAN = {
+const ORPHAN: IncomingItem = {
   ref: { kind: "characters", id: "winifred" },
   status: "conflict",
   world: { name: "Winifred", version: "v1", card: card("Harbourmaster.", "Ledger's shut.") },
@@ -51,7 +53,7 @@ const ORPHAN = {
 /** A card change outside the prose fields this view compares -- a new greeting,
  *  a tag, the embedded lorebook. Both sides render identically, so the panel has
  *  to say why rather than let it read as no change. */
-const UNSEEN = {
+const UNSEEN: IncomingItem = {
   ref: { kind: "characters", id: "seraphine" },
   status: "conflict",
   world: { name: "Seraphine", version: "v2", card: card("Keeps the tide ledger.", "You again.") },
@@ -60,9 +62,9 @@ const UNSEEN = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getIncoming as any).mockResolvedValue([]);
-  (api.acceptIncoming as any).mockResolvedValue({ ok: true });
-  (api.rejectIncoming as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.getIncoming).mockResolvedValue([]);
+  vi.mocked(api.acceptIncoming).mockResolvedValue({ ok: true });
+  vi.mocked(api.rejectIncoming).mockResolvedValue({ ok: true });
 });
 
 async function renderPanel() {
@@ -73,7 +75,7 @@ async function renderPanel() {
 const row = (name: RegExp) => screen.getByRole("button", { name });
 
 test("lists each incoming item with its name, kind and status badge", async () => {
-  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE, MARA]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR, SERAPHINE, MARA]));
   await renderPanel();
   expect(row(/Saltmarch Harbor · Location update/)).toBeInTheDocument();
   expect(row(/Seraphine · Character conflict/)).toBeInTheDocument();
@@ -86,7 +88,7 @@ test("lists each incoming item with its name, kind and status badge", async () =
 });
 
 test("an entity update shows world and campaign bodies side by side", async () => {
-  (api.getIncoming as any).mockResolvedValue([HARBOR]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR]));
   await renderPanel();
   // Name and Body, each in two columns.
   expect(screen.getAllByText("From the world")).toHaveLength(2);
@@ -96,7 +98,7 @@ test("an entity update shows world and campaign bodies side by side", async () =
 });
 
 test("an entity renamed in the world reads as a rename, not as an empty change", async () => {
-  (api.getIncoming as any).mockResolvedValue([{
+  vi.mocked(api.getIncoming).mockResolvedValue([{
     ref: { kind: "locations", id: "saltmarch-harbor" }, status: "update",
     world: { name: "Saltmarch Quay", body: "A busy port town." },
     mine: { name: "Saltmarch Harbor", body: "A busy port town." },
@@ -110,7 +112,7 @@ test("an entity renamed in the world reads as a rename, not as an empty change",
 });
 
 test("a plot map is compared as text, with no name row to compare", async () => {
-  (api.getIncoming as any).mockResolvedValue([{
+  vi.mocked(api.getIncoming).mockResolvedValue([{
     ref: { kind: "plotmap", id: "plotmap" }, status: "update",
     world: { name: "Plot map", body: '{"threads": ["the blockade"]}' },
     mine: { name: "Plot map", body: "{}" },
@@ -124,7 +126,7 @@ test("a plot map is compared as text, with no name row to compare", async () => 
 });
 
 test("a character conflict renders both columns as labelled card fields", async () => {
-  (api.getIncoming as any).mockResolvedValue([SERAPHINE]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([SERAPHINE]));
   await renderPanel();
   expect(screen.getByRole("heading", { name: "Description" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "First message" })).toBeInTheDocument();
@@ -140,7 +142,7 @@ test("a character conflict renders both columns as labelled card fields", async 
 });
 
 test("a new item renders persona fields with only the world side", async () => {
-  (api.getIncoming as any).mockResolvedValue([MARA]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([MARA]));
   await renderPanel();
   expect(screen.getByRole("heading", { name: "Pronouns" })).toBeInTheDocument();
   expect(screen.getByText("they/them")).toBeInTheDocument();
@@ -150,8 +152,8 @@ test("a new item renders persona fields with only the world side", async () => {
 });
 
 test("accepting sends that item's ref and refetches, so the row drops off", async () => {
-  (api.getIncoming as any).mockResolvedValueOnce([HARBOR, SERAPHINE])
-                          .mockResolvedValueOnce([SERAPHINE]);
+  vi.mocked(api.getIncoming).mockResolvedValueOnce(fixture([HARBOR, SERAPHINE]))
+                          .mockResolvedValueOnce(fixture([SERAPHINE]));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: "Accept" }));
   await waitFor(() => expect(api.acceptIncoming).toHaveBeenCalledWith(
@@ -164,7 +166,7 @@ test("accepting sends that item's ref and refetches, so the row drops off", asyn
 });
 
 test("rejecting sends that item's ref to the reject route", async () => {
-  (api.getIncoming as any).mockResolvedValue([HARBOR]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR]));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: "Reject" }));
   await waitFor(() => expect(api.rejectIncoming).toHaveBeenCalledWith(
@@ -173,7 +175,7 @@ test("rejecting sends that item's ref to the reject route", async () => {
 });
 
 test("the selected row is the one whose detail is shown", async () => {
-  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR, SERAPHINE]));
   await renderPanel();
   fireEvent.click(row(/Seraphine · Character conflict/));
   fireEvent.click(screen.getByRole("button", { name: "Accept" }));
@@ -182,7 +184,7 @@ test("the selected row is the one whose detail is shown", async () => {
 });
 
 test("accept all confirms first, naming what it would overwrite", async () => {
-  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR, SERAPHINE]));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: "Accept all" }));
   // Nothing is sent on the first click: accepting deletes the campaign's copy
@@ -198,7 +200,7 @@ test("accept all confirms first, naming what it would overwrite", async () => {
 });
 
 test("cancelling a bulk action sends nothing", async () => {
-  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR, SERAPHINE]));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: "Reject all" }));
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -209,7 +211,7 @@ test("cancelling a bulk action sends nothing", async () => {
 });
 
 test("a conflict with no campaign copy shows one column and says so", async () => {
-  (api.getIncoming as any).mockResolvedValue([ORPHAN]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([ORPHAN]));
   await renderPanel();
   expect(screen.queryByText("In this campaign")).not.toBeInTheDocument();
   // Not "both sides changed": there is no copy here to have changed.
@@ -218,14 +220,14 @@ test("a conflict with no campaign copy shows one column and says so", async () =
 });
 
 test("a change outside the compared fields is named, not passed off as no change", async () => {
-  (api.getIncoming as any).mockResolvedValue([UNSEEN]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([UNSEEN]));
   await renderPanel();
   expect(screen.getByText(/Every field below is identical/)).toBeInTheDocument();
   expect(screen.getByText(/embedded lorebook/)).toBeInTheDocument();
 });
 
 test("an entity whose front matter moved names the front matter, not the card", async () => {
-  (api.getIncoming as any).mockResolvedValue([{
+  vi.mocked(api.getIncoming).mockResolvedValue([{
     ref: { kind: "lore", id: "the-salt-pact" }, status: "update",
     world: { name: "The Salt Pact", body: "Debts written in salt." },
     mine: { name: "The Salt Pact", body: "Debts written in salt." },
@@ -235,7 +237,7 @@ test("an entity whose front matter moved names the front matter, not the card", 
 });
 
 test("a world-side rename is visible as a field, not just in the heading", async () => {
-  (api.getIncoming as any).mockResolvedValue([{
+  vi.mocked(api.getIncoming).mockResolvedValue([{
     ref: { kind: "characters", id: "seraphine" }, status: "update",
     world: { name: "Seraphine of the Tides", version: "v2",
              card: { spec: "chara_card_v3", spec_version: "3.0",
@@ -251,8 +253,8 @@ test("a world-side rename is visible as a field, not just in the heading", async
 });
 
 test("a failed read can be retried from the banner", async () => {
-  (api.getIncoming as any).mockRejectedValueOnce(new Error("campaign not found"))
-                          .mockResolvedValueOnce([HARBOR]);
+  vi.mocked(api.getIncoming).mockRejectedValueOnce(new Error("campaign not found"))
+                          .mockResolvedValueOnce(fixture([HARBOR]));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(await screen.findByRole("button", { name: /Saltmarch Harbor/ })).toBeInTheDocument();
@@ -261,7 +263,7 @@ test("a failed read can be retried from the banner", async () => {
 });
 
 test("a single item offers no bulk actions", async () => {
-  (api.getIncoming as any).mockResolvedValue([HARBOR]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR]));
   await renderPanel();
   expect(screen.queryByRole("button", { name: "Accept all" })).not.toBeInTheDocument();
 });
@@ -272,15 +274,15 @@ test("says the campaign is up to date when nothing is pending", async () => {
 });
 
 test("a failed read reports the failure instead of claiming to be up to date", async () => {
-  (api.getIncoming as any).mockRejectedValue(new Error("campaign not found"));
+  vi.mocked(api.getIncoming).mockRejectedValue(new Error("campaign not found"));
   await renderPanel();
   expect(screen.getByText("campaign not found")).toBeInTheDocument();
   expect(screen.queryByText(/up to date with its world/)).not.toBeInTheDocument();
 });
 
 test("a failed accept reports it and leaves the row in place", async () => {
-  (api.getIncoming as any).mockResolvedValue([HARBOR]);
-  (api.acceptIncoming as any).mockRejectedValue(new Error("world is gone"));
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR]));
+  vi.mocked(api.acceptIncoming).mockRejectedValue(new Error("world is gone"));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: "Accept" }));
   expect(await screen.findByText("world is gone")).toBeInTheDocument();
@@ -291,14 +293,14 @@ test("a read for one campaign cannot land in another campaign's panel", async ()
   // The panel is mounted by a route that keeps its instance across a `cid`
   // change, so this is the shape of the bug: a slow read for c1 settling after
   // c2 is on screen.
-  let settleFirst: (v: unknown) => void = () => {};
-  (api.getIncoming as any)
+  let settleFirst: (v: IncomingItem[]) => void = () => {};
+  vi.mocked(api.getIncoming)
     .mockReturnValueOnce(new Promise((res) => { settleFirst = res; }))
-    .mockResolvedValueOnce([SERAPHINE]);
+    .mockResolvedValueOnce(fixture([SERAPHINE]));
 
   const { rerender } = render(<IncomingReview cid="c1" />);
   rerender(<IncomingReview cid="c2" />);
-  await act(async () => { settleFirst([HARBOR]); });
+  await act(async () => { settleFirst(fixture([HARBOR])); });
 
   expect(api.getIncoming).toHaveBeenNthCalledWith(1, "c1");
   expect(api.getIncoming).toHaveBeenNthCalledWith(2, "c2");
@@ -308,7 +310,7 @@ test("a read for one campaign cannot land in another campaign's panel", async ()
 });
 
 test("a focus ref from the composition panel opens the review on that change", async () => {
-  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR, SERAPHINE]));
   const { rerender } = render(<IncomingReview cid="c1" />);
   await act(async () => {});
   // Without a focus the panel falls back to the first row, which is not the one
@@ -328,7 +330,7 @@ test("a focus naming a ref this panel has no row for leaves the selection alone"
   // naming nothing is not inert: `active` falls back to `items[0]`, so a focus
   // stored without checking would silently open an unrelated change with its
   // Accept and Reject enabled.
-  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR, SERAPHINE]));
   const { rerender } = render(<IncomingReview cid="c1" />);
   await act(async () => {});
   fireEvent.click(screen.getByRole("button", { name: /Seraphine/ }));
@@ -343,7 +345,7 @@ test("a focus naming a ref this panel has no row for leaves the selection alone"
 test("a focus does not drag the selection back on every later refetch", async () => {
   // The deep link is a one-shot: once the reader has moved on, a refetch (which
   // every accept triggers) must not haul them back to where they arrived.
-  (api.getIncoming as any).mockResolvedValue([HARBOR, SERAPHINE]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR, SERAPHINE]));
   const focus = { kind: "locations", id: "saltmarch-harbor" };
   const { rerender } = render(<IncomingReview cid="c1" focus={focus} />);
   await act(async () => {});
@@ -357,11 +359,11 @@ test("a focus does not drag the selection back on every later refetch", async ()
 });
 
 test("a focus arriving before the first read lands is applied when it does", async () => {
-  let settle: (v: unknown) => void = () => {};
-  (api.getIncoming as any).mockReturnValue(new Promise((res) => { settle = res; }));
+  let settle: (v: IncomingItem[]) => void = () => {};
+  vi.mocked(api.getIncoming).mockReturnValue(new Promise((res) => { settle = res; }));
   render(<IncomingReview cid="c1" focus={{ kind: "characters", id: "seraphine" }} />);
   await act(async () => {});
-  await act(async () => { settle([HARBOR, SERAPHINE]); });
+  await act(async () => { settle(fixture([HARBOR, SERAPHINE])); });
   expect(screen.getByRole("heading", { level: 3 }).textContent).toContain("Seraphine");
 });
 
@@ -369,8 +371,8 @@ test("a landed resolve is announced, after this panel has re-read", async () => 
   // The composition panel (#199) sits beside this one reading the same
   // `/incoming`, so it has to hear about an accept -- and hear about it late
   // enough that its own re-read sees what this one just took.
-  (api.getIncoming as any).mockResolvedValue([HARBOR]);
-  (api.acceptIncoming as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR]));
+  vi.mocked(api.acceptIncoming).mockResolvedValue({ ok: true });
   const onResolved = vi.fn(() => {
     expect(api.getIncoming).toHaveBeenCalledTimes(2);
   });
@@ -384,8 +386,8 @@ test("a landed resolve is announced, after this panel has re-read", async () => 
 test("a resolve that failed announces nothing", async () => {
   // Nothing changed server-side, so a listener re-reading would spend three
   // requests to learn that.
-  (api.getIncoming as any).mockResolvedValue([HARBOR]);
-  (api.acceptIncoming as any).mockRejectedValue(new Error("world is gone"));
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([HARBOR]));
+  vi.mocked(api.acceptIncoming).mockRejectedValue(new Error("world is gone"));
   const onResolved = vi.fn();
   render(<IncomingReview cid="c1" onResolved={onResolved} />);
   await act(async () => {});
@@ -396,7 +398,7 @@ test("a resolve that failed announces nothing", async () => {
 });
 
 test("non-greeting incoming prose opts into the shared image viewer", async () => {
-  (api.getIncoming as any).mockResolvedValue([{ ...HARBOR, world: { ...HARBOR.world, body: "![Saltmarch](https://example.test/map.png)" } }]);
+  vi.mocked(api.getIncoming).mockResolvedValue(fixture([{ ...HARBOR, world: { ...HARBOR.world, body: "![Saltmarch](https://example.test/map.png)" } }]));
   await renderPanel();
   fireEvent.click(screen.getByRole("button", { name: /Saltmarch Harbor/ }));
   fireEvent.click(await screen.findByRole("button", { name: "Enlarge Saltmarch" }));

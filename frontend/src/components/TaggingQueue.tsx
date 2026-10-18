@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, type Appearance, type CharacterSummary, type Greeting } from "../api/client";
+import { errorText } from "../api/errors";
 
 // Stepper over greeting images with no subjects entry. Save / No-subjects PUT
 // then advance; Skip advances only (the image stays unreviewed).
@@ -47,8 +48,8 @@ export function TaggingQueue({ wid, chars, greetings, queue, onClose, onSaved }:
       await api.setImageSubjects(wid, cur.gid, cur.name, subjects);
       onSaved(cur.gid);
       advance();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 

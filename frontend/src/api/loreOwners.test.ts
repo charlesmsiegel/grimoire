@@ -1,3 +1,4 @@
+import { fixture } from "../testkit/fixture";
 import { beforeEach, expect, test, vi } from "vitest";
 import { loreOwnerOptions } from "./loreOwners";
 
@@ -16,13 +17,13 @@ import { api } from "./client";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listCharacters as any).mockResolvedValue([{ id: "tanaka", name: "Tanaka" }]);
-  (api.listPCs as any).mockResolvedValue([{ id: "hero", name: "Hero" }]);
-  (api.listEntities as any).mockResolvedValue([{ id: "old-dojo", name: "Old Dojo" }]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "tanaka", name: "Tanaka" }]));
+  vi.mocked(api.listPCs).mockResolvedValue(fixture([{ id: "hero", name: "Hero" }]));
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "old-dojo", name: "Old Dojo" }]);
 });
 
 test("collects characters, pcs, locations, items, groups and creatures as owner refs", async () => {
-  (api.listEntities as any).mockImplementation((_s: unknown, kind: string) =>
+  vi.mocked(api.listEntities).mockImplementation((_s: unknown, kind: string) =>
     Promise.resolve(kind === "locations" ? [{ id: "old-dojo", name: "Old Dojo" }]
       : kind === "items" ? [{ id: "lantern", name: "Lantern" }]
       : kind === "groups" ? [{ id: "dock-union", name: "Dock Union" }]
@@ -43,19 +44,19 @@ test("collects characters, pcs, locations, items, groups and creatures as owner 
 });
 
 test("actors with avatars get an avatar url; others get none", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "maren", name: "Maren", default_version: "v1", has_avatar: true, versions: [],
       avatar_v: "m1" },
     { id: "hedde", name: "Hedde", default_version: "v1", has_avatar: false, versions: [] },
   ]);
   // A PC resolves its own art under `pcs`, not the character folder (#219) --
   // before PCs had images at all, every owner chip for one showed initials.
-  (api.listPCs as any).mockResolvedValue([
+  vi.mocked(api.listPCs).mockResolvedValue([
     { id: "wren", name: "Wren", tags: [], default_version: "v2", has_avatar: true, versions: [],
       avatar_v: "w2" },
     { id: "brack", name: "Brack", tags: [], default_version: "v1", has_avatar: false, versions: [] },
   ]);
-  (api.listEntities as any).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([]);
   const opts = await loreOwnerOptions({ kind: "world", id: "w" });
   // Every consumer draws these at chip size (22-26px), so they are the row
   // bucket -- and a character's carries the token the listing already had,

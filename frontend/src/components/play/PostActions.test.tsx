@@ -87,7 +87,14 @@ test("a post with nothing to offer draws no ⋯ at all", () => {
 // ---- what a post offers ----
 
 const noop = () => {};
-const ACTIONS = new Proxy({}, { get: () => noop }) as unknown as TranscriptActions;
+const ACTIONS: TranscriptActions = {
+  openActor: noop, openReroll: noop, stepAlternate: noop, stepVariant: noop,
+  edit: noop, toggleExcluded: noop, cancelEdit: noop, saveEdit: noop, saveRetcon: noop,
+  pickImage: noop, cutFrom: noop, replayFrom: noop, branchFrom: noop,
+  setRerollPrompt: noop, setRerollRoute: noop, reroll: noop, deleteResponse: noop,
+  rerollResponse: noop, extendResponse: noop, activateVariant: noop,
+  createCharacter: noop, testRules: noop, refreshTracker: noop,
+};
 const base = {
   index: 2, actor: undefined, speaker: "Seraphine", rolling: false, active: true, absorbed: false,
   rerollButton: false, canReplayAfter: true, actions: ACTIONS,

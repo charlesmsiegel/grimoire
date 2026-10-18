@@ -10,15 +10,16 @@ vi.mock("../api/client", () => ({
 }));
 import { api } from "../api/client";
 import WorldMechanics from "./WorldMechanics";
+import { fixture } from "../testkit/fixture";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listModules as any).mockResolvedValue([
+  vi.mocked(api.listModules).mockResolvedValue([
     { id: "pool-basic", name: "Basic Pool", description: "", version: "0.1", source: "builtin", valid: true },
   ]);
-  (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "", counts: {} });
-  (api.setWorldModule as any).mockResolvedValue({ ok: true });
-  (api.getWorldSheets as any).mockResolvedValue({ coverage: {}, refs: [] });
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({ meta: { id: "w", name: "Saltmarch" }, body: "", counts: {} }));
+  vi.mocked(api.setWorldModule).mockResolvedValue({ ok: true });
+  vi.mocked(api.getWorldSheets).mockResolvedValue({ coverage: {}, refs: [] });
 });
 
 test("shows two-state select defaulting to None and saves the choice", async () => {
@@ -32,8 +33,8 @@ test("shows two-state select defaulting to None and saves the choice", async () 
 });
 
 test("shows the default-module hint when the world has a module set", async () => {
-  (api.getWorld as any).mockResolvedValue(
-    { meta: { id: "w", name: "Saltmarch", module: "pool-basic" }, body: "", counts: {} });
+  vi.mocked(api.getWorld).mockResolvedValue(
+    fixture({ meta: { id: "w", name: "Saltmarch", module: "pool-basic" }, body: "", counts: {} }));
   render(<WorldMechanics wid="w" />);
   expect(await screen.findByText("Campaigns on this world default to Basic Pool.")).toBeInTheDocument();
 });
@@ -47,7 +48,7 @@ test("the starting-sheets picker calls onPickMid on selection", async () => {
 });
 
 test("shows sheet coverage for the picked starting-sheets module", async () => {
-  (api.getWorldSheets as any).mockResolvedValue({
+  vi.mocked(api.getWorldSheets).mockResolvedValue({
     coverage: { characters: { total: 3, sheeted: 1, invalid: 0 } }, refs: [],
   });
   render(<WorldMechanics wid="w" worldMid="pool-basic" onPickMid={() => {}} />);

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ResponseControls } from "./ResponseControls";
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 vi.mock("../api/client", async () => ({
   ...(await vi.importActual<typeof import("../api/client")>("../api/client")),
@@ -192,9 +193,9 @@ describe("individual response controls", () => {
     expect(await screen.findByRole("button", { name: "Reroll response" })).toBeEnabled();
   });
   it("activates the stable variant id from the selected response", async () => {
-    vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
+    vi.mocked(api.getResponse).mockResolvedValue(fixture({ id: "response-a", active_variant: "v1",
       variants: [{ id: "v1", content: "First", status: "complete" },
-        { id: "v2", content: "Second", status: "complete" }, { id: "v3", content: "Partial", status: "incomplete", issue: "invalid_handoff" }] } as Awaited<ReturnType<typeof api.getResponse>>);
+        { id: "v2", content: "Second", status: "complete" }, { id: "v3", content: "Partial", status: "incomplete", issue: "invalid_handoff" }] }));
     const actions = show();
     fireEvent.click(screen.getByRole("button", { name: "Response variants" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Use variant 2" })).toBeInTheDocument());
@@ -204,9 +205,9 @@ describe("individual response controls", () => {
     expect(actions.onActivate).toHaveBeenCalledWith("response-a", "v2");
   });
   it("shows the response's approach as a plain chip, and nothing without one", async () => {
-    vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
+    vi.mocked(api.getResponse).mockResolvedValue(fixture({ id: "response-a", active_variant: "v1",
       approach: "deflect (sampled, reported 38%) · hint · hold steady",
-      variants: [{ id: "v1", content: "First", status: "complete" }] } as Awaited<ReturnType<typeof api.getResponse>>);
+      variants: [{ id: "v1", content: "First", status: "complete" }] }));
     show();
     fireEvent.click(screen.getByRole("button", { name: "Response variants" }));
     const chip = await screen.findByText("deflect (sampled, reported 38%) · hint · hold steady");
@@ -215,12 +216,12 @@ describe("individual response controls", () => {
     expect(chip.parentElement).toHaveTextContent(/^Approach:/);
   });
   it("shows what made each variant under its text, and nothing for one with no record", async () => {
-    vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
+    vi.mocked(api.getResponse).mockResolvedValue(fixture({ id: "response-a", active_variant: "v1",
       settings: { words: 120, paragraphs: 3, style_id: "", phase: "play" },
       resume_settings: { words: 60, paragraphs: 1, style_id: "noir", phase: "play" },
       variants: [{ id: "v1", content: "First", status: "complete" },
         { id: "v2", content: "Second", status: "complete", made_by: { model: "vendor/m", guidance: "Colder." } },
-        { id: "v3", content: "Third", status: "complete", made_by: { model: "vendor/r", composed: "resume" } }] } as Awaited<ReturnType<typeof api.getResponse>>);
+        { id: "v3", content: "Third", status: "complete", made_by: { model: "vendor/r", composed: "resume" } }] }));
     show();
     fireEvent.click(screen.getByRole("button", { name: "Response variants" }));
     await screen.findByRole("button", { name: "Use variant 2" });

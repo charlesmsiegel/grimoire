@@ -21,7 +21,7 @@ export type { Hotkey, Scope };
  *  OPENED last rather than the one that mounted last: the palette mounts with
  *  the shell, long before any drawer, and still has to be what Escape reaches
  *  while it is open. */
-export function useHotkeys(keys: Hotkey[], opts: { modal?: boolean } = {}): Scope {
+export function useHotkeys(keys: Hotkey[], opts: { modal?: boolean | undefined } = {}): Scope {
   const modal = !!opts.modal;
   // Rewritten in render, not in an effect: the help sheet reads the registry
   // while rendering, and an effect would show it the previous pass's table.

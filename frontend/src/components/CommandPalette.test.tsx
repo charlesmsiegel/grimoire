@@ -28,7 +28,7 @@ function Page({ items }: { items: PaletteItem[] }) {
   return null;
 }
 
-function Harness({ sources = [CAST, SCENES, ELSEWHERE] }: { sources?: PaletteItem[][] }) {
+function Harness({ sources = [CAST, SCENES, ELSEWHERE] }: { sources?: PaletteItem[][] | undefined }) {
   usePaletteHotkey();
   return (
     <>

@@ -3,6 +3,7 @@ import { api, type EntityScope, type ModuleDetail, type Sheet } from "../api/cli
 import SheetEditor, { typeKind } from "./SheetEditor";
 import { assembledDefs } from "./SheetLayout";
 import { isResource } from "./SheetWidgets";
+import { errorText } from "../api/errors";
 
 export default function SheetPanel({ scope, module, kind, eid, onOpenRef, onChanged }:
   { scope: EntityScope; module: ModuleDetail | null; kind: string; eid: string;
@@ -36,23 +37,24 @@ export default function SheetPanel({ scope, module, kind, eid, onOpenRef, onChan
     setChoice("");
     api.getSheet(scope, module.id, kind, eid)
       .then(({ sheet }) => { setSheet(sheet); setLoaded(true); })
-      .catch((err: any) => { setError(err?.detail ?? String(err)); setLoaded(true); });
+      .catch((err: unknown) => { setError(errorText(err)); setLoaded(true); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.kind, scope.id, module?.id, kind, eid]);
 
   if (!module || !hasType) return null;
+  const moduleId = module.id;
 
   async function refetch(): Promise<Sheet | null> {
     setError(null);
     try {
-      const { sheet: fresh } = await api.getSheet(scope, module!.id, kind, eid);
+      const { sheet: fresh } = await api.getSheet(scope, moduleId, kind, eid);
       setSheet(fresh);
       // After the re-read, not before: a host that reacts by re-reading its own
       // view of this sheet would otherwise race the read we are already making.
       onChanged?.();
       return fresh;
-    } catch (err: any) {
-      setError(err?.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
       return null;
     }
   }
@@ -61,11 +63,11 @@ export default function SheetPanel({ scope, module, kind, eid, onOpenRef, onChan
     if (!choiceValue) return;
     setError(null);
     try {
-      await api.putSheet(scope, module!.id, kind, eid, { sheet_type: choiceValue, fields: null, expected: null });
+      await api.putSheet(scope, moduleId, kind, eid, { sheet_type: choiceValue, fields: null, expected: null });
       const fresh = await refetch();
       if (fresh) setEditing(true);
-    } catch (err: any) {
-      setError(err?.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 

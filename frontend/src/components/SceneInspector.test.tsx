@@ -60,9 +60,13 @@ vi.mock("./AuthorsNotesPanel", () => ({
     <div data-testid="authors-notes-panel" data-cid={cid} data-sid={sid} />
   ),
 }));
-import { ApiError, api, PRESET_CLEAR } from "../api/client";
+import { ApiError, api, PRESET_CLEAR, type CapabilityNeed } from "../api/client";
 import { getModels } from "../api/models";
 import { NO_FALLBACK_POLICY } from "./inference/selection";
+import type {
+  InferenceSettings, ModelCapabilities, PinRule, PromptDiff, PromptEntry, PromptSnapshot, RollingSummary, RollingSummaryRefresh, SceneBreak, SceneDatetime,
+} from "../api/types";
+import { fixture, type DeepPartial } from "../testkit/fixture";
 
 const GREG_MONTHS = [
   { key: "01", name: "January", days: 31 },
@@ -84,78 +88,78 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getSceneFocus).mockResolvedValue({ text: "Let Mara choose.", status: "ok" });
   vi.mocked(api.getPromptLayout).mockResolvedValue({ enabled: false, sections: [] });
-  (api.getAuthorsNotesNext as any).mockResolvedValue({ turn: 1, count: 0, notes: [] });
-  (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "seraphine", role: "npc" }]);
-  (api.getSceneUsage as any).mockResolvedValue({
+  vi.mocked(api.getAuthorsNotesNext).mockResolvedValue({ turn: 1, count: 0, notes: [] });
+  vi.mocked(api.getCast).mockResolvedValue(fixture([{ kind: "characters", id: "seraphine", role: "npc" }]));
+  vi.mocked(api.getSceneUsage).mockResolvedValue(fixture({
     campaign: "c", scene: "s", since: "2026-08-01", until: "2026-08-14",
     generated_at: "2026-08-14T12:00:00Z",
     totals: { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
               cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0, estimated_usd: 0,
               priced_calls: 0, unpriced_calls: 0, duration_ms: 0 },
-    by_task: [], turns: [], listed: 0, truncated: false });
-  (api.getCampaignBudget as any).mockResolvedValue(
+    by_task: [], turns: [], listed: 0, truncated: false }));
+  vi.mocked(api.getCampaignBudget).mockResolvedValue(
     { limit_usd: 0, period: "monthly", level: "off", warn_fraction: 0.8 });
-  (api.addToCast as any).mockResolvedValue({ ok: true });
-  (api.getSuggestions as any).mockResolvedValue([]);
-  (api.dismissSuggestion as any).mockResolvedValue({ ok: true });
-  (api.removeFromCast as any).mockResolvedValue({ ok: true });
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "c", world: "w" }, body: "" });
-  (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", versions: [] }]);
-  (api.listPCs as any).mockResolvedValue([]);
-  (api.listCampaignPCs as any).mockResolvedValue([]);
-  (api.getSceneLocation as any).mockResolvedValue({ current: { id: "crypt", name: "The Crypt" }, visited: [] });
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.addToCast).mockResolvedValue({ ok: true });
+  vi.mocked(api.getSuggestions).mockResolvedValue([]);
+  vi.mocked(api.dismissSuggestion).mockResolvedValue({ ok: true });
+  vi.mocked(api.removeFromCast).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "c", world: "w" }, body: "" }));
+  vi.mocked(api.listCharacters).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", versions: [] }]);
+  vi.mocked(api.listPCs).mockResolvedValue([]);
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([]);
+  vi.mocked(api.getSceneLocation).mockResolvedValue({ current: { id: "crypt", name: "The Crypt" }, visited: [] });
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 0,
     sections: [{ label: "World info", text: "lore text", tokens: 100,
                  tier: "spotlight", dropped: false, trimmed: 0 }],
   });
-  (api.listScenePrompts as any).mockResolvedValue({ entries: [] });
-  (api.getScenePrompt as any).mockResolvedValue(null);
-  (api.getScenePromptDiff as any).mockResolvedValue(null);
-  (api.getCastDetail as any).mockResolvedValue({ kind: "characters", id: "seraphine", name: "Seraphine", version: "default", body: "keeper", source: "library" });
-  (getModels as any).mockResolvedValue([{ id: "m", name: "M", context: 1000, prompt: "0", completion: "0" }]);
-  (api.getChronicle as any).mockResolvedValue([
+  vi.mocked(api.listScenePrompts).mockResolvedValue({ entries: [] });
+  vi.mocked(api.getScenePrompt).mockRejectedValue(new Error("not found"));
+  vi.mocked(api.getScenePromptDiff).mockRejectedValue(new Error("not found"));
+  vi.mocked(api.getCastDetail).mockResolvedValue({ kind: "characters", id: "seraphine", name: "Seraphine", version: "default", body: "keeper", source: "library" });
+  vi.mocked(getModels).mockResolvedValue([{ id: "m", name: "M", context: 1000, prompt: "0", completion: "0" }]);
+  vi.mocked(api.getChronicle).mockResolvedValue([
     { id: "s0", one_line: "They first met.", summary: "", keywords: [],
       cast: [], location: "", date: "", absorbed: "t" }]);
-  (api.getCalendarConfig as any).mockResolvedValue({
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: true });
-  (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
-  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+    secondary: null, confirmed: true }));
+  vi.mocked(api.setCalendarConfig).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCalendarProviders).mockResolvedValue({ providers: [
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
   ] });
-  (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [], suggested: null });
-  (api.dismissNotices as any).mockResolvedValue({ ok: true, marked: [] });
-  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
-  (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
-  (api.getCampaignClock as any).mockResolvedValue(
-    { now: "2026-05-01", friendly: "1 May 2026", log: [] });
-  (api.listAppearances as any).mockResolvedValue([]);
-  (api.listEntityImages as any).mockResolvedValue([]);
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: true, name: "" });
+  vi.mocked(api.getSceneDatetime).mockResolvedValue({ current: null, history: [], suggested: null });
+  vi.mocked(api.dismissNotices).mockResolvedValue({ ok: true, marked: [] });
+  vi.mocked(api.setSceneDatetime).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: GREG_MONTHS });
+  vi.mocked(api.getCampaignClock).mockResolvedValue(
+    fixture({ now: "2026-05-01", friendly: "1 May 2026", log: [] }));
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
+  vi.mocked(api.listEntityImages).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.setSceneLocation).mockResolvedValue({ ok: true, moved: true, name: "" });
   // Empty by default, so the briefing section renders nothing and the suites
   // that predate it assert on the same rail they always did (#118).
-  (api.sceneBriefing as any).mockResolvedValue(EMPTY_BRIEFING);
-  (api.getRollingSummary as any).mockResolvedValue({
+  vi.mocked(api.sceneBriefing).mockResolvedValue(EMPTY_BRIEFING);
+  vi.mocked(api.getRollingSummary).mockResolvedValue({
     summary: "", at: 0, total: 0, stale: false, every: 10, due: false });
-  (api.refreshRollingSummary as any).mockResolvedValue({
+  vi.mocked(api.refreshRollingSummary).mockResolvedValue({
     summary: "Refolded.", at: 4, total: 4, stale: false, every: 10, due: false,
     refreshed: true });
   // The scene-break detector saying nothing (#84), so every suite that predates
   // it renders the rail it always did.
-  (api.getSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
-  (api.askSceneBreak as any).mockResolvedValue({ ...NO_SCENE_BREAK, asked: false });
-  (api.dismissSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
+  vi.mocked(api.getSceneBreak).mockResolvedValue(NO_SCENE_BREAK);
+  vi.mocked(api.askSceneBreak).mockResolvedValue({ ...NO_SCENE_BREAK, asked: false });
+  vi.mocked(api.dismissSceneBreak).mockResolvedValue(NO_SCENE_BREAK);
   // No rules by default (#129), so every suite that predates pins renders the
   // rail it always did -- an empty section with its hint.
-  (api.getPins as any).mockResolvedValue({ pins: [] });
-  (api.setPin as any).mockResolvedValue({ ok: true });
-  (api.removePin as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.getPins).mockResolvedValue({ pins: [] });
+  vi.mocked(api.setPin).mockResolvedValue(fixture({ ok: true }));
+  vi.mocked(api.removePin).mockResolvedValue({ ok: true });
 });
 
 /** One pin row as the panel receives it. */
-function pinRow(over: Partial<any> = {}) {
+function pinRow(over: Partial<PinRule> = {}): PinRule {
   return {
     ref: "characters:seraphine", kind: "characters", id: "seraphine",
     name: "Seraphine", missing: false, mode: "pin", scope: "scene", sid: "s",
@@ -235,14 +239,14 @@ const BREAK_YES = {
 };
 
 test("a confirmed break shows why, and what the next scene might be called", async () => {
-  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  vi.mocked(api.getSceneBreak).mockResolvedValue(BREAK_YES);
   renderInspector();
   await screen.findByText("The ledger changed hands and both sides walked away.");
   await screen.findByText(/The Long Walk Back/);
 });
 
 test("the detector never ends the scene itself — the only actions are asking and declining", async () => {
-  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  vi.mocked(api.getSceneBreak).mockResolvedValue(BREAK_YES);
   renderInspector();
   await screen.findByText(/The Long Walk Back/);
   // No control here writes the transcript or the scene's done flag; a reader
@@ -252,7 +256,7 @@ test("the detector never ends the scene itself — the only actions are asking a
 });
 
 test("a model that said no is said differently from nothing having been asked", async () => {
-  (api.getSceneBreak as any).mockResolvedValue({
+  vi.mocked(api.getSceneBreak).mockResolvedValue({
     ...NO_SCENE_BREAK, verdict: "no", reason: "They are still mid-argument.", posts: 40 });
   renderInspector();
   await screen.findByText(/still mid-beat/i);
@@ -262,7 +266,7 @@ test("a model that said no is said differently from nothing having been asked", 
 });
 
 test("with nothing to suggest it says what it can see rather than nothing at all", async () => {
-  (api.getSceneBreak as any).mockResolvedValue({
+  vi.mocked(api.getSceneBreak).mockResolvedValue({
     ...NO_SCENE_BREAK, posts: 12, score: 1,
     signals: [{ kind: "length", weight: 1, detail: "12 posts since this was last considered" }] });
   renderInspector();
@@ -271,7 +275,7 @@ test("with nothing to suggest it says what it can see rather than nothing at all
 });
 
 test("switched off, the panel says so instead of reporting a score of zero", async () => {
-  (api.getSceneBreak as any).mockResolvedValue({ ...NO_SCENE_BREAK, every: 0, posts: 400 });
+  vi.mocked(api.getSceneBreak).mockResolvedValue({ ...NO_SCENE_BREAK, every: 0, posts: 400 });
   renderInspector();
   await screen.findByText(/Turned off/);
 });
@@ -280,15 +284,15 @@ test("a forced answer is shown even with the automatic cadence switched off", as
   // Ask now works when `every` is 0 — that is the whole point of a button that
   // says now — so an off-notice that outranked the verdict meant the player
   // pressed it, paid for a call, and watched the panel go on saying "Turned off".
-  (api.getSceneBreak as any).mockResolvedValue({ ...NO_SCENE_BREAK, every: 0, posts: 400 });
-  (api.askSceneBreak as any).mockResolvedValue({ ...BREAK_YES, every: 0, asked: true });
+  vi.mocked(api.getSceneBreak).mockResolvedValue({ ...NO_SCENE_BREAK, every: 0, posts: 400 });
+  vi.mocked(api.askSceneBreak).mockResolvedValue({ ...BREAK_YES, every: 0, asked: true });
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
   await screen.findByText("The ledger changed hands and both sides walked away.");
 });
 
 test("a proposal about deleted posts is shown, but not as current", async () => {
-  (api.getSceneBreak as any).mockResolvedValue({ ...BREAK_YES, stale: true });
+  vi.mocked(api.getSceneBreak).mockResolvedValue({ ...BREAK_YES, stale: true });
   renderInspector();
   await screen.findByText("The ledger changed hands and both sides walked away.");
   await screen.findByText(/may no longer apply/i);
@@ -298,14 +302,14 @@ test("a read that failed is not a detector that found nothing", async () => {
   // "Nothing to suggest yet" is an assertion about the scene. Rendering it out
   // of a failed GET tells the player it looked and found nothing when it never
   // got an answer at all.
-  (api.getSceneBreak as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getSceneBreak).mockRejectedValue(new Error("offline"));
   renderInspector();
   await screen.findByText(/could not be read/i);
   expect(screen.queryByText(/Nothing to suggest yet/)).toBeNull();
 });
 
 test("Ask now forces a question and installs whatever comes back", async () => {
-  (api.askSceneBreak as any).mockResolvedValue({ ...BREAK_YES, asked: true });
+  vi.mocked(api.askSceneBreak).mockResolvedValue({ ...BREAK_YES, asked: true });
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
   await waitFor(() => expect(api.askSceneBreak).toHaveBeenCalledWith("c", "s", true));
@@ -313,8 +317,8 @@ test("Ask now forces a question and installs whatever comes back", async () => {
 });
 
 test("a failed question reports itself and never blanks a standing proposal", async () => {
-  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
-  (api.askSceneBreak as any).mockRejectedValue({ detail: "OpenRouter key not set" });
+  vi.mocked(api.getSceneBreak).mockResolvedValue(BREAK_YES);
+  vi.mocked(api.askSceneBreak).mockRejectedValue({ detail: "OpenRouter key not set" });
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
   await screen.findByText("OpenRouter key not set");
@@ -325,8 +329,8 @@ test("a failed question reports itself and never blanks a standing proposal", as
 test("Not here goes to the server, because the watermark it moves lives there", async () => {
   // A local dismissal would leave the same posts re-earning the same
   // suggestion on the very next turn.
-  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
-  (api.dismissSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
+  vi.mocked(api.getSceneBreak).mockResolvedValue(BREAK_YES);
+  vi.mocked(api.dismissSceneBreak).mockResolvedValue(NO_SCENE_BREAK);
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /not here/i }));
   await waitFor(() => expect(api.dismissSceneBreak).toHaveBeenCalledWith("c", "s"));
@@ -337,10 +341,10 @@ test("a read issued before Ask now cannot blank the verdict it just landed", asy
   // The scene-select effect's GET can be in flight when the button commits, and
   // resolving second would install a pre-write answer over the one the player
   // just paid for — with nothing later scheduled to put it back.
-  let releaseRead: ((v: unknown) => void) | undefined;
-  (api.getSceneBreak as any).mockImplementationOnce(
+  let releaseRead: ((v: SceneBreak) => void) | undefined;
+  vi.mocked(api.getSceneBreak).mockImplementationOnce(
     () => new Promise((resolve) => { releaseRead = resolve; }));
-  (api.askSceneBreak as any).mockResolvedValue({ ...BREAK_YES, asked: true });
+  vi.mocked(api.askSceneBreak).mockResolvedValue({ ...BREAK_YES, asked: true });
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
   await screen.findByText("The ledger changed hands and both sides walked away.");
@@ -353,8 +357,8 @@ test("both break buttons are held while a question is out on this scene", async 
   // What makes ordering the panel's own writes against each other unnecessary:
   // they cannot overlap on one record. A write arriving from somewhere else is
   // the server's to refuse, and `_break_commit` does.
-  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
-  (api.askSceneBreak as any).mockReturnValueOnce(new Promise(() => {}));
+  vi.mocked(api.getSceneBreak).mockResolvedValue(BREAK_YES);
+  vi.mocked(api.askSceneBreak).mockReturnValueOnce(new Promise(() => {}));
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /ask now/i }));
   await waitFor(() =>
@@ -365,11 +369,11 @@ test("both break buttons are held while a question is out on this scene", async 
 test("switching scenes never shows the previous scene's proposal", async () => {
   // A proposal is prose ABOUT a story, so showing one under another scene reads
   // as fact rather than as lag — `rolling`'s rule, for a sharper reason.
-  (api.getSceneBreak as any).mockResolvedValueOnce(BREAK_YES);
+  vi.mocked(api.getSceneBreak).mockResolvedValueOnce(BREAK_YES);
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await screen.findByText("The ledger changed hands and both sides walked away.");
-  (api.getSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
+  vi.mocked(api.getSceneBreak).mockResolvedValue(NO_SCENE_BREAK);
   rerender(<SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
   await waitFor(() => expect(
     screen.queryByText("The ledger changed hands and both sides walked away.")).toBeNull());
@@ -386,7 +390,7 @@ test("suggested cast: mid-scene mentions can be seated or dismissed from the ins
   // The scan reads the cards of who is already cast, so it only pays off once
   // the scene has a cast — which is exactly where CastPanel has stopped
   // rendering (#7, #96).
-  (api.getSuggestions as any).mockResolvedValue([
+  vi.mocked(api.getSuggestions).mockResolvedValue([
     { character: "mara", name: "Mara", mentioned_by: ["seraphine"] },
   ]);
   const onSceneChanged = vi.fn();
@@ -401,7 +405,7 @@ test("suggested cast: mid-scene mentions can be seated or dismissed from the ins
 });
 
 test("suggested cast: dismissing one drops it from this scene", async () => {
-  (api.getSuggestions as any)
+  vi.mocked(api.getSuggestions)
     .mockResolvedValueOnce([{ character: "mara", name: "Mara", mentioned_by: ["seraphine"] }])
     .mockResolvedValue([]);
   renderInspector();
@@ -418,14 +422,14 @@ test("clicking a cast row opens the drawer", async () => {
 });
 
 test("cast rows show portraits with roster versions and role chips", async () => {
-  (api.getCast as any).mockResolvedValue([
+  vi.mocked(api.getCast).mockResolvedValue([
     { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine" },
     { kind: "pcs", id: "yara", role: "player", name: "Yara" },
   ]);
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", version: "v2", role: "npc", scenes: ["s"] },
-  ]);
-  (api.listPCs as any).mockResolvedValue([
+  ]));
+  vi.mocked(api.listPCs).mockResolvedValue([
     { id: "yara", name: "Yara", tags: [], default_version: "default", versions: [] }]);
   renderInspector();
   await screen.findByText("Seraphine");
@@ -438,11 +442,11 @@ test("cast rows show portraits with roster versions and role chips", async () =>
 test("a PC in the roster gets a portrait like anyone else", async () => {
   // The roster lookup used to be gated on `kind === "characters"`, so a PC fell
   // back to initials even with a locked version to build a URL from (#219).
-  (api.getCast as any).mockResolvedValue([
+  vi.mocked(api.getCast).mockResolvedValue([
     { kind: "pcs", id: "yara", role: "player", name: "Yara" }]);
-  (api.listAppearances as any).mockResolvedValue([
-    { kind: "pcs", id: "yara", version: "v3", role: "player", scenes: ["s"] }]);
-  (api.listPCs as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
+    { kind: "pcs", id: "yara", version: "v3", role: "player", scenes: ["s"] }]));
+  vi.mocked(api.listPCs).mockResolvedValue([
     { id: "yara", name: "Yara", tags: [], default_version: "default", versions: [] }]);
   renderInspector();
   const portrait = await screen.findByAltText("yara portrait");
@@ -452,18 +456,18 @@ test("a PC in the roster gets a portrait like anyone else", async () => {
 
 test("a cast row's portrait carries the roster's avatar token", async () => {
   // Without it the row is served no-cache and revalidated on every open.
-  (api.getCast as any).mockResolvedValue([
+  vi.mocked(api.getCast).mockResolvedValue([
     { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine" }]);
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "seraphine", version: "v2", role: "npc", scenes: ["s"],
-      avatar_v: "1a-2b" }]);
+      avatar_v: "1a-2b" }]));
   renderInspector();
   const portrait = await screen.findByAltText("Seraphine portrait");
   expect(portrait.getAttribute("src")).toBe("/img/characters/seraphine/v2?w=256&v=1a-2b");
 });
 
 test("location with a primary image renders a clickable thumbnail", async () => {
-  (api.listEntityImages as any).mockResolvedValue([{ name: "avatar", ext: "png" }]);
+  vi.mocked(api.listEntityImages).mockResolvedValue(fixture([{ name: "avatar", ext: "png" }]));
   renderInspector();
   const thumb = await screen.findByAltText("The Crypt");
   expect(thumb.closest("button")).not.toBeNull();
@@ -489,7 +493,7 @@ test("context section expands to show the text", async () => {
 });
 
 test("world info lists each entry with its reason", async () => {
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 0,
     sections: [{
       id: "world_info", label: "World info", text: "lore text", tokens: 100,
@@ -522,7 +526,7 @@ test("world info lists each entry with its reason", async () => {
 });
 
 test("a World info that sent nothing still lists what cooldown held back", async () => {
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 0, dropped_tokens: 0, budget_tokens: 0,
     sections: [{
       id: "world_info", label: "World info", text: "", tokens: 0,
@@ -555,9 +559,9 @@ test("shows the story-so-far recap", async () => {
 });
 
 test("no calendar selected: choosing one confirms the calendar", async () => {
-  (api.getCalendarConfig as any).mockResolvedValue({
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
-    secondary: null, confirmed: false });
+    secondary: null, confirmed: false }));
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /use this calendar/i }));
   await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
@@ -580,7 +584,7 @@ test("calendar but no date: setting a date calls setSceneDatetime and notifies",
 });
 
 test("first date set renames the scene: adopts the new id via onSceneRenamed", async () => {
-  (api.setSceneDatetime as any).mockResolvedValue(
+  vi.mocked(api.setSceneDatetime).mockResolvedValue(
     { ok: true, advanced: false, friendly: "4 July 2026", id: "001--2026-07-04--s" });
   const onRenamed = vi.fn();
   render(<SceneInspector cid="c" sid="s" refreshKey={0}
@@ -597,10 +601,10 @@ test("first date set renames the scene: adopts the new id via onSceneRenamed", a
 });
 
 test("shows the current date when one is set", async () => {
-  (api.getSceneDatetime as any).mockResolvedValue({
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(fixture({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
                secondary_friendly: null, holidays_today: [], upcoming: null, cast: [] },
-    history: ["2026-07-04"] });
+    history: ["2026-07-04"] }));
   renderInspector();
   await screen.findByText(/4 July 2026/);
 });
@@ -608,13 +612,13 @@ test("shows the current date when one is set", async () => {
 test("an imminent event is warned about once, and dismissing it marks the key", async () => {
   // The reader-facing half of #106. The model is told what is upcoming every
   // turn; this is the channel that says it once and then stops.
-  (api.getSceneDatetime as any).mockResolvedValue({
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(fixture({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
                secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
                notices: [{ key: "event:739437:the-envoy-arrives", kind: "event",
                            name: "The envoy arrives", in_days: 2,
                            friendly: "6 July 2026" }] },
-    history: ["2026-07-04"] });
+    history: ["2026-07-04"] }));
   renderInspector();
   await screen.findByText("The envoy arrives");
   fireEvent.click(screen.getByLabelText("Dismiss The envoy arrives"));
@@ -629,19 +633,19 @@ test("a notice dismissed elsewhere refreshes this panel's copy of the payload", 
   // in either left the other holding a payload from before it, showing the
   // reader the warning they just closed (#106). The api mutators emit on the
   // `notices` channel and both surfaces listen.
-  (api.getSceneDatetime as any).mockResolvedValue({
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(fixture({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
                secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
                notices: [] },
-    history: ["2026-07-04"] });
+    history: ["2026-07-04"] }));
   renderInspector();
   await screen.findByText(/4 July 2026/);
-  const before = (api.getSceneDatetime as any).mock.calls.length;
+  const before = vi.mocked(api.getSceneDatetime).mock.calls.length;
   act(() => { noticesChanged(); });
   await waitFor(() =>
-    expect((api.getSceneDatetime as any).mock.calls.length).toBeGreaterThan(before));
+    expect(vi.mocked(api.getSceneDatetime).mock.calls.length).toBeGreaterThan(before));
   // `fresh`, so the read cannot join a GET issued before the write it follows.
-  const last = (api.getSceneDatetime as any).mock.calls.at(-1);
+  const last = vi.mocked(api.getSceneDatetime).mock.calls.slice(-1)[0];
   expect(last[2]).toEqual({ fresh: true });
 });
 
@@ -649,22 +653,22 @@ test("an older datetime read cannot replace a newer one", async () => {
   // `fresh` stops a new read JOINING an in-flight GET; it does not cancel the
   // older promise, whose `.then` is already attached. Landing late, that stale
   // payload would put the acknowledged notice back (#106).
-  const withNotice = {
+  const withNotice = fixture<SceneDatetime>({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
                secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
                notices: [{ key: "event:739437:the-envoy-arrives", kind: "event",
                            name: "The envoy arrives", in_days: 2,
                            friendly: "6 July 2026" }] },
-    history: ["2026-07-04"] };
+    history: ["2026-07-04"] });
   const withoutNotice = {
     ...withNotice,
-    current: { ...withNotice.current, notices: [] } };
+    current: { ...withNotice.current, notices: [] } } satisfies DeepPartial<SceneDatetime>;
 
   // The first (stale) read is held open; the second resolves immediately.
-  let landStale: (v: any) => void = () => {};
-  (api.getSceneDatetime as any)
+  let landStale: (v: SceneDatetime) => void = () => {};
+  vi.mocked(api.getSceneDatetime)
     .mockReturnValueOnce(new Promise((r: any) => { landStale = r; }))
-    .mockResolvedValue(withoutNotice);
+    .mockResolvedValue(fixture(withoutNotice));
   renderInspector();
   await waitFor(() => expect(api.getSceneDatetime).toHaveBeenCalled());
 
@@ -673,7 +677,7 @@ test("an older datetime read cannot replace a newer one", async () => {
   await waitFor(() => expect(screen.getByText(/4 July 2026/)).toBeTruthy());
 
   // Now the stale one lands, still carrying the notice. It must be ignored.
-  await act(async () => { landStale(withNotice); });
+  await act(async () => { landStale(fixture(withNotice)); });
   expect(screen.queryByText("The envoy arrives")).toBeNull();
 });
 
@@ -682,19 +686,19 @@ test("a scene change drops the previous scene's notices before the reload lands"
   // the banner would render its notices beside the new ids, so a dismissal in
   // that window writes the old campaign's occurrence key into the new
   // campaign's ledger (#106).
-  (api.getSceneDatetime as any).mockResolvedValue({
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(fixture({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
                secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
                notices: [{ key: "event:739437:the-envoy-arrives", kind: "event",
                            name: "The envoy arrives", in_days: 2,
                            friendly: "6 July 2026" }] },
-    history: ["2026-07-04"] });
+    history: ["2026-07-04"] }));
   const { rerender } = render(
     <MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
                                   onSceneChanged={() => {}} /></MemoryRouter>);
   await screen.findByText("The envoy arrives");
   // The next scene's read never settles, so only the synchronous clear can help.
-  (api.getSceneDatetime as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getSceneDatetime).mockReturnValue(new Promise(() => {}));
   rerender(
     <MemoryRouter><SceneInspector cid="c" sid="s2" refreshKey={0}
                                   onSceneChanged={() => {}} /></MemoryRouter>);
@@ -711,44 +715,44 @@ test("a read in flight when the scene changes cannot restore the old payload", a
   // the reset closes is between the render-time clear and the effect flush,
   // which a test cannot interleave. The bump is kept because it is free and
   // correct, not because this proves it.
-  const withNotice = {
+  const withNotice = fixture<SceneDatetime>({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
                secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
                notices: [{ key: "event:739437:the-envoy-arrives", kind: "event",
                            name: "The envoy arrives", in_days: 2,
                            friendly: "6 July 2026" }] },
-    history: ["2026-07-04"] };
-  let landOld: (v: any) => void = () => {};
-  (api.getSceneDatetime as any).mockReturnValueOnce(
+    history: ["2026-07-04"] });
+  let landOld: (v: SceneDatetime) => void = () => {};
+  vi.mocked(api.getSceneDatetime).mockReturnValueOnce(
     new Promise((r: any) => { landOld = r; }));
   const { rerender } = render(
     <MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
                                   onSceneChanged={() => {}} /></MemoryRouter>);
   await waitFor(() => expect(api.getSceneDatetime).toHaveBeenCalled());
   // The next scene has nothing imminent, and its read settles first.
-  (api.getSceneDatetime as any).mockResolvedValue({
-    current: { ...withNotice.current, notices: [] }, history: ["2026-07-04"] });
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(fixture({
+    current: { ...withNotice.current, notices: [] }, history: ["2026-07-04"] }));
   rerender(
     <MemoryRouter><SceneInspector cid="c" sid="s2" refreshKey={0}
                                   onSceneChanged={() => {}} /></MemoryRouter>);
   await screen.findByText(/4 July 2026/);
-  await act(async () => { landOld(withNotice); });
+  await act(async () => { landOld(fixture(withNotice)); });
   expect(screen.queryByText("The envoy arrives")).toBeNull();
 });
 
 test("a scene with nothing imminent shows no warning at all", async () => {
-  (api.getSceneDatetime as any).mockResolvedValue({
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(fixture({
     current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
                secondary_friendly: null, holidays_today: [], upcoming: null, cast: [],
                notices: [] },
-    history: ["2026-07-04"] });
+    history: ["2026-07-04"] }));
   renderInspector();
   await screen.findByText(/4 July 2026/);
   expect(screen.queryByLabelText("Coming up")).toBeNull();
 });
 
 test("Move to sets the scene location, reloads it, and refreshes the stream", async () => {
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "crypt", name: "The Crypt" }, { id: "docks", name: "The Docks" }]);
   const onSceneChanged = vi.fn();
   renderInspector(onSceneChanged);
@@ -757,18 +761,18 @@ test("Move to sets the scene location, reloads it, and refreshes the stream", as
   fireEvent.click(screen.getByRole("button", { name: /move to/i }));
   await waitFor(() => expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s", "docks"));
   await waitFor(() => expect(onSceneChanged).toHaveBeenCalled());
-  expect((api.getSceneLocation as any).mock.calls.length).toBeGreaterThan(1); // reloaded after the move
+  expect(vi.mocked(api.getSceneLocation).mock.calls.length).toBeGreaterThan(1); // reloaded after the move
 });
 
 test("Move to is disabled until a location is chosen", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "docks", name: "The Docks" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "docks", name: "The Docks" }]);
   renderInspector();
   await screen.findByText("The Crypt");
   expect(await screen.findByRole("button", { name: /move to/i })).toBeDisabled();
 });
 
 test("a dateless scene with a suggestion pre-fills the date input", async () => {
-  (api.getSceneDatetime as any).mockResolvedValue(
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(
     { current: null, history: [], suggested: "2026-07-06" });
   renderInspector();
   await screen.findByLabelText("Scene date year");
@@ -791,7 +795,7 @@ test("the date actions are locked while a turn streams into this scene", async (
   // strands `finalize`, `_persist_reply` and the abort write on the old id.
   // Review caught the rail and the cast panel being locked while this one, the
   // always-mounted surface, was not (#95).
-  (api.getSceneDatetime as any).mockResolvedValue(
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(
     { current: null, history: [], suggested: "2026-07-06" });
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} sceneLocked />);
   const button = await screen.findByRole("button", { name: /set date/i });
@@ -804,10 +808,10 @@ test("the date actions are locked while a turn streams into this scene", async (
 
 test("Advance to is locked for the same reason", async () => {
   // The dated branch renders a different button through the same handler.
-  (api.getSceneDatetime as any).mockResolvedValue({
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(fixture({
     current: { friendly: "6 July 2026", weekday: "Monday", holidays_today: [] },
     history: [], suggested: "2026-07-07",
-  });
+  }));
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} sceneLocked />);
   const button = await screen.findByRole("button", { name: /advance to/i });
@@ -850,8 +854,8 @@ function inheritedRole(model: string) {
            inherits: RESOLVED("saltmarch", "Saltmarch Router", model) };
 }
 
-function campaignInference(over: Partial<any> = {}) {
-  return {
+function campaignInference(over: DeepPartial<InferenceSettings> = {}): InferenceSettings {
+  return fixture({
     format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
     roles: { primary: inheritedRole("vendor/opus"), fast: inheritedRole("vendor/haiku"),
              decision: inheritedRole("vendor/haiku") },
@@ -869,11 +873,11 @@ function campaignInference(over: Partial<any> = {}) {
     presets: [{ id: "terse", name: "Terse" }],
     preset_clear: "⁣none",
     ...over,
-  };
+  });
 }
 
-function capabilities(need: string, fits: string[]) {
-  return {
+function capabilities(need: CapabilityNeed, fits: string[]): ModelCapabilities {
+  return fixture({
     provider_preset: { id: "custom", label: "Custom", kind: "openai_compatible", base_url: "",
                        url_locked: false, billing: "metered", reports_price: false,
                        always: [], possible: [], never: [] },
@@ -882,7 +886,7 @@ function capabilities(need: string, fits: string[]) {
                                         completion: null, reason: "listed",
                                         capabilities: {} })),
               unverified: [] },
-  };
+  });
 }
 
 /** The inspector with its Models section opened, and that section to query. */
@@ -898,10 +902,10 @@ async function openModels() {
 
 describe("the Models section", () => {
   beforeEach(() => {
-    (api.getCampaignInference as any).mockResolvedValue(campaignInference());
-    (api.readConnectionCapabilities as any).mockImplementation(
-      (_provider: string, need: string) => Promise.resolve(capabilities(need, ["realm/small"])));
-    (api.previewControls as any).mockResolvedValue({ controls: {} });
+    vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference());
+    vi.mocked(api.readConnectionCapabilities).mockImplementation(
+      (_provider, need) => Promise.resolve(capabilities(need, ["realm/small"])));
+    vi.mocked(api.previewControls).mockResolvedValue(fixture({ controls: {} }));
   });
 
   test("links to this campaign's full settings while preserving Models", async () => {
@@ -918,7 +922,7 @@ describe("the Models section", () => {
               resolves: RESOLVED("realm", "Realm Local", "realm/small", "campaign", "terse",
                                  "Terse"),
               inherits: RESOLVED("saltmarch", "Saltmarch Router", "vendor/haiku") } } });
-    (api.putCampaignInference as any).mockResolvedValue(saved);
+    vi.mocked(api.putCampaignInference).mockResolvedValue(fixture(saved));
     const section = await openModels();
     expect(api.getCampaignInference).toHaveBeenCalledWith("c");
 
@@ -1063,7 +1067,7 @@ describe("the Models section", () => {
   });
 
   test("Edit waits for the new layout, and the upgrade banner says why", async () => {
-    (api.getCampaignInference as any).mockResolvedValue(campaignInference({
+    vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference({
       format: "1", migration: { state: "pending", reason: "", skipped: [] } }));
     const section = await openModels();
     expect(await section.findByText(/Upgrade pending/)).toBeInTheDocument();
@@ -1074,27 +1078,27 @@ describe("the Models section", () => {
   test("Edit opens once the upgrade lands, with the section left open", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      (api.getCampaignInference as any).mockResolvedValue(campaignInference({
+      vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference({
         format: "1", migration: { state: "running", reason: "", skipped: [] } }));
       const section = await openModels();
       fireEvent.click(section.getByRole("button", { name: /^Primary/ }));
       expect(await section.findByRole("button", { name: "Edit" })).toBeDisabled();
 
-      (api.getCampaignInference as any).mockResolvedValue(campaignInference());
+      vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference());
       await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
 
       expect(await section.findByRole("button", { name: "Edit" })).toBeEnabled();
       expect(section.queryByText(/Upgrade pending/)).not.toBeInTheDocument();
-      const reads = (api.getCampaignInference as any).mock.calls.length;
+      const reads = vi.mocked(api.getCampaignInference).mock.calls.length;
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-      expect((api.getCampaignInference as any).mock.calls.length).toBe(reads);
+      expect(vi.mocked(api.getCampaignInference).mock.calls.length).toBe(reads);
     } finally {
       vi.useRealTimers();
     }
   });
 
   test("a campaign the move has not reached says so quietly at the new layout", async () => {
-    (api.getCampaignInference as any).mockResolvedValue(campaignInference({
+    vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference({
       migration: { state: "pending", reason: "",
                    skipped: ["campaign c: busy; finished on the next start"] } }));
     const section = await openModels();
@@ -1108,7 +1112,7 @@ describe("the Models section", () => {
 
   test("another campaign left behind is the library's upgrade line, worded as Settings words it", async () => {
     const other = "campaign saltmarch: busy; finished on the next start";
-    (api.getCampaignInference as any).mockResolvedValue(campaignInference({
+    vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference({
       migration: { state: "pending", reason: "", skipped: [other] } }));
     const section = await openModels();
     expect(await section.findByText(`The upgrade left 1 thing for later (${other}).`))
@@ -1120,7 +1124,7 @@ describe("the Models section", () => {
     // `fallback_missing` is the server's: the seam never sends a fallback
     // known unable to do what it is for, and refuses nothing over it.
     const base = campaignInference();
-    (api.getCampaignInference as any).mockResolvedValue(campaignInference({
+    vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference({
       roles: { ...base.roles,
                primary: { ...inheritedRole("vendor/opus"),
                           fallback: { provider: "realm", model: "realm/embed", preset: "" },
@@ -1151,7 +1155,7 @@ describe("the Models section", () => {
     // `fallback_problem` is the server's: a fallback with no key is left out
     // of the chain as silently as one known unable to do the work.
     const base = campaignInference();
-    (api.getCampaignInference as any).mockResolvedValue(campaignInference({
+    vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference({
       roles: { ...base.roles,
                primary: { ...inheritedRole("vendor/opus"),
                           fallback: { provider: "realm", model: "realm/small", preset: "" },
@@ -1173,7 +1177,7 @@ describe("the Models section", () => {
 
   test("a route whose task's policy sends no fallback says so, not that it cannot be sent", async () => {
     const base = campaignInference();
-    (api.getCampaignInference as any).mockResolvedValue(campaignInference({
+    vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference({
       routes: [{ ...base.routes[0], fallback_problem: NO_FALLBACK_POLICY }] }));
     const section = await openModels();
 
@@ -1196,7 +1200,7 @@ describe("the Models section", () => {
   });
 
   test("a campaign a newer build marked refuses the save, and the section says so", async () => {
-    (api.putCampaignInference as any).mockRejectedValue(new ApiError(409,
+    vi.mocked(api.putCampaignInference).mockRejectedValue(new ApiError(409,
       "A newer version of grimoire has changed this campaign's model settings. "
       + "Update grimoire to change them here.", "newer_format"));
     const section = await openModels();
@@ -1210,12 +1214,12 @@ describe("the Models section", () => {
   });
 
   test("a save refused as not migrated shows the upgrade's state", async () => {
-    const failed = { state: "failed", reason: "the safety backup failed: disk full", skipped: [] };
-    (api.putCampaignInference as any).mockRejectedValue(new ApiError(409,
+    const failed: InferenceSettings["migration"] = { state: "failed", reason: "the safety backup failed: disk full", skipped: [] };
+    vi.mocked(api.putCampaignInference).mockRejectedValue(new ApiError(409,
       "Model settings are being moved to the new layout. Try again once that has finished.",
       "not_migrated", { kind: "not_migrated", status: failed }));
     // Read again after the refusal, the store says the same: not moved yet.
-    (api.getCampaignInference as any).mockResolvedValueOnce(campaignInference())
+    vi.mocked(api.getCampaignInference).mockResolvedValueOnce(campaignInference())
       .mockResolvedValue(campaignInference({ format: "1", migration: failed }));
     const section = await openModels();
     fireEvent.click(await section.findByRole("button", { name: /^Primary/ }));
@@ -1229,7 +1233,7 @@ describe("the Models section", () => {
   });
 
   test("a not-migrated refusal reads the view again, and a finished move frees Edit", async () => {
-    (api.putCampaignInference as any).mockRejectedValue(new ApiError(409,
+    vi.mocked(api.putCampaignInference).mockRejectedValue(new ApiError(409,
       "Model settings are being moved to the new layout. Try again once that has finished.",
       "not_migrated",
       { kind: "not_migrated", status: { state: "done", reason: "", skipped: [] } }));
@@ -1248,7 +1252,7 @@ describe("the Models section", () => {
   test("a route that inherits its role but overrides its preset shows what it runs on",
        async () => {
     const base = campaignInference();
-    (api.getCampaignInference as any).mockResolvedValue(campaignInference({ routes: [{
+    vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference({ routes: [{
       ...base.routes[0], use: "", preset: "terse",
       resolves: RESOLVED("saltmarch", "Saltmarch Router", "vendor/opus", "campaign", "terse",
                          "Terse"),
@@ -1276,7 +1280,7 @@ describe("the Models section", () => {
     const before = await section.findByRole("button", { name: /^Fast/ });
     expect(before).toHaveTextContent("vendor/haiku");
 
-    (api.getCampaignInference as any).mockResolvedValue(campaignInference({ roles: {
+    vi.mocked(api.getCampaignInference).mockResolvedValue(campaignInference({ roles: {
       ...campaignInference().roles, fast: inheritedRole("vendor/sonnet") } }));
     act(() => { configChanged(); });
 
@@ -1286,7 +1290,7 @@ describe("the Models section", () => {
 
   // ---- what a save sends: the named risks of a whole-selection replace ----
   /** A role this campaign chose for itself, with a fallback the library set. */
-  function ownedFast() {
+  function ownedFast(): InferenceSettings {
     return campaignInference({ roles: { ...campaignInference().roles,
       fast: { stored: { provider: "realm", model: "realm/small", preset: "terse" },
               fallback: { provider: "saltmarch", model: "vendor/haiku", preset: "" },
@@ -1304,8 +1308,8 @@ describe("the Models section", () => {
   }
 
   test("Inherit sends the empty selection", async () => {
-    (api.getCampaignInference as any).mockResolvedValue(ownedFast());
-    (api.putCampaignInference as any).mockResolvedValue(campaignInference());
+    vi.mocked(api.getCampaignInference).mockResolvedValue(ownedFast());
+    vi.mocked(api.putCampaignInference).mockResolvedValue(campaignInference());
     const section = await openModels();
     await editRow(section, /^Fast/);
     fireEvent.change(section.getByRole("combobox", { name: "Fast for this campaign" }),
@@ -1317,11 +1321,11 @@ describe("the Models section", () => {
   });
 
   test("a model edit keeps the stored preset and never names the fallback", async () => {
-    (api.readConnectionCapabilities as any).mockImplementation(
-      (_provider: string, need: string) =>
+    vi.mocked(api.readConnectionCapabilities).mockImplementation(
+      (_provider, need) =>
         Promise.resolve(capabilities(need, ["realm/small", "realm/large"])));
-    (api.getCampaignInference as any).mockResolvedValue(ownedFast());
-    (api.putCampaignInference as any).mockResolvedValue(ownedFast());
+    vi.mocked(api.getCampaignInference).mockResolvedValue(ownedFast());
+    vi.mocked(api.putCampaignInference).mockResolvedValue(ownedFast());
     const section = await openModels();
     await editRow(section, /^Fast/);
     // The role's own picker: the stored fallback opens with the form, and has one too.
@@ -1335,7 +1339,7 @@ describe("the Models section", () => {
   });
 
   test("a campaign sets its own fallback for a role, and only that is sent", async () => {
-    (api.putCampaignInference as any).mockResolvedValue(campaignInference());
+    vi.mocked(api.putCampaignInference).mockResolvedValue(campaignInference());
     const section = await openModels();
     await editRow(section, /^Primary/);
     // Left to inherit, the role can still have a fallback of this campaign's own.
@@ -1353,8 +1357,8 @@ describe("the Models section", () => {
   });
 
   test("clearing a campaign's fallback sends it empty, back to the library's", async () => {
-    (api.getCampaignInference as any).mockResolvedValue(ownedFast());
-    (api.putCampaignInference as any).mockResolvedValue(campaignInference());
+    vi.mocked(api.getCampaignInference).mockResolvedValue(ownedFast());
+    vi.mocked(api.putCampaignInference).mockResolvedValue(campaignInference());
     const section = await openModels();
     await editRow(section, /^Fast/);
     // A stored fallback opens with the form.
@@ -1369,7 +1373,7 @@ describe("the Models section", () => {
   });
 
   /** The scene route, pinned to a model of this campaign's choosing. */
-  function pinnedScene() {
+  function pinnedScene(): InferenceSettings {
     const base = campaignInference();
     return campaignInference({ routes: [{
       ...base.routes[0], use: "model",
@@ -1383,8 +1387,8 @@ describe("the Models section", () => {
   }
 
   test("a route switched to a role leaves its pin out of the save", async () => {
-    (api.getCampaignInference as any).mockResolvedValue(pinnedScene());
-    (api.putCampaignInference as any).mockResolvedValue(campaignInference());
+    vi.mocked(api.getCampaignInference).mockResolvedValue(pinnedScene());
+    vi.mocked(api.putCampaignInference).mockResolvedValue(campaignInference());
     const section = await openModels();
     await editScene(section);
     fireEvent.change(section.getByRole("combobox", { name: "Role (default: Primary)" }),
@@ -1396,7 +1400,7 @@ describe("the Models section", () => {
   });
 
   test("a route pinned to a specific model sends the pin", async () => {
-    (api.putCampaignInference as any).mockResolvedValue(pinnedScene());
+    vi.mocked(api.putCampaignInference).mockResolvedValue(pinnedScene());
     const section = await openModels();
     await editScene(section);
     fireEvent.change(section.getByRole("combobox", { name: "Role (default: Primary)" }),
@@ -1413,7 +1417,7 @@ describe("the Models section", () => {
   });
 
   test("a route's no-preset override is sent as the clear marker", async () => {
-    (api.putCampaignInference as any).mockResolvedValue(campaignInference());
+    vi.mocked(api.putCampaignInference).mockResolvedValue(campaignInference());
     const section = await openModels();
     await editScene(section);
     fireEvent.change(section.getByRole("combobox", { name: "Preset override" }),
@@ -1426,7 +1430,7 @@ describe("the Models section", () => {
 });
 
 test("the Author's notes section counts the notes applying next turn", async () => {
-  (api.getAuthorsNotesNext as any).mockResolvedValue({
+  vi.mocked(api.getAuthorsNotesNext).mockResolvedValue({
     turn: 3, count: 2,
     notes: [{ level: "campaign", depth: 4, every: 1, applies: true },
             { level: "character", depth: 0, every: 1, applies: true,
@@ -1556,7 +1560,7 @@ test("removing a cast member calls removeFromCast, reloads cast, and notifies th
 });
 
 test("adding a character posts kind + id + role, reloads cast, and notifies the scene changed", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [] },
     { id: "mara", name: "Mara", default_version: "default", versions: [] },
   ]);
@@ -1572,7 +1576,7 @@ test("adding a character posts kind + id + role, reloads cast, and notifies the 
 });
 
 test("adding a PC omits the role picker and forces role=player", async () => {
-  (api.listCampaignPCs as any).mockResolvedValue([
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([
     { id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.change(await screen.findByLabelText("Cast kind to add"), { target: { value: "pcs" } });
@@ -1585,7 +1589,7 @@ test("adding a PC omits the role picker and forces role=player", async () => {
 });
 
 test("offscreen scene hides the kind and role pickers, forcing npc characters only", async () => {
-  (api.getCast as any).mockResolvedValue([]);
+  vi.mocked(api.getCast).mockResolvedValue([]);
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} pcless />);
   await screen.findByLabelText("Character or PC to add");
   expect(screen.queryByLabelText("Cast kind to add")).not.toBeInTheDocument();
@@ -1597,8 +1601,8 @@ test("offscreen scene hides the kind and role pickers, forcing npc characters on
 });
 
 test("a failed add surfaces the error banner instead of silently failing", async () => {
-  (api.addToCast as any).mockRejectedValue({ detail: "already cast" });
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.addToCast).mockRejectedValue({ detail: "already cast" });
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "mara", name: "Mara", default_version: "default", versions: [] }]);
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await screen.findByRole("option", { name: "Mara" });
@@ -1608,7 +1612,7 @@ test("a failed add surfaces the error banner instead of silently failing", async
 });
 
 test("a failed remove surfaces the error banner instead of silently failing", async () => {
-  (api.removeFromCast as any).mockRejectedValue({ detail: "actor kind not found" });
+  vi.mocked(api.removeFromCast).mockRejectedValue({ detail: "actor kind not found" });
   renderInspector();
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /remove seraphine from scene/i }));
@@ -1619,7 +1623,7 @@ test("a section the budget dropped is shown as dropped, not hidden", async () =>
   // The whole point of reporting drops is that the user can see them; a
   // dropped section that simply vanished would be the silent truncation the
   // packer replaced.
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 40, budget_tokens: 120,
     sections: [
       { label: "World info", text: "lore text", tokens: 100, tier: "spotlight", dropped: false, trimmed: 0 },
@@ -1637,7 +1641,7 @@ test("the two off-scene cast tiers read as separate rows with their own numbers"
   // The backend splits the directory into a section per tier (#2) precisely so
   // the unbounded one can be priced on its own; the panel has to show them as
   // two readouts rather than collapsing them back into a single row.
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 200,
     sections: [
       { label: "Off-scene cast · active elsewhere", text: "Winifred: she counts the tide.",
@@ -1655,7 +1659,7 @@ test("the two off-scene cast tiers read as separate rows with their own numbers"
 });
 
 test("percentages measure against the configured budget, not the model window", async () => {
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 200,
     sections: [{ label: "World info", text: "lore text", tokens: 100,
                  tier: "spotlight", dropped: false, trimmed: 0 }],
@@ -1667,7 +1671,7 @@ test("percentages measure against the configured budget, not the model window", 
 });
 
 test("a trimmed history says how many turns went", async () => {
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 200,
     sections: [{ label: "Conversation history", text: "turns", tokens: 100,
                  tier: "history", dropped: false, trimmed: 3 }],
@@ -1679,9 +1683,9 @@ test("a trimmed history says how many turns went", async () => {
 test("percentages use the smaller of the budget and the model window", async () => {
   // A 32k budget left over from a bigger model would otherwise report a full
   // 8k window as a quarter used — hiding the overflow this panel exists to show.
-  (getModels as any).mockResolvedValue([
+  vi.mocked(getModels).mockResolvedValue([
     { id: "m", name: "M", context: 200, prompt: "0", completion: "0" }]);
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 1000,
     sections: [{ label: "World info", text: "lore text", tokens: 100,
                  tier: "spotlight", dropped: false, trimmed: 0 }],
@@ -1710,7 +1714,7 @@ const BRIEFING = {
 };
 
 function renderWithBriefing(posts?: number) {
-  (api.sceneBriefing as any).mockResolvedValue(BRIEFING);
+  vi.mocked(api.sceneBriefing).mockResolvedValue(BRIEFING);
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}}
                          posts={posts} />);
 }
@@ -1740,7 +1744,7 @@ test("the briefing section is absent when there is nothing to brief", async () =
 });
 
 test("the briefing survives a failed load as the empty state", async () => {
-  (api.sceneBriefing as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.sceneBriefing).mockRejectedValue(new Error("nope"));
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await screen.findByText("Seraphine");
   expect(screen.queryByText("Briefing")).not.toBeInTheDocument();
@@ -1772,13 +1776,13 @@ test("a briefing never renders under a different campaign's scene of the same id
   // CampaignView across campaigns, and scene ids are per-campaign — so two
   // campaigns sitting on "s" would have matched on sid alone, showing one
   // game's commitments under the other's name (Codex review).
-  (api.sceneBriefing as any).mockResolvedValue(BRIEFING);
+  vi.mocked(api.sceneBriefing).mockResolvedValue(BRIEFING);
   const { rerender } = render(
     <SceneInspector cid="a" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await screen.findByText("Find the ledger");
 
   // Campaign b's request never settles, so anything on screen is a's.
-  (api.sceneBriefing as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.sceneBriefing).mockReturnValue(new Promise(() => {}));
   rerender(<SceneInspector cid="b" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await waitFor(() =>
     expect(screen.queryByText("Find the ledger")).not.toBeInTheDocument());
@@ -1786,14 +1790,14 @@ test("a briefing never renders under a different campaign's scene of the same id
 
 // ---- turn history: what the model saw for a PAST turn (#157) ----
 
-const TURNS = [
+const TURNS: PromptEntry[] = [
   { id: "000002", scene: "s", ts: "2026-08-06T12:00:00Z", task: "regenerate",
     model: "m", total_tokens: 90, dropped_tokens: 0, budget_tokens: 0 },
   { id: "000001", scene: "s", ts: "2026-08-06T11:00:00Z", task: "chat",
     model: "m", total_tokens: 80, dropped_tokens: 0, budget_tokens: 0 },
 ];
 
-const FROZEN = {
+const FROZEN: PromptSnapshot = {
   id: "000001", ts: "2026-08-06T11:00:00Z", task: "chat", model: "m",
   total_tokens: 80, dropped_tokens: 0, budget_tokens: 0,
   sections: [{ label: "World info", text: "the lore as it stood then", tokens: 80,
@@ -1806,15 +1810,15 @@ test("with no captured turns the history section says so", async () => {
 });
 
 test("captured turns are listed by what kind of turn they were", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
   renderInspector();
   await screen.findByText("Regenerate");
   await screen.findByText("Send");
 });
 
 test("clicking a turn shows that turn's frozen prompt instead of the live one", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
   renderInspector();
 
   // the live composition is what shows first
@@ -1830,8 +1834,8 @@ test("clicking a turn shows that turn's frozen prompt instead of the live one", 
 });
 
 test("going back restores the live context", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
   renderInspector();
 
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
@@ -1843,8 +1847,8 @@ test("going back restores the live context", async () => {
 });
 
 test("a turn that has aged out of the log says so rather than blanking", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockRejectedValue({ status: 404, detail: "not found" });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockRejectedValue({ status: 404, detail: "not found" });
   renderInspector();
 
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
@@ -1855,9 +1859,9 @@ test("a turn that has aged out of the log says so rather than blanking", async (
 test("a frozen turn is measured against the budget it was captured under", async () => {
   // Not today's: the live budget has since been raised, and reporting the past
   // turn against it would show a prompt that overran as comfortably inside.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue({ ...FROZEN, budget_tokens: 100 });
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(fixture({ ...FROZEN, budget_tokens: 100 }));
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 10000,
     sections: [{ label: "World info", text: "lore text", tokens: 100,
                  tier: "spotlight", dropped: false, trimmed: 0 }],
@@ -1873,9 +1877,9 @@ test("a snapshot arriving after a scene change is dropped, not shown", async () 
   // The guard is worth a test because the obvious version of it — comparing the
   // callback's own captured sid against itself — is always satisfied and looks
   // right on the page.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  let release: (v: any) => void = () => {};
-  (api.getScenePrompt as any).mockReturnValue(new Promise((r) => { release = r; }));
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  let release: (v: PromptSnapshot) => void = () => {};
+  vi.mocked(api.getScenePrompt).mockReturnValue(new Promise((r) => { release = r; }));
 
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
@@ -1894,28 +1898,28 @@ test("a turn list arriving after a scene change is dropped, not listed", async (
   // Worse than a stale label: entry ids are per-campaign counters, so they
   // collide across campaigns and clicking a stale row would fetch a different
   // campaign's prompt under it.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await screen.findByText("Regenerate");
 
-  let release: (v: any) => void = () => {};
-  (api.listScenePrompts as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.listScenePrompts>>) => void = () => {};
+  vi.mocked(api.listScenePrompts).mockReturnValue(new Promise((r) => { release = r; }));
   rerender(<SceneInspector cid="c2" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
 
   // the previous campaign's rows are gone the moment the scene changes, not
   // when the replacement request settles
   await screen.findByText("No captured turns yet.");
-  release({ entries: TURNS });
+  release(fixture({ entries: TURNS }));
   await screen.findByText("Regenerate");   // c2's own rows, once they arrive
 });
 
 test("the last turn clicked wins even if an earlier request resolves after it", async () => {
   // The scene guard does not cover this: both requests are for the same scene,
   // so without a per-request check the slower first click overwrites the second.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
   const pending: Record<string, (v: any) => void> = {};
-  (api.getScenePrompt as any).mockImplementation((_c: string, _s: string, eid: string) =>
+  vi.mocked(api.getScenePrompt).mockImplementation((_c, _s, eid) =>
     new Promise((r) => { pending[eid] = r; }));
 
   renderInspector();
@@ -1939,7 +1943,7 @@ test("a superseded turn-list response does not overwrite a newer one", async () 
   // order two independent ones. If the newer answers first, the older `.then`
   // would put the pre-turn rows back.
   const pending: ((v: any) => void)[] = [];
-  (api.listScenePrompts as any).mockImplementation(
+  vi.mocked(api.listScenePrompts).mockImplementation(
     () => new Promise((r) => { pending.push(r); }));
 
   const { rerender } = render(
@@ -1959,21 +1963,21 @@ test("a superseded turn-list response does not overwrite a newer one", async () 
 test("going back to live discards a detail fetch still in flight", async () => {
   // Click B, change your mind, go back — B must not reopen the panel over an
   // explicit choice to leave it.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValueOnce(FROZEN);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValueOnce(FROZEN);
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
   await screen.findByText("the lore as it stood then");
 
-  let release: (v: any) => void = () => {};
-  (api.getScenePrompt as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: PromptSnapshot) => void = () => {};
+  vi.mocked(api.getScenePrompt).mockReturnValue(new Promise((r) => { release = r; }));
   fireEvent.click(screen.getByRole("button", { name: /^Regenerate/ }));
   fireEvent.click(screen.getByRole("button", { name: /Back to live context/ }));
   await screen.findByText("lore text");
 
-  release({ ...FROZEN, id: "000002",
+  release(fixture({ ...FROZEN, id: "000002",
             sections: [{ label: "World info", text: "the regenerate prompt", tokens: 90,
-                         tier: "spotlight", dropped: false, trimmed: 0 }] });
+                         tier: "spotlight", dropped: false, trimmed: 0 }] }));
   await new Promise((r) => setTimeout(r, 0));
 
   await screen.findByText("lore text");              // still live
@@ -1984,8 +1988,8 @@ test("going back to live discards a detail fetch still in flight", async () => {
 test("a frozen turn is not painted under a scene it does not belong to", async () => {
   // The clearing effect runs AFTER render, so scoping has to happen during it —
   // otherwise the first paint under the new scene still shows the old prompt.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
@@ -1999,8 +2003,8 @@ test("a frozen turn is not painted under a scene it does not belong to", async (
 
 test("switching campaigns does not paint the other campaign's frozen turn", async () => {
   // Scene ids repeat across campaigns, so `sid` alone would match here.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
@@ -2012,7 +2016,7 @@ test("switching campaigns does not paint the other campaign's frozen turn", asyn
 
 // ---- the live rolling summary (#85) ----
 test("shows the running summary and what it covers", async () => {
-  (api.getRollingSummary as any).mockResolvedValue({
+  vi.mocked(api.getRollingSummary).mockResolvedValue({
     summary: "Mara reaches the salt gate; the ledger is still missing.",
     at: 12, total: 14, stale: false, every: 10, due: false });
   renderInspector();
@@ -2026,7 +2030,7 @@ test("says so when nothing has been summarized yet, rather than showing an empty
 });
 
 test("flags a summary whose posts have since been rerolled or edited", async () => {
-  (api.getRollingSummary as any).mockResolvedValue({
+  vi.mocked(api.getRollingSummary).mockResolvedValue({
     summary: "An older account of the scene.", at: 12, total: 12,
     stale: true, every: 10, due: false });
   renderInspector();
@@ -2041,9 +2045,9 @@ test("Refresh now forces a refold and shows the result", async () => {
 });
 
 test("a refresh that spends nothing leaves the panel as it was", async () => {
-  (api.getRollingSummary as any).mockResolvedValue({
+  vi.mocked(api.getRollingSummary).mockResolvedValue({
     summary: "Standing summary.", at: 4, total: 4, stale: false, every: 10, due: false });
-  (api.refreshRollingSummary as any).mockResolvedValue({
+  vi.mocked(api.refreshRollingSummary).mockResolvedValue({
     summary: "Standing summary.", at: 4, total: 4, stale: false, every: 10, due: false,
     refreshed: false });
   renderInspector();
@@ -2053,9 +2057,9 @@ test("a refresh that spends nothing leaves the panel as it was", async () => {
 });
 
 test("a failed refresh reports itself and never blanks the summary", async () => {
-  (api.getRollingSummary as any).mockResolvedValue({
+  vi.mocked(api.getRollingSummary).mockResolvedValue({
     summary: "Standing summary.", at: 4, total: 4, stale: false, every: 10, due: false });
-  (api.refreshRollingSummary as any).mockRejectedValue({ detail: "OpenRouter key not set" });
+  vi.mocked(api.refreshRollingSummary).mockRejectedValue({ detail: "OpenRouter key not set" });
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
   await screen.findByText("OpenRouter key not set");
@@ -2063,9 +2067,9 @@ test("a failed refresh reports itself and never blanks the summary", async () =>
 });
 
 test("a refold the model could not be reached for offers the recovery", async () => {
-  (api.getRollingSummary as any).mockResolvedValue({
+  vi.mocked(api.getRollingSummary).mockResolvedValue({
     summary: "Standing summary.", at: 4, total: 4, stale: false, every: 10, due: false });
-  (api.refreshRollingSummary as any).mockRejectedValue(
+  vi.mocked(api.refreshRollingSummary).mockRejectedValue(
     { detail: "connection refused", kind: "network" });
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
@@ -2078,7 +2082,7 @@ test("a refold the model could not be reached for offers the recovery", async ()
 test("a summary that cannot be read is not an empty summary", async () => {
   // The panel reads on every scene select, and a failed GET must not be
   // indistinguishable from a scene nobody has summarized.
-  (api.getRollingSummary as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getRollingSummary).mockRejectedValue(new Error("offline"));
   renderInspector();
   await screen.findByText(/could not be read/i);
 });
@@ -2086,14 +2090,14 @@ test("a summary that cannot be read is not an empty summary", async () => {
 test("switching scenes never shows the previous scene's summary", async () => {
   // Prose under the wrong scene reads as fact, where a stale token count reads
   // as lag — and two selects in a row can answer out of order.
-  (api.getRollingSummary as any).mockResolvedValueOnce({
+  vi.mocked(api.getRollingSummary).mockResolvedValueOnce({
     summary: "Scene one: Mara reaches the salt gate.", at: 4, total: 4,
     stale: false, every: 10, due: false });
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await screen.findByText("Scene one: Mara reaches the salt gate.");
 
-  (api.getRollingSummary as any).mockReturnValueOnce(new Promise(() => {}));  // never answers
+  vi.mocked(api.getRollingSummary).mockReturnValueOnce(new Promise(() => {}));  // never answers
   view.rerender(
     <SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
   await waitFor(() =>
@@ -2104,13 +2108,13 @@ test("a late read for a scene the reader has left does not evict the current one
   // Stamping the response keeps A's prose off B's panel, but on its own it does
   // not stop A's *later* answer from replacing B's — after which the stamp
   // rejects it and the panel says "No summary yet" about a scene that has one.
-  let answerA: ((v: any) => void) | undefined;
-  (api.getRollingSummary as any).mockImplementationOnce(
+  let answerA: ((v: RollingSummary) => void) | undefined;
+  vi.mocked(api.getRollingSummary).mockImplementationOnce(
     () => new Promise((resolve) => { answerA = resolve; }));
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
 
-  (api.getRollingSummary as any).mockResolvedValueOnce({
+  vi.mocked(api.getRollingSummary).mockResolvedValueOnce({
     summary: "Scene two: the ledger surfaces.", at: 2, total: 2,
     stale: false, every: 10, due: false });
   view.rerender(
@@ -2131,14 +2135,14 @@ test("the same scene id in another campaign does not inherit the summary", async
   // every campaign's first scene by that title is called. `App.tsx` renders
   // CampaignView without a key, so navigating between campaigns reuses this
   // inspector rather than remounting it.
-  (api.getRollingSummary as any).mockResolvedValueOnce({
+  vi.mocked(api.getRollingSummary).mockResolvedValueOnce({
     summary: "Campaign one: Mara reaches the salt gate.", at: 4, total: 4,
     stale: false, every: 10, due: false });
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await screen.findByText("Campaign one: Mara reaches the salt gate.");
 
-  (api.getRollingSummary as any).mockReturnValueOnce(new Promise(() => {}));
+  vi.mocked(api.getRollingSummary).mockReturnValueOnce(new Promise(() => {}));
   view.rerender(
     <SceneInspector cid="c2" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await waitFor(() =>
@@ -2149,13 +2153,13 @@ test("an older read of the same scene cannot overwrite a newer one", async () =>
   // This effect re-runs on `refreshKey` for the SAME scene — twice per turn, in
   // fact — so two reads are routinely in flight together. Scene identity cannot
   // order them.
-  let answerFirst: ((v: any) => void) | undefined;
-  (api.getRollingSummary as any).mockImplementationOnce(
+  let answerFirst: ((v: RollingSummary) => void) | undefined;
+  vi.mocked(api.getRollingSummary).mockImplementationOnce(
     () => new Promise((resolve) => { answerFirst = resolve; }));
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
 
-  (api.getRollingSummary as any).mockResolvedValueOnce({
+  vi.mocked(api.getRollingSummary).mockResolvedValueOnce({
     summary: "The refreshed summary.", at: 12, total: 12,
     stale: false, every: 10, due: false });
   view.rerender(
@@ -2174,7 +2178,7 @@ test("a refresh that fails after the reader moves on does not banner the new sce
   // does not clear it, so an error installed for the scene the reader left
   // sits over the scene they are on until something else happens to clear it.
   let rejectA: ((e: any) => void) | undefined;
-  (api.refreshRollingSummary as any).mockImplementationOnce(
+  vi.mocked(api.refreshRollingSummary).mockImplementationOnce(
     () => new Promise((_resolve, reject) => { rejectA = reject; }));
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
@@ -2191,7 +2195,7 @@ test("switching scenes frees the new scene's Refresh button", async () => {
   // `rollingBusy` was a bare boolean, so scene A's in-flight refold left B's
   // button disabled and reading "Summarizing…" for as long as A's provider call
   // took — for a result B can no longer use.
-  (api.refreshRollingSummary as any).mockReturnValueOnce(new Promise(() => {}));
+  vi.mocked(api.refreshRollingSummary).mockReturnValueOnce(new Promise(() => {}));
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
@@ -2207,14 +2211,14 @@ test("a failed reread is reported even when older prose is on screen", async () 
   // Same scene, `refreshKey` bumped: the cached value still matches the key, so
   // the failure used to be suppressed entirely and the panel kept presenting
   // pre-turn coverage as current with nothing to say otherwise.
-  (api.getRollingSummary as any).mockResolvedValueOnce({
+  vi.mocked(api.getRollingSummary).mockResolvedValueOnce({
     summary: "Mara reaches the salt gate.", at: 10, total: 10,
     stale: false, every: 10, due: false });
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await screen.findByText("Mara reaches the salt gate.");
 
-  (api.getRollingSummary as any).mockRejectedValueOnce(new Error("offline"));
+  vi.mocked(api.getRollingSummary).mockRejectedValueOnce(new Error("offline"));
   view.rerender(
     <SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
 
@@ -2232,11 +2236,11 @@ test("a read issued before a manual refresh cannot undo it", async () => {
   // in flight bumped it, and the POST's authoritative answer was then thrown
   // away as superseded — leaving the panel on the old summary although the new
   // one is durable on the server.
-  let answerRead: ((v: any) => void) | undefined;
-  let answerPost: ((v: any) => void) | undefined;
-  (api.getRollingSummary as any).mockResolvedValueOnce({
+  let answerRead: ((v: RollingSummary) => void) | undefined;
+  let answerPost: ((v: RollingSummaryRefresh) => void) | undefined;
+  vi.mocked(api.getRollingSummary).mockResolvedValueOnce({
     summary: "The old summary.", at: 4, total: 4, stale: false, every: 10, due: false });
-  (api.refreshRollingSummary as any).mockImplementationOnce(
+  vi.mocked(api.refreshRollingSummary).mockImplementationOnce(
     () => new Promise((resolve) => { answerPost = resolve; }));
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
@@ -2244,7 +2248,7 @@ test("a read issued before a manual refresh cannot undo it", async () => {
   fireEvent.click(screen.getByRole("button", { name: /refresh now/i }));
 
   // a routine reread starts while the refold is still out, and answers first
-  (api.getRollingSummary as any).mockImplementationOnce(
+  vi.mocked(api.getRollingSummary).mockImplementationOnce(
     () => new Promise((resolve) => { answerRead = resolve; }));
   view.rerender(
     <SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
@@ -2275,7 +2279,7 @@ test("a refresh error does not follow the reader to the next scene", async () =>
   // The token guard only retires a rejection that arrives AFTER navigation. One
   // that lands while the scene is still selected is stored, and nothing on the
   // scene-change path clears the panel's shared banner.
-  (api.refreshRollingSummary as any).mockRejectedValueOnce({ detail: "OpenRouter key not set" });
+  vi.mocked(api.refreshRollingSummary).mockRejectedValueOnce({ detail: "OpenRouter key not set" });
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
@@ -2290,13 +2294,13 @@ test("a refresh error does not follow the reader to the next scene", async () =>
 test("a later successful read clears a settled refresh failure", async () => {
   // A manual refold fails; a later automatic one succeeds and bumps refreshKey.
   // The banner must not go on reporting a failure the panel recovered from.
-  (api.refreshRollingSummary as any).mockRejectedValueOnce({ detail: "OpenRouter key not set" });
+  vi.mocked(api.refreshRollingSummary).mockRejectedValueOnce({ detail: "OpenRouter key not set" });
   const view = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
   await screen.findByText("OpenRouter key not set");
 
-  (api.getRollingSummary as any).mockResolvedValueOnce({
+  vi.mocked(api.getRollingSummary).mockResolvedValueOnce({
     summary: "Recovered, and current.", at: 12, total: 12,
     stale: false, every: 10, due: false });
   view.rerender(
@@ -2309,7 +2313,7 @@ test("a later successful read clears a settled refresh failure", async () => {
 test("moving the scene asks whether the summary is due", async () => {
   // A location move appends a transition post, which counts toward the
   // threshold like any other — and `onSceneChanged` only re-reads (#85).
-  (api.listEntities as any).mockResolvedValue([{ id: "dock", name: "The Night Dock" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "dock", name: "The Night Dock" }]);
   renderInspector();
   fireEvent.change(await screen.findByLabelText("Move to location"),
                    { target: { value: "dock" } });
@@ -2329,7 +2333,7 @@ test("the first date set asks for a refold under the scene's NEW id", async () =
   // itself changed the scene's date FACT, which is part of the fold's validity
   // key. So the ask belongs here, against the id the rename produced: the old
   // one no longer names a file (#85).
-  (api.setSceneDatetime as any).mockResolvedValue(
+  vi.mocked(api.setSceneDatetime).mockResolvedValue(
     { ok: true, advanced: false, friendly: "4 July 2026", id: "001--2026-07-04--s" });
   render(<SceneInspector cid="c" sid="s" refreshKey={0}
                          onSceneChanged={() => {}} onSceneRenamed={() => {}} />);
@@ -2357,10 +2361,10 @@ test("an automatic refold that answers late cannot undo a newer one", async () =
   // that right (#85).
   // Two places that are not where the scene already is: the picker offers
   // somewhere to GO, so the current location is not among its options.
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "dock", name: "The Night Dock" }, { id: "gate", name: "The Salt Gate" }]);
-  let landFirst: ((v: any) => void) | undefined;
-  (api.refreshRollingSummary as any)
+  let landFirst: ((v: RollingSummaryRefresh) => void) | undefined;
+  vi.mocked(api.refreshRollingSummary)
     .mockImplementationOnce(() => new Promise((resolve) => { landFirst = resolve; }))
     .mockResolvedValueOnce({ summary: "The newer fold.", at: 12, total: 12,
                              stale: false, every: 10, due: false, refreshed: true });
@@ -2389,14 +2393,14 @@ test("a successful automatic refold retires the warnings it just disproved", asy
   // fold the server reconciled makes both false. Leaving them up left an earlier
   // provider failure sitting beside prose the POST had just made current, with
   // nothing later scheduled to retire it (#85).
-  (api.listEntities as any).mockResolvedValue([{ id: "dock", name: "The Night Dock" }]);
-  (api.refreshRollingSummary as any).mockRejectedValueOnce(
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "dock", name: "The Night Dock" }]);
+  vi.mocked(api.refreshRollingSummary).mockRejectedValueOnce(
     { detail: "OpenRouter key not set" });
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
   await screen.findByText("OpenRouter key not set");
 
-  (api.refreshRollingSummary as any).mockResolvedValueOnce({
+  vi.mocked(api.refreshRollingSummary).mockResolvedValueOnce({
     summary: "Mara reaches the salt gate.", at: 12, total: 12, stale: false,
     every: 10, due: false, refreshed: true });
   fireEvent.change(await screen.findByLabelText("Move to location"),
@@ -2428,7 +2432,7 @@ test("a cast row's pin toggle files a scene-scoped rule and reloads", async () =
 });
 
 test("the toggle reads as pressed while its rule stands, and lifts it on a second click", async () => {
-  (api.getPins as any).mockResolvedValue({ pins: [pinRow()] });
+  vi.mocked(api.getPins).mockResolvedValue(fixture({ pins: [pinRow()] }));
   renderInspector();
   const pin = await screen.findByRole("button", { name: "Pin Seraphine in the prompt" });
   await waitFor(() => expect(pin.getAttribute("aria-pressed")).toBe("true"));
@@ -2439,7 +2443,7 @@ test("the toggle reads as pressed while its rule stands, and lifts it on a secon
 });
 
 test("excluding someone already pinned replaces the rule rather than removing it", async () => {
-  (api.getPins as any).mockResolvedValue({ pins: [pinRow()] });
+  vi.mocked(api.getPins).mockResolvedValue(fixture({ pins: [pinRow()] }));
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: "Exclude Seraphine from the prompt" }));
   await waitFor(() => expect(api.setPin).toHaveBeenCalledWith("c", {
@@ -2448,11 +2452,11 @@ test("excluding someone already pinned replaces the rule rather than removing it
 });
 
 test("the panel lists each rule with its scope, countdown and a way to lift it", async () => {
-  (api.getPins as any).mockResolvedValue({ pins: [
+  vi.mocked(api.getPins).mockResolvedValue(fixture({ pins: [
     pinRow({ remaining: 3, ttl_posts: 3 }),
     pinRow({ ref: "lore:tide-oath", kind: "lore", id: "tide-oath", name: "Tide oath",
              mode: "exclude", scope: "campaign", sid: "" }),
-  ] });
+  ] }));
   renderInspector();
   await screen.findByText(/3 posts left/);
   await screen.findByText(/lore · campaign/);
@@ -2463,14 +2467,14 @@ test("the panel lists each rule with its scope, countdown and a way to lift it",
 });
 
 test("a rule whose target the campaign lost is shown as deleted rather than hidden", async () => {
-  (api.getPins as any).mockResolvedValue({ pins: [
-    pinRow({ ref: "lore:gone", kind: "lore", id: "gone", name: "gone", missing: true })] });
+  vi.mocked(api.getPins).mockResolvedValue(fixture({ pins: [
+    pinRow({ ref: "lore:gone", kind: "lore", id: "gone", name: "gone", missing: true })] }));
   renderInspector();
   await screen.findByText(/deleted/);
 });
 
 test("adding a rule from the picker sends the kind, mode, scope and post window", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "tide-oath", name: "Tide oath" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "tide-oath", name: "Tide oath" }]);
   renderInspector();
   await screen.findByText(/Nothing pinned/);
 
@@ -2501,8 +2505,8 @@ test("Add is disabled until a record is picked", async () => {
 });
 
 test("a refused rule surfaces the server's reason", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "tide-oath", name: "Tide oath" }]);
-  (api.setPin as any).mockRejectedValue({ detail: "a campaign-scoped rule cannot carry a post TTL" });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "tide-oath", name: "Tide oath" }]);
+  vi.mocked(api.setPin).mockRejectedValue({ detail: "a campaign-scoped rule cannot carry a post TTL" });
   renderInspector();
   fireEvent.change(await screen.findByLabelText("What to pin or exclude"), { target: { value: "lore" } });
   fireEvent.change(await screen.findByLabelText("Record to pin or exclude"),
@@ -2512,7 +2516,7 @@ test("a refused rule surfaces the server's reason", async () => {
 });
 
 test("a pinned section is marked in the context breakdown", async () => {
-  (api.getSceneContext as any).mockResolvedValue({
+  vi.mocked(api.getSceneContext).mockResolvedValue({
     model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 0,
     sections: [{ label: "World info", text: "lore text", tokens: 100,
                  tier: "spotlight", dropped: false, trimmed: 0, pinned: true }],
@@ -2524,7 +2528,7 @@ test("a pinned section is marked in the context breakdown", async () => {
 test("a campaign-wide rule shows on the row but is not toggled from it", async () => {
   // The row toggles only ever write scene scope, so leaving them live here made
   // a pressed button whose click changed nothing a reader could see.
-  (api.getPins as any).mockResolvedValue({ pins: [pinRow({ scope: "campaign", sid: "" })] });
+  vi.mocked(api.getPins).mockResolvedValue(fixture({ pins: [pinRow({ scope: "campaign", sid: "" })] }));
   renderInspector();
   const pin = await screen.findByRole("button", { name: "Pin Seraphine in the prompt" });
   await waitFor(() => expect(pin.getAttribute("aria-pressed")).toBe("true"));
@@ -2539,7 +2543,7 @@ test("switching scenes does not leave the previous scene's rules driving the tog
   // The component survives a scene switch, so an unscoped rule list left the
   // new scene's row showing the old scene's pin — and a click on it would have
   // asked the server to lift a rule that scene never had.
-  (api.getPins as any).mockResolvedValue({ pins: [pinRow()] });
+  vi.mocked(api.getPins).mockResolvedValue(fixture({ pins: [pinRow()] }));
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await waitFor(() => expect(
@@ -2547,7 +2551,7 @@ test("switching scenes does not leave the previous scene's rules driving the tog
   ).toBe("true"));
 
   // The next scene's read is still in flight when it repaints.
-  (api.getPins as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getPins).mockReturnValue(new Promise(() => {}));
   rerender(<SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
   expect(
     screen.getByRole("button", { name: "Pin Seraphine in the prompt" }).getAttribute("aria-pressed"),
@@ -2557,7 +2561,7 @@ test("switching scenes does not leave the previous scene's rules driving the tog
 test("the picker's options do not survive a campaign switch", async () => {
   // Same reason, one cache over: offering another campaign's lore here would
   // file a rule naming an entry this campaign has never had.
-  (api.listEntities as any).mockResolvedValue([{ id: "tide-oath", name: "Tide oath" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "tide-oath", name: "Tide oath" }]);
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.change(await screen.findByLabelText("What to pin or exclude"), { target: { value: "lore" } });
@@ -2566,14 +2570,14 @@ test("the picker's options do not survive a campaign switch", async () => {
   const picker = () => within(screen.getByLabelText("Record to pin or exclude") as HTMLElement);
   await waitFor(() => expect(picker().queryByRole("option", { name: "Tide oath" })).not.toBeNull());
 
-  (api.listEntities as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.listEntities).mockReturnValue(new Promise(() => {}));
   rerender(<SceneInspector cid="c2" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   await waitFor(() => expect(picker().queryByRole("option", { name: "Tide oath" })).toBeNull());
 });
 
 // ---- comparing a captured turn against another composition (#130) ----
 
-const DIFF = {
+const DIFF = fixture<PromptDiff>({
   base: { id: "000001", task: "chat", ts: "2026-08-06T11:00:00Z", model: "m",
           total_tokens: 80, dropped_tokens: 0, budget_tokens: 0 },
   head: { id: "live", task: "live", ts: "", model: "m",
@@ -2584,12 +2588,12 @@ const DIFF = {
     head: { label: "World info", tokens: 120, dropped: false, trimmed: 0, pinned: false },
     diff: [{ op: "insert", text: "the pact was signed at dusk" }],
   }],
-};
+});
 
 async function openTurnAndCompare(value: string) {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePromptDiff).mockResolvedValue(DIFF);
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
   await screen.findByText("the lore as it stood then");
@@ -2599,8 +2603,8 @@ async function openTurnAndCompare(value: string) {
 
 test("the comparison picker is offered only from a past turn", async () => {
   // The live composition has nothing to be the "before" of.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
   renderInspector();
   await screen.findByText("lore text");
   expect(screen.queryByLabelText("Compare with")).toBeNull();
@@ -2621,8 +2625,8 @@ test("comparing a turn with the live preview replaces the breakdown with the dif
 });
 
 test("the turn being compared against is offered, and the one being compared is not", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
 
@@ -2635,7 +2639,7 @@ test("the turn being compared against is offered, and the one being compared is 
 
 // ---- decisions, listed apart from turns (roadmap 01b) ----
 
-const DECISIONS = [
+const DECISIONS: PromptEntry[] = [
   { id: "000005", scene: "s", ts: "2026-08-06T12:40:00Z", task: "scene-break",
     operation: "decide", model: "m", total_tokens: 40, dropped_tokens: 0, budget_tokens: 0 },
   { id: "000004", scene: "s", ts: "2026-08-06T12:30:00Z", task: "scene-break",
@@ -2645,7 +2649,7 @@ const DECISIONS = [
     model: "m", total_tokens: 30, dropped_tokens: 0, budget_tokens: 0 },
 ];
 
-const FROZEN_DECISION = {
+const FROZEN_DECISION: PromptSnapshot = {
   id: "000005", ts: "2026-08-06T12:40:00Z", task: "scene-break", operation: "decide",
   model: "m", total_tokens: 40, dropped_tokens: 0, budget_tokens: 0,
   sections: [
@@ -2657,7 +2661,7 @@ const FROZEN_DECISION = {
 };
 
 test("turn history hides decisions, which a collapsed section lists apart", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: [...DECISIONS, ...TURNS] });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: [...DECISIONS, ...TURNS] }));
   renderInspector();
   await screen.findByText("Regenerate");
   expect(screen.queryByText("Scene-break check")).toBeNull();
@@ -2669,14 +2673,14 @@ test("turn history hides decisions, which a collapsed section lists apart", asyn
 });
 
 test("a scene with only decisions has no captured turns", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: DECISIONS });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: DECISIONS }));
   renderInspector();
   await screen.findByText("No captured turns yet.");
 });
 
 test("a decision opens read-only and compares only with its own task", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: [...DECISIONS, ...TURNS] });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN_DECISION);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: [...DECISIONS, ...TURNS] }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN_DECISION);
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Decisions/ }));
   fireEvent.click((await screen.findAllByRole("button", { name: /^Scene-break check/ }))[0]);
@@ -2700,9 +2704,9 @@ test("two captured turns compare against each other, oldest end first", async ()
 });
 
 test("picking an OLDER turn still asks for the diff oldest end first", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue({ ...FROZEN, id: "000002", task: "regenerate" });
-  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(fixture({ ...FROZEN, id: "000002", task: "regenerate" }));
+  vi.mocked(api.getScenePromptDiff).mockResolvedValue(DIFF);
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Regenerate/ }));
   await screen.findByText("the lore as it stood then");
@@ -2729,8 +2733,8 @@ test("comparing against the live preview survives moving to another turn", async
   await screen.findByText("the pact was signed at dusk");
   // Each row answers with its own snapshot, or the second click would land the
   // first turn again and the assertion below would pass without moving.
-  (api.getScenePrompt as any).mockImplementation((_c: string, _s: string, eid: string) =>
-    Promise.resolve({ ...FROZEN, id: eid, task: eid === "000002" ? "regenerate" : "chat" }));
+  vi.mocked(api.getScenePrompt).mockImplementation((_c, _s, eid) =>
+    Promise.resolve(fixture({ ...FROZEN, id: eid, task: eid === "000002" ? "regenerate" : "chat" })));
 
   fireEvent.click(screen.getByRole("button", { name: /^Regenerate/ }));
   await waitFor(() => expect(api.getScenePromptDiff)
@@ -2780,9 +2784,9 @@ test.each(["live", "000002"])("focus save refreshes only the live end of a %s co
 test("a landed turn re-reads the comparison, because the live end has moved", async () => {
   // A diff against a preview that has since changed describes a prompt nobody
   // would send. `refreshKey` is bumped by the very turn that moved it.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePromptDiff).mockResolvedValue(DIFF);
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
@@ -2800,9 +2804,9 @@ test("a landed turn re-reads the comparison, because the live end has moved", as
 test("a turn landing does not re-read a comparison of two frozen turns", async () => {
   // Both ends are frozen, so a completed turn cannot change the answer and the
   // request could only return what is already on screen.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePromptDiff).mockResolvedValue(DIFF);
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
@@ -2818,9 +2822,9 @@ test("a turn landing does not re-read a comparison of two frozen turns", async (
 test("a live comparison marks itself stale while the replacement is in flight", async () => {
   // Blanking it would flip the panel to this turn's breakdown — a different
   // kind of content, and one that is refetching too.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePromptDiff).mockResolvedValue(DIFF);
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
@@ -2828,8 +2832,8 @@ test("a live comparison marks itself stale while the replacement is in flight", 
   fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "live" } });
   await screen.findByText("the pact was signed at dusk");
 
-  let release: (v: any) => void = () => {};
-  (api.getScenePromptDiff as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: PromptDiff) => void = () => {};
+  vi.mocked(api.getScenePromptDiff).mockReturnValue(new Promise((r) => { release = r; }));
   rerender(<SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
 
   await screen.findByText(/A turn has landed since this was computed/);
@@ -2844,18 +2848,18 @@ test("moving to another turn with a live comparison selected stays in compare mo
   // must not drop to the ordinary breakdown underneath it while the
   // replacement diff is in flight — two controls contradicting each other, and
   // indefinitely so if that request never answers.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockImplementation((_c: string, _s: string, eid: string) =>
-    Promise.resolve({ ...FROZEN, id: eid, task: eid === "000002" ? "regenerate" : "chat" }));
-  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockImplementation((_c, _s, eid) =>
+    Promise.resolve(fixture({ ...FROZEN, id: eid, task: eid === "000002" ? "regenerate" : "chat" })));
+  vi.mocked(api.getScenePromptDiff).mockResolvedValue(DIFF);
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
   await screen.findByText("the lore as it stood then");
   fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "live" } });
   await screen.findByText("the pact was signed at dusk");
 
-  let release: (v: any) => void = () => {};
-  (api.getScenePromptDiff as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: PromptDiff) => void = () => {};
+  vi.mocked(api.getScenePromptDiff).mockReturnValue(new Promise((r) => { release = r; }));
   fireEvent.click(screen.getByRole("button", { name: /^Regenerate/ }));
 
   await screen.findByText("Comparing…");
@@ -2868,10 +2872,10 @@ test("moving to another turn with a live comparison selected stays in compare mo
 });
 
 test("the very first comparison also waits rather than showing the breakdown", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  let release: (v: any) => void = () => {};
-  (api.getScenePromptDiff as any).mockReturnValue(new Promise((r) => { release = r; }));
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  let release: (v: PromptDiff) => void = () => {};
+  vi.mocked(api.getScenePromptDiff).mockReturnValue(new Promise((r) => { release = r; }));
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
   await screen.findByText("the lore as it stood then");
@@ -2885,9 +2889,9 @@ test("the very first comparison also waits rather than showing the breakdown", a
 test("a failed comparison falls back to the turn rather than waiting forever", async () => {
   // The pending state must not outlive the request: the catch clears the
   // picker, so the panel has a comparison to fall back FROM.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  (api.getScenePromptDiff as any).mockRejectedValue({ status: 404, detail: "gone" });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePromptDiff).mockRejectedValue({ status: 404, detail: "gone" });
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
   await screen.findByText("the lore as it stood then");
@@ -2899,9 +2903,9 @@ test("a failed comparison falls back to the turn rather than waiting forever", a
 });
 
 test("an evicted turn on either end says so rather than blanking", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  (api.getScenePromptDiff as any).mockRejectedValue({ status: 404, detail: "not found" });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePromptDiff).mockRejectedValue({ status: 404, detail: "not found" });
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
   await screen.findByText("the lore as it stood then");
@@ -2915,9 +2919,9 @@ test("an evicted turn on either end says so rather than blanking", async () => {
 test("a failed comparison's banner clears when the reader tries again", async () => {
   // Otherwise the retry renders its diff underneath "those turns could not be
   // compared", which reads as a diff that failed.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  (api.getScenePromptDiff as any).mockRejectedValueOnce({ status: 404, detail: "gone" });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePromptDiff).mockRejectedValueOnce({ status: 404, detail: "gone" });
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
   await screen.findByText("the lore as it stood then");
@@ -2925,17 +2929,17 @@ test("a failed comparison's banner clears when the reader tries again", async ()
   fireEvent.change(await screen.findByLabelText("Compare with"), { target: { value: "live" } });
   await screen.findByText(/aged out of the log/);
 
-  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  vi.mocked(api.getScenePromptDiff).mockResolvedValue(DIFF);
   fireEvent.change(screen.getByLabelText("Compare with"), { target: { value: "live" } });
   await screen.findByText("the pact was signed at dusk");
   expect(screen.queryByText(/aged out of the log/)).toBeNull();
 });
 
 test("a diff arriving after the reader moved on is dropped, not shown", async () => {
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  let release: (v: any) => void = () => {};
-  (api.getScenePromptDiff as any).mockReturnValue(new Promise((r) => { release = r; }));
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  let release: (v: PromptDiff) => void = () => {};
+  vi.mocked(api.getScenePromptDiff).mockReturnValue(new Promise((r) => { release = r; }));
 
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
@@ -2957,9 +2961,9 @@ test("a turn that fails to load ends the comparison rather than hiding it", asyn
   // two exits differ: the choice would be invisible, and the NEXT turn clicked
   // would open straight into a comparison the reader never saw themselves ask
   // for. Sticky across turns, not across leaving.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePromptDiff).mockResolvedValue(DIFF);
   renderInspector();
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
   await screen.findByText("the lore as it stood then");
@@ -2967,12 +2971,12 @@ test("a turn that fails to load ends the comparison rather than hiding it", asyn
   await screen.findByText("the pact was signed at dusk");
 
   // the next turn clicked has aged out
-  (api.getScenePrompt as any).mockRejectedValue({ status: 404, detail: "gone" });
+  vi.mocked(api.getScenePrompt).mockRejectedValue({ status: 404, detail: "gone" });
   fireEvent.click(screen.getByRole("button", { name: /^Regenerate/ }));
   await screen.findByText(/aged out of the log/);
 
   // ...and a later turn that DOES load opens as itself, not as a comparison
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
   fireEvent.click(screen.getByRole("button", { name: /^Send/ }));
   await screen.findByText("the lore as it stood then");
   expect(screen.getByLabelText<HTMLSelectElement>("Compare with").value).toBe("");
@@ -2984,9 +2988,9 @@ test("a comparison whose turn ages out keeps its option in the picker", async ()
   // retention can still evict the entry it names. Without an option the browser
   // falls back to the first one and the picker contradicts the panel below it;
   // clearing would throw away a comparison the reader is in the middle of.
-  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
-  (api.getScenePrompt as any).mockResolvedValue(FROZEN);
-  (api.getScenePromptDiff as any).mockResolvedValue(DIFF);
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: TURNS }));
+  vi.mocked(api.getScenePrompt).mockResolvedValue(FROZEN);
+  vi.mocked(api.getScenePromptDiff).mockResolvedValue(DIFF);
   const { rerender } = render(
     <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: /^Send/ }));
@@ -2995,7 +2999,7 @@ test("a comparison whose turn ages out keeps its option in the picker", async ()
   await screen.findByText("the pact was signed at dusk");
 
   // the compared turn falls out of the retention window
-  (api.listScenePrompts as any).mockResolvedValue({ entries: [TURNS[1]] });
+  vi.mocked(api.listScenePrompts).mockResolvedValue(fixture({ entries: [TURNS[1]] }));
   rerender(<SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
 
   await screen.findByText(/aged out of the log/);
@@ -3020,17 +3024,17 @@ function renderRewrites(handlers: { onSceneChanged?: () => void; onTranscriptEdi
 }
 
 function mockRewriteRecord() {
-  (api.getSceneRewrites as any).mockResolvedValue({
+  vi.mocked(api.getSceneRewrites).mockResolvedValue({
     "resp-1": { original: "Mara nods. (OOC: she is lying)", rules: ["r-strip", "r-gone"],
                 at: "2026-10-05T12:00:00Z" } });
-  (api.getRegex as any).mockResolvedValue({
+  vi.mocked(api.getRegex).mockResolvedValue(fixture({
     layer: { rules: [{ id: "r-strip", name: "Strip asides" }], off: [] },
-    inherited: [], warnings: {} });
+    inherited: [], warnings: {} }));
 }
 
 test("a rewritten turn shows the original and Restore calls editMessage with restore", async () => {
   mockRewriteRecord();
-  (api.editMessage as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.editMessage).mockResolvedValue({ ok: true });
   const onSceneChanged = vi.fn();
   const onTranscriptEdited = vi.fn();
   renderRewrites({ onSceneChanged, onTranscriptEdited });
@@ -3053,7 +3057,7 @@ test("a rewritten turn shows the original and Restore calls editMessage with res
 
 test("a stale restore says so and reloads the scene rather than writing anything", async () => {
   mockRewriteRecord();
-  (api.editMessage as any).mockRejectedValue(Object.assign(new Error("stale"), {
+  vi.mocked(api.editMessage).mockRejectedValue(Object.assign(new Error("stale"), {
     status: 409, kind: "rewrite_stale",
     detail: "This message no longer matches its recorded rewrite; reload the scene." }));
   const onSceneChanged = vi.fn();
@@ -3069,8 +3073,8 @@ test("a stale restore says so and reloads the scene rather than writing anything
 });
 
 test("a rewritten post whose record is gone offers nothing to restore", async () => {
-  (api.getSceneRewrites as any).mockResolvedValue({});
-  (api.getRegex as any).mockResolvedValue({ layer: { rules: [], off: [] }, inherited: [], warnings: {} });
+  vi.mocked(api.getSceneRewrites).mockResolvedValue({});
+  vi.mocked(api.getRegex).mockResolvedValue({ layer: { rules: [], off: [] }, inherited: [], warnings: {} });
   renderRewrites();
   fireEvent.click(await screen.findByRole("button", { name: /Rewritten/ }));
   expect(await screen.findByText(/no longer has a recorded original/)).toBeInTheDocument();
@@ -3078,9 +3082,10 @@ test("a rewritten post whose record is gone offers nothing to restore", async ()
 });
 
 test("a hand-mangled record's rules do not crash the opened rewrite", async () => {
-  (api.getSceneRewrites as any).mockResolvedValue({
-    "resp-1": { original: "Mara nods. (OOC: she is lying)", rules: "r-strip", at: 7 } });
-  (api.getRegex as any).mockResolvedValue({ layer: { rules: [], off: [] }, inherited: [], warnings: {} });
+  vi.mocked(api.getSceneRewrites).mockResolvedValue(fixture({
+    // @ts-expect-error -- this regression intentionally sends malformed persisted fields.
+    "resp-1": { original: "Mara nods. (OOC: she is lying)", rules: "r-strip", at: 7 } }));
+  vi.mocked(api.getRegex).mockResolvedValue({ layer: { rules: [], off: [] }, inherited: [], warnings: {} });
   renderRewrites();
   fireEvent.click(await screen.findByRole("button", { name: /Rewritten/ }));
   const detail = await screen.findByRole("region", { name: "Rewrite of post 4" });
@@ -3089,10 +3094,10 @@ test("a hand-mangled record's rules do not crash the opened rewrite", async () =
 });
 
 test("a later part of a response opens its own record, by the key the scene read names", async () => {
-  (api.getSceneRewrites as any).mockResolvedValue({
+  vi.mocked(api.getSceneRewrites).mockResolvedValue({
     "resp-1": { original: "First part...", rules: ["r-strip"], at: "" },
     "resp-1#c-2": { original: "Second part...", rules: ["r-strip"], at: "" } });
-  (api.getRegex as any).mockResolvedValue({ layer: { rules: [], off: [] }, inherited: [], warnings: {} });
+  vi.mocked(api.getRegex).mockResolvedValue({ layer: { rules: [], off: [] }, inherited: [], warnings: {} });
   render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}}
     rewritten={[{ index: 4, message: { role: "assistant", content: "Second part…",
       response_id: "resp-1", response_part: "c-2", rewritten: true,
@@ -3119,7 +3124,7 @@ test("a task the strip is running disables its manual button", async () => {
 test("Not here is held while the strip has a scene-break question out", async () => {
   // Dismissing under a strip-started question would let that question land
   // afterwards and raise the prompt the player just turned down.
-  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  vi.mocked(api.getSceneBreak).mockResolvedValue(BREAK_YES);
   render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
     onSceneChanged={() => {}} stripTasks={{ scene_break: true }} /></MemoryRouter>);
   expect(await screen.findByRole("button", { name: /not here/i })).toBeDisabled();

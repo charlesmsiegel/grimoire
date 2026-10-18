@@ -34,7 +34,7 @@ export function SuggestedCast({ cid, sid, cast, nameOf, onCast }: {
    *  refetch it. Falls back to the id. */
   nameOf?: (id: string) => string;
   /** A character was just seated — the host reloads its own cast list. */
-  onCast?: () => void;
+  onCast?: (() => void) | undefined;
 }) {
   const [suggestions, setSuggestions] = useState<Suggestion[]>(NONE);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +74,7 @@ export function SuggestedCast({ cid, sid, cast, nameOf, onCast }: {
     try {
       await run();
       await reload();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err));
     } finally {
       setPending(null);

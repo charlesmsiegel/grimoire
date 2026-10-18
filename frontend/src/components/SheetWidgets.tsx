@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
 import { api, type EntityScope, type ModuleContentEntry, type ModuleDetail, type ModuleField } from "../api/client";
+import { ENTITY_KINDS } from "../api/types";
 import { Field } from "./Field";
+import { errorText } from "../api/errors";
 
 export type WidgetMode = "view" | "edit";
 
 type WidgetProps = {
   def: ModuleField; value: unknown; mode: WidgetMode;
-  grid?: boolean; onChange?: (v: unknown) => void;
+  grid?: boolean | undefined; onChange?: ((v: unknown) => void) | undefined;
   // ref-only context (RefView/RefEdit read from these; other widgets ignore them).
-  scope?: EntityScope; module?: ModuleDetail; onOpenRef?: (kind: string, id: string) => void;
+  scope?: EntityScope; module?: ModuleDetail; onOpenRef?: ((kind: string, id: string) => void) | undefined;
   // advancement-only: presence signals "this field is advancement-eligible in the
   // current (campaign, view-mode) context" -- callers gate before passing it.
-  onAdvance?: () => void;
+  onAdvance?: (() => void) | undefined;
 };
 
 export function isResource(v: unknown): v is { current: number; max: number } {
@@ -174,8 +176,8 @@ function RefView({ def, value, scope, module, onOpenRef }: WidgetProps) {
     try {
       await api.instantiateContent(scope, preview.kind, module.id, preview.id);
       setPreview(null);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -216,10 +218,12 @@ function RefView({ def, value, scope, module, onOpenRef }: WidgetProps) {
 
 function RefEdit({ def, value, scope, module, onChange }: WidgetProps) {
   const [entities, setEntities] = useState<{ id: string; name: string }[]>([]);
-  const refKind = def.ref_kind!;
+  const refKind = def.ref_kind;
   useEffect(() => {
     if (!scope) return;
-    api.listEntities(scope, refKind as any).then(setEntities).catch(() => setEntities([]));
+    const kind = ENTITY_KINDS.find((candidate) => candidate === refKind);
+    if (!kind) { setEntities([]); return; }
+    api.listEntities(scope, kind).then(setEntities).catch(() => setEntities([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope?.kind, scope?.id, refKind]);
   const current = new Set(Array.isArray(value) ? (value as string[]) : []);

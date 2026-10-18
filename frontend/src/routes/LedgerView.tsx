@@ -49,7 +49,7 @@ type Row = {
   /** The second line under `what`: a supersession, a beat, a diff. */
   note?: ReactNode;
   /** Visible lifecycle label, including when the row's actions are gone. */
-  status?: string;
+  status?: string | undefined;
   asOf: string;
   scene: string;
   /** Struck through at 55%: this row is history, and it is still on the page. */

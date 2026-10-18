@@ -1,3 +1,4 @@
+import { fixture } from "../../testkit/fixture";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Conditions from "./Conditions";
@@ -7,14 +8,14 @@ function renderConditions(props: Partial<Parameters<typeof Conditions>[0]> = {})
     <MemoryRouter>
       <Conditions cid="saltmarch" worldName="Saltmarch"
                   location={{ current: { id: "tideflats", name: "The Tideflats" }, visited: [] }}
-                  datetime={{
+                  datetime={fixture({
                     current: { native: "1183-07-04", friendly: "4 Reaping 1183",
                                weekday: "Marsday", secondary_friendly: null,
                                holidays_today: [], upcoming: null, cast: [] },
                     history: [], suggested: null,
-                  } as any}
-                  weather={{ weather: { condition: "Low fog", temperature: "Cold", wind: "Still" },
-                             location: null, native: null } as any}
+                  })}
+                  weather={fixture({ weather: { condition: "Low fog", temperature: "Cold", wind: "Still" },
+                             location: null, native: null })}
                   {...props} />
     </MemoryRouter>,
   );

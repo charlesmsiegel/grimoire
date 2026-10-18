@@ -30,11 +30,11 @@ const OK = { ok: true, errors: [], display_errors: [] };
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers({ shouldAdvanceTime: true });
-  (api.readModule as any).mockResolvedValue(DETAIL);
+  vi.mocked(api.readModule).mockResolvedValue(DETAIL);
 });
 
 test("manifest section saves and reloads", async () => {
-  (api.putModuleManifest as any).mockResolvedValue(OK);
+  vi.mocked(api.putModuleManifest).mockResolvedValue(OK);
   render(<ModuleEditor detail={DETAIL} onDone={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Manifest" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm 2" } });
@@ -45,7 +45,7 @@ test("manifest section saves and reloads", async () => {
 });
 
 test("debounced dry-run renders errors inline", async () => {
-  (api.putModuleManifest as any).mockResolvedValue(
+  vi.mocked(api.putModuleManifest).mockResolvedValue(
     { ok: false, errors: ["module.md: manifest requires a name"], display_errors: [] });
   render(<ModuleEditor detail={DETAIL} onDone={() => {}} />);
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "" } });
@@ -56,20 +56,20 @@ test("debounced dry-run renders errors inline", async () => {
 });
 
 test("Save never commits an invalid draft", async () => {
-  (api.putModuleManifest as any).mockResolvedValue(
+  vi.mocked(api.putModuleManifest).mockResolvedValue(
     { ok: false, errors: ["module.md: manifest requires a name"], display_errors: [] });
   render(<ModuleEditor detail={DETAIL} onDone={() => {}} />);
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByText(/requires a name/)).toBeInTheDocument();
   // no real (non-dry-run) save was ever issued for the invalid draft
-  const real = (api.putModuleManifest as any).mock.calls
+  const real = vi.mocked(api.putModuleManifest).mock.calls
     .filter((c: any[]) => c[1].dry_run === false);
   expect(real).toHaveLength(0);
 });
 
 test("impact confirm gates the save and Cancel aborts", async () => {
-  (api.putModuleManifest as any).mockResolvedValue(
+  vi.mocked(api.putModuleManifest).mockResolvedValue(
     { ...OK, impact: { sheet_types: ["warden"], sheets_migrated: 2,
                        sheets_newly_invalid: 1, dangling_refs: 0 } });
   render(<ModuleEditor detail={DETAIL} onDone={() => {}} />);
@@ -79,7 +79,7 @@ test("impact confirm gates the save and Cancel aborts", async () => {
   expect(await screen.findByText(/migrates 2 sheets/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   // only the dry_run call happened
-  const real = (api.putModuleManifest as any).mock.calls
+  const real = vi.mocked(api.putModuleManifest).mock.calls
     .filter((c: any[]) => c[1].dry_run === false);
   expect(real).toHaveLength(0);
 });

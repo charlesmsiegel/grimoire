@@ -1,3 +1,4 @@
+import { fixture } from "../testkit/fixture";
 // The intent reading behind a prefetch: what counts as a reader meaning to
 // open a world, as opposed to passing over its card on the way elsewhere.
 import { createElement } from "react";
@@ -34,10 +35,10 @@ beforeEach(() => {
   vi.stubGlobal("PointerEvent", TestPointerEvent);
   vi.clearAllMocks();
   resetPrefetch();
-  (api.getWorld as any).mockResolvedValue({ meta: { id: "saltmarch", name: "Saltmarch" }, body: "" });
-  (api.listCharacters as any).mockResolvedValue([]);
-  (api.rememberedWorld as any).mockReturnValue(undefined);
-  (api.rememberedCharacters as any).mockReturnValue(undefined);
+  vi.mocked(api.getWorld).mockResolvedValue(fixture({ meta: { id: "saltmarch", name: "Saltmarch" }, body: "" }));
+  vi.mocked(api.listCharacters).mockResolvedValue([]);
+  vi.mocked(api.rememberedWorld).mockReturnValue(undefined);
+  vi.mocked(api.rememberedCharacters).mockReturnValue(undefined);
 });
 
 afterEach(() => {

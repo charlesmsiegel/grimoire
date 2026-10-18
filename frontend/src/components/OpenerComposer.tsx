@@ -20,13 +20,13 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, greeting, chara
   sid: string;
   /** An LLM connection is configured; without one there is nothing to call. */
   ready: boolean;
-  initialPrompt?: string;
+  initialPrompt?: string | undefined;
   /** The greeting this scene was started from, if any. An empty scene that
    *  carries one was opened for adaptation (#91) -- or emptied since -- so the
    *  block offers to rewrite that greeting for where the story stands now. The
    *  server reads the body off the scene's own stamp; only its presence matters
    *  here, which is why a reload still offers it. */
-  greeting?: string;
+  greeting?: string | undefined;
   /** Every character an opener could be saved against. Which one it IS saved
    *  against is this block's own state, not the panel's add-to-scene selection:
    *  those are unrelated choices, and sharing them meant staging a PC disabled
@@ -42,7 +42,7 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, greeting, chara
   /** Bumped to focus the prompt (a composer quick reply asked for the opener
    *  generator). Compared with the last one handled, which starts at the mount
    *  value, so mounting never steals focus. */
-  focusRequest?: number;
+  focusRequest?: number | undefined;
 }) {
   const [prompt, setPrompt] = useState("");
   const promptRef = useRef<HTMLInputElement>(null);

@@ -28,33 +28,35 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { ApiError, api } from "../api/client";
+import type { CharacterSummary, Greeting, GreetingDetail } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
 const fail = (status: number, detail: string, kind?: string,
               body?: Record<string, unknown>) =>
-  new (ApiError as any)(status, detail, kind, body);
+  new (ApiError)(status, detail, kind, body);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getGreetingSubjects as any).mockResolvedValue({});
-  (api.setImageSubjects as any).mockResolvedValue({ ok: true });
-  (api.listUntaggedImages as any).mockResolvedValue([]);
-  (api.listGreetings as any).mockResolvedValue([]);
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.getGreetingSubjects).mockResolvedValue({});
+  vi.mocked(api.setImageSubjects).mockResolvedValue({ ok: true });
+  vi.mocked(api.listUntaggedImages).mockResolvedValue([]);
+  vi.mocked(api.listGreetings).mockResolvedValue([]);
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
   ]);
-  (api.listTags as any).mockResolvedValue({ vip: "VIP" });
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listTags).mockResolvedValue({ vip: "VIP" });
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "counting-house", name: "The Counting House" },
     { id: "the-quay", name: "The Quay" },
   ]);
-  (api.createGreeting as any).mockResolvedValue({ id: "open" });
-  (api.setEdges as any).mockResolvedValue({ ok: true });
-  (api.importGreetings as any).mockResolvedValue({ greetings: ["g1"] });
-  (api.readGreeting as any).mockResolvedValue({
+  vi.mocked(api.createGreeting).mockResolvedValue({ id: "open" });
+  vi.mocked(api.setEdges).mockResolvedValue({ ok: true });
+  vi.mocked(api.importGreetings).mockResolvedValue({ greetings: ["g1"] });
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
-  (api.updateGreeting as any).mockResolvedValue({ ok: true });
+  }));
+  vi.mocked(api.updateGreeting).mockResolvedValue({ ok: true });
 });
 
 type Props = ComponentProps<typeof GreetingEditor>;
@@ -99,24 +101,24 @@ function deferred<T>() {
 }
 
 test("a greeting row is a link", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "tide-watch", name: "Tide Watch", character: "", version: "", present: [],
       requires_tags: [], predecessor_join: "all" },
-  ]);
+  ]));
   renderGreetings({ selected: null });
   expect(await screen.findByRole("link", { name: /Tide Watch/ }))
     .toHaveAttribute("href", "/worlds/realm/greetings/tide-watch");
 });
 
 test("a bookmarked address that fails to read reports the failure instead of leaving a blank form", async () => {
-  (api.readGreeting as any).mockRejectedValueOnce(new Error("not found"));
+  vi.mocked(api.readGreeting).mockRejectedValueOnce(new Error("not found"));
   renderGreetings({ selected: "ghost" });
   await screen.findByText("Error: not found");
 });
 
 test("leaving a greeting for the section root survives its own late read", async () => {
   const slow = deferred<any>();
-  (api.readGreeting as any).mockImplementationOnce(() => slow.promise);
+  vi.mocked(api.readGreeting).mockImplementationOnce(() => slow.promise);
   const { rerender } = renderGreetings({ selected: "tide-watch" });
   rerender(greetingsWith({ selected: null }));
   slow.resolve(greetingFixture("tide-watch", "Tide Watch"));
@@ -132,21 +134,21 @@ const CAST = [
   { id: "mara", name: "Mara", default_version: "default", versions: [{ id: "default", name: "default" }] },
 ];
 /** name, source character, present characters, mark */
-function greeting(id: string, name: string, character: string, present: string[], mark?: string) {
+function greeting(id: string, name: string, character: string, present: string[], mark?: Greeting["mark"]) {
   return { id, name, character, version: "default", present, requires_tags: [],
            predecessor_join: "all" as const, ...(mark ? { mark } : {}) };
 }
-const RAIL = [
+const RAIL = fixture<Greeting[]>([
   greeting("dawn", "Saltmarch Dawn", "seraphine", []),
   greeting("ledger", "The Ledger", "winifred", ["mara"], "played"),
   greeting("word", "A Quiet Word", "mara", [], "skipped"),
   greeting("vow", "Vow of Silence", "winifred", [], "completed"),
-];
+]);
 const railOf = (c: HTMLElement) => c.querySelector(".editor-list") as HTMLElement;
 
 test("mark chips hide their group, and are absent in world scope", async () => {
-  (api.listGreetings as any).mockResolvedValue(RAIL);
-  (api.listCharacters as any).mockResolvedValue(CAST);
+  vi.mocked(api.listGreetings).mockResolvedValue(RAIL);
+  vi.mocked(api.listCharacters).mockResolvedValue(CAST);
   const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await within(rail).findByText("Saltmarch Dawn");
@@ -167,9 +169,9 @@ test("mark chips hide their group, and are absent in world scope", async () => {
 });
 
 test("world scope has no mark chips, since a world has no play history", async () => {
-  (api.listGreetings as any).mockResolvedValue(
+  vi.mocked(api.listGreetings).mockResolvedValue(
     RAIL.map(({ mark, ...g }) => g));   // a world list carries no marks
-  (api.listCharacters as any).mockResolvedValue(CAST);
+  vi.mocked(api.listCharacters).mockResolvedValue(CAST);
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await within(rail).findByText("Saltmarch Dawn");
@@ -180,8 +182,8 @@ test("world scope has no mark chips, since a world has no play history", async (
 });
 
 test("search matches the greeting name, its source character, and present characters", async () => {
-  (api.listGreetings as any).mockResolvedValue(RAIL);
-  (api.listCharacters as any).mockResolvedValue(CAST);
+  vi.mocked(api.listGreetings).mockResolvedValue(RAIL);
+  vi.mocked(api.listCharacters).mockResolvedValue(CAST);
   const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await within(rail).findByText("Saltmarch Dawn");
@@ -206,8 +208,8 @@ test("search matches the greeting name, its source character, and present charac
 // campaign -> world -> campaign trip hides the chips in the middle leg while
 // the exclusion they represent is still in force.
 test("search and mark filters reset when the scope changes", async () => {
-  (api.listGreetings as any).mockResolvedValue(RAIL);
-  (api.listCharacters as any).mockResolvedValue(CAST);
+  vi.mocked(api.listGreetings).mockResolvedValue(RAIL);
+  vi.mocked(api.listCharacters).mockResolvedValue(CAST);
   const { container, rerender } = render(
     <Wrap scope={{ kind: "campaign", id: "a" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
@@ -234,10 +236,10 @@ test("search matches a decomposed name typed in composed form", async () => {
   const decomposed = "Café Meeting";   // e + U+0301 combining acute
   const composed = "Café";              // the same glyph as one code point
   expect(decomposed).not.toContain(composed);  // the premise, asserted
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     greeting("cafe", decomposed, "seraphine", []),
-  ]);
-  (api.listCharacters as any).mockResolvedValue(CAST);
+  ]));
+  vi.mocked(api.listCharacters).mockResolvedValue(CAST);
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await waitFor(() => expect(rail.querySelectorAll(".row")).toHaveLength(1));
@@ -250,10 +252,10 @@ test("search matches a decomposed name typed in composed form", async () => {
 // matches" -- and a query on a character's name cannot be judged at all until
 // the character list is in, since `charName` falls back to the raw id.
 test("the status line says nothing until both lists have loaded", async () => {
-  let releaseGreetings: (v: any) => void = () => {};
-  let releaseChars: (v: any) => void = () => {};
-  (api.listGreetings as any).mockReturnValue(new Promise((r) => { releaseGreetings = r; }));
-  (api.listCharacters as any).mockReturnValue(new Promise((r) => { releaseChars = r; }));
+  let releaseGreetings: (v: Greeting[]) => void = () => {};
+  let releaseChars: (v: CharacterSummary[]) => void = () => {};
+  vi.mocked(api.listGreetings).mockReturnValue(new Promise((r) => { releaseGreetings = r; }));
+  vi.mocked(api.listCharacters).mockReturnValue(new Promise((r) => { releaseChars = r; }));
   const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   const status = within(rail).getByRole("status");
@@ -272,8 +274,8 @@ test("the status line says nothing until both lists have loaded", async () => {
 // Filtering happens while focus is still in the search box, so the result
 // count has to live in a region that exists before the text changes.
 test("the result count is a live region", async () => {
-  (api.listGreetings as any).mockResolvedValue(RAIL);
-  (api.listCharacters as any).mockResolvedValue(CAST);
+  vi.mocked(api.listGreetings).mockResolvedValue(RAIL);
+  vi.mocked(api.listCharacters).mockResolvedValue(CAST);
   const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
   const rail = await waitFor(() => railOf(container));
   await within(rail).findByText("Saltmarch Dawn");
@@ -288,13 +290,13 @@ test("the result count is a live region", async () => {
 // The body of the open greeting is on screen either way; dropping its row would
 // leave that content with no visible source in the list that supposedly holds it.
 test("the open greeting stays listed even when the filters would hide it", async () => {
-  (api.listGreetings as any).mockResolvedValue(RAIL);
-  (api.listCharacters as any).mockResolvedValue(CAST);
-  (api.readGreeting as any).mockResolvedValue({
+  vi.mocked(api.listGreetings).mockResolvedValue(RAIL);
+  vi.mocked(api.listCharacters).mockResolvedValue(CAST);
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: greeting("word", "A Quiet Word", "mara", []),
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
-  (api.updateGreeting as any).mockResolvedValue({ ok: true });
+  }));
+  vi.mocked(api.updateGreeting).mockResolvedValue({ ok: true });
   const { container } = render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="word" />);
   const rail = await waitFor(() => railOf(container));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
@@ -308,13 +310,13 @@ test("the open greeting stays listed even when the filters would hide it", async
 });
 
 test("clicking a greeting shows a read-only rendered view; Edit reveals the form", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     body: "Hello **world**", edges: { leads_to: [], excludes: [] }, predecessors: [],
-  });
+  }));
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   // read-only: markdown rendered, no editable textarea
@@ -327,14 +329,14 @@ test("clicking a greeting shows a read-only rendered view; Edit reveals the form
 });
 
 test("greeting body demotes scene-label headings and keeps single newlines", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
     body: "#Rooftop Setting#\n\nFirst line\nSecond line",
     edges: { leads_to: [], excludes: [] }, predecessors: [],
-  });
+  }));
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await screen.findByText("Rooftop Setting");
   expect(screen.queryByRole("heading", { name: /rooftop setting/i })).toBeNull();
@@ -397,18 +399,18 @@ test("import-from-character posts the selected character + version", async () =>
 
 test("clicking a present character opens that character at the right version", async () => {
   const onOpenCharacter = vi.fn();
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "v2", name: "Seraphine (alt)" }] },
     { id: "rowan", name: "Rowan", default_version: "main", versions: [{ id: "main", name: "Rowan" }] },
   ]);
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "v2", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "v2", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
-  (api.updateGreeting as any).mockResolvedValue({ ok: true });
+  }));
+  vi.mocked(api.updateGreeting).mockResolvedValue({ ok: true });
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" onOpenCharacter={onOpenCharacter} selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const present = within(container.querySelector(".detail-sidebar") as HTMLElement)
@@ -422,16 +424,16 @@ test("clicking a present character opens that character at the right version", a
 });
 
 test("a present chip whose version cannot be resolved falls back to the bare name", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
   ]);
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "gone", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "gone", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
+  }));
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const present = within(container.querySelector(".detail-sidebar") as HTMLElement)
@@ -443,17 +445,17 @@ test("a present chip whose version cannot be resolved falls back to the bare nam
 });
 
 test("the view sidebar shows the full dependency picture", async () => {
-  (api.listTags as any).mockResolvedValue({ vip: "VIP" });
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listTags).mockResolvedValue({ vip: "VIP" });
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     { id: "prologue", name: "Prologue", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
     { id: "finale", name: "Finale", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
     { id: "secret", name: "Secret", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: ["vip"], predecessor_join: "any" },
     body: "hi", edges: { leads_to: ["finale"], excludes: ["secret"] }, predecessors: ["prologue"],
-  });
+  }));
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -470,14 +472,14 @@ test("a Depends-on chip is a link to that greeting's own address, not a same-pag
   // bar naming the greeting the reader started from -- Back did nothing, a
   // reload showed the wrong record, and a copied link sent someone else
   // elsewhere. It has to be a real `Link` to the predecessor's own address.
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "any" },
     { id: "prologue", name: "Prologue", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "any" },
     body: "x", edges: { leads_to: [], excludes: [] }, predecessors: ["prologue"],
-  });
+  }));
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const dep = within(container.querySelector(".detail-sidebar") as HTMLElement)
@@ -486,18 +488,18 @@ test("a Depends-on chip is a link to that greeting's own address, not a same-pag
 });
 
 test("editing a greeting toggles present characters and saves them", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
     { id: "rowan", name: "Rowan", default_version: "default", versions: [{ id: "default", name: "default" }] },
   ]);
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] },
-  });
-  (api.updateGreeting as any).mockResolvedValue({ ok: true });
+  }));
+  vi.mocked(api.updateGreeting).mockResolvedValue({ ok: true });
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
@@ -511,17 +513,17 @@ test("editing a greeting toggles present characters and saves them", async () =>
 });
 
 test("editing a greeting can re-point its character and version (#17)", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
     { id: "rowan", name: "Rowan", default_version: "main", versions: [{ id: "main", name: "main" }] },
   ]);
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, rev: "r1",
-  });
+  }));
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
@@ -547,18 +549,18 @@ test("re-pointing adds the new primary to a cast that lacks the old one", async 
   // Codex review: the old primary may be unchecked (or the greeting narrator-
   // only) while co-present characters are listed -- the new speaker still has
   // to end up in its own opener's cast.
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
     { id: "winifred", name: "Winifred", default_version: "default", versions: [{ id: "default", name: "default" }] },
     { id: "rowan", name: "Rowan", default_version: "main", versions: [{ id: "main", name: "main" }] },
   ]);
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["winifred"], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["winifred"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, rev: "r1",
-  });
+  }));
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
@@ -572,10 +574,10 @@ test("re-pointing adds the new primary to a cast that lacks the old one", async 
 });
 
 test("editing a greeting sets leads_to edges", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     { id: "reckoning", name: "Reckoning", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
-  ]);
+  ]));
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
@@ -590,14 +592,14 @@ test("editing a greeting sets leads_to edges", async () => {
 const IMG_BODY = "scene ![M](/api/worlds/w/greetings/open/images/embed-aaa111bbb222)";
 
 function mockOpenWithImage(subjects: Record<string, string[]> = {}) {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     body: IMG_BODY, edges: { leads_to: [], excludes: [] }, predecessors: [],
-  });
-  (api.getGreetingSubjects as any).mockResolvedValue(subjects);
+  }));
+  vi.mocked(api.getGreetingSubjects).mockResolvedValue(subjects);
 }
 
 test("greeting image shows subject chips and opens the picker", async () => {
@@ -645,10 +647,10 @@ const UNTAGGED = [
 ];
 
 test("rail button opens the tagging queue; save/no-subjects advance it", async () => {
-  (api.listUntaggedImages as any).mockResolvedValue(UNTAGGED);
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listUntaggedImages).mockResolvedValue(UNTAGGED);
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
-  ]);
+  ]));
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByRole("button", { name: /tag images \(2\)/i }));
   await screen.findByText(/tagging 1 \/ 2/i);
@@ -662,7 +664,7 @@ test("rail button opens the tagging queue; save/no-subjects advance it", async (
 });
 
 test("skip advances without a PUT and close leaves the queue", async () => {
-  (api.listUntaggedImages as any).mockResolvedValue(UNTAGGED);
+  vi.mocked(api.listUntaggedImages).mockResolvedValue(UNTAGGED);
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByRole("button", { name: /tag images \(2\)/i }));
   await screen.findByText(/tagging 1 \/ 2/i);
@@ -675,47 +677,47 @@ test("skip advances without a PUT and close leaves the queue", async () => {
 
 
 test("campaign scope: marks a greeting as won't-do from the sidebar", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
       requires_tags: [], predecessor_join: "all", mark: null },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
             requires_tags: [], predecessor_join: "all" },
     body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
-  });
-  (api.markGreeting as any).mockResolvedValue({ ok: true });
+  }));
+  vi.mocked(api.markGreeting).mockResolvedValue({ ok: true });
   render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="g1" />);
   fireEvent.click(await screen.findByRole("button", { name: "Won't do" }));
   await waitFor(() => expect(api.markGreeting).toHaveBeenCalledWith("run", "g1", "skipped"));
 });
 
 test("campaign scope: played greetings show a disabled status control", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
       requires_tags: [], predecessor_join: "all", mark: "played" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
             requires_tags: [], predecessor_join: "all" },
     body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
-  });
+  }));
   render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="g1" />);
   expect(await screen.findByRole("button", { name: "Mark complete" })).toBeDisabled();
   expect(screen.getByText(/started this greeting in a scene/i)).toBeInTheDocument();
 });
 
 test("campaign scope: a played greeting's Clear is enabled and clears an orphaned mark", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
       requires_tags: [], predecessor_join: "all", mark: "played" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
             requires_tags: [], predecessor_join: "all" },
     body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
-  });
-  (api.markGreeting as any).mockResolvedValue({ ok: true });
+  }));
+  vi.mocked(api.markGreeting).mockResolvedValue({ ok: true });
   render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="g1" />);
   const clearBtn = await screen.findByRole("button", { name: /^clear$/i });
   expect(clearBtn).not.toBeDisabled();          // #315: the only in-app way back from a burned greeting
@@ -724,16 +726,16 @@ test("campaign scope: a played greeting's Clear is enabled and clears an orphane
 });
 
 test("campaign scope: clearing a played greeting that IS still stamped surfaces the backend's 409", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
       requires_tags: [], predecessor_join: "all", mark: "played" },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
             requires_tags: [], predecessor_join: "all" },
     body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
-  });
-  (api.markGreeting as any).mockRejectedValue(
+  }));
+  vi.mocked(api.markGreeting).mockRejectedValue(
     { detail: "greeting was played in a scene; its mark cannot be changed" });
   render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" selected="g1" />);
   fireEvent.click(await screen.findByRole("button", { name: /^clear$/i }));
@@ -741,28 +743,28 @@ test("campaign scope: clearing a played greeting that IS still stamped surfaces 
 });
 
 test("campaign scope: hides the tagging queue and never fetches untagged images", async () => {
-  (api.listGreetings as any).mockResolvedValue([]);
+  vi.mocked(api.listGreetings).mockResolvedValue([]);
   render(<Wrap scope={{ kind: "campaign", id: "run" }} wid="w" />);
   await screen.findByRole("link", { name: "+ New greeting" });
   expect(api.listUntaggedImages).not.toHaveBeenCalled();
 });
 
 test("view shows the Offscreen chip for a pcless greeting", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "cabal", name: "Cabal", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all", pcless: true },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "cabal", name: "Cabal", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all", pcless: true },
     body: "The cult meets.", edges: { leads_to: [], excludes: [] }, predecessors: [],
-  });
+  }));
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="cabal" />);
   await screen.findByText("NPC-only opener");
 });
 
 test("the form's Offscreen toggle is sent on save", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
-  ]);
+  ]));
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   fireEvent.click(screen.getByRole("button", { name: /offscreen \(no pc\)/i }));
@@ -774,10 +776,10 @@ test("the form's Offscreen toggle is sent on save", async () => {
 // ---- external edits: the save precondition (#35) ----
 
 async function openGreetingForEdit() {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default",
       present: [], requires_tags: [], predecessor_join: "all" },
-  ]);
+  ]));
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
@@ -793,7 +795,7 @@ test("a greeting save echoes back the rev it was read at", async () => {
 });
 
 test("a stale greeting save is refused, and the plot map is left alone", async () => {
-  (api.updateGreeting as any).mockRejectedValue(
+  vi.mocked(api.updateGreeting).mockRejectedValue(
     fail(409, "changed on disk", "stale_record", { rev: "r2" }));
   await openGreetingForEdit();
   fireEvent.click(screen.getByRole("button", { name: /^save greeting$/i }));
@@ -805,7 +807,7 @@ test("a stale greeting save is refused, and the plot map is left alone", async (
 });
 
 test("overwriting a greeting retries against the rev the refusal reported", async () => {
-  (api.updateGreeting as any).mockRejectedValueOnce(
+  vi.mocked(api.updateGreeting).mockRejectedValueOnce(
     fail(409, "changed on disk", "stale_record", { rev: "r2" }));
   await openGreetingForEdit();
   fireEvent.click(screen.getByRole("button", { name: /^save greeting$/i }));
@@ -821,15 +823,15 @@ test("overwriting a greeting retries against the rev the refusal reported", asyn
 
 /** A greeting read that carries `location`, plus the row that lists it. */
 function withLocation(location: string) {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default",
       present: ["seraphine"], requires_tags: [], predecessor_join: "all", location },
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "open", name: "Open", character: "seraphine", version: "default",
             present: ["seraphine"], requires_tags: [], predecessor_join: "all", location },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
+  }));
 }
 
 test("the view sidebar shows the location as a chip that navigates to it", async () => {
@@ -847,10 +849,10 @@ test("the view sidebar shows the location as a chip that navigates to it", async
 });
 
 test("a greeting with no location gets no Location section", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     { id: "open", name: "Open", character: "seraphine", version: "default",
       present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
-  ]);
+  ]));
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await screen.findByRole("button", { name: /^edit$/i });
   const aside = container.querySelector(".detail-sidebar") as HTMLElement;
@@ -922,7 +924,7 @@ test("a failed locations read shows the stored id without calling it missing", a
   // An empty list means three different things -- not read yet, read and
   // failed, read and there are none -- and only the last is evidence about
   // this greeting's location. Saying "missing" on the others invents a fact.
-  (api.listEntities as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.listEntities).mockRejectedValue(new Error("offline"));
   withLocation("counting-house");
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalled());
@@ -938,10 +940,10 @@ test("a demoted world greeting is cleared, not left as a pre-filled new draft", 
   // clearing only the id leaves `mode` on "view" with the deleted greeting still
   // in `form`, so the editor falls through to the NEW-greeting form holding it
   // -- and Save then recreates the world greeting the demote just removed
-  (api.listGreetings as any).mockResolvedValue(RAIL);
-  (api.listCharacters as any).mockResolvedValue(CAST);
-  (api.libraryDependents as any).mockResolvedValue([]);
-  (api.demoteFromLibrary as any).mockResolvedValue({ copied_down: [], dependents: [] });
+  vi.mocked(api.listGreetings).mockResolvedValue(RAIL);
+  vi.mocked(api.listCharacters).mockResolvedValue(CAST);
+  vi.mocked(api.libraryDependents).mockResolvedValue([]);
+  vi.mocked(api.demoteFromLibrary).mockResolvedValue({ copied_down: [], dependents: [] });
   const { container } = render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="dawn" />);
   await screen.findByRole("button", { name: "Remove from library…" });
 
@@ -957,15 +959,15 @@ test("a demoted world greeting is cleared, not left as a pre-filled new draft", 
 });
 
 test("a save whose chips were never touched does not resend the edges", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     greeting("dawn", "Saltmarch Dawn", "seraphine", []),
     greeting("vow", "Vow of Silence", "seraphine", []),
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: ["vow"], excludes: [] }, predecessors: [], rev: "r1",
-  });
+  }));
   render(<Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="dawn" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Saltmarch Dusk" } });
@@ -988,20 +990,20 @@ test("a save whose chips were never touched does not resend the edges", async ()
 });
 
 test("a refresh that lands after the reader starts editing is discarded", async () => {
-  (api.listGreetings as any).mockResolvedValue([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]);
-  let land: (v: any) => void = () => {};
-  const detail = {
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]));
+  let land: (v: GreetingDetail) => void = () => {};
+  const detail = fixture<GreetingDetail>({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  };
-  (api.readGreeting as any).mockResolvedValue(detail);
+  });
+  vi.mocked(api.readGreeting).mockResolvedValue(detail);
   const { rerender } = render(
     <Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={0} selected="dawn" />);
   await screen.findByRole("button", { name: /^edit$/i });
 
   // the other view writes; this refresh read is slow
-  (api.readGreeting as any).mockImplementation(() => new Promise((res) => { land = res; }));
+  vi.mocked(api.readGreeting).mockImplementation(() => new Promise((res) => { land = res; }));
   rerender(<Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={1} selected="dawn" />);
 
   // ...and while it is out, the reader starts a draft
@@ -1016,12 +1018,12 @@ test("a refresh that lands after the reader starts editing is discarded", async 
 });
 
 test("the editor holds still while the map's own write is on the wire", async () => {
-  (api.listGreetings as any).mockResolvedValue([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]);
-  (api.readGreeting as any).mockResolvedValue({
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
+  }));
   render(
     <Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="dawn"
                     hold="The plot map is still writing these links." />);
@@ -1034,15 +1036,15 @@ test("the editor holds still while the map's own write is on the wire", async ()
 });
 
 test("an unsaved edge change is reported, so the map can hold still for it", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     greeting("dawn", "Saltmarch Dawn", "seraphine", []),
     greeting("vow", "Vow of Silence", "seraphine", []),
-  ]);
-  (api.readGreeting as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
+  }));
   const onEdgeDraft = vi.fn();
   render(
     <Wrap scope={{ kind: "world", id: "w" }} wid="w" onEdgeDraft={onEdgeDraft} selected="dawn" />);
@@ -1057,12 +1059,12 @@ test("an unsaved edge change is reported, so the map can hold still for it", asy
 });
 
 test("Delete is held while the map is writing, as Save is", async () => {
-  (api.listGreetings as any).mockResolvedValue([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]);
-  (api.readGreeting as any).mockResolvedValue({
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
+  }));
   render(
     <Wrap scope={{ kind: "world", id: "w" }} wid="w" selected="dawn"
                     hold="The plot map is still writing these links." />);
@@ -1075,14 +1077,15 @@ test("Delete is held while the map is writing, as Save is", async () => {
 });
 
 test("busy stays true until the second of two overlapping saves settles", async () => {
-  (api.listGreetings as any).mockResolvedValue([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]);
-  (api.readGreeting as any).mockResolvedValue({
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
+  }));
   const gate: (() => void)[] = [];
-  (api.updateGreeting as any).mockImplementation(() => new Promise<void>((res) => gate.push(res)));
+  vi.mocked(api.updateGreeting).mockImplementation(() =>
+    new Promise<Awaited<ReturnType<typeof api.updateGreeting>>>((res) => gate.push(() => res({ ok: true }))));
   const onBusy = vi.fn();
   render(
     <Wrap scope={{ kind: "world", id: "w" }} wid="w" onBusy={onBusy} selected="dawn" />);
@@ -1100,25 +1103,25 @@ test("busy stays true until the second of two overlapping saves settles", async 
 });
 
 test("a graph write rebases a clean draft's chips without touching the form", async () => {
-  (api.listGreetings as any).mockResolvedValue([
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([
     greeting("dawn", "Saltmarch Dawn", "seraphine", []),
     greeting("vow", "Vow of Silence", "seraphine", []),
-  ]);
-  const before = {
+  ]));
+  const before = fixture<GreetingDetail>({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  };
-  (api.readGreeting as any).mockResolvedValue(before);
+  });
+  vi.mocked(api.readGreeting).mockResolvedValue(before);
   const { rerender } = render(
     <Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={0} selected="dawn" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Half-written" } });
 
   // the map draws an edge on this greeting while the draft sits open
-  (api.readGreeting as any).mockResolvedValue({
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     ...before, edges: { leads_to: ["vow"], excludes: [] },
-  });
+  }));
   rerender(<Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={1} selected="dawn" />);
 
   // The typing survives -- and the chips catch up, so touching one later does
@@ -1136,20 +1139,20 @@ test("a graph write rebases a clean draft's chips without touching the form", as
 // no longer coexist through routing -- this exercises the `mode === "view"`
 // half of the refresh directly, the way the map would have reached it before.
 test("a refresh re-reads a viewed record's whole detail, not merely its chips", async () => {
-  (api.listGreetings as any).mockResolvedValue([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]);
-  (api.readGreeting as any).mockResolvedValue({
+  vi.mocked(api.listGreetings).mockResolvedValue(fixture([greeting("dawn", "Saltmarch Dawn", "seraphine", [])]));
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     meta: { id: "dawn", name: "Saltmarch Dawn", character: "seraphine", version: "default",
             present: [], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [], rev: "r1",
-  });
+  }));
   const { rerender } = render(
     <Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={0} selected="dawn" />);
   await screen.findByRole("button", { name: /^edit$/i });   // arrived read-only, no draft started
-  const readsBefore = (api.readGreeting as any).mock.calls.length;
+  const readsBefore = vi.mocked(api.readGreeting).mock.calls.length;
 
   rerender(<Wrap scope={{ kind: "world", id: "w" }} wid="w" refreshKey={1} selected="dawn" />);
   await waitFor(() =>
-    expect((api.readGreeting as any).mock.calls.length).toBeGreaterThan(readsBefore));
+    expect(vi.mocked(api.readGreeting).mock.calls.length).toBeGreaterThan(readsBefore));
 });
 
 test("creating a greeting includes phase sequence and optional metadata", async () => {
@@ -1173,10 +1176,10 @@ test("collection members expose subject controls for the selected picture", asyn
   const member = `/api/worlds/realm/images/collection-image-${"b".repeat(64)}?v=1`;
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true,
     json: async () => ({ format: 1, id, members: [member] }) }));
-  vi.mocked(api.readGreeting).mockResolvedValue({
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     ...greetingFixture("open", "Open"),
     body: `![Scene](/api/worlds/realm/image-collections/${id}/image)`,
-  } as any);
+  }));
   try {
     renderGreetings({ selected: "open" });
     expect(await screen.findByAltText("Scene")).toHaveAttribute("src", member);
@@ -1194,10 +1197,10 @@ test("format 2 collection members expose subject controls keyed by member URL", 
   const member = `/api/worlds/realm/image-collections/${id}/members/2?v=${"c".repeat(64)}`;
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true,
     json: async () => ({ format: 2, id, members: [member] }) }));
-  vi.mocked(api.readGreeting).mockResolvedValue({
+  vi.mocked(api.readGreeting).mockResolvedValue(fixture({
     ...greetingFixture("open", "Open"),
     body: `![Scene](/api/worlds/realm/image-collections/${id}/image)`,
-  } as any);
+  }));
   try {
     renderGreetings({ selected: "open" });
     expect(await screen.findByAltText("Scene")).toHaveAttribute("src", member);

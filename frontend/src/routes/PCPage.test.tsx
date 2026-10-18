@@ -23,6 +23,8 @@ vi.mock("../api/client", async () => {
   } };
 });
 import { ApiError, api } from "../api/client";
+import type { PCRevision, Persona } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
 const DETAIL = { meta: { id: "mara", name: "Mara", tags: [], default_version: "default" },
   versions: [{ id: "default", name: "default", persona: {
@@ -35,23 +37,23 @@ beforeEach(() => {
   vi.mocked(api.appendRecordArt).mockResolvedValue({ name: "avatar", ext: "png", v: "new", image_id: "new" });
 
   vi.mocked(api.getActorMembership).mockResolvedValue({ actor: "pcs:mara", groups: [] });
-  (api.readPC as any).mockResolvedValue(DETAIL);
-  (api.listPCImages as any).mockResolvedValue([]);
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.listTags as any).mockResolvedValue({});
-  (api.listModules as any).mockResolvedValue([]);
-  (api.getWorldSheetsIndex as any).mockResolvedValue({ default: "", modules: [] });
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "saltmarch", name: "Saltmarch", world: "realm" } });
-  (api.getCampaignModule as any).mockResolvedValue({ resolved: null });
-  (api.listAppearances as any).mockResolvedValue([]);
-  (api.libraryStatus as any).mockResolvedValue(
+  vi.mocked(api.readPC).mockResolvedValue(DETAIL);
+  vi.mocked(api.listPCImages).mockResolvedValue([]);
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.listTags).mockResolvedValue({});
+  vi.mocked(api.listModules).mockResolvedValue([]);
+  vi.mocked(api.getWorldSheetsIndex).mockResolvedValue({ default: "", modules: [] });
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "saltmarch", name: "Saltmarch", world: "realm" } }));
+  vi.mocked(api.getCampaignModule).mockResolvedValue(fixture({ resolved: null }));
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
+  vi.mocked(api.libraryStatus).mockResolvedValue(
     { in_library: true, diverged: false, can_promote: false, can_push: false });
-  (api.updatePCVersion as any).mockResolvedValue({ ok: true });
-  (api.putPCImage as any).mockResolvedValue({ ok: true });
-  (api.getCalendarConfig as any).mockResolvedValue({ primary: { provider: "gregorian" } });
-  (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
-  (api.listPCRevisions as any).mockResolvedValue([]);
-  (api.restorePCRevision as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.updatePCVersion).mockResolvedValue({ ok: true });
+  vi.mocked(api.putPCImage).mockResolvedValue({ name: "avatar", ext: "png" });
+  vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({ primary: { provider: "gregorian" } }));
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
+  vi.mocked(api.listPCRevisions).mockResolvedValue([]);
+  vi.mocked(api.restorePCRevision).mockResolvedValue({ ok: true });
 });
 
 let lastPCPath = "";
@@ -88,7 +90,7 @@ test("a campaign PC uses its campaign scope", async () => {
 });
 
 test("a missing PC reports the read failure", async () => {
-  (api.readPC as any).mockRejectedValue(new Error("not found"));
+  vi.mocked(api.readPC).mockRejectedValue(new Error("not found"));
   renderPC();
   expect(await screen.findByText(/not found/i)).toBeInTheDocument();
 });
@@ -105,7 +107,7 @@ test("editing a PC saves its persona and returns to read mode", async () => {
 });
 
 test("goals and narrator notes are edited in the form and shown read-only in the column", async () => {
-  (api.readPC as any).mockResolvedValue({ ...DETAIL, versions: [{ ...DETAIL.versions[0], persona: {
+  vi.mocked(api.readPC).mockResolvedValue({ ...DETAIL, versions: [{ ...DETAIL.versions[0], persona: {
     ...DETAIL.versions[0].persona, goals: "find the archive", player_notes: "never speak for her",
   } }] });
   renderPC();
@@ -125,16 +127,16 @@ test("goals and narrator notes are edited in the form and shown read-only in the
 });
 
 test("history lists earlier texts, previews one read-only, and restores it", async () => {
-  (api.listPCRevisions as any).mockResolvedValue([
+  vi.mocked(api.listPCRevisions).mockResolvedValue([
     { id: "r2", saved: "2026-10-05T12:00:00Z", name: "Mara" },
     { id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara Vey" },
   ]);
-  (api.readPCRevision as any).mockResolvedValue({
+  vi.mocked(api.readPCRevision).mockResolvedValue({
     name: "Mara Vey", pronouns: "", summary: "", description: "An older telling.", goals: "go home",
   });
   // a fresh object per read, as the network gives: the history list refreshes
   // when a re-read lands, and an identical reference is no re-read at all
-  (api.readPC as any).mockImplementation(async () => structuredClone(DETAIL));
+  vi.mocked(api.readPC).mockImplementation(async () => structuredClone(DETAIL));
   renderPC();
   await screen.findByRole("heading", { name: "Mara", level: 1 });
   const column = document.querySelector(".context-column") as HTMLElement;
@@ -154,12 +156,12 @@ test("history lists earlier texts, previews one read-only, and restores it", asy
     { kind: "world", id: "realm" }, "mara", "default", "r1"));
   // back on the current text, re-read, and history asked again
   expect(await within(main).findByText("At Saltmarch.")).toBeInTheDocument();
-  await waitFor(() => expect((api.listPCRevisions as any).mock.calls.length).toBeGreaterThan(1));
+  await waitFor(() => expect(vi.mocked(api.listPCRevisions).mock.calls.length).toBeGreaterThan(1));
 });
 
 test("Back to current leaves a preview without restoring", async () => {
-  (api.listPCRevisions as any).mockResolvedValue([{ id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara" }]);
-  (api.readPCRevision as any).mockResolvedValue({ ...DETAIL.versions[0].persona, description: "Before." });
+  vi.mocked(api.listPCRevisions).mockResolvedValue([{ id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara" }]);
+  vi.mocked(api.readPCRevision).mockResolvedValue({ ...DETAIL.versions[0].persona, description: "Before." });
   renderPC();
   await screen.findByRole("heading", { name: "Mara", level: 1 });
   const column = document.querySelector(".context-column") as HTMLElement;
@@ -171,7 +173,7 @@ test("Back to current leaves a preview without restoring", async () => {
 });
 
 test("history cannot be opened over an unsaved edit", async () => {
-  (api.listPCRevisions as any).mockResolvedValue([{ id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara" }]);
+  vi.mocked(api.listPCRevisions).mockResolvedValue([{ id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara" }]);
   renderPC();
   await screen.findByRole("heading", { name: "Mara", level: 1 });
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -182,12 +184,12 @@ test("history cannot be opened over an unsaved edit", async () => {
 test("switching version drops the other version's history rows and its preview", async () => {
   const two = { ...DETAIL, versions: [DETAIL.versions[0],
     { id: "older", name: "older", persona: { ...DETAIL.versions[0].persona, description: "Older one." }, images: [] }] };
-  (api.readPC as any).mockResolvedValue(two);
-  let releaseB: (v: unknown) => void = () => {};
-  (api.listPCRevisions as any).mockImplementation((_s: unknown, _p: string, vid: string) =>
+  vi.mocked(api.readPC).mockResolvedValue(two);
+  let releaseB: (v: PCRevision[]) => void = () => {};
+  vi.mocked(api.listPCRevisions).mockImplementation((_s, _p, vid) =>
     vid === "default" ? Promise.resolve([{ id: "rA", saved: "2026-10-04T12:00:00Z", name: "Mara" }])
       : new Promise((r) => { releaseB = r; }));
-  (api.readPCRevision as any).mockResolvedValue({ ...DETAIL.versions[0].persona, description: "A's past." });
+  vi.mocked(api.readPCRevision).mockResolvedValue({ ...DETAIL.versions[0].persona, description: "A's past." });
   renderPC();
   await screen.findByRole("heading", { name: "Mara", level: 1 });
   const column = document.querySelector(".context-column") as HTMLElement;
@@ -203,12 +205,12 @@ test("switching version drops the other version's history rows and its preview",
 });
 
 test("a slow answer for an earlier history click cannot replace the later one", async () => {
-  (api.listPCRevisions as any).mockResolvedValue([
+  vi.mocked(api.listPCRevisions).mockResolvedValue([
     { id: "r2", saved: "2026-10-05T12:00:00Z", name: "Mara" },
     { id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara" },
   ]);
-  let releaseFirst: (v: unknown) => void = () => {};
-  (api.readPCRevision as any).mockImplementation((_s: unknown, _p: string, _v: string, rid: string) =>
+  let releaseFirst: (v: Persona) => void = () => {};
+  vi.mocked(api.readPCRevision).mockImplementation((_s, _p, _v, rid) =>
     rid === "r2" ? new Promise((r) => { releaseFirst = r; })
       : Promise.resolve({ ...DETAIL.versions[0].persona, description: "The later click." }));
   renderPC();
@@ -305,7 +307,7 @@ test("a late record refresh cannot restore a version after the reader switches v
   const second = { id: "second", name: "second", persona: {
     ...DETAIL.versions[0].persona, description: "At Realm." }, images: [] };
   const twoVersions = { ...DETAIL, versions: [DETAIL.versions[0], second] };
-  (api.readPC as any).mockResolvedValueOnce(twoVersions)
+  vi.mocked(api.readPC).mockResolvedValueOnce(twoVersions)
     .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
   renderPC();
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));

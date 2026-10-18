@@ -9,6 +9,7 @@ vi.mock("../api/client", async () => {
   return { ...actual, api: { getQuickReplies: vi.fn(), setQuickReplies: vi.fn() } };
 });
 import { api, ApiError, type QuickReplySet } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 const WORLD = { kind: "world" as const, wid: "realm" };
 const SET: QuickReplySet = { version: 1, digest: "d1", replies: [
@@ -17,11 +18,11 @@ const SET: QuickReplySet = { version: 1, digest: "d1", replies: [
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getQuickReplies as any).mockResolvedValue(SET);
-  (api.setQuickReplies as any).mockImplementation(
-    (_scope: unknown, replies: any[], _expect: string) => Promise.resolve({
+  vi.mocked(api.getQuickReplies).mockResolvedValue(SET);
+  vi.mocked(api.setQuickReplies).mockImplementation(
+    (_scope, replies, _expect) => Promise.resolve(fixture({
       version: 1, digest: "d2",
-      replies: replies.map((r, i) => (r.id ? r : { ...r, id: `minted${i}` })) }));
+      replies: replies.map((r, i) => (r.id ? r : { ...r, id: `minted${i}` })) })));
 });
 
 async function openWorld() {
@@ -118,7 +119,7 @@ test("Delete removes the reply and saves", async () => {
 });
 
 test("a 400 is shown in the form", async () => {
-  (api.setQuickReplies as any).mockRejectedValue(new ApiError(400, "can't read dice notation 'q'", "invalid_quick_reply"));
+  vi.mocked(api.setQuickReplies).mockRejectedValue(new ApiError(400, "can't read dice notation 'q'", "invalid_quick_reply"));
   await openWorld();
   fireEvent.click(screen.getByRole("button", { name: "Search" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
@@ -129,7 +130,7 @@ test("a 400 is shown in the form", async () => {
 });
 
 test("a 409 re-reads and keeps the draft", async () => {
-  (api.setQuickReplies as any).mockRejectedValue(new ApiError(409, "the set changed", "set_changed"));
+  vi.mocked(api.setQuickReplies).mockRejectedValue(new ApiError(409, "the set changed", "set_changed"));
   fireEvent.click(await openWorld());
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Label"), { target: { value: "My draft" } });
@@ -147,9 +148,9 @@ const CAMP: QuickReplySet = { version: 1, digest: "c1", replies: [{ id: "w2", hi
               { id: "w2", label: "Search", kind: "roll", notation: "1d20" }] };
 
 function campaignReturns(set: QuickReplySet) {
-  (api.getQuickReplies as any).mockResolvedValue(set);
-  (api.setQuickReplies as any).mockImplementation(
-    (_scope: unknown, replies: any[]) => Promise.resolve({ ...set, digest: "c2", replies }));
+  vi.mocked(api.getQuickReplies).mockResolvedValue(set);
+  vi.mocked(api.setQuickReplies).mockImplementation(
+    (_scope, replies) => Promise.resolve(fixture({ ...set, digest: "c2", replies })));
 }
 
 test("inherited replies are read-only with Override and Hide", async () => {

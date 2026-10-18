@@ -1,3 +1,5 @@
+import { fixture } from "../testkit/fixture";
+import type { ShellPayload } from "../api/types";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_ROWS, CAMPAIGN_ROWS, RAIL_PX, SEARCH_CHORD, railless, titleFor } from "./rail";
@@ -24,14 +26,14 @@ const ctx = { cid: "c1" };
 /** A payload with a mechanics module bound, so rows gated on one are offered.
  *  `to` takes the payload because whether a row has anywhere to go can depend
  *  on what the campaign actually has. */
-const WITH_MODULE = {
+const WITH_MODULE = fixture<ShellPayload & { campaign: NonNullable<ShellPayload["campaign"]> }>({
   campaigns: 1, todo: null,
   campaign: {
     id: "c1", name: "A Run", world_name: "Saltmarch", scenes: 1, open: [],
     ledger_open: 0, sheets: { sheeted: 1, total: 2 }, unreviewed: 0,
     pending: [], images_undescribed: null,
   },
-} as any;
+});
 
 function activeIn(rows: typeof APP_ROWS, path: string) {
   return rows.filter((r) => r.to(ctx, WITH_MODULE) !== null && r.match(path, ctx))
@@ -286,14 +288,14 @@ test("no OTHER row carries a money tail", () => {
 });
 
 describe("tails tell 0 apart from unmeasured", () => {
-  const withCampaign = (over: Record<string, unknown>) => ({
+  const withCampaign = (over: Partial<NonNullable<ShellPayload["campaign"]>>) => (fixture<ShellPayload>({
     campaigns: 1, todo: null,
     campaign: {
       id: "c1", name: "A Run", world_name: "Saltmarch", scenes: 2,
       open: [], ledger_open: 0, sheets: null,
       unreviewed: null, pending: [], images_undescribed: null, ...over,
     },
-  } as any);
+  }));
 
   test("0 renders as 0 — nothing is waiting is an answer", () => {
     expect(CAMPAIGN_ROWS.find((r) => r.id === "ledger")!.tail!(withCampaign({}))).toBe("0");

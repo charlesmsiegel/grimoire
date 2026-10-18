@@ -156,8 +156,8 @@ export default function WorldsView() {
     if (!window.confirm(`Delete world '${w.name}'?`)) return;
     try {
       await api.deleteWorld(w.id);
-    } catch (err: any) {
-      window.alert(err?.message ?? "Could not delete the world.");
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : "Could not delete the world.");
       return;
     }
     await reload();
@@ -228,8 +228,9 @@ export default function WorldsView() {
     let imported: string;
     try {
       ({ id: imported } = await api.importWorld(file));
-    } catch (err: any) {
-      setError(err?.detail ?? err?.message ?? "Could not import that bundle.");
+    } catch (err: unknown) {
+      setError(typeof err === "object" && err !== null && "detail" in err && typeof err.detail === "string"
+          ? err.detail : err instanceof Error ? err.message : "Could not import that bundle.");
       setImporting(false);
       return;
     }

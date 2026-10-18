@@ -7,13 +7,15 @@ vi.mock("../api/client", async () =>
 import { api, ApiError } from "../api/client";
 import LedgerView from "./LedgerView";
 import { EMPTY_LEDGER, Here, installLedgerMocks, renderLedger } from "../testkit/ledgerHarness";
+import type { Aging, Ledger, PlotThread } from "../api/types";
+import { fixture, type DeepPartial } from "../testkit/fixture";
 
 const scene = (id: string, title: string, date = "") => ({ id, title, date });
 
 const EMPTY = EMPTY_LEDGER;
 
 /** Aging (#103) as the route returns it: computed at read time, never stored. */
-const ok = { state: "ok", days_since: 2, days_over: null, due_in: null };
+const ok: Aging = { state: "ok", days_since: 2, days_over: null, due_in: null };
 
 /** The screen's reason to exist, in data.
  *
@@ -77,7 +79,7 @@ const rowById = (id: string) =>
 // ---- the column ------------------------------------------------------------
 
 test("the column lists the seven sections with a live count each", async () => {
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...CHAIN,
     plot: [{ id: "t", title: "The sea wall", status: "open", last_scene: "009",
              latest_beat: "Mara named it aloud.", scene: scene("009", "The Long Tide") }],
@@ -91,12 +93,12 @@ test("the column lists the seven sections with a live count each", async () => {
                       type: "", since_scene: "", scene: scene("", "") }],
     chronicle: [{ id: "009", one_line: "They argued.", date: "3 Reaping", title: "The Long Tide" }],
   });
-  (api.campaignChanges as any).mockResolvedValue([
+  vi.mocked(api.campaignChanges).mockResolvedValue([
     { ref: { kind: "characters", id: "mara" }, name: "Sister Mara",
       scene: scene("009", "The Long Tide"), fields: [{ field: "current_state",
         label: "Current state", diff: [] }] },
   ]);
-  (api.campaignRelationshipHistory as any).mockResolvedValue(STANDINGS);
+  vi.mocked(api.campaignRelationshipHistory).mockResolvedValue(STANDINGS);
   renderLedger();
 
   const facts = await column().findByRole("button", { name: /standing facts/i });
@@ -131,7 +133,7 @@ test("the campaign is named, and the way back to it is a link", async () => {
 // ---- the table -------------------------------------------------------------
 
 test("standing facts render as a real table: id, fact, as of, scene", async () => {
-  (api.campaignLedger as any).mockResolvedValue(CHAIN);
+  vi.mocked(api.campaignLedger).mockResolvedValue(CHAIN);
   renderLedger();
   await screen.findByRole("table");
 
@@ -150,7 +152,7 @@ test("a superseded fact keeps its row without the toggle, struck through and ann
     // The judgement this screen turns on: SHOW RETIRED starts OFF, and the fact
     // f9 overturned is on the page anyway. Hiding it by default would hide the
     // one thing facts.json keeps that a snapshot cannot.
-    (api.campaignLedger as any).mockResolvedValue(CHAIN);
+    vi.mocked(api.campaignLedger).mockResolvedValue(CHAIN);
     renderLedger();
     await screen.findByRole("table");
     expect(column().getByRole("checkbox", { name: /show retired/i })).not.toBeChecked();
@@ -167,7 +169,7 @@ test("a superseded fact keeps its row without the toggle, struck through and ann
 
 test("the fact that replaced it names what it replaced, and sits directly above it",
   async () => {
-    (api.campaignLedger as any).mockResolvedValue(CHAIN);
+    vi.mocked(api.campaignLedger).mockResolvedValue(CHAIN);
     renderLedger();
     await screen.findByRole("table");
 
@@ -181,7 +183,7 @@ test("the fact that replaced it names what it replaced, and sits directly above 
   });
 
 test("a fact retired with nothing in its place is what the toggle is for", async () => {
-  (api.campaignLedger as any).mockResolvedValue(CHAIN);
+  vi.mocked(api.campaignLedger).mockResolvedValue(CHAIN);
   renderLedger();
   await screen.findByRole("table");
   expect(screen.queryByText(/The gate is watched/)).not.toBeInTheDocument();
@@ -198,7 +200,7 @@ test("a fact retired with nothing in its place is what the toggle is for", async
 
 test("a chain three deep reads newest to oldest, each link under the one that ended it",
   async () => {
-    (api.campaignLedger as any).mockResolvedValue({
+    vi.mocked(api.campaignLedger).mockResolvedValue({
       ...EMPTY,
       facts: [{ id: "f3", text: "The bridge is rubble.", date: "", scene: scene("3", "Third") }],
       retired: [
@@ -217,7 +219,7 @@ test("a chain three deep reads newest to oldest, each link under the one that en
 test("a supersession written in a circle by hand renders instead of hanging", async () => {
   // facts.json is hand-editable, so f1←f2 and f2←f1 can both be on disk. The
   // walk has to stop; an infinite loop is not a degraded row.
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY,
     retired: [
       { id: "f1", text: "One.", date: "", scene: scene("1", "First"),
@@ -234,7 +236,7 @@ test("a supersession written in a circle by hand renders instead of hanging", as
 // ---- the other five sections ----------------------------------------------
 
 test("choosing a section swaps the table and its column labels", async () => {
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...CHAIN,
     commitments: [{ id: "c", title: "The Reeve's deadline", kind: "threat", status: "open",
                     due: "midnight", last_scene: "009", latest_beat: "Sworn at the pier.",
@@ -256,7 +258,7 @@ test("choosing a section swaps the table and its column labels", async () => {
 });
 
 test("relationships show both shapes: a directed meter and a dated bond", async () => {
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY,
     relationships: [
       { id: "characters:mara->characters:reeve", kind: "feeling",
@@ -282,7 +284,7 @@ test("relationships show both shapes: a directed meter and a dated bond", async 
 test("relationship history is the arc the current standing overwrote", async () => {
   // The section's reason to exist: `relationships.json` keeps only the far end
   // of this, and the two feeling rows are the same pair a scene apart.
-  (api.campaignRelationshipHistory as any).mockResolvedValue(STANDINGS);
+  vi.mocked(api.campaignRelationshipHistory).mockResolvedValue(STANDINGS);
   renderLedger();
   fireEvent.click(await column().findByRole("button", { name: /relationship history/i }));
 
@@ -310,7 +312,7 @@ test("the timeline narrows to one pair through the server, not the page", async 
   // The route caps what it returns, so filtering here would search what the cap
   // already threw away — a long campaign's older arc for one pair would be
   // unreachable in the app while the store still held every row of it.
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY,
     relationships: [{ id: "characters:mara->characters:reeve", kind: "feeling",
                       a: "characters:mara", b: "characters:reeve",
@@ -318,7 +320,7 @@ test("the timeline narrows to one pair through the server, not the page", async 
                       trust: 1, affection: 0, tension: 4, note: "",
                       type: "", since_scene: "", scene: scene("", "") }],
   });
-  (api.campaignRelationshipHistory as any).mockResolvedValue(STANDINGS);
+  vi.mocked(api.campaignRelationshipHistory).mockResolvedValue(STANDINGS);
   renderLedger();
   fireEvent.click(await column().findByRole("button", { name: /relationship history/i }));
   await screen.findByRole("table");
@@ -330,7 +332,7 @@ test("the timeline narrows to one pair through the server, not the page", async 
     "run", { a: "characters:mara", b: "characters:reeve" }));
 
   // and back to everyone, which is a read of its own rather than a re-filter
-  (api.campaignRelationshipHistory as any).mockClear();
+  vi.mocked(api.campaignRelationshipHistory).mockClear();
   fireEvent.change(picker, { target: { value: "" } });
   await waitFor(() => expect(api.campaignRelationshipHistory)
     .toHaveBeenCalledWith("run", undefined));
@@ -338,7 +340,7 @@ test("the timeline narrows to one pair through the server, not the page", async 
 
 test("a narrowed timeline with nothing in it says so rather than sending you to play",
   async () => {
-    (api.campaignLedger as any).mockResolvedValue({
+    vi.mocked(api.campaignLedger).mockResolvedValue({
       ...EMPTY,
       relationships: [{ id: "characters:mara->characters:reeve", kind: "feeling",
                         a: "characters:mara", b: "characters:reeve",
@@ -346,7 +348,7 @@ test("a narrowed timeline with nothing in it says so rather than sending you to 
                         trust: 1, affection: 0, tension: 4, note: "",
                         type: "", since_scene: "", scene: scene("", "") }],
     });
-    (api.campaignRelationshipHistory as any).mockResolvedValue([]);
+    vi.mocked(api.campaignRelationshipHistory).mockResolvedValue([]);
     renderLedger();
     fireEvent.click(await column().findByRole("button", { name: /relationship history/i }));
     fireEvent.change(await screen.findByRole("combobox", { name: /narrow the timeline/i }),
@@ -358,8 +360,8 @@ test("a narrowed timeline with nothing in it says so rather than sending you to 
   });
 
 test("a broken relationship-history read costs its section and nothing else", async () => {
-  (api.campaignRelationshipHistory as any).mockRejectedValue(new Error("nope"));
-  (api.campaignLedger as any).mockResolvedValue(CHAIN);
+  vi.mocked(api.campaignRelationshipHistory).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.campaignLedger).mockResolvedValue(CHAIN);
   renderLedger();
   await screen.findByRole("table");
 
@@ -372,12 +374,12 @@ test("a broken relationship-history read costs its section and nothing else", as
 });
 
 test("recent changes and the timeline come from their own reads", async () => {
-  (api.campaignChanges as any).mockResolvedValue([
+  vi.mocked(api.campaignChanges).mockResolvedValue([
     { ref: { kind: "characters", id: "mara" }, name: "Sister Mara",
       scene: scene("009", "The Long Tide"),
       fields: [{ field: "current_state", label: "Current state", diff: [] }] },
   ]);
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY,
     chronicle: [{ id: "009", one_line: "They argued until the tide turned.",
                   date: "3 Reaping", title: "The Long Tide" }],
@@ -407,8 +409,8 @@ test("an empty section names what fills it rather than saying nothing here", asy
 });
 
 test("a failed read degrades to the empty state, never a stuck reading line", async () => {
-  (api.campaignLedger as any).mockRejectedValue(new Error("nope"));
-  (api.campaignChanges as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.campaignLedger).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.campaignChanges).mockRejectedValue(new Error("nope"));
   renderLedger();
   expect(await screen.findByText(/Absorbing a scene records the truths/)).toBeInTheDocument();
   expect(screen.queryByText(/Reading the ledger/)).not.toBeInTheDocument();
@@ -418,13 +420,13 @@ test("rows never outlive the campaign they came from", async () => {
   // The route is not keyed on the campaign, so a switch keeps this component
   // mounted: without the held cid, one game's facts would sit under the other's
   // name until the new read settled.
-  (api.campaignLedger as any).mockResolvedValue(CHAIN);
+  vi.mocked(api.campaignLedger).mockResolvedValue(CHAIN);
   const { unmount } = renderLedger();
   await screen.findByRole("table");
   unmount();
 
-  let settle: (v: unknown) => void = () => {};
-  (api.campaignLedger as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  let settle: (v: Ledger) => void = () => {};
+  vi.mocked(api.campaignLedger).mockReturnValue(new Promise((r) => { settle = r; }));
   renderLedger("/campaigns/other/ledger");
   expect(await screen.findByText(/Reading the ledger/)).toBeInTheDocument();
   expect(screen.queryByText(/speaks of the drowned freely/)).not.toBeInTheDocument();
@@ -434,7 +436,7 @@ test("rows never outlive the campaign they came from", async () => {
 // ---- ⌘K -------------------------------------------------------------------
 
 test("the sections are offered to the palette", async () => {
-  (api.campaignLedger as any).mockResolvedValue(CHAIN);
+  vi.mocked(api.campaignLedger).mockResolvedValue(CHAIN);
   renderLedger();
   await screen.findByRole("table");
 
@@ -450,7 +452,7 @@ test("an overdue commitment says how far past its deadline it is", async () => {
   // The badge leads the note: "overdue by 12 days" is the reason to read the
   // row, and a reader scanning for what has slipped should not have to reach
   // the end of a beat to find it.
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY,
     commitments: [{ id: "the-debt", title: "Repay the moneylender", kind: "promise",
                     status: "open", due: "3 Reaping", last_scene: "004",
@@ -464,7 +466,7 @@ test("an overdue commitment says how far past its deadline it is", async () => {
 });
 
 test("a thread nobody has touched is badged stale", async () => {
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY,
     plot: [{ id: "the-map", title: "The map", status: "open", last_scene: "004",
              latest_beat: "", scene: scene("004", "The Priory Door"),
@@ -478,7 +480,7 @@ test("a thread nobody has touched is badged stale", async () => {
 test("a record inside the campaign's patience carries no badge", async () => {
   // An unbadged row is also what "cannot tell" looks like — no clock, no dated
   // scene — which is the honest rendering of an answer nothing supports.
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY,
     plot: [{ id: "the-map", title: "The map", status: "open", last_scene: "004",
              latest_beat: "Mara found it.", scene: scene("004", "The Priory Door"),
@@ -495,7 +497,7 @@ test("a record inside the campaign's patience carries no badge", async () => {
 // The rows are effective: a record merged into another is not a row of its
 // own, and the canonical says what was folded into it on its note line.
 
-const MERGED_THREAD = {
+const MERGED_THREAD: PlotThread = {
   id: "winifred-s-chart", title: "Winifred's chart", status: "open",
   last_scene: "002", latest_beat: "Mara traced the coast.", aging: ok,
   scene: scene("002", "The Long Tide"),
@@ -549,7 +551,7 @@ test("closing a merged thread addresses the canonical", async () => {
 // offer nothing, and that the one rule the ledger keeps about facts survives:
 // grimoire never edits one, the user may.
 
-const THREADS = {
+const THREADS = fixture<Ledger>({
   ...EMPTY,
   plot: [
     { id: "warehouse", title: "Who fired the warehouse", status: "open",
@@ -559,9 +561,9 @@ const THREADS = {
       last_scene: "009", latest_beat: "", aging: ok,
       scene: scene("009", "The Long Tide") },
   ],
-};
+});
 
-const OWED = {
+const OWED = fixture<Ledger>({
   ...EMPTY,
   commitments: [
     { id: "pay", title: "Pay the Reeve", status: "open", kind: "promise",
@@ -571,7 +573,7 @@ const OWED = {
       due: "", last_scene: "009", latest_beat: "Repaid", aging: ok,
       scene: scene("009", "The Long Tide") },
   ],
-};
+});
 
 test("completed threads and commitments show clear status when history is enabled", async () => {
   await at(/Threads/, THREADS);
@@ -608,8 +610,8 @@ const BONDS = {
  *
  *  In that order: the ledger opens on Standing facts, so a fixture whose facts
  *  are empty has no table to wait for until the section has moved. */
-async function at(section: RegExp, data: unknown) {
-  (api.campaignLedger as any).mockResolvedValue(data);
+async function at(section: RegExp, data: DeepPartial<Ledger>) {
+  vi.mocked(api.campaignLedger).mockResolvedValue(fixture(data));
   renderLedger();
   await screen.findByRole("complementary", { name: "Ledger sections" });
   fireEvent.click(column().getByRole("button", { name: section }));
@@ -669,7 +671,7 @@ test("a field the reader never touched is not in the payload at all", async () =
   fireEvent.change(screen.getByLabelText("Thread"), { target: { value: "Renamed" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.ledgerSaveThread).toHaveBeenCalled());
-  const body = (api.ledgerSaveThread as any).mock.calls[0][2];
+  const body = vi.mocked(api.ledgerSaveThread).mock.calls[0][2];
   expect(Object.keys(body)).toEqual(["title"]);
 });
 
@@ -688,9 +690,9 @@ test("a record's scene is picked from the campaign's scenes, by title", async ()
   // It was a text box holding the scene's id -- a filename nobody types
   // correctly -- so correcting where the absorb filed something meant
   // copying `009--…` out of somewhere else.
-  (api.listScenes as any).mockResolvedValue([
+  vi.mocked(api.listScenes).mockResolvedValue(fixture([
     { id: "004", title: "The Priory Door" }, { id: "009", title: "The Long Tide" },
-  ]);
+  ]));
   await at(/Threads/, THREADS);
   await openEditor(rowFor(/Who fired the warehouse/));
   const picker = await screen.findByRole("combobox", { name: "Scene" });
@@ -704,14 +706,14 @@ test("a record's scene is picked from the campaign's scenes, by title", async ()
 
 test("a scene the list no longer has stays the record's value until another is picked",
   async () => {
-    (api.listScenes as any).mockResolvedValue([{ id: "009", title: "The Long Tide" }]);
+    vi.mocked(api.listScenes).mockResolvedValue(fixture([{ id: "009", title: "The Long Tide" }]));
     await at(/Threads/, THREADS);
     await openEditor(rowFor(/Who fired the warehouse/));
     expect(await screen.findByRole("combobox", { name: "Scene" })).toHaveValue("004");
   });
 
 test("with no scene list to offer, the scene is still correctable by id", async () => {
-  (api.listScenes as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.listScenes).mockRejectedValue(new Error("offline"));
   await at(/Threads/, THREADS);
   await openEditor(rowFor(/Who fired the warehouse/));
   expect(screen.getByRole("textbox", { name: "Scene" })).toHaveValue("004");
@@ -764,7 +766,7 @@ test("deleting takes two clicks and says how it differs from retiring", async ()
 });
 
 test("a refusal is shown in the editor it belongs to", async () => {
-  (api.ledgerSaveFact as any).mockRejectedValue(new Error("a fact needs text"));
+  vi.mocked(api.ledgerSaveFact).mockRejectedValue(new Error("a fact needs text"));
   await at(/Standing facts/, CHAIN);
   await openEditor(factRow("f4"));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -805,14 +807,14 @@ test("a meter that is typed nonsense does not reach the store as one", async () 
   fireEvent.change(screen.getByLabelText("Trust"), { target: { value: "" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.ledgerSaveRelationship).toHaveBeenCalled());
-  expect((api.ledgerSaveRelationship as any).mock.calls[0][1].trust).toBe(0);
+  expect(vi.mocked(api.ledgerSaveRelationship).mock.calls[0][1].trust).toBe(0);
 });
 
 test("Enter cannot submit a second time while the first save is in flight", async () => {
   // Only the buttons were disabled, so Enter twice during a slow save sent the
   // write twice — two threads, or the same beat appended twice.
-  let release: (v: unknown) => void = () => {};
-  (api.ledgerSaveThread as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.ledgerSaveThread>>) => void = () => {};
+  vi.mocked(api.ledgerSaveThread).mockReturnValue(new Promise((r) => { release = r; }));
   await at(/Threads/, THREADS);
   await openEditor(rowFor(/Who fired the warehouse/));
   const title = screen.getByLabelText("Thread");
@@ -857,10 +859,10 @@ test("the timeline line is editable and its row cannot be deleted", async () => 
 test("the two log sections offer nothing to edit", async () => {
   // They record what happened. Editing a log falsifies history rather than
   // correcting state, and Undo is how something in them is reversed.
-  (api.campaignRelationshipHistory as any).mockResolvedValue(STANDINGS);
-  (api.campaignChanges as any).mockResolvedValue([
+  vi.mocked(api.campaignRelationshipHistory).mockResolvedValue(STANDINGS);
+  vi.mocked(api.campaignChanges).mockResolvedValue([
     { ref: { kind: "lore", id: "pact" }, name: "The Pact",
-      fields: [{ key: "body", label: "body" }], scene: scene("004", "The Priory Door") },
+      fields: [{ field: "body", label: "body", diff: [] }], scene: scene("004", "The Priory Door") },
   ]);
   renderLedger();
   for (const label of [/Relationship history/, /Recent changes/]) {
@@ -901,7 +903,7 @@ beforeEach(() => {
 const highlighted = () => document.querySelectorAll("tr.highlighted");
 
 test("a section address opens that section", async () => {
-  (api.campaignLedger as any).mockResolvedValue(OWED);
+  vi.mocked(api.campaignLedger).mockResolvedValue(OWED);
   renderLedger("/campaigns/run/ledger/commitments");
   expect(await screen.findByRole("heading", { level: 1, name: "Commitments" }))
     .toBeInTheDocument();
@@ -918,7 +920,7 @@ test("clicking a section changes the address", async () => {
 });
 
 test("a row address highlights that row without opening its editor", async () => {
-  (api.campaignLedger as any).mockResolvedValue(THREADS);
+  vi.mocked(api.campaignLedger).mockResolvedValue(THREADS);
   renderLedger("/campaigns/run/ledger/threads/warehouse");
   const row = await waitFor(() => rowFor(/Who fired the warehouse/));
   await waitFor(() => expect(row).toHaveClass("highlighted"));
@@ -932,7 +934,7 @@ test("a row address highlights that row without opening its editor", async () =>
 });
 
 test("a row address with a slash in its id highlights that row", async () => {
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY,
     plot: [{ ...THREADS.plot[0], id: "mara/map", title: "Mara's map" },
            { ...THREADS.plot[0], id: "act:2", title: "The coronation" }],
@@ -944,14 +946,14 @@ test("a row address with a slash in its id highlights that row", async () => {
 });
 
 test("an alias source's address highlights its canonical row", async () => {
-  (api.campaignLedger as any).mockResolvedValue({ ...EMPTY, plot: [MERGED_THREAD] });
+  vi.mocked(api.campaignLedger).mockResolvedValue({ ...EMPTY, plot: [MERGED_THREAD] });
   renderLedger("/campaigns/run/ledger/threads/mara-s-map");
   const row = await waitFor(() => rowFor(/Winifred's chart/));
   await waitFor(() => expect(row).toHaveClass("highlighted"));
 });
 
 test("a row address to a closed thread shows and highlights it", async () => {
-  (api.campaignLedger as any).mockResolvedValue(THREADS);
+  vi.mocked(api.campaignLedger).mockResolvedValue(THREADS);
   renderLedger("/campaigns/run/ledger/threads/settled");
   // Not on the first table: it is filtered out until the address reveals it.
   await waitFor(() => expect(rowFor(/The debt, settled/)).toHaveClass("highlighted"));
@@ -963,11 +965,11 @@ test("a row address to a closed thread shows and highlights it", async () => {
 });
 
 test("re-renders do not re-scroll", async () => {
-  let release: (v: unknown) => void = () => {};
-  (api.ledgerSaveThread as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.ledgerSaveThread>>) => void = () => {};
+  vi.mocked(api.ledgerSaveThread).mockReturnValue(new Promise((r) => { release = r; }));
   // A new object per read, as the wire gives: the re-read must rebuild the
   // table, or this would prove nothing about the effect that scrolls.
-  (api.campaignLedger as any).mockImplementation(() => Promise.resolve(structuredClone(THREADS)));
+  vi.mocked(api.campaignLedger).mockImplementation(() => Promise.resolve(structuredClone(THREADS)));
   renderLedger("/campaigns/run/ledger/threads/warehouse");
   const row = await waitFor(() => rowFor(/Who fired the warehouse/));
   await waitFor(() => expect(row).toHaveClass("highlighted"));
@@ -1008,7 +1010,7 @@ function twoCampaigns(second: "open" | "closed") {
     plot: [{ ...THREADS.plot[0] },
            { ...THREADS.plot[1], status, title: `The debt, in ${cid}` }],
   });
-  (api.campaignLedger as any).mockImplementation((cid: string) => Promise.resolve(
+  vi.mocked(api.campaignLedger).mockImplementation((cid) => Promise.resolve(
     cid === "run" ? thread("run", "open") : thread("tide", second)));
 }
 
@@ -1040,7 +1042,7 @@ test("the same address in another campaign scrolls to its row", async () => {
 });
 
 test("an unknown section redirects to the facts", async () => {
-  (api.campaignLedger as any).mockResolvedValue(CHAIN);
+  vi.mocked(api.campaignLedger).mockResolvedValue(CHAIN);
   renderLedger("/campaigns/run/ledger/nonsense");
   await waitFor(() => expect(here()).toBe("/campaigns/run/ledger"));
   expect(await screen.findByRole("heading", { level: 1, name: "Standing facts" }))
@@ -1054,7 +1056,7 @@ test("the Merged note links to Reviewed links / merges", async () => {
 });
 
 test("a delete refused for merged records offers Delete anyway", async () => {
-  (api.ledgerDeleteThread as any).mockRejectedValueOnce(new ApiError(
+  vi.mocked(api.ledgerDeleteThread).mockRejectedValueOnce(new ApiError(
     409, "thread:warehouse has merged records", "has_merged_records",
     { kind: "has_merged_records", detail: "thread:warehouse has merged records" }));
   await at(/Threads/, THREADS);
@@ -1067,7 +1069,7 @@ test("a delete refused for merged records offers Delete anyway", async () => {
   expect(api.ledgerDeleteThread).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole("button", { name: "Delete anyway" }));
   await waitFor(() => expect(api.ledgerDeleteThread).toHaveBeenCalledTimes(2));
-  expect((api.ledgerDeleteThread as any).mock.calls[1]).toEqual(["run", "warehouse", true]);
+  expect(vi.mocked(api.ledgerDeleteThread).mock.calls[1]).toEqual(["run", "warehouse", true]);
 });
 
 const THREAD_PARTIAL = "the thread was deleted, but its merges and links could not all be "
@@ -1077,11 +1079,11 @@ test("a delete that landed but could not clear its links re-reads the ledger", a
   // The thread is gone on the server, so a row drawn from the pre-delete read
   // would answer a second Delete with a 404. Re-read, and still say what
   // happened.
-  (api.ledgerDeleteThread as any).mockRejectedValueOnce(new ApiError(
+  vi.mocked(api.ledgerDeleteThread).mockRejectedValueOnce(new ApiError(
     500, THREAD_PARTIAL, "partial_delete",
     { kind: "partial_delete", landed: ["thread"], detail: THREAD_PARTIAL }));
   await at(/Threads/, THREADS);
-  (api.campaignLedger as any).mockResolvedValue({ ...THREADS, plot: THREADS.plot.slice(1) });
+  vi.mocked(api.campaignLedger).mockResolvedValue({ ...THREADS, plot: THREADS.plot.slice(1) });
   await openEditor(rowFor(/Who fired the warehouse/));
   fireEvent.click(screen.getByRole("button", { name: "Delete" }));
   fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
@@ -1092,7 +1094,7 @@ test("a delete that landed but could not clear its links re-reads the ledger", a
 });
 
 test("a delete refused for another reason leaves the row and reads nothing again", async () => {
-  (api.ledgerDeleteThread as any).mockRejectedValueOnce(new ApiError(
+  vi.mocked(api.ledgerDeleteThread).mockRejectedValueOnce(new ApiError(
     409, "continuity.json cannot be read", "malformed",
     { kind: "malformed", detail: "continuity.json cannot be read" }));
   await at(/Threads/, THREADS);

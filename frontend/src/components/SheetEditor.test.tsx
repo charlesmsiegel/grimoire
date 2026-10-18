@@ -94,8 +94,8 @@ const ADV_MOD: ModuleDetail = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.putSheet as any).mockResolvedValue({ ok: true });
-  (api.deleteSheet as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.putSheet).mockResolvedValue({ ok: true });
+  vi.mocked(api.deleteSheet).mockResolvedValue({ ok: true });
 });
 
 test("typeKind maps pcs to characters and passes through others", () => {
@@ -129,7 +129,7 @@ test("change type confirms and filters orphans", async () => {
                       onClose={() => {}} onSaved={onSaved} />);
   fireEvent.change(screen.getByLabelText("Change type"), { target: { value: "shifter" } });
   await waitFor(() => expect(api.putSheet).toHaveBeenCalled());
-  const call = (api.putSheet as any).mock.calls[0];
+  const call = vi.mocked(api.putSheet).mock.calls[0];
   expect(call[0]).toEqual({ kind: "campaign", id: "run" });
   expect(call[1]).toBe("pool-basic");
   expect(call[2]).toBe("characters");
@@ -331,7 +331,7 @@ test("view mode renders entity-form ref chips that call onOpenRef", async () => 
 });
 
 test("view mode renders module-content ref chips that open a preview instead", async () => {
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "lore", id: "icebolt", name: "Icebolt", body: "A shard of ice.", keys: "", sheet_type: null, fields: {},
   });
   const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [], gen: "g2" };
@@ -343,10 +343,10 @@ test("view mode renders module-content ref chips that open a preview instead", a
 });
 
 test("module-content ref preview's Instantiate button calls the API and closes the preview", async () => {
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "lore", id: "icebolt", name: "Icebolt", body: "A shard of ice.", keys: "", sheet_type: null, fields: {},
   });
-  (api.instantiateContent as any).mockResolvedValue({ id: "icebolt" });
+  vi.mocked(api.instantiateContent).mockResolvedValue({ id: "icebolt" });
   const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [], gen: "g2" };
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
                       kind="characters" eid="mara" initial={initial}
@@ -360,10 +360,10 @@ test("module-content ref preview's Instantiate button calls the API and closes t
 });
 
 test("module-content ref preview shows an error and stays open when Instantiate fails", async () => {
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "lore", id: "icebolt", name: "Icebolt", body: "A shard of ice.", keys: "", sheet_type: null, fields: {},
   });
-  (api.instantiateContent as any).mockRejectedValue({ detail: "already instantiated" });
+  vi.mocked(api.instantiateContent).mockRejectedValue({ detail: "already instantiated" });
   const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [], gen: "g2" };
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
                       kind="characters" eid="mara" initial={initial}
@@ -376,7 +376,7 @@ test("module-content ref preview shows an error and stays open when Instantiate 
 });
 
 test("edit mode offers a two-group checkbox picker for a ref field", async () => {
-  (api.listEntities as any).mockResolvedValue([{ id: "fireball", name: "Fireball" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "fireball", name: "Fireball" }]);
   const initial: Sheet = { sheet_type: "warden", fields: { known: [] }, derived: {}, errors: [], gen: "g2" };
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
                       kind="characters" eid="mara" initial={initial}
@@ -396,7 +396,7 @@ test("shows an advance button for advancement-eligible fields and calls the API 
   const initial: Sheet = {
     sheet_type: "warden", fields: { wits: 2, xp: { current: 20, max: 999 } }, derived: {}, errors: [], gen: "g2",
   };
-  (api.advanceSheet as any).mockResolvedValue({
+  vi.mocked(api.advanceSheet).mockResolvedValue({
     sheet: { sheet_type: "warden", fields: { wits: 3, xp: { current: 11, max: 999 } }, derived: {}, errors: [], gen: "g3" },
   });
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={ADV_MOD}
@@ -410,7 +410,7 @@ test("shows the SheetError message on a rejected advance", async () => {
   const initial: Sheet = {
     sheet_type: "warden", fields: { wits: 2, xp: { current: 1, max: 999 } }, derived: {}, errors: [], gen: "g2",
   };
-  (api.advanceSheet as any).mockRejectedValue({ detail: "needs 6 xp, have 1" });
+  vi.mocked(api.advanceSheet).mockRejectedValue({ detail: "needs 6 xp, have 1" });
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={ADV_MOD}
                       kind="characters" eid="mara" initial={initial}
                       onClose={() => {}} onSaved={() => {}} />);
@@ -442,7 +442,7 @@ test("saving a legacy sheet with no gen sends gen: null inside the expected snap
 
 test("a type change refreshes the held gen, so the next save uses it instead of 409ing", async () => {
   vi.spyOn(window, "confirm").mockReturnValue(true);
-  (api.getSheet as any).mockResolvedValue({
+  vi.mocked(api.getSheet).mockResolvedValue({
     sheet: { sheet_type: "shifter",
       fields: { vigor: 3, strength: 10, fury: { current: 5, max: 5 } },
       derived: {}, errors: [], gen: "g2" } });
@@ -459,9 +459,9 @@ test("a type change refreshes the held gen, so the next save uses it instead of 
   fireEvent.click(screen.getByText("Save"));
 
   await waitFor(() => expect(api.putSheet).toHaveBeenCalledTimes(2));
-  const secondCall = (api.putSheet as any).mock.calls[1];
-  expect(secondCall[4].expected.gen).toBe("g2");
-  expect(secondCall[4].expected.gen).not.toBe(SHEET.gen);
+  const secondCall = vi.mocked(api.putSheet).mock.calls[1];
+  expect(secondCall[4].expected?.gen).toBe("g2");
+  expect(secondCall[4].expected?.gen).not.toBe(SHEET.gen);
   // refreshSnapshot runs after both the type change and the second save --
   // neither is the reloadAfterConflict path, so putSheet is never re-called.
   expect(api.getSheet).toHaveBeenCalledTimes(2);
@@ -469,8 +469,8 @@ test("a type change refreshes the held gen, so the next save uses it instead of 
 });
 
 test("a 409 on save re-fetches the sheet, replaces the form, and shows a changed-elsewhere notice", async () => {
-  (api.putSheet as any).mockRejectedValue(new ApiError(409, "the sheet changed since it was loaded"));
-  (api.getSheet as any).mockResolvedValue({
+  vi.mocked(api.putSheet).mockRejectedValue(new ApiError(409, "the sheet changed since it was loaded"));
+  vi.mocked(api.getSheet).mockResolvedValue({
     sheet: { sheet_type: "medium",
       fields: { vigor: 3, strength: 10, essence: { current: 2, max: 10 }, quirk: "", gear: [] },
       derived: { sight_pool: 3 }, errors: [], gen: "g9" } });

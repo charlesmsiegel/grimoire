@@ -1,22 +1,24 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import type { SceneMeta, ShellPayload } from "../../api/types";
+import { fixture } from "../../testkit/fixture";
 import NothingToWrapUp from "./NothingToWrapUp";
 import { ShellPayloadProvider } from "../../shell/ShellPayloadContext";
 
-const SCENES = [
+const SCENES = fixture<SceneMeta[]>([
   { id: "s1", title: "The Tide Comes In" },
   { id: "s2", title: "The Long Quay" },
-] as any;
+]);
 
 function page(pending: { sid: string; proposals: number }[] | null) {
-  const payload = pending === null ? null : {
+  const payload = pending === null ? null : fixture<ShellPayload>({
     campaigns: 1, todo: 0,
     campaign: { id: "run", name: "A Run", scenes: 2, open: [], ledger_open: 0, sheets: null,
                 unreviewed: 0, pending, images_undescribed: 0 },
-  } as any;
+  });
   render(
     <ShellPayloadProvider value={{ status: payload ? "ready" : "loading", payload,
-                                   retry: () => {}, cid: "run" } as any}>
+                                   retry: () => {}, cid: "run" }}>
       <MemoryRouter>
         <NothingToWrapUp cid="run" campaignName="A Run" sid="s1"
                          sceneTitle="The Tide Comes In" scenes={SCENES} />

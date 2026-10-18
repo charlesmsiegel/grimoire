@@ -5,6 +5,13 @@ import { NO_FALLBACK_POLICY } from "../components/inference/selection";
 import { forgetModelTests } from "../components/inference/TestCallDialog";
 import ModelsView from "./ModelsView";
 import { useInferenceSettings } from "../components/inference/useInferenceSettings";
+import type {
+  CapabilityModel, CapabilityValue, CardLimits, ControlPreview, DecidesNatively, DecisionMode, InferenceSelection,
+  LimitSource,
+  MigrationStatus, ModelCapabilities, ModelLimit, ProviderHealth, ProviderPreset, ResolvedSelection,
+  RetiredNote, RoleCard, RouteRow,
+} from "../api/types";
+import { fixture, type DeepPartial } from "../testkit/fixture";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -16,7 +23,7 @@ vi.mock("../api/client", async () => {
   } };
 });
 
-const PRESET = {
+const PRESET: ProviderPreset = {
   id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "", url_locked: true,
   billing: "metered", reports_price: true, always: [], possible: [], never: [],
 };
@@ -36,11 +43,10 @@ const BASE_CAPS = (): Record<string, Record<string, Value>> => ({
 
 /** The capabilities API, as the server groups it: yes fits, unknown is
  *  unverified, no is hidden. `decide` is a native decision or generation. */
-function answer(need: CapabilityNeed, model?: string) {
-  const out = {
-    provider_preset: PRESET, need, reason: null as string | null,
-    groups: { fits: [] as unknown[], unverified: [] as unknown[] },
-    hidden: [] as { id: string; reason: string }[],
+function answer(need: CapabilityNeed, model?: string): ModelCapabilities {
+  const out: ModelCapabilities = {
+    provider_preset: PRESET, need, reason: null,
+    groups: { fits: [], unverified: [] }, hidden: [],
   };
   for (const id of model ? [model] : Object.keys(CAPS)) {
     const caps = CAPS[id] ?? {};
@@ -48,12 +54,12 @@ function answer(need: CapabilityNeed, model?: string) {
     const value: Value = need === "decide"
       ? (get("decide_native") === "yes" ? "yes" : get("generate"))
       : get(need);
-    const row = {
+    const row = fixture<CapabilityModel>({
       id, name: NAMES[id] ?? id, context: null, prompt: null, completion: null,
       reason: value === "yes" ? "the catalog says so" : "not known yet",
       capabilities: Object.fromEntries(Object.entries(caps)
-        .map(([k, v]) => [k, { value: v, source: "catalog" }])),
-    };
+        .map(([k, v]): [string, CapabilityValue] => [k, { value: v, source: "catalog" }])),
+    });
     if (value === "yes") out.groups.fits.push(row);
     else if (value === "unknown") out.groups.unverified.push(row);
     else out.hidden.push({ id, reason: `${id} cannot ${need}` });
@@ -61,18 +67,18 @@ function answer(need: CapabilityNeed, model?: string) {
   return out;
 }
 
-const sel = (provider = "", model = "", preset = "") => ({ provider, model, preset });
-const resolved = (over: Record<string, unknown> = {}) => ({
+const sel = (provider = "", model = "", preset = ""): InferenceSelection => ({ provider, model, preset });
+const resolved = (over: Partial<ResolvedSelection> = {}): ResolvedSelection => ({
   provider: "saltmarch", provider_name: "Saltmarch Router", model: "vendor/m",
   preset: "", preset_name: "", via: "role", scope: "global", ...over,
 });
 const BOTH = { prompt_usd_per_1k: 0.003, completion_usd_per_1k: 0.015 };
-const card = (over: Record<string, unknown> = {}) => ({
+const card = (over: Partial<RoleCard> = {}) => fixture<RoleCard>({
   stored: sel(), fallback: sel(), resolves: resolved(), inherits: resolved(), problem: null,
   fallback_missing: [], fallback_problem: null, decision_mode: "", decides_natively: "unknown",
   rate: { source: "provider", entry: BOTH }, ...over,
 });
-const route = (over: Record<string, unknown>) => ({
+const route = (over: Partial<RouteRow>) => fixture<RouteRow>({
   hint: "", tasks: [], operation: "generate", default_role: "fast", requires: [],
   campaign_scoped: true, use: "", pin: sel(), preset: "", resolves: resolved(),
   inherits: resolved(), problem: null, fallback_missing: [], fallback_problem: null,
@@ -80,7 +86,7 @@ const route = (over: Record<string, unknown>) => ({
   rate: { source: "provider", entry: BOTH }, ...over,
 });
 
-const ROUTES = [
+const ROUTES: RouteRow[] = [
   route({ key: "scene", label: "Scene prose", default_role: "primary", role: "primary", uses: "primary" }),
   route({ key: "summary", label: "Rolling summary", hint: "Keeps the running summary." }),
   route({ key: "image", label: "Image descriptions", requires: ["vision"] }),
@@ -88,8 +94,8 @@ const ROUTES = [
           role: "fast", uses: "decision" }),
 ];
 
-function settings(over: Record<string, unknown> = {}) {
-  return {
+function settings(over: DeepPartial<InferenceSettings> = {}): InferenceSettings {
+  return fixture({
     format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
     roles: {
       primary: card({
@@ -111,25 +117,25 @@ function settings(over: Record<string, unknown> = {}) {
     preset_clear: PRESET_CLEAR,
     retirement_notes: [],
     ...over,
-  };
+  });
 }
-const health = (state: string) => ({ state, kind: "", detail: "", at: "" });
+const health = (state: ProviderHealth["state"]): ProviderHealth => ({ state, kind: "", detail: "", at: "" });
 
 beforeEach(() => {
   vi.clearAllMocks();
   forgetModelTests();
   CAPS = BASE_CAPS();
-  (api.getInferenceSettings as any).mockResolvedValue(settings());
-  (api.putInferenceSettings as any).mockResolvedValue(settings());
-  (api.readConnectionCapabilities as any).mockImplementation(
-    (_id: string, need: CapabilityNeed, model?: string) => Promise.resolve(answer(need, model)));
-  (api.previewControls as any).mockResolvedValue({ requested: {}, effective: {}, controls: {} });
-  (api.listConnections as any).mockResolvedValue([
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings());
+  vi.mocked(api.putInferenceSettings).mockResolvedValue(settings());
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
+    (_id, need, model) => Promise.resolve(answer(need, model)));
+  vi.mocked(api.previewControls).mockResolvedValue({ requested: {}, effective: {}, controls: {} });
+  vi.mocked(api.listConnections).mockResolvedValue(fixture([
     { id: "saltmarch", name: "Saltmarch Router", health: health("ok") },
     { id: "realm", name: "Realm Local", health: health("error") },
-  ]);
-  (api.getPricing as any).mockResolvedValue({ rates: { "vendor/m": BOTH } });
-  (api.setPricing as any).mockImplementation(async (rates: unknown) => ({ rates }));
+  ]));
+  vi.mocked(api.getPricing).mockResolvedValue(fixture({ rates: { "vendor/m": BOTH } }));
+  vi.mocked(api.setPricing).mockImplementation(async (rates) => ({ rates }));
 });
 
 function Where() {
@@ -158,7 +164,7 @@ async function openSummary(at = "/models") {
   open(at);
   await main().findByRole("group", { name: "Primary" });
 }
-const putBody = (n = 0) => (api.putInferenceSettings as any).mock.calls[n];
+const putBody = (n = 0) => vi.mocked(api.putInferenceSettings).mock.calls[n];
 
 afterEach(cleanup);
 
@@ -207,7 +213,7 @@ test("Embedding off says so, with why, and draws no rate", async () => {
 });
 
 test("each row says what would price it, and an unpriced one offers Set rate", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     fast: card({ rate: { source: "table", entry: BOTH } }),
     decision: card({ rate: { source: "none" }, resolves: resolved({ model: "vendor/odd#1" }) }),
@@ -221,7 +227,7 @@ test("each row says what would price it, and an unpriced one offers Set rate", a
 });
 
 test("a native Decision says why it has no figure", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     decision: card({ decision_mode: "native", rate: { source: "native" },
                      stored: sel("saltmarch", "vendor/decider") }),
@@ -233,15 +239,16 @@ test("a native Decision says why it has no figure", async () => {
 });
 
 // ---- 01i: the model's window ----
-const lim = (value: number | null, source = value == null ? "unknown" : "catalog") =>
+const lim = (value: number | null,
+             source: LimitSource = value == null ? "unknown" : "catalog"): ModelLimit =>
   ({ value, source });
-const limits = (over: Record<string, unknown> = {}) => ({
+const limits = (over: Partial<CardLimits> = {}): CardLimits => ({
   window: lim(200000), max_output: lim(64000), fallback_window: null,
   ceiling: { tokens: 195904, binding: ["saltmarch", "vendor/m"], reason: "" }, ...over,
 });
 
 test("a known window shows after the rate", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles, fast: card({ limits: limits() }),
   } }));
   await openSummary();
@@ -252,7 +259,7 @@ test("a known window shows after the rate", async () => {
 });
 
 test("an unknown window offers Set, to the model's size form", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     fast: card({ limits: limits({ window: lim(null), max_output: lim(null),
                                   ceiling: { tokens: null, binding: null, reason: "" } }) }),
@@ -264,7 +271,7 @@ test("an unknown window offers Set, to the model's size form", async () => {
 });
 
 test("the fallback line shows the riding fallback's window", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     fast: card({ fallback: sel("realm", "local/small"),
                  limits: limits({ fallback_window: lim(8192, "user"),
@@ -277,7 +284,7 @@ test("the fallback line shows the riding fallback's window", async () => {
 });
 
 test("a riding fallback whose window is unknown says so, with Set", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     fast: card({ fallback: sel("realm", "local/small"),
                  limits: limits({ fallback_window: lim(null) }) }),
@@ -291,7 +298,7 @@ test("a riding fallback whose window is unknown says so, with Set", async () => 
 
 test("a ceiling reason shows under the row", async () => {
   const reason = "The preset asks for 32,000 reply tokens; vendor/m's window is 8,192.";
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     fast: card({ limits: limits({ window: lim(8192),
                                   ceiling: { tokens: 0, binding: ["saltmarch", "vendor/m"],
@@ -302,7 +309,7 @@ test("a ceiling reason shows under the row", async () => {
 });
 
 test("no window where limits is null", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     decision: card({ decision_mode: "native", rate: { source: "native" }, limits: null,
                      stored: sel("saltmarch", "vendor/decider") }),
@@ -313,7 +320,7 @@ test("no window where limits is null", async () => {
 });
 
 test("a role naming a deleted provider keeps it on screen", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     fast: card({ stored: sel("gone", "vendor/m"), resolves: null, rate: null,
                  problem: "The provider gone no longer exists." }),
@@ -333,7 +340,7 @@ test("task overrides are counted only when there are some", async () => {
   await openSummary();
   expect(main().queryByText(/task override/)).toBeNull();
   cleanup();
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     routes: [ROUTES[0], { ...ROUTES[1], preset: "tight" }, ROUTES[2], ROUTES[3]] }));
   await openSummary();
   expect(main().getByRole("link", { name: "1 task override active" }))
@@ -349,7 +356,7 @@ test("the actions: Edit models, add a provider, provider status", async () => {
 });
 
 test("Edit models waits while a newer build owns the settings", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ newer: true }));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ newer: true }));
   await openSummary();
   expect(main().getByRole("button", { name: "Edit models" })).toBeDisabled();
 });
@@ -377,12 +384,12 @@ test("Cancel on a Set rate drops the address and keeps the table in view", async
   expect(api.setPricing).not.toHaveBeenCalled();
 });
 
-test.each([
+test.each<[string, MigrationStatus, RegExp]>([
   ["pending", { state: "pending", reason: "", skipped: [] }, /not finished upgrading yet/],
   ["skipped", { state: "done", reason: "", skipped: ["campaign saltmarch-run: unreadable"] },
    /The upgrade left 1 thing for later/],
 ])("the upgrade's quiet line shows at format 2 (%s)", async (_name, migration, line) => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ migration }));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ migration }));
   await openSummary();
   expect(main().getByText(line)).toHaveClass("field-hint");
 });
@@ -405,14 +412,14 @@ test("+ Add provider comes back to the exact address it left", async () => {
 });
 
 test("what was not carried over sits under the heading until dismissed", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ retirement_notes: [{
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ retirement_notes: [{
     id: "a1", scope: "global", scope_name: "", subject: "summary", provider_id: "glm",
     effort: "high", kind: "route_preset",
     text: "On the Summary route, the preset “Cold” sets no reasoning effort, so the GLM "
       + "provider “glm” no longer sends its reasoning effort (high) there — this was not "
       + "carried over.",
   }] }));
-  (api.dismissRetiredNote as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.dismissRetiredNote).mockResolvedValue({ ok: true });
   await openSummary();
   const notice = await screen.findByRole("region", { name: "Not carried over" });
   const heading = screen.getByRole("heading", { level: 1, name: "Models" });
@@ -426,14 +433,14 @@ test("what was not carried over sits under the heading until dismissed", async (
 });
 
 test("two dismisses in flight both stick", async () => {
-  const note = (id: string) => ({
+  const note = (id: string): RetiredNote => ({
     id, scope: "global", scope_name: "", subject: id, provider_id: "glm", effort: "high",
     kind: "route_preset", text: `Note ${id} — this was not carried over.`,
   });
-  (api.getInferenceSettings as any).mockResolvedValue(
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(
     settings({ retirement_notes: [note("a1"), note("b2")] }));
   const finish: Record<string, () => void> = {};
-  (api.dismissRetiredNote as any).mockImplementation((id: string) =>
+  vi.mocked(api.dismissRetiredNote).mockImplementation((id) =>
     new Promise((resolve) => { finish[id] = () => resolve({ ok: true }); }));
   await openSummary();
   const notice = await screen.findByRole("region", { name: "Not carried over" });
@@ -455,7 +462,7 @@ test("with nothing lost, there is no notice", async () => {
 });
 
 // ---- ported from the card page: what the summary still owns ----
-const decisionAs = (mode: string, over: Record<string, unknown> = {}) =>
+const decisionAs = (mode: DecisionMode, over: Partial<RoleCard> = {}): InferenceSettings =>
   settings({ roles: { ...settings().roles, decision: card({ decision_mode: mode, ...over }) } });
 
 test("warns when the Primary model can't generate text", async () => {
@@ -466,7 +473,7 @@ test("warns when the Primary model can't generate text", async () => {
 });
 
 test("warns when the Embedding model can't create embeddings", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     embedding: { stored: { provider: "saltmarch", model: "vendor/m" }, resolves: null,
                  on: false, problem: null, rate: null },
@@ -494,16 +501,16 @@ test("a capability warning is asked again once a model test lands", async () => 
 
 test("a native Decision says the provider's decisions endpoint answers", async () => {
   CAPS["vendor/m"].decide_native = "no";
-  (api.getInferenceSettings as any).mockResolvedValue(decisionAs("native"));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(decisionAs("native"));
   await openSummary();
   expect(await row("Decision").findByText("Answered by the provider's decisions endpoint."))
     .toBeInTheDocument();
   expect(row("Decision").queryByText(/structured generation/)).toBeNull();
 });
 
-test.each(["yes", "unknown"])("structured Decision with native API %s claims no missing API",
+test.each<DecidesNatively>(["yes", "unknown"])("structured Decision with native API %s claims no missing API",
   async (known) => {
-    (api.getInferenceSettings as any).mockResolvedValue(
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(
       decisionAs("structured", { decides_natively: known }));
     await openSummary();
     expect(await row("Decision").findByText("Answered by structured generation."))
@@ -514,7 +521,7 @@ test.each(["yes", "unknown"])("structured Decision with native API %s claims no 
 test("a Decision model known to have no native API says so, even when the picker hides it",
   async () => {
     CAPS["vendor/m"] = { generate: "no", vision: "no", embed: "no", decide_native: "no" };
-    (api.getInferenceSettings as any).mockResolvedValue(
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(
       decisionAs("structured", { decides_natively: "no" }));
     await openSummary();
     expect(await row("Decision").findByText(
@@ -525,7 +532,7 @@ test("a Decision model known to have no native API says so, even when the picker
 test("a refused Decision shows only the refusal's own sentence", async () => {
   const incapable = "Saltmarch Router ▸ vendor/m cannot generate text or make native decisions.";
   CAPS["vendor/m"] = { generate: "no", vision: "no", embed: "no", decide_native: "no" };
-  (api.getInferenceSettings as any).mockResolvedValue(decisionAs("", { problem: incapable }));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(decisionAs("", { problem: incapable }));
   await openSummary();
   expect(await row("Decision").findByText(incapable)).toBeInTheDocument();
   expect(row("Decision").queryByRole("note")).toBeNull();
@@ -533,7 +540,7 @@ test("a refused Decision shows only the refusal's own sentence", async () => {
 });
 
 test("a fallback known not to fit its role says it is never sent", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     primary: card({ stored: sel("saltmarch", "vendor/m"), fallback: sel("saltmarch", "vendor/eye"),
                     inherits: null, fallback_missing: ["generate"] }),
@@ -545,7 +552,7 @@ test("a fallback known not to fit its role says it is never sent", async () => {
 });
 
 test("a fallback that cannot send says why", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     primary: card({ stored: sel("saltmarch", "vendor/m"), inherits: null,
                     fallback: sel("realm", "realm/small"),
@@ -558,7 +565,7 @@ test("a fallback that cannot send says why", async () => {
 });
 
 test("a fallback that fits says nothing", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     primary: card({ stored: sel("saltmarch", "vendor/m"), fallback: sel("saltmarch", "vendor/eye"),
                     inherits: null }),
@@ -570,13 +577,13 @@ test("a fallback that fits says nothing", async () => {
 
 test("a native Decision's What this sends asks as a decision and says no sampling is sent",
   async () => {
-    (api.getInferenceSettings as any).mockResolvedValue(decisionAs("native"));
-    const na = { state: "n/a", wire: "", why: "a native decision takes no sampling",
-                 source: "adapter" };
-    (api.previewControls as any).mockImplementation((body: { operation?: string }) =>
-      Promise.resolve(body.operation === "decide"
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(decisionAs("native"));
+    const na: ControlPreview = { state: "n/a", wire: "", why: "a native decision takes no sampling",
+                                 source: "adapter" };
+    vi.mocked(api.previewControls).mockImplementation((body) =>
+      Promise.resolve(fixture(body.operation === "decide"
         ? { requested: {}, effective: {}, controls: { temperature: na, reasoning_effort: na } }
-        : { requested: {}, effective: {}, controls: {} }));
+        : { requested: {}, effective: {}, controls: {} })));
     await openSummary();
     (row("Decision").getByText("What this sends").closest("details") as HTMLDetailsElement).open = true;
     expect(await row("Decision").findByText("Not sent: a native decision takes no sampling."))
@@ -587,7 +594,7 @@ test("a native Decision's What this sends asks as a decision and says no samplin
   });
 
 test("the Decision task list names inherited roles and leaves out pinned tasks", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ routes: [
     ...ROUTES.slice(0, 3),
     route({ key: "speaker", label: "Who speaks next", operation: "decide",
             default_role: "decision", role: "fast", uses: "decision" }),
@@ -608,14 +615,14 @@ test("the Decision task list names inherited roles and leaves out pinned tasks",
 });
 
 test("the Decision row says when no task uses it", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: ROUTES.slice(0, 3) }));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ routes: ROUTES.slice(0, 3) }));
   await openSummary();
   expect(row("Decision").getByText("No task uses Decision yet.")).toBeInTheDocument();
 });
 
 test("an Embedding that is on shows provider and model, no preset, and an input-only rate",
   async () => {
-    (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
       ...settings().roles,
       embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
                    resolves: resolved({ model: "vendor/embed" }), problem: null,
@@ -631,7 +638,7 @@ test("an Embedding that is on shows provider and model, no preset, and an input-
   });
 
 test("the Embedding row says what options its requests carry", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
                  resolves: resolved({ model: "vendor/embed" }), problem: null, rate: null,
@@ -645,7 +652,7 @@ test("the Embedding row says what options its requests carry", async () => {
 });
 
 test("an Embedding with no options draws no options line", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
                  resolves: resolved({ model: "vendor/embed" }), problem: null, rate: null,
@@ -656,14 +663,14 @@ test("an Embedding with no options draws no options line", async () => {
 });
 
 test("a newer store says so and disables Edit models", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ newer: true }));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ newer: true }));
   await openSummary();
   expect(await screen.findByText(/upgraded by a newer Grimoire/)).toBeInTheDocument();
   expect(main().getByRole("button", { name: "Edit models" })).toBeDisabled();
 });
 
 test("a pending migration at format 2 still lets the settings be edited", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     migration: { state: "pending", reason: "",
                  skipped: ["campaign saltmarch-run: busy; finished on the next start"] } }));
   await openSummary();
@@ -671,7 +678,7 @@ test("a pending migration at format 2 still lets the settings be edited", async 
 });
 
 test("a store not yet at format 2 says the upgrade is pending and cannot be edited", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     format: "1", migration: { state: "pending", reason: "", skipped: [] } }));
   await openSummary();
   expect(await screen.findByText(/Upgrade pending/)).toBeInTheDocument();
@@ -681,20 +688,20 @@ test("a store not yet at format 2 says the upgrade is pending and cannot be edit
 test("the page unlocks once the upgrade lands, without leaving it", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
-    (api.getInferenceSettings as any).mockResolvedValue(settings({
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
       format: "1", migration: { state: "running", reason: "", skipped: [] } }));
     await openSummary();
     expect(await screen.findByText(/Upgrade pending/)).toBeInTheDocument();
     expect(main().getByRole("button", { name: "Edit models" })).toBeDisabled();
 
-    (api.getInferenceSettings as any).mockResolvedValue(settings());
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings());
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
 
     expect(await main().findByRole("button", { name: "Edit models" })).toBeEnabled();
     expect(screen.queryByText(/Upgrade pending/)).toBeNull();
-    const reads = (api.getInferenceSettings as any).mock.calls.length;
+    const reads = vi.mocked(api.getInferenceSettings).mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-    expect((api.getInferenceSettings as any).mock.calls.length).toBe(reads);
+    expect(vi.mocked(api.getInferenceSettings).mock.calls.length).toBe(reads);
   } finally {
     vi.useRealTimers();
   }
@@ -744,7 +751,7 @@ test("one changed role is all a save sends", async () => {
 });
 
 test("Same as Fast clears provider, model and preset alike", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles, decision: card({ stored: sel("saltmarch", "vendor/m", "tight") }) } }));
   await openForm();
   pick("Decision provider", "");
@@ -773,7 +780,7 @@ test("a fallback is added, sent, and removed as an empty one", async () => {
 });
 
 test("removing a stored fallback writes an empty one", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles, fast: card({ fallback: sel("realm", "vendor/m", "") }) } }));
   await openForm();
   fireEvent.click(form().getByRole("button", { name: "Remove Fast fallback" }));
@@ -797,7 +804,7 @@ test("an Embedding that would re-embed asks first, then sends the yes", async ()
 });
 
 test("turning Embedding off asks nothing up front", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
                  resolves: resolved({ model: "vendor/embed" }), problem: null, rate: null } } }));
@@ -809,11 +816,11 @@ test("turning Embedding off asks nothing up front", async () => {
 });
 
 test("the server's re-embedding question is asked in its words, and the resend carries the yes", async () => {
-  (api.putInferenceSettings as any).mockRejectedValueOnce({
+  vi.mocked(api.putInferenceSettings).mockRejectedValueOnce({
     detail: "Changing the embedding model re-embeds your library through Saltmarch Router, "
             + "which may cost money — confirm to change it.",
     kind: "confirm_embedding" });
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
                  resolves: resolved({ model: "vendor/embed" }), problem: null, rate: null } } }));
@@ -828,7 +835,7 @@ test("the server's re-embedding question is asked in its words, and the resend c
 });
 
 test("any other refusal is shown above the form in the server's words, the form kept", async () => {
-  (api.putInferenceSettings as any).mockRejectedValueOnce({ detail: "no such preset: tight", kind: "" });
+  vi.mocked(api.putInferenceSettings).mockRejectedValueOnce({ detail: "no such preset: tight", kind: "" });
   await openForm();
   pick("Primary preset", "tight");
   fireEvent.click(form().getByRole("button", { name: "Save" }));
@@ -846,7 +853,7 @@ test("Cancel discards the draft and lands on the summary, even from a direct loa
 });
 
 test("an edit row carries the role's problem, and a fallback row why it is dropped", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     primary: card({ stored: sel("saltmarch", "vendor/embed"), problem: "vendor/embed cannot generate text." }),
     fast: card({ fallback: sel("realm", "vendor/embed"), fallback_missing: ["generate"] }),
@@ -874,7 +881,7 @@ test("an Embedding model known not to embed is warned of on the form", async () 
 });
 
 test("a newer build's store holds the whole form", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ newer: true }));
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ newer: true }));
   await openForm();
   expect(form().getByRole("combobox", { name: "Primary provider" })).toBeDisabled();
   expect(form().getByRole("button", { name: "Save" })).toBeDisabled();
@@ -917,8 +924,8 @@ test("choosing a role for a task marks it as overriding and sends only use", asy
 });
 
 test("switching a pinned task to a role keeps the pin to come back to", async () => {
-  const pinned = { ...ROUTES[1], use: "model", pin: sel("realm", "vendor/m", "tight") };
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  const pinned: RouteRow = { ...ROUTES[1], use: "model", pin: sel("realm", "vendor/m", "tight") };
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     routes: [ROUTES[0], pinned, ROUTES[2], ROUTES[3]] }));
   await openForm("#advanced");
   const use = task("Rolling summary").getByRole("combobox", { name: "Rolling summary use" });
@@ -935,9 +942,9 @@ test("switching a pinned task to a role keeps the pin to come back to", async ()
 });
 
 test("a pin preset and a preset override are two values, and stop-inheriting round-trips", async () => {
-  const pinned = { ...ROUTES[1], use: "model", pin: sel("saltmarch", "vendor/m", "balanced"),
+  const pinned: RouteRow = { ...ROUTES[1], use: "model", pin: sel("saltmarch", "vendor/m", "balanced"),
                    preset: PRESET_CLEAR };
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     routes: [ROUTES[0], pinned, ROUTES[2], ROUTES[3]] }));
   await openForm("#advanced");
   expect(task("Rolling summary").getByRole("combobox", { name: "Rolling summary pin preset" }))
@@ -971,7 +978,7 @@ test("a pin with no model holds Save", async () => {
 
 test("each task keeps what its detail page said: vision, a dropped fallback, the decide note", async () => {
   CAPS["vendor/eye"].vision = "unknown";
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ routes: [
     ROUTES[0],
     { ...ROUTES[1], fallback_problem: "Realm Local has no key set" },
     { ...ROUTES[2], resolves: resolved({ model: "vendor/eye" }), inherits: resolved({ model: "vendor/eye" }) },
@@ -989,7 +996,7 @@ test("each task keeps what its detail page said: vision, a dropped fallback, the
 });
 
 test("a task whose policy sends no fallback says so, not that it cannot be sent", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ routes: [
     ROUTES[0], { ...ROUTES[1], fallback_problem: NO_FALLBACK_POLICY }, ROUTES[2], ROUTES[3],
   ] }));
   open("/models/edit#advanced");
@@ -1004,8 +1011,8 @@ test("a task whose policy sends no fallback says so, not that it cannot be sent"
 });
 
 test("a pinned model is warned of when it is unverified for the task's images", async () => {
-  const pinned = { ...ROUTES[2], use: "model", pin: sel("saltmarch", "vendor/eye", "") };
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
+  const pinned: RouteRow = { ...ROUTES[2], use: "model", pin: sel("saltmarch", "vendor/eye", "") };
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({
     routes: [ROUTES[0], ROUTES[1], pinned, ROUTES[3]] }));
   open("/models/edit#advanced");
   await main().findByRole("form", { name: "Edit models" });
@@ -1027,7 +1034,7 @@ test("a settings refresh while the form is open does not make an untouched role 
   // Another tab (or the migration poll) changed what Primary stores.
   const refreshed = settings();
   refreshed.roles.primary = { ...refreshed.roles.primary, stored: sel("realm", "vendor/other", "tight") };
-  (api.getInferenceSettings as any).mockResolvedValue(refreshed);
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(refreshed);
   const { configChanged } = await import("../appEvents");
   act(() => { configChanged(); });
   await waitFor(() => expect(api.getInferenceSettings).toHaveBeenCalledTimes(2));
@@ -1053,7 +1060,7 @@ test("a folded What this sends asks the server nothing until it is opened", asyn
 });
 
 test("a task whose draft moved says it is checked on save, not what the saved one said", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ routes: [
     ROUTES[0],
     { ...ROUTES[1], problem: "The summary model is gone.", fallback_problem: "Realm Local has no key set" },
     ROUTES[2], ROUTES[3],
@@ -1070,7 +1077,7 @@ test("a task whose draft moved says it is checked on save, not what the saved on
 });
 
 test("a role whose draft moved says it is checked on save, not what the saved one said", async () => {
-  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ roles: {
     ...settings().roles,
     fast: card({ stored: sel("saltmarch", "vendor/embed"), problem: "vendor/embed cannot generate text.",
                  fallback: sel("realm", "vendor/m"), fallback_problem: "Realm Local has no key set" }),
@@ -1104,20 +1111,20 @@ test.each(["1", "2"])("retirement beginning after a done response stays visible 
   try {
     vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ format: initial,
       migration: { state: initial === "2" ? "done" : "running", active: true,
-        reason: "", skipped: [] } }) as unknown as InferenceSettings);
+        reason: "", skipped: [] } }));
     await openSummary();
     if (initial === "2") expect(main().getByRole("button", { name: "Edit models" })).toBeEnabled();
-    const migration = { state: "done", active: true, reason: "", skipped: [],
+    const migration: MigrationStatus = { state: "done", active: true, reason: "", skipped: [],
       progress: { phase: "retirement_backup", done: 0, total: null } };
-    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ migration }) as unknown as InferenceSettings);
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ migration }));
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(main().getByText(/Preparing/)).toBeInTheDocument();
     expect(main().getByRole("button", { name: "Edit models" })).toBeEnabled();
     vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ migration: { ...migration,
-      progress: { ...migration.progress, done: 3, total: 8 } } }) as unknown as InferenceSettings);
+      progress: { ...migration.progress, done: 3, total: 8 } } }));
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(main().getByText(/3 of 8 files/)).toBeInTheDocument();
-    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings() as unknown as InferenceSettings);
+    vi.mocked(api.getInferenceSettings).mockResolvedValue(settings());
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(main().queryByText(/3 of 8 files/)).toBeNull();
     const reads = vi.mocked(api.getInferenceSettings).mock.calls.length;
@@ -1135,15 +1142,15 @@ test("an archive poll arriving after a saved view cannot revive progress", async
     const active = settings({ migration: { state: "done", active: true, reason: "", skipped: [],
       progress: { phase: "retirement_backup", done: 3, total: 8 } } });
     let resolvePoll!: (value: InferenceSettings) => void;
-    vi.mocked(api.getInferenceSettings).mockResolvedValueOnce(active as unknown as InferenceSettings)
+    vi.mocked(api.getInferenceSettings).mockResolvedValueOnce(active)
       .mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
     const { result } = renderHook(() => useInferenceSettings());
     await waitFor(() => expect(result.current.settings?.migration.active).toBe(true));
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(api.getInferenceSettings).toHaveBeenCalledTimes(2);
     const saved = settings();
-    act(() => result.current.install(saved as unknown as InferenceSettings));
-    await act(async () => { resolvePoll(active as unknown as InferenceSettings); });
+    act(() => result.current.install(saved));
+    await act(async () => { resolvePoll(active); });
     expect(result.current.settings).toEqual(saved);
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(api.getInferenceSettings).toHaveBeenCalledTimes(2);
@@ -1159,15 +1166,15 @@ test("a saved active view rearms an archive poll that it superseded", async () =
     const active = settings({ migration: { state: "done", active: true, reason: "", skipped: [],
       progress: { phase: "retirement_backup", done: 3, total: 8 } } });
     let resolvePoll!: (value: InferenceSettings) => void;
-    vi.mocked(api.getInferenceSettings).mockResolvedValueOnce(active as unknown as InferenceSettings)
+    vi.mocked(api.getInferenceSettings).mockResolvedValueOnce(active)
       .mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
     const { result } = renderHook(() => useInferenceSettings());
     await waitFor(() => expect(result.current.settings?.migration.active).toBe(true));
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(api.getInferenceSettings).toHaveBeenCalledTimes(2);
     const saved = settings({ ...active, presets: [...active.presets, { id: "warm", name: "Warm" }] });
-    act(() => result.current.install(saved as unknown as InferenceSettings));
-    await act(async () => { resolvePoll(active as unknown as InferenceSettings); });
+    act(() => result.current.install(saved));
+    await act(async () => { resolvePoll(active); });
     expect(result.current.settings).toEqual(saved);
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(api.getInferenceSettings).toHaveBeenCalledTimes(3);

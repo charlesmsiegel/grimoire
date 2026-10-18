@@ -1,22 +1,24 @@
+import { isValidElement } from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import SearchView, { hitTo, markTerms } from "./SearchView";
 import { characterHref, charactersHref } from "../components/character/shared";
-import type { EntityScope } from "../api/types";
+import type { EntityScope, SearchHit, SearchResult } from "../api/types";
 
 vi.mock("../api/client", () => ({ api: { search: vi.fn() } }));
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 const W: EntityScope = { kind: "world", id: "realm" };
 
-const hit = (over: Partial<Record<string, unknown>> = {}) => ({
+const hit = (over: Partial<SearchHit> = {}): SearchHit => ({
   scope: "world", root: "realm", root_name: "Realm", kind: "lore",
   id: "the-salt-pact", sub: "", name: "The Salt Pact",
   snippet: "Debts written in salt are owed to the sea.", score: 11,
   ...over,
 });
 
-const result = (hits: ReturnType<typeof hit>[], over: Record<string, unknown> = {}) => ({
+const result = (hits: SearchHit[], over: Partial<SearchResult> = {}): SearchResult => fixture({
   q: "salt", terms: ["salt"], total: hits.length,
   facets: Object.fromEntries(hits.map((h) => [h.kind, hits.filter((x) => x.kind === h.kind).length])),
   scopes: Object.fromEntries(hits.map((h) => [h.scope, hits.filter((x) => x.scope === h.scope).length])),
@@ -43,7 +45,7 @@ function show(entry = "/search?q=salt") {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.search as any).mockResolvedValue(result([hit()]));
+  vi.mocked(api.search).mockResolvedValue(result([hit()]));
 });
 
 test("a query in the URL is searched for and its hits are listed", async () => {
@@ -59,7 +61,7 @@ test("a query in the URL is searched for and its hits are listed", async () => {
 });
 
 test("the matched terms are marked in the name and the snippet", async () => {
-  (api.search as any).mockResolvedValue(result([hit()]));
+  vi.mocked(api.search).mockResolvedValue(result([hit()]));
   show();
   await screen.findByRole("link", { name: /the salt pact/i });
   const marks = document.querySelectorAll(".search-hit mark");
@@ -87,7 +89,7 @@ test("typing settles before it searches, and only the settled query is asked", a
 });
 
 test("a hit says which world or campaign holds it", async () => {
-  (api.search as any).mockResolvedValue(result([
+  vi.mocked(api.search).mockResolvedValue(result([
     hit(),
     hit({ scope: "campaign", root: "the-long-run", root_name: "The Long Run" }),
   ]));
@@ -105,7 +107,7 @@ test("following a hit opens the record it names", async () => {
 });
 
 test("the kind column filters, and clicking the live filter clears it", async () => {
-  (api.search as any).mockResolvedValue(result([
+  vi.mocked(api.search).mockResolvedValue(result([
     hit(), hit({ kind: "scenes", scope: "campaign", root: "the-long-run", id: "001", name: "Salt" }),
   ]));
   show();
@@ -137,7 +139,7 @@ test("only the kinds this query found are offered as filters", async () => {
 });
 
 test("nothing matching says so, and offers the way out of the filter", async () => {
-  (api.search as any).mockResolvedValue(result([], { total: 0, facets: {}, scopes: {} }));
+  vi.mocked(api.search).mockResolvedValue(result([], { total: 0, facets: {}, scopes: {} }));
   show("/search?q=salt&kind=lore");
   expect(await screen.findByText(/nothing matches/i)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /search everywhere instead/i }));
@@ -147,41 +149,41 @@ test("nothing matching says so, and offers the way out of the filter", async () 
 });
 
 test("a failed search degrades to a message rather than a stuck spinner", async () => {
-  (api.search as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.search).mockRejectedValue(new Error("nope"));
   show();
   expect(await screen.findByText(/could not be run/i)).toBeInTheDocument();
 });
 
 test("hitTo sends every kind of hit somewhere it can actually be read", () => {
-  expect(hitTo(hit() as any)).toBe("/worlds/realm/lore/the-salt-pact");
+  expect(hitTo(hit())).toBe("/worlds/realm/lore/the-salt-pact");
   // A campaign's fork opens in that campaign's world view, never in the world
   // it forked from: they are two records with one id.
-  expect(hitTo(hit({ scope: "campaign", root: "run" }) as any))
+  expect(hitTo(hit({ scope: "campaign", root: "run" })))
     .toBe("/campaigns/run/world/lore/the-salt-pact");
-  expect(hitTo(hit({ kind: "characters", id: "seraphine", sub: "veiled" }) as any))
+  expect(hitTo(hit({ kind: "characters", id: "seraphine", sub: "veiled" })))
     .toBe("/worlds/realm/characters/seraphine?v=veiled");
-  expect(hitTo(hit({ kind: "characters", id: "seraphine", sub: "" }) as any))
+  expect(hitTo(hit({ kind: "characters", id: "seraphine", sub: "" })))
     .toBe("/worlds/realm/characters/seraphine");
-  expect(hitTo(hit({ scope: "campaign", root: "run", kind: "scenes", id: "001" }) as any))
+  expect(hitTo(hit({ scope: "campaign", root: "run", kind: "scenes", id: "001" })))
     .toBe("/campaigns/run/scenes/001");
-  expect(hitTo(hit({ scope: "campaign", root: "run", kind: "plot" }) as any))
+  expect(hitTo(hit({ scope: "campaign", root: "run", kind: "plot" })))
     .toBe("/campaigns/run/ledger");
-  expect(hitTo(hit({ scope: "campaign", root: "run", kind: "campaign" }) as any))
+  expect(hitTo(hit({ scope: "campaign", root: "run", kind: "campaign" })))
     .toBe("/campaigns/run");
   // A dossier is filed under a character, so it opens the character.
-  expect(hitTo(hit({ scope: "campaign", root: "run", kind: "dossier", id: "seraphine" }) as any))
+  expect(hitTo(hit({ scope: "campaign", root: "run", kind: "dossier", id: "seraphine" })))
     .toBe("/campaigns/run/world/characters/seraphine");
 });
 
 test("nothing in the app mints a ?section= link any more", () => {
-  for (const href of [hitTo(hit() as any), charactersHref(W), characterHref(W, "mira")]) {
+  for (const href of [hitTo(hit()), charactersHref(W), characterHref(W, "mira")]) {
     expect(href).not.toContain("section=");
   }
 });
 
 test("markTerms prefers the longer of two overlapping terms", () => {
   const parts = markTerms("the salt pact endures", ["salt", "salt pact"]);
-  const marked = parts.filter((p) => typeof p === "object") as any[];
+  const marked = parts.filter(isValidElement<{ children: string }>);
   expect(marked).toHaveLength(1);
   expect(marked[0].props.children).toBe("salt pact");
 });
@@ -195,7 +197,7 @@ test("the kind still filtering stays in the column when its count drops to 0", a
   // Otherwise: change the query with a kind filter on, the row that applied it
   // vanishes from the column, and the page reads "Nothing matches" with
   // nothing on screen saying a filter is still in force.
-  (api.search as any).mockResolvedValue(result([], { total: 0, facets: {}, scopes: {} }));
+  vi.mocked(api.search).mockResolvedValue(result([], { total: 0, facets: {}, scopes: {} }));
   show("/search?q=salt&kind=lore");
   const column = within(await screen.findByRole("complementary"));
   await waitFor(() => expect(column.getByRole("button", { name: /^Lore/ })).toHaveClass("active"));
@@ -219,10 +221,10 @@ test("a slow answer for an old query never lands on top of a newer one", async (
   // settles, so the page waits for it rather than starting a second sweep
   // beside it -- and when it lands, its hits are dropped rather than shown
   // under the newer query's heading, and "salt" is asked for straight away.
-  let releaseStale = (_: unknown) => {};
-  (api.search as any).mockImplementationOnce(
+  let releaseStale = (_: SearchResult) => {};
+  vi.mocked(api.search).mockImplementationOnce(
     () => new Promise((res) => { releaseStale = res; }));
-  (api.search as any).mockResolvedValue(
+  vi.mocked(api.search).mockResolvedValue(
     result([hit({ id: "the-tide-table", name: "The Tide Table" })]));
 
   show("/search?q=sal");
@@ -245,10 +247,10 @@ test("typing on through a slow sweep asks once more, for the last query only", a
   // own beside the others, all walking the whole store at once, with the one
   // the reader wanted finishing last. Now the page sends at most two: the one
   // already out, and the last thing typed.
-  let release = (_: unknown) => {};
-  (api.search as any).mockImplementationOnce(
+  let release = (_: SearchResult) => {};
+  vi.mocked(api.search).mockImplementationOnce(
     () => new Promise((res) => { release = res; }));
-  (api.search as any).mockResolvedValue(result([hit({ id: "salt-marsh", name: "Salt Marsh" })],
+  vi.mocked(api.search).mockResolvedValue(result([hit({ id: "salt-marsh", name: "Salt Marsh" })],
                                                 { q: "salt marsh", terms: ["salt", "marsh"] }));
 
   show("/search");
@@ -272,8 +274,8 @@ test("typing on through a slow sweep asks once more, for the last query only", a
 test("typing away and back while a sweep is out keeps its answer", async () => {
   // "salt", then "salty", then "salt" again before the first sweep lands: the
   // answer on its way is the answer to the question now being asked.
-  let release = (_: unknown) => {};
-  (api.search as any).mockImplementationOnce(
+  let release = (_: SearchResult) => {};
+  vi.mocked(api.search).mockImplementationOnce(
     () => new Promise((res) => { release = res; }));
 
   show("/search?q=salt");
@@ -291,7 +293,7 @@ test("typing away and back while a sweep is out keeps its answer", async () => {
 
 test("a superseded search that fails is traded for the wanted one, not reported", async () => {
   let fail = (_: unknown) => {};
-  (api.search as any).mockImplementationOnce(
+  vi.mocked(api.search).mockImplementationOnce(
     () => new Promise((_res, rej) => { fail = rej; }));
 
   show("/search?q=sal");
@@ -306,10 +308,10 @@ test("a superseded search that fails is traded for the wanted one, not reported"
 });
 
 test("leaving the page aborts the search it left running", async () => {
-  (api.search as any).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.search).mockImplementation(() => new Promise(() => {}));
   const { unmount } = show();
   await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
-  const signal = (api.search as any).mock.calls[0][2] as AbortSignal;
+  const signal = vi.mocked(api.search).mock.calls[0][2] as AbortSignal;
   expect(signal.aborted).toBe(false);
   unmount();
   expect(signal.aborted).toBe(true);
@@ -331,10 +333,10 @@ test("switching modes does not queue behind the other mode's search", async () =
   // A meaning search waits on an embeddings endpoint, not on the CPU the
   // queue is there to share, so a reader who gives up on one and switches to
   // keywords is answered now rather than once the endpoint lets go.
-  (api.search as any).mockImplementationOnce(() => new Promise(() => {}));
+  vi.mocked(api.search).mockImplementationOnce(() => new Promise(() => {}));
   show("/search?q=salt&mode=semantic");
   await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1));
-  const stuck = (api.search as any).mock.calls[0][2] as AbortSignal;
+  const stuck = vi.mocked(api.search).mock.calls[0][2] as AbortSignal;
 
   fireEvent.click(screen.getByRole("button", { name: /^keywords/i }));
   expect(await screen.findByRole("link", { name: /the salt pact/i })).toBeInTheDocument();
@@ -345,7 +347,7 @@ test("switching modes does not queue behind the other mode's search", async () =
 });
 
 test("an answer that fell back to keywords says so, and why", async () => {
-  (api.search as any).mockResolvedValue(result([hit()], {
+  vi.mocked(api.search).mockResolvedValue(result([hit()], {
     mode: "keyword", requested_mode: "semantic",
     note: "Semantic search needs an embeddings connection and model.",
   }));
@@ -356,7 +358,7 @@ test("an answer that fell back to keywords says so, and why", async () => {
 });
 
 test("a semantic answer says how much of the library has been indexed", async () => {
-  (api.search as any).mockResolvedValue(result([hit()], {
+  vi.mocked(api.search).mockResolvedValue(result([hit()], {
     mode: "semantic", requested_mode: "semantic", note: "", terms: [],
     indexed: 40, corpus: 100,
   }));
@@ -365,7 +367,7 @@ test("a semantic answer says how much of the library has been indexed", async ()
 });
 
 test("a fully indexed semantic answer does not nag about indexing", async () => {
-  (api.search as any).mockResolvedValue(result([hit()], {
+  vi.mocked(api.search).mockResolvedValue(result([hit()], {
     mode: "semantic", requested_mode: "semantic", note: "", terms: [],
     indexed: 100, corpus: 100,
   }));
@@ -377,7 +379,7 @@ test("a fully indexed semantic answer does not nag about indexing", async () => 
 test("an empty library in semantic mode does not print a stray zero", async () => {
   // `result.corpus && …` is a number, and React renders a 0 rather than
   // skipping it. A library with nothing in it yet would have printed one.
-  (api.search as any).mockResolvedValue(result([], {
+  vi.mocked(api.search).mockResolvedValue(result([], {
     mode: "semantic", requested_mode: "semantic", note: "", terms: [],
     indexed: 0, corpus: 0,
   }));
@@ -391,7 +393,7 @@ test("an empty library in semantic mode does not print a stray zero", async () =
 });
 
 test("an empty semantic result does not explain the keyword rules", async () => {
-  (api.search as any).mockResolvedValue(result([], {
+  vi.mocked(api.search).mockResolvedValue(result([], {
     mode: "semantic", requested_mode: "semantic", note: "", terms: [],
     indexed: 10, corpus: 10,
   }));
@@ -416,7 +418,7 @@ test("meaning mode waits to be asked rather than searching as you type", async (
 test("a character hit names the version it matched, so two versions are two rows", async () => {
   // A tagline or a display name matches every version of a character, so the
   // rows are otherwise identical: same name, same kind, same world.
-  (api.search as any).mockResolvedValue(result([
+  vi.mocked(api.search).mockResolvedValue(result([
     hit({ kind: "characters", id: "seraphine", sub: "default", name: "Seraphine" }),
     hit({ kind: "characters", id: "seraphine", sub: "veiled", name: "Seraphine" }),
   ]));
@@ -440,7 +442,7 @@ test("switching mode drops the other mode's results rather than showing them und
   // ranking as the other's answer.
   show();
   await screen.findByRole("link", { name: /the salt pact/i });
-  (api.search as any).mockReturnValue(new Promise(() => {}));   // never resolves
+  vi.mocked(api.search).mockReturnValue(new Promise(() => {}));   // never resolves
   fireEvent.click(screen.getByRole("button", { name: /meaning/i }));
   await waitFor(() =>
     expect(screen.queryByRole("link", { name: /the salt pact/i })).not.toBeInTheDocument());
@@ -452,7 +454,7 @@ test("asking again re-runs the search, which is what the coverage line promises"
   // the library". Submitting an unchanged query left the URL untouched, so the
   // effect never refired and nothing was read — the page instructed an action
   // that did nothing.
-  (api.search as any).mockResolvedValue(result([hit()], {
+  vi.mocked(api.search).mockResolvedValue(result([hit()], {
     mode: "semantic", requested_mode: "semantic", note: "", terms: [],
     indexed: 40, corpus: 100,
   }));

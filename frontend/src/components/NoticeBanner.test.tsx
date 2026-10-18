@@ -92,7 +92,7 @@ test("Undo is disabled until the dismissal it would take back has landed", async
   // whichever order they arrive: a forget that wins finds nothing to forget,
   // then the mark it beat lands, leaving the occurrence dismissed while the
   // banner has already reported it restored.
-  let land: (v: any) => void = () => {};
+  let land: (v: Awaited<ReturnType<typeof api.dismissNotices>>) => void = () => {};
   vi.mocked(api.dismissNotices).mockReturnValue(new Promise((r) => { land = r; }));
   render(<NoticeBanner cid="c" notices={[HOLIDAY]} />);
   fireEvent.click(screen.getByLabelText("Dismiss Saltmarch Eve"));

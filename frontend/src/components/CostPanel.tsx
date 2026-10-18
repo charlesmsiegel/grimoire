@@ -4,6 +4,7 @@ import {
   Footnotes, about, bound, bucketPrice, estimatedTokensTitle, money, tokenTotal, turnPrice,
   turnTags,
 } from "./cost";
+import { errorText } from "../api/errors";
 
 /** What this scene's turns cost, and where the campaign stands against its
  *  budget (#153).
@@ -38,12 +39,12 @@ export function CostPanel({ cid, sid, refreshKey, usage: usageProp, budget: budg
    *  reading it and has nothing yet", which this renders exactly as a read of
    *  its own still in flight; left out (`undefined`), the panel reads it
    *  itself, as it did before anything supplied it. */
-  usage?: SceneUsage | null;
-  budget?: CampaignBudget | null;
+  usage?: SceneUsage | null | undefined;
+  budget?: CampaignBudget | null | undefined;
   /** Told about a budget this panel saved, so a parent that supplies `budget`
    *  shows the new one -- here and in its banner -- without a re-read. Named
    *  with the campaign it was saved for, which the reader may have left. */
-  onBudgetSaved?: (cid: string, budget: CampaignBudget) => void;
+  onBudgetSaved?: ((cid: string, budget: CampaignBudget) => void) | undefined;
 }) {
   const [ownUsage, setUsage] = useState<SceneUsage | null>(null);
   const [ownBudget, setBudget] = useState<CampaignBudget | null>(null);
@@ -106,8 +107,8 @@ export function CostPanel({ cid, sid, refreshKey, usage: usageProp, budget: budg
       onBudgetSaved?.(cid, b);
       setLimit(b.level === "off" ? "" : String(b.limit_usd));
       setEditing(false);
-    } catch (err: any) {
-      setError(err?.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     } finally {
       setBusy(false);
     }

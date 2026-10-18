@@ -15,7 +15,7 @@ export function DemotePanel({ wid, kind, id, onDemoted, beforeDemote }: {
   wid: string;
   kind: LibraryKind;
   id: string;
-  onDemoted?: () => void;
+  onDemoted?: (() => void) | undefined;
   /** The selected record may own an unsaved Art draft; check before deleting. */
   beforeDemote?: () => boolean;
 }) {

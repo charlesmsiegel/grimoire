@@ -98,7 +98,7 @@ export function localImageDownloadUrl(url: string): string | undefined {
   return parsed.pathname + "?" + parsed.searchParams.toString();
 }
 
-export function toImageDescriptor(image: RecordArtImage, identity?: { name?: string; versionName?: string }): ImageDescriptor {
+export function toImageDescriptor(image: RecordArtImage, identity?: { name?: string | undefined; versionName?: string | undefined }): ImageDescriptor {
   const target = image.placement.target, actor = target.kind === "characters" || target.kind === "pcs";
   const recordLabel = (identity?.name || target.record_id) + (actor ? " / " + (identity?.versionName || target.version) : "");
   const label = image.name === "avatar" ? "Primary image" : `Gallery image ${image.name.replace(/^gallery_/, "")}`;

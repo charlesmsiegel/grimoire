@@ -11,20 +11,20 @@ import { api } from "../api/client";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listStyles as any).mockResolvedValue([
+  vi.mocked(api.listStyles).mockResolvedValue([
     { id: "gothic-horror", name: "Gothic Horror", description: "Dread.", tags: ["horror"], built_in: true },
     { id: "cozy-mystery", name: "Cozy Mystery", description: "Gentle.", tags: ["cozy"], built_in: false },
   ]);
-  (api.readStyle as any).mockImplementation((sid: string) => Promise.resolve(
+  vi.mocked(api.readStyle).mockImplementation((sid) => Promise.resolve(
     sid === "gothic-horror"
       ? { meta: { id: "gothic-horror", name: "Gothic Horror", description: "Dread.", tags: ["horror"], built_in: true },
           body: "Atmosphere first." }
       : { meta: { id: "cozy-mystery", name: "Cozy Mystery", description: "Gentle.", tags: ["cozy"], built_in: false },
           body: "Keep it warm." }));
-  (api.createStyle as any).mockResolvedValue({ id: "new-style" });
-  (api.updateStyle as any).mockResolvedValue({ ok: true });
-  (api.deleteStyle as any).mockResolvedValue({ ok: true });
-  (api.duplicateStyle as any).mockResolvedValue({ id: "gothic-horror-copy" });
+  vi.mocked(api.createStyle).mockResolvedValue({ id: "new-style" });
+  vi.mocked(api.updateStyle).mockResolvedValue({ ok: true });
+  vi.mocked(api.deleteStyle).mockResolvedValue({ ok: true });
+  vi.mocked(api.duplicateStyle).mockResolvedValue({ id: "gothic-horror-copy" });
 });
 
 test("clicking a style shows a read-only view; built-in shows Duplicate not Edit", async () => {
@@ -63,7 +63,7 @@ test("duplicating a built-in style opens the new copy for editing", async () => 
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Gothic Horror"));
   await waitFor(() => expect(api.readStyle).toHaveBeenCalledWith("gothic-horror"));
-  (api.readStyle as any).mockResolvedValueOnce({
+  vi.mocked(api.readStyle).mockResolvedValueOnce({
     meta: { id: "gothic-horror-copy", name: "Gothic Horror (copy)", description: "Dread.", tags: ["horror"], built_in: false },
     body: "Atmosphere first.",
   });

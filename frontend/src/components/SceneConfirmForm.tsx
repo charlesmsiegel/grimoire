@@ -284,7 +284,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       // a salvaged scene. No second PUT can race the first scene publication.
       ({ id: sid } = await api.createScene(cid, finalTitle, date || undefined, draft.pcless,
                                           normalizeSceneFocus(focus)));
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (live.current) { setError(errorText(err)); setWriting(false); }
       return;
     }
@@ -315,7 +315,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
           const names = r.skipped.map((ref) => cast.find((c) => `${c.kind}/${c.id}` === ref)?.name ?? ref);
           soft.push(`not seated: ${names.join(", ")}`);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (live.current) { setError(await deleteAndReport(sid, errorText(err))); setWriting(false); }
         return;
       }
@@ -327,14 +327,14 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     //      Neither failure deletes: each is one independent piece of metadata.
     if (location) {
       try { await api.setSceneLocation(cid, sid, location); }
-      catch (err: any) { soft.push(errorText(err)); }
+      catch (err: unknown) { soft.push(errorText(err)); }
       if (!live.current) return;
     }
     if (date) {
       try {
         const r = await api.setSceneDatetime(cid, sid, date);
         sid = r.id;
-      } catch (err: any) { soft.push(errorText(err)); }
+      } catch (err: unknown) { soft.push(errorText(err)); }
       if (!live.current) return;
     }
     // 5. seed. A failure here has written nothing outside the scene, so the
@@ -355,7 +355,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
         const r = await api.startFromGreeting(cid, sid, draft.gid, !locationsOk,
                                               firstPost === "greeting");
         sid = r.id;
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (live.current) { setError(await deleteAndReport(sid, errorText(err))); setWriting(false); }
         return;
       }
@@ -366,7 +366,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       try {
         const r = await api.renameScene(cid, sid, finalTitle);
         sid = r.id;
-      } catch (err: any) { soft.push(errorText(err)); }
+      } catch (err: unknown) { soft.push(errorText(err)); }
       if (!live.current) return;
     }
     // 6. the ledger, last: an idea becomes "used" only once the scene it
@@ -378,7 +378,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     //    would have no way to tell that from a deliberate keep.
     if (draft.source === "saved" && draft.lid) {
       try { await api.setSceneIdeaStatus(cid, draft.lid, "used", sid); }
-      catch (err: any) { soft.push(`${errorText(err)} — the saved idea is still on the list`); }
+      catch (err: unknown) { soft.push(`${errorText(err)} — the saved idea is still on the list`); }
       if (!live.current) return;
     }
     setWriting(false);

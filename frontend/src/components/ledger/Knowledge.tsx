@@ -203,10 +203,10 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted, onCanc
 
   function save() {
     if (!entry) {
+      const audienceName = shownName(form.audience);
       const body: KnowledgeSave = { audience: form.audience, status: form.status,
                                     note: form.note, ...subject(),
-                                    ...(shownName(form.audience)
-                                      ? { audience_name: shownName(form.audience) } : {}) };
+                                    ...(audienceName ? { audience_name: audienceName } : {}) };
       void write(() => api.ledgerCreateKnowledge(cid, body));
       return;
     }
@@ -235,7 +235,8 @@ export function KnowledgePane({ cid, entry, creating, onSaved, onDeleted, onCanc
     // still the same character or group. The name they were shown rides as a
     // precondition, so a rename since the list loaded is refused, not accepted.
     void write(() => api.ledgerSaveKnowledge(
-      cid, e.id, { audience: e.audience, audience_name: e.audience_now ?? undefined }), e.id);
+      cid, e.id, { audience: e.audience,
+                   ...(e.audience_now == null ? {} : { audience_name: e.audience_now }) }), e.id);
   }
 
   function restamp(e: KnowledgeEntry) {

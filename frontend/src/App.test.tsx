@@ -1,3 +1,5 @@
+import type { ActiveConnection, Config, ProviderHealth } from "./api/client";
+import { fixture } from "./testkit/fixture";
 import { render, screen, within, fireEvent, waitFor, act } from "@testing-library/react";
 import { MemoryRouter, RouterProvider, createMemoryRouter, useNavigate, useParams } from "react-router-dom";
 import { Profiler, StrictMode, useEffect } from "react";
@@ -123,13 +125,13 @@ function Jump({ to }: { to: string }) {
   return <button onClick={() => navigate(to)}>jump</button>;
 }
 
-const READY_OPENROUTER = {
+const READY_OPENROUTER = fixture<Config & { active_connection: ActiveConnection; health: ProviderHealth }>({
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter", model: "vendor/model-x" },
   ready: true, setup_done: "on", first_run: false, data_dir: "/home/u/.grimoire",
   health: { state: "ok", kind: "", detail: "", at: "2026-08-21T09:00:00Z" },
-};
+});
 
 const column = () => within(screen.getByRole("complementary"));
 const header = () => within(screen.getByRole("banner"));
@@ -160,9 +162,9 @@ beforeEach(() => {
   // stocks has to be put back or it leaks into the next one — which is how a
   // library test that expects an empty shelf ends up rendering someone else's.
   vi.clearAllMocks();
-  (api.getConfig as any).mockResolvedValue(READY_OPENROUTER);
-  (api.listCampaigns as any).mockResolvedValue([]);
-  (api.listWorlds as any).mockResolvedValue([]);
+  vi.mocked(api.getConfig).mockResolvedValue(READY_OPENROUTER);
+  vi.mocked(api.listCampaigns).mockResolvedValue([]);
+  vi.mocked(api.listWorlds).mockResolvedValue([]);
 });
 
 test("the header keeps the brand and the pill; Settings lives on the rail", async () => {
@@ -204,7 +206,7 @@ test("with no campaign remembered the rail opens on the one the shell resolved",
   // the hrefs its rows are built from. A row whose `to()` is null is absent
   // from the DOM entirely, so a tier taking its name from the payload and its
   // links from the (empty) remembered id would draw a heading over nothing.
-  (api.getShell as any).mockResolvedValue({
+  vi.mocked(api.getShell).mockResolvedValue({
     campaigns: 1,
     campaign: {
       id: "last-played", name: "Tidewrack", world: "w1", world_name: "Saltmarch",
@@ -246,10 +248,10 @@ test("the ⌘K pill and the keyboard shortcut open the same palette", async () =
 });
 
 test("the palette offers campaigns, worlds and library sections, and goes there", async () => {
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "saltmarch", name: "Saltmarch", world: "w", updated: "2026-03-03", scenes: 1, last_scene: "" },
-  ]);
-  (api.listWorlds as any).mockResolvedValue([{ id: "w", name: "Realm", counts: {} }]);
+  ]));
+  vi.mocked(api.listWorlds).mockResolvedValue(fixture([{ id: "w", name: "Realm", counts: {} }]));
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
   await screen.findByText(/GRIMOIRE/);
 
@@ -366,7 +368,7 @@ test("the header names the connection and the active model", async () => {
 test("the header reports a configured connection whose provider is failing", async () => {
   // #146: `ready` only ever meant "a key string is present", so a revoked key
   // drew the same green dot as a working one until the first scene failed.
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.getConfig).mockResolvedValue({
     ...READY_OPENROUTER,
     health: { state: "error", kind: "auth", detail: "No auth credentials found", at: "2026-08-21T09:05:00Z" },
   });
@@ -380,7 +382,7 @@ test("a connection nothing has exercised yet is not reported as broken", async (
   // The state every app start begins in. A warning shown to everyone every
   // morning is a warning nobody reads by lunchtime — the dot stays green and
   // the tooltip says which of the two greens this is.
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.getConfig).mockResolvedValue({
     ...READY_OPENROUTER, health: { state: "unknown", kind: "", detail: "", at: "" },
   });
   render(<MemoryRouter><App /></MemoryRouter>);
@@ -390,7 +392,7 @@ test("a connection nothing has exercised yet is not reported as broken", async (
 });
 
 test("the header reports a connection that cannot be used yet", async () => {
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.getConfig).mockResolvedValue({
     ...READY_OPENROUTER, ready: false,
     active_connection: { id: "zai-glm", kind: "openai_compatible", name: "z.ai GLM", model: "" },
   });
@@ -404,7 +406,7 @@ test("the header refetches and updates after navigating, without a reload", asyn
 
   // simulate the active connection having changed elsewhere (Config/Connections
   // page) — the next getConfig() call reflects it
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.getConfig).mockResolvedValue({
     ...READY_OPENROUTER, ready: false, active_connection_id: "claude",
     active_connection: { id: "claude", kind: "claude", name: "Claude", model: "vendor/model-y" },
   });
@@ -420,7 +422,7 @@ test("the header follows a connection change made without leaving the page", asy
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
   await waitFor(() => expect(header().getByTitle(/openrouter, connected/i)).toBeInTheDocument());
 
-  (api.getConfig as any).mockResolvedValue({
+  vi.mocked(api.getConfig).mockResolvedValue({
     ...READY_OPENROUTER, ready: false, active_connection_id: "claude",
     active_connection: { id: "claude", kind: "claude", name: "Claude", model: "opus" },
   });
@@ -443,10 +445,10 @@ test("opening another campaign from the palette remounts the view instead of reu
   // transcript or activeId. Until those land — or forever, if the new list is
   // empty or the request fails — the page shows campaign A's scene while its
   // handlers carry B's cid, and scene ids repeat across campaigns.
-  (api.listCampaigns as any).mockResolvedValue([
+  vi.mocked(api.listCampaigns).mockResolvedValue(fixture([
     { id: "saltmarch", name: "Saltmarch", world: "w", updated: "2026-03-03", activity: "2026-03-03", scenes: 1, last_scene: "" },
     { id: "realm", name: "Realm", world: "w", updated: "2026-02-02", activity: "2026-02-02", scenes: 1, last_scene: "" },
-  ]);
+  ]));
   campaignMounts.length = 0;
   // Driven on the PLAY route, which is where the hazard lives: `/campaigns/:cid`
   // is the hub now, and moving between two hubs unmounts the play view anyway.
@@ -495,8 +497,8 @@ test("a slow pre-mutation config response cannot revert the header behind a newe
   // read, or a store move — with nothing ordering the responses. Retiring the
   // client's in-flight entry stops a new caller *joining* the old promise; it
   // cannot detach the .then already on it.
-  let settleOld: (v: unknown) => void = () => {};
-  (api.getConfig as any)
+  let settleOld: (v: Config) => void = () => {};
+  vi.mocked(api.getConfig)
     // call 1 is the boot read, which must resolve or nothing renders; call 2
     // is the first edit's read, left hanging deliberately; call 3 is the
     // second edit's, which answers first.
@@ -544,11 +546,11 @@ test("under StrictMode, booting still asks the server once for each read", async
       <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}><App /></MemoryRouter>
     </StrictMode>);
   await screen.findByTestId("campaign-view");
-  const fresh = (api.getConfig as any).mock.calls.filter((c: unknown[]) =>
+  const fresh = vi.mocked(api.getConfig).mock.calls.filter((c: unknown[]) =>
     (c[0] as { fresh?: boolean } | undefined)?.fresh);
   expect(fresh).toHaveLength(1);
   expect(api.getShell).toHaveBeenCalledWith("run");
-  expect((api.getShell as any).mock.calls.filter((c: unknown[]) => c[0] === "run")).toHaveLength(1);
+  expect(vi.mocked(api.getShell).mock.calls.filter((c: unknown[]) => c[0] === "run")).toHaveLength(1);
 });
 
 test("a config change that changes nothing a page draws re-renders no route", async () => {
@@ -557,17 +559,17 @@ test("a config change that changes nothing a page draws re-renders no route", as
   // and re-render the open page -- the play view, here -- for an answer that
   // drew nothing new: once for the bump, once for the new health object the
   // read installed, and once more for the rail's request.
-  (api.getConfig as any).mockImplementation(() => Promise.resolve({
+  vi.mocked(api.getConfig).mockImplementation(() => Promise.resolve({
     ...READY_OPENROUTER, health: { ...READY_OPENROUTER.health },
     active_connection: { ...READY_OPENROUTER.active_connection },
   }));
   render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}><App /></MemoryRouter>);
   await screen.findByTestId("campaign-view");
   const before = campaignRenders.n;
-  const reads = (api.getConfig as any).mock.calls.length;
+  const reads = vi.mocked(api.getConfig).mock.calls.length;
 
   act(() => configChanged());
-  await waitFor(() => expect((api.getConfig as any).mock.calls.length).toBeGreaterThan(reads));
+  await waitFor(() => expect(vi.mocked(api.getConfig).mock.calls.length).toBeGreaterThan(reads));
   await screen.findByTestId("campaign-view");
   expect(campaignRenders.n).toBe(before);
 });
@@ -576,7 +578,7 @@ test("a navigation's config read that changes nothing commits nothing at all", a
   // The chrome's half of the same rule: the header, the rail and the palette
   // are re-rendered by a new health object as surely as a route is, and a
   // config read rides every navigation.
-  (api.getShell as any).mockResolvedValue({
+  vi.mocked(api.getShell).mockResolvedValue({
     campaigns: 1, todo: null,
     campaign: { id: "run", name: "Run", world: "w", world_name: "Saltmarch", scenes: 2,
                 open: [], ledger_open: 0, sheets: null, unreviewed: null, pending: [],
@@ -594,8 +596,8 @@ test("a navigation's config read that changes nothing commits nothing at all", a
 
   // Hold the navigation's read, so everything the navigation itself commits is
   // done before the answer lands.
-  let land: (v: unknown) => void = () => {};
-  (api.getConfig as any).mockReturnValueOnce(new Promise((r) => { land = r; }));
+  let land: (v: Config) => void = () => {};
+  vi.mocked(api.getConfig).mockReturnValueOnce(new Promise((r) => { land = r; }));
   fireEvent.click(screen.getByText("jump"));
   await waitFor(() => expect(api.getConfig).toHaveBeenCalledWith({ fresh: true }));
   await screen.findByTestId("campaign-view");
@@ -612,7 +614,9 @@ test("a navigation's config read that changes nothing commits nothing at all", a
 test("a config with no health verdict survives the comparison that keeps it stable", async () => {
   // The comparison runs inside a state updater, where a throw is a render
   // error: a payload that left `health` out must be a no-op, not a blank app.
-  (api.getConfig as any).mockResolvedValue({ ...READY_OPENROUTER, health: undefined });
+  // Deliberately emulate an older response that omitted its health verdict.
+  // @ts-expect-error: the current API requires health; this is the compatibility regression.
+  vi.mocked(api.getConfig).mockResolvedValue({ ...READY_OPENROUTER, health: undefined });
   render(<MemoryRouter initialEntries={["/worlds"]}><App /></MemoryRouter>);
   await waitFor(() => expect(header().getByTitle(/openrouter/i)).toBeInTheDocument());
   fireEvent.click(column().getByRole("link", { name: /styles/i }));
@@ -624,7 +628,7 @@ test("a config with no health verdict survives the comparison that keeps it stab
 const FIRST_RUN = { ...READY_OPENROUTER, ready: false, active_connection: null, setup_done: "off", first_run: true };
 
 test("a first run sends / to the setup wizard instead of the campaigns list", async () => {
-  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  vi.mocked(api.getConfig).mockResolvedValue(FIRST_RUN);
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
   expect(await screen.findByTestId("setup-wizard")).toBeInTheDocument();
   expect(campaignsPage()).not.toBeInTheDocument();
@@ -638,7 +642,7 @@ test("an install past setup lands on the campaigns list", async () => {
 });
 
 test("a first run does not hijack a route other than /", async () => {
-  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  vi.mocked(api.getConfig).mockResolvedValue(FIRST_RUN);
   render(<MemoryRouter initialEntries={["/worlds"]}><App /></MemoryRouter>);
   await screen.findByText(/GRIMOIRE/);
   expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
@@ -658,11 +662,11 @@ test("the per-navigation config read bypasses the cache", async () => {
 test("a world created outside the wizard retires the redirect on the next navigation", async () => {
   // The palette deliberately lets a fresh user escape. If they make a world in
   // WorldsView, `/` must stop bouncing them back into setup.
-  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  vi.mocked(api.getConfig).mockResolvedValue(FIRST_RUN);
   render(<MemoryRouter initialEntries={["/worlds"]}><App /></MemoryRouter>);
   await screen.findByText(/GRIMOIRE/);
 
-  (api.getConfig as any).mockResolvedValue(READY_OPENROUTER);   // a world now exists
+  vi.mocked(api.getConfig).mockResolvedValue(READY_OPENROUTER);   // a world now exists
   await goVia("campaigns", /campaigns/i);
   await waitFor(() => expect(campaignsPage()).toBeInTheDocument());
   expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
@@ -672,14 +676,14 @@ test("a different store pointed at later gets its own first run", async () => {
   // The exit latch is scoped to the library it was set in. Unscoped, finishing
   // setup once would suppress the wizard for every store this session ever
   // opens — including a brand-new empty one chosen from Config.
-  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  vi.mocked(api.getConfig).mockResolvedValue(FIRST_RUN);
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
   const wizard = await screen.findByTestId("setup-wizard");
   fireEvent.click(within(wizard).getByText("finish-setup"));
   await waitFor(() => expect(campaignsPage()).toBeInTheDocument());
 
   // Config repoints storage at a different, empty library
-  (api.getConfig as any).mockResolvedValue({ ...FIRST_RUN, data_dir: "/sync/other" });
+  vi.mocked(api.getConfig).mockResolvedValue({ ...FIRST_RUN, data_dir: "/sync/other" });
   await goVia("worlds", /worlds/i);
   await waitFor(() => expect(api.getConfig).toHaveBeenCalledWith({ fresh: true }));
   await goVia("campaigns", /campaigns/i);
@@ -697,7 +701,7 @@ test("/welcome bounces to the campaigns list once the store is no longer a first
 });
 
 test("/welcome still renders the wizard for a genuine first run", async () => {
-  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  vi.mocked(api.getConfig).mockResolvedValue(FIRST_RUN);
   render(<MemoryRouter initialEntries={["/welcome"]}><App /></MemoryRouter>);
   expect(await screen.findByTestId("setup-wizard")).toBeInTheDocument();
 });
@@ -706,7 +710,7 @@ test("leaving the wizard sticks even when the server still answers first_run", a
   // finish() writes setup_done best-effort so a failure can't strand anyone —
   // which means the live verdict can still say first_run afterwards. The
   // session latch is what makes one exit enough instead of a loop.
-  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  vi.mocked(api.getConfig).mockResolvedValue(FIRST_RUN);
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
   const wizard = await screen.findByTestId("setup-wizard");
 

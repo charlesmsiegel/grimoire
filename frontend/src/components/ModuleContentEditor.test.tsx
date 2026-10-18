@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import { api } from "../api/client";
 import { ContentSection } from "./ModuleContentEditor";
+import { fixture } from "../testkit/fixture";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -36,7 +37,7 @@ beforeEach(() => {
 });
 
 test("content row loads the body read-only, Edit reveals the form", async () => {
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "items", id: "sunblade", name: "Sunblade", body: "A blade of dawn.",
     keys: "sunblade", sheet_type: "relic", fields: { power: 3 } });
   render(<ContentSection pack={PACK} reload={vi.fn()} />);
@@ -49,10 +50,10 @@ test("content row loads the body read-only, Edit reveals the form", async () => 
 });
 
 test("saving posts body + stat block", async () => {
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "items", id: "sunblade", name: "Sunblade", body: "b", keys: "",
     sheet_type: "relic", fields: { power: 3 } });
-  (api.putModuleContent as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleContent).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ContentSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Sunblade"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
@@ -65,7 +66,7 @@ test("saving posts body + stat block", async () => {
 });
 
 test("+ New content offers the kind select and posts a fresh entry", async () => {
-  (api.putModuleContent as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleContent).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ContentSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "+ New content" }));
   fireEvent.change(screen.getByLabelText("Content id"), { target: { value: "moonshard" } });
@@ -78,10 +79,10 @@ test("+ New content offers the kind select and posts a fresh entry", async () =>
 });
 
 test("custom frontmatter metadata round-trips through save instead of being dropped", async () => {
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue(fixture({
     kind: "items", id: "sunblade", name: "Sunblade", body: "A blade of dawn.",
-    keys: "", sheet_type: null, fields: {}, rarity: "legendary" });
-  (api.putModuleContent as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+    keys: "", sheet_type: null, fields: {}, rarity: "legendary" }));
+  vi.mocked(api.putModuleContent).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ContentSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Sunblade"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
@@ -94,10 +95,10 @@ test("custom frontmatter metadata round-trips through save instead of being drop
 });
 
 test("deleting the selected content clears the selection instead of leaving a ghost view", async () => {
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "items", id: "sunblade", name: "Sunblade", body: "A blade of dawn.",
     keys: "", sheet_type: null, fields: {} });
-  (api.deleteModuleContent as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.deleteModuleContent).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<ContentSection pack={PACK} reload={reload} />);
   fireEvent.click(screen.getByText("Sunblade"));
@@ -111,10 +112,10 @@ test("deleting the selected content clears the selection instead of leaving a gh
 });
 
 test("a successful content-id rename resyncs the still-open form to the new id", async () => {
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "items", id: "sunblade", name: "Sunblade", body: "A blade of dawn.",
     keys: "", sheet_type: null, fields: {} });
-  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+  vi.mocked(api.renameModulePart).mockResolvedValue({ ok: true, errors: [], display_errors: [],
     impact: { sheet_types: [], sheets_migrated: 0, sheets_newly_invalid: 0, dangling_refs: 0 } });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<ContentSection pack={PACK} reload={reload} />);
@@ -151,10 +152,10 @@ test("switching sheet type drops stat fields the new type doesn't recognize", as
       },
     },
   };
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "items", id: "sunblade", name: "Sunblade", body: "b", keys: "",
     sheet_type: "relic", fields: { power: 3 } });
-  (api.putModuleContent as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleContent).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ContentSection pack={pack} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Sunblade"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
@@ -171,10 +172,10 @@ test("switching sheet type drops stat fields the new type doesn't recognize", as
 });
 
 test("switching to No stat block clears the stat fields and submits sheet: null", async () => {
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "items", id: "sunblade", name: "Sunblade", body: "b", keys: "",
     sheet_type: "relic", fields: { power: 3 } });
-  (api.putModuleContent as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  vi.mocked(api.putModuleContent).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ContentSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Sunblade"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
@@ -189,17 +190,17 @@ test("switching to No stat block clears the stat fields and submits sheet: null"
 test("a failed content delete's guard banner clears when another row is selected", async () => {
   const pack = { ...PACK, content: [...PACK.content,
     { kind: "lore", id: "moonshard", name: "Moonshard", sheet_type: null }] };
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "items", id: "sunblade", name: "Sunblade", body: "A blade of dawn.",
     keys: "", sheet_type: null, fields: {} });
-  (api.deleteModuleContent as any).mockResolvedValue(
+  vi.mocked(api.deleteModuleContent).mockResolvedValue(
     { ok: false, errors: ["content 'sunblade' has dangling refs — resolve first"], display_errors: [] });
   render(<ContentSection pack={pack} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Sunblade"));
   await screen.findByRole("button", { name: "Edit" });
   fireEvent.click(screen.getByRole("button", { name: "Delete" }));
   expect(await screen.findByText(/dangling refs/)).toBeInTheDocument();
-  (api.readModuleContent as any).mockResolvedValue({
+  vi.mocked(api.readModuleContent).mockResolvedValue({
     kind: "lore", id: "moonshard", name: "Moonshard", body: "A sliver of night.",
     keys: "", sheet_type: null, fields: {} });
   fireEvent.click(screen.getByText("Moonshard"));
@@ -208,8 +209,8 @@ test("a failed content delete's guard banner clears when another row is selected
 });
 
 test("module record prose opts into the common image viewer without record controls", async () => {
-  (api.readModuleContent as any).mockResolvedValue({ kind: "items", id: "Saltmarch", name: "Saltmarch",
-    body: "![Saltmarch](https://example.test/item.png)", keys: "", fields: {} });
+  vi.mocked(api.readModuleContent).mockResolvedValue(fixture({ kind: "items", id: "Saltmarch", name: "Saltmarch",
+    body: "![Saltmarch](https://example.test/item.png)", keys: "", fields: {} }));
   render(<ContentSection pack={{ ...PACK, content: [{ kind: "items", id: "Saltmarch", name: "Saltmarch" }] }} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Saltmarch"));
   fireEvent.click(await screen.findByRole("button", { name: "Enlarge Saltmarch" }));

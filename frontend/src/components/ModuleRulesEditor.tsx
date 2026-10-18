@@ -71,7 +71,8 @@ export function ChecksSection({ pack, reload }: {
   const dirty = form != null && baseline != null && JSON.stringify(form) !== baseline;
 
   const save: SaveFn = (dryRun) => {
-    const f = form!;
+    const f = form;
+    if (!f) return Promise.resolve({ ok: false, errors: ["no record selected"], display_errors: [] });
     if (f.isDefaults) {
       const body: Record<string, unknown> = {};
       if (f.difficulty !== "") body.difficulty = parseInt(f.difficulty, 10);
@@ -119,11 +120,14 @@ export function ChecksSection({ pack, reload }: {
       }
     });
   };
-  const renameCheck = (to: string) =>
+  const renameCheck = (to: string) => {
+    const selectedForm = form;
+    if (!selectedForm) return;
     void confirmGate(
-      () => api.renameModulePart(pack.id, "check", { from: form!.cid }, to, true),
-      () => api.renameModulePart(pack.id, "check", { from: form!.cid }, to, false),
+      () => api.renameModulePart(pack.id, "check", { from: selectedForm.cid }, to, true),
+      () => api.renameModulePart(pack.id, "check", { from: selectedForm.cid }, to, false),
       () => { setForm((f) => (f ? { ...f, cid: to } : f)); setSelected(to); dr.reset(); void reload(); });
+  };
 
   const toggleRequires = (gid: string) => {
     if (!form) return;
@@ -321,17 +325,20 @@ export function RulesSection({ pack, reload }: {
   const dirty = form != null && baseline != null && JSON.stringify(form) !== baseline;
 
   const save: SaveFn = (dryRun) => {
+    const selectedForm = form;
+    if (!selectedForm) return Promise.resolve({ ok: false, errors: ["no record selected"], display_errors: [] });
+
     // A blank id must reject, not silently no-op as ok -- requestSave's
     // `!fresh.ok` guard then keeps the form open and shows the error instead
     // of Save quietly discarding the draft (with no PUT ever fired).
-    if (!form!.slug) {
+    if (!selectedForm.slug) {
       return Promise.resolve({ ok: false, errors: ["rule id is required"], display_errors: [] });
     }
-    return api.putModuleRule(pack.id, form!.slug, {
-      always: form!.always, on_roll: form!.onRoll,
-      keys: form!.keys.split(",").map((k) => k.trim()).filter(Boolean),
-      sheet_types: form!.sheetTypes,
-    }, form!.body, dryRun);
+    return api.putModuleRule(pack.id, selectedForm.slug, {
+      always: selectedForm.always, on_roll: selectedForm.onRoll,
+      keys: selectedForm.keys.split(",").map((k) => k.trim()).filter(Boolean),
+      sheet_types: selectedForm.sheetTypes,
+    }, selectedForm.body, dryRun);
   };
   const dr = useModuleDryRun(form ? save : emptyResult, [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
@@ -359,11 +366,14 @@ export function RulesSection({ pack, reload }: {
       }
     });
   };
-  const renameRule = (to: string) =>
+  const renameRule = (to: string) => {
+    const selectedForm = form;
+    if (!selectedForm) return;
     void confirmGate(
-      () => api.renameModulePart(pack.id, "rule", { from: form!.slug }, to, true),
-      () => api.renameModulePart(pack.id, "rule", { from: form!.slug }, to, false),
+      () => api.renameModulePart(pack.id, "rule", { from: selectedForm.slug }, to, true),
+      () => api.renameModulePart(pack.id, "rule", { from: selectedForm.slug }, to, false),
       () => { setForm((f) => (f ? { ...f, slug: to } : f)); setSelected(to); dr.reset(); void reload(); });
+  };
 
   const toggleSheetType = (tid: string) => {
     if (!form) return;

@@ -1,14 +1,17 @@
+import type { ActiveConnection, Model } from "./client";
+import type { DeepPartial } from "../testkit/fixture";
+import { fixture } from "../testkit/fixture";
 vi.mock("./client", () => ({ api: { getConfig: vi.fn(), readConnection: vi.fn() } }));
 
 import { api } from "./client";
 import { configChanged } from "../appEvents";
 import { getModels, invalidateModelsCache, tokensPerDollar, priceLabel, contextLabel } from "./models";
 
-const ACTIVE = { id: "local", kind: "openai_compatible", name: "Local", model: "m" };
+const ACTIVE: ActiveConnection = { id: "local", kind: "openai_compatible", name: "Local", model: "m" };
 
-function serving(models: unknown[], active: unknown = ACTIVE) {
-  (api.getConfig as any).mockResolvedValue({ active_connection: active });
-  (api.readConnection as any).mockResolvedValue({ models });
+function serving(models: DeepPartial<Model>[], active: ActiveConnection | null = ACTIVE) {
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({ active_connection: active }));
+  vi.mocked(api.readConnection).mockResolvedValue(fixture({ models }));
 }
 
 beforeEach(() => {
@@ -78,10 +81,10 @@ test("getModels fetches once and serves later mounts from cache", async () => {
 });
 
 test("getModels does not cache a failure", async () => {
-  (api.getConfig as any).mockResolvedValue({ active_connection: ACTIVE });
-  (api.readConnection as any)
+  vi.mocked(api.getConfig).mockResolvedValue(fixture({ active_connection: ACTIVE }));
+  vi.mocked(api.readConnection)
     .mockRejectedValueOnce(new Error("offline"))
-    .mockResolvedValue({ models: [] });
+    .mockResolvedValue(fixture({ models: [] }));
 
   await expect(getModels()).rejects.toThrow();
   await expect(getModels()).resolves.toEqual([]);

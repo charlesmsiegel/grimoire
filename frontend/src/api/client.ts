@@ -209,8 +209,8 @@ async function fetchJson<T>(method: string, path: string, body?: unknown,
       ...(body ? { "Content-Type": "application/json" } : {}),
       ...(attempt ? { "X-Grimoire-Attempt": attempt } : {}),
     },
-    body: body ? JSON.stringify(body) : undefined,
-    signal,
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    ...(signal === undefined ? {} : { signal }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -480,7 +480,7 @@ async function writing<T>(send: () => Promise<T>): Promise<T> {
 // for every caller waiting on it, not just the one that asked to stop -- and a
 // `fresh` read is never shared, so its promise is its caller's alone.
 function request<T>(method: string, path: string, body?: unknown,
-                    opts?: { fresh?: boolean; signal?: AbortSignal;
+                    opts?: { fresh?: boolean; signal?: AbortSignal | undefined;
                              attempt?: string }): Promise<T> {
   if (method !== "GET" || opts?.fresh) {
     if (opts?.fresh) retireInflight(path);
@@ -710,7 +710,7 @@ async function findDraftRun(scope: DraftScope, attempt: string,
  */
 async function draftRun<T>(scope: DraftScope,
                            start: (attempt: string) => Promise<{ run: RunHandle }>,
-                           opts?: { signal?: AbortSignal; attempt?: string }): Promise<T> {
+                           opts?: { signal?: AbortSignal | undefined; attempt?: string | undefined }): Promise<T> {
   const attempt = opts?.attempt ?? newAttemptId();
   let started: RunHandle;
   try {
@@ -1053,7 +1053,7 @@ async function streamGet<T = ChatEvent>(
   signal?: AbortSignal,
   onIndex?: (index: number) => void,
 ): Promise<void> {
-  const res = await fetch(path, { signal });
+  const res = await fetch(path, signal === undefined ? {} : { signal });
   if (!res.ok || !res.body) {
     // Typed rather than left `any`: this app's error handler puts `kind` at the
     // top level of the body, so the shape is known and reading it blind only
@@ -1090,8 +1090,8 @@ async function requestForm<T>(path: string, form: FormData, method = "POST",
   return writing(async () => {
     const res = await fetch(path, {
       method, body: form,
-      headers: attempt ? { "X-Grimoire-Attempt": attempt } : undefined,
-      signal,
+      ...(attempt ? { headers: { "X-Grimoire-Attempt": attempt } } : {}),
+      ...(signal === undefined ? {} : { signal }),
     });
     return parseReply<T>(res);
   });
@@ -1138,7 +1138,7 @@ function membershipBase(scope: EntityScope): string {
  *  (`api/thumbs.ts` says which), and `v`, the store's token for the bytes,
  *  which makes the response cache immutable. Either left out, or empty, is
  *  simply not asked -- a bare URL is the revalidated one. */
-export type ImageOpts = { w?: number; v?: string | null };
+export type ImageOpts = { w?: number | undefined; v?: string | null | undefined };
 
 /** `path` with `opts` as its query. One builder for every image URL, so `w`
  *  and `v` read the same way, in the same order, wherever a picture is drawn.
@@ -1233,8 +1233,8 @@ async function streamPostRaw<T>(
       "Content-Type": "application/json",
       ...(attempt ? { "X-Grimoire-Attempt": attempt } : {}),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(signal === undefined ? {} : { signal }),
   }).catch((err) => {
     if (err && typeof err === "object") (err as { beforeResponse?: boolean }).beforeResponse = true;
     throw err;
@@ -1297,7 +1297,7 @@ function regexPath(scope: RegexScope): string {
 }
 
 export const api = {
-  readRecordArt: (target: RecordArtTarget, opts?: { fresh?: boolean; signal?: AbortSignal }) =>
+  readRecordArt: (target: RecordArtTarget, opts?: { fresh?: boolean; signal?: AbortSignal | undefined }) =>
     // A caller-owned abort cannot cancel a shared GET for another owner. A
     // signalled Art read therefore takes the existing fresh/unshared path.
     request<RecordArtRead>("GET", recordArtBase(target), undefined,
@@ -3042,7 +3042,7 @@ export const api = {
    *  outcome) rather than a second, paid one. Omitted, each call is new. */
   runModelTest: (id: string,
                  body: { model: string; capabilities: TestableCapability[]; confirm: true },
-                 opts?: { signal?: AbortSignal; attempt?: string }) =>
+                 opts?: { signal?: AbortSignal | undefined; attempt?: string | undefined }) =>
     draftRun<ModelTestResult>({ at: "global" }, (attempt) =>
       request<{ run: RunHandle }>(
         "POST", `/api/llm-connections/${encodeSegment(id)}/test`, body,

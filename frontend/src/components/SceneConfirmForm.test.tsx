@@ -20,6 +20,7 @@ vi.mock("./CalendarDatePicker", () => ({
     <input aria-label={ariaLabel} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} />,
 }));
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 const GEN: SceneDraft = {
   focus: "",
@@ -36,20 +37,20 @@ const GRT: SceneDraft = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.createScene as any).mockResolvedValue({ id: "s9" });
-  (api.addCastBatch as any).mockResolvedValue({ ok: true, added: 1, skipped: [] });
-  (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
-  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, id: "s9-dated" });
-  (api.startFromGreeting as any).mockResolvedValue({ ok: true, id: "s9-greet" });
-  (api.renameScene as any).mockResolvedValue({ id: "s9-titled", title: "T" });
-  (api.deleteScene as any).mockResolvedValue({ ok: true });
-  (api.listEntities as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
-  (api.setSceneIdeaStatus as any).mockResolvedValue({ ok: true });
-  (api.getCampaignClock as any).mockResolvedValue(
-    { now: "5786-Kislev-25", friendly: "25 Kislev 5786", log: [] });
-  (api.listCampaignPCs as any).mockResolvedValue([]);
-  (api.listAppearances as any).mockResolvedValue([]);
+  vi.mocked(api.createScene).mockResolvedValue({ id: "s9" });
+  vi.mocked(api.addCastBatch).mockResolvedValue({ ok: true, added: 1, skipped: [] });
+  vi.mocked(api.setSceneLocation).mockResolvedValue({ ok: true, moved: false, name: "" });
+  vi.mocked(api.setSceneDatetime).mockResolvedValue(fixture({ ok: true, id: "s9-dated" }));
+  vi.mocked(api.startFromGreeting).mockResolvedValue({ ok: true, id: "s9-greet" });
+  vi.mocked(api.renameScene).mockResolvedValue({ id: "s9-titled", title: "T" });
+  vi.mocked(api.deleteScene).mockResolvedValue({ ok: true });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" }]));
+  vi.mocked(api.setSceneIdeaStatus).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCampaignClock).mockResolvedValue(
+    fixture({ now: "5786-Kislev-25", friendly: "25 Kislev 5786", log: [] }));
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([]);
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
 });
 
 function renderForm(draft: SceneDraft, onCreated = vi.fn()) {
@@ -139,9 +140,9 @@ test("a greeting draft applies location and date BEFORE seeding", async () => {
   const onCreated = renderForm(GRT);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalled());
-  const seedOrder = (api.startFromGreeting as any).mock.invocationCallOrder[0];
-  const locOrder = (api.setSceneLocation as any).mock.invocationCallOrder[0];
-  const dateOrder = (api.setSceneDatetime as any).mock.invocationCallOrder[0];
+  const seedOrder = vi.mocked(api.startFromGreeting).mock.invocationCallOrder[0];
+  const locOrder = vi.mocked(api.setSceneLocation).mock.invocationCallOrder[0];
+  const dateOrder = vi.mocked(api.setSceneDatetime).mock.invocationCallOrder[0];
   expect(locOrder).toBeLessThan(seedOrder);
   expect(dateOrder).toBeLessThan(seedOrder);
   // seeded against the dated scene, and the confirmed title lands after the rename
@@ -166,7 +167,7 @@ test("clearing a greeting's pre-filled location leaves the scene with none", asy
 });
 
 test("editing title, date, location, and premise reaches the write sequence", async () => {
-  (api.listEntities as any).mockResolvedValue([
+  vi.mocked(api.listEntities).mockResolvedValue([
     { id: "saltmarch", name: "Saltmarch" },
     { id: "harrow", name: "Harrow" },
   ]);
@@ -183,10 +184,10 @@ test("editing title, date, location, and premise reaches the write sequence", as
 });
 
 test("adding and removing cast members through the picker reaches addCastBatch", async () => {
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([
     { id: "mara", name: "Mara" },
     { id: "winifred", name: "Winifred" },
-  ]);
+  ]));
   renderForm(GEN);
   // GEN starts cast with Mara already seated; remove her, then add Winifred.
   fireEvent.click(await screen.findByRole("button", { name: "Remove Mara" }));
@@ -219,7 +220,7 @@ test("an emptied title falls back to defaultTitle, not to the backend default", 
 });
 
 test("a cast failure deletes the scene", async () => {
-  (api.addCastBatch as any).mockRejectedValue({ detail: "boom" });
+  vi.mocked(api.addCastBatch).mockRejectedValue({ detail: "boom" });
   const onCreated = renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("c", "s9"));
@@ -228,7 +229,7 @@ test("a cast failure deletes the scene", async () => {
 });
 
 test("a date failure keeps the scene and offers Continue", async () => {
-  (api.setSceneDatetime as any).mockRejectedValue({ detail: "bad date" });
+  vi.mocked(api.setSceneDatetime).mockRejectedValue({ detail: "bad date" });
   const onCreated = renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await screen.findByText(/bad date/);
@@ -239,7 +240,7 @@ test("a date failure keeps the scene and offers Continue", async () => {
 });
 
 test("a startFromGreeting failure deletes the scene", async () => {
-  (api.startFromGreeting as any).mockRejectedValue({ detail: "not available" });
+  vi.mocked(api.startFromGreeting).mockRejectedValue({ detail: "not available" });
   const onCreated = renderForm(GRT);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   // the scene has already been dated (id adopted from setSceneDatetime) by the
@@ -251,10 +252,10 @@ test("a startFromGreeting failure deletes the scene", async () => {
 });
 
 test("an offscreen draft never offers a player, even one seated as a character", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" },
-                                                 { id: "winifred", name: "Winifred" }]);
-  (api.listAppearances as any).mockResolvedValue(
-    [{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" },
+                                                 { id: "winifred", name: "Winifred" }]));
+  vi.mocked(api.listAppearances).mockResolvedValue(
+    fixture([{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]));
   renderForm({ ...GEN, pcless: true, cast: [] });
   await screen.findByLabelText("Add to cast");
   const options = Array.from(screen.getByLabelText("Add to cast").querySelectorAll("option"))
@@ -266,10 +267,10 @@ test("an offscreen draft never offers a player, even one seated as a character",
 test("a pcless draft excludes a PC that has never appeared, not just ones the roster already flags", async () => {
   // Elara has no entry in listAppearances at all -- roster() only enumerates
   // actors that have appeared, so a roster-role filter alone would miss her.
-  (api.listCharacters as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
-  (api.listCampaignPCs as any).mockResolvedValue(
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "winifred", name: "Winifred" }]));
+  vi.mocked(api.listCampaignPCs).mockResolvedValue(
     [{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
-  (api.listAppearances as any).mockResolvedValue([]);
+  vi.mocked(api.listAppearances).mockResolvedValue([]);
   renderForm({ ...GEN, pcless: true, cast: [] });
   await screen.findByLabelText("Add to cast");
   const options = Array.from(screen.getByLabelText("Add to cast").querySelectorAll("option"))
@@ -279,10 +280,10 @@ test("a pcless draft excludes a PC that has never appeared, not just ones the ro
 });
 
 test("an onscreen draft DOES offer a player seated as a character", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" },
-                                                 { id: "winifred", name: "Winifred" }]);
-  (api.listAppearances as any).mockResolvedValue(
-    [{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "mara", name: "Mara" },
+                                                 { id: "winifred", name: "Winifred" }]));
+  vi.mocked(api.listAppearances).mockResolvedValue(
+    fixture([{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]));
   renderForm({ ...GEN, pcless: false, cast: [] });
   await screen.findByLabelText("Add to cast");
   const options = Array.from(screen.getByLabelText("Add to cast").querySelectorAll("option"))
@@ -298,7 +299,7 @@ test("a warning raised while the draft was built is shown here", async () => {
 });
 
 test("a location failure keeps the scene and offers Continue", async () => {
-  (api.setSceneLocation as any).mockRejectedValue({ detail: "gone" });
+  vi.mocked(api.setSceneLocation).mockRejectedValue({ detail: "gone" });
   const onCreated = renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await screen.findByText(/gone/);
@@ -315,8 +316,8 @@ test("an emptied title on a greeting draft falls back to the greeting name", asy
 });
 
 test("the form reports writing so the modal can refuse to close", async () => {
-  let release: (v: any) => void = () => {};
-  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.createScene>>) => void = () => {};
+  vi.mocked(api.createScene).mockReturnValue(new Promise((r) => { release = r; }));
   const onWriting = vi.fn();
   render(<SceneConfirmForm cid="c" draft={GEN} ready onBack={() => {}} onCreated={vi.fn()}
                            onWriting={onWriting} />);
@@ -327,7 +328,7 @@ test("the form reports writing so the modal can refuse to close", async () => {
 });
 
 test("a cast failure still releases onWriting, not just the busy button", async () => {
-  (api.addCastBatch as any).mockRejectedValue({ detail: "boom" });
+  vi.mocked(api.addCastBatch).mockRejectedValue({ detail: "boom" });
   const onWriting = vi.fn();
   render(<SceneConfirmForm cid="c" draft={GEN} ready onBack={() => {}} onCreated={vi.fn()}
                            onWriting={onWriting} />);
@@ -337,7 +338,7 @@ test("a cast failure still releases onWriting, not just the busy button", async 
 });
 
 test("a startFromGreeting failure still releases onWriting", async () => {
-  (api.startFromGreeting as any).mockRejectedValue({ detail: "not available" });
+  vi.mocked(api.startFromGreeting).mockRejectedValue({ detail: "not available" });
   const onWriting = vi.fn();
   render(<SceneConfirmForm cid="c" draft={GRT} ready onBack={() => {}} onCreated={vi.fn()}
                            onWriting={onWriting} />);
@@ -350,7 +351,7 @@ test("a cast member the backend skips is reported rather than silently dropped",
   // addCastBatch succeeds overall but reports one ref it could not seat (e.g.
   // its default version moved since the actor's first appearance) -- that
   // must not be discarded, or the user is told the cast is complete when it isn't.
-  (api.addCastBatch as any).mockResolvedValue({ ok: true, added: 0, skipped: ["characters/mara"] });
+  vi.mocked(api.addCastBatch).mockResolvedValue({ ok: true, added: 0, skipped: ["characters/mara"] });
   const onCreated = renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   expect(await screen.findByText(/not seated.*Mara/i)).toBeInTheDocument();
@@ -369,8 +370,8 @@ test("Cancel closes the whole chooser without writing", async () => {
 });
 
 test("Cancel is disabled while the create sequence is writing, like Back", async () => {
-  let release: (v: any) => void = () => {};
-  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.createScene>>) => void = () => {};
+  vi.mocked(api.createScene).mockReturnValue(new Promise((r) => { release = r; }));
   render(<SceneConfirmForm cid="c" draft={GEN} ready onBack={() => {}} onCancel={() => {}} onCreated={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   expect(screen.getByRole("button", { name: /^cancel$/i })).toBeDisabled();
@@ -378,8 +379,8 @@ test("Cancel is disabled while the create sequence is writing, like Back", async
 });
 
 test("a cast failure whose own cleanup also fails says so", async () => {
-  (api.addCastBatch as any).mockRejectedValue({ detail: "boom" });
-  (api.deleteScene as any).mockRejectedValue({ detail: "delete blocked" });
+  vi.mocked(api.addCastBatch).mockRejectedValue({ detail: "boom" });
+  vi.mocked(api.deleteScene).mockRejectedValue({ detail: "delete blocked" });
   renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await screen.findByText(/boom/);
@@ -387,7 +388,7 @@ test("a cast failure whose own cleanup also fails says so", async () => {
 });
 
 test("a final rename failure keeps the scene", async () => {
-  (api.renameScene as any).mockRejectedValue({ detail: "locked" });
+  vi.mocked(api.renameScene).mockRejectedValue({ detail: "locked" });
   const onCreated = renderForm(GRT);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await screen.findByText(/locked/);
@@ -401,7 +402,7 @@ test("a final rename failure keeps the scene", async () => {
 // ---- Finding 2 (PR #318 review): a pending/failed locations read must not
 // let a location the user never saw reach setSceneLocation ----
 test("a pending locations read blocks Create scene", async () => {
-  (api.listEntities as any).mockReturnValue(new Promise(() => {}));   // never resolves
+  vi.mocked(api.listEntities).mockReturnValue(new Promise(() => {}));   // never resolves
   renderForm(GEN);
   await screen.findByDisplayValue("The creditor");
   expect(screen.getByRole("button", { name: /create scene/i })).toBeDisabled();
@@ -412,7 +413,7 @@ test("a location the read does not offer is cleared rather than sent unseen", as
   // between the draft being composed and this pane opening. The <select>
   // renders an unmatched value as "— no location —", so leaving it in state
   // would send Create a location the reader was never shown (#412 review).
-  (api.listEntities as any).mockResolvedValue([{ id: "harrow", name: "Harrow" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "harrow", name: "Harrow" }]);
   const onCreated = renderForm(GEN);   // GEN.location = "saltmarch"
   await screen.findByDisplayValue("The creditor");
   expect(screen.getByText(/no longer in this campaign/i)).toBeInTheDocument();
@@ -427,7 +428,7 @@ test("a failed locations read lets the server seed the greeting's own location",
   // worked. A read that failed leaves nothing for the reader to have answered
   // with, so discarding the greeting's location would lose it to an
   // infrastructure fault they had no say in (#412 review).
-  (api.listEntities as any).mockRejectedValue({ detail: "boom" });
+  vi.mocked(api.listEntities).mockRejectedValue({ detail: "boom" });
   const onCreated = renderForm(GRT);
   await screen.findByDisplayValue("Reckoning");
   expect(screen.getByText(/open at the greeting's own location/i)).toBeInTheDocument();
@@ -441,7 +442,7 @@ test("declining the greeting stops the banner promising its location", async () 
   // The promise only holds while the greeting is actually going to be the first
   // post: declining it skips startFromGreeting, which is what seeds (#412
   // review). The banner has to follow that choice, not the read that failed.
-  (api.listEntities as any).mockRejectedValue({ detail: "boom" });
+  vi.mocked(api.listEntities).mockRejectedValue({ detail: "boom" });
   renderForm(GRT);
   await screen.findByDisplayValue("Reckoning");
   expect(screen.getByText(/open at the greeting's own location/i)).toBeInTheDocument();
@@ -454,14 +455,14 @@ test("the location picker is not editable before it can show what is selected", 
   // No <option> matches a pre-filled id until the list lands, so the browser
   // shows index 0 and picking it fires no change event -- the value the reader
   // believes they cleared would reappear (#412 review).
-  (api.listEntities as any).mockReturnValue(new Promise(() => {}));   // never resolves
+  vi.mocked(api.listEntities).mockReturnValue(new Promise(() => {}));   // never resolves
   renderForm(GRT);
   await screen.findByDisplayValue("Reckoning");
   expect(screen.getByLabelText("Location")).toBeDisabled();
 });
 
 test("a failed locations read clears an unresolved location rather than sending it unseen", async () => {
-  (api.listEntities as any).mockRejectedValue({ detail: "boom" });
+  vi.mocked(api.listEntities).mockRejectedValue({ detail: "boom" });
   const onCreated = renderForm(GEN);   // GEN.location = "saltmarch"
   await screen.findByDisplayValue("The creditor");
   await waitFor(() => expect(screen.getByRole("button", { name: /create scene/i })).not.toBeDisabled());
@@ -476,8 +477,8 @@ test("a failed locations read clears an unresolved location rather than sending 
 // create() has captured the render's values, or once a soft failure means
 // Continue can no longer save anything typed afterward ----
 test("fields are disabled while the create sequence is writing", async () => {
-  let release: (v: any) => void = () => {};
-  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.createScene>>) => void = () => {};
+  vi.mocked(api.createScene).mockReturnValue(new Promise((r) => { release = r; }));
   renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   expect(screen.getByLabelText("Title")).toBeDisabled();
@@ -491,7 +492,7 @@ test("fields are disabled while the create sequence is writing", async () => {
 });
 
 test("fields stay disabled after a soft failure, since Continue cannot save further edits", async () => {
-  (api.setSceneLocation as any).mockRejectedValue({ detail: "gone" });
+  vi.mocked(api.setSceneLocation).mockRejectedValue({ detail: "gone" });
   const onCreated = renderForm({ ...GEN, focus: "Mara chooses." });
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await screen.findByText(/gone/);
@@ -511,8 +512,8 @@ test("fields stay disabled after a soft failure, since Continue cannot save furt
 // campaign's player must be seated with role "player", not defaulted to
 // "npc" by the backend and then rejected by the campaign's locked role ----
 test("a character-kind player is seated with role player, not left to the backend's npc default", async () => {
-  (api.listAppearances as any).mockResolvedValue(
-    [{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]);
+  vi.mocked(api.listAppearances).mockResolvedValue(
+    fixture([{ kind: "characters", id: "mara", version: "default", role: "player", scenes: [] }]));
   renderForm(GEN);   // GEN's cast already seats Mara as a `characters` actor
   await screen.findByLabelText("Add to cast");   // roster (and so playerTokens) has settled
   fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
@@ -556,7 +557,7 @@ test("declining the first post on a greeting draft never seeds the greeting", as
 });
 
 test("a greeting draft that is not using its greeting casts the scene itself", async () => {
-  (api.listCharacters as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
+  vi.mocked(api.listCharacters).mockResolvedValue(fixture([{ id: "winifred", name: "Winifred" }]));
   renderForm(GRT);
   // the backend only seats a greeting's cast when the greeting is the first post
   expect(screen.queryByLabelText("Add to cast")).toBeNull();
@@ -610,7 +611,7 @@ test("the adapted greeting is not offered without an LLM connection, and says wh
 });
 
 test("a failed locations read still lets an adapted greeting open at its own location", async () => {
-  (api.listEntities as any).mockRejectedValue(new Error("boom"));
+  vi.mocked(api.listEntities).mockRejectedValue(new Error("boom"));
   const onCreated = renderForm(GRT);
   fireEvent.click(await screen.findByRole("radio", { name: /greeting, adapted/i }));
   expect(await screen.findByText(/open at the greeting's own location/i)).toBeInTheDocument();
@@ -628,7 +629,7 @@ test("declining the first post keeps the premise out of the opener box", async (
 });
 
 test("Continue after a soft failure honours the declined first post", async () => {
-  (api.setSceneLocation as any).mockRejectedValue({ detail: "gone" });
+  vi.mocked(api.setSceneLocation).mockRejectedValue({ detail: "gone" });
   const onCreated = renderForm(GEN);
   fireEvent.click(await screen.findByRole("radio", { name: /^nothing/i }));
   fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
@@ -654,7 +655,7 @@ test("the generate option stays quiet when an LLM is connected", async () => {
 });
 
 test("the first-post choice stays locked after a soft failure, like every other field", async () => {
-  (api.setSceneLocation as any).mockRejectedValue({ detail: "gone" });
+  vi.mocked(api.setSceneLocation).mockRejectedValue({ detail: "gone" });
   renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await screen.findByText(/gone/);
@@ -662,8 +663,8 @@ test("the first-post choice stays locked after a soft failure, like every other 
 });
 
 test("the first-post choice is locked while the create sequence is writing", async () => {
-  let release: (v: any) => void = () => {};
-  (api.createScene as any).mockReturnValue(new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.createScene>>) => void = () => {};
+  vi.mocked(api.createScene).mockReturnValue(new Promise((r) => { release = r; }));
   renderForm(GEN);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   expect(screen.getByRole("radio", { name: /^nothing/i })).toBeDisabled();
@@ -672,7 +673,7 @@ test("the first-post choice is locked while the create sequence is writing", asy
 
 // ---- the scene ledger (#88): a picked idea is marked used once its scene
 // exists, and only then ----
-const SAVED: SceneDraft = { ...(GEN as any), source: "saved", lid: "the-tide-book" };
+const SAVED: SceneDraft = { ...(GEN), source: "saved", lid: "the-tide-book" };
 
 test("a saved draft marks its ledger idea used, against the scene's final id", async () => {
   const onCreated = renderForm(SAVED);
@@ -693,7 +694,7 @@ test("a draft that is not a saved idea never touches the ledger", async () => {
 test("a failed mark-used keeps the scene and says the idea is still on the list", async () => {
   // the scene is real and usable, so this is soft -- but silently leaving the
   // idea active is indistinguishable from a deliberate keep
-  (api.setSceneIdeaStatus as any).mockRejectedValue({ detail: "ledger unreachable" });
+  vi.mocked(api.setSceneIdeaStatus).mockRejectedValue({ detail: "ledger unreachable" });
   const onCreated = renderForm(SAVED);
   fireEvent.click(await screen.findByRole("button", { name: /create scene/i }));
   await screen.findByText(/ledger unreachable/);
@@ -726,22 +727,22 @@ test("the fill button names the date it will fill in", async () => {
 });
 
 test("the fill button drops a time of day — the form takes a date", async () => {
-  (api.getCampaignClock as any).mockResolvedValue(
-    { now: "5786-Kislev-25T21:30", friendly: "25 Kislev 5786", log: [] });
+  vi.mocked(api.getCampaignClock).mockResolvedValue(
+    fixture({ now: "5786-Kislev-25T21:30", friendly: "25 Kislev 5786", log: [] }));
   renderForm({ ...GEN, date: "" });
   fireEvent.click(await screen.findByRole("button", { name: /last scene's date/i }));
   expect(screen.getByLabelText("Scene date")).toHaveValue("5786-Kislev-25");
 });
 
 test("no fill button on a campaign that has no date yet", async () => {
-  (api.getCampaignClock as any).mockResolvedValue({ now: "", friendly: "", log: [] });
+  vi.mocked(api.getCampaignClock).mockResolvedValue(fixture({ now: "", friendly: "", log: [] }));
   renderForm({ ...GEN, date: "" });
   await screen.findByDisplayValue("The creditor");
   expect(screen.queryByRole("button", { name: /last scene's date/i })).toBeNull();
 });
 
 test("a failed clock read costs the button, not the form", async () => {
-  (api.getCampaignClock as any).mockRejectedValue(new Error("nope"));
+  vi.mocked(api.getCampaignClock).mockRejectedValue(new Error("nope"));
   renderForm({ ...GEN, date: "" });
   await screen.findByDisplayValue("The creditor");
   expect(screen.queryByRole("button", { name: /last scene's date/i })).toBeNull();
@@ -756,8 +757,8 @@ test("the fill overrides a date already in the form", async () => {
 test("the button names the native date when the calendar cannot render a friendly one", async () => {
   // `GET /clock` answers friendly: "" for a calendar it cannot load — the
   // moment is still real and still worth offering.
-  (api.getCampaignClock as any).mockResolvedValue(
-    { now: "5786-Kislev-25", friendly: "", log: [] });
+  vi.mocked(api.getCampaignClock).mockResolvedValue(
+    fixture({ now: "5786-Kislev-25", friendly: "", log: [] }));
   renderForm({ ...GEN, date: "" });
   const button = await screen.findByRole("button", { name: /last scene's date/i });
   expect(button).toHaveAttribute("title", expect.stringContaining("5786-Kislev-25"));

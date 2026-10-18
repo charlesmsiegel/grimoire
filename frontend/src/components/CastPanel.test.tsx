@@ -21,6 +21,7 @@ vi.mock("../api/client", async () => {
   };
 });
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 const GREG_MONTHS = [
   { key: "01", name: "January", days: 31 },
@@ -39,41 +40,41 @@ const GREG_MONTHS = [
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getCast as any).mockResolvedValue([{ kind: "pcs", id: "elara", role: "player" }]);
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "c", world: "w" }, body: "" });
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.getCast).mockResolvedValue(fixture([{ kind: "pcs", id: "elara", role: "player" }]));
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "c", world: "w" }, body: "" }));
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default",
       versions: [{ id: "default", name: "Default" }, { id: "winter", name: "Winter" }] },
   ]);
-  (api.listCampaignPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
-  (api.listEntities as any).mockResolvedValue([]);
-  (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
-  (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
-  (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
-  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: true, friendly: "1 January 2027", id: "s" });
-  (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
-  (api.addToCast as any).mockResolvedValue({ ok: true });
-  (api.getSuggestions as any).mockResolvedValue([]);
-  (api.dismissSuggestion as any).mockResolvedValue({ ok: true });
-  (api.createGreeting as any).mockResolvedValue({ id: "g" });
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  vi.mocked(api.getSceneLocation).mockResolvedValue({ current: null, visited: [] });
+  vi.mocked(api.setSceneLocation).mockResolvedValue({ ok: true, moved: false, name: "" });
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(fixture({ current: null, history: [] }));
+  vi.mocked(api.setSceneDatetime).mockResolvedValue({ ok: true, advanced: true, friendly: "1 January 2027", id: "s" });
+  vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: GREG_MONTHS });
+  vi.mocked(api.addToCast).mockResolvedValue({ ok: true });
+  vi.mocked(api.getSuggestions).mockResolvedValue([]);
+  vi.mocked(api.dismissSuggestion).mockResolvedValue({ ok: true });
+  vi.mocked(api.createGreeting).mockResolvedValue({ id: "g" });
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "sera", version: "default", role: "npc", scenes: ["s"] },
-  ]);
+  ]));
 });
 
 test("character cast row shows the locked-version avatar", async () => {
-  (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "sera", role: "npc" }]);
+  vi.mocked(api.getCast).mockResolvedValue(fixture([{ kind: "characters", id: "sera", role: "npc" }]));
   renderPanel();
   const img = await screen.findByAltText("sera avatar");
   expect(img.getAttribute("src")).toContain("/cimg/c/characters/sera/default/avatar");
 });
 
 test("a cast row's avatar carries the roster's token, so it is cached immutable", async () => {
-  (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "sera", role: "npc" }]);
-  (api.listAppearances as any).mockResolvedValue([
+  vi.mocked(api.getCast).mockResolvedValue(fixture([{ kind: "characters", id: "sera", role: "npc" }]));
+  vi.mocked(api.listAppearances).mockResolvedValue(fixture([
     { kind: "characters", id: "sera", version: "default", role: "npc", scenes: ["s"],
       avatar_v: "1a-2b" },
-  ]);
+  ]));
   renderPanel();
   const img = await screen.findByAltText("sera avatar");
   expect(img.getAttribute("src")).toBe("/cimg/c/characters/sera/default/avatar?v=1a-2b");
@@ -113,7 +114,7 @@ function renderPanel(props: Partial<{ ready: boolean; onSeeded: () => void;
   );
 }
 
-function emitOpener(onEvent: (event: unknown) => void, content: string) {
+function emitOpener(onEvent: Parameters<typeof api.opener>[3], content: string) {
   const speaker = { actor_ref: "grimoire", speaker: "Grimoire", version: "" };
   onEvent({ snapshot: [speaker] });
   onEvent({ speaker_start: speaker });
@@ -125,7 +126,7 @@ function emitOpener(onEvent: (event: unknown) => void, content: string) {
 // #91: the greeting the scene was started from reaches the opener block, which
 // is what offers to adapt it.
 test("a scene started from a greeting offers to adapt it", async () => {
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p, onEvent) => {
     emitOpener(onEvent, "The gate stands open.");
   });
   renderPanel({ greeting: "reck" });
@@ -148,7 +149,7 @@ test("renders the current cast", async () => {
 });
 
 test("PC dropdown lists the campaign's PCs (copied world PCs + local overlays)", async () => {
-  (api.listCampaignPCs as any).mockResolvedValue([
+  vi.mocked(api.listCampaignPCs).mockResolvedValue([
     { id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] },
     { id: "mara", name: "Mara", tags: [], default_version: "default", versions: [] },
   ]);
@@ -170,7 +171,7 @@ test("adding an actor posts kind + id (+ role for characters)", async () => {
 });
 
 test("generating an opener streams into the preview and can be saved as a greeting", async () => {
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p, onEvent) => {
     emitOpener(onEvent, "Mist rolls in.");
   });
   vi.spyOn(window, "prompt").mockReturnValue("Opener");
@@ -190,7 +191,7 @@ test("generating an opener streams into the preview and can be saved as a greeti
 });
 
 async function renderWithOpener(text = "Mist rolls in.") {
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p, onEvent) => {
     emitOpener(onEvent, text);
   });
   vi.spyOn(window, "prompt").mockReturnValue("Opener");
@@ -256,7 +257,7 @@ test("switching the greeting character drops the previous one's version pick", a
   // variants run parallel across a roster, so the stale pick RESOLVES against
   // the new character instead of falling away. Only clearing it on the switch
   // gets the reader the default they were promised.
-  (api.listCharacters as any).mockResolvedValue([
+  vi.mocked(api.listCharacters).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default",
       versions: [{ id: "default", name: "Default" }, { id: "winter", name: "Winter" }] },
     { id: "mara", name: "Mara", default_version: "default",
@@ -288,10 +289,10 @@ test("with no greeting character picked, saving is disabled and says why", async
 test("a failed greeting save says so and keeps the opener", async () => {
   // The preview is the only copy of a generation that cost a call — dropping
   // it on a failed save would throw the reader's text away.
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p, onEvent) => {
     emitOpener(onEvent, "Mist rolls in.");
   });
-  (api.createGreeting as any).mockRejectedValue({ detail: "name taken" });
+  vi.mocked(api.createGreeting).mockRejectedValue({ detail: "name taken" });
   vi.spyOn(window, "prompt").mockReturnValue("Opener");
   renderPanel();
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
@@ -308,7 +309,7 @@ test("a failed greeting save says so and keeps the opener", async () => {
 test("an opener the model could not be reached for offers the local-model recovery", async () => {
   // The stream's error frame carries `kind`; the composer used to hand up
   // `e.error.detail` alone, so being offline read as a bare socket error (#210).
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p, onEvent) => {
     onEvent({ error: { detail: "connection refused", kind: "network" } });
   });
   renderPanel();
@@ -321,10 +322,10 @@ test("an opener the model could not be reached for offers the local-model recove
 });
 
 test("Use adopts the generated opener as the scene's first post", async () => {
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p, onEvent) => {
     emitOpener(onEvent, "Mist rolls in.");
   });
-  (api.firstPost as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.firstPost).mockResolvedValue({ ok: true });
   const onSeeded = vi.fn();
   renderPanel({ onSeeded });
   fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "A foggy harbor" } });
@@ -340,8 +341,8 @@ test("Use adopts the generated opener as the scene's first post", async () => {
 });
 
 test("shows the current setting and lists campaign locations", async () => {
-  (api.getSceneLocation as any).mockResolvedValue({ current: { id: "crypt", name: "The Crypt" }, visited: [] });
-  (api.listEntities as any).mockResolvedValue([{ id: "crypt", name: "The Crypt" }, { id: "market", name: "Market" }]);
+  vi.mocked(api.getSceneLocation).mockResolvedValue({ current: { id: "crypt", name: "The Crypt" }, visited: [] });
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "crypt", name: "The Crypt" }, { id: "market", name: "Market" }]);
   renderPanel();
   await screen.findByText("The Crypt", { selector: "div.field-hint" });
   await screen.findByRole("option", { name: "Market" });
@@ -349,7 +350,7 @@ test("shows the current setting and lists campaign locations", async () => {
 
 test("changing the setting calls setSceneLocation and refreshes the stream", async () => {
   const onSeeded = vi.fn();
-  (api.listEntities as any).mockResolvedValue([{ id: "market", name: "Market" }]);
+  vi.mocked(api.listEntities).mockResolvedValue([{ id: "market", name: "Market" }]);
   renderPanel({ onSeeded });
   fireEvent.change(await screen.findByLabelText("Location"), { target: { value: "market" } });
   fireEvent.click(screen.getByRole("button", { name: /set location/i }));
@@ -358,11 +359,11 @@ test("changing the setting calls setSceneLocation and refreshes the stream", asy
 });
 
 test("When section shows the current date and advances", async () => {
-  (api.getSceneDatetime as any).mockResolvedValue({
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(fixture({
     current: { native: "2026-12-25", friendly: "25 December 2026", weekday: "Friday",
                secondary_friendly: null, holidays_today: ["Christmas Day"], upcoming: null, cast: [] },
     history: ["2026-12-25"],
-  });
+  }));
   const onSeeded = vi.fn();
   renderPanel({ onSeeded });
   expect(await screen.findByText(/25 December 2026/)).toBeInTheDocument();
@@ -379,7 +380,7 @@ test("When section shows the current date and advances", async () => {
 });
 
 test("a dateless scene with a suggestion pre-fills the date input", async () => {
-  (api.getSceneDatetime as any).mockResolvedValue(
+  vi.mocked(api.getSceneDatetime).mockResolvedValue(
     { current: null, history: [], suggested: "2026-07-06" });
   renderPanel();
   await screen.findByLabelText("Scene date year");
@@ -397,7 +398,7 @@ test("a dateless scene with a suggestion pre-fills the date input", async () => 
 });
 
 test("first date set renames the scene: adopts the new id via onSceneRenamed", async () => {
-  (api.setSceneDatetime as any).mockResolvedValue(
+  vi.mocked(api.setSceneDatetime).mockResolvedValue(
     { ok: true, advanced: false, friendly: "4 July 2026", id: "001--2026-07-04--s" });
   const onSceneRenamed = vi.fn();
   const onSeeded = vi.fn();
@@ -415,8 +416,8 @@ test("first date set renames the scene: adopts the new id via onSceneRenamed", a
 });
 
 test("suggested cast: a mention in a seated character's card can be seated from here", async () => {
-  (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "seraphine", role: "npc" }]);
-  (api.getSuggestions as any).mockResolvedValue([
+  vi.mocked(api.getCast).mockResolvedValue(fixture([{ kind: "characters", id: "seraphine", role: "npc" }]));
+  vi.mocked(api.getSuggestions).mockResolvedValue([
     { character: "mara", name: "Mara", mentioned_by: ["seraphine"] },
   ]);
   renderPanel();
@@ -432,7 +433,7 @@ test("suggested cast: a mention in a seated character's card can be seated from 
 });
 
 test("suggested cast: an empty scene has no cast to scan, so no strip", async () => {
-  (api.getCast as any).mockResolvedValue([]);
+  vi.mocked(api.getCast).mockResolvedValue([]);
   renderPanel();
   await screen.findByText(/add to scene/i);
   expect(screen.queryByText("Suggested cast")).toBeNull();
@@ -451,7 +452,7 @@ test("generating an opener refreshes, so its captured prompt becomes visible", a
   // else on this path bumps the refresh, so without this the inspector's Turn
   // history keeps saying "No captured turns yet" — and a preview the reader
   // rejects leaves the row invisible indefinitely.
-  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+  vi.mocked(api.opener).mockImplementation(async (_c, _s, _p, onEvent) => {
     emitOpener(onEvent, "Mist rolls in.");
   });
   const onSeeded = vi.fn();
@@ -469,8 +470,8 @@ test("an opener finishing after a scene switch does not drag the reader back", a
   // `onSeeded` NAVIGATES (`selectScene(activeId)`), closed over the id the
   // render was given — so calling it unconditionally would reselect the scene
   // the reader deliberately left, failure included.
-  let release: (v: any) => void = () => {};
-  (api.opener as any).mockImplementation(() => new Promise((r) => { release = r; }));
+  let release: (v: Awaited<ReturnType<typeof api.opener>>) => void = () => {};
+  vi.mocked(api.opener).mockImplementation(() => new Promise((r) => { release = r; }));
   const onSeeded = vi.fn();
   const { rerender } = render(
     <CastPanel cid="c" sid="s" ready onSeeded={onSeeded} />);

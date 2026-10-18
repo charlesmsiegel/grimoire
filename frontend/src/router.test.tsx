@@ -18,7 +18,7 @@ test("data-router host preserves descendant routes and the run registry above na
   // against actual Back/Link behavior by ArtNavigationProvider.test.tsx.
   const NativeRequest = globalThis.Request;
   class TestRequest extends NativeRequest {
-    constructor(input: RequestInfo | URL, init?: RequestInit) { super(input, { ...init, signal: undefined }); }
+    constructor(input: RequestInfo | URL, init?: RequestInit) { const options = { ...init }; delete options.signal; super(input, options); }
   }
   vi.stubGlobal("Request", TestRequest);
   try { await act(() => router.navigate("/campaigns")); } finally { vi.unstubAllGlobals(); }

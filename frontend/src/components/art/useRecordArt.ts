@@ -47,7 +47,7 @@ function errorSnapshot(error: ApiError): CaptionSnapshot | null {
  *  Reads may replace displayed metadata, never a draft's captured tokens.
  *  Writes capture the adapter before awaiting; stale results cannot migrate
  *  into another selected record or a library remounted after a store move. */
-export function useRecordArt(target: RecordArtTarget | null, { onSaved, recordName, versionName }: { onSaved: () => Promise<void>; recordName?: string; versionName?: string }) {
+export function useRecordArt(target: RecordArtTarget | null, { onSaved, recordName, versionName }: { onSaved: () => Promise<void>; recordName?: string | undefined; versionName?: string | undefined }) {
   const scopeKind = target?.scope.kind, scopeId = target?.scope.id, kind = target?.kind;
   const rid = target?.record_id, version = target?.version;
   const adapter = useMemo(() => {

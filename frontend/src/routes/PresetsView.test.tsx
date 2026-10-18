@@ -1,8 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { api, PRESET_CLEAR } from "../api/client";
+import type {
+  InferenceSelection, InferenceSettings, RoleCard, RouteRow, SamplerParamSpec, SamplerPreset,
+} from "../api/types";
 import { decodeStop, encodeStop } from "../components/presets/presetDraft";
 import PresetsView from "./PresetsView";
+import { fixture } from "../testkit/fixture";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -14,7 +18,7 @@ vi.mock("../api/client", async () => {
   } };
 });
 
-const TABLE = [
+const TABLE: SamplerParamSpec[] = [
   { name: "temperature", label: "Temperature", kind: "float", min: 0, max: 5 },
   { name: "top_k", label: "Top-k", kind: "int", min: 0, max: 1000 },
   { name: "max_tokens", label: "Max tokens", kind: "int", min: 1, max: 200000 },
@@ -22,24 +26,24 @@ const TABLE = [
   { name: "reasoning_effort", label: "Reasoning effort", kind: "choice",
     choices: ["off", "low", "medium", "high"] },
 ];
-const BALANCED = { id: "balanced", name: "Balanced", notes: "", source: "manual",
+const BALANCED: SamplerPreset = { id: "balanced", name: "Balanced", notes: "", source: "manual",
                    params: { temperature: 0.7 } };
-const TIGHT = { id: "tight", name: "Tight", notes: "", source: "manual", params: {} };
-const WARM = { id: "warm", name: "Warm", params: { temperature: 1.1, stop: ["\nYou:"] },
+const TIGHT: SamplerPreset = { id: "tight", name: "Tight", notes: "", source: "manual", params: {} };
+const WARM: SamplerPreset = { id: "warm", name: "Warm", params: { temperature: 1.1, stop: ["\nYou:"] },
                notes: "For **prose**.", source: "" };
 const PRESETS = [BALANCED, TIGHT, WARM];
 
-const sel = (provider = "", model = "", preset = "") => ({ provider, model, preset });
-const card = (over = {}) => ({ stored: sel(), fallback: sel(), resolves: null, inherits: null,
+const sel = (provider = "", model = "", preset = ""): InferenceSelection => ({ provider, model, preset });
+const card = (over: Partial<RoleCard> = {}) => fixture<RoleCard>({ stored: sel(), fallback: sel(), resolves: null, inherits: null,
   problem: null, fallback_missing: [], fallback_problem: null, decision_mode: "",
   decides_natively: "unknown", rate: null, ...over });
-const route = (key: string, label: string, over = {}) => ({ key, label, hint: "", tasks: [],
+const route = (key: string, label: string, over: Partial<RouteRow> = {}) => fixture<RouteRow>({ key, label, hint: "", tasks: [],
   operation: "generate", default_role: "fast", requires: [], campaign_scoped: true, use: "",
   pin: sel(), preset: "", resolves: null, inherits: null, problem: null, fallback_missing: [],
   fallback_problem: null, decision_mode: "", decides_natively: "unknown", role: "fast",
   uses: "fast", rate: null, ...over });
-function settings(over = {}) {
-  return { format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
+function settings(over: Partial<InferenceSettings> = {}): InferenceSettings {
+  return fixture({ format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
     roles: { primary: card({ stored: sel("saltmarch", "vendor/m", "balanced") }),
              fast: card({ fallback: sel("realm", "vendor/m", "balanced") }),
              decision: card() },
@@ -48,19 +52,19 @@ function settings(over = {}) {
     providers: [{ id: "saltmarch", name: "Saltmarch Router", kind: "openrouter",
                   preset: "openrouter", usable: true, problem: null }],
     presets: PRESETS.map(({ id, name }) => ({ id, name })),
-    preset_clear: PRESET_CLEAR, retirement_notes: [], ...over } as never;
+    preset_clear: PRESET_CLEAR, retirement_notes: [], ...over });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.listSamplerPresets).mockResolvedValue({ presets: PRESETS, params: TABLE } as never);
+  vi.mocked(api.listSamplerPresets).mockResolvedValue({ presets: PRESETS, params: TABLE });
   vi.mocked(api.getInferenceSettings).mockResolvedValue(settings());
   vi.mocked(api.previewControls).mockResolvedValue({ requested: {}, effective: {}, controls: {} });
   vi.mocked(api.updateSamplerPreset).mockImplementation(
-    (async (id: string, b: object) => ({ ...b, id, source: "manual" })) as never);
+    async (id, b) => ({ ...b, id, source: "manual" }));
   vi.mocked(api.createSamplerPreset).mockImplementation(
-    (async (b: object) => ({ ...b, id: "new-one", source: "manual" })) as never);
-  vi.mocked(api.deleteSamplerPreset).mockResolvedValue({} as never);
+    async (b) => ({ ...b, id: "new-one", source: "manual" }));
+  vi.mocked(api.deleteSamplerPreset).mockResolvedValue(fixture({}));
 });
 
 function Where() { const l = useLocation(); return <div data-testid="where">{l.pathname + l.hash}</div>; }
@@ -138,9 +142,9 @@ test("an import shows what mapped and what did not", async () => {
               invalid: [], unmapped: ["mirostat_mode", "typical_p"], notes: [] },
   });
   vi.mocked(api.listSamplerPresets)
-    .mockResolvedValueOnce({ presets: PRESETS, params: TABLE } as never)
+    .mockResolvedValueOnce({ presets: PRESETS, params: TABLE })
     .mockResolvedValue({ presets: [...PRESETS, { id: "shared", name: "Shared",
-      params: { temperature: 0.7 }, notes: "", source: "sillytavern" }], params: TABLE } as never);
+      params: { temperature: 0.7 }, notes: "", source: "sillytavern" }], params: TABLE });
   open("/presets/balanced");
   fireEvent.click(await column().findByRole("button", { name: "Import…" }));
   const file = new File([JSON.stringify({ temp: 0.7 })], "Shared.json",
@@ -225,7 +229,7 @@ test("a read left over from a cancelled import cannot fill the next one", async 
 test("the form offers reasoning effort", async () => {
   vi.mocked(api.listSamplerPresets).mockResolvedValue({
     presets: [{ ...WARM, params: { ...WARM.params, reasoning_effort: "high" } }],
-    params: TABLE } as never);
+    params: TABLE });
   open("/presets/warm");
   // The view shows it, under the server's label.
   const view = (await main().findByRole("heading", { name: "Warm" })).closest(".detail-view") as HTMLElement;
@@ -254,7 +258,7 @@ test("the form offers reasoning effort", async () => {
 test("the form offers max when the server lists it", async () => {
   const withMax = TABLE.map((row) => row.name === "reasoning_effort"
     ? { ...row, choices: ["off", "low", "medium", "high", "max"] } : row);
-  vi.mocked(api.listSamplerPresets).mockResolvedValue({ presets: [WARM], params: withMax } as never);
+  vi.mocked(api.listSamplerPresets).mockResolvedValue({ presets: [WARM], params: withMax });
   open("/presets/warm");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   const box = screen.getByLabelText<HTMLSelectElement>("Reasoning effort");
@@ -269,7 +273,7 @@ test("the form offers max when the server lists it", async () => {
 test("a stored reasoning level the table does not offer is shown as itself", async () => {
   vi.mocked(api.listSamplerPresets).mockResolvedValue({
     presets: [{ ...WARM, params: { ...WARM.params, reasoning_effort: "max" } }],
-    params: TABLE } as never);
+    params: TABLE });
   open("/presets/warm");
   fireEvent.click(await main().findByRole("button", { name: "Edit" }));
   const box = screen.getByLabelText<HTMLSelectElement>("Reasoning effort");
@@ -278,11 +282,11 @@ test("a stored reasoning level the table does not offer is shown as itself", asy
 });
 
 test("Preview on… shows the server's controls for that model", async () => {
-  vi.mocked(api.readConnectionCapabilities).mockResolvedValue({
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(fixture({
     provider_preset: {}, need: "generate", hidden: [], reason: null,
     groups: { fits: [{ id: "vendor/mara", name: "Mara", reason: "", capabilities: {} }],
               unverified: [] },
-  } as never);
+  }));
   vi.mocked(api.previewControls).mockResolvedValue({
     requested: {}, effective: {},
     controls: {
@@ -290,7 +294,7 @@ test("Preview on… shows the server's controls for that model", async () => {
       reasoning_effort: { state: "translated", wire: "reasoning", why: "", source: "catalog" },
       min_p: { state: "unsupported", wire: null, why: "not on this endpoint", source: "adapter" },
     },
-  } as never);
+  });
   await openWarm();
   const preview = await screen.findByRole("region", { name: "Preview on…" });
   fireEvent.change(within(preview).getByLabelText("Provider"), { target: { value: "saltmarch" } });
@@ -366,7 +370,7 @@ test("/presets opens the first preset; an empty library says so", async () => {
 });
 
 test("an empty library offers + New preset", async () => {
-  vi.mocked(api.listSamplerPresets).mockResolvedValue({ presets: [], params: TABLE } as never);
+  vi.mocked(api.listSamplerPresets).mockResolvedValue({ presets: [], params: TABLE });
   open("/presets");
   expect(await main().findByText("No presets yet.")).toBeInTheDocument();
   expect(column().getByRole("button", { name: "+ New preset" })).toBeEnabled();

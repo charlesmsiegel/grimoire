@@ -207,7 +207,7 @@ function NumField(
  *  Silent when they are, or when the switch is off: the hint exists so turning
  *  the setting on cannot quietly do nothing. Reads the SAVED answer, so it
  *  speaks about the connection as stored, not about an unsaved draft. */
-function ImagesReachHint({ reach, on }: { reach?: string; on: boolean }) {
+function ImagesReachHint({ reach, on }: { reach?: string | undefined; on: boolean }) {
   if (!on) return null;
   if (reach === "unknown") {
     return (
@@ -453,8 +453,8 @@ export default function ConfigView() {
           (r) => ({ id: r.id, label: r.label, enabled: r.enabled })));
         setLayout(stored.sections);
         setLayoutSaved(stored.sections);
-      } catch (e: any) {
-        setError(e?.detail ?? "Could not save the prompt layout");
+      } catch (e: unknown) {
+        setError(typeof e === "object" && e !== null && "detail" in e && typeof e.detail === "string" ? e.detail : "Could not save the prompt layout");
         setBusy(false);
         return;   // the settings are not written either: one Save, one outcome
       }
@@ -478,8 +478,8 @@ export default function ConfigView() {
         if (d) for (const f of DRAFT_FIELDS) if (d[f] !== sent[f]) merged[f] = d[f];
         return merged;
       });
-    } catch (e: any) {
-      setError(e?.detail ?? "Could not save these settings");
+    } catch (e: unknown) {
+      setError(typeof e === "object" && e !== null && "detail" in e && typeof e.detail === "string" ? e.detail : "Could not save these settings");
     } finally {
       setBusy(false);
     }

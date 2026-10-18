@@ -1,3 +1,5 @@
+import type { CapabilityModel, ModelCapabilities, ProviderPreset } from "../../api/client";
+import { fixture } from "../../testkit/fixture";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { api, type CapabilityNeed, type InferenceProvider, type ProviderHealth } from "../../api/client";
@@ -11,7 +13,7 @@ vi.mock("../../api/client", async () => {
   } };
 });
 
-const PRESET = {
+const PRESET: ProviderPreset = {
   id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "", url_locked: true,
   billing: "metered", reports_price: true, always: [], possible: [], never: [],
 };
@@ -19,15 +21,15 @@ type Value = "yes" | "no" | "unknown";
 let CAPS: Record<string, Record<string, Value>>;
 
 function answer(need: CapabilityNeed, model?: string) {
-  const out = { provider_preset: PRESET, need, reason: null as string | null,
-                groups: { fits: [] as unknown[], unverified: [] as unknown[] },
-                hidden: [] as { id: string; reason: string }[] };
+  const out: ModelCapabilities = { provider_preset: PRESET, need, reason: null as string | null,
+                groups: { fits: [], unverified: [] },
+                hidden: [] };
   for (const id of model ? [model] : Object.keys(CAPS)) {
     const v: Value = CAPS[id]?.[need] ?? "unknown";
-    const row = { id, name: id, context: null, prompt: null, completion: null,
+    const row: CapabilityModel = fixture({ id, name: id, context: null, prompt: null, completion: null,
                   reason: v === "yes" ? "listed" : "not known yet",
                   capabilities: Object.fromEntries(Object.entries(CAPS[id] ?? {})
-                    .map(([k, x]) => [k, { value: x, source: "catalog" }])) };
+                    .map(([k, x]) => [k, { value: x, source: "catalog" as const }])) });
     if (v === "yes") out.groups.fits.push(row);
     else if (v === "unknown") out.groups.unverified.push(row);
     else out.hidden.push({ id, reason: `${id} cannot ${need}` });
@@ -53,7 +55,7 @@ beforeEach(() => {
     "vendor/eye": { generate: "yes", vision: "unknown" },
     "vendor/embed": { generate: "no", vision: "no" },
   };
-  (api.readConnectionCapabilities as any).mockImplementation(
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
     (_p: string, need: CapabilityNeed, model?: string) => Promise.resolve(answer(need, model)));
 });
 
@@ -148,10 +150,10 @@ test("closing the test dialog after a test landed puts focus back on the model s
   // As the picker's own test does (ProviderModelPicker.test.tsx:301): the run
   // lands "works", the re-asked list moves vendor/eye into Fits, and the
   // Test… the dialog came from is gone by the time it closes.
-  (api.previewModelTest as any).mockResolvedValue({
+  vi.mocked(api.previewModelTest).mockResolvedValue({
     provider: "Saltmarch Router", provider_id: "saltmarch", model: "vendor/eye",
-    sends: [], estimated_cost_usd: null });
-  (api.runModelTest as any).mockImplementation(async () => {
+    sends: [], estimated_cost_usd: null, estimate_basis: null });
+  vi.mocked(api.runModelTest).mockImplementation(async () => {
     CAPS["vendor/eye"].vision = "yes";
     return { provider: "saltmarch", model: "vendor/eye", rev: "r2",
              results: { vision: { ok: true } }, recorded: true };
@@ -170,7 +172,7 @@ test("closing the test dialog after a test landed puts focus back on the model s
 
 test("a slow answer for the provider just left never fills the new one's list", async () => {
   let release!: () => void;
-  (api.readConnectionCapabilities as any).mockImplementation((p: string, need: CapabilityNeed) =>
+  vi.mocked(api.readConnectionCapabilities).mockImplementation((p: string, need: CapabilityNeed) =>
     p === "saltmarch"
       ? new Promise((resolve) => { release = () => resolve(answer(need)); })
       : Promise.resolve({ ...answer(need), groups: { fits: [], unverified: [] }, hidden: [] }));
@@ -181,11 +183,11 @@ test("a slow answer for the provider just left never fills the new one's list", 
 });
 
 test("a test dialog closed mid-run and opened again rejoins that run", async () => {
-  (api.previewModelTest as any).mockResolvedValue({
+  vi.mocked(api.previewModelTest).mockResolvedValue({
     provider: "Saltmarch Router", provider_id: "saltmarch", model: "vendor/eye",
-    sends: [], estimated_cost_usd: null });
+    sends: [], estimated_cost_usd: null, estimate_basis: null });
   // A run that never lands: closing the dialog does not stop it on the server.
-  (api.runModelTest as any).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.runModelTest).mockImplementation(() => new Promise(() => {}));
   render(<Holder start={{ provider: "saltmarch", model: "vendor/eye" }} needs={["generate", "vision"]} seen={[]} />);
   fireEvent.click(await screen.findByRole("button", { name: "Test vendor/eye" }));
   let dialog = await screen.findByRole("dialog", { name: "Test a model" });

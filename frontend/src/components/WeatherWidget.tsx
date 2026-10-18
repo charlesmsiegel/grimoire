@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, WEATHER_AXES, type SceneWeather, type WeatherAxis } from "../api/client";
+import { errorText } from "../api/errors";
 
 const LABELS: Record<WeatherAxis, string> = {
   condition: "Condition", temperature: "Temperature", wind: "Wind",
@@ -152,8 +153,8 @@ export function WeatherWidget({ cid, sid, refreshKey }:
       }
       await reload();
       setOpen(false);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     } finally {
       setBusy(false);
     }

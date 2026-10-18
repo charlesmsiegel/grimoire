@@ -49,7 +49,7 @@ function keyOf(provider: string, model: string): string {
  *  (or on the other page) offered a second, paid run instead of the live one. */
 const RUNS = new Map<string, { attempt: string; landed?: Promise<ModelTestResult> }>();
 /** The mounted holders' `onLanded`, each heard once per landed run. */
-const LISTENERS = new Set<{ current?: (result: ModelTestResult) => void }>();
+const LISTENERS = new Set<{ current?: ((result: ModelTestResult) => void) | undefined }>();
 
 /** Forget every run. For tests, which share this module. */
 export function forgetModelTests(): void {

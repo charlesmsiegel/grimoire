@@ -17,14 +17,14 @@ function isQuoteChar(ch: string): boolean {
   return ch === '"' || ch === "“" || ch === "”";
 }
 
-function quotedSpan(children: any[]): any {
+function quotedSpan(children: unknown[]) {
   return { type: "element", tagName: "span", properties: { className: ["quoted"] }, children };
 }
 
 // Split a text value into text / span.quoted nodes, carrying the open-quote state
 // in and back out so it threads through sibling nodes.
-function splitText(value: string, inQuote: boolean): { nodes: any[]; inQuote: boolean } {
-  const nodes: any[] = [];
+function splitText(value: string, inQuote: boolean): { nodes: unknown[]; inQuote: boolean } {
+  const nodes: unknown[] = [];
   let buf = "";
   const flush = (quoted: boolean) => {
     if (!buf) return;
@@ -50,18 +50,20 @@ function splitText(value: string, inQuote: boolean): { nodes: any[]; inQuote: bo
   return { nodes, inQuote };
 }
 
-function walk(node: any): void {
-  if (!node || !Array.isArray(node.children)) return;
-  const next: any[] = [];
+function walk(node: unknown): void {
+  if (typeof node !== "object" || node === null || !("children" in node) || !Array.isArray(node.children)) return;
+  const children: unknown[] = node.children;
+  const next: unknown[] = [];
   let inQuote = false;
-  for (const child of node.children) {
-    if (child.type === "text") {
+  for (const child of children) {
+    if (typeof child === "object" && child !== null && "type" in child
+        && child.type === "text" && "value" in child && typeof child.value === "string") {
       const r = splitText(child.value, inQuote);
       next.push(...r.nodes);
       inQuote = r.inQuote;
-    } else if (child.type === "element") {
+    } else if (typeof child === "object" && child !== null && "type" in child && child.type === "element") {
       walk(child);
-      if (inQuote && INLINE.has(child.tagName)) {
+      if (inQuote && "tagName" in child && typeof child.tagName === "string" && INLINE.has(child.tagName)) {
         next.push(quotedSpan([child]));   // emphasis inside an open quote
       } else {
         inQuote = false;                  // a block boundary ends the quote
@@ -75,5 +77,5 @@ function walk(node: any): void {
 }
 
 export function quotePlugin() {
-  return (tree: any) => walk(tree);
+  return (tree: unknown) => walk(tree);
 }

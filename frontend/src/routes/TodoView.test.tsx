@@ -27,10 +27,10 @@ beforeEach(() => {
   // unprovable. `clearAllMocks` clears the record and leaves the mocks callable
   // — the implementations are re-set immediately below.
   vi.clearAllMocks();
-  (api.getTodo as any).mockResolvedValue({ chores: [chore()], ignored: [], count: 1 });
-  (api.rememberedTodo as any).mockReturnValue(undefined);
-  (api.setChoreIgnored as any).mockResolvedValue({ ok: true, ignored: [] });
-  (api.getChoreItems as any).mockResolvedValue({
+  vi.mocked(api.getTodo).mockResolvedValue({ chores: [chore()], ignored: [], count: 1 });
+  vi.mocked(api.rememberedTodo).mockReturnValue(undefined);
+  vi.mocked(api.setChoreIgnored).mockResolvedValue({ ok: true, ignored: [] });
+  vi.mocked(api.getChoreItems).mockResolvedValue({
     items: [{ id: "mara", label: "Mara Vance", detail: "characters",
               fix: "/campaigns/run/world" },
             { id: "sera", label: "Seraphine Coll", detail: "characters" }],
@@ -51,7 +51,7 @@ test("a chore says what it is, why it matters, and where to fix it", async () =>
 test("ignoring re-reads the list rather than patching it", async () => {
   // Ignoring is not the only thing that can have changed the counts, and the
   // counts are the whole point of the page.
-  (api.getTodo as any)
+  vi.mocked(api.getTodo)
     .mockResolvedValueOnce({ chores: [chore()], ignored: [], count: 1 })
     .mockResolvedValue({ chores: [], ignored: [chore()], count: 0 });
   renderTodo();
@@ -63,7 +63,7 @@ test("ignoring re-reads the list rather than patching it", async () => {
 
 test("an ignored chore is kept, with a way back", async () => {
   // A dismissal that cannot be undone is one nobody dares make.
-  (api.getTodo as any).mockResolvedValue({
+  vi.mocked(api.getTodo).mockResolvedValue({
     chores: [], ignored: [chore()], count: 0 });
   renderTodo();
   expect(await screen.findByRole("button", { name: /restore/i })).toBeInTheDocument();
@@ -73,14 +73,14 @@ test("an ignored chore is kept, with a way back", async () => {
 });
 
 test("restoring sends the ignore back off", async () => {
-  (api.getTodo as any).mockResolvedValue({ chores: [], ignored: [chore()], count: 0 });
+  vi.mocked(api.getTodo).mockResolvedValue({ chores: [], ignored: [chore()], count: 0 });
   renderTodo();
   fireEvent.click(await screen.findByRole("button", { name: /restore/i }));
   await waitFor(() => expect(api.setChoreIgnored).toHaveBeenCalledWith("sheets", false, "run"));
 });
 
 test("nothing outstanding reads as an answer", async () => {
-  (api.getTodo as any).mockResolvedValue({ chores: [], ignored: [], count: 0 });
+  vi.mocked(api.getTodo).mockResolvedValue({ chores: [], ignored: [], count: 0 });
   renderTodo();
   expect(await screen.findByText(/nothing outstanding/i)).toBeInTheDocument();
 });
@@ -92,7 +92,7 @@ test("with no campaign open the library's own chores are still listed", async ()
   // before a campaign is chosen, which is exactly when a freshly imported
   // world's backlog is largest. Hiding them behind that line hid a list with
   // entries in it.
-  (api.getTodo as any).mockResolvedValue({
+  vi.mocked(api.getTodo).mockResolvedValue({
     chores: [chore({ id: "world-taglines", scope: "world", group: "Character & voice", n: 4,
                      what: "4 characters with no tagline", fix: "/worlds",
                      fix_label: "The worlds" })],
@@ -108,7 +108,7 @@ test("two chores with the same sentence are told apart by scope", async () => {
   // Before the chip the only thing separating them was a clause at the end of
   // the `why` prose, and for a screen reader they were two controls with one
   // accessible name.
-  (api.getTodo as any).mockResolvedValue({
+  vi.mocked(api.getTodo).mockResolvedValue({
     chores: [
       chore({ id: "taglines", scope: "campaign", group: "Character & voice", n: 3,
               what: "3 characters with no tagline" }),
@@ -130,7 +130,7 @@ test("two chores with the same sentence are told apart by scope", async () => {
 test("the scope chip stays away when every chore is the same kind", async () => {
   // It exists to tell two rows apart. Where there is nothing to tell apart it
   // is a word on every row, which is a word the reader learns to skip.
-  (api.getTodo as any).mockResolvedValue({
+  vi.mocked(api.getTodo).mockResolvedValue({
     chores: [
       chore({ id: "sheets", scope: "campaign" }),
       chore({ id: "owed", scope: "campaign", group: "Story & continuity", n: 2,
@@ -144,7 +144,7 @@ test("the scope chip stays away when every chore is the same kind", async () => 
 });
 
 test("a failed read is not an empty list", async () => {
-  (api.getTodo as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getTodo).mockRejectedValue(new Error("offline"));
   renderTodo();
   expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText(/nothing outstanding/i)).not.toBeInTheDocument();
@@ -152,7 +152,7 @@ test("a failed read is not an empty list", async () => {
 
 test("the list and Groups column follow the server's thematic order", async () => {
   const groups = ["Story & continuity", "Character & voice", "Artwork", "Game mechanics", "Costs & pricing"];
-  (api.getTodo as any).mockResolvedValue({
+  vi.mocked(api.getTodo).mockResolvedValue({
     // Input order differs from heading order, as it does when a global report
     // combines library chores with campaign chores.
     chores: [
@@ -211,12 +211,12 @@ test("collapsing and reopening does not refetch", async () => {
   fireEvent.click(toggle);
   fireEvent.click(toggle);
   await screen.findByText("Mara Vance");
-  expect((api.getChoreItems as any).mock.calls).toHaveLength(1);
+  expect(vi.mocked(api.getChoreItems).mock.calls).toHaveLength(1);
 });
 
 test("a capped list says it is capped", async () => {
   // A short list nobody labels reads as a complete one.
-  (api.getChoreItems as any).mockResolvedValue({
+  vi.mocked(api.getChoreItems).mockResolvedValue({
     items: [{ id: "a", label: "A", detail: "" }], total: 240, truncated: true,
   });
   renderTodo();
@@ -225,7 +225,7 @@ test("a capped list says it is capped", async () => {
 });
 
 test("instances that cannot be read say so rather than reading as none", async () => {
-  (api.getChoreItems as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.getChoreItems).mockRejectedValue(new Error("offline"));
   renderTodo();
   fireEvent.click(await screen.findByRole("button", { name: /3 cast members/i }));
   expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
@@ -246,9 +246,9 @@ const REMEMBERED: TodoPayload = {
 };
 
 test("a remembered list paints on the first render, busy, with Ignore and Restore held", async () => {
-  (api.rememberedTodo as any).mockReturnValue(REMEMBERED);
+  vi.mocked(api.rememberedTodo).mockReturnValue(REMEMBERED);
   const answer = held<TodoPayload>();
-  (api.getTodo as any).mockReturnValue(answer.promise);
+  vi.mocked(api.getTodo).mockReturnValue(answer.promise);
   renderTodo();
   // Synchronously, before any await: the frame painted from memory.
   expect(screen.getByText("3 cast members without a sheet")).toBeInTheDocument();
@@ -270,7 +270,7 @@ test("a remembered list paints on the first render, busy, with Ignore and Restor
 
 test("nothing outstanding is not said before a read has landed", async () => {
   const answer = held<TodoPayload>();
-  (api.getTodo as any).mockReturnValue(answer.promise);
+  vi.mocked(api.getTodo).mockReturnValue(answer.promise);
   renderTodo();
   expect(screen.queryByText(/nothing outstanding/i)).toBeNull();
   answer.resolve({ chores: [], ignored: [], count: 0 });
@@ -278,9 +278,9 @@ test("nothing outstanding is not said before a read has landed", async () => {
 });
 
 test("a remembered zero is not said until the visit's own read agrees", async () => {
-  (api.rememberedTodo as any).mockReturnValue({ chores: [], ignored: [], count: 0 });
+  vi.mocked(api.rememberedTodo).mockReturnValue({ chores: [], ignored: [], count: 0 });
   const answer = held<TodoPayload>();
-  (api.getTodo as any).mockReturnValue(answer.promise);
+  vi.mocked(api.getTodo).mockReturnValue(answer.promise);
   renderTodo();
   expect(screen.queryByText(/nothing outstanding/i)).toBeNull();
   answer.resolve({ chores: [chore()], ignored: [], count: 1 });
@@ -289,14 +289,14 @@ test("a remembered zero is not said until the visit's own read agrees", async ()
 });
 
 test("a failed read drops the remembered list, and Try again re-reads", async () => {
-  (api.rememberedTodo as any).mockReturnValue(REMEMBERED);
-  (api.getTodo as any).mockRejectedValue(new Error("offline"));
+  vi.mocked(api.rememberedTodo).mockReturnValue(REMEMBERED);
+  vi.mocked(api.getTodo).mockRejectedValue(new Error("offline"));
   renderTodo();
   expect(await screen.findByText(/the list could not be read/i)).toBeInTheDocument();
   expect(screen.queryByText("3 cast members without a sheet")).toBeNull();
   expect(screen.queryByText(/nothing outstanding/i)).toBeNull();
 
-  (api.getTodo as any).mockResolvedValue({ chores: [chore()], ignored: [], count: 1 });
+  vi.mocked(api.getTodo).mockResolvedValue({ chores: [chore()], ignored: [], count: 1 });
   fireEvent.click(screen.getByRole("button", { name: /try again/i }));
   expect(await screen.findByText("3 cast members without a sheet")).toBeInTheDocument();
   expect(api.getTodo).toHaveBeenCalledTimes(2);
@@ -304,7 +304,7 @@ test("a failed read drops the remembered list, and Try again re-reads", async ()
 });
 
 test("an ignore re-reads through the page's own read, which paints the list after it", async () => {
-  (api.getTodo as any)
+  vi.mocked(api.getTodo)
     .mockResolvedValueOnce({ chores: [chore()], ignored: [], count: 1 })
     .mockResolvedValue({ chores: [], ignored: [chore()], count: 0 });
   renderTodo();
@@ -321,20 +321,20 @@ test("a second visit to the same scope is never blank", async () => {
   await screen.findByText("3 cast members without a sheet");
   first.unmount();
   // What the client remembered from the first visit.
-  (api.rememberedTodo as any).mockImplementation((cid: string | null) =>
+  vi.mocked(api.rememberedTodo).mockImplementation((cid) =>
     (cid === "run" ? { chores: [chore()], ignored: [], count: 1 } : undefined));
-  (api.getTodo as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getTodo).mockReturnValue(new Promise(() => {}));
   renderTodo();
   expect(screen.getByText("3 cast members without a sheet")).toBeInTheDocument();
 });
 
 test("switching campaign never shows the last one's chores under the next", async () => {
-  (api.rememberedTodo as any).mockImplementation((cid: string | null) =>
+  vi.mocked(api.rememberedTodo).mockImplementation((cid) =>
     (cid === "run" ? { chores: [chore()], ignored: [], count: 1 } : undefined));
   const view = renderTodo("run");
   await screen.findByText("3 cast members without a sheet");
   const other = held<TodoPayload>();
-  (api.getTodo as any).mockReturnValue(other.promise);
+  vi.mocked(api.getTodo).mockReturnValue(other.promise);
   view.rerender(<MemoryRouter><TodoView cid="tidewrack" /></MemoryRouter>);
   // The render that moves the key is the one that must not draw A's rows.
   expect(screen.queryByText("3 cast members without a sheet")).toBeNull();

@@ -13,6 +13,8 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import type { CampaignSceneCosts } from "../api/types";
+import { fixture } from "../testkit/fixture";
 
 const ZERO = {
   calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
@@ -45,10 +47,10 @@ const REPORT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch" }, body: "" });
-  (api.getCampaignSceneCosts as any).mockResolvedValue(REPORT);
-  (api.getMonthlyCosts as any).mockResolvedValue({ trend: [] });
-  (api.listConnections as any).mockResolvedValue([]);
+  vi.mocked(api.getCampaign).mockResolvedValue(fixture({ meta: { id: "run", name: "Saltmarch" }, body: "" }));
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue(REPORT);
+  vi.mocked(api.getMonthlyCosts).mockResolvedValue(fixture({ trend: [] }));
+  vi.mocked(api.listConnections).mockResolvedValue([]);
 });
 
 function renderCosts() {
@@ -85,10 +87,10 @@ test("each scene is listed with what it cost", async () => {
 });
 
 test("the campaign Costs page shows its own monthly cost chart", async () => {
-  (api.getMonthlyCosts as any).mockResolvedValue({ trend: [{
+  vi.mocked(api.getMonthlyCosts).mockResolvedValue(fixture({ trend: [{
     month: "2026-09", ...ZERO, cost_usd: 2, priced_calls: 1,
     estimated_total_usd: 2,
-  }] });
+  }] }));
   renderCosts();
   expect(await screen.findByRole("region", { name: "Monthly cost trend" }))
     .toHaveTextContent("2026-09");
@@ -127,7 +129,7 @@ test("re-ordering asks the SERVER, because the list is capped there", async () =
   // recent cheap scene from a list headed "most recent".
   renderCosts();
   await headline().findByText("$1.50");
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT, order: "recent", scenes: [...REPORT.scenes].reverse(),
   });
   fireEvent.click(column().getByRole("button", { name: /most recent/i }));
@@ -138,7 +140,7 @@ test("re-ordering asks the SERVER, because the list is capped there", async () =
 });
 
 test("a deleted scene keeps its row, because it keeps its place in the total", async () => {
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     scenes: [row("003--gone", "", { calls: 2, priced_calls: 2, cost_usd: 0.5,
                                     missing: true })],
@@ -152,7 +154,7 @@ test("a deleted scene keeps its row, because it keeps its place in the total", a
 });
 
 test("calls that belong to no scene are still in the list", async () => {
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     scenes: [row("", "", { calls: 1, priced_calls: 1, cost_usd: 0.02 })],
   });
@@ -165,7 +167,7 @@ test("a campaign nobody billed does not claim a reported charge of $0.00", async
   // `cost_usd` is 0.0 when everything was subscription-billed, and the closing
   // line would then say providers reported a charge of $0.00 — a reported zero
   // where nobody reported anything.
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     totals: { ...ZERO, calls: 2, priced_calls: 2, subscription_calls: 2,
               estimated_usd: 0.80 },
@@ -179,7 +181,7 @@ test("a campaign nobody billed does not claim a reported charge of $0.00", async
 });
 
 test("the truncation note names the order the rows were cut by", async () => {
-  (api.getCampaignSceneCosts as any).mockResolvedValue(
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue(
     { ...REPORT, order: "recent", truncated: true, listed: 2 });
   renderCosts();
 
@@ -187,7 +189,7 @@ test("the truncation note names the order the rows were cut by", async () => {
 });
 
 test("a scene nobody priced does not total to $0.00", async () => {
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     totals: { ...ZERO, calls: 3, unpriced_calls: 3 },
     scenes: [row("001--arrival", "The Priory Door", { calls: 3, unpriced_calls: 3 })],
@@ -208,7 +210,7 @@ test("the scanned window is reported in the reader's own calendar", async () => 
 });
 
 test("a scene row never totals its two kinds of estimate", async () => {
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     scenes: [row("002--market", "The Market", {
       calls: 5, priced_calls: 3, cost_usd: 0.40, subscription_calls: 2,
@@ -227,7 +229,7 @@ test("a scene row never totals its two kinds of estimate", async () => {
 test("a row whose headline IS the estimate does not print it twice", async () => {
   // `bucketPrice` renders the single estimate as the headline; a "+ ≈ $X"
   // line under it reads as two amounts where the ledger holds one.
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     scenes: [row("002--market", "The Market", {
       calls: 2, priced_calls: 2, subscription_calls: 2, estimated_usd: 0.90 })],
@@ -240,7 +242,7 @@ test("a row whose headline IS the estimate does not print it twice", async () =>
 });
 
 test("subscription and modelled spend are reported apart from the bill", async () => {
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     totals: { ...ZERO, calls: 4, priced_calls: 3, cost_usd: 0.4,
               subscription_calls: 2, estimated_usd: 0.9,
@@ -258,7 +260,7 @@ test("subscription and modelled spend are reported apart from the bill", async (
 });
 
 test("a campaign that has generated nothing says so rather than showing $0.00", async () => {
-  (api.getCampaignSceneCosts as any).mockResolvedValue(
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue(
     { ...REPORT, totals: ZERO, scenes: [], listed: 0 });
   renderCosts();
 
@@ -270,7 +272,7 @@ test("a failed read says so rather than reporting a measured zero", async () => 
   // Degrading to an empty report printed "$0.00" and "Nothing has been
   // generated" over a campaign with real spend — this feature's cardinal
   // error wearing a different hat.
-  (api.getCampaignSceneCosts as any).mockRejectedValue(new Error("no"));
+  vi.mocked(api.getCampaignSceneCosts).mockRejectedValue(new Error("no"));
   renderCosts();
 
   expect(await screen.findByText(/Could not read this campaign's costs/))
@@ -280,7 +282,7 @@ test("a failed read says so rather than reporting a measured zero", async () => 
 });
 
 test("a failed read can be retried", async () => {
-  (api.getCampaignSceneCosts as any)
+  vi.mocked(api.getCampaignSceneCosts)
     .mockRejectedValueOnce(new Error("no")).mockResolvedValue(REPORT);
   renderCosts();
 
@@ -294,8 +296,8 @@ test("the heading describes the order that came back, not the one just clicked",
   // the previous order.
   renderCosts();
   await headline().findByText("$1.50");
-  let release: (v: unknown) => void = () => {};
-  (api.getCampaignSceneCosts as any).mockReturnValue(
+  let release: (v: CampaignSceneCosts) => void = () => {};
+  vi.mocked(api.getCampaignSceneCosts).mockReturnValue(
     new Promise((res) => { release = res; }));
   fireEvent.click(column().getByRole("button", { name: /most recent/i }));
 
@@ -315,7 +317,7 @@ test("the way back to the campaign is a link", async () => {
 });
 
 test("estimated tokens are marked wherever a token total is shown", async () => {
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     totals: { ...REPORT.totals, estimated_token_calls: 2 },
     scenes: [{ ...REPORT.scenes[0], estimated_token_calls: 2 }, REPORT.scenes[1]],
@@ -329,10 +331,10 @@ test("estimated tokens are marked wherever a token total is shown", async () => 
 });
 
 test("an unpriced model on two providers is two lines, each naming its provider", async () => {
-  (api.listConnections as any).mockResolvedValue([
+  vi.mocked(api.listConnections).mockResolvedValue(fixture([
     { id: "realm-local", name: "Realm Local" }, { id: "saltmarch", name: "Saltmarch" },
-  ]);
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  ]));
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     totals: { ...REPORT.totals, unpriced_calls: 3 },
     unpriced_models: [
@@ -373,8 +375,8 @@ test("an unpriced model on two providers is two lines, each naming its provider"
 test("one dated snapshot asked for under two names is two distinct lines", async () => {
   // The backend keys on (provider, asked-for model, answering model): one
   // provider answering `-2026` whether asked for the alias or the snapshot.
-  (api.listConnections as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.listConnections).mockResolvedValue(fixture([{ id: "saltmarch", name: "Saltmarch" }]));
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     totals: { ...REPORT.totals, unpriced_calls: 3 },
     unpriced_models: [
@@ -404,8 +406,8 @@ test("before the model-settings upgrade every line points at the pricing table",
   // A model's own rates save only on a store at the current format (`PUT
   // .../facts` answers 409 before it), so no line opens an editor that cannot
   // save; the hint says the rates arrive after the upgrade.
-  (api.listConnections as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.listConnections).mockResolvedValue(fixture([{ id: "saltmarch", name: "Saltmarch" }]));
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT, rates_editable: false,
     totals: { ...REPORT.totals, unpriced_calls: 1 },
     unpriced_models: [
@@ -425,8 +427,8 @@ test("before the model-settings upgrade every line points at the pricing table",
 });
 
 test("a store a newer version wrote says so, never \"after the upgrade\"", async () => {
-  (api.listConnections as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.listConnections).mockResolvedValue(fixture([{ id: "saltmarch", name: "Saltmarch" }]));
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT, rates_editable: false, rates_newer: true,
     totals: { ...REPORT.totals, unpriced_calls: 1 },
     unpriced_models: [
@@ -447,8 +449,8 @@ test("a store a newer version wrote says so, never \"after the upgrade\"", async
 test("a deleted provider's line points at the pricing table, not a dead page", async () => {
   // Housekeeping does the same (`routes/todo.py`): only a provider that still
   // exists has a rates page to open.
-  (api.listConnections as any).mockResolvedValue([]);
-  (api.getCampaignSceneCosts as any).mockResolvedValue({
+  vi.mocked(api.listConnections).mockResolvedValue([]);
+  vi.mocked(api.getCampaignSceneCosts).mockResolvedValue({
     ...REPORT,
     totals: { ...REPORT.totals, unpriced_calls: 1 },
     unpriced_models: [

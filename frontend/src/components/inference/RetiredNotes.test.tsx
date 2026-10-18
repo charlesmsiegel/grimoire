@@ -40,7 +40,7 @@ test("shows each note, where it applies, worded as permanent", () => {
 });
 
 test("Dismiss records it on the server, then drops the row", async () => {
-  (api.dismissRetiredNote as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.dismissRetiredNote).mockResolvedValue({ ok: true });
   const onDismissed = vi.fn();
   render(<RetiredNotes notes={[note(), note({ id: "b2" })]} onDismissed={onDismissed} />);
   fireEvent.click(screen.getAllByRole("button", { name: "Dismiss" })[0]);
@@ -50,7 +50,7 @@ test("Dismiss records it on the server, then drops the row", async () => {
 
 test("each note's button waits on its own dismissal", async () => {
   let finish: (v: { ok: boolean }) => void = () => {};
-  (api.dismissRetiredNote as any).mockImplementationOnce(
+  vi.mocked(api.dismissRetiredNote).mockImplementationOnce(
     () => new Promise((resolve) => { finish = resolve; }));
   render(<RetiredNotes notes={[note(), note({ id: "b2" })]} onDismissed={() => {}} />);
   const [first, second] = screen.getAllByRole("button", { name: "Dismiss" });
@@ -62,7 +62,7 @@ test("each note's button waits on its own dismissal", async () => {
 });
 
 test("a dismiss the server refuses keeps the row and says why", async () => {
-  (api.dismissRetiredNote as any).mockRejectedValue(new Error("record unreadable"));
+  vi.mocked(api.dismissRetiredNote).mockRejectedValue(new Error("record unreadable"));
   const onDismissed = vi.fn();
   render(<RetiredNotes notes={[note()]} onDismissed={onDismissed} />);
   fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));

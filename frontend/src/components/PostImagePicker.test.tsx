@@ -19,32 +19,33 @@ vi.mock("../api/client", () => ({
 }));
 import { api } from "../api/client";
 import { artChanged } from "../appEvents";
+import { fixture } from "../testkit/fixture";
 
 const file = (name: string) => new File(["png"], name, { type: "image/png" });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listCampaignImages as any).mockResolvedValue({
+  vi.mocked(api.listCampaignImages).mockResolvedValue({
     images: [
       { name: "coastline", ext: "png", v: "a1" },
       { name: "the-inn", ext: "jpg", v: "b2" },
     ],
     hidden: [],
   });
-  (api.putCampaignImage as any).mockResolvedValue({ name: "x", ext: "png", v: "c3" });
-  (api.deleteCampaignImage as any).mockResolvedValue({ ok: true });
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.putCampaignImage).mockResolvedValue({ name: "x", ext: "png", v: "c3" });
+  vi.mocked(api.deleteCampaignImage).mockResolvedValue({ ok: true });
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     meta: { id: "sera", name: "Seraphine", default_version: "default" },
     versions: [
       { id: "default", name: "Now", card: {}, images: ["avatar", "gallery_1"] },
       { id: "young", name: "Younger", card: {}, images: ["avatar"] },
       { id: "bare", name: "No art", card: {}, images: [] },
     ],
-  });
-  (api.readPC as any).mockResolvedValue({
+  }));
+  vi.mocked(api.readPC).mockResolvedValue(fixture({
     meta: { id: "mara", name: "Mara", tags: [], default_version: "default" },
     versions: [{ id: "default", name: "Now", persona: {}, images: ["avatar"] }],
-  });
+  }));
 });
 
 // ---- the pure pieces -------------------------------------------------------
@@ -96,12 +97,12 @@ test("a narrator post is offered the campaign's images", async () => {
 });
 
 test("an empty library says so, and an upload lands under a name from the file", async () => {
-  (api.listCampaignImages as any).mockResolvedValue({ images: [], hidden: [] });
+  vi.mocked(api.listCampaignImages).mockResolvedValue({ images: [], hidden: [] });
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
   expect(await screen.findByText(/no campaign images yet/i)).toBeTruthy();
 
-  (api.listCampaignImages as any).mockResolvedValue({ images: [{ name: "Coast-at-Dusk", ext: "png", v: "z" }], hidden: [] });
+  vi.mocked(api.listCampaignImages).mockResolvedValue({ images: [{ name: "Coast-at-Dusk", ext: "png", v: "z" }], hidden: [] });
   fireEvent.change(screen.getByLabelText(/add an image/i),
                    { target: { files: [file("Coast at Dusk.png")] } });
   await waitFor(() => expect(api.putCampaignImage)
@@ -122,7 +123,7 @@ test("an upload whose name is taken does not overwrite the image already there",
 });
 
 test("a rejected upload shows the server's reason", async () => {
-  (api.putCampaignImage as any).mockRejectedValue({ detail: "unsupported image type" });
+  vi.mocked(api.putCampaignImage).mockRejectedValue({ detail: "unsupported image type" });
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
   await screen.findByRole("button", { name: "Insert coastline" });
@@ -135,7 +136,7 @@ test("a library whose listing failed offers no upload", async () => {
   // An upload names itself by stepping around the names already there, so
   // uploading against a listing that never arrived would propose one that is
   // taken and quietly replace an image the reader still has.
-  (api.listCampaignImages as any).mockRejectedValue({ detail: "campaign not found" });
+  vi.mocked(api.listCampaignImages).mockRejectedValue({ detail: "campaign not found" });
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
   expect(await screen.findByText("campaign not found")).toBeTruthy();
@@ -175,7 +176,7 @@ test("Escape closes the picker", async () => {
 // be the one dismissal keyboard users cannot reach (PR #400 review).
 test("Escape closes mid-upload, exactly as Cancel and the scrim do", async () => {
   const onClose = vi.fn();
-  (api.putCampaignImage as any).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.putCampaignImage).mockImplementation(() => new Promise(() => {}));
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={onClose} />);
   const input = await screen.findByLabelText(/add an image/i);
@@ -218,14 +219,14 @@ test("a character post is offered that character's art, the version that spoke f
 });
 
 test("a character post is also offered the world's default version, passed through", async () => {
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     meta: { id: "sera", name: "Seraphine", default_version: "young" },
     versions: [{ id: "young", name: "Younger", card: {}, images: ["avatar"] }],
     base_versions: [{ id: "default", name: "Now", images: ["gallery_1"],
                       image_v: { gallery_1: "g" },
                       image_descriptions: { gallery_1: "at the tide gate" } },
                     { id: "bare", name: "No art", images: [], image_v: {}, image_descriptions: {} }],
-  });
+  }));
   const onInsert = vi.fn();
   render(<PostImagePicker cid="run"
                           target={{ kind: "characters", id: "sera", version: "young",
@@ -242,12 +243,12 @@ test("the world's copy a same-named campaign file shadows is not offered to a po
   // Export resolves even a world-shaped URL through the campaign overlay, so
   // an inserted world original would come out of the book as the campaign's
   // copy. The shelf shows it; a post cannot carry it.
-  (api.readCharacter as any).mockResolvedValue({
+  vi.mocked(api.readCharacter).mockResolvedValue(fixture({
     meta: { id: "sera", name: "Seraphine", default_version: "young" },
     versions: [{ id: "young", name: "Younger", card: {}, images: ["gallery_1"],
                  world_shadowed: [{ name: "gallery_1", v: "w1" }, { name: "gallery_9", v: "w9" }] }],
     base_versions: [],
-  });
+  }));
   render(<PostImagePicker cid="run"
                           target={{ kind: "characters", id: "sera", version: "young",
                                     name: "Seraphine" }}
@@ -270,10 +271,10 @@ test("a PC post reads the PC, not the character, surface", async () => {
 });
 
 test("an actor with no art says so instead of offering an empty grid", async () => {
-  (api.readPC as any).mockResolvedValue({
+  vi.mocked(api.readPC).mockResolvedValue(fixture({
     meta: { id: "mara", name: "Mara", tags: [], default_version: "default" },
     versions: [{ id: "default", name: "Now", persona: {}, images: [] }],
-  });
+  }));
   render(<PostImagePicker cid="run"
                           target={{ kind: "pcs", id: "mara", version: "default", name: "Mara" }}
                           onInsert={() => {}} onClose={() => {}} />);
@@ -281,7 +282,7 @@ test("an actor with no art says so instead of offering an empty grid", async () 
 });
 
 test("a failed read shows the reason rather than an empty picker", async () => {
-  (api.readCharacter as any).mockRejectedValue({ detail: "character not found" });
+  vi.mocked(api.readCharacter).mockRejectedValue({ detail: "character not found" });
   render(<PostImagePicker cid="run"
                           target={{ kind: "characters", id: "ghost", version: "default",
                                     name: "Ghost" }}
@@ -336,7 +337,7 @@ test("a name a markdown link cannot carry bare is percent-encoded", () => {
 
 
 test("the library shows each image's description and saves an edit", async () => {
-  (api.listCampaignImages as any).mockResolvedValue({
+  vi.mocked(api.listCampaignImages).mockResolvedValue({
     images: [
       { name: "coastline", ext: "png", v: "a1",
         description: "A hand-drawn map of the coast.", described: true },
@@ -344,7 +345,7 @@ test("the library shows each image's description and saves an edit", async () =>
     ],
     hidden: [],
   });
-  (api.setCampaignImageDescription as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.setCampaignImageDescription).mockResolvedValue({ ok: true });
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
   expect(await screen.findByRole("button", { name: /Description of coastline/ }))
@@ -361,7 +362,7 @@ test("the library shows each image's description and saves an edit", async () =>
 });
 
 test("inserting a described library image uses the description as alt text", async () => {
-  (api.listCampaignImages as any).mockResolvedValue({
+  vi.mocked(api.listCampaignImages).mockResolvedValue({
     images: [
       { name: "coastline", ext: "png", v: "a1",
         description: "A hand-drawn map of the coast.", described: true },
@@ -382,7 +383,7 @@ test("an inherited image is offered under the world, and inserted with a campaig
   // only reads through to (`store/context/art.py:url_for`) -- a world URL is
   // the one shape that does not follow a campaign, which is why the picker
   // refuses greeting art outright.
-  (api.listCampaignImages as any).mockResolvedValue({
+  vi.mocked(api.listCampaignImages).mockResolvedValue({
     images: [
       { name: "handout", ext: "png", v: "a1" },
       { name: "coastline", ext: "png", v: "b2", inherited: true },
@@ -401,7 +402,7 @@ test("an inherited image is offered under the world, and inserted with a campaig
 });
 
 test("removing an inherited image is called hiding, and says the world keeps it", async () => {
-  (api.listCampaignImages as any).mockResolvedValue({
+  vi.mocked(api.listCampaignImages).mockResolvedValue({
     images: [{ name: "coastline", ext: "png", v: "b2", inherited: true }],
     hidden: [],
   });
@@ -419,7 +420,7 @@ test("an inherited legacy image is not describable here", async () => {
   // A legacy world file has no shared image object to describe, so it is
   // described in the WORLD, where doing it once serves every campaign -- and
   // the route refuses it here (409), so the field would always fail.
-  (api.listCampaignImages as any).mockResolvedValue({
+  vi.mocked(api.listCampaignImages).mockResolvedValue({
     images: [
       { name: "handout", ext: "png", v: "a1" },
       { name: "coastline", ext: "png", v: "b2", inherited: true },
@@ -438,7 +439,7 @@ test("an inherited placement-backed library image is describable", async () => {
   // It has an image_id, so the description lives on the shared image object
   // and the campaign route writes it (R3) -- the field is no longer a control
   // that always fails. The legacy sibling beside it still gets none.
-  (api.listCampaignImages as any).mockResolvedValue({
+  vi.mocked(api.listCampaignImages).mockResolvedValue({
     images: [
       { name: "coastline", ext: "png", v: "b2", inherited: true, image_id: "id-coast",
         description: "A grey coast.", described: true },
@@ -455,7 +456,7 @@ test("an inherited placement-backed library image is describable", async () => {
   // The usage control is there too, and needs no router: the picker is a
   // modal over the composer, so its chips never navigate.
   expect(screen.getAllByRole("button", { name: "Used in…" })).toHaveLength(1);
-  (api.getImageUsage as any).mockResolvedValue({
+  vi.mocked(api.getImageUsage).mockResolvedValue({
     characters: [{ scope: "world:realm", id: "seraphine", vid: "default", name: "avatar" }],
     pcs: [], entities: [], greetings: [], world_images: [],
     campaign_images: [], covers: [], collections: [],
@@ -470,10 +471,10 @@ test("an inherited placement-backed library image is describable", async () => {
 test("a hidden image is listed with a way back", async () => {
   // Hidden pictures are in no group by construction, so this row is the only
   // route back -- and it is what lets the world-side sweep be best-effort.
-  (api.listCampaignImages as any).mockResolvedValue({
+  vi.mocked(api.listCampaignImages).mockResolvedValue({
     images: [], hidden: ["coastline"],
   });
-  (api.restoreCampaignImage as any).mockResolvedValue({ ok: true });
+  vi.mocked(api.restoreCampaignImage).mockResolvedValue({ ok: true });
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
 

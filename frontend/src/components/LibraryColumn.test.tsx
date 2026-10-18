@@ -10,6 +10,7 @@ vi.mock("../api/client", () => ({
   },
 }));
 import { api } from "../api/client";
+import { fixture } from "../testkit/fixture";
 
 function Probe() {
   return <span data-testid="where">{useLocation().pathname}</span>;
@@ -28,11 +29,11 @@ const row = (name: RegExp) => screen.getByRole("link", { name });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listWorlds as any).mockResolvedValue([{ id: "realm" }, { id: "saltmarch" }]);
-  (api.listModules as any).mockResolvedValue([{ id: "d20" }]);
-  (api.listStyles as any).mockResolvedValue([{ id: "a" }, { id: "b" }, { id: "c" }]);
-  (api.listClimates as any).mockResolvedValue({ climates: [{ id: "temperate" }, { id: "arid" }] });
-  (api.listConnections as any).mockResolvedValue([{ id: "openrouter" }]);
+  vi.mocked(api.listWorlds).mockResolvedValue(fixture([{ id: "realm" }, { id: "saltmarch" }]));
+  vi.mocked(api.listModules).mockResolvedValue(fixture([{ id: "d20" }]));
+  vi.mocked(api.listStyles).mockResolvedValue(fixture([{ id: "a" }, { id: "b" }, { id: "c" }]));
+  vi.mocked(api.listClimates).mockResolvedValue(fixture({ climates: [{ id: "temperate" }, { id: "arid" }] }));
+  vi.mocked(api.listConnections).mockResolvedValue(fixture([{ id: "openrouter" }]));
 });
 
 test("offers every section as a link to the page that already owns it", async () => {
@@ -79,7 +80,7 @@ test("retired response presets have no library row", async () => {
 });
 
 test("one section failing to load leaves the others counted", async () => {
-  (api.listModules as any).mockRejectedValue(new Error("boom"));
+  vi.mocked(api.listModules).mockRejectedValue(new Error("boom"));
   renderColumn();
   await waitFor(() => expect(row(/worlds/i)).toHaveTextContent("2"));
   // an unknown count is a dash, never a made-up zero

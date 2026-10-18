@@ -87,7 +87,7 @@ function NavChip({ chip }: { chip: Chip & { to: string } }) {
  *  the report scans every scope. `navigable` is false where a navigation would
  *  tear down what the reader is in the middle of. */
 export function ImageUsage({ imageId, navigable = true }: {
-  imageId: string; navigable?: boolean;
+  imageId: string; navigable?: boolean | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [revision, setRevision] = useState(0);

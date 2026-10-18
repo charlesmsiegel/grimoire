@@ -7,14 +7,17 @@ vi.mock("../api/client", async () =>
   (await import("../testkit/ledgerMocks")).ledgerApiMock());
 import { api, ApiError, RefreshRefused } from "../api/client";
 import type {
-  CandidateRecord, ContinuityCandidate, ContinuityCandidates, ContinuityState,
+  CandidateRecord, ContinuityApplied, ContinuityCandidate, ContinuityCandidates, ContinuityState,
+  PromptEntry, PromptSnapshot, ReconcileResult,
 } from "../api/client";
+import type { RunHandle } from "../api/stream";
 import LedgerView from "./LedgerView";
 import { DECISION_LABELS, STALE_SENTENCES } from "../components/continuity/labels";
 import { NONE_NOTE, NO_MODEL_NOTE, PARTIAL_NOTE } from "../components/continuity/useContinuityReview";
 import {
   EMPTY_CANDIDATES, EMPTY_CONTINUITY, EMPTY_LEDGER, Here, installLedgerMocks, renderLedger,
 } from "../testkit/ledgerHarness";
+import { fixture } from "../testkit/fixture";
 
 const scene = (id: string, title: string) => ({ id, title, date: "" });
 
@@ -99,7 +102,7 @@ const REVIEWED: ContinuityState = {
   ],
 };
 
-const RESULT = {
+const RESULT: ReconcileResult = {
   sweep: "full", matching: "basic", embedding: "off", llm: "ok", reason: "",
   reason_kind: "", candidates: 0, adjudicated: 0, unanswered: 0, pairs_capped: false, superseded: false,
   continuity: "ok", follow_on: false,
@@ -119,8 +122,8 @@ const groupRow = (label: RegExp) => column().getByRole("button", { name: label }
 
 beforeEach(() => {
   installLedgerMocks();
-  (api.continuityCandidates as any).mockResolvedValue(FINDINGS);
-  (api.getContinuity as any).mockResolvedValue(REVIEWED);
+  vi.mocked(api.continuityCandidates).mockResolvedValue(FINDINGS);
+  vi.mocked(api.getContinuity).mockResolvedValue(REVIEWED);
 });
 
 // ---- the column ------------------------------------------------------------
@@ -138,7 +141,7 @@ test("the section and its group counts render in the column", async () => {
 });
 
 test("a group's count is a dash while its read is pending", async () => {
-  (api.continuityCandidates as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.continuityCandidates).mockReturnValue(new Promise(() => {}));
   renderLedger();
   await waitFor(() => expect(groupRow(/reviewed links/i)).toHaveTextContent("4"));
   expect(groupRow(/possible overlaps/i)).toHaveTextContent("—");
@@ -153,7 +156,7 @@ test("the matching line says Basic matching active", async () => {
 });
 
 test("the matching line says Semantic matching active when it is", async () => {
-  (api.continuityCandidates as any).mockResolvedValue({ ...FINDINGS, matching: "semantic" });
+  vi.mocked(api.continuityCandidates).mockResolvedValue({ ...FINDINGS, matching: "semantic" });
   renderLedger();
   expect(await column().findByText("Semantic matching active")).toBeInTheDocument();
 });
@@ -191,12 +194,12 @@ test("the dismissed group is collapsed until selected", async () => {
 
 // ---- What the sweep asked (roadmap 01b) -------------------------------------
 
-const SWEEP_ENTRY = {
+const SWEEP_ENTRY: PromptEntry = {
   id: "000007", scene: "", ts: "2026-10-01T10:05:00Z", task: "continuity-reconcile",
   operation: "decide", model: "m", total_tokens: 60, dropped_tokens: 0, budget_tokens: 0,
 };
 
-const SWEEP_SNAPSHOT = {
+const SWEEP_SNAPSHOT: PromptSnapshot = {
   id: "000007", ts: "2026-10-01T10:05:00Z", task: "continuity-reconcile",
   operation: "decide", model: "m", total_tokens: 60, dropped_tokens: 0, budget_tokens: 0,
   sections: [
@@ -208,8 +211,8 @@ const SWEEP_SNAPSHOT = {
 };
 
 test("what the sweep asked is collapsed, and a row opens its capture read-only", async () => {
-  (api.listCampaignPrompts as any).mockResolvedValue({ entries: [SWEEP_ENTRY] });
-  (api.getCampaignPrompt as any).mockResolvedValue(SWEEP_SNAPSHOT);
+  vi.mocked(api.listCampaignPrompts).mockResolvedValue({ entries: [SWEEP_ENTRY] });
+  vi.mocked(api.getCampaignPrompt).mockResolvedValue(SWEEP_SNAPSHOT);
   renderLedger("/campaigns/run/ledger/continuity/overlaps");
   const toggle = await main().findByRole("button", { name: "What the sweep asked" });
   expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -232,11 +235,11 @@ test("what the sweep asked says so when nothing was captured", async () => {
 });
 
 test("an investigation's captures are listed apart from the sweep's", async () => {
-  (api.getConfig as any).mockResolvedValue(
-    { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
-  const QUESTION = { ...SWEEP_ENTRY, id: "000008", task: "investigation-question",
+  vi.mocked(api.getConfig).mockResolvedValue(
+    fixture({ data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" }));
+  const QUESTION: PromptEntry = { ...SWEEP_ENTRY, id: "000008", task: "investigation-question",
                      operation: "tools" };
-  (api.listCampaignPrompts as any).mockResolvedValue({ entries: [SWEEP_ENTRY, QUESTION] });
+  vi.mocked(api.listCampaignPrompts).mockResolvedValue({ entries: [SWEEP_ENTRY, QUESTION] });
   renderLedger("/campaigns/run/ledger/continuity/overlaps");
   fireEvent.click(await main().findByRole("button", { name: "What the sweep asked" }));
   expect(await main().findByRole("button", { name: /^Continuity sweep/ })).toBeInTheDocument();
@@ -248,8 +251,8 @@ test("an investigation's captures are listed apart from the sweep's", async () =
 // ---- Refresh ---------------------------------------------------------------
 
 test("a refresh shows progress and re-reads when it lands", async () => {
-  const run = deferred<typeof RESULT>();
-  (api.reconcileContinuity as any).mockReturnValue(run.promise);
+  const run = deferred<ReconcileResult>();
+  vi.mocked(api.reconcileContinuity).mockReturnValue(run.promise);
   renderLedger();
   const button = await column().findByRole("button", { name: "Refresh continuity review" });
   await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(1));
@@ -261,12 +264,12 @@ test("a refresh shows progress and re-reads when it lands", async () => {
   expect(column().queryByText("Refreshing…")).toBeNull();
   expect(column().getByRole("button", { name: "Refresh continuity review" })).toBeEnabled();
   expect(api.reconcileContinuity).toHaveBeenCalledTimes(1);
-  expect((api.reconcileContinuity as any).mock.calls[0][0]).toBe("run");
-  expect((api.reconcileContinuity as any).mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+  expect(vi.mocked(api.reconcileContinuity).mock.calls[0][0]).toBe("run");
+  expect(vi.mocked(api.reconcileContinuity).mock.calls[0][1]).toBeInstanceOf(AbortSignal);
 });
 
 test("a refresh that adopted an incremental sweep runs once more", async () => {
-  (api.reconcileContinuity as any)
+  vi.mocked(api.reconcileContinuity)
     .mockResolvedValueOnce({ ...RESULT, sweep: "incremental" })
     .mockResolvedValue({ ...RESULT, sweep: "full" });
   renderLedger();
@@ -278,7 +281,7 @@ test("a refresh that adopted an incremental sweep runs once more", async () => {
 });
 
 test("a refresh answered incremental twice still stops at two", async () => {
-  (api.reconcileContinuity as any).mockResolvedValue({ ...RESULT, sweep: "incremental" });
+  vi.mocked(api.reconcileContinuity).mockResolvedValue({ ...RESULT, sweep: "incremental" });
   renderLedger();
   fireEvent.click(await column().findByRole("button", { name: "Refresh continuity review" }));
   await waitFor(() => expect(column().getByRole("button", {
@@ -287,7 +290,7 @@ test("a refresh answered incremental twice still stops at two", async () => {
 });
 
 test("an adopted incremental sweep that failed also runs once more", async () => {
-  (api.reconcileContinuity as any)
+  vi.mocked(api.reconcileContinuity)
     .mockRejectedValueOnce(new ApiError(500, "the sweep failed", "run_failed",
                                         { kind: "run_failed", sweep: "incremental" }))
     .mockResolvedValue({ ...RESULT, sweep: "full" });
@@ -302,7 +305,7 @@ test("an adopted incremental sweep that failed also runs once more", async () =>
 });
 
 test("a failed refresh still re-reads and explains", async () => {
-  (api.reconcileContinuity as any).mockRejectedValue(new ApiError(
+  vi.mocked(api.reconcileContinuity).mockRejectedValue(new ApiError(
     502, "the reconciliation check returned no readable answer", "undecodable",
     { kind: "undecodable", sweep: "full", saved: true }));
   renderLedger();
@@ -358,7 +361,7 @@ test.each([
    "The follow-on pass did not finish — the first pass's findings are listed.",
    "continuity.json is malformed; nothing the follow-on pass found was saved"],
 ])("%s says what it saved", async (_name, err, note, detail) => {
-  (api.reconcileContinuity as any).mockRejectedValue(err);
+  vi.mocked(api.reconcileContinuity).mockRejectedValue(err);
   renderLedger();
   await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(1));
   fireEvent.click(column().getByRole("button", { name: "Refresh continuity review" }));
@@ -368,7 +371,7 @@ test.each([
 });
 
 test("refresh is enabled with no connection, and says what it did", async () => {
-  (api.reconcileContinuity as any).mockResolvedValue({ ...RESULT, llm: "off" });
+  vi.mocked(api.reconcileContinuity).mockResolvedValue({ ...RESULT, llm: "off" });
   renderLedger();
   const button = await column().findByRole("button", { name: "Refresh continuity review" });
   expect(button).toBeEnabled();
@@ -381,7 +384,7 @@ test("refresh is enabled with no connection, and says what it did", async () => 
 test("a model that cannot serve the sweep says why, not 'No model connection'", async () => {
   const why = "The Continuity checks route runs on the Decision role (vendor/decider on "
     + "OpenRouter), which cannot generate. Set a model that can.";
-  (api.reconcileContinuity as any).mockResolvedValue(
+  vi.mocked(api.reconcileContinuity).mockResolvedValue(
     { ...RESULT, llm: "off", reason: why, reason_kind: "incapable" });
   renderLedger();
   fireEvent.click(await column().findByRole("button", { name: "Refresh continuity review" }));
@@ -393,7 +396,7 @@ test("a model that cannot serve the sweep says why, not 'No model connection'", 
 
 describe("a partial sweep says some findings have no suggestion yet", () => {
   async function landed(extra: object) {
-    (api.reconcileContinuity as any).mockResolvedValue({ ...RESULT, ...extra });
+    vi.mocked(api.reconcileContinuity).mockResolvedValue({ ...RESULT, ...extra });
     renderLedger();
     fireEvent.click(await column().findByRole("button",
       { name: "Refresh continuity review" }));
@@ -433,14 +436,14 @@ describe("a partial sweep says some findings have no suggestion yet", () => {
 });
 
 test("a sweep running on load is followed and its findings appear", async () => {
-  const followed = deferred<unknown>();
-  (api.continuityCandidates as any)
+  const followed = deferred<RunHandle>();
+  vi.mocked(api.continuityCandidates)
     .mockResolvedValueOnce({
       ...EMPTY_CANDIDATES,
       run: { id: "r1", attempt_id: null, state: "running", next_index: 0 },
     })
     .mockResolvedValue(FINDINGS);
-  (api.awaitCampaignRun as any).mockReturnValue(followed.promise);
+  vi.mocked(api.awaitCampaignRun).mockReturnValue(followed.promise);
   renderLedger("/campaigns/run/ledger/continuity/overlaps");
   expect(await column().findByText("A continuity sweep is running.")).toBeInTheDocument();
   expect(column().getByRole("button", { name: "Refresh continuity review" })).toBeDisabled();
@@ -458,15 +461,15 @@ test("a sweep running on load is followed and its findings appear", async () => 
 });
 
 describe("a followed sweep says what its model check did, as a Refresh does", () => {
-  async function followedTo(result: object | null) {
-    const followed = deferred<unknown>();
-    (api.continuityCandidates as any)
+  async function followedTo(result: Partial<ReconcileResult> | null) {
+    const followed = deferred<RunHandle>();
+    vi.mocked(api.continuityCandidates)
       .mockResolvedValueOnce({
         ...EMPTY_CANDIDATES,
         run: { id: "r1", attempt_id: null, state: "running", next_index: 0 },
       })
       .mockResolvedValue(FINDINGS);
-    (api.awaitCampaignRun as any).mockReturnValue(followed.promise);
+    vi.mocked(api.awaitCampaignRun).mockReturnValue(followed.promise);
     renderLedger("/campaigns/run/ledger/continuity/overlaps");
     expect(await column().findByText("A continuity sweep is running.")).toBeInTheDocument();
     await act(async () => {
@@ -507,33 +510,33 @@ describe("a followed sweep says what its model check did, as a Refresh does", ()
 });
 
 test("a followed sweep that fails still re-reads", async () => {
-  (api.continuityCandidates as any)
+  vi.mocked(api.continuityCandidates)
     .mockResolvedValueOnce({
       ...EMPTY_CANDIDATES,
       run: { id: "r1", attempt_id: null, state: "running", next_index: 0 },
     })
     .mockResolvedValue(FINDINGS);
-  (api.awaitCampaignRun as any).mockRejectedValue(new ApiError(500, "gone", "run_failed", {}));
+  vi.mocked(api.awaitCampaignRun).mockRejectedValue(new ApiError(500, "gone", "run_failed", {}));
   renderLedger("/campaigns/run/ledger/continuity/overlaps");
   expect(await main().findByRole("button", { name: /mara's map/i })).toBeInTheDocument();
   expect(api.continuityCandidates).toHaveBeenCalledTimes(2);
 });
 
-const RUNNING = (id: string) => ({ id, attempt_id: null, state: "running", next_index: 0 });
+const RUNNING = (id: string): RunHandle => ({ id, attempt_id: null, state: "running", next_index: 0 });
 
 test("a refresh's own second pass, seen running by its re-read, is not followed", async () => {
   // After an adopted incremental pass the loop re-reads and starts pass 2 at
   // once, so that read can come back naming pass 2's own run. Following it
   // would take the latch from the Refresh, which would then hand it back on
   // landing while the follow is still polling -- room for a third reconcile.
-  const second = deferred<typeof RESULT>();
+  const second = deferred<ReconcileResult>();
   let inPass2 = false;
-  (api.reconcileContinuity as any)
+  vi.mocked(api.reconcileContinuity)
     .mockResolvedValueOnce({ ...RESULT, sweep: "incremental" })
     .mockImplementationOnce(() => { inPass2 = true; return second.promise; });
-  (api.continuityCandidates as any).mockImplementation(async () =>
+  vi.mocked(api.continuityCandidates).mockImplementation(async () =>
     (inPass2 ? { ...FINDINGS, run: RUNNING("r2") } : FINDINGS));
-  (api.awaitCampaignRun as any).mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.awaitCampaignRun).mockReturnValue(new Promise(() => {}));
   renderLedger();
   fireEvent.click(await column().findByRole("button", { name: "Refresh continuity review" }));
   await waitFor(() => expect(api.reconcileContinuity).toHaveBeenCalledTimes(2));
@@ -550,12 +553,12 @@ test("a refresh's own second pass, seen running by its re-read, is not followed"
 });
 
 test("re-reads while a sweep is followed do not follow it again", async () => {
-  const followed = deferred<unknown>();
+  const followed = deferred<RunHandle>();
   let running = true;
-  (api.continuityCandidates as any).mockImplementation(async () =>
+  vi.mocked(api.continuityCandidates).mockImplementation(async () =>
     (running ? { ...EMPTY_CANDIDATES, run: RUNNING("r1") } : FINDINGS));
-  (api.awaitCampaignRun as any).mockReturnValue(followed.promise);
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.awaitCampaignRun).mockReturnValue(followed.promise);
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY_LEDGER,
     plot: [{ id: "the-coronation", title: "The coronation", status: "open",
              last_scene: "", latest_beat: "", scene: scene("", "") }],
@@ -590,9 +593,9 @@ function SwitchTo({ to }: { to: string }) {
 }
 
 test("switching campaign mid-refresh starts no follow-up", async () => {
-  const run = deferred<typeof RESULT>();
-  (api.reconcileContinuity as any).mockReturnValueOnce(run.promise);
-  (api.continuityCandidates as any).mockImplementation((cid: string) =>
+  const run = deferred<ReconcileResult>();
+  vi.mocked(api.reconcileContinuity).mockReturnValueOnce(run.promise);
+  vi.mocked(api.continuityCandidates).mockImplementation((cid) =>
     Promise.resolve(cid === "run" ? FINDINGS : EMPTY_CANDIDATES));
   render(
     <MemoryRouter initialEntries={["/campaigns/run/ledger/continuity/overlaps"]}>
@@ -604,16 +607,16 @@ test("switching campaign mid-refresh starts no follow-up", async () => {
   );
   expect(await main().findByRole("button", { name: /mara's map/i })).toBeInTheDocument();
   fireEvent.click(column().getByRole("button", { name: "Refresh continuity review" }));
-  const signal = (api.reconcileContinuity as any).mock.calls[0][1] as AbortSignal;
+  const signal = vi.mocked(api.reconcileContinuity).mock.calls[0][1] as AbortSignal;
   fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
   await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledWith("other"));
   expect(signal.aborted).toBe(true);
-  const readsBefore = (api.continuityCandidates as any).mock.calls.length;
+  const readsBefore = vi.mocked(api.continuityCandidates).mock.calls.length;
   await act(async () => { run.resolve({ ...RESULT, sweep: "incremental" }); });
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   expect(api.reconcileContinuity).toHaveBeenCalledTimes(1);
   // No re-read for the campaign that is gone, and none of its findings shown.
-  expect((api.continuityCandidates as any).mock.calls.length).toBe(readsBefore);
+  expect(vi.mocked(api.continuityCandidates).mock.calls.length).toBe(readsBefore);
   expect(main().queryByRole("button", { name: /mara's map/i })).toBeNull();
   expect(column().getByRole("button", { name: "Refresh continuity review" })).toBeEnabled();
   expect(column().queryByText("Refreshing…")).toBeNull();
@@ -623,7 +626,7 @@ test("switching campaign mid-refresh starts no follow-up", async () => {
 
 test("a continuity write re-reads the ledger", async () => {
   // Unmerge brings the merged-away thread back as a row of its own.
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY_LEDGER,
     plot: [{ id: "winifred-s-chart", title: "Winifred's chart", status: "open",
              last_scene: "", latest_beat: "", scene: scene("", ""),
@@ -632,7 +635,7 @@ test("a continuity write re-reads the ledger", async () => {
   renderLedger("/campaigns/run/ledger/continuity/reviewed");
   await waitFor(() => expect(column().getByRole("button", { name: /^threads/i }))
     .toHaveTextContent("1"));
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY_LEDGER,
     plot: [
       { id: "winifred-s-chart", title: "Winifred's chart", status: "open", last_scene: "",
@@ -641,19 +644,19 @@ test("a continuity write re-reads the ledger", async () => {
         latest_beat: "", scene: scene("", ""), aliases: [] },
     ],
   });
-  const ledgerReads = (api.campaignLedger as any).mock.calls.length;
+  const ledgerReads = vi.mocked(api.campaignLedger).mock.calls.length;
   fireEvent.click(await main().findByRole("button", { name: "Unmerge Mara's map" }));
   await waitFor(() => expect(api.removeAlias).toHaveBeenCalledWith("run", MAP.ref));
-  await waitFor(() => expect((api.campaignLedger as any).mock.calls.length)
+  await waitFor(() => expect(vi.mocked(api.campaignLedger).mock.calls.length)
     .toBeGreaterThan(ledgerReads));
   await waitFor(() => expect(column().getByRole("button", { name: /^threads/i }))
     .toHaveTextContent("2"));
   // ... and the continuity reads with it: one epoch.
-  expect((api.getContinuity as any).mock.calls.length).toBeGreaterThan(1);
+  expect(vi.mocked(api.getContinuity).mock.calls.length).toBeGreaterThan(1);
 });
 
 test("a ledger hand edit re-reads the continuity section", async () => {
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY_LEDGER,
     plot: [{ id: "the-coronation", title: "The coronation", status: "open",
              last_scene: "", latest_beat: "", scene: scene("", "") }],
@@ -682,7 +685,7 @@ test("a stale finding offers Refresh in main on a phone", async () => {
 });
 
 test("findings show hedged proposal labels and visible stale text", async () => {
-  (api.continuityCandidates as any).mockResolvedValue({
+  vi.mocked(api.continuityCandidates).mockResolvedValue({
     ...FINDINGS,
     candidates: [
       OVERLAP,
@@ -702,7 +705,7 @@ test("findings show hedged proposal labels and visible stale text", async () => 
 });
 
 test("a decision word no table holds is never shown raw", async () => {
-  (api.continuityCandidates as any).mockResolvedValue({
+  vi.mocked(api.continuityCandidates).mockResolvedValue({
     ...FINDINGS,
     candidates: [{ ...CLOSURE, proposal: { ...OVERLAP.proposal!, decision: "obliterate" } }],
   });
@@ -784,7 +787,7 @@ test("a record whose ledger cannot be read is not called missing", async () => {
   // With plot.json unreadable a thread cannot be looked up, although it may
   // exist; the alias is not dangling and the link is not broken. A ref-titled
   // record is worded by `recordName` from `unreadable`, never called missing.
-  (api.getContinuity as any).mockResolvedValue({
+  vi.mocked(api.getContinuity).mockResolvedValue({
     ...REVIEWED,
     unreadable: ["plot"],
     aliases: [
@@ -818,7 +821,7 @@ test("an untitled record is named untitled in every group, never by its ref", as
   const untitled = record(MAP.ref, "");
   const gone = record("thread:seraphine-s-errand", "thread:seraphine-s-errand",
                       { gone: true, status: "" });
-  (api.continuityCandidates as any).mockResolvedValue({
+  vi.mocked(api.continuityCandidates).mockResolvedValue({
     ...EMPTY_CANDIDATES,
     candidates: [
       finding("possible_duplicate-3333333333333333", "possible_duplicate", "overlaps",
@@ -827,7 +830,7 @@ test("an untitled record is named untitled in every group, never by its ref", as
               [gone, CHART]),
     ],
   });
-  (api.getContinuity as any).mockResolvedValue({
+  vi.mocked(api.getContinuity).mockResolvedValue({
     ...EMPTY_CONTINUITY,
     aliases: [{ ...REVIEWED.aliases[0], title: "an untitled thread" }],
     suppressions: [{ ...REVIEWED.suppressions[0],
@@ -859,7 +862,7 @@ test("an untitled record is named untitled in every group, never by its ref", as
 });
 
 test("an unknown reason code is never shown", async () => {
-  (api.getContinuity as any).mockResolvedValue({
+  vi.mocked(api.getContinuity).mockResolvedValue({
     ...REVIEWED,
     raw_links: REVIEWED.raw_links.map((l) => (l.id === "l2" ? { ...l, reason: "frobbed" } : l)),
   });
@@ -871,7 +874,7 @@ test("an unknown reason code is never shown", async () => {
 });
 
 test("a refused remove shows why and keeps the row", async () => {
-  (api.removeAlias as any).mockRejectedValue(new ApiError(409, "that merge changed", "conflict"));
+  vi.mocked(api.removeAlias).mockRejectedValue(new ApiError(409, "that merge changed", "conflict"));
   renderLedger("/campaigns/run/ledger/continuity/reviewed");
   fireEvent.click(await main().findByRole("button", { name: "Unmerge Mara's map" }));
   expect(await main().findByText("that merge changed")).toBeInTheDocument();
@@ -886,10 +889,10 @@ test("a dismissed finding is restorable", async () => {
   expect(kept).toHaveTextContent("Kept open");
   // A dismissal whose records have since changed suppresses nothing: not shown.
   expect(main().queryByRole("listitem", { name: /mara's oath/i })).toBeNull();
-  const reads = (api.getContinuity as any).mock.calls.length;
+  const reads = vi.mocked(api.getContinuity).mock.calls.length;
   fireEvent.click(within(dismissed).getByRole("button", { name: /^Restore/ }));
   await waitFor(() => expect(api.restoreSuppression).toHaveBeenCalledWith("run", "s1"));
-  await waitFor(() => expect((api.getContinuity as any).mock.calls.length)
+  await waitFor(() => expect(vi.mocked(api.getContinuity).mock.calls.length)
     .toBeGreaterThan(reads));
 });
 
@@ -898,9 +901,9 @@ test("a dismissed finding is restorable", async () => {
 /** Both reads as the server answers them when continuity.json's sections in
  *  `sections` are not objects: each reads as empty, and both say which. */
 function brokenContinuity(sections: string[], state: Partial<ContinuityState> = {}) {
-  (api.getContinuity as any).mockResolvedValue({
+  vi.mocked(api.getContinuity).mockResolvedValue({
     ...EMPTY_CONTINUITY, ...state, malformed: sections });
-  (api.continuityCandidates as any).mockResolvedValue({
+  vi.mocked(api.continuityCandidates).mockResolvedValue({
     ...EMPTY_CANDIDATES,
     diagnostics: { ...EMPTY_CANDIDATES.diagnostics, malformed: sections } });
 }
@@ -950,7 +953,7 @@ test("a whole continuity.json that cannot be read names merges, links and dismis
 });
 
 test("a findings cache that cannot be read says a refresh rebuilds it", async () => {
-  (api.continuityCandidates as any).mockResolvedValue({
+  vi.mocked(api.continuityCandidates).mockResolvedValue({
     ...EMPTY_CANDIDATES,
     diagnostics: { ...EMPTY_CANDIDATES.diagnostics, cache_malformed: true } });
   renderLedger("/campaigns/run/ledger/continuity/closures");
@@ -972,13 +975,13 @@ function renderReviewedSwitchable() {
   );
 }
 
-const readsFor = (fn: unknown, cid: string) =>
-  (fn as any).mock.calls.filter((c: unknown[]) => c[0] === cid).length;
+const readsFor = (fn: (cid: string, ...rest: never[]) => unknown, cid: string) =>
+  vi.mocked(fn).mock.calls.filter((c) => c[0] === cid).length;
 
 test("a reviewed action refused after a campaign switch says nothing on the new campaign",
      async () => {
   const write = deferred<never>();
-  (api.removeAlias as any).mockReturnValueOnce(write.promise);
+  vi.mocked(api.removeAlias).mockReturnValueOnce(write.promise);
   renderReviewedSwitchable();
   fireEvent.click(await main().findByRole("button", { name: "Unmerge Mara's map" }));
   fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
@@ -996,7 +999,7 @@ test("a reviewed action refused after a campaign switch says nothing on the new 
 test("a reviewed action landing after a campaign switch re-reads nothing for the new one",
      async () => {
   const write = deferred<{ ok: true }>();
-  (api.restoreSuppression as any).mockReturnValueOnce(write.promise);
+  vi.mocked(api.restoreSuppression).mockReturnValueOnce(write.promise);
   render(
     <MemoryRouter initialEntries={["/campaigns/run/ledger/continuity/dismissed"]}>
       <SwitchTo to="/campaigns/other/ledger/continuity/dismissed" />
@@ -1019,7 +1022,7 @@ test("a reviewed action landing after a campaign switch re-reads nothing for the
 });
 
 test("a refusal shown before a campaign switch does not follow the reader", async () => {
-  (api.removeLink as any).mockRejectedValueOnce(
+  vi.mocked(api.removeLink).mockRejectedValueOnce(
     new ApiError(409, "that link changed", "conflict"));
   renderReviewedSwitchable();
   const link = await main().findByRole("listitem", { name: /the coronation/i });
@@ -1032,8 +1035,8 @@ test("a refusal shown before a campaign switch does not follow the reader", asyn
 });
 
 test("the candidates read failing costs only its section", async () => {
-  (api.continuityCandidates as any).mockRejectedValue(new Error("boom"));
-  (api.campaignLedger as any).mockResolvedValue({
+  vi.mocked(api.continuityCandidates).mockRejectedValue(new Error("boom"));
+  vi.mocked(api.campaignLedger).mockResolvedValue({
     ...EMPTY_LEDGER,
     plot: [{ id: "the-coronation", title: "The coronation", status: "open",
              last_scene: "", latest_beat: "", scene: scene("", "") }],
@@ -1051,7 +1054,7 @@ test("the candidates read failing costs only its section", async () => {
 });
 
 test("the continuity read failing costs only its groups", async () => {
-  (api.getContinuity as any).mockRejectedValue(new Error("boom"));
+  vi.mocked(api.getContinuity).mockRejectedValue(new Error("boom"));
   renderLedger("/campaigns/run/ledger/continuity/reviewed");
   expect(await main().findByText(/could not be read/i)).toBeInTheDocument();
   await waitFor(() => expect(groupRow(/possible overlaps/i)).toHaveTextContent("1"));
@@ -1060,8 +1063,8 @@ test("the continuity read failing costs only its groups", async () => {
 });
 
 test("an empty group says so", async () => {
-  (api.continuityCandidates as any).mockResolvedValue(EMPTY_CANDIDATES);
-  (api.getContinuity as any).mockResolvedValue(EMPTY_CONTINUITY);
+  vi.mocked(api.continuityCandidates).mockResolvedValue(EMPTY_CANDIDATES);
+  vi.mocked(api.getContinuity).mockResolvedValue(EMPTY_CONTINUITY);
   renderLedger("/campaigns/run/ledger/continuity/closures");
   expect(await main().findByText(/nothing here may be finished/i)).toBeInTheDocument();
 });
@@ -1133,11 +1136,11 @@ const aside = () => within(screen.getByRole("complementary", { name: "Finding ac
 /** The sidebar, once the detail has rendered it. */
 const sidebar = async () =>
   within(await screen.findByRole("complementary", { name: "Finding actions" }));
-const applied = () => (api.applyCandidate as any).mock.calls;
+const applied = () => vi.mocked(api.applyCandidate).mock.calls;
 
 describe("the finding detail", () => {
   beforeEach(() => {
-    (api.continuityCandidates as any).mockResolvedValue(DETAIL);
+    vi.mocked(api.continuityCandidates).mockResolvedValue(DETAIL);
   });
 
   test("a candidate opens a read-only detail", async () => {
@@ -1215,7 +1218,7 @@ describe("the finding detail", () => {
   });
 
   test("a liveness mismatch confirmation resubmits with the flag", async () => {
-    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+    vi.mocked(api.applyCandidate).mockRejectedValueOnce(new ApiError(
       409, "Mara's map is open but Winifred's chart is closed", "liveness_mismatch", {
         kind: "liveness_mismatch", detail: "Mara's map is open but Winifred's chart is closed",
         source: { status: "open", kind: "", due: "" },
@@ -1254,7 +1257,7 @@ describe("the finding detail", () => {
     const promise = record("commitment:mara-s-oath-2", "Mara's oath");
     const pair = finding("possible_duplicate-9999999999999999", "possible_duplicate",
                          "overlaps", [threat, promise]);
-    (api.continuityCandidates as any).mockResolvedValue({ ...DETAIL, candidates: [pair] });
+    vi.mocked(api.continuityCandidates).mockResolvedValue({ ...DETAIL, candidates: [pair] });
     renderLedger(at(pair));
     await sidebar();
     expect(main().getByText("Commitment (threat) · open")).toBeInTheDocument();
@@ -1308,7 +1311,7 @@ describe("the finding detail", () => {
     // §12.9: a scene that moved is a re-read, never a dead end; §30: the
     // refusal reads as words, and the select never resends the old id.
     const SAID = "That scene has been renamed or removed; pick it again.";
-    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(400, SAID, "bad_scene",
+    vi.mocked(api.applyCandidate).mockRejectedValueOnce(new ApiError(400, SAID, "bad_scene",
       { kind: "bad_scene", detail: SAID }));
     renderLedger(at(CLOSE_ME));
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
@@ -1316,7 +1319,7 @@ describe("the finding detail", () => {
                      { target: { value: "The crown is placed." } });
     fireEvent.change(screen.getByRole("combobox", { name: "Evidence scene" }),
                      { target: { value: "002--saltmarch-eve" } });
-    (api.continuityCandidates as any).mockResolvedValue({
+    vi.mocked(api.continuityCandidates).mockResolvedValue({
       ...DETAIL, scenes: [{ id: "002--winifred-harbour", title: "Winifred harbour" },
                           { id: "001--realm-road", title: "Realm road" }] });
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -1339,7 +1342,7 @@ describe("the finding detail", () => {
   });
 
   test("a closure with no beat sends no scene, and a beat needs a scene", async () => {
-    (api.continuityCandidates as any).mockResolvedValue({
+    vi.mocked(api.continuityCandidates).mockResolvedValue({
       ...DETAIL, candidates: [{ ...CLOSE_ME, proposal: null }] });
     renderLedger(at(CLOSE_ME));
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
@@ -1403,7 +1406,7 @@ describe("the finding detail", () => {
   });
 
   test("a stale 409 re-renders current records and does not start a run", async () => {
-    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+    vi.mocked(api.applyCandidate).mockRejectedValueOnce(new ApiError(
       409, "Records have changed since this was found.", "stale_candidate", {
         kind: "stale_candidate", detail: "Records have changed since this was found.",
         reason: "records",
@@ -1428,7 +1431,7 @@ describe("the finding detail", () => {
   test("a hand edit ends what a stale 409 laid over the finding", async () => {
     // The 409's records hold only until the page's next write -- a hand edit
     // in the table is one too, and its re-read is what the finding shows.
-    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+    vi.mocked(api.applyCandidate).mockRejectedValueOnce(new ApiError(
       409, "Records have changed since this was found.", "stale_candidate", {
         kind: "stale_candidate", reason: "records",
         current: { fingerprint: "fp-now", records: [MAP_D, CHART_D] },
@@ -1438,7 +1441,7 @@ describe("the finding detail", () => {
     await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
     expect(aside().getByRole("button", { name: "Keep Winifred's chart" })).toBeEnabled();
     // Mara's map is closed by hand: the next read finds the pair stale again.
-    (api.continuityCandidates as any).mockResolvedValue({
+    vi.mocked(api.continuityCandidates).mockResolvedValue({
       ...DETAIL,
       candidates: [{ ...PAIR, fingerprint: "fp-later", stale: true, stale_reason: "records",
                      records: [{ ...MAP_D, status: "closed" }, CHART_D] }],
@@ -1457,7 +1460,7 @@ describe("the finding detail", () => {
   });
 
   test("an evidence 409 keeps the actions disabled and offers Refresh", async () => {
-    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+    vi.mocked(api.applyCandidate).mockRejectedValueOnce(new ApiError(
       409, "Records have changed since this was found.", "stale_candidate", {
         kind: "stale_candidate", reason: "evidence",
         current: { fingerprint: PAIR.fingerprint, records: [MAP_D, CHART_D] },
@@ -1478,7 +1481,7 @@ describe("the finding detail", () => {
   });
 
   test("a 409 with a malformed current body falls back to a re-read", async () => {
-    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+    vi.mocked(api.applyCandidate).mockRejectedValueOnce(new ApiError(
       409, "Records have changed since this was found.", "stale_candidate", {
         kind: "stale_candidate", reason: "records", current: { fingerprint: 7 },
       }));
@@ -1511,7 +1514,7 @@ describe("the finding detail", () => {
   test("a merge names the other records that now follow the kept one", async () => {
     // §5.1's Response: a record already merged into the source resolves to
     // the kept record now, and the confirmation says so -- titled, no ref.
-    (api.applyCandidate as any).mockResolvedValueOnce({
+    vi.mocked(api.applyCandidate).mockResolvedValueOnce({
       ok: true, applied: ["alias", "cache"],
       affected: [{ ref: "thread:seraphine-s-letter", name: "Seraphine's letter" }],
     });
@@ -1524,7 +1527,7 @@ describe("the finding detail", () => {
   });
 
   test("a merge that carries several others names them all", async () => {
-    (api.applyCandidate as any).mockResolvedValueOnce({
+    vi.mocked(api.applyCandidate).mockResolvedValueOnce({
       ok: true, applied: ["alias", "cache"],
       affected: [{ ref: "thread:seraphine-s-letter", name: "Seraphine's letter" },
                  { ref: "thread:saltmarch-debt", name: "The Saltmarch debt" }],
@@ -1544,7 +1547,7 @@ describe("the finding detail", () => {
   });
 
   test("a deep link does not claim not-pending while reading", async () => {
-    (api.continuityCandidates as any).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.continuityCandidates).mockReturnValue(new Promise(() => {}));
     renderLedger(at(PAIR));
     expect(await main().findByText("Reading the findings…")).toBeInTheDocument();
     expect(screen.queryByText("This finding is no longer pending.")).toBeNull();
@@ -1595,10 +1598,10 @@ describe("the finding detail", () => {
   });
 
   test("an apply answered not_found shows the finding is no longer pending", async () => {
-    (api.applyCandidate as any).mockRejectedValueOnce(
+    vi.mocked(api.applyCandidate).mockRejectedValueOnce(
       new ApiError(404, "This finding is no longer pending.", "not_found",
                    { kind: "not_found" }));
-    (api.continuityCandidates as any)
+    vi.mocked(api.continuityCandidates)
       .mockResolvedValueOnce(DETAIL)
       .mockResolvedValue({ ...DETAIL, candidates: DETAIL.candidates.filter((c) => c !== PAIR) });
     renderLedger(at(PAIR));
@@ -1612,7 +1615,7 @@ describe("the finding detail", () => {
   });
 
   test("any other refusal shows its text", async () => {
-    (api.applyCandidate as any).mockRejectedValueOnce(
+    vi.mocked(api.applyCandidate).mockRejectedValueOnce(
       new ApiError(500, "the finding could not be applied", "io", {}));
     renderLedger(at(PAIR));
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
@@ -1628,16 +1631,16 @@ describe("the finding detail", () => {
       plot: [{ id: "the-coronation", title: "The coronation", status, last_scene: "",
                latest_beat: "", scene: scene("", ""), aliases: [] }],
     });
-    (api.campaignLedger as any).mockResolvedValue(thread("open"));
+    vi.mocked(api.campaignLedger).mockResolvedValue(thread("open"));
     renderLedger(at(CLOSE_ME));
     await waitFor(() => expect(column().getByRole("button", { name: /^threads/i }))
       .toHaveTextContent("1"));
-    (api.campaignLedger as any).mockResolvedValue(thread("closed"));
-    (api.continuityCandidates as any).mockResolvedValue(
+    vi.mocked(api.campaignLedger).mockResolvedValue(thread("closed"));
+    vi.mocked(api.continuityCandidates).mockResolvedValue(
       { ...DETAIL, candidates: DETAIL.candidates.filter((c) => c.id !== CLOSE_ME.id) });
     return {
-      ledgerReads: (api.campaignLedger as any).mock.calls.length,
-      candidateReads: (api.continuityCandidates as any).mock.calls.length,
+      ledgerReads: vi.mocked(api.campaignLedger).mock.calls.length,
+      candidateReads: vi.mocked(api.continuityCandidates).mock.calls.length,
     };
   };
 
@@ -1650,8 +1653,8 @@ describe("the finding detail", () => {
     // old read would leave it actionable after the thread already closed, and
     // a second click would only draw a 409.
     const err = new ApiError(500, text, kind, { kind, detail: text, landed: ["status"] });
-    if (kind === "partial_apply") (api.applyCandidate as any).mockRejectedValueOnce(err);
-    else (api.dismissCandidate as any).mockRejectedValueOnce(err);
+    if (kind === "partial_apply") vi.mocked(api.applyCandidate).mockRejectedValueOnce(err);
+    else vi.mocked(api.dismissCandidate).mockRejectedValueOnce(err);
     const before = await closing();
     if (kind === "partial_apply") {
       fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
@@ -1660,9 +1663,9 @@ describe("the finding detail", () => {
       fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep open" }));
     }
     expect(await main().findByText(text)).toBeInTheDocument();
-    await waitFor(() => expect((api.campaignLedger as any).mock.calls.length)
+    await waitFor(() => expect(vi.mocked(api.campaignLedger).mock.calls.length)
       .toBeGreaterThan(before.ledgerReads));
-    await waitFor(() => expect((api.continuityCandidates as any).mock.calls.length)
+    await waitFor(() => expect(vi.mocked(api.continuityCandidates).mock.calls.length)
       .toBeGreaterThan(before.candidateReads));
     // Keep open leaves the thread open; only the close moves the count.
     if (kind === "partial_apply") {
@@ -1710,16 +1713,16 @@ describe("the finding detail", () => {
       plot: [{ id: "the-coronation", title: "The coronation", status, last_scene: "",
                latest_beat: "", scene: scene("", ""), aliases: [] }],
     });
-    (api.campaignLedger as any).mockResolvedValue(thread("open"));
+    vi.mocked(api.campaignLedger).mockResolvedValue(thread("open"));
     renderLedger(at(CLOSE_ME));
     await waitFor(() => expect(column().getByRole("button", { name: /^threads/i }))
       .toHaveTextContent("1"));
-    (api.campaignLedger as any).mockResolvedValue(thread("closed"));
-    const ledgerReads = (api.campaignLedger as any).mock.calls.length;
+    vi.mocked(api.campaignLedger).mockResolvedValue(thread("closed"));
+    const ledgerReads = vi.mocked(api.campaignLedger).mock.calls.length;
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect((api.campaignLedger as any).mock.calls.length)
+    await waitFor(() => expect(vi.mocked(api.campaignLedger).mock.calls.length)
       .toBeGreaterThan(ledgerReads));
     await waitFor(() => expect(column().getByRole("button", { name: /^threads/i }))
       .toHaveTextContent("0"));
@@ -1739,13 +1742,13 @@ describe("the finding detail", () => {
 
   test("an apply that lands after a campaign switch leaves the reader where they are",
        async () => {
-    const write = deferred<{ ok: true }>();
-    (api.applyCandidate as any).mockReturnValueOnce(write.promise);
+    const write = deferred<ContinuityApplied>();
+    vi.mocked(api.applyCandidate).mockReturnValueOnce(write.promise);
     renderSwitchable(at(PAIR), "/campaigns/other/ledger/continuity/overlaps");
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
     fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
     await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledWith("other"));
-    await act(async () => { write.resolve({ ok: true }); });
+    await act(async () => { write.resolve(fixture({ ok: true })); });
     await settle();
     expect(screen.getByTestId("here"))
       .toHaveTextContent(/^\/campaigns\/other\/ledger\/continuity\/overlaps$/);
@@ -1756,7 +1759,7 @@ describe("the finding detail", () => {
        async () => {
     // A fork shares candidate ids, so the same id may be open on the new one.
     const write = deferred<never>();
-    (api.applyCandidate as any).mockReturnValueOnce(write.promise);
+    vi.mocked(api.applyCandidate).mockReturnValueOnce(write.promise);
     renderSwitchable(at(PAIR), `/campaigns/other/ledger/continuity/overlaps/${PAIR.id}`);
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
     fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
@@ -1779,7 +1782,7 @@ describe("the finding detail", () => {
 
   test("a refusal that lands after another finding is opened stays off it", async () => {
     const write = deferred<never>();
-    (api.applyCandidate as any).mockReturnValueOnce(write.promise);
+    vi.mocked(api.applyCandidate).mockReturnValueOnce(write.promise);
     renderLedger(at(PAIR));
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
     fireEvent.click(main().getByRole("button", { name: "‹ All findings" }));
@@ -1804,21 +1807,21 @@ describe("the finding detail", () => {
 
   test("an apply that lands after another finding is opened leaves the reader on it",
        async () => {
-    const write = deferred<{ ok: true }>();
-    (api.applyCandidate as any).mockReturnValueOnce(write.promise);
+    const write = deferred<ContinuityApplied>();
+    vi.mocked(api.applyCandidate).mockReturnValueOnce(write.promise);
     renderLedger(at(PAIR));
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
     fireEvent.click(main().getByRole("button", { name: "‹ All findings" }));
     fireEvent.click(await main().findByRole("button", { name: /mara's oath \/ seraphine's oath/i }));
     await sidebar();
-    const ledgerReads = (api.campaignLedger as any).mock.calls.length;
-    await act(async () => { write.resolve({ ok: true }); });
+    const ledgerReads = vi.mocked(api.campaignLedger).mock.calls.length;
+    await act(async () => { write.resolve(fixture({ ok: true })); });
     await settle();
     expect(screen.getByTestId("here")).toHaveTextContent(at(OATHS));
     expect(await (await sidebar()).findByRole("button", { name: "Keep Mara's oath" }))
       .toBeInTheDocument();
     // The write landed on this campaign all the same: the ledger re-reads.
-    await waitFor(() => expect((api.campaignLedger as any).mock.calls.length)
+    await waitFor(() => expect(vi.mocked(api.campaignLedger).mock.calls.length)
       .toBeGreaterThan(ledgerReads));
   });
 
@@ -1826,7 +1829,7 @@ describe("the finding detail", () => {
     const twin = record("thread:mara-s-map-2", "Mara's map");
     const twins = finding("possible_duplicate-9898989898989898", "possible_duplicate",
                           "overlaps", [MAP_D, twin], { signals: { title_exact: true } });
-    (api.continuityCandidates as any).mockResolvedValue({
+    vi.mocked(api.continuityCandidates).mockResolvedValue({
       ...DETAIL, candidates: [...DETAIL.candidates, twins] });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -1863,7 +1866,7 @@ describe("the finding detail", () => {
       proposal: { decision: "close", from: "", to: "", relation: "", status: "",
                   reason: "The crown was placed.", evidence_scenes: [gone, untitled] },
     });
-    (api.continuityCandidates as any).mockResolvedValue({
+    vi.mocked(api.continuityCandidates).mockResolvedValue({
       ...DETAIL, scenes: [...SCENES, { id: untitled, title: "" }],
       candidates: [...DETAIL.candidates, quiet] });
     renderLedger(at(quiet));
@@ -1882,7 +1885,7 @@ describe("the finding detail", () => {
       proposal: { decision: "close", from: "", to: "", relation: "", status: "",
                   reason: "", evidence_scenes: ["001--realm-road"] },
     });
-    (api.continuityCandidates as any).mockResolvedValue({
+    vi.mocked(api.continuityCandidates).mockResolvedValue({
       ...DETAIL, candidates: [...DETAIL.candidates, bare] });
     renderLedger(at(bare));
     await sidebar();
@@ -1897,14 +1900,14 @@ describe("the finding detail", () => {
   /** Pressing `press`, answered by an evidence 409 (the finding goes stale and
    *  its form is hidden), then a Refresh whose re-read returns `after`. */
   async function staleThenRefreshed(press: string, after: ContinuityCandidate) {
-    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+    vi.mocked(api.applyCandidate).mockRejectedValueOnce(new ApiError(
       409, "Records have changed since this was found.", "stale_candidate", {
         kind: "stale_candidate", reason: "evidence",
       }));
     fireEvent.click(aside().getByRole("button", { name: press }));
     const refresh = await (await sidebar()).findByRole("button", { name: "Refresh" });
     await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
-    (api.continuityCandidates as any).mockResolvedValue({
+    vi.mocked(api.continuityCandidates).mockResolvedValue({
       ...DETAIL, candidates: DETAIL.candidates.map((c) => c.id === after.id ? after : c) });
     fireEvent.click(refresh);
     await waitFor(() => expect(api.reconcileContinuity).toHaveBeenCalledTimes(1));
@@ -1971,7 +1974,7 @@ describe("the finding detail", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Evidence scene" }),
                      { target: { value: "002--saltmarch-eve" } });
     // A fresh copy of the identical read.
-    (api.continuityCandidates as any).mockResolvedValue(structuredClone(DETAIL));
+    vi.mocked(api.continuityCandidates).mockResolvedValue(structuredClone(DETAIL));
     fireEvent.click(main().getByRole("button", { name: "Refresh continuity review" }));
     await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("textbox", { name: "Closing beat" }))
@@ -1986,7 +1989,7 @@ describe("the finding detail", () => {
 describe("investigating a finding", () => {
   beforeEach(() => {
     localStorage.clear();
-    (api.continuityCandidates as any).mockResolvedValue(DETAIL);
+    vi.mocked(api.continuityCandidates).mockResolvedValue(DETAIL);
   });
 
   test("no Investigate is offered while the switch is off", async () => {
@@ -1997,31 +2000,31 @@ describe("investigating a finding", () => {
   });
 
   test("Investigate starts the run and says how it ended, then re-reads", async () => {
-    (api.getConfig as any).mockResolvedValue(
-      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
-    (api.investigateCandidate as any).mockResolvedValue({
+    vi.mocked(api.getConfig).mockResolvedValue(
+      fixture({ data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" }));
+    vi.mocked(api.investigateCandidate).mockResolvedValue(fixture({
       candidate: PAIR.id, persisted: true,
       outcome: { state: "completed", limit: "", reason: "", error: "", result: {},
                  trace: {} },
-    });
+    }));
     renderLedger(at(PAIR));
     const button = await (await sidebar()).findByRole("button",
       { name: /investigate|second opinion/i });
-    const reads = (api.continuityCandidates as any).mock.calls.length;
+    const reads = vi.mocked(api.continuityCandidates).mock.calls.length;
     fireEvent.click(button);
     await waitFor(() => expect(api.investigateCandidate).toHaveBeenCalledWith(
       "run", PAIR.id, expect.any(AbortSignal), expect.any(String)));
     expect(await aside().findByText(/The investigation finished\. Its suggestion is shown above\./))
       .toBeInTheDocument();
-    await waitFor(() => expect((api.continuityCandidates as any).mock.calls.length)
+    await waitFor(() => expect(vi.mocked(api.continuityCandidates).mock.calls.length)
       .toBeGreaterThan(reads));
     expect(api.applyCandidate).not.toHaveBeenCalled();
   });
 
   test("another finding's Investigate waits while one runs in this campaign", async () => {
-    (api.getConfig as any).mockResolvedValue(
-      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
-    (api.investigateCandidate as any).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.getConfig).mockResolvedValue(
+      fixture({ data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" }));
+    vi.mocked(api.investigateCandidate).mockReturnValue(new Promise(() => {}));
     render(
       <MemoryRouter initialEntries={[at(PAIR)]}>
         <SwitchTo to={at(OATHS)} />
@@ -2041,17 +2044,17 @@ describe("investigating a finding", () => {
   });
 
   test("an investigation left running is followed on return, never started again", async () => {
-    (api.getConfig as any).mockResolvedValue(
-      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
+    vi.mocked(api.getConfig).mockResolvedValue(
+      fixture({ data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" }));
     localStorage.setItem('grimoire.investigation:["/lib","run"]',
                          JSON.stringify({ attempt: "a-earlier", candidate: PAIR.id }));
-    const handle = { id: "r1", state: "running" };
-    (api.findCandidateInvestigation as any).mockResolvedValue(handle);
-    (api.followCandidateInvestigation as any).mockResolvedValue({
+    const handle = fixture<RunHandle>({ id: "r1", state: "running" });
+    vi.mocked(api.findCandidateInvestigation).mockResolvedValue(handle);
+    vi.mocked(api.followCandidateInvestigation).mockResolvedValue(fixture({
       candidate: PAIR.id, persisted: false,
       outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
                  result: null, trace: {} },
-    });
+    }));
     renderLedger(at(PAIR));
     expect(await (await sidebar()).findByText(/could not find enough/)).toBeInTheDocument();
     expect(api.findCandidateInvestigation)
@@ -2065,21 +2068,21 @@ describe("investigating a finding", () => {
   test("an investigation left running is still followed once the switch is off", async () => {
     localStorage.setItem('grimoire.investigation:["/lib","run"]',
                          JSON.stringify({ attempt: "a-earlier", candidate: PAIR.id }));
-    (api.findCandidateInvestigation as any).mockResolvedValue({ id: "r1", state: "running" });
-    (api.followCandidateInvestigation as any).mockResolvedValue({
+    vi.mocked(api.findCandidateInvestigation).mockResolvedValue(fixture({ id: "r1", state: "running" }));
+    vi.mocked(api.followCandidateInvestigation).mockResolvedValue(fixture({
       candidate: PAIR.id, persisted: false,
       outcome: { state: "no_change", limit: "", reason: "", error: "", result: null,
                  trace: {} },
-    });
+    }));
     renderLedger(at(PAIR));
     expect(await (await sidebar()).findByText(/found nothing to change/)).toBeInTheDocument();
     expect(aside().queryByRole("button", { name: /investigate|second opinion/i })).toBeNull();
   });
 
   test("another finding's remembered investigation is followed, not replaced", async () => {
-    (api.getConfig as any).mockResolvedValue(
-      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
-    (api.findCandidateInvestigation as any).mockResolvedValue(null);
+    vi.mocked(api.getConfig).mockResolvedValue(
+      fixture({ data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" }));
+    vi.mocked(api.findCandidateInvestigation).mockResolvedValue(null);
     renderLedger(at(PAIR));
     // Remembered for another finding after the review mounted (a failure
     // with no reply, in another tab): Investigate here follows it first.
@@ -2094,9 +2097,9 @@ describe("investigating a finding", () => {
   });
 
   test("Investigate shows the campaign's budget level beside it", async () => {
-    (api.getConfig as any).mockResolvedValue(
-      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
-    (api.getCampaignBudget as any).mockResolvedValue(
+    vi.mocked(api.getConfig).mockResolvedValue(
+      fixture({ data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" }));
+    vi.mocked(api.getCampaignBudget).mockResolvedValue(
       { limit_usd: 5, period: "total", level: "warn", warn_fraction: 0.8, spent_usd: 4.5 });
     renderLedger(at(PAIR));
     expect(await (await sidebar()).findByText(
@@ -2105,23 +2108,23 @@ describe("investigating a finding", () => {
   });
 
   test("a retry after a failure with no reply follows the first run", async () => {
-    (api.getConfig as any).mockResolvedValue(
-      { data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" });
-    (api.investigateCandidate as any).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    vi.mocked(api.getConfig).mockResolvedValue(
+      fixture({ data_dir: "/lib", investigation_continuity: "on", investigation_question: "off" }));
+    vi.mocked(api.investigateCandidate).mockRejectedValueOnce(new TypeError("Failed to fetch"));
     renderLedger(at(PAIR));
     fireEvent.click(await (await sidebar()).findByRole("button",
       { name: /investigate|second opinion/i }));
     expect(await aside().findByText(/Failed to fetch|reach/)).toBeInTheDocument();
-    const [, , , attempt] = (api.investigateCandidate as any).mock.calls[0];
+    const [, , , attempt] = vi.mocked(api.investigateCandidate).mock.calls[0];
     expect(JSON.parse(localStorage.getItem('grimoire.investigation:["/lib","run"]') ?? "null"))
       .toEqual({ attempt, candidate: PAIR.id });
-    const handle = { id: "r1", state: "landed" };
-    (api.findCandidateInvestigation as any).mockResolvedValue(handle);
-    (api.followCandidateInvestigation as any).mockResolvedValue({
+    const handle = fixture<RunHandle>({ id: "r1", state: "landed" });
+    vi.mocked(api.findCandidateInvestigation).mockResolvedValue(handle);
+    vi.mocked(api.followCandidateInvestigation).mockResolvedValue(fixture({
       candidate: PAIR.id, persisted: false,
       outcome: { state: "insufficient_evidence", limit: "", reason: "", error: "",
                  result: null, trace: {} },
-    });
+    }));
     fireEvent.click(aside().getByRole("button", { name: /investigate|second opinion/i }));
     expect(await aside().findByText(/could not find enough/)).toBeInTheDocument();
     expect(api.findCandidateInvestigation)
@@ -2130,7 +2133,7 @@ describe("investigating a finding", () => {
   });
 
   test("a proposal's investigation trace is shown with it", async () => {
-    (api.continuityCandidates as any).mockResolvedValue({
+    vi.mocked(api.continuityCandidates).mockResolvedValue({
       ...DETAIL,
       candidates: DETAIL.candidates.map((c) => c.id !== PAIR.id ? c : {
         ...c, proposal: { ...c.proposal!, investigation: {
@@ -2155,8 +2158,8 @@ describe("asking the history", () => {
     renderLedger();
     expect(await column().findByText("Continuity review")).toBeInTheDocument();
     expect(column().queryByText("Ask the history")).toBeNull();
-    (api.getConfig as any).mockResolvedValue(
-      { data_dir: "/lib", investigation_continuity: "off", investigation_question: "on" });
+    vi.mocked(api.getConfig).mockResolvedValue(
+      fixture({ data_dir: "/lib", investigation_continuity: "off", investigation_question: "on" }));
     renderLedger();
     const ask = await screen.findAllByRole("button", { name: "Ask a question" });
     fireEvent.click(ask[ask.length - 1]);
@@ -2167,7 +2170,7 @@ describe("asking the history", () => {
   test("a question still running stays reachable with the switch off", async () => {
     localStorage.setItem('grimoire.askHistory:["/lib","run"]',
                          JSON.stringify({ attempt: "a-earlier", question: "Who keeps it?" }));
-    (api.findHistoryQuestion as any).mockResolvedValue(null);
+    vi.mocked(api.findHistoryQuestion).mockResolvedValue(null);
     renderLedger();
     fireEvent.click(await column().findByRole("button", { name: "Ask a question" }));
     expect(await screen.findByRole("region", { name: "Ask the history" })).toBeInTheDocument();

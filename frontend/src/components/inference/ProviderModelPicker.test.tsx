@@ -1,3 +1,6 @@
+import type { DeepPartial } from "../../testkit/fixture";
+import type { CapabilityModel, ModelCapabilities, ProviderPreset } from "../../api/client";
+import { fixture } from "../../testkit/fixture";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { api, type CapabilityNeed, type InferenceProvider } from "../../api/client";
@@ -18,19 +21,19 @@ const PROVIDERS = [
     preset: "custom", usable: true, problem: null },
 ];
 
-const PRESET = {
+const PRESET: ProviderPreset = {
   id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "", url_locked: true,
   billing: "metered", reports_price: true, always: [], possible: [], never: [],
 };
 
-function row(id: string, reason = "the catalog says so") {
-  return { id, name: id.toUpperCase(), context: null, prompt: null, completion: null,
-           reason, capabilities: {} };
+function row(id: string, reason = "the catalog says so"): CapabilityModel {
+  return fixture({ id, name: id.toUpperCase(), context: null, prompt: null, completion: null,
+           reason, capabilities: {} });
 }
 
 /** One need's answer: the rows in each group, and the hidden ids. */
 function answer(need: CapabilityNeed, fits: string[], unverified: string[], hidden: string[],
-                reason: string | null = null) {
+                reason: string | null = null): ModelCapabilities {
   return {
     provider_preset: PRESET, need, reason,
     groups: { fits: fits.map((id) => row(id)),
@@ -42,9 +45,9 @@ function answer(need: CapabilityNeed, fits: string[], unverified: string[], hidd
 beforeEach(() => {
   vi.clearAllMocks();
   forgetModelTests();
-  (api.previewModelTest as any).mockResolvedValue({
+  vi.mocked(api.previewModelTest).mockResolvedValue({
     provider: "Saltmarch Router", provider_id: "saltmarch", model: "b",
-    sends: [], estimated_cost_usd: null });
+    sends: [], estimated_cost_usd: null, estimate_basis: null });
 });
 
 /** The picker, controlled the way a role form holds it. */
@@ -57,7 +60,7 @@ function Harness({ needs, start = { provider: "saltmarch", model: "" }, spy = vi
 }
 
 test("ProviderModelPicker groups fits and unverified across several needs", async () => {
-  (api.readConnectionCapabilities as any).mockImplementation(
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
     (_id: string, need: CapabilityNeed) => Promise.resolve(need === "generate"
       ? answer("generate", ["a", "b", "c"], ["d"], ["e"])
       : answer("vision", ["a"], ["b", "d"], ["c"])));
@@ -84,7 +87,7 @@ test("ProviderModelPicker groups fits and unverified across several needs", asyn
 });
 
 test("picking a row reports the provider and the model", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(
     answer("generate", ["a"], [], []));
   const spy = vi.fn();
   render(<Harness needs={["generate"]} spy={spy} />);
@@ -95,7 +98,7 @@ test("picking a row reports the provider and the model", async () => {
 });
 
 test("changing the provider clears the model and asks the new one", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(
     answer("generate", ["a"], [], []));
   const spy = vi.fn();
   render(<Harness needs={["generate"]} spy={spy}
@@ -109,7 +112,7 @@ test("changing the provider clears the model and asks the new one", async () => 
 });
 
 test("shows the provider-wide reason", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(
     answer("embed", [], [], [], "z.ai serves no embeddings"));
 
   render(<Harness needs={["embed"]} />);
@@ -121,7 +124,7 @@ test("shows the provider-wide reason", async () => {
 });
 
 test("accepts a typed model id", async () => {
-  (api.readConnectionCapabilities as any).mockImplementation(
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
     (_id: string, need: CapabilityNeed, model?: string) => Promise.resolve(model
       ? answer(need, [], [model], [])
       : answer(need, ["a"], [], [])));
@@ -146,7 +149,7 @@ test("Enter in the typed-id box uses the id, and goes no further", async () => {
   // The box's Enter is "Use this id", as the old combobox's was. It stops
   // there: a picker inside the reroll popover sits in an Enter-commits
   // container, and a typed id is not a reroll.
-  (api.readConnectionCapabilities as any).mockImplementation(
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
     (_id: string, need: CapabilityNeed, model?: string) => Promise.resolve(model
       ? answer(need, [], [model], [])
       : answer(need, ["a"], [], [])));
@@ -174,7 +177,7 @@ test("Enter in the typed-id box uses the id, and goes no further", async () => {
 });
 
 test("Test… opens the test dialog for that row", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(
     answer("generate", [], ["b"], []));
   render(<Harness needs={["generate"]} />);
 
@@ -191,14 +194,14 @@ test("Test… opens the test dialog for that row", async () => {
 });
 
 /** An answer to the `decide` need whose one unverified row `b` states `caps`. */
-function decideAnswer(caps: Record<string, { value: string; source: string }>) {
+function decideAnswer(caps: DeepPartial<CapabilityModel["capabilities"]>) {
   const base = answer("decide", [], ["b"], []);
-  base.groups.unverified[0] = { ...base.groups.unverified[0], capabilities: caps };
+  base.groups.unverified[0] = { ...base.groups.unverified[0], capabilities: fixture(caps) };
   return base;
 }
 
 test("an unverified Decision row known unable to generate offers decide_native", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer({
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(decideAnswer({
     generate: { value: "no", source: "catalog" },
     decide_native: { value: "unknown", source: "unknown" } }));
   render(<Harness needs={["decide"]} />);
@@ -213,9 +216,9 @@ test("an unverified Decision row known unable to generate offers decide_native",
 test.each([
   ["unknown", { value: "unknown", source: "unknown" }],
   ["yes", { value: "yes", source: "test" }],
-])("a Decision row whose generate is %s offers generate only", async (_name, generate) => {
-  const capabilities = { generate, decide_native: { value: "unknown", source: "unknown" } };
-  (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer(capabilities));
+ ] as const)("a Decision row whose generate is %s offers generate only", async (_name, generate) => {
+  const capabilities: DeepPartial<CapabilityModel["capabilities"]> = { generate, decide_native: { value: "unknown", source: "unknown" } };
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(decideAnswer(capabilities));
   render(<Harness needs={["decide"]} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
@@ -231,7 +234,7 @@ test("a Decision row whose generate no is a name-rule guess never offers decide_
   // Brutal review H (2-P4): the resolver serves such a model structured
   // whatever the native probe finds (a name-rule `no` is a guess), so a
   // confirmed, cost-unknown native request would buy nothing.
-  (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer({
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(decideAnswer({
     generate: { value: "no", source: "name" },
     decide_native: { value: "unknown", source: "unknown" } }));
   render(<Harness needs={["decide"]} />);
@@ -244,7 +247,7 @@ test("a Decision row whose generate no is a name-rule guess never offers decide_
 });
 
 test("a Decision row whose decide_native is no never offers it", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer({
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(decideAnswer({
     generate: { value: "no", source: "catalog" },
     decide_native: { value: "no", source: "catalog" } }));
   render(<Harness needs={["decide"]} />);
@@ -258,10 +261,10 @@ test("a Decision row whose decide_native is no never offers it", async () => {
 
 test("a picker that does not ask to decide never offers decide_native", async () => {
   const unverified = answer("generate", [], ["b"], []);
-  unverified.groups.unverified[0] = { ...unverified.groups.unverified[0], capabilities: {
+  unverified.groups.unverified[0] = fixture({ ...unverified.groups.unverified[0], capabilities: {
     generate: { value: "no", source: "catalog" },
-    decide_native: { value: "unknown", source: "unknown" } } };
-  (api.readConnectionCapabilities as any).mockResolvedValue(unverified);
+    decide_native: { value: "unknown", source: "unknown" } } });
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(unverified);
   render(<Harness needs={["generate"]} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
@@ -272,10 +275,10 @@ test("a picker that does not ask to decide never offers decide_native", async ()
 });
 
 test("a test dialog closed mid-run and opened again rejoins that run", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(
     answer("generate", [], ["b"], []));
   // A run that never lands: closing the dialog does not stop it on the server.
-  (api.runModelTest as any).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.runModelTest).mockImplementation(() => new Promise(() => {}));
   render(<Harness needs={["generate"]} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
@@ -303,9 +306,9 @@ test("closing a dialog whose test landed puts focus back on that model", async (
   // Test… the dialog came from is gone by the time it closes, and focus fell
   // to the body, where no key inside the picker (or a popover around it)
   // could reach it.
-  (api.readConnectionCapabilities as any).mockResolvedValue(answer("generate", [], ["b"], []));
-  (api.runModelTest as any).mockImplementation(async () => {
-    (api.readConnectionCapabilities as any).mockResolvedValue(answer("generate", ["b"], [], []));
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(answer("generate", [], ["b"], []));
+  vi.mocked(api.runModelTest).mockImplementation(async () => {
+    vi.mocked(api.readConnectionCapabilities).mockResolvedValue(answer("generate", ["b"], [], []));
     return LANDED_B;
   });
   render(<Harness needs={["generate"]} />);
@@ -324,9 +327,9 @@ test("closing a dialog whose test landed puts focus back on that model", async (
 });
 
 test("a test landing behind a closed dialog keeps focus on its Test…", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(answer("generate", [], ["b"], []));
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(answer("generate", [], ["b"], []));
   let land: (r: typeof LANDED_B) => void = () => {};
-  (api.runModelTest as any).mockImplementation(() => new Promise((resolve) => { land = resolve; }));
+  vi.mocked(api.runModelTest).mockImplementation(() => new Promise((resolve) => { land = resolve; }));
   render(<Harness needs={["generate"]} />);
   const opener = await screen.findByRole("button", { name: "Test B" });
   opener.focus();
@@ -346,9 +349,9 @@ test("a test landing behind a closed dialog keeps focus on its Test…", async (
 });
 
 test("another model's test dialog starts clean", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(
     answer("generate", [], ["b", "d"], []));
-  (api.runModelTest as any).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.runModelTest).mockImplementation(() => new Promise(() => {}));
   render(<Harness needs={["generate"]} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
@@ -368,7 +371,7 @@ test("another model's test dialog starts clean", async () => {
 });
 
 test("a provider that cannot send says so without guessing why", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(
     answer("generate", ["a"], [], []));
   // `kind: ""` is what the view sends for a record that names none.
   const providers: InferenceProvider[] = [
@@ -403,7 +406,7 @@ test("no needs asks nothing and offers no models", async () => {
 });
 
 test("a failed read keeps the chosen model on screen and still takes a typed id", async () => {
-  (api.readConnectionCapabilities as any).mockRejectedValue(
+  vi.mocked(api.readConnectionCapabilities).mockRejectedValue(
     Object.assign(new Error("offline"), { detail: "the provider is unreachable" }));
   const spy = vi.fn();
   render(<Harness needs={["generate"]} spy={spy}
@@ -420,7 +423,7 @@ test("a failed read keeps the chosen model on screen and still takes a typed id"
 });
 
 test("a provider-wide reason still shows the model a selection names", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(
     answer("embed", [], [], [], "z.ai serves no embeddings"));
   render(<Harness needs={["embed"]} start={{ provider: "saltmarch", model: "vendor/kept" }} />);
 
@@ -430,7 +433,7 @@ test("a provider-wide reason still shows the model a selection names", async () 
 });
 
 test("an empty list points a listable provider at its refresh", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(answer("generate", [], [], []));
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(answer("generate", [], [], []));
   render(<Harness needs={["generate"]} />);
   expect(await screen.findByText(
     "No listed model can do this. Refresh this provider's models on the Providers page, "
@@ -438,7 +441,7 @@ test("an empty list points a listable provider at its refresh", async () => {
 });
 
 test("an empty list on a provider with no catalog asks only for an id", async () => {
-  (api.readConnectionCapabilities as any).mockResolvedValue(answer("generate", [], [], []));
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue(answer("generate", [], [], []));
   render(<ProviderModelPicker needs={["generate"]} value={{ provider: "realm-claude", model: "" }}
                               onChange={() => {}}
                               providers={[{ id: "realm-claude", name: "Realm Claude",
@@ -449,9 +452,9 @@ test("an empty list on a provider with no catalog asks only for an id", async ()
 });
 
 test("a pin needing tools tests tools on a row that already generates", async () => {
-  const caps = { generate: { value: "yes", source: "catalog" },
-                 tools: { value: "unknown", source: "unknown" } };
-  (api.readConnectionCapabilities as any).mockImplementation(
+  const caps = fixture<CapabilityModel["capabilities"]>({ generate: { value: "yes", source: "catalog" },
+                 tools: { value: "unknown", source: "unknown" } });
+  vi.mocked(api.readConnectionCapabilities).mockImplementation(
     (_id: string, need: CapabilityNeed) => {
       const got = need === "generate" ? answer("generate", ["b"], [], [])
         : answer("tools", [], ["b"], []);

@@ -13,6 +13,8 @@ vi.mock("../api/client", () => ({
 import { api } from "../api/client";
 import ModulesView from "./ModulesView";
 import { MemoryRouter } from "react-router-dom";
+import { fixture } from "../testkit/fixture";
+import type { ModuleDetail } from "../api/types";
 
 // The page lives in the library's shell now — a context column of sections
 // beside main — and every row in that column is a <NavLink>.
@@ -30,7 +32,7 @@ const DETAIL = {
   errors: [],
 };
 
-const POOL = {
+const POOL: ModuleDetail = {
   id: "pool-basic",
   source: "builtin",
   manifest: { id: "pool-basic", name: "Basic Pool", description: "d10 pools.", version: "0.1", dice: "5d10 t6" },
@@ -49,10 +51,10 @@ const POOL = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listModules as any).mockResolvedValue([
+  vi.mocked(api.listModules).mockResolvedValue([
     { id: "pool-basic", name: "Basic Pool", description: "d10 pools.", version: "0.1", source: "builtin", valid: true },
   ]);
-  (api.readModule as any).mockResolvedValue(POOL);
+  vi.mocked(api.readModule).mockResolvedValue(POOL);
 });
 
 test("clicking a row shows the read-only module detail", async () => {
@@ -70,18 +72,21 @@ test("clicking a row shows the read-only module detail", async () => {
 });
 
 test("renders valid sheet types and the Problems section without throwing on a broken pack", async () => {
-  const BROKEN = {
+  // A broken pack is served as it is on disk, which the type does not
+  // describe: `broken` is a sheet type that is not an object at all.
+  const sheetTypes: Record<string, unknown> = {
+    broken: "oops",
+    medium: { label: "Medium", kind: "characters", groups: ["ghost-group"], fields: [], derived: {} },
+  };
+  const BROKEN = fixture<ModuleDetail>({
     ...POOL,
     sheets: {
       groups: { attributes: { label: "Attributes", fields: [{ key: "vigor", label: "Vigor", type: "dots", max: 5 }] } },
-      sheet_types: {
-        broken: "oops",
-        medium: { label: "Medium", kind: "characters", groups: ["ghost-group"], fields: [], derived: {} },
-      },
+      sheet_types: sheetTypes as ModuleDetail["sheets"]["sheet_types"],
     },
     errors: ["sheet_types.broken: must be an object", "sheet_types.medium: unknown group ref 'ghost-group'"],
-  };
-  (api.readModule as any).mockResolvedValue(BROKEN);
+  });
+  vi.mocked(api.readModule).mockResolvedValue(BROKEN);
   const { container } = render(inShell(<ModulesView />));
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Basic Pool"));
@@ -94,11 +99,11 @@ test("renders valid sheet types and the Problems section without throwing on a b
 });
 
 test("list row flags display issues; detail shows Display section", async () => {
-  (api.listModules as any).mockResolvedValue([
+  vi.mocked(api.listModules).mockResolvedValue([
     { id: "pool-basic", name: "Pool Basic", description: "", version: "1",
       source: "builtin", valid: true, display_ok: false },
   ]);
-  (api.readModule as any).mockResolvedValue({
+  vi.mocked(api.readModule).mockResolvedValue({
     ...POOL,
     layout: { sheet_types: { medium: { column: [] } } },
     theme: { dots: "diamond" },
@@ -114,15 +119,15 @@ test("list row flags display issues; detail shows Display section", async () => 
 });
 
 test("user module shows Edit; builtin shows duplicate hint", async () => {
-  (api.listModules as any).mockResolvedValue([
+  vi.mocked(api.listModules).mockResolvedValue(fixture([
     { id: "mine", name: "Mine", source: "user", valid: true },
     { id: "d20-basic", name: "Basic D20", source: "builtin", valid: true },
-  ]);
-  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "mine", source: "user" });
+  ]));
+  vi.mocked(api.readModule).mockResolvedValue({ ...DETAIL, id: "mine", source: "user" });
   render(inShell(<ModulesView />));
   fireEvent.click(await screen.findByText("Mine"));
   expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
-  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "d20-basic", source: "builtin" });
+  vi.mocked(api.readModule).mockResolvedValue({ ...DETAIL, id: "d20-basic", source: "builtin" });
   fireEvent.click(screen.getByText("Basic D20"));
   await waitFor(() =>
     expect(screen.getByText(/duplicate to customize/)).toBeInTheDocument());
@@ -130,11 +135,11 @@ test("user module shows Edit; builtin shows duplicate hint", async () => {
 });
 
 test("Duplicate prompts for a name and selects the copy", async () => {
-  (api.listModules as any).mockResolvedValue([
+  vi.mocked(api.listModules).mockResolvedValue(fixture([
     { id: "d20-basic", name: "Basic D20", source: "builtin", valid: true },
-  ]);
-  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "d20-basic", source: "builtin" });
-  (api.duplicateModule as any).mockResolvedValue({ id: "basic-d20-copy" });
+  ]));
+  vi.mocked(api.readModule).mockResolvedValue({ ...DETAIL, id: "d20-basic", source: "builtin" });
+  vi.mocked(api.duplicateModule).mockResolvedValue({ id: "basic-d20-copy" });
   render(inShell(<ModulesView />));
   fireEvent.click(await screen.findByText("Basic D20"));
   await waitFor(() =>
@@ -146,8 +151,8 @@ test("Duplicate prompts for a name and selects the copy", async () => {
 });
 
 test("Import posts the picked file, reloads the list, and selects the imported module", async () => {
-  (api.importModule as any).mockResolvedValue({ id: "imported" });
-  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "imported", source: "user" });
+  vi.mocked(api.importModule).mockResolvedValue({ id: "imported" });
+  vi.mocked(api.readModule).mockResolvedValue({ ...DETAIL, id: "imported", source: "user" });
   render(inShell(<ModulesView />));
   const input = screen.getByLabelText("Import module zip") as HTMLInputElement;
   const file = new File(["zip"], "pack.zip", { type: "application/zip" });
@@ -158,10 +163,10 @@ test("Import posts the picked file, reloads the list, and selects the imported m
 });
 
 test("Edit mounts the module editor", async () => {
-  (api.listModules as any).mockResolvedValue([
+  vi.mocked(api.listModules).mockResolvedValue(fixture([
     { id: "mine", name: "Mine", source: "user", valid: true },
-  ]);
-  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "mine", source: "user" });
+  ]));
+  vi.mocked(api.readModule).mockResolvedValue({ ...DETAIL, id: "mine", source: "user" });
   render(inShell(<ModulesView />));
   fireEvent.click(await screen.findByText("Mine"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));

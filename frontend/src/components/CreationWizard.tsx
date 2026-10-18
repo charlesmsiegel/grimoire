@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, type EntityScope, type ModuleDetail } from "../api/client";
 import { Field } from "./Field";
 import { typeKind } from "./SheetEditor";
+import { errorText } from "../api/errors";
 
 type Step = "form" | "type" | "budget";
 
@@ -89,14 +90,14 @@ export default function CreationWizard({ scope, kind, module, createRecord, dele
     let id: string;
     try {
       id = await createRecord(name);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
       return;
     }
     try {
       await api.putSheetCreation(scope, module.id, kind, id, { sheet_type: tid, spends: finalSpends, expected: null });
       onDone(id);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // The record was already created; the sheet write is what failed. Best-effort
       // roll it back so a rejected budget/validation/transient failure doesn't leave
       // a durable, permanently orphaned, unsheeted record with no way for the user
@@ -108,7 +109,7 @@ export default function CreationWizard({ scope, kind, module, createRecord, dele
           // ignore -- surfaced error below still reflects the original failure
         }
       }
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     }
   }
 

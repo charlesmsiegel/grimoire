@@ -47,7 +47,7 @@ export function EventsPanel({ cid, refreshKey }: {
       await action();
       await reload();
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof ApiError && err.kind === "partial_delete") {
         // The delete landed and only its link cleanup did not: the event is
         // gone, so a row drawn from the old read would answer a second Delete
@@ -56,7 +56,7 @@ export function EventsPanel({ cid, refreshKey }: {
         setError(errorText(err));
         return false;
       }
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
       return false;
     } finally {
       setBusy(false);
@@ -89,7 +89,8 @@ export function EventsPanel({ cid, refreshKey }: {
         <EventForm cid={cid} busy={busy} onCancel={() => setAdding(false)}
                    onSave={async (body) => {
                      if (await run(() => api.createCampaignEvent(
-                       cid, { name: body.name ?? "", date: body.date ?? "", note: body.note })))
+                       cid, { name: body.name ?? "", date: body.date ?? "",
+                               ...(body.note === undefined ? {} : { note: body.note }) })))
                        setAdding(false);
                    }} />
       ) : (

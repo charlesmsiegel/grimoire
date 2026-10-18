@@ -124,7 +124,7 @@ function unnamed(row: Row): boolean {
 }
 
 export function PricingEditor({ addModel, onSaved, onCancel }:
-  { addModel?: string; onSaved?: () => void; onCancel?: () => void } = {}) {
+  { addModel?: string | undefined; onSaved?: () => void; onCancel?: () => void } = {}) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

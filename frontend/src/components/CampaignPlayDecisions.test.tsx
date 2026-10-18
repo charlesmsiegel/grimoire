@@ -14,7 +14,7 @@ const inherited = {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 test("each switch says what Inherit comes to", async () => {
-  (api.getCampaignPlayDecisions as any).mockResolvedValue(inherited);
+  vi.mocked(api.getCampaignPlayDecisions).mockResolvedValue(inherited);
   render(<CampaignPlayDecisions cid="saltmarch" />);
   expect(await screen.findByText(/^Currently on \(following the global setting\)\. No extra call/))
     .toBeInTheDocument();
@@ -26,8 +26,8 @@ test("each switch says what Inherit comes to", async () => {
 });
 
 test("choosing a value writes only that switch and shows the answer", async () => {
-  (api.getCampaignPlayDecisions as any).mockResolvedValue(inherited);
-  (api.setCampaignPlayDecisions as any).mockResolvedValue({
+  vi.mocked(api.getCampaignPlayDecisions).mockResolvedValue(inherited);
+  vi.mocked(api.setCampaignPlayDecisions).mockResolvedValue({
     ...inherited, turn_plan: "plan", effective: { ...inherited.effective, turn_plan: "plan" } });
   render(<CampaignPlayDecisions cid="saltmarch" />);
   const select = await screen.findByLabelText("Turn decision");
@@ -39,7 +39,7 @@ test("choosing a value writes only that switch and shows the answer", async () =
 });
 
 test("a failed read says why", async () => {
-  (api.getCampaignPlayDecisions as any).mockRejectedValue(new Error("campaign not found"));
+  vi.mocked(api.getCampaignPlayDecisions).mockRejectedValue(new Error("campaign not found"));
   render(<CampaignPlayDecisions cid="gone" />);
   expect(await screen.findByRole("alert")).toHaveTextContent("campaign not found");
 });

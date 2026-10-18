@@ -256,7 +256,7 @@ export const SceneInspector = memo(function SceneInspector({
      *  The caller's count is windowed (#94) and so understates a long
      *  transcript — which does not matter here, because a window is a whole page
      *  and the only distinction this draws is "barely started or not". */
-    posts?: number;
+    posts?: number | undefined;
     /** The reads the Cost section renders, when the caller already holds them
      *  (see `CostPanel`); left out, that section reads them itself. */
     usage?: SceneUsage | null;
@@ -268,7 +268,7 @@ export const SceneInspector = memo(function SceneInspector({
     /** A restore rewrote the transcript. Left out, `onSceneChanged` stands in;
      *  the play view passes its own so a restore asks for the follow-ups any
      *  edit does. */
-    onTranscriptEdited?: () => void;
+    onTranscriptEdited?: (() => void) | undefined;
     /** The manual tasks a composer quick reply is running for this scene, so
      *  the same task cannot be started twice from two surfaces. */
     stripTasks?: { rolling_summary?: boolean; scene_break?: boolean };
@@ -552,8 +552,8 @@ export const SceneInspector = memo(function SceneInspector({
       await reloadCast();
       onSceneChanged();
       askRolling();   // a join/leave appends a transition post (#85)
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -564,8 +564,8 @@ export const SceneInspector = memo(function SceneInspector({
       await reloadCast();
       onSceneChanged();
       askRolling();   // a join/leave appends a transition post (#85)
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -605,7 +605,8 @@ export const SceneInspector = memo(function SceneInspector({
         if (mine !== whenGen.current) return;
         setWhen(w);
         // dateless scene with a suggestion: pre-fill the input, but never clobber typing
-        if (!w.current && w.suggested) setDateInput((prev) => prev || w.suggested!);
+        const suggested = w.suggested;
+        if (!w.current && suggested) setDateInput((prev) => prev || suggested);
       }).catch(() => { if (mine === whenGen.current) setWhen(null); });
     },
     [cid, sid]);
@@ -643,8 +644,8 @@ export const SceneInspector = memo(function SceneInspector({
       else await api.setPin(cid, { ref, mode, scope: "scene", sid });
       await reloadPins();
       onSceneChanged();   // the prompt changed, so the context panel has moved
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -659,8 +660,8 @@ export const SceneInspector = memo(function SceneInspector({
       setPinTtl("");
       await reloadPins();
       onSceneChanged();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -670,8 +671,8 @@ export const SceneInspector = memo(function SceneInspector({
       await api.removePin(cid, p.ref, p.scope, p.sid);
       await reloadPins();
       onSceneChanged();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -867,7 +868,7 @@ export const SceneInspector = memo(function SceneInspector({
       // serve (the detail route scopes each entry to its scene), so the client
       // must not reintroduce it from the other end.
       if (current()) setFrozen({ cid, sid, data: snapshot });
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (!current()) return;
       // The likeliest failure is the retention window having evicted it while
       // the list was on screen, which is a 404 and not worth a scary banner.
@@ -880,9 +881,9 @@ export const SceneInspector = memo(function SceneInspector({
       // straight into a comparison the reader could not see themselves asking
       // for. Sticky across turns, not across leaving.
       setCompare("");
-      setError(err?.status === 404
+      setError(typeof err === "object" && err !== null && "status" in err && err.status === 404
         ? "That turn's prompt has aged out of the log."
-        : (err?.detail ?? String(err)));
+        : errorText(err));
     }
   }, [cid, sid]);
 
@@ -902,8 +903,8 @@ export const SceneInspector = memo(function SceneInspector({
       await api.setCalendarConfig({ kind: "campaign", id: cid }, {
         ...cfg, primary: { ...cfg.primary, provider }, confirmed: true });
       await reloadCfg();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -916,8 +917,8 @@ export const SceneInspector = memo(function SceneInspector({
       await api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
       onSceneChanged(); // surface the location-transition line in the stream
       askRolling();     // ...which is a post, and may be the Nth (#85)
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -945,8 +946,8 @@ export const SceneInspector = memo(function SceneInspector({
       await reloadWhen();
       onSceneChanged();  // surface the "Time passes…" transition line in the stream
       askRolling();      // ...which is a post, and may be the Nth (#85)
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     } finally {
       onRenaming?.(false);
     }
@@ -1160,7 +1161,7 @@ export const SceneInspector = memo(function SceneInspector({
       writeSeq.current += 1;
       setRolling({ key, data });
       setRollingUnread(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Guarded like the success path, because `error` is shared by every action
       // in this panel and the scene-change effect does not clear it: a refold
       // that failed for the record the reader LEFT would otherwise sit as a
@@ -1215,7 +1216,7 @@ export const SceneInspector = memo(function SceneInspector({
       breakSeq.current += 1;
       setBreakState({ key, data });
       setBreakUnread(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Reported, never destructive: a standing proposal is still the best
       // thing anyone has, so a failed question leaves it exactly where it is.
       if (currentKey.current !== key) return;
@@ -1239,7 +1240,7 @@ export const SceneInspector = memo(function SceneInspector({
       breakSeq.current += 1;
       setBreakState({ key, data });
       setBreakUnread(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (currentKey.current !== key) return;
       setBreakError({ key, err });
     } finally {

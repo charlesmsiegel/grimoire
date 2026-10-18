@@ -49,11 +49,11 @@ vi.mock("../components/ResponseControls", async () => {
   };
 });
 
-import { api, type Message } from "../api/client";
+import { api, type Actor, type Message } from "../api/client";
 import { RunRegistryProvider } from "../runs/RunRegistryProvider";
 import { Here, installCampaignMocks, playRoutes, withPalette } from "../testkit/campaignHarness";
 
-const CAST = [
+const CAST: Actor[] = [
   { kind: "characters", id: "seraphine", name: "Seraphine", role: "npc" },
   { kind: "characters", id: "mara", name: "Mara", role: "npc" },
   { kind: "pcs", id: "winifred", name: "Winifred", role: "player" },
@@ -89,7 +89,7 @@ function renderPlay() {
  *  gesture handlers, and a dependency of theirs that moved on every render
  *  would re-render that row. */
 function withArrows() {
-  (api.getResponseSwipe as any).mockResolvedValue({
+  vi.mocked(api.getResponseSwipe).mockResolvedValue({
     active: 1, variants: ["v1", "v2", "v3"].map((id) => ({ id, status: "complete" })),
     settings: null, resume_settings: null, can_reroll: true, editable: true, round_open: false, edited: false });
 }
@@ -103,20 +103,20 @@ function gate() {
 
 beforeEach(() => {
   installCampaignMocks();
-  (api.getCast as any).mockResolvedValue(CAST);
+  vi.mocked(api.getCast).mockResolvedValue(CAST);
 });
 
 test("composer keystrokes and streamed deltas re-render none of the posts on screen", async () => {
   const posts = transcript(10);
-  (api.getScene as any).mockResolvedValue(
+  vi.mocked(api.getScene).mockResolvedValue(
     { meta: { id: "s1", title: "Old" }, messages: posts, total: posts.length,
       has_user_message: true });
   const started = gate();
   const counted = gate();
   const delivered = gate();
   const streamed = gate();
-  (api.chat as any).mockImplementation(async (
-    _c: string, _s: string, _t: string, onEvent: (e: object) => void) => {
+  vi.mocked(api.chat).mockImplementation(async (
+    _c, _s, _t, onEvent: (e: object) => void) => {
     onEvent({ delta: "The lamps " });
     started.open();
     await counted.opened;                   // the test zeroes its counters
@@ -167,7 +167,7 @@ test("composer keystrokes and streamed deltas re-render none of the posts on scr
 
 test("typing in a post's edit form re-renders that post's run and no other", async () => {
   const posts = transcript(10);
-  (api.getScene as any).mockResolvedValue(
+  vi.mocked(api.getScene).mockResolvedValue(
     { meta: { id: "s1", title: "Old" }, messages: posts, total: posts.length,
       has_user_message: true });
   withArrows();
@@ -194,7 +194,7 @@ test("a scene with posts never mounts the empty-scene setup while it opens", asy
   // soon as the posts came in.
   const posts = transcript(2);
   const landed = gate();
-  (api.getScene as any).mockImplementation(async () => {
+  vi.mocked(api.getScene).mockImplementation(async () => {
     await landed.opened;
     return { meta: { id: "s1", title: "Old" }, messages: posts, total: posts.length,
              has_user_message: true };
@@ -212,7 +212,7 @@ test("a scene with posts never mounts the empty-scene setup while it opens", asy
 
 test("an empty scene shows its setup once its transcript has landed", async () => {
   const landed = gate();
-  (api.getScene as any).mockImplementation(async () => {
+  vi.mocked(api.getScene).mockImplementation(async () => {
     await landed.opened;
     return { meta: { id: "s1", title: "Old" }, messages: [], total: 0 };
   });

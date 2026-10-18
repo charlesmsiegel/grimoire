@@ -13,7 +13,7 @@ export function SwipeNav({ shown, title, previous, next }: {
   /** The position, as read: "2/3", or "–/3" with nothing active. */
   shown: string;
   /** What the active take was made with, for the figure's tooltip. */
-  title?: string;
+  title?: string | undefined;
   previous: SwipeStep;
   next: SwipeStep;
 }) {

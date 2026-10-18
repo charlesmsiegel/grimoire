@@ -185,7 +185,9 @@ const KNOWN_BY_SPEC: EntityFieldSpec = {
 const activationSpec = (a: (typeof ACTIVATION_FIELDS)[number]): EntityFieldSpec =>
   a.widget === "refs" ? KNOWN_BY_SPEC
     : { key: a.key, label: a.label, widget: a.widget as EntityFieldSpec["widget"],
-        min: a.min, max: a.max, options: a.options };
+        ...(a.min === undefined ? {} : { min: a.min }),
+        ...(a.max === undefined ? {} : { max: a.max }),
+        ...(a.options === undefined ? {} : { options: a.options }) };
 // Read at call time, not at import: this module is loaded by suites that mock
 // the client without the catalog and never render an editor.
 const activationKeys = () => ACTIVATION_FIELDS.map((a) => a.key);
@@ -402,7 +404,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
   scope?: EntityScope;
   /** The record the URL names, or null for the section's own screen. That
    *  screen is the browse grid, unless `isNew` says it is the blank form. */
-  selected?: string | null;
+  selected?: string | null | undefined;
   /** The blank new-record form, asked for by `?new=1` (or `?owner=` on Lore).
    *  With no record named, this is what separates the form from the grid. */
   isNew?: boolean;
@@ -743,7 +745,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     setKeys(e.meta.keys ?? "");
     const loaded = Object.fromEntries(
       [...fieldSpecs.map((f) => f.key), ...activationKeys()]
-        .map((k) => [k, String((e.meta as any)[k] ?? "")]));
+        .map((k) => {
+          const value = e.meta[k];
+          if (typeof value === "string") return [k, value];
+          if (typeof value === "number" || typeof value === "boolean") return [k, String(value)];
+          // Preserve structured frontmatter as JSON instead of an object label.
+          return [k, typeof value === "object" && value !== null ? JSON.stringify(value) : ""];
+        }));
     setFields(loaded);
     setLoadedFields(loaded);
     // Open when the record already sets something in it: that is what the
@@ -848,8 +856,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
       // GreetingEditor's own fix for the same defect). The URL-driven
       // `selected` effect is what actually opens the record read-only.
       navigate(recordHref(id));
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -898,7 +906,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
         if (!stillHere()) return;
         resetForm();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (!stillHere()) return;
       if (err instanceof ApiError && err.kind === "group_identity_conflict") {
         setBindings([]);
@@ -911,7 +919,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
         setStale({ rev: (err.body?.rev as string | null) ?? null });
         return;
       }
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     }
   }
 

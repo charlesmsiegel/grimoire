@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { errorText } from "../api/errors";
 
 /** A cover image, for a campaign or for a world.
  *
@@ -75,9 +76,9 @@ export function CoverPanel({ scope }: { scope: CoverScope }) {
       if (live.current !== mine) return;   // the reader switched campaigns mid-upload
       setBroken(null);
       setVersion(r.v);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (live.current !== mine) return;
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     } finally {
       // Both of these are the abandoned campaign's state, not the new one's:
       // the cid-change effect has already reset them for whoever is on screen.
@@ -96,11 +97,11 @@ export function CoverPanel({ scope }: { scope: CoverScope }) {
       await (isWorld ? api.deleteWorldCover(cid) : api.deleteCampaignCover(cid));
       if (live.current !== mine) return;
       setVersion("");
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (live.current !== mine) return;
       // The backend confirms the unlink, so a failure means the cover is
       // genuinely still there — leave it on screen.
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     } finally {
       if (live.current === mine) setBusy(false);
     }

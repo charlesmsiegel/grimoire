@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type Style } from "../api/client";
 import { Field } from "./Field";
+import { errorText } from "../api/errors";
 
 const BLANK = { name: "", description: "", tags: [] as string[], body: "" };
 
@@ -47,8 +48,8 @@ export function StyleGuideEditor() {
         await reload();
         await select(id);
       }
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 

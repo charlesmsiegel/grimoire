@@ -2,6 +2,7 @@ import { useState, type ChangeEvent } from "react";
 import { ApiError, api, type EntityScope, type ModuleDetail, type ModuleField, type Sheet } from "../api/client";
 import SheetLayout, { assembledDefs, themeStyle } from "./SheetLayout";
 import { useHotkeys } from "../shortcuts/useHotkeys";
+import { errorText } from "../api/errors";
 
 /** Module sheet-type kind for a file kind (pcs share characters types) — mirrors backend sheets.sheet_kind. */
 export const typeKind = (k: string) => (k === "pcs" ? "characters" : k);
@@ -36,7 +37,7 @@ function normalizeForSave(draft: Record<string, unknown>, defs: ModuleField[]): 
 
 export default function SheetEditor({ scope, module, kind, eid, initial, onClose, onSaved, onOpenRef }:
   { scope: EntityScope; module: ModuleDetail; kind: string; eid: string; initial: Sheet;
-    onClose: () => void; onSaved: () => void; onOpenRef?: (kind: string, id: string) => void }) {
+    onClose: () => void; onSaved: () => void; onOpenRef?: ((kind: string, id: string) => void) | undefined }) {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [sheetType, setSheetType] = useState<string | null>(initial.sheet_type);
   const [fields, setFields] = useState<Record<string, unknown>>(initial.fields);
@@ -101,8 +102,8 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       setMode("view");
       setNotice("This sheet changed elsewhere — reloaded.");
       onSaved();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -140,12 +141,12 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       if (scope.kind === "campaign") await refreshSnapshot();
       setMode("view");
       onSaved();
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 409) {
         await reloadAfterConflict();
         return;
       }
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     }
   }
 
@@ -193,12 +194,12 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       if (scope.kind === "campaign") await refreshSnapshot();
       setMode("view");
       onSaved();
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 409) {
         await reloadAfterConflict();
         return;
       }
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     }
   }
 
@@ -210,8 +211,8 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       setDraft(fresh.fields);
       setGen(fresh.gen);
       onSaved();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -223,12 +224,12 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       await api.deleteSheet(scope, module.id, kind, eid, gen);
       onSaved();
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 409) {
         await reloadAfterConflict();
         return;
       }
-      setError(err.detail ?? String(err));
+      setError(errorText(err));
     }
   }
 
@@ -262,14 +263,14 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
 
         <h3>{typeDef?.label ?? "No sheet type"}</h3>
 
-        {!typeDef ? (
+        {!typeDef || !sheetType ? (
           <div className="field-hint">This entity has no sheet type yet — pick one above to begin.</div>
         ) : mode === "view" ? (
-          <SheetLayout module={module} sheetType={sheetType!} mode="view"
+          <SheetLayout module={module} sheetType={sheetType} mode="view"
                        values={fields} derived={initial.derived}
                        scope={scope} onOpenRef={onOpenRef} onAdvance={advanceField} />
         ) : (
-          <SheetLayout module={module} sheetType={sheetType!} mode="edit"
+          <SheetLayout module={module} sheetType={sheetType} mode="edit"
                        values={draft} derived={initial.derived} onChange={setField}
                        scope={scope} onOpenRef={onOpenRef} />
         )}

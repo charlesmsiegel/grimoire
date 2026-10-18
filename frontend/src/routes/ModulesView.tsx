@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type ModuleDetail, type ModuleSummary } from "../api/client";
 import ModuleEditor from "../components/ModuleEditor";
 import LibraryPage from "../components/LibraryPage";
+import { errorText } from "../api/errors";
 
 export default function ModulesView() {
   const [mods, setMods] = useState<ModuleSummary[]>([]);
@@ -33,8 +34,8 @@ export default function ModulesView() {
       const d = await api.readModule(id);
       setDetail(d);
       setMode("edit");
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -47,8 +48,8 @@ export default function ModulesView() {
       const { id } = await api.importModule(file);
       await reloadList();
       select(id);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 
@@ -66,8 +67,8 @@ export default function ModulesView() {
       setDupName(null);
       await reloadList();
       select(id);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    } catch (err: unknown) {
+      setError(errorText(err));
     }
   }
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { ApiError, api, type ModelTestResult } from "../../api/client";
+import { ApiError, api, type ModelTestPreview, type ModelTestResult } from "../../api/client";
 import { TestCallDialog, forgetModelTests, useModelTests } from "./TestCallDialog";
 import { useHotkeys } from "../../shortcuts/useHotkeys";
 
@@ -9,12 +9,12 @@ vi.mock("../../api/client", async () => {
   return { ...actual, api: { previewModelTest: vi.fn(), runModelTest: vi.fn() } };
 });
 
-function preview(over: Partial<any> = {}) {
+function preview(over: Partial<ModelTestPreview> = {}): ModelTestPreview {
   return {
     provider: "Saltmarch Router", provider_id: "saltmarch", model: "vendor/m",
     sends: [{ capability: "generate",
               description: "One chat message, “Reply with OK.”, with the reply capped at 64 tokens." }],
-    estimated_cost_usd: 0.00012,
+    estimated_cost_usd: 0.00012, estimate_basis: "catalog",
     ...over,
   };
 }
@@ -24,7 +24,7 @@ beforeEach(() => {
   // The runs are module scope (one store for every holder), so a run a test
   // left in flight would be rejoined by the next.
   forgetModelTests();
-  (api.previewModelTest as any).mockResolvedValue(preview());
+  vi.mocked(api.previewModelTest).mockResolvedValue(preview());
 });
 
 /** The dialog, held the way the picker holds it: the runs belong to the
@@ -42,7 +42,7 @@ function open(onClose = vi.fn(), onDone = vi.fn()) {
 }
 
 test("TestCallDialog sends nothing until Run test", async () => {
-  (api.runModelTest as any).mockResolvedValue({
+  vi.mocked(api.runModelTest).mockResolvedValue({
     provider: "saltmarch", model: "vendor/m", rev: "r1",
     results: { generate: { ok: true } }, recorded: true });
   const { onDone } = open();
@@ -68,7 +68,7 @@ test("TestCallDialog sends nothing until Run test", async () => {
 
 test("Run test cannot be pressed twice", async () => {
   // A run that never lands, so the dialog stays in flight.
-  (api.runModelTest as any).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.runModelTest).mockImplementation(() => new Promise(() => {}));
   open();
 
   const run = await screen.findByRole("button", { name: "Run test" });
@@ -86,7 +86,7 @@ test("Run test cannot be pressed twice", async () => {
 test("a lost wait asks again under the same attempt", async () => {
   // The network dropped the wait, not the server refusing: the run may still
   // be going, so the next Run must name it rather than start another.
-  (api.runModelTest as any)
+  vi.mocked(api.runModelTest)
     .mockRejectedValueOnce(new TypeError("Failed to fetch"))
     .mockImplementationOnce(() => new Promise(() => {}));
   open();
@@ -102,7 +102,7 @@ test("a lost wait asks again under the same attempt", async () => {
 });
 
 test("a refused run lets its attempt go", async () => {
-  (api.runModelTest as any)
+  vi.mocked(api.runModelTest)
     .mockRejectedValueOnce(new ApiError(502, "the provider is down", "upstream"))
     .mockImplementationOnce(() => new Promise(() => {}));
   open();
@@ -133,7 +133,7 @@ function Opener({ onLanded }: { onLanded?: (r: ModelTestResult) => void }) {
 
 test("a run started before a remount is rejoined, not paid for again", async () => {
   let land: (r: ModelTestResult) => void = () => {};
-  (api.runModelTest as any).mockImplementation(
+  vi.mocked(api.runModelTest).mockImplementation(
     () => new Promise<ModelTestResult>((resolve) => { land = resolve; }));
   const firstLanded = vi.fn();
   const first = render(<Opener onLanded={firstLanded} />);
@@ -219,7 +219,7 @@ test("an overlay drawn over the dialog keeps its own focus", async () => {
 });
 
 test("never shows a zero cost for an unknown price", async () => {
-  (api.previewModelTest as any).mockResolvedValue(preview({ estimated_cost_usd: null }));
+  vi.mocked(api.previewModelTest).mockResolvedValue(preview({ estimated_cost_usd: null }));
   open();
 
   const dialog = await screen.findByRole("dialog", { name: "Test a model" });
@@ -229,7 +229,7 @@ test("never shows a zero cost for an unknown price", async () => {
 });
 
 test("a decision probe is never priced: cost unknown, not $0", async () => {
-  (api.previewModelTest as any).mockResolvedValue(preview({
+  vi.mocked(api.previewModelTest).mockResolvedValue(preview({
     sends: [{ capability: "decide_native",
               description: "One native decision request: the statement “The lamp in the window is lit.” and the yes/no question “Is the lamp lit?”." }],
     estimated_cost_usd: null, estimate_basis: null }));
@@ -242,7 +242,7 @@ test("a decision probe is never priced: cost unknown, not $0", async () => {
 });
 
 test("TestCallDialog says when the estimate comes from your rates", async () => {
-  (api.previewModelTest as any).mockResolvedValue(
+  vi.mocked(api.previewModelTest).mockResolvedValue(
     preview({ estimated_cost_usd: 0.0042, estimate_basis: "rates" }));
   open();
 
@@ -252,7 +252,7 @@ test("TestCallDialog says when the estimate comes from your rates", async () => 
 });
 
 test("a catalog estimate does not claim to be from your rates", async () => {
-  (api.previewModelTest as any).mockResolvedValue(
+  vi.mocked(api.previewModelTest).mockResolvedValue(
     preview({ estimated_cost_usd: 0.0042, estimate_basis: "catalog" }));
   open();
 
@@ -262,7 +262,7 @@ test("a catalog estimate does not claim to be from your rates", async () => {
 });
 
 test("an unpriced estimate says cost unknown whatever basis it carries", async () => {
-  (api.previewModelTest as any).mockResolvedValue(
+  vi.mocked(api.previewModelTest).mockResolvedValue(
     preview({ estimated_cost_usd: null, estimate_basis: "rates" }));
   open();
 
@@ -273,7 +273,7 @@ test("an unpriced estimate says cost unknown whatever basis it carries", async (
 });
 
 test("a preview the server refuses says why and offers no Run", async () => {
-  (api.previewModelTest as any).mockRejectedValue(
+  vi.mocked(api.previewModelTest).mockRejectedValue(
     new ApiError(409, "This connection has no API key.", "missing_key"));
   open();
 
@@ -294,7 +294,7 @@ test("a run forgotten while in flight never answers for the next one", async () 
   // it finally settles is not the second's to hear, or to lose its slot to.
   const lands: ((r: ModelTestResult) => void)[] = [];
   const fails: ((e: unknown) => void)[] = [];
-  (api.runModelTest as any).mockImplementation(() => new Promise<ModelTestResult>(
+  vi.mocked(api.runModelTest).mockImplementation(() => new Promise<ModelTestResult>(
     (resolve, reject) => { lands.push(resolve); fails.push(reject); }));
   const heard = vi.fn();
   let tests: ReturnType<typeof useModelTests> | null = null;
@@ -337,7 +337,7 @@ test("Run test hands focus to the dialog, and the outcome is announced", async (
   // Run test disables under the reader while the test runs: focus left on it
   // dropped to the body, and the outcome arrived with nothing to say so.
   let land: (r: ModelTestResult) => void = () => {};
-  (api.runModelTest as any).mockReturnValue(new Promise((r) => { land = r; }));
+  vi.mocked(api.runModelTest).mockReturnValue(new Promise((r) => { land = r; }));
   open();
   const dialog = await screen.findByRole("dialog", { name: "Test a model" });
   const run = within(dialog).getByRole("button", { name: "Run test" });

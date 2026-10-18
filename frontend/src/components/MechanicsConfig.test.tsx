@@ -13,12 +13,12 @@ import MechanicsConfig from "./MechanicsConfig";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listModules as any).mockResolvedValue([
+  vi.mocked(api.listModules).mockResolvedValue([
     { id: "pool-basic", name: "Basic Pool", description: "", version: "0.1", source: "builtin", valid: true },
   ]);
-  (api.getCampaignModule as any).mockResolvedValue({ setting: "", resolved: null, source: null });
-  (api.setCampaignModule as any).mockResolvedValue({ ok: true });
-  (api.getCampaignSheets as any).mockResolvedValue({ coverage: {}, refs: [] });
+  vi.mocked(api.getCampaignModule).mockResolvedValue({ setting: "", resolved: null, source: null });
+  vi.mocked(api.setCampaignModule).mockResolvedValue({ ok: true });
+  vi.mocked(api.getCampaignSheets).mockResolvedValue({ coverage: {}, refs: [] });
 });
 
 test("shows tri-state select and saves the choice", async () => {
@@ -33,7 +33,7 @@ test("shows tri-state select and saves the choice", async () => {
 });
 
 test("shows the resolved module and its source", async () => {
-  (api.getCampaignModule as any).mockResolvedValue(
+  vi.mocked(api.getCampaignModule).mockResolvedValue(
     { setting: "", resolved: "pool-basic", source: "world" });
   render(<MechanicsConfig cid="run" />);
   // "Basic Pool" also appears as a <select> option, so match the hint text
@@ -42,7 +42,7 @@ test("shows the resolved module and its source", async () => {
 });
 
 test("shows a stale-binding warning when the bound module is missing or invalid", async () => {
-  (api.getCampaignModule as any).mockResolvedValue(
+  vi.mocked(api.getCampaignModule).mockResolvedValue(
     { setting: "ghost", resolved: null, source: null });
   render(<MechanicsConfig cid="run" />);
   expect(await screen.findByText(
@@ -51,7 +51,7 @@ test("shows a stale-binding warning when the bound module is missing or invalid"
 });
 
 test("shows an error hint and does not throw when save fails", async () => {
-  (api.setCampaignModule as any).mockRejectedValue(new Error("boom"));
+  vi.mocked(api.setCampaignModule).mockRejectedValue(new Error("boom"));
   render(<MechanicsConfig cid="run" />);
   const select = (await screen.findByLabelText("Mechanics")) as HTMLSelectElement;
   fireEvent.change(select, { target: { value: "pool-basic" } });
@@ -60,9 +60,9 @@ test("shows an error hint and does not throw when save fails", async () => {
 });
 
 test("shows sheet coverage below the resolved hint when a module is resolved", async () => {
-  (api.getCampaignModule as any).mockResolvedValue(
+  vi.mocked(api.getCampaignModule).mockResolvedValue(
     { setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
-  (api.getCampaignSheets as any).mockResolvedValue({
+  vi.mocked(api.getCampaignSheets).mockResolvedValue({
     coverage: { characters: { total: 3, sheeted: 1, invalid: 0 } }, refs: [],
   });
   render(<MechanicsConfig cid="run" />);
