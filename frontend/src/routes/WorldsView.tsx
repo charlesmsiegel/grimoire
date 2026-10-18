@@ -290,7 +290,7 @@ export default function WorldsView() {
         {failed && (
           <div className="banner error-banner">
             The worlds could not be read.{" "}
-            <button className="subtle" onClick={() => { setError(null); void reload(); }}>Try again</button>
+            <button className="subtle" onClick={() => { void reload(); }}>Try again</button>
           </div>
         )}
         {/* "0 worlds" is a statement, so it waits for a read that landed;

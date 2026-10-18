@@ -6512,6 +6512,40 @@ test("an older page that will not load says so", async () => {
   expect(screen.getByText("newer post")).toBeInTheDocument();
 });
 
+test.each(["failure", "success"])("an older-page %s belongs to its campaign while the next campaign's list is pending", async (outcome) => {
+  let finishPage: () => void = () => {};
+  let landOther: (value: SceneMeta[]) => void = () => {};
+  vi.mocked(api.listScenes).mockImplementation((cid) => cid === "other"
+    ? new Promise((resolve) => { landOther = resolve; }) : Promise.resolve(SCENES_WITH_DATE));
+  vi.mocked(api.getScene).mockImplementation((cid, _sid, window) => {
+    if (cid === "run" && window?.before === 1) {
+      return new Promise((resolve, reject) => {
+        finishPage = () => outcome === "failure" ? reject(new Error("Retired page refused"))
+          : resolve({ meta: { id: "s1", title: "Old" }, messages: [{ role: "user", content: "retired opener" }], offset: 0 });
+      });
+    }
+    return Promise.resolve({ meta: { id: "s1", title: "Old" },
+      messages: [{ role: "assistant", content: `${cid} recent` }], offset: 1, total: 2, has_older: true });
+  });
+  render(<MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
+    {withPalette(<><Here /><Link to="/campaigns/other/scenes/s1">switch campaign</Link>{playRoutes()}</>)}
+  </MemoryRouter>);
+  await screen.findByText("run recent");
+  fireEvent.click(screen.getByRole("button", { name: /load 1 older post/i }));
+  fireEvent.click(screen.getByRole("link", { name: "switch campaign" }));
+  await waitFor(() => expect(here()).toBe("/campaigns/other/scenes/s1"));
+  await waitFor(() => expect(api.listScenes).toHaveBeenCalledWith("other"));
+  // The new list has not landed, so its selectScene cannot have retired the
+  // old window token yet. Campaign ownership must already be authoritative.
+  expect(screen.getByText("run recent")).toBeInTheDocument();
+  await act(async () => finishPage());
+  expect(screen.queryByText(/Retired page refused/)).not.toBeInTheDocument();
+  expect(screen.queryByText("retired opener")).not.toBeInTheDocument();
+  await act(async () => landOther(SCENES_WITH_DATE));
+  await screen.findByText("other recent");
+  expect(screen.queryByText(/Retired page refused/)).not.toBeInTheDocument();
+});
+
 test.each([false, true])("an older-page retry clears its failure, including an empty page: %s", async (empty) => {
   vi.mocked(api.listScenes).mockResolvedValue(SCENES_WITH_DATE);
   let attempts = 0;
@@ -7808,6 +7842,28 @@ test("a scene created whose only list read fails says so instead of going quiet"
   fireEvent.click(screen.getByText("stub-pick"));
 
   expect(await screen.findByText(/list read failed/)).toBeInTheDocument();
+});
+
+test.each(["failure", "success"])("a retired mount list %s cannot replace a creation's confirming-read refusal", async (outcome) => {
+  let finishMount: () => void = () => {};
+  let refuseRefresh: () => void = () => {};
+  vi.mocked(api.listScenes).mockImplementationOnce(() => new Promise((resolve, reject) => {
+    finishMount = () => outcome === "failure" ? reject(new Error("Retired mount refused")) : resolve(SCENES_WITH_DATE);
+  })).mockImplementationOnce(() => new Promise((_, reject) => {
+    refuseRefresh = () => reject(new Error("Creation refresh refused"));
+  }));
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: /\+ new scene/i }));
+  fireEvent.click(screen.getByText("stub-pick"));
+  await waitFor(() => expect(api.listScenes).toHaveBeenCalledTimes(2));
+  await act(async () => finishMount());
+  // The mount now follows the mutation's newer read; only its caller owns
+  // the explanation that the server already created the requested scene.
+  await act(async () => refuseRefresh());
+  expect(screen.getByText(/The scene was created, but the scene list could not be refreshed:.*Creation refresh refused/))
+    .toBeInTheDocument();
+  expect(screen.queryByText(/The scene list could not be read:/)).not.toBeInTheDocument();
+  expect(here()).toBe("/campaigns/run/scenes/s1");
 });
 
 test("an edit cannot write one scene's index into another's transcript", async () => {

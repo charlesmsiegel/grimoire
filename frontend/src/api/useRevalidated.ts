@@ -37,10 +37,11 @@ import { issuedEpoch, memoEpoch, onRunSettled } from "./memoEpoch";
  *  or that an id now names something else (a store moved from another origin,
  *  which no event of this one hears).
  *
- *  `reload()` answers whether the read it started (or the fresh one an old
- *  answer was swapped for) landed: `false` only when that read failed while it
- *  was still the newest. A read superseded by a later one answers `true`; the
- *  later one speaks for itself.
+ *  `reload()` answers whether the newest confirming read for this key landed.
+ *  A read superseded by a later one follows that read's result, including any
+ *  further replacement. A caller holding a mutation pending through its
+ *  confirming read must not release it while a newer answer is still pending.
+ *  Leaving the key retires its old reads without waiting on a different page.
  */
 export type Revalidated<T> = {
   data: T | undefined;
@@ -76,6 +77,7 @@ export function useRevalidated<T>(key: string,
   // allowed to write.
   const keyRef = useRef(key);
   const seq = useRef(0);
+  const latestRead = useRef<{ key: string; seq: number; result: Promise<boolean> } | null>(null);
 
   const issue = useCallback((k: string, fresh: boolean): Promise<boolean> => {
     const n = ++seq.current;
@@ -90,16 +92,25 @@ export function useRevalidated<T>(key: string,
     // which is current by definition.
     const sentIn = issuedEpoch(answer);
     const newest = () => n === seq.current && keyRef.current === k;
-    return answer.then((value) => {
-      if (!newest()) return true;
+    const retired = () => {
+      const latest = latestRead.current;
+      // Cleanup increments seq without issuing a replacement. Only a newer
+      // read of this same key can confirm a write for the waiting caller;
+      // never follow this promise itself or a different page's read.
+      return keyRef.current === k && latest?.key === k && latest.seq > n ? latest.result : true;
+    };
+    const result: Promise<boolean> = answer.then((value) => {
+      if (!newest()) return retired();
       if (sentIn !== undefined && sentIn < memoEpoch()) return issue(k, true);
       setHeld({ key: k, data: value, stale: false, failed: false });
       return true;
     }, () => {
-      if (!newest()) return true;
+      if (!newest()) return retired();
       setHeld({ key: k, data: undefined, stale: false, failed: true });
       return false;
     });
+    latestRead.current = { key: k, seq: n, result };
+    return result;
   }, []);
 
   useEffect(() => {

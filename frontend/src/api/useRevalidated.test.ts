@@ -94,6 +94,64 @@ test("reload answers false when the read it started fails", async () => {
   expect(result.current.failed).toBe(true);
 });
 
+test.each(["success", "failure"])("a superseded reload waits for the latest read's %s", async (outcome) => {
+  const older = held<Rows>();
+  const newer = held<Rows>();
+  const read = vi.fn((_k: string, _fresh: boolean) => Promise.resolve(BEFORE));
+  const { result } = track(() => "worlds", () => undefined, read);
+  await waitFor(() => expect(result.current.data).toEqual(BEFORE));
+  read.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+  let settled: boolean | undefined;
+  act(() => {
+    void result.current.reload().then((ok) => { settled = ok; });
+    void result.current.reload();
+  });
+  await act(async () => { older.resolve(BEFORE); });
+  expect(settled).toBeUndefined();
+  await act(async () => {
+    if (outcome === "success") newer.resolve(AFTER);
+    else newer.reject(new Error("offline"));
+  });
+  expect(settled).toBe(outcome === "success");
+  expect(result.current.data).toEqual(outcome === "success" ? AFTER : undefined);
+});
+
+test("a waiting reload follows further replacements of its confirming read", async () => {
+  const first = held<Rows>();
+  const second = held<Rows>();
+  const third = held<Rows>();
+  const read = vi.fn((_k: string, _fresh: boolean) => Promise.resolve(BEFORE));
+  const { result } = track(() => "worlds", () => undefined, read);
+  await waitFor(() => expect(result.current.data).toEqual(BEFORE));
+  read.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise).mockReturnValueOnce(third.promise);
+  let settled: boolean | undefined;
+  act(() => {
+    void result.current.reload().then((ok) => { settled = ok; });
+    void result.current.reload();
+  });
+  await act(async () => { first.resolve(BEFORE); });
+  act(() => { void result.current.reload(); });
+  await act(async () => { second.resolve(BEFORE); });
+  expect(settled).toBeUndefined();
+  await act(async () => { third.resolve(AFTER); });
+  expect(settled).toBe(true);
+  expect(result.current.data).toEqual(AFTER);
+});
+
+test.each(["key change", "unmount"])("a waiting reload retires without following another page on %s", async (leave) => {
+  const pending = held<Rows>();
+  const read = vi.fn((_k: string, _fresh: boolean) => Promise.resolve(BEFORE));
+  const { result, rerender, unmount } = track(() => "worlds", () => undefined, read);
+  await waitFor(() => expect(result.current.data).toEqual(BEFORE));
+  read.mockReturnValueOnce(pending.promise).mockReturnValue(new Promise<Rows>(() => {}));
+  let settled: boolean | undefined;
+  act(() => { void result.current.reload().then((ok) => { settled = ok; }); });
+  if (leave === "unmount") unmount();
+  else rerender({ k: "other-worlds" });
+  await act(async () => { pending.resolve(AFTER); });
+  expect(settled).toBe(true);
+});
+
 test("key change: the next key's render never shows the last key's payload", async () => {
   // Switch cid A -> B with A's payload on screen: B's render never shows A's
   // chores, where Ignore would act on the wrong campaign.

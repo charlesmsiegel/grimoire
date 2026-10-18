@@ -903,8 +903,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // below is the one place that reads it -- once this list has installed. A
     // read that fails installs nothing, so dropping its rejection left the page
     // with no scene, no rail and no word of why.
-    loadScenes().catch((err: unknown) => {
-      if (cidRef.current === cid) {
+    const mountScenes = loadScenes();
+    const mountSequence = sceneListSeq.current.get(cid);
+    mountScenes.catch((err: unknown) => {
+      // A retired mount read follows a newer mutation's refresh. That caller
+      // owns its refusal: only it knows whether the scene was already created.
+      if (cidRef.current === cid && sceneListSeq.current.get(cid) === mountSequence) {
         setError({ text: `The scene list could not be read: ${errorText(err)}`, retryable: false });
       }
     });
@@ -1623,7 +1627,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       const page = await api.getScene(cid, id, { limit: PAGE_SIZE, before: firstIndex });
       // the reader moved on (another scene, or a refresh that re-read the
       // window): this page describes a transcript that is no longer on screen
-      if (windowTokenRef.current !== token) return;
+      // A new campaign's list may still be pending, before its selectScene
+      // can retire the window token. Its route already owns the screen.
+      if (cidRef.current !== cid || windowTokenRef.current !== token) return;
       // A different operation may have replaced this window's failure banner.
       setError((current) => current?.from === from ? null : current);
       if (!page.messages.length) {
@@ -1643,7 +1649,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // back to its label as if nothing had been asked. Scoped like
       // `readScene`'s report: a page for a window the reader has left says
       // nothing about the one on screen.
-      if (windowTokenRef.current === token) {
+      if (cidRef.current === cid && windowTokenRef.current === token) {
         setError({ text: `Older posts could not be loaded: ${errorText(err)}`, retryable: false, from });
       }
     } finally {
