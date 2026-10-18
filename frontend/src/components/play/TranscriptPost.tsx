@@ -1,9 +1,10 @@
-import { memo, useState } from "react";
+import { memo } from "react";
 import type { Actor, Message, TrackerEntry, TrackerSummary, UsagePostBucket } from "../../api/client";
 import { PostCost } from "../cost";
 import { Portrait } from "../Portrait";
 import { ResponseControls } from "../ResponseControls";
-import RerollRoutePicker, { canGenerateOnRoute, type RerollRoute } from "../RerollRoute";
+import type { RerollRoute } from "../RerollRoute";
+import RerollPopover from "./RerollPopover";
 import { SavedThinking } from "../Thinking";
 import { TrackerDisclosure } from "../tracker/TrackerDisclosure";
 import { PostActions, type PostAction } from "./PostActions";
@@ -11,7 +12,6 @@ import { RenderedMarkdown } from "./StreamingMarkdown";
 import { SwipeNav } from "./SwipeNav";
 import { quotedIn } from "./citation";
 import { useSwipe } from "./useSwipe";
-import { useHotkeys } from "../../shortcuts/useHotkeys";
 
 // Marks a manual dice-roll transcript line's speaker (backend: scenes.ROLL_SPEAKER).
 // Prefixed with an invisible separator so it can never collide with a real
@@ -497,70 +497,3 @@ export const TranscriptPost = memo(function TranscriptPost({
     </div>
   );
 });
-
-/** The reroll box: where this reroll goes, and what it is told once there.
- *
- *  An overlay, so it registers as one (`modal`): while it is up the scene's
- *  bindings are held off and Escape is its own, from any control in it or
- *  from nowhere at all. The model list is radios, which are not typing
- *  targets, so without the hold a bare ← or → on one answered the scene's
- *  variant swipe -- activating another variant behind the box, or reopening
- *  it and dropping the route being chosen -- and the dispatcher's
- *  `preventDefault` took the radios' own arrow travel with it. A dialog the
- *  picker opens (a model's Test…) is a modal that registers later, so it is
- *  on top, and its Escape closes only it.
- *
- *  Enter stays on the element, where it is a commit: from the guidance box,
- *  or from a model row. The picker keeps the Enter its own controls answer (a
- *  select, a button, the typed-id box) by stopping it before it gets here. */
-function RerollPopover({ cid, pop, rolling, generationDisabled, actions }: {
-  cid: string;
-  pop: { prompt: string; route: RerollRoute };
-  rolling: boolean;
-  generationDisabled: boolean;
-  actions: TranscriptActions;
-}) {
-  useHotkeys(
-    [{ keys: "escape", label: "Close the reroll box", group: "THIS PANEL", whileTyping: true,
-       run: () => actions.setRerollPrompt(null) }],
-    { modal: true },
-  );
-  // A model id typed into the picker and not yet taken: Reroll waits for it
-  // (`RerollRoutePicker`'s `onPending`), and so does Enter's commit.
-  const [pending, setPending] = useState(false);
-  const disabled = rolling || pending || !canGenerateOnRoute(!generationDisabled, pop.route);
-  return (
-    // Keydown is only Enter's commit, filtered from what its controls send;
-    // they are the interactive elements.
-    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
-    <span className="reroll-pop"
-          onKeyDown={(e) => {
-            // React bubbles a portal's events through the tree that rendered
-            // it, so a key in the test dialog -- portalled to the body --
-            // arrives here as well. It is the dialog's, not the popover's.
-            if (!e.currentTarget.contains(e.target as Node)) return;
-            // `preventDefault` is what tells the shortcut dispatcher this
-            // keystroke is spoken for: ⌘⏎ typed here means "reroll", not
-            // "send", and without it both fired (PR #400 review).
-            if (e.key === "Enter") { e.preventDefault(); if (!disabled) actions.reroll(); }
-          }}>
-      {/* Above the guidance, not beside it: this is where the reroll goes,
-          and the hint is what it says once it gets there. Untouched, it is
-          Default: the campaign's own scene route, with no override. */}
-      <RerollRoutePicker cid={cid} value={pop.route} onChange={actions.setRerollRoute}
-                         onPending={setPending} />
-      <span className="reroll-guide">
-        <input
-          autoFocus
-          placeholder="Guide the reroll (optional)…"
-          aria-label="Reroll guidance"
-          value={pop.prompt}
-          onChange={(e) => actions.setRerollPrompt(e.target.value)}
-        />
-        <button className="btn-chrome" onClick={actions.reroll} disabled={disabled}>
-          Reroll ▸
-        </button>
-      </span>
-    </span>
-  );
-}

@@ -266,9 +266,6 @@
   "frontend/src/components/play/CastChanges.tsx": {
     "@typescript-eslint/no-misused-promises": 5
   },
-  "frontend/src/components/play/TranscriptPost.tsx": {
-    "jsx-a11y/no-autofocus": 1
-  },
   "frontend/src/components/review/AbsorbEditRow.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 1
   },

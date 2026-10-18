@@ -2177,12 +2177,19 @@ a.shelf-promote { text-decoration: none; text-align: center; }
    Two rows: where this reroll goes (#77), then what it is told once it gets
    there. The route row is on top because it is the coarser choice, and because
    the guidance input keeps the autofocus it has always had. */
-/* Capped to the viewport less the page's 16px gutters, so a phone never scrolls
-   sideways for it; the two fixed widths inside yield to the cap. */
-.reroll-pop { position: absolute; left: 100%; bottom: 0; margin-left: 10px; z-index: 5;
-  max-width: calc(100vw - 32px);
+/* Portalled outside the transcript's overflow, and fitted to its visible
+   rectangle by RerollPopover. Anchoring only to a post's bottom clipped an
+   early post's model controls behind the head. The picker scrolls within the
+   available height, while its guidance and touch Close stay reachable. */
+.reroll-pop { position: fixed; z-index: 5; width: 350px;
+  max-width: calc(100vw - 32px); overflow: hidden;
   display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow-glow); }
-.reroll-guide { display: flex; }
+/* The compact fallback can cover the phone index (25), but a model's Test
+   dialog (30) must still paint above its parent reroll form. */
+.reroll-pop-viewport { z-index: 28; }
+.reroll-close { flex: none; align-self: flex-end; margin: 4px 8px; min-height: 44px; }
+.reroll-pop > .reroll-route { flex: 1 1 auto; min-height: 0; width: auto; }
+.reroll-guide { display: flex; flex: none; }
 .reroll-guide input {
   width: 260px; min-width: 0; flex: 1 1 auto;
   background: transparent; color: var(--ink); border: none; outline: none;
@@ -2200,13 +2207,6 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 .reroll-route .reroll-default { display: flex; align-items: baseline; gap: 8px; }
 .reroll-route .reroll-default button[aria-pressed="true"] { color: var(--accent); }
 .reroll-route .reroll-preset { display: flex; flex-direction: column; gap: 4px; }
-/* A phone has no room beside the 26px gutter for a 340px box: opened from
-   there it ran off the right edge. It opens over the post instead, from the
-   gutter's own left edge, which sits inside the page's gutter. */
-@media (max-width: 720px) {
-  .reroll-pop { left: 0; margin-left: 0; }
-}
-
 /* ---- manual dice roll popover (anchored to the input bar) ---- */
 .roll-pop { position: absolute; bottom: 100%; left: 0; margin-bottom: 8px; z-index: 5;
   display: flex; align-items: center; flex-wrap: wrap;

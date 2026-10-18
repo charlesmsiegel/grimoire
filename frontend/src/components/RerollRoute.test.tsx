@@ -266,15 +266,26 @@ test("at format 1 a provider naming no model of its own says to choose one", asy
     .toBeInTheDocument();
 });
 
-test("the popover fits a phone: capped to the viewport, and anchored inside it", () => {
-  const { css, atWidth } = stylesheet();
+test("the popover fits the viewport without being clipped by the transcript", () => {
+  const { css } = stylesheet();
   expect(bodiesOf(css, ".reroll-pop").map((b) => declares(b, "max-width")))
     .toContain("calc(100vw - 32px)");
   // The route row's fixed width yields to that cap rather than pushing past it.
   expect(bodiesOf(css, ".reroll-route").map((b) => declares(b, "max-width"))).toContain("100%");
-  // Beside the gutter there is no room on a phone, so there it opens over the
-  // post, from the gutter's own left edge.
-  const phone = bodiesOf(atWidth(720), ".reroll-pop");
-  expect(phone.map((b) => declares(b, "left"))).toContain("0");
-  expect(phone.map((b) => declares(b, "margin-left"))).toContain("0");
+  // Its component fits viewport coordinates to the visible transcript. An
+  // absolute child was clipped above the first post even when its width fit.
+  expect(bodiesOf(css, ".reroll-pop").map((b) => declares(b, "position"))).toContain("fixed");
+  // The form's route area gives up height to the guidance and Close control
+  // and keeps its own scroll, rather than forcing those below the composer.
+  expect(bodiesOf(css, ".reroll-pop > .reroll-route").map((b) => declares(b, "min-height"))).toContain("0");
+  expect(bodiesOf(css, ".reroll-route").map((b) => declares(b, "overflow-y"))).toContain("auto");
+  // The model's test dialog is portalled separately. It remains above the
+  // form that opened it, both for its controls and for the modal backdrop.
+  const layer = (selector: string) => bodiesOf(css, selector)
+    .map((b) => declares(b, "z-index")).filter((value) => value !== null).map(Number);
+  expect(layer(".reroll-pop")).not.toHaveLength(0);
+  expect(layer(".tagline-modal-backdrop")).not.toHaveLength(0);
+  expect(Math.max(...layer(".reroll-pop"))).toBeLessThan(Math.max(...layer(".tagline-modal-backdrop")));
+  expect(layer(".reroll-pop-viewport")).not.toHaveLength(0);
+  expect(Math.max(...layer(".reroll-pop-viewport"))).toBeLessThan(Math.max(...layer(".tagline-modal-backdrop")));
 });
