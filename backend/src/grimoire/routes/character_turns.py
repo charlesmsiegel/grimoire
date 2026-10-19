@@ -513,14 +513,6 @@ def _successor(cid, sid, round_record, handoff, cancelled, actor=None):
             "lead": lead}
 
 
-def _selector_item(cid, sid, round_record):
-    """The speaker pick as a decision item: the round's eligible roster, and
-    the observable transcript gathered by `response_protocol` through the
-    prompt-phase regex view (stored text is raw; the pick reads what a model
-    is shown)."""
-    return _selector_inputs(cid, sid, round_record)[0]
-
-
 def _selector_inputs(cid, sid, round_record):
     """`(item, trigger, author_ref)`: the pick's item, and what the round
     answers for the addressed narrowing (roadmap 02 §5.2 rule 2) -- the

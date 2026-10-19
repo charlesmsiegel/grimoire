@@ -11,7 +11,6 @@ vi.mock("../api/client", async () => {
     setWeatherOverride: vi.fn(),
     clearWeather: vi.fn(),
     resumeWeather: vi.fn(),
-    deleteWeatherOverride: vi.fn(),
     replaceWeatherOverride: vi.fn(),
   } };
 });
@@ -276,7 +275,7 @@ test("a note-only edit replaces the span atomically instead of layering a duplic
   fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.replaceWeatherOverride).toHaveBeenCalled());
-  expect(api.deleteWeatherOverride).not.toHaveBeenCalled();
+  expect(api.replaceWeatherOverride).toHaveBeenCalledTimes(1);
   expect(api.setWeatherOverride).not.toHaveBeenCalled();
   const [, key, spanId, body] = vi.mocked(api.replaceWeatherOverride).mock.calls[0];
   expect([key, spanId]).toEqual(["saltmarch-docks", "ovr-1"]);

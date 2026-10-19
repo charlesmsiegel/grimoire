@@ -77,7 +77,7 @@ vi.mock("../api/client", () => ({
     getActorMembership: vi.fn().mockResolvedValue({ actor: "", groups: [] }),
     // the PC page asks for the selected version's history (#67)
     listPCRevisions: vi.fn(() => Promise.resolve([])),
-    listPCImages: vi.fn(), getCalendarMonths: vi.fn(),
+     getCalendarMonths: vi.fn(),
     listTags: vi.fn(),
     getTrackerFields: vi.fn(), setTrackerFields: vi.fn(),
     getRegex: vi.fn(), putRegex: vi.fn(), listConnections: vi.fn(),
@@ -93,7 +93,6 @@ vi.mock("../api/client", () => ({
     readGreeting: vi.fn(),
     getGreetingSubjects: vi.fn(),
     listUntaggedImages: vi.fn(),
-    imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
     exportUrl: (w: string, c: string, v: string, f: string) => `/export/${w}/${c}/${v}/${f}`,
     actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
       `/img/${sc.id}/${k}/${a}/${v}/${n}`,
@@ -1029,7 +1028,6 @@ test("a ref chip naming a PC opens that PC, and picking PCs from the index clear
     versions: [{ id: "main", name: "main",
                  persona: { name: "Winifred", pronouns: "", summary: "",
                             birthdate: "", description: "a quiet sort" } }] });
-  vi.mocked(api.listPCImages).mockResolvedValue([]);
   vi.mocked(api.listTags).mockResolvedValue({});
   vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
   vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
@@ -1066,7 +1064,6 @@ test("a Known-by actor chip on a location opens that actor", async () => {
     versions: [{ id: "main", name: "main",
                  persona: { name: "Winifred", pronouns: "", summary: "",
                             birthdate: "", description: "a quiet sort" } }] });
-  vi.mocked(api.listPCImages).mockResolvedValue([]);
   vi.mocked(api.listTags).mockResolvedValue({});
   vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
   vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
@@ -1091,7 +1088,6 @@ test("a focused PC is not carried into another scope's render", async () => {
     versions: [{ id: "main", name: "main",
                  persona: { name: "Winifred", pronouns: "", summary: "",
                             birthdate: "", description: "a quiet sort" } }] });
-  vi.mocked(api.listPCImages).mockResolvedValue([]);
   vi.mocked(api.listTags).mockResolvedValue({});
   vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
   vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });

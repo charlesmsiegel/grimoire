@@ -1246,7 +1246,7 @@ def test_every_entity_image_write_route_refuses_a_kind_that_has_no_entities(clie
     even be asked about.
 
     Enumerated rather than spot-checked because the check moved: it used to sit
-    in `_entity_image_put`/`_entity_image_promote`, where every caller got it
+    in `_entity_image_put`/`record_art_mutation`, where every caller got it
     for free, and it now rides along with the record gate the six handlers
     call. That is the trade this test pays for. `greetings` is here beside the
     nonsense kind because it is the near miss -- a real kind, with real images,

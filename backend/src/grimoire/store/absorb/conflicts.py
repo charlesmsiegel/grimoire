@@ -64,6 +64,7 @@ from .. import (
     characters,
     commitments,
     facts,
+    fieldtext,
     groupstate,
     overlay,
     playstate,
@@ -237,9 +238,9 @@ def fact_line(rec: dict) -> str:
     read by a bare `json.loads`, so a list-valued `status` would otherwise be
     concatenated into the line and raise.
     """
-    status = facts._field(rec.get("status"), facts.ACTIVE)
-    superseded_by = facts._field(rec.get("superseded_by"))
-    text = facts._field(rec.get("text"))
+    status = fieldtext.text(rec.get("status"), facts.ACTIVE)
+    superseded_by = fieldtext.text(rec.get("superseded_by"))
+    text = fieldtext.text(rec.get("text"))
     head = status + (f" (superseded by {superseded_by})" if superseded_by else "")
     return f"{head} — {text}" if text else head
 

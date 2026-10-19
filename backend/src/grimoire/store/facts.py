@@ -66,7 +66,7 @@ import json
 from pathlib import Path
 
 from .. import prompts
-from . import atomic, locks
+from . import atomic, fieldtext, locks
 from .campaigns import paths as campaigns_paths
 
 ACTIVE = "active"
@@ -108,18 +108,6 @@ def get(cid: str, fid: str) -> dict | None:
     return read(cid).get(fid)
 
 
-def _field(value, fallback: str = "") -> str:
-    """A stored field as text, or `fallback` for anything that is not a string.
-
-    facts.json is hand-editable and read by a bare `json.loads`, so every field
-    is whatever the file says. Same rule -- and the same reason -- as
-    `commitments._field`: a list-valued `text` reaching the ledger route renders
-    as an object React refuses as a child and blanks the panel, and one handed
-    to `.strip()` inside `materialize` turns a paid-for absorb into a 500.
-    """
-    return value.strip() if isinstance(value, str) else fallback
-
-
 def is_active(rec) -> bool:
     """Whether this record is still standing.
 
@@ -130,7 +118,7 @@ def is_active(rec) -> bool:
     `commitments.open_commitments` folds -- a hand-edited `"Retired"` must not
     read as a live fact the model is asked to reason from.
     """
-    return isinstance(rec, dict) and _field(rec.get("status"), ACTIVE).lower() != RETIRED
+    return isinstance(rec, dict) and fieldtext.text(rec.get("status"), ACTIVE).lower() != RETIRED
 
 
 def restates(rec, text: str) -> bool:
@@ -153,7 +141,7 @@ def restates(rec, text: str) -> bool:
     sentence.
     """
     return (isinstance(rec, dict)
-            and _field(rec.get("text")).casefold() == text.strip().casefold())
+            and fieldtext.text(rec.get("text")).casefold() == text.strip().casefold())
 
 
 def find(data: dict, scene: str, text: str) -> str:
@@ -170,8 +158,8 @@ def find(data: dict, scene: str, text: str) -> str:
     """
     want = text.strip().casefold()
     return next((k for k, rec in data.items()
-                 if isinstance(rec, dict) and _field(rec.get("scene")) == scene
-                 and _field(rec.get("text")).casefold() == want), "")
+                 if isinstance(rec, dict) and fieldtext.text(rec.get("scene")) == scene
+                 and fieldtext.text(rec.get("text")).casefold() == want), "")
 
 
 def recorded_after(rec, scene: str) -> bool:
@@ -194,7 +182,7 @@ def recorded_after(rec, scene: str) -> bool:
     """
     # A manual retirement has no scene anchor; its empty value means "now",
     # not a scene earlier than every recorded fact in the campaign.
-    return bool(scene) and isinstance(rec, dict) and _field(rec.get("scene")) > scene
+    return bool(scene) and isinstance(rec, dict) and fieldtext.text(rec.get("scene")) > scene
 
 
 def _next_id(data: dict) -> str:
@@ -215,7 +203,7 @@ def _next_id(data: dict) -> str:
     while an older retired fact still points at it, so the next unrelated fact
     takes the id and rewrites what that supersession says happened.
     """
-    taken = set(data) | {_field(rec.get("superseded_by"))
+    taken = set(data) | {fieldtext.text(rec.get("superseded_by"))
                          for rec in data.values() if isinstance(rec, dict)}
     n = len(data) + 1
     while f"f{n}" in taken:
@@ -353,7 +341,7 @@ def set_text(cid: str, fid: str, text: str | None = None,
         if not isinstance(rec, dict):
             return False
         if scene is not None:
-            ended = _field(rec.get("retired_scene"))
+            ended = fieldtext.text(rec.get("retired_scene"))
             if ended and scene.strip() > ended:
                 raise ValueError(
                     "a fact cannot be recorded after the scene that retired it")
@@ -458,9 +446,9 @@ def active(cid: str, as_of: str | None = None) -> list[dict]:
     """
     items = [(fid, r) for fid, r in read(cid).items()
              if is_active(r) and not (as_of is not None and recorded_after(r, as_of))]
-    items.sort(key=lambda fr: (_field(fr[1].get("scene")), len(fr[0]), fr[0]))
-    return [{"id": fid, "text": _field(r.get("text")), "date": _field(r.get("date")),
-             "scene": _field(r.get("scene"))} for fid, r in items]
+    items.sort(key=lambda fr: (fieldtext.text(fr[1].get("scene")), len(fr[0]), fr[0]))
+    return [{"id": fid, "text": fieldtext.text(r.get("text")), "date": fieldtext.text(r.get("date")),
+             "scene": fieldtext.text(r.get("scene"))} for fid, r in items]
 
 
 def retired(cid: str) -> list[dict]:
@@ -488,11 +476,11 @@ def retired(cid: str) -> list[dict]:
     """
     items = [(fid, r) for fid, r in read(cid).items()
              if isinstance(r, dict) and not is_active(r)]
-    items.sort(key=lambda fr: (_field(fr[1].get("scene")), len(fr[0]), fr[0]))
-    return [{"id": fid, "text": _field(r.get("text")), "date": _field(r.get("date")),
-             "scene": _field(r.get("scene")),
-             "superseded_by": _field(r.get("superseded_by")),
-             "retired_scene": _field(r.get("retired_scene"))} for fid, r in items]
+    items.sort(key=lambda fr: (fieldtext.text(fr[1].get("scene")), len(fr[0]), fr[0]))
+    return [{"id": fid, "text": fieldtext.text(r.get("text")), "date": fieldtext.text(r.get("date")),
+             "scene": fieldtext.text(r.get("scene")),
+             "superseded_by": fieldtext.text(r.get("superseded_by")),
+             "retired_scene": fieldtext.text(r.get("retired_scene"))} for fid, r in items]
 
 
 def render_active(cid: str, limit: int | None = None, as_of: str | None = None) -> list[str]:

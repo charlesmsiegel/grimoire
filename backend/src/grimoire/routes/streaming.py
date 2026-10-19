@@ -463,15 +463,6 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-def _sse_response(frames: list[str]):
-    """A StreamingResponse that just replays already-computed SSE frames (used
-    for the immediate-done / error-frame branches of the proposal route)."""
-    async def event_stream():
-        for f in frames:
-            yield f
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
 class StreamOutcome:
     """What a producer decided about its own run, for the runner to apply.
 

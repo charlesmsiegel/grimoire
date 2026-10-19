@@ -306,7 +306,6 @@ export function installCampaignMocks() {
   vi.mocked(api.getChronicle).mockResolvedValue([]);
   vi.mocked(api.campaignChanges).mockResolvedValue([]);
   vi.mocked(api.getIncoming).mockResolvedValue([]);
-  vi.mocked(api.listDiverged).mockResolvedValue([]);
   vi.mocked(api.getComposition).mockResolvedValue({ rows: [] });
   vi.mocked(api.setSyncPin).mockResolvedValue({ pinned: [] });
   vi.mocked(api.acceptIncoming).mockResolvedValue({ ok: true });

@@ -88,7 +88,7 @@ export async function campaignApiMock() {
       // The durable-review surface (#396). A review outlives the request that
       // asked for it, so the panel discovers one rather than only creating one.
       pendingReview: vi.fn(), discardReview: vi.fn(), liveReview: vi.fn(),
-      awaitRun: vi.fn(), getRun: vi.fn(),
+      awaitRun: vi.fn(),
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
       getSceneFocus: vi.fn(), setSceneFocus: vi.fn(), getPromptLayout: vi.fn(),
@@ -118,7 +118,7 @@ export async function campaignApiMock() {
       listModules: vi.fn(), getCampaignSheets: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
-      getIncoming: vi.fn(), listDiverged: vi.fn(),
+      getIncoming: vi.fn(),
       getComposition: vi.fn(), setSyncPin: vi.fn(),
       acceptIncoming: vi.fn(), rejectIncoming: vi.fn(),
       campaignLedger: vi.fn(),

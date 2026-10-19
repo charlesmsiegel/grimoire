@@ -16,11 +16,13 @@ from .. import (
     entities,
     errors,
     facts,
+    fieldtext,
     overlay,
     plot,
 )
 from ..campaigns import paths as campaigns_paths
 from ..continuity import effective as continuity_effective
+from ..continuity import retarget
 from ..paths import slugify
 from . import conflicts, membership, parse, routing, staging, weather
 
@@ -80,20 +82,8 @@ def record_taken(cid: str, kind: str, name: str) -> str | None:
     return f"this campaign already has {noun} with the id {slugify(name)}"
 
 
-def _text(value) -> str:
-    """A stored field as text, or "" for anything that is not a string.
-
-    commitments.json is hand-editable and read by a bare `json.loads`, so every
-    field inside a record is whatever the file says — a list-valued `status`
-    concatenated into a label, or a list-valued `due` handed to `.strip()`,
-    raises from inside `materialize`. That is AFTER the extraction call and is
-    not caught by the absorb route, so one malformed record turns a paid-for
-    absorb into a 500. Checking the document's top-level shape does not reach
-    this; the fields have to be coerced where they are read.
-    """
-    return value.strip() if isinstance(value, str) else ""
-
-
+# Coerce hand-edited commitment fields at every read: a malformed status or due
+# must not turn the already-paid extraction into a 500 after its top-level read succeeds.
 def _new_record_id(stored: dict, staged: dict[str, str], slug: str, title: str, *,
                    settled: Callable[[dict], bool],
                    aliases: dict[str, str] | None = None) -> str:
@@ -163,7 +153,7 @@ def _new_record_id(stored: dict, staged: dict[str, str], slug: str, title: str, 
             return True
         if settled(cur):
             return False
-        return _text(cur.get("title")).casefold() == want
+        return fieldtext.text(cur.get("title")).casefold() == want
 
     n, candidate = 1, slug
     while not _free(candidate):
@@ -178,10 +168,10 @@ def _merge_honoured(stored: dict, source: str, canonical: str, want: str,
     cur = stored.get(canonical)
     if not isinstance(cur, dict) or settled(cur):
         return False
-    titles = {_text(cur.get("title")).casefold()}
+    titles = {fieldtext.text(cur.get("title")).casefold()}
     src = stored.get(source)
     if isinstance(src, dict):
-        titles.add(_text(src.get("title")).casefold())
+        titles.add(fieldtext.text(src.get("title")).casefold())
     return want in titles
 
 
@@ -194,11 +184,11 @@ def _commitment_settled(record: dict) -> bool:
     # it, which is exactly what the resolved check exists to prevent. `_text`
     # because the file is hand-editable: a list-valued status reads as "" (not
     # settled) rather than raising out of a paid-for absorb.
-    return _text(record.get("status")).lower() in commitments.RESOLVED
+    return fieldtext.text(record.get("status")).lower() in commitments.RESOLVED
 
 
 def _thread_settled(record: dict) -> bool:
-    return _text(record.get("status")).lower() == "closed"
+    return fieldtext.text(record.get("status")).lower() == "closed"
 
 
 def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str,
@@ -291,7 +281,7 @@ def _assign_section(rows: list, stored: dict, section: str,
             # title counts only for an id that names nothing stored, where it
             # becomes the new record's title.
             cur = stored.get(rid)
-            meant = _text(cur.get("title")).strip() if isinstance(cur, dict) else ""
+            meant = fieldtext.text(cur.get("title")).strip() if isinstance(cur, dict) else ""
             staged.setdefault(rid, (meant or title).casefold())
             if source is not None:
                 # The SOURCE id is reserved too, under its own stored title. A
@@ -302,7 +292,7 @@ def _assign_section(rows: list, stored: dict, section: str,
                 # refuses a settled canonical -- and the row stages `slug-N`, a
                 # new record duplicating the source this row already moved.
                 src = stored.get(source)
-                said = _text(src.get("title")).strip() if isinstance(src, dict) else ""
+                said = fieldtext.text(src.get("title")).strip() if isinstance(src, dict) else ""
                 staged.setdefault(source, (said or title).casefold())
         elif any(c.isalnum() for c in title):
             # New record — needs a title with real content, and an id that does
@@ -373,7 +363,7 @@ def _merged_head(stored: dict | None, merged: str | None, title: str) -> str:
     if merged is None:
         return title
     src = (stored or {}).get(merged)
-    return (_text(src.get("title")) if isinstance(src, dict) else "") or merged
+    return (fieldtext.text(src.get("title")) if isinstance(src, dict) else "") or merged
 
 
 def _merged_tail(cur: dict | None, merged: str | None, title: str,
@@ -384,7 +374,7 @@ def _merged_tail(cur: dict | None, merged: str | None, title: str,
         return ""
     tail = f" → merged into {title}"
     if settled(cur):
-        tail += f" ({_text(cur.get('status'))})"
+        tail += f" ({fieldtext.text(cur.get('status'))})"
     return tail
 
 
@@ -444,7 +434,7 @@ def _commitment_edit(sid: str, row: dict, mid: str, owed: dict, *,
     status = (row.get("status", "") or "").strip()
     # None, not "": the key's PRESENCE is the signal (see parse.py). "" is
     # an instruction to clear the deadline; absent means leave it alone.
-    due = _text(row["due"]) if "due" in row else None
+    due = fieldtext.text(row["due"]) if "due" in row else None
     cur = owed.get(mid)
     if isinstance(cur, dict):  # existing commitment (by id, or a colliding new title)
         # The STORED head, deadline included: `due` is applied on save and
@@ -454,12 +444,12 @@ def _commitment_edit(sid: str, row: dict, mid: str, owed: dict, *,
         # was; the label below is what it will be. It doubles as the
         # staleness token `apply_edits` re-checks at save time.
         before = conflicts.commitment_line(cur)
-        stored_due = _text(cur.get("due"))
-        disp_title = _text(cur.get("title")) or title or mid  # keep the stored title
+        stored_due = fieldtext.text(cur.get("due"))
+        disp_title = fieldtext.text(cur.get("title")) or title or mid  # keep the stored title
         # What the record will read AFTER the save: the model's value where
         # it gave one, the stored value where it did not.
-        disp_kind = kind or _text(cur.get("kind")) or "promise"
-        disp_status = status or _text(cur.get("status")) or "open"
+        disp_kind = kind or fieldtext.text(cur.get("kind")) or "promise"
+        disp_status = status or fieldtext.text(cur.get("status")) or "open"
         disp_due = stored_due if due is None else due
     else:
         before, disp_title = "", title or mid
@@ -520,7 +510,7 @@ def _siblings(rows: list, i: int, target: str) -> list[int]:
     because row `i` held their id: unexamined, and naming that same id."""
     return [j for j in range(i + 1, len(rows))
             if isinstance(rows[j], dict) and "identity_check" not in rows[j]
-            and _text(rows[j].get("id")) == target]
+            and fieldtext.text(rows[j].get("id")) == target]
 
 
 def _moved_elsewhere(rows: list, i: int, stored: dict, kind: str,
@@ -530,7 +520,7 @@ def _moved_elsewhere(rows: list, i: int, stored: dict, kind: str,
     Asked of `_assign_section` itself, on the batch with row `i` and its
     siblings blanked, so every other row's target is the one `assign_ids` will
     give it -- explicit ids and honoured slugs alike, through the same map."""
-    skip = {i, *_siblings(rows, i, _text(rows[i].get("id")))}
+    skip = {i, *_siblings(rows, i, fieldtext.text(rows[i].get("id")))}
     probe = [{**r, "beat": ""} if j in skip and isinstance(r, dict) else r
              for j, r in enumerate(rows)]
     allocate = _new_thread_id if kind == "thread" else _new_commitment_id
@@ -545,7 +535,7 @@ def _recheck_section(rows: list, stored: dict, kind: str, aliases: dict[str, str
         if not isinstance(row, dict) or not _accepted_existing(row.get("identity_check")):
             continue
         original = row.get(AS_NEW_KEY)
-        target = _text(row.get("id"))
+        target = fieldtext.text(row.get("id"))
         if not isinstance(original, dict):
             continue
         canonical = _redirect(target, stored, aliases)[0]
@@ -572,28 +562,6 @@ def _recheck_section(rows: list, stored: dict, kind: str, aliases: dict[str, str
     return rows
 
 
-def _onto_existing(kind: str, row: dict, rid: str) -> dict:
-    """The §10.2 rewrite of `row` onto the existing record `rid` -- the rules
-    `continuity.identity._onto_existing` applies to an accepted row, restated
-    because materializer cannot import identity. The title is blank (keep
-    stored); a plot status is the model's ``closed`` or ``advanced``, else
-    ``advanced``, never ``open``; a commitment keeps its stored kind and a
-    status only when it resolves the record; a stated ``due`` is kept, an
-    absent or blank one is left absent (a blank ``due`` on a row that would
-    have opened a record lifted nothing, so it must not clear the stored
-    record's deadline)."""
-    new = {**row, "id": rid, "title": ""}
-    if "due" in row and not _text(row.get("due")):
-        del new["due"]
-    status = row.get("status")
-    if kind == "thread":
-        new["status"] = status if status in ("closed", "advanced") else "advanced"
-    else:
-        new["kind"] = ""
-        new["status"] = status if status in commitments.RESOLVED else ""
-    return new
-
-
 def _fresh_id(stored: dict, staged: dict[str, str], slug: str) -> str:
     """`slug`, or the first `slug-N` naming nothing stored and nothing this
     batch reserved -- under any title. Not `_new_*_id`, which honours a
@@ -611,7 +579,7 @@ def _latest_beat(rec: dict) -> str:
     `latest_beat`, as `plot.open_threads` projects it."""
     beats = rec.get("beats")
     last = beats[-1] if isinstance(beats, list) and beats else None
-    return _text(last.get("text")) if isinstance(last, dict) else ""
+    return fieldtext.text(last.get("text")) if isinstance(last, dict) else ""
 
 
 def _current_candidates(kind: str, ic: dict, stored: dict,
@@ -643,8 +611,8 @@ def _current_candidates(kind: str, ic: dict, stored: dict,
             continue
         seen.add(canonical)
         moved = canonical != ref
-        out.append({**cand, "ref": canonical, "title": _text(cur.get("title")) or rid,
-                    "status": _text(cur.get("status")),
+        out.append({**cand, "ref": canonical, "title": fieldtext.text(cur.get("title")) or rid,
+                    "status": fieldtext.text(cur.get("status")),
                     "latest_beat": (_latest_beat(cur) if moved
                                     else cand.get("latest_beat", _latest_beat(cur)))})
     return out
@@ -666,7 +634,7 @@ def _candidate_alternatives(sid: str, kind: str, original: dict, candidates: lis
         if ((target_kind, rid) in taken
                 or not continuity_effective.is_live(kind, cur.get("status"))):
             continue
-        alts.append(build(sid, _onto_existing(kind, original, rid), rid, stored))
+        alts.append(build(sid, retarget.onto_existing(kind, original, rid), rid, stored))
     return alts
 
 
@@ -679,7 +647,7 @@ def _as_new_alternative(sid: str, kind: str, original: dict, stored: dict,
     id such as ``plot/the-map`` would create a record the Ledger's routes
     cannot address. The id is reserved in `staged`, so two as-new variants
     never share one."""
-    given, title = _text(original.get("id")), _text(original.get("title"))
+    given, title = fieldtext.text(original.get("id")), fieldtext.text(original.get("title"))
     if given and slugify(given) == given and given not in stored and given not in staged:
         rid = given
     else:
@@ -821,8 +789,8 @@ def _fact_edits(cid: str, sid: str, rows: list[dict], stamp: staging.Stamp) -> l
     retiring: set[str] = set()
     staged_texts: set[str] = set()   # folded text of the new facts THIS batch stages
     for n, e in enumerate(rows):
-        text, date = _text(e.get("text")), _text(e.get("date"))
-        sup = _text(e.get("supersedes"))
+        text, date = fieldtext.text(e.get("text")), fieldtext.text(e.get("date"))
+        sup = fieldtext.text(e.get("supersedes"))
         predecessor = _fact_predecessor(ledger, sid, text, sup)
         if predecessor is None:
             continue

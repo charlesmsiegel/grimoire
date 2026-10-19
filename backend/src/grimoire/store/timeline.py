@@ -43,19 +43,8 @@ marked absorbed beside a thread that has not moved yet.
 
 from __future__ import annotations
 
-from . import chronicle, locks, plot
+from . import chronicle, fieldtext, locks, plot
 from .scenes import read as scenes_read
-
-
-def _text(value, fallback: str = "") -> str:
-    """A projected field as text. The same guard ``plot._field``,
-    ``commitments._field`` and ``briefing._text`` apply, for the same reason:
-    plot.json and chronicle.json are hand-editable and read by a bare
-    ``json.loads``, so an object-valued ``title`` arrives here intact, and React
-    refuses an object as a child — blanking the card rather than showing one odd
-    row. No ``try`` around the READ catches that; the read succeeds.
-    """
-    return value.strip() if isinstance(value, str) else fallback
 
 
 def _beats(threads, known: frozenset[str]) -> tuple[dict[str, list[dict]], list[dict]]:
@@ -94,13 +83,13 @@ def _beats(threads, known: frozenset[str]) -> tuple[dict[str, list[dict]], list[
     items = [(pid, rec) for pid, rec in (threads.items() if isinstance(threads, dict) else ())
              if isinstance(pid, str) and isinstance(rec, dict)]
     for pid, rec in sorted(items, key=lambda it: it[0]):
-        title = _text(rec.get("title"), pid)
-        status = _text(rec.get("status"), "open")
+        title = fieldtext.text(rec.get("title"), pid)
+        status = fieldtext.text(rec.get("status"), "open")
         raw = rec.get("beats")
         for beat in (raw if isinstance(raw, list) else ()):
             if not isinstance(beat, dict):
                 continue
-            sid, text = beat.get("scene"), _text(beat.get("text"))
+            sid, text = beat.get("scene"), fieldtext.text(beat.get("text"))
             # An empty beat is not one `set_movement` can write — it appends
             # only when the text is non-blank — so this is the hand-edited case,
             # and a beat with nothing to say has nothing to show.
@@ -161,7 +150,7 @@ def build(cid: str) -> dict:
         rec = rec if isinstance(rec, dict) else {}   # a per-scene entry can be wrong too
         out.append({
             "id": sid,
-            "title": _text(meta.get("title"), sid),
+            "title": fieldtext.text(meta.get("title"), sid),
             # `one_line or summary`, the fallback every other chronicle consumer
             # uses (`context.story._story_entries`, `get_ledger`): a save may
             # leave `one_line` empty, and a card with only its title is a blank
@@ -173,18 +162,18 @@ def build(cid: str) -> dict:
             # prose on the wire for every load of a view that shows none of it.
             # The fallback above is what keeps its content reachable in the one
             # case it matters, a save that left `one_line` empty.
-            "one_line": _text(rec.get("one_line")) or _text(rec.get("summary")),
+            "one_line": fieldtext.text(rec.get("one_line")) or fieldtext.text(rec.get("summary")),
             # The scene's OWN opening moment first (`time_history[0]`, which
             # `list_scenes` already projects as `date`). It is stamped when the
             # scene gets a datetime, absorbed or not, and it is when the scene
             # BEGAN — where the chronicle's `date` is its last moment and exists
             # only post-absorb. So the chronicle is the fallback, not the source.
-            "date": _text(meta.get("date")) or _text(rec.get("date")),
+            "date": fieldtext.text(meta.get("date")) or fieldtext.text(rec.get("date")),
             # The display name `chronicle.scene_facts` resolved at absorb time,
             # already flat text on disk. Deliberately not re-resolved from
             # `location_history` here: a card is a record of where the scene WAS,
             # and a location renamed since is still the place it happened.
-            "location": _text(rec.get("location")),
+            "location": fieldtext.text(rec.get("location")),
             "done": bool(meta.get("done")),
             "pcless": bool(meta.get("pcless")),
             "beats": by_scene.get(sid, []),

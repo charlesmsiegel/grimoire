@@ -86,9 +86,9 @@ from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from ... import decisions, prompts
-from .. import commitments, fieldtext
+from .. import fieldtext
 from ..absorb import materializer as absorb_materializer
-from . import canon, effective, involvement, similarity
+from . import canon, effective, involvement, retarget, similarity
 
 #: Parsed section -> the record kind its rows open.
 SECTIONS: dict[str, similarity.Kind] = {"plot_movements": "thread",
@@ -314,7 +314,7 @@ class Examination:
         for e in self.rows:
             ic = _identity_check(e)
             if e.decision == "existing" and e.status == "accepted" and e.target:
-                new = _onto_existing(e.kind, e.row, e.target)
+                new = retarget.onto_existing(e.kind, e.row, e.target)
                 new["identity_check"] = ic
                 new[AS_NEW_KEY] = dict(e.row)
                 _retarget_siblings(e, parsed, out, e.target)
@@ -355,37 +355,13 @@ def _settle(e: Examined, decision: str, status: str, reason: str, *,
     e.decision, e.status, e.reason, e.target = decision, status, reason, target
 
 
-def _onto_existing(kind: str, row: dict, rid: str) -> dict:
-    """The §10.2 rewrite of `row` onto the existing record `rid`.
-
-    The id becomes the canonical one and the title blank (keep stored). A plot
-    status is the model's ``closed`` or ``advanced``, else ``advanced`` -- never
-    ``open``, which the extraction's own default is and which would regress an
-    advanced thread. A commitment keeps its stored kind and keeps a status only
-    when it resolves the record. A stated ``due`` is kept and an absent one
-    stays absent; a blank one is dropped, because ``""`` means "lift the
-    deadline" only on a row that named the record -- on a row that would have
-    opened one there was no deadline to lift, so carrying it across would
-    clear the stored record's. Citation keys are untouched."""
-    new = {**row, "id": rid, "title": ""}
-    if "due" in row and not _text(row.get("due")):
-        del new["due"]
-    status = row.get("status")
-    if kind == "thread":
-        new["status"] = status if status in ("closed", "advanced") else "advanced"
-    else:
-        new["kind"] = ""
-        new["status"] = status if status in commitments.RESOLVED else ""
-    return new
-
-
 def _retarget_siblings(e: Examined, parsed: dict, out: dict, target: str) -> None:
     """Keep a retargeted row's dropped siblings on the same existing record.
     A sibling already rewritten by another examination keeps that decision."""
     for j in e.siblings:
         sibling = parsed[e.section][j]
         if out[e.section][j] is sibling and isinstance(sibling, dict):
-            out[e.section][j] = _onto_existing(e.kind, sibling, target)
+            out[e.section][j] = retarget.onto_existing(e.kind, sibling, target)
 
 
 def _identity_check(e: Examined) -> dict:

@@ -144,7 +144,7 @@ def test_response_selector_reads_the_prompt_view(client):
     reply(cid, sid, "<think>plotting</think>Hello")
     put_rules(client, "/api/llm-connections/openrouter/regex", THINK)
 
-    rendered = character_turns._selector_item(cid, sid, {"eligible": [], "note": ""}).context
+    rendered = character_turns._selector_inputs(cid, sid, {"eligible": [], "note": ""})[0].context
     assert "Hello" in rendered and "plotting" not in rendered
 
 

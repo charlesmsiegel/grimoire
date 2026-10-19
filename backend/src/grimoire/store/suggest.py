@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import prompts, schemas
+from . import _idea_provenance as idea_shapes
 from . import (
     birthdays,
     calendars,
@@ -38,6 +39,7 @@ from . import (
     clock,
     default_prompts,
     events,
+    fieldtext,
     greetings,
     overlay,
     pcs,
@@ -972,7 +974,7 @@ def validate_ideas(cid: str, ideas: list[dict]) -> list[dict]:
     check = ref_validator(cid)
     rows = [{**i, **check(i["cast"], i["location"], i["date"], i["pcless"])}
             for i in ideas]
-    if not any(_stored_entries(i.get("drivers")) or _stored_anchor(i.get("time_anchor"))
+    if not any(idea_shapes.drivers(i.get("drivers")) or idea_shapes.anchor(i.get("time_anchor"))
                for i in rows):
         return [{**i, **_NO_ANNOTATION} for i in rows]
     ctx = _IdeaContext.load(cid)
@@ -1000,25 +1002,6 @@ _PASSING_RELATIONS = ("before", "by", "on")
 
 def _kind_of(ref: str) -> str:
     return ref.split(":", 1)[0]
-
-
-def _stored_entries(value) -> list[dict]:
-    """`[{ref, action}]` with string fields, whatever the caller handed over."""
-    if not isinstance(value, list):
-        return []
-    return [{"ref": e["ref"], "action": e["action"]} for e in value
-            if isinstance(e, dict) and isinstance(e.get("ref"), str) and e["ref"].strip()
-            and isinstance(e.get("action"), str)]
-
-
-def _stored_anchor(value) -> dict | None:
-    if not isinstance(value, dict):
-        return None
-    ref, relation, native = value.get("ref"), value.get("relation"), value.get("native")
-    if not (isinstance(ref, str) and ref.strip() and isinstance(relation, str)
-            and isinstance(native, str)):
-        return None
-    return {"ref": ref, "relation": relation, "native": native}
 
 
 def _occurrence_day(ref: str) -> int | None:
@@ -1108,7 +1091,7 @@ def _provenance_anchor(cid: str, raw, ledgers: effective.Ledgers | None,
 def _provenance_pair(entry, canon: dict[str, str]) -> dict | None:
     """One driver entry as a canonical `{ref, action}`, or None when it is
     malformed or its action is wrong for its kind."""
-    pair = _stored_entries([entry])
+    pair = idea_shapes.drivers([entry])
     if not pair:
         return None
     ref = canon.get(pair[0]["ref"].strip(), pair[0]["ref"].strip())
@@ -1331,7 +1314,7 @@ def _stale_reason(anchor: dict | None, reading: dict | None, states: dict[str, d
 
 def _anchor_reading(idea: dict, ctx: _IdeaContext) -> tuple[dict, dict] | None:
     """The stored anchor (its ref canonical) and its reading, or None."""
-    stored = _stored_anchor(idea.get("time_anchor"))
+    stored = idea_shapes.anchor(idea.get("time_anchor"))
     if stored is None:
         return None
     anchor = {**stored, "ref": ctx.canon.get(stored["ref"], stored["ref"])}
@@ -1354,7 +1337,7 @@ def _annotate(idea: dict, ctx: _IdeaContext) -> dict:
     found = _anchor_reading(idea, ctx)
     readings: dict[str, dict] = {}
     drivers: list[dict] = []
-    for entry in _stored_entries(idea.get("drivers")):
+    for entry in idea_shapes.drivers(idea.get("drivers")):
         ref = ctx.canon.get(entry["ref"], entry["ref"])
         if ref in readings:
             continue
@@ -1376,9 +1359,9 @@ def _annotate(idea: dict, ctx: _IdeaContext) -> dict:
 def _unannotated(idea: dict) -> dict:
     """The fallback when an idea's annotation raised: its stored refs, as live
     and labelled by themselves, and nothing stale."""
-    anchor = _stored_anchor(idea.get("time_anchor"))
+    anchor = idea_shapes.anchor(idea.get("time_anchor"))
     return {"drivers": [{**e, "kind": _kind_of(e["ref"]), "label": e["ref"], "state": "live"}
-                        for e in _stored_entries(idea.get("drivers"))],
+                        for e in idea_shapes.drivers(idea.get("drivers"))],
             "time_anchor": ({**anchor, "kind": _kind_of(anchor["ref"]), "label": anchor["ref"],
                              "friendly": "", "state": "live"} if anchor else None),
             "stale_reason": "", "anchor_date": ""}
@@ -1721,6 +1704,7 @@ def is_card(entry) -> bool:
             and bool(str(entry.get("premise", "")).strip()))
 
 
+# JSON null, numbers and objects are missing text, never literal titles such as "None".
 def _card(entry, ctx: dict) -> dict | None:
     """One parsed suggestion with its validated provenance (spec §15.2), or
     None when `is_card` says the app does not keep it."""
@@ -1739,7 +1723,7 @@ def _card(entry, ctx: dict) -> dict | None:
         return [{"ref": r, "label": labels.get(r, r)} for r in refs]
 
     return {"title": title, "premise": premise,
-            "focus": scenes_focus.normalize(_str_field(entry.get("focus", ""))),
+            "focus": scenes_focus.normalize(fieldtext.text(entry.get("focus", ""))),
             "cast": _cast_of(entry, ctx["ids"], ctx["offscreen"]),
             "location": loc if loc in ctx["ids"][2] else "",
             "date": date, "date_friendly": _friendly_of(provider, fixed),
@@ -1789,17 +1773,6 @@ def parse_output(text: str, cid: str, offscreen: bool = False, *,
     return order_cards(rows, snap, controls)
 
 
-def _str_field(value) -> str:
-    """A model field that is supposed to be a string. `str(x)` on a non-string
-    (JSON `null`, a number, a nested object) produces a non-empty string like
-    "None"/"42"/"{'a': 1}" that then reads as real model output -- e.g. a
-    `null` title survives as the literal title "None" instead of falling back
-    to blank. Only an actual string is trimmed; anything else counts as
-    missing, the same way `cast`'s entries are validated structurally rather
-    than coerced."""
-    return value.strip() if isinstance(value, str) else ""
-
-
 def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
     """Metadata extracted from the user's own description, every field validated
     against the campaign.
@@ -1821,10 +1794,10 @@ def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
     cast = ([t for t in (str(x).strip() for x in raw_cast)
              if token_ok(t, char_ids, player_tokens, offscreen)]
             if isinstance(raw_cast, list) else [])
-    loc = _str_field(parsed.get("location", ""))
-    return {"title": _str_field(parsed.get("title", "")),
-            "focus": scenes_focus.normalize(_str_field(parsed.get("focus", ""))),
-            "date": date_normalizer(cid, tolerant=True)(_str_field(parsed.get("date", ""))),
+    loc = fieldtext.text(parsed.get("location", ""))
+    return {"title": fieldtext.text(parsed.get("title", "")),
+            "focus": scenes_focus.normalize(fieldtext.text(parsed.get("focus", ""))),
+            "date": date_normalizer(cid, tolerant=True)(fieldtext.text(parsed.get("date", ""))),
             "location": loc if loc in loc_ids else "",
             "cast": cast}
 

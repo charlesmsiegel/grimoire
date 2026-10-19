@@ -85,8 +85,6 @@ vi.mock("../api/client", () => ({
     listEntityImages: vi.fn(),
     setEntityImageDescription: vi.fn(),
     draftEntityImageDescription: vi.fn(),
-    putEntityImage: vi.fn(),
-    promoteEntityImage: vi.fn(),
     // The campaign-scope sidebar's LibraryPanel (#52, #53). "already library
     // content, unedited" is the state that renders no button, so every test
     // here sees the sidebar it always did; LibraryPanel.test.tsx owns the rest.
@@ -98,7 +96,6 @@ vi.mock("../api/client", () => ({
     libraryDependents: vi.fn().mockResolvedValue([]),
     demoteFromLibrary: vi.fn(),
     pushToLibrary: vi.fn(),
-    imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
     // `?w=` then `?v=`, the order the real builder writes them in, so a test
     // can tell a thumbnail from the original it links to.
     actorImageUrl: (sc: { kind: string; id: string }, k: string, a: string, v: string, n: string,
@@ -149,8 +146,6 @@ beforeEach(() => {
   ] });
   vi.mocked(api.listEntityImages).mockResolvedValue([]);
   vi.mocked(api.setEntityImageDescription).mockResolvedValue({ ok: true });
-  vi.mocked(api.putEntityImage).mockResolvedValue({ name: "avatar", ext: "png" });
-  vi.mocked(api.promoteEntityImage).mockResolvedValue({ ok: true });
   vi.mocked(api.getSheet).mockResolvedValue({ sheet: null });
   vi.mocked(api.readModuleContent).mockRejectedValue(new Error("not found"));
   vi.mocked(api.instantiateContent).mockResolvedValue({ id: "e1" });

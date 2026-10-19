@@ -11,9 +11,9 @@ vi.mock("../api/client", async () => {
     readRecordArt: vi.fn(), appendRecordArt: vi.fn(), promoteRecordArt: vi.fn(), removeRecordArt: vi.fn(),
     setRecordArtFocus: vi.fn(), setRecordArtDescription: vi.fn(), draftRecordArtDescription: vi.fn(), getImageUsage: vi.fn(),
     getActorMembership: vi.fn(), createPCVersion: vi.fn(), readPC: vi.fn(), updatePCVersion: vi.fn(), updatePC: vi.fn(),
-    listPCImages: vi.fn(), listAppearances: vi.fn(), listEntities: vi.fn(),
-    putPCImage: vi.fn(), promotePCImage: vi.fn(), deletePCImage: vi.fn(),
-    setPCImageDescription: vi.fn(), draftPCImageDescription: vi.fn(), setPCAvatarFocus: vi.fn(),
+     listAppearances: vi.fn(), listEntities: vi.fn(),
+
+    setPCImageDescription: vi.fn(), draftPCImageDescription: vi.fn(),
     listTags: vi.fn(), listModules: vi.fn(), getWorldSheetsIndex: vi.fn(),
     getCampaign: vi.fn(), getCampaignModule: vi.fn(), libraryStatus: vi.fn(),
     getCalendarMonths: vi.fn(), getCalendarConfig: vi.fn(),
@@ -38,7 +38,6 @@ beforeEach(() => {
 
   vi.mocked(api.getActorMembership).mockResolvedValue({ actor: "pcs:mara", groups: [] });
   vi.mocked(api.readPC).mockResolvedValue(DETAIL);
-  vi.mocked(api.listPCImages).mockResolvedValue([]);
   vi.mocked(api.listEntities).mockResolvedValue([]);
   vi.mocked(api.listTags).mockResolvedValue({});
   vi.mocked(api.listModules).mockResolvedValue([]);
@@ -49,7 +48,6 @@ beforeEach(() => {
   vi.mocked(api.libraryStatus).mockResolvedValue(
     { in_library: true, diverged: false, can_promote: false, can_push: false });
   vi.mocked(api.updatePCVersion).mockResolvedValue({ ok: true });
-  vi.mocked(api.putPCImage).mockResolvedValue({ name: "avatar", ext: "png" });
   vi.mocked(api.getCalendarConfig).mockResolvedValue(fixture({ primary: { provider: "gregorian" } }));
   vi.mocked(api.getCalendarMonths).mockResolvedValue({ months: [] });
   vi.mocked(api.listPCRevisions).mockResolvedValue([]);
@@ -263,7 +261,6 @@ test("PC art has contained thumbnails and opens the original only when requested
   expect(screen.queryByRole("dialog", { name: "Image viewer" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "View Gallery image 1" }));
   expect(screen.getByTestId("viewer-image")).toHaveAttribute("src", "/api/art/gallery_1?v=1");
-  expect(api.listPCImages).not.toHaveBeenCalled();
 });
 test("campaign uploads use the resolved PC version and server allocation", async () => {
   renderPC("/campaigns/saltmarch/world/pcs/mara?tab=art&v=default");
@@ -272,7 +269,6 @@ test("campaign uploads use the resolved PC version and server allocation", async
   fireEvent.change(screen.getByLabelText("Image files"), { target: { files: [file] } });
   await waitFor(() => expect(api.appendRecordArt).toHaveBeenCalledWith(
     { scope: { kind: "campaign", id: "saltmarch" }, kind: "pcs", record_id: "mara", version: "default" }, file));
-  expect(api.putPCImage).not.toHaveBeenCalled();
   expect(screen.getByRole("heading", { name: "Mara", level: 1 })).toBeInTheDocument();
 });
 test("PC mutations capture image and primary bytes, and preserve a failed description draft", async () => {

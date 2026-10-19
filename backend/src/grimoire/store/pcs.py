@@ -21,6 +21,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import _actor_hash as actor_hash
 from . import assets, atomic, image_descriptions, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
@@ -518,14 +519,7 @@ def version_hash(root: Path, pid: str, vid: str) -> str | None:
         lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
 
 
-def dir_content_hash(files: list[tuple[str, str]]) -> str:
-    """`dir_hash` over (name, text) pairs you are holding rather than files on
-    disk — see `snapshot`."""
-    h = hashlib.sha256()
-    for name, text in files:
-        h.update(name.encode("utf-8"))
-        h.update(text.encode("utf-8"))
-    return h.hexdigest()
+dir_content_hash = actor_hash.content_hash
 
 
 def snapshot(root: Path, pid: str) -> tuple[str, list[tuple[str, str]]] | None:

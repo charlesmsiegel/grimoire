@@ -52,7 +52,7 @@ FEELING_AXES = ("trust", "affection", "tension")
 
 def _text(value, fallback: str = "") -> str:
     """A projected field as text. Same guard, for the same reason, as
-    `briefing._text`: these files are hand-editable, React refuses an object as
+    `fieldtext.text`: these files are hand-editable, React refuses an object as
     a child, and one odd value must not blank the panel it appears in."""
     return value.strip() if isinstance(value, str) else fallback
 

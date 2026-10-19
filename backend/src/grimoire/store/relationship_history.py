@@ -79,6 +79,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from . import _retention as retention
 from . import atomic, locks
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
@@ -214,34 +215,14 @@ def append(cid: str, rows: list[dict]) -> list[dict]:
             stamped = {**entry, "id": f"rh{doc['seq']}", "ts": ts}
             doc["entries"].append(stamped)
             written.append(stamped)
-        doc["entries"] = _trim(doc["entries"], keep=len(written))
+        doc["entries"] = retention.trim(
+            doc["entries"], keep=len(written), rows=RETENTION, max_bytes=MAX_BYTES)
         _write(cid, doc)
     # Outside the hold, and `written` is bound before it for the same reason:
     # `campaign_lock` is a @contextmanager, so its `__exit__` is typed as able
     # to swallow -- a return that only exists inside the block is one mypy
     # cannot prove happens.
     return written
-
-
-def _trim(entries: list[dict], keep: int) -> list[dict]:
-    """Drop the oldest entries until both caps hold, never below `keep`.
-
-    `keep` is what this append just wrote, and the floor is `journal._trim`'s:
-    one absorb can carry more relationship deltas than either cap allows, and
-    trimming to satisfy the cap would then delete the rows for the writes that
-    just happened. The caps bound accumulation, not the present.
-
-    Sizes are measured once per entry rather than by re-serializing the list on
-    each pop, which would be quadratic in exactly the case that reaches here.
-    """
-    room = max(RETENTION, keep)
-    entries = entries[-room:] if len(entries) > room else entries
-    sizes = [len(json.dumps(e, default=str)) for e in entries]
-    total, first = sum(sizes), 0
-    while total > MAX_BYTES and len(entries) - first > keep:
-        total -= sizes[first]
-        first += 1
-    return entries[first:]
 
 
 def forget_scene(cid: str, sid: str) -> int:

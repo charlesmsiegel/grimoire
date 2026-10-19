@@ -563,7 +563,7 @@ def _campaign_entity_or_404(cid: str, kind: str, eid: str):
     return root
 
 
-# `root` on both of these comes from `_world_entity_or_404` /
+# `root` on this upload helper comes from `_world_entity_or_404` /
 # `_campaign_entity_or_404`, which is where the kind and the id are checked --
 # not here, and not in `assets` either. A handler that reaches these with a
 # bare root files art under an id or a kind that names nothing; the two
@@ -577,20 +577,6 @@ async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFi
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"name": name, "ext": stored,
             **image_id_field(store.assets.image_id(root, eid, "default", name, base=kind))}
-
-
-def _entity_image_promote(root, kind: str, eid: str, name: str):
-    try:
-        store.assets.promote_image(root, eid, "default", name, base=kind)
-    except store.assets.ImageNotYetAvailableError as exc:
-        # placed, not arrived (mid-sync): absent here for now, and says why
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except FileNotFoundError as err:
-        raise HTTPException(status_code=404, detail="image not found") from err
-    except ValueError as exc:
-        # an externally-placed file whose extension we never accepted for upload
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True}
 
 
 @router.get("/worlds/{wid}/{kind}/{eid}/images")

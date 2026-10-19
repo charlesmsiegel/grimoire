@@ -1212,7 +1212,6 @@ export type LibraryStatus = {
   can_push: boolean;
 };
 
-export type DivergedRecord = { ref: { kind: EntityKind | "greetings"; id: string }; name: string };
 
 /** A campaign that would notice a library record going away. `has_copy` says
  *  whether it already holds its own — the ones that do not are what demote's

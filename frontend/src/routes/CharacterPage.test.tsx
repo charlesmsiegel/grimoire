@@ -18,7 +18,6 @@ vi.mock("../api/client", async () => {
         `/img/${sc.id}/${k}/${a}/${v}/${n}`
         + (o?.w || o?.v ? "?" + [o.w && `w=${o.w}`, o.v && `v=${o.v}`].filter(Boolean).join("&") : ""),
       exportUrl: (w: string, c: string, v: string, f: string) => `/export/${w}/${c}/${v}/${f}`,
-      imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
       readRecordArt: vi.fn(), appendRecordArt: vi.fn(), promoteRecordArt: vi.fn(), removeRecordArt: vi.fn(),
       setRecordArtFocus: vi.fn(), setRecordArtDescription: vi.fn(), draftRecordArtDescription: vi.fn(), getImageUsage: vi.fn(),
       getActorMembership: vi.fn(), readCharacter: vi.fn(), listCharacters: vi.fn(), deleteCharacter: vi.fn(),
@@ -28,7 +27,7 @@ vi.mock("../api/client", async () => {
       getCampaignCharacterTagline: vi.fn().mockResolvedValue({ tagline: "" }),
       setCampaignCharacterTagline: vi.fn(), generateCampaignCapsule: vi.fn(),
       importCharacter: vi.fn(), localizeImages: vi.fn(),
-      putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
+
       setCharacterImageDescription: vi.fn(), draftCharacterImageDescription: vi.fn(),
       lorebookParse: vi.fn(), lorebookImport: vi.fn(), entityKinds: vi.fn(),
       importCharacterFromChub: vi.fn(), setCharacterChubSource: vi.fn(),
@@ -731,7 +730,6 @@ test("ordinary character uploads defer names to the server and attempt every fil
   fireEvent.change(screen.getByLabelText("Image files"), { target: { files } });
   await waitFor(() => expect(api.appendRecordArt).toHaveBeenCalledTimes(3));
   expect(vi.mocked(api.appendRecordArt).mock.calls.map((call) => call[1])).toEqual(files);
-  expect(api.putImage).not.toHaveBeenCalled();
   expect(await screen.findByText(/b.png:.*unsupported image/)).toBeInTheDocument();
 });
 test("promotion captures image bytes and the current primary, then refreshes the character", async () => {

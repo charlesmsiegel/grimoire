@@ -65,7 +65,16 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
-from . import _search_markdown, chronicle, entities, facts, plot, relationships, statcache
+from . import (
+    _search_markdown,
+    chronicle,
+    entities,
+    facts,
+    fieldtext,
+    plot,
+    relationships,
+    statcache,
+)
 from .frontmatter import parse_frontmatter, parse_frontmatter_head, text_of
 from .paths import home, natural_key, safe_id
 
@@ -321,17 +330,6 @@ def _doc(reader, path: Path) -> tuple[str, str, str] | None:
                           pool=_POOL, max_entries=POOL_ENTRIES)
 
 
-def _s(value, fallback: str = "") -> str:
-    """A stored field as text, or `fallback` for anything that is not a string.
-
-    Every JSON file this module reads is hand-editable and read by a bare
-    `json.loads`, so the same coercion `facts._field` and `plot._field` apply
-    for the same reason: a list-valued `text` must cost its own row, not the
-    query.
-    """
-    return value.strip() if isinstance(value, str) else fallback
-
-
 # ---- the corpus walk ----
 
 def _row(kind: str, rid: str, sub: str, name: str, text: str, prose: str) -> dict:
@@ -496,6 +494,7 @@ def _mapping(read, *args) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# A malformed hand-edited field must cost its own row, never the whole query.
 def _fact_docs(cid: str, root: Path) -> Iterator[dict]:
     """The campaign's fact record, one document per addressable thing in it.
 
@@ -508,12 +507,12 @@ def _fact_docs(cid: str, root: Path) -> Iterator[dict]:
         if not isinstance(rec, dict):
             continue
         keywords = rec.get("keywords")
-        parts = [_s(rec.get("one_line")), _s(rec.get("summary")), _s(rec.get("location"))]
+        parts = [fieldtext.text(rec.get("one_line")), fieldtext.text(rec.get("summary")), fieldtext.text(rec.get("location"))]
         if isinstance(keywords, list):
-            parts.extend(_s(k) for k in keywords)
+            parts.extend(fieldtext.text(k) for k in keywords)
         text = _flat(" ".join(p for p in parts if p))
         if text:
-            yield _row("chronicle", sid, "", _s(rec.get("one_line")) or sid, text, text)
+            yield _row("chronicle", sid, "", fieldtext.text(rec.get("one_line")) or sid, text, text)
 
     # The timeline is an append-only list of dated lines, so a line is the
     # record. The leading "- " and the heading are formatting, not content.
@@ -527,21 +526,21 @@ def _fact_docs(cid: str, root: Path) -> Iterator[dict]:
         if not isinstance(thread, dict):
             continue
         beats = thread.get("beats")
-        title = _s(thread.get("title")) or pid
-        parts = [title, _s(thread.get("status"))]
+        title = fieldtext.text(thread.get("title")) or pid
+        parts = [title, fieldtext.text(thread.get("status"))]
         if isinstance(beats, list):
-            parts.extend(_s(b.get("text")) for b in beats if isinstance(b, dict))
+            parts.extend(fieldtext.text(b.get("text")) for b in beats if isinstance(b, dict))
         text = _flat(" ".join(p for p in parts if p))
         yield _row("plot", pid, "", title, text, text)
 
     for fid, rec in sorted(_mapping(facts.read, cid).items()):
         if not isinstance(rec, dict):
             continue
-        text = _s(rec.get("text"))
+        text = fieldtext.text(rec.get("text"))
         if not text:
             continue
-        yield _row("facts", fid, _s(rec.get("scene")), text,
-                   _flat(" ".join([text, _s(rec.get("date"))])), text)
+        yield _row("facts", fid, fieldtext.text(rec.get("scene")), text,
+                   _flat(" ".join([text, fieldtext.text(rec.get("date"))])), text)
 
     yield from _relationship_docs(cid)
 
@@ -570,7 +569,7 @@ def _relationship_docs(cid: str) -> Iterator[dict]:
             a, _, b = key.partition("->")
             label = f"{name_of(a)} → {name_of(b)}"
             yield _row("relationships", key, "feeling", label,
-                       _flat(" ".join([label, _s(rec.get("note"))])), _s(rec.get("note")))
+                       _flat(" ".join([label, fieldtext.text(rec.get("note"))])), fieldtext.text(rec.get("note")))
 
     bonds = data.get("bonds")
     if isinstance(bonds, dict):
@@ -580,7 +579,7 @@ def _relationship_docs(cid: str) -> Iterator[dict]:
             a, _, b = key.partition("|")
             label = f"{name_of(a)} ↔ {name_of(b)}"
             yield _row("relationships", key, "bond", label,
-                       _flat(" ".join([label, _s(rec.get("type"))])), _s(rec.get("type")))
+                       _flat(" ".join([label, fieldtext.text(rec.get("type"))])), fieldtext.text(rec.get("type")))
 
 
 def _roots(scope: str, root_id: str) -> Iterator[tuple[str, str, str, Path, str]]:

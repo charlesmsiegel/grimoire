@@ -486,16 +486,6 @@ test("campaignChanges GETs the campaign changes endpoint", async () => {
   expect(out).toEqual(rows);
 });
 
-test("promoteImage POSTs the promote route", async () => {
-  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonOk({ ok: true }));
-  globalThis.fetch = fetchMock;
-  await api.promoteImage({ kind: "world", id: "w" }, "sera", "v1", "gallery_2");
-  expect(fetchMock).toHaveBeenCalledWith(
-    "/api/worlds/w/characters/sera/versions/v1/images/gallery_2/promote",
-    expect.objectContaining({ method: "POST" }),
-  );
-});
-
 test("entity image helpers hit the scope-aware routes", async () => {
   const scope = { kind: "campaign", id: "run" } as const;
   expect(api.entityImageUrl(scope, "locations", "crypt", "avatar"))
@@ -507,11 +497,7 @@ test("entity image helpers hit the scope-aware routes", async () => {
     "/api/worlds/w/locations/crypt/images",
     expect.objectContaining({ method: "GET" }),
   );
-  await api.promoteEntityImage({ kind: "world", id: "w" }, "locations", "crypt", "gallery_1");
-  expect(fetchMock).toHaveBeenCalledWith(
-    "/api/worlds/w/locations/crypt/images/gallery_1/promote",
-    expect.objectContaining({ method: "POST" }),
-  );
+
 });
 
 test("scope-parameterized calls route to worlds or campaigns", async () => {

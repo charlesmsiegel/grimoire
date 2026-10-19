@@ -22,6 +22,9 @@ from pathlib import Path
 from PIL import Image
 
 from . import (
+    _actor_hash as actor_hash,
+)
+from . import (
     assets,
     atomic,
     cards,
@@ -876,14 +879,7 @@ def card_hash(root: Path, cid: str, vid: str) -> str | None:
         lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
 
 
-def dir_content_hash(files: list[tuple[str, str]]) -> str:
-    """`dir_hash` over (name, text) pairs you are holding rather than files on
-    disk — see `snapshot`."""
-    h = hashlib.sha256()
-    for name, text in files:
-        h.update(name.encode("utf-8"))
-        h.update(text.encode("utf-8"))
-    return h.hexdigest()
+dir_content_hash = actor_hash.content_hash
 
 
 def snapshot(root: Path, cid: str) -> tuple[str, list[tuple[str, str]]] | None:

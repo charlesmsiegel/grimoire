@@ -9,8 +9,6 @@ vi.mock("./client", () => ({
                     o?: { w?: number; v?: string | null }) =>
       `/api/worlds/${sc.id}/${k}/${a}/versions/${v}/images/${n}`
       + (o?.w || o?.v ? "?" + [o.w && `w=${o.w}`, o.v && `v=${o.v}`].filter(Boolean).join("&") : ""),
-    imageUrl: (w: string, c: string, v: string, n: string) =>
-      `/api/worlds/${w}/characters/${c}/versions/${v}/images/${n}`,
   },
 }));
 import { api } from "./client";

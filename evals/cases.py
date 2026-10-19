@@ -1580,14 +1580,14 @@ def build_decide_speaker() -> dict:
 
 def _decide_speaker_prompt(ctx: dict) -> list[dict]:
     """The structured prompt for the item `_select` sends, gathered through the
-    store helpers `_selector_item` calls: the present cast but the player
+    store helpers `_selector_inputs` calls: the present cast but the player
     (`npc_roster`, every NPC eligible, as in a round nobody sits out of) and
     the observable transcript through the prompt-phase regex view
     (`observable_conversation`). No rationale is asked for."""
     cid, sid = ctx["cid"], ctx["sid"]
     roster = response_protocol.npc_roster(appearances.scene_cast(cid, sid))
     messages = scenes.read_scene(cid, sid)["messages"]
-    # The twin of `_selector_item`'s lambda (routes/character_turns.py), the
+    # The twin of `_selector_inputs`'s lambda (routes/character_turns.py), the
     # one `test_regex_prompt_guard.py` holds to the prompt phase: keep the two
     # identical, since only the route's is guarded.
     conversation = response_protocol.observable_conversation(

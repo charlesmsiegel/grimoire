@@ -37,20 +37,10 @@ has just run, which makes that window this view's normal case, not a remote one.
 
 from __future__ import annotations
 
-from . import chronicle, commitments, locks, plot, relationships
+from . import chronicle, commitments, fieldtext, locks, plot, relationships
 from .appearances import cast as appearances_cast
 from .continuity import effective, involvement
 from .scenes import read as scenes_read
-
-
-def _text(value, fallback: str = "") -> str:
-    """A projected field as text. Same guard as ``plot._field`` /
-    ``commitments._field``, applied to the fields this module projects itself:
-    the section renders these directly, and React refuses an object as a child,
-    so one hand-edited chronicle record would blank the panel rather than show
-    one odd row. No ``try`` around the read can catch that — the read succeeds.
-    """
-    return value.strip() if isinstance(value, str) else fallback
 
 
 def _focus(present: list[dict], pcless: bool) -> list[dict]:
@@ -134,7 +124,7 @@ def _last_time(cid: str, sid: str) -> dict | None:
                    if isinstance(key, str) and isinstance(rec, dict) and key < sid)
     for key in reversed(prior):
         rec = chron[key]
-        one_line = _text(rec.get("one_line")) or _text(rec.get("summary"))
+        one_line = fieldtext.text(rec.get("one_line")) or fieldtext.text(rec.get("summary"))
         if not one_line:
             continue
         # Inside the loop on purpose: `list_scenes` stats the whole scene
@@ -143,7 +133,7 @@ def _last_time(cid: str, sid: str) -> dict | None:
         # print. The loop leaves on the next line, so it runs at most once.
         titles = {s["id"]: s.get("title", s["id"]) for s in scenes_read.list_scenes(cid)}
         return {"id": key, "one_line": one_line,
-                "title": _text(titles.get(key), key), "date": _text(rec.get("date"))}
+                "title": fieldtext.text(titles.get(key), key), "date": fieldtext.text(rec.get("date"))}
     return None
 
 
@@ -173,7 +163,7 @@ def build(cid: str, sid: str) -> dict:
         # set, where an unhashable value RAISES; and that runs outside the
         # tolerant reads, so the whole endpoint 500s. This is the boundary those
         # values cross, so it is where they are made text.
-        names = {f"{a['kind']}/{a['id']}": _text(a.get("name")) or _text(a.get("id"))
+        names = {f"{a['kind']}/{a['id']}": fieldtext.text(a.get("name")) or fieldtext.text(a.get("id"))
                  for a in focus}
         stage = _tolerant(lambda: involvement.stage_history(cid, set(names)), {})
         # Two reads per section, both inside the hold: `effective.threads` /

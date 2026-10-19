@@ -86,7 +86,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, locks, paths
+from . import _idea_provenance as idea_shapes
+from . import atomic, fieldtext, locks, paths
 from .campaigns import paths as campaigns_paths
 from .scenes import focus as scenes_focus
 
@@ -142,17 +143,6 @@ def get(cid: str, lid: str) -> dict | None:
     return read(cid).get(lid)
 
 
-def _field(value, fallback: str = "") -> str:
-    """A stored field as text, or `fallback` for anything that is not a string.
-
-    scene_ideas.json is hand-editable and read by a bare `json.loads`, so every
-    field is whatever the file says. Same rule, and the same reason, as
-    `facts._field`: these are rendered straight into React, which refuses an
-    object as a child and blanks the panel that holds it.
-    """
-    return value.strip() if isinstance(value, str) else fallback
-
-
 def _tokens(value) -> list[str]:
     """The cast as a list of strings. A non-list, or an entry that is not a
     string, is dropped rather than coerced -- `str()` on a dict would produce a
@@ -160,29 +150,6 @@ def _tokens(value) -> list[str]:
     if not isinstance(value, list):
         return []
     return [v.strip() for v in value if isinstance(v, str) and v.strip()]
-
-
-def _drivers(value) -> list[dict]:
-    """Stored driver provenance as `[{ref, action}]`: a non-list is `[]`, and an
-    entry without a non-empty string `ref` and a string `action` is dropped.
-    Shape only -- whether the ref still names anything is `suggest`'s."""
-    if not isinstance(value, list):
-        return []
-    return [{"ref": e["ref"], "action": e["action"]} for e in value
-            if isinstance(e, dict) and isinstance(e.get("ref"), str) and e["ref"].strip()
-            and isinstance(e.get("action"), str)]
-
-
-def _anchor(value) -> dict | None:
-    """Stored `{ref, relation, native}`, or None unless all three are strings
-    and `ref` is not blank."""
-    if not isinstance(value, dict):
-        return None
-    ref, relation, native = value.get("ref"), value.get("relation"), value.get("native")
-    if not (isinstance(ref, str) and ref.strip() and isinstance(relation, str)
-            and isinstance(native, str)):
-        return None
-    return {"ref": ref, "relation": relation, "native": native}
 
 
 def _put_provenance(rec: dict, drivers: list[dict], time_anchor: dict | None) -> None:
@@ -205,8 +172,8 @@ def _union(rec: dict, drivers: list[dict], time_anchor: dict | None) -> bool:
     and an absent anchor is filled; an `anchor` entry joins only when it names
     the anchor kept (Decision 18)."""
     before = {k: rec[k] for k in ("drivers", "time_anchor") if k in rec}
-    kept = _anchor(rec.get("time_anchor")) or time_anchor
-    merged = _drivers(rec.get("drivers"))
+    kept = idea_shapes.anchor(rec.get("time_anchor")) or time_anchor
+    merged = idea_shapes.drivers(rec.get("drivers"))
     for entry in drivers:
         if entry["ref"] in {m["ref"] for m in merged}:
             continue
@@ -255,9 +222,9 @@ def _standing_match(data: dict, title: str, premise: str, pcless: bool) -> str:
     want = (title.casefold(), premise.casefold(), bool(pcless))
     return next((k for k, rec in data.items()
                  if isinstance(rec, dict)
-                 and _field(rec.get("status"), ACTIVE).lower() == ACTIVE
-                 and (_field(rec.get("title")).casefold(),
-                      _field(rec.get("premise")).casefold(),
+                 and fieldtext.text(rec.get("status"), ACTIVE).lower() == ACTIVE
+                 and (fieldtext.text(rec.get("title")).casefold(),
+                      fieldtext.text(rec.get("premise")).casefold(),
                       bool(rec.get("pcless"))) == want), "")
 
 
@@ -297,7 +264,7 @@ def add(cid: str, title: str, premise: str, cast: list[str] | None = None,
         raise ValueError(f"unknown idea source: {source}")
     premise = premise.strip()
     title = _title_from(title, premise)
-    drivers, time_anchor = _drivers(drivers), _anchor(time_anchor)
+    drivers, time_anchor = idea_shapes.drivers(drivers), idea_shapes.anchor(time_anchor)
     with locks.campaign_lock(cid):
         data = _read_ledger(cid)
         standing = _standing_match(data, title, premise, pcless)
@@ -307,7 +274,7 @@ def add(cid: str, title: str, premise: str, cast: list[str] | None = None,
             return standing
         lid = paths.uniquify(paths.slugify(title), lambda c: c in data)
         rec = {"title": title, "premise": premise, "cast": _tokens(cast),
-               "location": _field(location), "date": _field(date),
+               "location": fieldtext.text(location), "date": fieldtext.text(date),
                "pcless": bool(pcless), "source": source, "status": ACTIVE,
                "created": paths.now_iso(), "used_scene": ""}
         # Current authored metadata, not part of standing-match identity. A
@@ -382,19 +349,19 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
 
 
 def _project(lid: str, rec: dict) -> dict:
-    source = _field(rec.get("source"), USER)
-    status = _field(rec.get("status"), ACTIVE).lower()
-    return {"id": lid, "title": _field(rec.get("title"), lid),
-            "premise": _field(rec.get("premise")),
-            "focus": scenes_focus.normalize(_field(rec.get("focus"))),
-            "cast": _tokens(rec.get("cast")), "location": _field(rec.get("location")),
-            "date": _field(rec.get("date")), "pcless": bool(rec.get("pcless")),
+    source = fieldtext.text(rec.get("source"), USER)
+    status = fieldtext.text(rec.get("status"), ACTIVE).lower()
+    return {"id": lid, "title": fieldtext.text(rec.get("title"), lid),
+            "premise": fieldtext.text(rec.get("premise")),
+            "focus": scenes_focus.normalize(fieldtext.text(rec.get("focus"))),
+            "cast": _tokens(rec.get("cast")), "location": fieldtext.text(rec.get("location")),
+            "date": fieldtext.text(rec.get("date")), "pcless": bool(rec.get("pcless")),
             "source": source if source in SOURCES else USER,
             "status": status if status in STATUSES else ACTIVE,
-            "created": _field(rec.get("created")),
-            "used_scene": _field(rec.get("used_scene")),
-            "drivers": _drivers(rec.get("drivers")),
-            "time_anchor": _anchor(rec.get("time_anchor"))}
+            "created": fieldtext.text(rec.get("created")),
+            "used_scene": fieldtext.text(rec.get("used_scene")),
+            "drivers": idea_shapes.drivers(rec.get("drivers")),
+            "time_anchor": idea_shapes.anchor(rec.get("time_anchor"))}
 
 
 def records(cid: str) -> list[dict]:
