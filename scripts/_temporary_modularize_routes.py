@@ -63,7 +63,7 @@ def split_models() -> None:
     ]
     directory = ROUTES / "models"
     directory.mkdir()
-    init = doc + "\nfrom __future__ import annotations\n\n" + header + "\n"
+    init = doc + "\n" + header + "\n"
     all_names: list[str] = []
     for module, a, b in segments:
         names = _exports(tree, a, b)
