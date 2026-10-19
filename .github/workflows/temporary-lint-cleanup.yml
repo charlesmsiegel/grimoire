@@ -58,6 +58,47 @@ jobs:
           print("RUFF REMAINING:", len(ruff), rc.most_common(24))
           print("ESLINT REMAINING:", sum(ec.values()), ec.most_common(24))
           PY
+      - name: Revert only autofixes that break TypeScript typechecking
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          import subprocess
+          from pathlib import Path
+
+          restored = set()
+          for iteration in range(6):
+              check = subprocess.run(
+                  ["npm", "run", "typecheck"], cwd="frontend",
+                  text=True, capture_output=True, check=False,
+              )
+              if check.returncode == 0:
+                  print("Typecheck passes after safe fixes; reverted", len(restored), "files")
+                  break
+              errors = re.findall(
+                  r"(?m)^src/([^\s(]+\.tsx?)\(\d+,\d+\): error TS\d+:",
+                  check.stdout + "\n" + check.stderr,
+              )
+              changed = set(subprocess.check_output(
+                  ["git", "diff", "--name-only", "--", "frontend/src"], text=True
+              ).splitlines())
+              implicated = sorted({"frontend/src/" + p for p in errors} & changed)
+              implicated = [p for p in implicated if p not in restored]
+              if not implicated:
+                  print(check.stdout[-5000:])
+                  print(check.stderr[-2000:])
+                  raise SystemExit("Unattributed TypeScript failure; refusing to commit autofixes")
+              subprocess.run(["git", "restore", "--", *implicated], check=True)
+              restored.update(implicated)
+              print("Discarding ESLint edits that broke typechecking:", *implicated, sep="\n  ")
+          else:
+              raise SystemExit("Typecheck did not stabilize after conservative restores")
+
+          Path("build/lint-debt/reverted-files.txt").write_text(
+              "\n".join(sorted(restored)) + "\n", encoding="utf-8"
+          )
+          PY
       - name: Lower baselines without permitting regressions
         run: |
           python scripts/ratchet.py ruff --update
@@ -108,6 +149,8 @@ jobs:
           name: lint-cleanup-safe-autofix
           path: |
             build/lint-debt/*.json
+            build/lint-debt/*.patch
+            build/lint-debt/*.txt
             lint-baselines/*.json
           retention-days: 30
           if-no-files-found: warn
