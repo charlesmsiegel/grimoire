@@ -177,7 +177,7 @@ export function ClimateEditor() {
     patchSeason(n, {
       [axis]: form.seasons[n][axis].map((x, i) => {
         if (i !== e) return x;
-        const next = { ...x, ...patch } as ClimateEntry;
+        const next = { ...x, ...patch };
         // The validator rejects an empty requires_temp and wants the key
         // omitted for an unconstrained condition, so clearing the field has to
         // delete the property — otherwise Save fails and the constraint can
@@ -187,7 +187,7 @@ export function ClimateEditor() {
         }
         return next;
       }),
-    } as Partial<ClimateSeason>);
+    });
   }
 
   /** Rename a temperature and rewrite every condition that requires it.
@@ -214,13 +214,13 @@ export function ClimateEditor() {
   }
 
   function addEntry(n: number, axis: typeof AXES[number]["key"]) {
-    patchSeason(n, { [axis]: [...form.seasons[n][axis], { name: "", weight: 1 }] } as Partial<ClimateSeason>);
+    patchSeason(n, { [axis]: [...form.seasons[n][axis], { name: "", weight: 1 }] });
   }
 
   function removeEntry(n: number, axis: typeof AXES[number]["key"], e: number) {
     const season = form.seasons[n];
     if (axis !== "temperature") {
-      patchSeason(n, { [axis]: season[axis].filter((_, i) => i !== e) } as Partial<ClimateSeason>);
+      patchSeason(n, { [axis]: season[axis].filter((_, i) => i !== e) });
       return;
     }
     // Removing a temperature drops it from every condition that required it,
@@ -238,7 +238,7 @@ export function ClimateEditor() {
         conditions: s.conditions.map((c) => {
           if (!c.requires_temp?.includes(gone)) return c;
           const kept = c.requires_temp.filter((r) => r !== gone);
-          const next = { ...c } as ClimateEntry;
+          const next = { ...c };
           if (kept.length) next.requires_temp = kept;
           else delete next.requires_temp;
           return next;

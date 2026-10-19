@@ -32,7 +32,6 @@
   "frontend/src/components/ClimateEditor.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 2,
-    "@typescript-eslint/no-unnecessary-type-assertion": 5,
     "react/no-array-index-key": 4
   },
   "frontend/src/components/ClockPanel.tsx": {
@@ -60,8 +59,7 @@
     "@typescript-eslint/no-unnecessary-type-assertion": 3
   },
   "frontend/src/components/CreationWizard.tsx": {
-    "@typescript-eslint/no-misused-promises": 1,
-    "@typescript-eslint/no-unnecessary-type-assertion": 1
+    "@typescript-eslint/no-misused-promises": 1
   },
   "frontend/src/components/EditableRow.tsx": {
     "jsx-a11y/click-events-have-key-events": 1,
@@ -75,7 +73,6 @@
     "@typescript-eslint/no-base-to-string": 1,
     "@typescript-eslint/no-floating-promises": 1,
     "@typescript-eslint/no-misused-promises": 7,
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
     "react-hooks/exhaustive-deps": 1
   },
   "frontend/src/components/EventsPanel.tsx": {
@@ -111,7 +108,6 @@
   },
   "frontend/src/components/ModuleContentEditor.tsx": {
     "@typescript-eslint/no-misused-promises": 1,
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
     "@typescript-eslint/require-await": 1,
     "react/no-array-index-key": 3
   },
@@ -125,7 +121,6 @@
   },
   "frontend/src/components/ModuleSchemaEditor.tsx": {
     "@typescript-eslint/no-misused-promises": 2,
-    "@typescript-eslint/no-unnecessary-type-assertion": 3,
     "@typescript-eslint/require-await": 2,
     "react/no-array-index-key": 5
   },
@@ -162,9 +157,6 @@
     "@typescript-eslint/no-misused-promises": 3,
     "react/no-array-index-key": 3
   },
-  "frontend/src/components/SceneCastList.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 1
-  },
   "frontend/src/components/SceneConfirmForm.tsx": {
     "@typescript-eslint/no-misused-promises": 1
   },
@@ -182,7 +174,6 @@
   "frontend/src/components/SceneInspector.tsx": {
     "@typescript-eslint/no-floating-promises": 6,
     "@typescript-eslint/no-misused-promises": 15,
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
     "@typescript-eslint/no-unsafe-return": 1,
     "react/no-array-index-key": 1
   },
@@ -198,9 +189,6 @@
     "jsx-a11y/click-events-have-key-events": 1,
     "jsx-a11y/no-static-element-interactions": 1
   },
-  "frontend/src/components/SheetLayout.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 1
-  },
   "frontend/src/components/SheetPanel.tsx": {
     "@typescript-eslint/no-misused-promises": 1,
     "react/no-array-index-key": 1
@@ -211,7 +199,6 @@
   "frontend/src/components/SheetWidgets.tsx": {
     "@typescript-eslint/no-base-to-string": 1,
     "@typescript-eslint/no-misused-promises": 2,
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
     "react/no-array-index-key": 1
   },
   "frontend/src/components/StorageLocation.tsx": {
@@ -266,18 +253,12 @@
   "frontend/src/components/play/CastChanges.tsx": {
     "@typescript-eslint/no-misused-promises": 5
   },
-  "frontend/src/components/review/AbsorbEditRow.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 1
-  },
   "frontend/src/components/review/ReviewPanel.tsx": {
     "@typescript-eslint/no-misused-promises": 4,
     "react/no-array-index-key": 5
   },
   "frontend/src/components/review/ReviewTranscript.tsx": {
     "react/no-array-index-key": 1
-  },
-  "frontend/src/components/review/SceneReview.test.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 1
   },
   "frontend/src/components/review/editRows.test.ts": {
     "@typescript-eslint/no-unnecessary-type-assertion": 1
@@ -289,7 +270,6 @@
   "frontend/src/routes/CampaignView.tsx": {
     "@typescript-eslint/no-floating-promises": 4,
     "@typescript-eslint/no-misused-promises": 9,
-    "@typescript-eslint/no-unnecessary-type-assertion": 2,
     "jsx-a11y/no-autofocus": 3,
     "react/no-array-index-key": 1
   },
@@ -307,9 +287,6 @@
   "frontend/src/routes/ConfigView.tsx": {
     "@typescript-eslint/no-floating-promises": 2,
     "@typescript-eslint/no-misused-promises": 2
-  },
-  "frontend/src/routes/ModulesView.test.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 1
   },
   "frontend/src/routes/ModulesView.tsx": {
     "@typescript-eslint/no-floating-promises": 1,
@@ -329,7 +306,6 @@
     "@typescript-eslint/no-misused-promises": 2
   },
   "frontend/src/test-setup.ts": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 1,
     "@typescript-eslint/no-unsafe-assignment": 1,
     "@typescript-eslint/no-unsafe-return": 1,
     "@typescript-eslint/unbound-method": 1

@@ -15,7 +15,7 @@ window.scrollTo = () => {};
 // match", so tests see the ordinary wide layout unless one overrides this
 // itself — jsdom has no real viewport to answer from either way.
 if (!window.matchMedia) {
-  window.matchMedia = ((query: string) => ({
+  window.matchMedia = (query: string) => ({
     matches: false,
     media: query,
     onchange: null,
@@ -24,7 +24,7 @@ if (!window.matchMedia) {
     addListener: () => {},      // deprecated, but jsdom consumers still probe for it
     removeListener: () => {},
     dispatchEvent: () => false,
-  })) as unknown as typeof window.matchMedia;
+  });
 }
 
 // ---- Every `await` here means "the page has gone quiet", not "one query passed" (#351).

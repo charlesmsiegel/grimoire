@@ -64,7 +64,7 @@ export function showProposal(present: () => unknown) {
   // Re-queried each pass: clicking a drawer re-renders the column, so a
   // NodeList captured up front holds elements React has already replaced.
   const drawers = () =>
-    Array.from(document.querySelectorAll(".context-column .column-row")) as HTMLElement[];
+    Array.from(document.querySelectorAll(".context-column .column-row"));
   for (let i = 0; i < drawers().length; i++) {
     fireEvent.click(drawers()[i]);
     if (present()) return;

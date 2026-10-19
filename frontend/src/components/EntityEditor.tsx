@@ -1154,7 +1154,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
                {...thumbSet((w) => api.entityImageUrl(at, kind, e.id, "avatar", { w, v: e.image_v }),
                             ENTITY_CARD_SIZES, THUMB.tile,
                             api.entityImageUrl(at, kind, e.id, "avatar", { v: e.image_v }))}
-               onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
+               onError={(ev) => { (ev.currentTarget).style.display = "none"; }} />
         )}
         <span className="row-name">{e.name}</span>
         {asSecrecy(e.secrecy) !== "public" && (
@@ -1169,7 +1169,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
               return o?.avatar ? (
                 <img key={ref} className="owner-stack-img" alt="" title={o.label}
                      loading="lazy" decoding="async" src={o.avatar}
-                     onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                     onError={(ev) => { (ev.currentTarget).style.display = "none"; }} />
               ) : null;
             })}
           </span>

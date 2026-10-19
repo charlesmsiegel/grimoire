@@ -154,7 +154,7 @@ test("Import posts the picked file, reloads the list, and selects the imported m
   vi.mocked(api.importModule).mockResolvedValue({ id: "imported" });
   vi.mocked(api.readModule).mockResolvedValue({ ...DETAIL, id: "imported", source: "user" });
   render(inShell(<ModulesView />));
-  const input = screen.getByLabelText("Import module zip") as HTMLInputElement;
+  const input = screen.getByLabelText("Import module zip");
   const file = new File(["zip"], "pack.zip", { type: "application/zip" });
   fireEvent.change(input, { target: { files: [file] } });
   await waitFor(() => expect(api.importModule).toHaveBeenCalled());

@@ -41,7 +41,7 @@ export function themeStyle(theme: ModuleTheme | undefined): CSSProperties {
   const f = theme?.fonts ?? {};
   if (f.display && FONT_VALUES[f.display]) s["--sheet-fd"] = FONT_VALUES[f.display];
   if (f.body && FONT_VALUES[f.body]) s["--sheet-fb"] = FONT_VALUES[f.body];
-  return s as CSSProperties;
+  return s;
 }
 
 type Ctx = {

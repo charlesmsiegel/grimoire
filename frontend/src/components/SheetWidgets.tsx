@@ -17,7 +17,7 @@ type WidgetProps = {
 };
 
 export function isResource(v: unknown): v is { current: number; max: number } {
-  return !!v && typeof v === "object" && "current" in (v as object) && "max" in (v as object);
+  return !!v && typeof v === "object" && "current" in (v) && "max" in (v);
 }
 
 const label = (f: ModuleField) => f.label ?? f.key;

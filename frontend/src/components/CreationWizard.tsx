@@ -81,7 +81,7 @@ export default function CreationWizard({ scope, kind, module, createRecord, dele
   }
 
   const anyOverBudget = Object.keys(pools).some((pid) => {
-    const budget = typeof pools[pid].budget === "number" ? pools[pid].budget as number : Infinity;
+    const budget = typeof pools[pid].budget === "number" ? pools[pid].budget : Infinity;
     return poolTotal(pid) > budget;
   });
 

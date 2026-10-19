@@ -90,7 +90,7 @@ export function FieldRows({ fields, setFields, existingKeys, dirty, onRename }: 
           <button onClick={() => setFields(fields.filter((_, j) => j !== i))}>Remove</button>
         </div>
       ))}
-      <button onClick={() => setFields([...fields, { key: "", type: "number" } as ModuleField])}>
+      <button onClick={() => setFields([...fields, { key: "", type: "number" }])}>
         + Add field
       </button>
     </div>
@@ -173,7 +173,7 @@ export function GroupsSection({ pack, reload }: {
       ...(Object.keys(selectedForm.derived).length ? { derived: selectedForm.derived } : {}),
     }, dryRun);
   };
-  const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] } as ModuleEditResult), [form]);
+  const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] }), [form]);
   // Group derived samples aren't computed at the group level (the backend's
   // group-only dry-run has no sheet to instantiate) -- they live on every
   // sheet type that composes this group, keyed by tid. A derived name means
@@ -452,7 +452,7 @@ export function SheetTypesSection({ pack, reload }: {
     }
     return api.putModuleSheetType(pack.id, selectedForm.tid, buildDef(selectedForm), dryRun);
   };
-  const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] } as ModuleEditResult), [form]);
+  const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] }), [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
   // Delete removes the record the form/selection points at, so unlike `done`
   // (rename/save keep the same record selected) it must also clear `selected`

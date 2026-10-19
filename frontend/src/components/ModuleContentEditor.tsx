@@ -170,7 +170,7 @@ export function ContentSection({ pack, reload }: {
     setGateError([]);
     setViewEntry(null);
     void api.readModuleContent(pack.id, kind, id).then((entry) => {
-      if (selectionRef.current === rev) setViewEntry(entry as ContentEntry);
+      if (selectionRef.current === rev) setViewEntry(entry);
     });
   };
 
