@@ -603,13 +603,6 @@
     "C901": 1,
     "PLW2901": 1
   },
-  "scripts/validate_partition.py": {
-    "B007": 1,
-    "C416": 1,
-    "C901": 4,
-    "RUF005": 1,
-    "RUF015": 1
-  },
   "scripts/verify_templates.py": {
     "A002": 1,
     "B905": 2,

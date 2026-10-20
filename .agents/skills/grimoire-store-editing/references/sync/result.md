@@ -46,7 +46,7 @@ reporting; a multi-file batch is not a transaction with automatic rollback.
 On a phone, ordinary reads rebuild lazily. `POST /api/cache/sync` is available
 through loopback only, for a PC with an existing `adb forward` setup.
 An open page can paint remembered data briefly before revalidation; see the
-[overview consistency bound](../../../../../docs/store-guarantees.md#what-an-overview-page-may-show-from-memory).
+[overview consistency bound](../../../../../docs/reference/storage.md#overview-projections).
 
 ## Report back
 

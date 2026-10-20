@@ -33,8 +33,7 @@ Source: [draws.py](../../../../../backend/src/grimoire/draws.py), [play_decision
   draw `on` (it adds no call: the pick was already asked) and the two that
   each add a call `off`. A global value a switch does not know reads as off.
   The live play gate (`evals/run.py --live --play`, `evals/play.py`) measures
-  them; its first report is
-  `docs/superpowers/validation/2026-10-12-roadmap-02-play-gate.md`. A turn
+  them; the current evaluation procedure is in `evals/README.md`. A turn
   decision off is byte-identical: nothing is resolved, called or written.
   On, a turn decision is asked before the contribution is composed
   (`character_turns._turn_plan`), resolved through `_soft_resolved`, bounded

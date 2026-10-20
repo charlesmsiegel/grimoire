@@ -21,7 +21,7 @@ Use `grimoire.store`; the [integration guide](../../world-card-integration/refer
 locates the existing operations. Keep the target campaign idle for the entire
 external batch, including its detached runs, even when using those writers.
 Closing a tab does not end generation; use the app's guarded routes instead
-if quiescence cannot be maintained. See [process exclusion](../../../../docs/store-guarantees.md#a-second-process-on-the-same-store)
+if quiescence cannot be maintained. See [process exclusion](../../../../docs/reference/storage.md#multiple-processes-and-sync)
 and [detached runs](../../grimoire-development/references/backend/runs.md#detached-runs-a-turn-outlives-the-request-that-asked-for-it).
 
 Choose embedding policy before entering `cache_sync.collecting`: it syncs on
@@ -44,7 +44,7 @@ Check affected references before deleting or moving records. A display rename
 keeps the record's ID; supported lifecycle operations own moves and
 reclassifications. A cache path report does not repair those references.
 Use `image_descriptions` and `image_subjects` for art metadata, rather than
-editing image-object files; read the [shared metadata guarantees](../../../../docs/store-guarantees.md#shared-metadata-descriptions-and-subjects).
+editing image-object files; read the [shared metadata guarantees](../../../../docs/reference/storage.md#shared-metadata).
 If a direct text edit is needed, preserve existing line endings and keep
 competing writers off the target. Record partial edits before retrying a failure.
 
@@ -54,7 +54,7 @@ Do not hand-edit `.cache/`, backups, logs, usage, provider credentials or a
 campaign's `revision.txt`. Sync updates the write token itself.
 Do not alter records to imitate a cached answer, or delete the compiled folder
 to repair one: its purge marker and deletion intents support recovery across
-devices. Report a cache fault and consult the [compiled-cache guarantees](../../../../docs/store-guarantees.md#the-compiled-cache).
+devices. Report a cache fault and consult the [compiled-cache guarantees](../../../../docs/reference/storage.md#compiled-caches).
 This procedure provides no cache-repair or deletion-control operation.
 
 For interpreter selection and shell syntax, read [Python commands](python.md).

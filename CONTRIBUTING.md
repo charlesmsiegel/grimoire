@@ -9,7 +9,7 @@ Its companions, which it points at rather than repeats:
 
 - [`AGENTS.md`](AGENTS.md) — universal project agreements and task routing.
   The linked skills own detailed conventions; this page owns gate commands.
-- [`docs/store-guarantees.md`](docs/store-guarantees.md) — what the store
+- [`docs/reference/storage.md`](docs/reference/storage.md) — what the store
   promises about atomicity and concurrency, and what it deliberately does not.
   Read it before writing anything that mutates campaign-scoped state.
 
@@ -93,10 +93,8 @@ and `make -j` cannot put two installs in one `node_modules` at the same time.
 `make check` runs every target in that table except **`check-apk`**, which is
 excluded deliberately: it needs a per-machine `make android-bootstrap` first,
 so folding it in would break `make check` on any un-bootstrapped machine. CI
-runs it as its own job. (The `check:` line in the `Makefile` is the list that
-counts — `test_docs_guard.py` fails if a target here goes unmentioned, but no
-test can tell you a sentence about *how many* there are went stale, which is
-why there is no number in this one.)
+runs it as its own job. The `check:` line in the `Makefile` is the executable
+list; keep this table current when that list changes.
 
 ### The three ratcheted gates
 
@@ -225,10 +223,8 @@ cannot fail a test run.
 | `test_lowering_retired_guard.py` | the connection-dict lowering stays deleted: in the package, `backend/scripts/` and `evals/`, nothing spells its keys (`FALLBACK_KEY`, `STRUCTURED_KEY`, `ACCOUNT_KEY`, or the `"_fallback"` / `"_structured"` / `"_account"` / `"_degrade"` strings), its builders (`_lowered`, `with_facts`, `own_sampling`, `lower` from `store.inference.resolve`), its shims (`from_lowered`, `_as_chain`, `without_fallback`, `_without_fallback`) or slice H's native table (`NATIVE_DECISION_KINDS`, `NativeAdapter`), and nothing reads `.conn` off a resolution, an attempt, a decide stage or a call | — |
 | `test_continuity_writer_guard.py` | continuity's discovery and projection modules, the Story Graph's included, never write plot or commitment records, events, scene ideas, reviewed aliases and links, or suppressions — only `continuity.review` and the routes apply a reviewed decision; roadmap 12's investigation package is scanned beside them, each module resolving its imports against its own package | — |
 | `test_investigation_writer_guard.py` | nothing under `store/investigation/` or in `routes/investigation.py` reaches a mutator of the ledger, the transcript, knowledge overrides, entities, play state, dossiers or the chronicle (an allowlist of readers per watched module); `reconcile.persist_investigation` is the one write, and only the route module may call it | — |
-| `test_continuity_wording.py` | no reader-visible source (non-test files under `backend/src/grimoire/` and `frontend/src/`, and `README.md`) makes a claim the continuity spec avoids by name — §30's four phrases and §3.3's “continuity disabled” — in any plain rewording (an article, a plural, a verb form), and nothing broader; why is in §30 of `docs/superpowers/specs/2026-10-04-continuity-capstone-design.md` | — |
+| `test_continuity_wording.py` | reader-visible application source under `backend/src/grimoire/` and `frontend/src/` uses the continuity UI's tested vocabulary; repository documentation is outside the scan | — |
 | `test_unreachable_guard.py` | nothing follows a `return`, `raise`, `continue` or `break` in its block, in the package, the scripts and the evals -- except the bare `yield` that makes a function which only raises a generator | — |
-| `test_skills_guard.py` | generated Claude pointers, nested reference links and reachability; store-editing commands and result vocabulary stay current | — |
-| `test_docs_guard.py` | this page, `AGENTS.md`, `docs/store-guarantees.md`, and `templates/README.md` stay true to the code; `CLAUDE.md` forwards to `AGENTS.md` | — |
 | `test_ratchet_guard.py` | the lint baselines are canonical, positive, and name files that exist | — |
 
 Clearing a genuinely safe call takes `# <marker>: <reason>`. **A marker with no
@@ -304,7 +300,7 @@ anything under `templates/`, run `make check`. It covers both harnesses —
 Three rules keep the two platforms in lockstep, and breaking one of them is
 invisible on the desktop build. The [packaging guide](.agents/skills/grimoire-development/references/android/packaging.md)
 routes to their source owners, with the architecture contract in
-[`docs/android-architecture.md`](docs/android-architecture.md): use the
+[`docs/reference/android.md`](docs/reference/android.md): use the
 filesystem resolvers, keep base dependencies installable on Android, and keep
 pydantic usage version-agnostic.
 
@@ -346,10 +342,22 @@ command runs at which stage, and what the final one is looking for — under
 *Development workflow: Codex review gates*. Do not restate that list anywhere;
 follow it there.
 
-Two things worth adding for a human contributor: specs live in
-`docs/superpowers/specs/` and plans in `docs/superpowers/plans/`, and a gate
+Two things worth adding for a human contributor: temporary specs live in
+`.superpowers/specs/` and plans in `.superpowers/plans/`, and a gate
 you could not run (no Codex access, an exhausted quota) is a thing to say in
 the pull request rather than to pass over silently.
+
+## Maintaining documentation
+
+The manual starts at [`docs/README.md`](docs/README.md). Update the page that owns
+a changed workflow or constraint, follow its links, and review screenshots
+against synthetic fixtures. Keep historical plans, generated reports and review
+logs in the ignored working area or Git history.
+
+Application tests and executable tools must not use documentation as input.
+Preserve useful examples as fixtures owned by the relevant tests; remove checks
+whose only assertion is that prose contains a particular phrase or inventory.
+Runtime store Markdown and Jinja prompt templates remain application inputs.
 
 ---
 

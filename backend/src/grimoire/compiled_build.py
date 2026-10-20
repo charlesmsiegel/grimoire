@@ -1,8 +1,10 @@
 """The portable source identity and the runtime part of compiled-cache BUILD.
 
 Spec 03 S1 needs the same source identity in a checkout, a wheel and an APK.
-Only relative names and exact file bytes enter that identity. Import-created
-bytecode never does. Gradle can run this module with a bare build Python and
+Only relative names and exact runtime-input bytes enter that identity. README
+files and docs directories are prose, not runtime inputs: editing them must not
+invalidate caches or disable fingerprinting. Import-created bytecode never does.
+Gradle can run this module with a bare build Python and
 ship a source-only stamp; the phone then adds its own Python and dependency
 versions, rather than mistaking the build machine's runtime for its own.
 
@@ -65,12 +67,13 @@ def source_digest(package_dir: Path, templates_dir: Path) -> str:
         if not root.is_dir():
             raise OSError("build inputs unavailable")
         for directory, names, filenames in os.walk(root, onerror=_walk_error):
-            names[:] = sorted(name for name in names if name != "__pycache__")
+            names[:] = sorted(name for name in names
+                              if name.casefold() not in {"__pycache__", "docs"})
             if any((Path(directory) / name).is_symlink() for name in names):
                 raise OSError("build subtree unavailable")
             for name in sorted(filenames):
                 path = Path(directory) / name
-                if path.suffix in SOURCE_SUFFIXES:
+                if path.stem.casefold() != "readme" and path.suffix in SOURCE_SUFFIXES:
                     manifest.append((domain, path.relative_to(root).as_posix(),
                                      hashlib.sha256(path.read_bytes()).hexdigest()))
     return hashlib.sha256(_canonical(sorted(manifest))).hexdigest()

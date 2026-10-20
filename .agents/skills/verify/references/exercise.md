@@ -1,37 +1,45 @@
 # Seed, drive and stop
 
-## Current model settings
+## Seed through the current API
 
-A fresh library uses format-2 settings. Set a fake provider key and select a
-fake model through the role API, following
-[test_format2_play.py](../../../../backend/tests/test_format2_play.py):
+Create a provider, then assign its model through roles. Legacy `openrouter_key`
+and `model` fields on `/api/config` are not the current settings interface.
 
-```text
-PUT /api/llm-connections/openrouter
-{"api_key":"sk-or-x"}
+1. `POST /api/llm-connections` with `kind: "openrouter"`, `name: "Fixture provider"`,
+   `preset: "openrouter"` and `api_key: "sk-or-fixture"`. Retain its returned `id`.
+2. `PUT /api/inference/settings` with:
 
-PUT /api/inference/settings
-{"roles":{"primary":{"selection":{"provider":"openrouter","model":"test/model"}}}}
-```
+   ```json
+   {"roles":{"primary":{"selection":{"provider":"<returned-id>","model":"test/model"}}}}
+   ```
 
-Legacy `PUT /api/config` model/key fields do not configure a current Primary.
-Use only the mocked provider; confirm Embedding is unset unless explicitly mocked.
+3. Create a world, characters with V3 cards, a PC and any locations/lore needed.
+   Use existing placeholder names such as Realm, Saltmarch, Seraphine, Mara and
+   Winifred. Record returned IDs and version IDs rather than guessing slugs.
+4. Create a campaign with the world's returned ID, then scenes and cast through
+   their API routes. `/api/campaigns/{cid}/scenes/import` accepts a reviewed
+   synthetic transcript, location and typed cast references when generation is
+   unnecessary. World records can be inherited; campaign-local records remain
+   separate from their shared world counterparts.
 
-## Seed and drive
+For public screenshots use
+[library.json](../../../../backend/tests/fixtures/documentation/library.json).
+Its text is synthetic and may be published; a private library must never be
+used as seed data. Do not regenerate the frozen compatibility `home/` fixture.
+The running app's `/openapi.json` describes request shapes from code.
 
-Create a World, a character card and the needed PCs through the API, then create
-a campaign and scenes. Add cast and greetings using the relevant routes.
-Campaign readers resolve inherited World records through the overlay; do not
-assume a physical character copy exists in the campaign folder.
+## Drive, inspect and stop
 
-Use the browser tool available in the host against the dedicated frontend URL.
-Exercise the change's meaningful behavior and capture any failing response or
-console message. Save screenshots and logs to an explicit ignored scratch path;
-do not rely on a particular browser tool's default artifact directory.
+Use the available browser-control procedure on `http://127.0.0.1:5209`.
+The campaign list is `/`, the hub is `/campaigns/{cid}`, and play is
+`/campaigns/{cid}/scenes/{sid}`. Inspect visible behavior, console exceptions,
+failed requests and loaded assets. Initial-letter art is expected for text-only
+fixtures; investigate image failures rather than dismissing them automatically.
 
-Stop both server processes using their recorded handles when verification is
-finished. Missing avatars for placeholder cards can produce harmless 404s; real
-provider traffic or a non-scratch library is an isolation failure.
+Keep launchers, logs, profiles and generated stores in ignored scratch. Review
+every public screenshot for fixture-only content before copying it into the
+manual. Stop only the temporary browser and servers started for this session.
+Stop Vite before `make check`: Windows cannot reinstall a running `esbuild.exe`.
 
 Source owners: [world routes/](../../../../backend/src/grimoire/routes/worlds/),
 [inference routes](../../../../backend/src/grimoire/routes/inference.py),

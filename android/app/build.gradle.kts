@@ -8,9 +8,15 @@ plugins {
 
 // The APK packages the working-tree backend sources and the freshly built
 // frontend bundle — there are no Android-side copies of any grimoire code.
-// See docs/android-architecture.md §5.
+// See docs/reference/android.md.
 val repoRoot: File = rootProject.projectDir.parentFile
 val frontendDir = File(repoRoot, "frontend")
+
+// Match compiled_build's boundary: documentation must neither invalidate the
+// source stamp nor enter the APK. Real Markdown styles and module data remain.
+// Chaquopy 17 forwards getExcludes() into its copy action, losing predicate
+// specs. String patterns keep packaged files consistent with declared inputs.
+val nonRuntimePatterns = listOf("**/docs/**", "**/README.*", "**/readme.*", "**/__pycache__/**")
 
 android {
     namespace = "app.grimoire"
@@ -20,7 +26,7 @@ android {
         applicationId = "app.grimoire"
         minSdk = 26
         // Bumping targetSdk to 35 forces edge-to-edge; the WebView insets need
-        // explicit handling first (Phase 2 of docs/android-architecture.md).
+        // explicit handling before the target can be raised.
         targetSdk = 34
         // versionCode is derived from versionName: major*10000 + minor*100 + patch.
         versionCode = 203
@@ -70,8 +76,8 @@ chaquopy {
             //
             // pydantic is pinned to the pure-python 1.10 line: pydantic v2's
             // Rust core had no Android wheel in Chaquopy 15's repository when
-            // this was pinned (docs/android-architecture.md §7 risk 1,
-            // fallback 2). Not re-checked against Chaquopy 17 — lifting the pin
+            // this was pinned. The packaging contract is in docs/reference/android.md.
+            // Not re-checked against Chaquopy 17 — lifting the pin
             // would also mean retiring `make check-pydantic1`. FastAPI
             // supports both lines, and the routes package is v1/v2-agnostic (_dump).
             install("pydantic==1.10.*")
@@ -96,6 +102,7 @@ chaquopy {
         getByName("main") {
             // the real backend, straight from the working tree
             srcDir("../../backend/src")
+            exclude(nonRuntimePatterns)
         }
     }
 }
@@ -109,14 +116,15 @@ dependencies {
 
 val webAssets = layout.buildDirectory.dir("generated/grimoireAssets")
 val compiledStamp = layout.buildDirectory.file("generated/compiledBuild/compiled-build.json")
+val runtimeBackend = fileTree(File(repoRoot, "backend/src/grimoire")) { exclude(nonRuntimePatterns) }
+val runtimeTemplates = fileTree(File(repoRoot, "templates")) { exclude(nonRuntimePatterns) }
 
 val generateCompiledBuild = tasks.register<Exec>("generateCompiledBuild") {
     description = "Fingerprints backend sources and templates for the compiled cache"
     workingDir = repoRoot
     val source = File(repoRoot, "backend/src/grimoire")
     val templates = File(repoRoot, "templates")
-    inputs.dir(source)
-    inputs.dir(templates)
+    inputs.files(runtimeBackend, runtimeTemplates)
     inputs.files(File(repoRoot, "backend/scripts/compiled_build.py"),
                  File(source, "compiled_build.py"))
     outputs.file(compiledStamp)
@@ -145,7 +153,7 @@ val stageGrimoireAssets = tasks.register<Sync>("stageGrimoireAssets") {
     dependsOn(buildFrontend, generateCompiledBuild)
     into(webAssets)
     from(File(frontendDir, "dist")) { into("grimoire/frontend") }
-    from(File(repoRoot, "templates")) { into("grimoire/templates") }
+    from(runtimeTemplates) { into("grimoire/templates") }
     from(compiledStamp) { into("grimoire") }
 }
 

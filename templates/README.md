@@ -574,8 +574,9 @@ stable across attempts. Primary capture follows the turn claim; fallback
 variants are captured only when dispatched. With capture off and an unbounded
 context budget, composition still skips token counting.
 
-See [GLM dialogue notes](../docs/glm-dialogue-prompts.md) for the evidence and
-the live evaluation still needed.
+See [Context and memory](../docs/guides/context.md#style-guidance-and-output-rules)
+for the current behavior. The retired dialogue investigation remains available
+in Git history; it is not the template contract.
 
 Message assembly (code-side, mirrored from `store/context/assemble/`):
 1. `system.j2` — one system message; omitted if it renders empty.
@@ -660,7 +661,7 @@ substituted by code:
   style and character expression may override expression defaults, never
   continuity, player control, knowledge, or reply format. The earlier phrase
   and rhythm policy is now optional `styles/natural-prose-legacy.md`.
-  Experiment scope: docs/scene-dialogue-guidance.md.
+  Current guidance and its limits: [Context and memory](../docs/guides/context.md#style-guidance-and-output-rules).
 - `world_overview` — the campaign world's profile (#38), `worlds.read.profile_of`
   over `campaigns.read.world_root_of`: `{genre, tone, themes: [str],
   description}`, every value empty when the world has none, in which case

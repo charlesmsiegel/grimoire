@@ -24,5 +24,6 @@ Source: [assets/](../../../../../backend/src/grimoire/store/assets/), [test_imag
   Neither module appears in `store/locks/_domain.py`'s domain lists, because the guard
   surveys by `cid` and each takes a root; the migration's campaign writes take
   `campaign_lock` anyway.
-  What the store promises is in `docs/store-guarantees.md`; the design is
-  `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md`.
+  What the store promises is in `docs/reference/storage.md`; the image-store
+  implementation's contracts are in `store/image_store.py`, `image_refs.py`,
+  `store/image_migration/` and `store/image_gc/`.
