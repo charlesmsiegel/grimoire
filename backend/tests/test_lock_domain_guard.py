@@ -213,18 +213,28 @@ from __future__ import annotations
 
 import ast
 import functools
+import json
 import pathlib
+import sys
 import typing
+
+import pytest
 
 import grimoire
 from grimoire.store import locks
 
-from . import guard_markers
+from . import guard_markers, guard_relocations
 
 PACKAGE = pathlib.Path(grimoire.__file__).parent
 # Compared by path, not by `name == "locks.py"`: a second module with that name
 # anywhere under the package would otherwise be skipped along with it.
 LOCKS_PY = pathlib.Path(locks.__file__)
+
+# Captured deliberately from a7ebe3961 before extraction. These are separate
+# ledgers: an old writer that used to lock cannot acquire legacy-hole status
+# merely because a different writer in the old monolith did not lock.
+_LEGACY_RELOCATIONS = json.loads((pathlib.Path(__file__).parent / "fixtures" /
+    "lock_domain_relocations.json").read_text(encoding="utf-8"))["modules"]
 
 # The trailing colon is load-bearing -- see test_pydantic_guard.MARKER.
 MARKER = "lock-domain-ok:"
@@ -2206,11 +2216,23 @@ def _analyze(path: pathlib.Path):
     """(unserialized mutator names, every campaign mutator name) for one file."""
     src = path.read_text(encoding="utf-8")
     tree = ast.parse(src)
+    return _analyze_tree(tree, src, path)
+
+
+def _analyze_tree(tree, src, path, *, origins=None, decorators=None, package=None):
+    """The same lock proof for physical files and exact relocated modules.
+
+    The adapter only reconstructs former local references. This function keeps
+    campaign binding, deferred writes, marker ownership and fixed-point rules
+    shared, so package extraction cannot create a second, weaker lock policy.
+    """
     funcs = _functions(tree)
-    package = ".".join(_module_name(path).split(".")[:-1])
+    if package is None:
+        package = ".".join(_module_name(path).split(".")[:-1])
     surface = _Surface.of(tree, package)
     serializing = _serializing(funcs, surface, _module_level(tree),
-                               _sibling_decorators(tree, path, package))
+                               _sibling_decorators(tree, path, package)
+                               if decorators is None else decorators)
     mutators = _mutators(funcs, serializing, surface)
 
     every = [d for ds in funcs.values() for d in ds]
@@ -2239,8 +2261,13 @@ def _analyze(path: pathlib.Path):
             continue
         # EVERY definition must carry its own exemption; one marker cannot
         # clear a name whose other branch is the unlocked one.
-        if _all(defs, lambda d: _exemption(src, d, [o for o in every if o is not d])
-                is not None):
+        def exempt(node):
+            original_src, origin = origins[id(node)] if origins else (src, path)
+            others = [other for other in every if other is not node and (
+                origins is None or origins[id(other)][1] == origin)]
+            return _exemption(original_src, node, others) is not None
+
+        if _all(defs, exempt):
             continue
         unserialized.add(name)
     return unserialized, campaign_mutators
@@ -2252,12 +2279,49 @@ def _survey() -> dict[str, tuple[set[str], set[str]]]:
     them). Cached: six tests below ask for it, the package is ~150 files, and
     the per-module fixed points are quadratic in the module's function count.
     Nothing rewrites the tree mid-run."""
-    out = {}
+    out, relocated = {}, set()
+    for logical, record in _LEGACY_RELOCATIONS.items():
+        old_path = PACKAGE.joinpath(*logical.split(".")).with_suffix(".py")
+        if old_path.is_file():
+            continue
+        joined = guard_relocations.join(PACKAGE, logical, record["owners"], _sibling_decorators)
+        relocated.update(joined.paths)
+        unserialized, mutators = _analyze_tree(joined.tree, "", PACKAGE.joinpath(
+            *logical.split(".")) / "__init__.py", origins=joined.origins,
+            decorators=joined.decorators, package=logical)
+        if mutators:
+            out[logical] = (unserialized, mutators)
     for path in sorted(PACKAGE.rglob("*.py")):
+        if path in relocated:
+            continue
         unserialized, mutators = _analyze(path)
         if mutators:
             out[_module_name(path)] = (unserialized, mutators)
     return out
+
+
+def _legacy_allowance_errors(logical, current, record):
+    """Frozen source identities, rather than a module-prefix exemption."""
+    unlocked, mutators = current
+    before = set(record["mutators"])
+    holes = set(record["unserialized"])
+    failures = []
+    for reason, names in (
+            ("new campaign mutators", mutators - before),
+            ("new unlocked mutators", unlocked - holes),
+            ("stale original mutators", before - mutators),
+            ("stale unlocked allowances", holes - unlocked)):
+        if names:
+            failures.append(f"{logical}: {reason}: {', '.join(sorted(names))}")
+    return failures
+
+
+def test_relocated_legacy_allowances_are_exact_and_only_shrink():
+    survey = _survey()
+    failures = [failure for logical, record in _LEGACY_RELOCATIONS.items()
+                for failure in _legacy_allowance_errors(
+                    logical, survey.get(logical, (set(), set())), record)]
+    assert not failures, "\n".join(failures)
 
 
 def _declared() -> set[str]:
@@ -4959,3 +5023,222 @@ def test_a_marker_inside_a_nested_function_does_not_exempt_the_outer_one():
     assert _exemption(src, funcs["outer"][0], others) is None, \
         "the enclosing mutator inherited a nested function's marker"
     assert _exemption(src, funcs["inner"][0], [funcs["outer"][0]]) is not None
+
+
+def test_relocated_private_writes_still_charge_the_public_caller(tmp_path, monkeypatch):
+    """The fixed point must cross a relocated helper's module boundary.
+
+    Surveying the leaves independently forgets the private writer and its
+    public caller alike: neither then needs a classification at all.
+    """
+    package = tmp_path / "store" / "overlay"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "_caller.py").write_text(
+        "from . import _writer\n"
+        "def put(cid):\n    _writer._write(cid)\n", encoding="utf-8")
+    (package / "_writer.py").write_text(
+        "from .. import atomic\n"
+        "def _write(cid):\n    atomic.write_text(p, x)\n", encoding="utf-8")
+    record = {"owners": {"put": "_caller", "_write": "_writer"},
+              "mutators": ["put"], "unserialized": ["put"]}
+    monkeypatch.setattr(sys.modules[__name__], "PACKAGE", tmp_path)
+    monkeypatch.setattr(sys.modules[__name__], "_LEGACY_RELOCATIONS",
+                        {"store.overlay": record}, raising=False)
+    _survey.cache_clear()
+    try:
+        assert _survey() == {"store.overlay": ({"put"}, {"put"})}
+    finally:
+        _survey.cache_clear()
+
+
+def _relocation_probe(tmp_path, sources, owners):
+    folder = tmp_path / "store" / "legacy"
+    folder.mkdir(parents=True)
+    sources = {"__init__": "", **sources}
+    for name, source in sources.items():
+        (folder / f"{name}.py").write_text(source, encoding="utf-8")
+    joined = guard_relocations.join(tmp_path, "store.legacy", owners,
+                                    lambda *_: frozenset())
+    return _analyze_tree(joined.tree, "", folder / "__init__.py",
+                         origins=joined.origins, decorators=joined.decorators,
+                         package="store.legacy")
+
+
+@pytest.mark.parametrize("caller,helper,expected", [
+    ("    _writer._write(cid)\n",
+     "def _write(cid):\n    atomic.write_text(p, x)\n", ({"put"}, {"put"})),
+    ("    with locks.campaign_lock(cid):\n        _writer._write(cid)\n",
+     "def _write(cid):\n    atomic.write_text(p, x)\n", (set(), {"put"})),
+    ("    _writer._write(cid)\n",
+     "def _write(cid):\n    with locks.campaign_lock(cid):\n        atomic.write_text(p, x)\n",
+     (set(), set())),
+    ("    _writer._write(other, cid)\n",
+     "def _write(cid, other):\n    with locks.campaign_lock(cid):\n        atomic.write_text(p, x)\n",
+     ({"put"}, {"put"})),
+])
+def test_relocated_delegation_keeps_position_and_campaign_binding(tmp_path, caller, helper, expected):
+    got = _relocation_probe(tmp_path, {
+        "_caller": "from . import _writer\nfrom .. import locks\ndef put(cid):\n" + caller,
+        "_writer": "from .. import atomic, locks\n" + helper,
+    }, {"put": "_caller", "_write": "_writer"})
+    assert got == expected
+
+
+@pytest.mark.parametrize("binding", [
+    "def put(cid, _writer):\n    _writer._write(cid)\n",
+    "def put(cid):\n    _writer = foreign\n    _writer._write(cid)\n",
+    "_writer = foreign\ndef put(cid):\n    _writer._write(cid)\n",
+])
+def test_a_shadowed_internal_module_never_grants_lock_coverage(tmp_path, binding):
+    with pytest.raises(guard_relocations.RelocationError, match="rebound internal module alias"):
+        _relocation_probe(tmp_path, {
+            "_caller": "from . import _writer\n" + binding,
+            "_writer": "from .. import atomic, locks\ndef _write(cid):\n"
+                       "    with locks.campaign_lock(cid):\n        atomic.write_text(p, x)\n",
+        }, {"put": "_caller", "_write": "_writer"})
+
+
+@pytest.mark.parametrize("source", [
+    "from ._writer import _write as safe\ndef put(cid, safe):\n    safe(cid)\n",
+    "from . import _writer\nfrom foreign import _writer\ndef put(cid):\n    _writer._write(cid)\n",
+])
+def test_rebound_or_multiply_imported_symbols_cannot_borrow_helper_coverage(tmp_path, source):
+    with pytest.raises(guard_relocations.RelocationError, match=r"(rebound|ambiguous) internal"):
+        _relocation_probe(tmp_path, {
+            "_caller": source,
+            "_writer": "from .. import atomic, locks\ndef _write(cid):\n"
+                       "    with locks.campaign_lock(cid):\n        atomic.write_text(p, x)\n",
+        }, {"put": "_caller", "_write": "_writer"})
+
+
+def test_an_escaping_internal_module_is_not_silently_dropped(tmp_path):
+    with pytest.raises(guard_relocations.RelocationError, match="escapes static resolution"):
+        _relocation_probe(tmp_path, {
+            "_caller": "from . import _writer\ndef put(cid):\n    alias = _writer\n    alias._write(cid)\n",
+            "_writer": "from .. import atomic\ndef _write(cid):\n    atomic.write_text(p, x)\n",
+        }, {"put": "_caller", "_write": "_writer"})
+
+
+def test_foreign_helpers_cannot_borrow_a_relocated_helpers_lock(tmp_path):
+    got = _relocation_probe(tmp_path, {
+        "_caller": "from .. import foreign\ndef put(cid):\n    foreign._write(cid)\n",
+        "_writer": "from .. import atomic, locks\ndef _write(cid):\n"
+                   "    with locks.campaign_lock(cid):\n        atomic.write_text(p, x)\n",
+    }, {"put": "_caller", "_write": "_writer"})
+    assert got == ({"put"}, {"put"})
+
+
+def test_external_aliases_from_different_leaves_do_not_grant_each_other_trust(tmp_path):
+    got = _relocation_probe(tmp_path, {
+        "_caller": "from . import _writer\nfrom foreign import locks\n"
+                   "import os.path as fs\ndef put(cid):\n"
+                   "    with locks.campaign_lock(cid):\n        _writer._write(other)\n",
+        "_writer": "from .. import locks\nimport shutil as fs\ndef _write(cid):\n"
+                   "    with locks.campaign_lock(cid):\n        fs.copytree(a, b)\n",
+    }, {"put": "_caller", "_write": "_writer"})
+    assert got == ({"put"}, {"put"})
+
+
+def test_relocated_decorators_keep_the_existing_lock_proof(tmp_path):
+    got = _relocation_probe(tmp_path, {
+        "_caller": "from . import _locking\nfrom .. import atomic\n"
+                   "@_locking.serialized\ndef put(cid):\n    atomic.write_text(p, x)\n",
+        "_locking": "from .. import locks\ndef serialized(fn):\n"
+                    "    def locked(cid, *args):\n"
+                    "        with locks.campaign_lock(cid):\n            return fn(cid, *args)\n"
+                    "    return locked\n",
+    }, {"put": "_caller", "serialized": "_locking"})
+    assert got == (set(), {"put"})
+
+
+def test_relocated_markers_keep_their_own_file_and_function(tmp_path):
+    got = _relocation_probe(tmp_path, {
+        "_caller": "from .. import atomic\n\ndef put(cid):\n    atomic.write_text(p, x)\n",
+        "_marked": "from .. import atomic\n"
+                   f"# {MARKER} the synthetic caller owns the campaign hold\n"
+                   "def old_hole(cid):\n    atomic.write_text(p, x)\n",
+    }, {"put": "_caller", "old_hole": "_marked"})
+    assert got == ({"put"}, {"put", "old_hole"})
+
+
+def test_a_facade_alias_cannot_publish_a_new_unclassified_writer(tmp_path):
+    got = _relocation_probe(tmp_path, {
+        "__init__": "from ._writer import _write as publish\n",
+        "_writer": "from .. import atomic\ndef _write(cid):\n    atomic.write_text(p, x)\n",
+    }, {"_write": "_writer"})
+    assert got == ({"publish"}, {"publish"})
+
+
+def test_new_sibling_writers_still_need_their_own_classification(tmp_path, monkeypatch):
+    _relocation_probe(tmp_path, {
+        "_writer": "from .. import atomic\ndef put(cid):\n    atomic.write_text(p, x)\n",
+        "_new": "from .. import atomic\ndef publish(cid):\n    atomic.write_text(p, x)\n",
+    }, {"put": "_writer"})
+    record = {"owners": {"put": "_writer"}, "mutators": ["put"], "unserialized": ["put"]}
+    monkeypatch.setattr(sys.modules[__name__], "PACKAGE", tmp_path)
+    monkeypatch.setattr(sys.modules[__name__], "_LEGACY_RELOCATIONS", {"store.legacy": record})
+    _survey.cache_clear()
+    try:
+        survey = _survey()
+        assert survey["store.legacy"] == ({"put"}, {"put"})
+        assert survey["store.legacy._new"] == ({"publish"}, {"publish"})
+    finally:
+        _survey.cache_clear()
+
+
+def test_a_relocated_reader_does_not_become_a_phantom_domain_member(tmp_path, monkeypatch):
+    _relocation_probe(tmp_path, {
+        "_reader": "def read(cid):\n    return {}\n",
+        "_new": "from .. import atomic\ndef put(cid):\n    atomic.write_text(p, x)\n",
+    }, {"read": "_reader"})
+    record = {"owners": {"read": "_reader"}, "mutators": [], "unserialized": []}
+    monkeypatch.setattr(sys.modules[__name__], "PACKAGE", tmp_path)
+    monkeypatch.setattr(sys.modules[__name__], "_LEGACY_RELOCATIONS", {"store.legacy": record})
+    _survey.cache_clear()
+    try:
+        survey = _survey()
+        assert "store.legacy" not in survey
+        assert survey["store.legacy._new"] == ({"put"}, {"put"})
+    finally:
+        _survey.cache_clear()
+
+
+def test_importing_an_unregistered_sibling_cannot_hide_its_private_writer(tmp_path):
+    with pytest.raises(guard_relocations.RelocationError, match="unregistered sibling import"):
+        _relocation_probe(tmp_path, {
+            "_caller": "from . import _new\ndef put(cid):\n    _new._write(cid)\n",
+            "_new": "from .. import atomic\ndef _write(cid):\n    atomic.write_text(p, x)\n",
+        }, {"put": "_caller"})
+
+
+def test_a_conditional_internal_import_cannot_hide_a_helper_edge(tmp_path):
+    with pytest.raises(guard_relocations.RelocationError, match="nested internal import"):
+        _relocation_probe(tmp_path, {
+            "_caller": "if enabled:\n    from . import _new\n"
+                       "def put(cid):\n    _new._write(cid)\n",
+            "_new": "from .. import atomic\ndef _write(cid):\n    atomic.write_text(p, x)\n",
+        }, {"put": "_caller"})
+
+
+def test_a_previously_locked_writer_cannot_join_the_unreviewed_holes():
+    record = {"mutators": ["locked", "old_hole"], "unserialized": ["old_hole"]}
+    assert _legacy_allowance_errors("store.legacy",
+        ({"locked", "old_hole"}, {"locked", "old_hole"}), record) == [
+            "store.legacy: new unlocked mutators: locked"]
+
+
+def test_a_fixed_or_removed_legacy_hole_must_drop_its_stale_allowance():
+    record = {"mutators": ["put"], "unserialized": ["put"]}
+    assert _legacy_allowance_errors("store.legacy", (set(), {"put"}), record) == [
+        "store.legacy: stale unlocked allowances: put"]
+    assert _legacy_allowance_errors("store.legacy", (set(), set()), record) == [
+        "store.legacy: stale original mutators: put",
+        "store.legacy: stale unlocked allowances: put"]
+
+
+def test_a_new_public_writer_cannot_be_added_to_a_registered_leaf():
+    record = {"mutators": ["put"], "unserialized": ["put"]}
+    assert _legacy_allowance_errors("store.legacy", ({"put", "publish"}, {"put", "publish"}), record) == [
+        "store.legacy: new campaign mutators: publish",
+        "store.legacy: new unlocked mutators: publish"]
