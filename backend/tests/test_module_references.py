@@ -20,8 +20,12 @@ prevent, arrived at from the other direction.
 
 from __future__ import annotations
 
+import fnmatch
+import os
 import re
 from pathlib import Path
+
+import pytest
 
 import grimoire
 
@@ -42,7 +46,7 @@ def _known_modules() -> set[str]:
     """Every .py basename in the checkout (package, scripts, tests, evals).
 
     Assumes BACKEND is the checkout's backend/. Imported from a non-editable install
-    it would instead be the environment root, and rglob would sweep every third-party
+    it would instead be the environment root, and the walk would sweep every third-party
     module into the set -- at which point nearly any name resolves and this test passes
     without testing anything. Fail loudly on that rather than silently green.
     """
@@ -56,8 +60,13 @@ def _known_modules() -> set[str]:
     # <repo>/.worktrees/<branch>, where every absolute path contains ".worktrees" and
     # an absolute-parts filter silently excludes the entire tree, failing every
     # reference in the codebase at once.
-    return {p.name for p in REPO.rglob("*.py")
-            if not _SKIP & set(p.relative_to(REPO).parts)}
+    # Prune the same excluded trees before visiting them. Filtering after rglob
+    # still traversed dependency and temporary stores for minutes on this gate.
+    known: set[str] = set()
+    for _root, dirs, files in os.walk(REPO, followlinks=False):
+        dirs[:] = [name for name in dirs if name not in _SKIP]
+        known.update(fnmatch.filter(files + dirs, "*.py"))
+    return known
 
 
 def test_named_modules_exist():
@@ -71,3 +80,39 @@ def test_named_modules_exist():
                     rel = path.relative_to(BACKEND).as_posix()
                     dangling.append(f"{rel}:{lineno} references {name}")
     assert not dangling, "references to non-existent modules:\n  " + "\n  ".join(dangling)
+
+
+@pytest.fixture
+def source_checkout(tmp_path, monkeypatch):
+    # Absolute ancestors must not exclude a source worktree. Only paths
+    # relative to this checkout participate in the existing _SKIP policy.
+    repo = tmp_path / ".worktrees" / "modularize"
+    backend = repo / "backend"
+    backend.mkdir(parents=True)
+    (backend / "pyproject.toml").write_text("", encoding="utf-8")
+    for name in ("backend/src/grimoire/leaf.py", "scripts/support.py", "evals/cases.py"):
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    for index, name in enumerate(sorted(_SKIP)):
+        path = repo / "nested" / name / f"foreign_{index}.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    monkeypatch.setitem(globals(), "REPO", repo)
+    monkeypatch.setitem(globals(), "BACKEND", backend)
+    return repo
+
+
+def test_module_census_keeps_all_source_roots_and_excludes_skipped_trees(source_checkout):
+    assert _known_modules() == {"leaf.py", "support.py", "cases.py"}
+
+
+def test_module_census_never_descends_into_skipped_trees(source_checkout, monkeypatch):
+    scandir = os.scandir
+
+    def source_only(path):
+        assert not (Path(path).is_relative_to(source_checkout) and Path(path).name in _SKIP)
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", source_only)
+    assert _known_modules() == {"leaf.py", "support.py", "cases.py"}
