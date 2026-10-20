@@ -7,10 +7,8 @@ user; this page covers changing it.
 
 Its companions, which it points at rather than repeats:
 
-- [`AGENTS.md`](AGENTS.md) — the project conventions themselves (store layout,
-  the frontend list/detail page pattern, the architecture guards, the Android
-  rules). **It is the source of truth for conventions**; this page tells you
-  how to run and satisfy them.
+- [`AGENTS.md`](AGENTS.md) — universal project agreements and task routing.
+  The linked skills own detailed conventions; this page owns gate commands.
 - [`docs/store-guarantees.md`](docs/store-guarantees.md) — what the store
   promises about atomicity and concurrency, and what it deliberately does not.
   Read it before writing anything that mutates campaign-scoped state.
@@ -161,7 +159,8 @@ than one change, and in the meantime none of it may get worse.
    change that passes under `npm test` can still fail `make check` — by
    dropping coverage rather than by breaking anything. Raise the floor when the
    number rises; the settings behind each report are load-bearing and their
-   comments say why, and `AGENTS.md` records the one you must not change.
+   comments say why; the [frontend testing guide](.agents/skills/grimoire-development/references/testing/frontend.md)
+   explains the coverage contract.
 
 For a single test while iterating:
 
@@ -228,7 +227,7 @@ cannot fail a test run.
 | `test_investigation_writer_guard.py` | nothing under `store/investigation/` or in `routes/investigation.py` reaches a mutator of the ledger, the transcript, knowledge overrides, entities, play state, dossiers or the chronicle (an allowlist of readers per watched module); `reconcile.persist_investigation` is the one write, and only the route module may call it | — |
 | `test_continuity_wording.py` | no reader-visible source (non-test files under `backend/src/grimoire/` and `frontend/src/`, and `README.md`) makes a claim the continuity spec avoids by name — §30's four phrases and §3.3's “continuity disabled” — in any plain rewording (an article, a plural, a verb form), and nothing broader; why is in §30 of `docs/superpowers/specs/2026-10-04-continuity-capstone-design.md` | — |
 | `test_unreachable_guard.py` | nothing follows a `return`, `raise`, `continue` or `break` in its block, in the package, the scripts and the evals -- except the bare `yield` that makes a function which only raises a generator | — |
-| `test_skills_guard.py` | every `.agents/skills/` package has its generated Claude pointer; executable references, links, result vocabulary and routing prose stay current | — |
+| `test_skills_guard.py` | generated Claude pointers, nested reference links and reachability; store-editing commands and result vocabulary stay current | — |
 | `test_docs_guard.py` | this page, `AGENTS.md`, `docs/store-guarantees.md`, and `templates/README.md` stay true to the code; `CLAUDE.md` forwards to `AGENTS.md` | — |
 | `test_ratchet_guard.py` | the lint baselines are canonical, positive, and name files that exist | — |
 
@@ -252,7 +251,7 @@ flow-insensitive guard, not a proof of arbitrary dynamic Python data flow.
 
 Each guard's docstring states its own reach, including where it stops seeing
 things — read the one that failed you before arguing with it. Two of them fail
-on code that looks perfectly ordinary, so [`AGENTS.md`](AGENTS.md) explains
+on code that looks perfectly ordinary, so the [store development guide](.agents/skills/grimoire-development/references/backend/store.md) explains
 both at length: classifying a new campaign-scoped mutator in `store/locks/_domain.py`,
 and how a cross-package import inside `store/` must bind a submodule rather
 than a name.
@@ -263,8 +262,9 @@ than a name.
 
 The conventions — store isolation, the shared LLM fakes, the frozen-campaign
 fixture, what a record-list page's tests must cover — are in
-[`AGENTS.md`](AGENTS.md) under **Working notes** and **the list/detail page
-pattern**. Read them there; what follows is only the part that is a command
+[the testing branch](.agents/skills/grimoire-development/references/testing/index.md)
+and [record pages](.agents/skills/grimoire-development/references/frontend/pages.md).
+Read the relevant branch; what follows is only the part that is a command
 rather than a rule.
 
 Every backend test isolates the store with
@@ -280,13 +280,15 @@ cd backend && PYTHONPATH=src .venv/bin/python -m tests.fixtures.frozen_campaign.
 ```
 
 Commit it alongside the change that moved it. Its sibling `home/` is never
-regenerated; `AGENTS.md` and that directory's README explain why.
+regenerated; the [backend fixture guide](.agents/skills/grimoire-development/references/testing/backend.md)
+and that directory's README explain why.
 
 ---
 
 ## Prompts and templates
 
-The rule and the reasoning live in [`AGENTS.md`](AGENTS.md); the layout is in
+The [prompt verification guide](.agents/skills/grimoire-development/references/testing/templates.md)
+owns the rationale; the layout is in
 [`templates/README.md`](templates/README.md). Operationally: after editing
 anything under `templates/`, run `make check`. It covers both harnesses —
 `scripts/verify_templates.py` (via `make check-templates`) and the offline
@@ -300,8 +302,8 @@ anything under `templates/`, run `make check`. It covers both harnesses —
 ## Android constraints
 
 Three rules keep the two platforms in lockstep, and breaking one of them is
-invisible on the desktop build. They are stated in [`AGENTS.md`](AGENTS.md)
-(**Android**) and in full in
+invisible on the desktop build. The [packaging guide](.agents/skills/grimoire-development/references/android/packaging.md)
+routes to their source owners, with the architecture contract in
 [`docs/android-architecture.md`](docs/android-architecture.md): use the
 filesystem resolvers, keep base dependencies installable on Android, and keep
 pydantic usage version-agnostic.

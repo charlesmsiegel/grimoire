@@ -75,10 +75,15 @@ AGENTS = ROOT / "AGENTS.md"
 CLAUDE = ROOT / "CLAUDE.md"
 GUARANTEES = ROOT / "docs" / "store-guarantees.md"
 SHOTS = ROOT / "docs" / "screenshots"
+DEVELOPMENT = ROOT / ".agents" / "skills" / "grimoire-development" / "references"
+RUNS_GUIDE = DEVELOPMENT / "backend" / "runs.md"
+COSTS_GUIDE = DEVELOPMENT / "inference" / "costs.md"
+MIGRATION_GUIDE = DEVELOPMENT / "inference" / "migration.md"
 
 #: The documents this guard holds to the code. Every one is an entry point a
 #: newcomer (or an agent) is pointed at, so a broken claim in one is read.
-DOCS = (README, CONTRIBUTING, AGENTS, CLAUDE, GUARANTEES, SHOTS / "README.md")
+DOCS = (README, CONTRIBUTING, AGENTS, CLAUDE, GUARANTEES, SHOTS / "README.md",
+        RUNS_GUIDE, COSTS_GUIDE, MIGRATION_GUIDE)
 
 #: The forwarding entry point is checked alongside the shared instructions:
 #: a broken pointer or a second copy of the conventions can strand one agent
@@ -406,7 +411,7 @@ def test_store_guarantees_names_the_lock_domain_constants():
 def _section(text: str, heading: str) -> str:
     """The body of the `## <heading>` section, up to the next `## ` heading.
 
-    `heading` is the start of the heading line, so AGENTS.md's
+    `heading` is the start of the heading line, so the accounting guide's
     `## Costs: three money columns, ...` is found as "Costs" -- and anchored
     to the line, so a `### ` heading that happens to start the same way is not.
     """
@@ -457,8 +462,8 @@ def test_store_guarantees_names_the_inference_migration():
     """The model settings migration section names its entry point and the
     marker it writes last -- and each of those names must still be in code,
     so a rename leaves no promise attached to nothing. The safety archive's
-    prefix is stated as a value (`pre-inference-`), in the section and in
-    `AGENTS.md`, so it is held to `backups.SAFETY_PREFIX` too -- and so is
+    prefix is stated as a value (`pre-inference-`), in the section and in the
+    migration guide, so it is held to `backups.SAFETY_PREFIX` too -- and so is
     retirement's (`pre-retirement-`, `backups.RETIRE_PREFIX`), beside the
     entry point the migration runs it through (`migrate._retire`)."""
 
@@ -471,7 +476,7 @@ def test_store_guarantees_names_the_inference_migration():
         assert hasattr(owner, attr), f"{name} no longer exists in code"
     assert inference_keys.FORMAT_KEY in section, (
         f"the section does not spell the marker key ({inference_keys.FORMAT_KEY})")
-    for doc, text in ((GUARANTEES, section), (AGENTS, _read(AGENTS))):
+    for doc, text in ((GUARANTEES, section), (MIGRATION_GUIDE, _read(MIGRATION_GUIDE))):
         assert f"{backups.SAFETY_PREFIX}grimoire-" in text, (
             f"{doc.relative_to(ROOT)} does not name the safety archive by its "
             f"prefix ({backups.SAFETY_PREFIX})")
@@ -511,8 +516,8 @@ def _is_route(fn: ast.FunctionDef) -> bool:
                for d in fn.decorator_list)
 
 
-def test_agents_md_names_every_tracker_route_that_starts_a_run():
-    """The one `AGENTS.md` claim held here: a tracker route whose request IS a
+def test_development_guide_names_every_tracker_route_that_starts_a_run():
+    """The runtime guide claim held here: a tracker route whose request IS a
     `tracker-update` run -- Retry, re-run from here -- is a handler that starts
     a detached run, so "Detached runs" names it.
 
@@ -537,16 +542,16 @@ def test_agents_md_names_every_tracker_route_that_starts_a_run():
     routes = sorted(fn.name for tree in trees for fn in tree.body
                     if isinstance(fn, ast.FunctionDef) and _is_route(fn) and starts(fn))
     assert routes, "found no tracker route that schedules an update -- the walk is stale"
-    section = _section(_read(AGENTS), "Detached runs")
+    section = _section(_read(RUNS_GUIDE), "Detached runs")
     missing = [name for name in routes if f"`{name}`" not in section]
     assert not missing, (
-        f"AGENTS.md's Detached runs section does not name these handlers, each of "
+        f"Runtime guide's Detached runs section does not name these handlers, each of "
         f"which starts a `tracker-update` run as the work its request asked for: {missing}"
     )
 
 
-def test_agents_md_names_every_run_class():
-    """`AGENTS.md`'s "Detached runs" section describes the run classes, and a
+def test_development_guide_names_every_run_class():
+    """The runtime guide's "Detached runs" section describes the run classes, and a
     class added to `runs.RunClass` without a word there is a kind of run the
     section's handler count and its exclusion rules silently leave out. It was
     "four classes" in prose while a fifth was being written; this is what makes
@@ -554,14 +559,14 @@ def test_agents_md_names_every_run_class():
 
     classes = typing.get_args(runs.RunClass)
     assert classes, "runs.RunClass has no members -- the lookup is stale"
-    section = _section(_read(AGENTS), "Detached runs")
+    section = _section(_read(RUNS_GUIDE), "Detached runs")
     missing = [c for c in classes if f"`{c}`" not in section]
     assert not missing, (
-        f"AGENTS.md's Detached runs section does not name these run classes: {missing}"
+        f"Runtime guide's Detached runs section does not name these run classes: {missing}"
     )
 
 
-#: The ledger fields `AGENTS.md`'s Costs section tells a reader a row carries.
+#: Ledger fields the accounting guide tells a reader a row carries.
 #: A rename in `usage.record` would leave the section naming a field no row has.
 COSTS_LEDGER_FIELDS = ("provider_id", "requested_model", "tokens_estimated", "billing")
 
@@ -570,8 +575,8 @@ COSTS_BUCKET_COUNTS = ("modelled_subscription_calls", "estimated_token_calls",
                        "unpriced_native_calls")
 
 
-def test_agents_md_costs_names_real_ledger_fields():
-    """`AGENTS.md`'s Costs section names ledger fields, a bucket count or two
+def test_development_costs_names_real_ledger_fields():
+    """The accounting guide's Costs section names ledger fields, a bucket count or two
     and the one rate-precedence function, and each must still exist under that
     name: a field is a parameter of `usage.record`, a count is a key
     `store/usage.py` writes, and `rate_for_call` is a callable in `pricing`.
@@ -580,34 +585,34 @@ def test_agents_md_costs_names_real_ledger_fields():
     at, so a field renamed in code and not in prose sends them looking for a
     row key that no row carries."""
 
-    section = _section(_read(AGENTS), "Costs")
+    section = _section(_read(COSTS_GUIDE), "Costs")
     unnamed = [f for f in COSTS_LEDGER_FIELDS + COSTS_BUCKET_COUNTS
                if f"`{f}`" not in section]
-    assert not unnamed, f"AGENTS.md's Costs section no longer names: {unnamed}"
+    assert not unnamed, f"Accounting guide's Costs section no longer names: {unnamed}"
 
     params = inspect.signature(usage.record).parameters
     missing = [f for f in COSTS_LEDGER_FIELDS if f not in params]
     assert not missing, (
-        f"AGENTS.md's Costs section names ledger fields `usage.record` does not "
+        f"Accounting guide's Costs section names ledger fields `usage.record` does not "
         f"take: {missing}"
     )
     assert "`pricing.rate_for_call`" in section
     assert callable(getattr(pricing, "rate_for_call", None)), (
-        "AGENTS.md names `pricing.rate_for_call` as the rate-precedence function, "
+        "The accounting guide names `pricing.rate_for_call` as the rate-precedence function, "
         "and `store/pricing.py` has no such callable"
     )
 
 
-def test_agents_md_costs_names_the_rollup_version_in_force():
+def test_development_costs_names_the_rollup_version_in_force():
     """The Costs section names the rail aggregate's format version, the
     reason an older build's rollup is never read with a native row folded in.
     A version it names must be `usage_rollup.VERSION`: the next bump would
     otherwise leave the prose pointing at a file no build writes."""
-    section = _section(_read(AGENTS), "Costs")
+    section = _section(_read(COSTS_GUIDE), "Costs")
     named = re.findall(r"`usage_rollup\.VERSION = (\d+)`", section)
-    assert named, "AGENTS.md's Costs section no longer names `usage_rollup.VERSION`"
+    assert named, "Accounting guide's Costs section no longer names `usage_rollup.VERSION`"
     assert {int(n) for n in named} == {usage_rollup.VERSION}, (
-        f"AGENTS.md names usage_rollup.VERSION {named}; the code says "
+        f"The accounting guide names usage_rollup.VERSION {named}; the code says "
         f"{usage_rollup.VERSION}")
 
 
@@ -756,7 +761,7 @@ def _starts_reconcile(fn: ast.FunctionDef) -> bool:
     return False
 
 
-def test_agents_md_names_every_handler_that_starts_a_reconcile_sweep():
+def test_development_guide_names_every_handler_that_starts_a_reconcile_sweep():
     """A route that starts the continuity sweep -- End Scene's save, the
     explicit Refresh -- is a handler that starts a detached run, so "Detached
     runs" names it. Found by its call to a starter, not by a list, so a third
@@ -767,10 +772,10 @@ def test_agents_md_names_every_handler_that_starts_a_reconcile_sweep():
         found |= {fn.name for fn in tree.body
                   if isinstance(fn, ast.FunctionDef) and _is_route(fn) and _starts_reconcile(fn)}
     assert found, "found no route that starts a reconcile sweep -- the walk is stale"
-    section = _section(_read(AGENTS), "Detached runs")
+    section = _section(_read(RUNS_GUIDE), "Detached runs")
     missing = sorted(name for name in found if f"`{name}`" not in section)
     assert not missing, (
-        f"AGENTS.md's Detached runs section does not name these handlers, each of "
+        f"Runtime guide's Detached runs section does not name these handlers, each of "
         f"which starts a continuity reconcile run: {missing}"
     )
 

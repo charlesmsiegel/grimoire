@@ -35,7 +35,7 @@ def pointer_text(source: Path) -> str:
     return (
         f"{match.group(1)}\n\n{GENERATED}\n\n"
         f"Read and follow the [authoritative procedure]({target}) in full.\n"
-        "Resolve supporting files relative to that authoritative skill directory.\n"
+        "Follow relative links from the authoritative file that contains them.\n"
     )
 
 

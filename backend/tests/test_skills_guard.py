@@ -116,6 +116,30 @@ def _link_problems(path: Path, text: str) -> list[str]:
     return problems
 
 
+def _reference_problems(directory: Path) -> list[str]:
+    """Follow the skill's Markdown graph, including conditional deep references.
+
+    A valid link in SKILL.md cannot establish that the next index still works.
+    Inspect every page, and require each one to be discoverable from the entry
+    point so a moved procedure cannot silently become an orphan. Other skills
+    and repo documents keep their own inventories; only traverse this package.
+    """
+    documents = {path.resolve(): path.read_text(encoding="utf-8") for path in directory.rglob("*.md")}
+    problems = [problem for path, text in documents.items() for problem in _link_problems(path, text)]
+    pending = [(directory / "SKILL.md").resolve()]
+    reached = set()
+    while pending:
+        path = pending.pop()
+        if path in reached or path not in documents:
+            continue
+        reached.add(path)
+        pending.extend((path.parent / ref.split("#", 1)[0]).resolve()
+                       for ref in docs_guard._refs(documents[path])
+                       if not ref.startswith(("https://", "http://", "mailto:")))
+    problems.extend(f"unreachable reference: {path}" for path in sorted(documents.keys() - reached))
+    return problems
+
+
 def _sync_options() -> set[str]:
     parser = cache.build_parser()
     sub = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
@@ -348,9 +372,7 @@ def test_repository_skills_obey_the_contract():
     names = tuple(path.name for path in CANONICAL_DIR.iterdir() if path.is_dir())
     problems = _diagnose("_pair_problems", CANONICAL_DIR, ADAPTER_DIRS, names)
     for name in names:
-        path = CANONICAL_DIR / name / "SKILL.md"
-        if path.is_file():
-            problems += _diagnose("_link_problems", path, path.read_text(encoding="utf-8"))
+        problems += _diagnose("_reference_problems", CANONICAL_DIR / name)
     other_skills = tuple((str(p), p.read_text(encoding="utf-8")) for p in CANONICAL_DIR.glob("*/SKILL.md")
                          if p.parent.name not in ROUTING_SKILLS)
     prose = tuple((str(p), p.read_text(encoding="utf-8")) for p in docs_guard.PROSE)
@@ -358,7 +380,7 @@ def test_repository_skills_obey_the_contract():
         path = CANONICAL_DIR / name / "SKILL.md"
         if not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8")
+        text = "\n\n".join(p.read_text(encoding="utf-8") for p in sorted(path.parent.rglob("*.md")))
         problems += _diagnose("_code_problems", text)
         problems += _diagnose("_vocabulary_problems", text)
         problems += _diagnose("_routing_problems", text, prose + other_skills)
@@ -426,6 +448,26 @@ def test_adapter_defects_are_rejected(skill_tree, defect, want):
 def test_relative_links_and_anchors_pass(skill_tree):
     _, _, canonical, _ = skill_tree
     assert _diagnose("_link_problems", canonical, canonical.read_text(encoding="utf-8")) == []
+
+
+def test_nested_skill_references_are_reachable_and_checked(skill_tree):
+    _, _, canonical, _ = skill_tree
+    canonical.write_text(canonical.read_text(encoding="utf-8") + "\n[Choose a task](references/index.md).\n",
+                         encoding="utf-8")
+    _write(canonical.parent / "references" / "index.md", "# Tasks\n\n[Sync](sync/result.md#result).\n")
+    leaf = _write(canonical.parent / "references" / "sync" / "result.md", "# Result\n\nRead the report.\n")
+    assert _diagnose("_reference_problems", canonical.parent) == []
+
+    leaf.write_text("# Result\n\n[Missing heading](../index.md#missing).\n", encoding="utf-8")
+    problems = _diagnose("_reference_problems", canonical.parent)
+    assert any("missing anchor" in problem for problem in problems), problems
+
+
+def test_unlinked_reference_is_not_hidden_from_discovery(skill_tree):
+    _, _, canonical, _ = skill_tree
+    _write(canonical.parent / "references" / "forgotten.md", "# Forgotten procedure\n")
+    problems = _diagnose("_reference_problems", canonical.parent)
+    assert any("unreachable reference" in problem and "forgotten.md" in problem for problem in problems), problems
 
 
 @pytest.mark.parametrize("target,want", [

@@ -361,15 +361,18 @@ DOCS = pytest.mark.parametrize("doc", [
     REPO / "AGENTS.md",
     REPO / "README.md",
     # The third one, and the reason the rule is a test rather than a fix:
-    # AGENTS.md's sweep note links here, and this file had the same Unix-only
+    # The backend testing guide links here, and this file had the same Unix-only
     # command. Two spots got found by reading the issue; this one only by
     # grepping for the shape.
     Path(__file__).parent / "fixtures" / "frozen_campaign" / "README.md",
     # The fourth was Windows-only throughout, and stayed that way for as long
     # as it was not in this list: the rule reaches exactly the files named here.
     REPO / "evals" / "README.md",
-    REPO / ".agents" / "skills" / "grimoire-store-editing" / "SKILL.md",
-], ids=["agents-md", "readme", "frozen-campaign-readme", "evals-readme", "store-editing-skill"])
+    # Procedures can move below multiple reference indexes. Check the whole
+    # authoritative Markdown tree, not a hand-picked entry point that no
+    # longer contains the executable examples.
+    *sorted((REPO / ".agents" / "skills").rglob("*.md")),
+], ids=lambda path: str(path.relative_to(REPO)))
 UNIX_PY = re.compile(r"\.venv/bin/python")
 WINDOWS_PY = re.compile(r"\.venv[/\\]Scripts[/\\]python")
 NEARBY = 4      # lines either side: the same command, bullet, or code block
