@@ -170,6 +170,12 @@
       "loggers": {
         "log": "grimoire.decisions"
       },
+      "module_annotations": {
+        "ESCALATION_OUTCOMES": "tuple[str, ...]",
+        "TRIGGERS": "tuple[str, ...]",
+        "UNSTATED": "Final",
+        "_UNOFFERED": "Final"
+      },
       "module_bindings": [
         "json",
         "logging",
@@ -332,6 +338,10 @@
       "loggers": {
         "log": "grimoire.inference"
       },
+      "module_annotations": {
+        "_BACKENDS": "dict[str, Backend]",
+        "_LOOPING": "weakref.WeakSet[asyncio.Task]"
+      },
       "module_bindings": [
         "asyncio",
         "claude_agent",
@@ -462,6 +472,7 @@
       "loggers": {
         "log": "grimoire.llm"
       },
+      "module_annotations": {},
       "module_bindings": [
         "adapters",
         "asyncio",
@@ -658,6 +669,9 @@
       ],
       "loggers": {
         "_log": "grimoire.character_turns"
+      },
+      "module_annotations": {
+        "_rng": "Callable[[], random.Random]"
       },
       "module_bindings": [
         "anyio",
@@ -879,6 +893,7 @@
         "thumb_query"
       ],
       "loggers": {},
+      "module_annotations": {},
       "module_bindings": [
         "_plaintext",
         "art_read",
@@ -1397,6 +1412,7 @@
       "loggers": {
         "log": "grimoire.routes.common"
       },
+      "module_annotations": {},
       "module_bindings": [
         "contextlib",
         "deadline",
@@ -1615,6 +1631,9 @@
       ],
       "loggers": {
         "log": "grimoire.routes.config"
+      },
+      "module_annotations": {
+        "GENERATING_CHECK_KINDS": "frozenset[str]"
       },
       "module_bindings": [
         "absorb_membership",
@@ -2182,6 +2201,7 @@
       "loggers": {
         "log": "grimoire.routes.ledger"
       },
+      "module_annotations": {},
       "module_bindings": [
         "continuity_doc",
         "continuity_effective",
@@ -2492,6 +2512,11 @@
       ],
       "loggers": {
         "_log": "grimoire.routes.runs"
+      },
+      "module_annotations": {
+        "ATTACHABLE": "frozenset[str]",
+        "GLOBAL_SUBJECT": "Subject",
+        "_EXCLUSIVE": "frozenset[str]"
       },
       "module_bindings": [
         "anyio",
@@ -2984,6 +3009,9 @@
       ],
       "loggers": {
         "log": "grimoire.routes.scenes"
+      },
+      "module_annotations": {
+        "_rolling_inflight": "set[tuple[str, str]]"
       },
       "module_bindings": [
         "absorb_membership",
@@ -3665,6 +3693,9 @@
       "loggers": {
         "_log": "grimoire.routes.streaming"
       },
+      "module_annotations": {
+        "_turn_tokens": "dict[tuple[str, str], int]"
+      },
       "module_bindings": [
         "anyio",
         "itertools",
@@ -3780,6 +3811,7 @@
         "store"
       ],
       "loggers": {},
+      "module_annotations": {},
       "module_bindings": [
         "continuity_candidates",
         "continuity_effective",
@@ -3913,6 +3945,7 @@
       "loggers": {
         "log": "grimoire.routes.tracker"
       },
+      "module_annotations": {},
       "module_bindings": [
         "anyio",
         "asyncio",
@@ -4158,6 +4191,7 @@
         "tempfile"
       ],
       "loggers": {},
+      "module_annotations": {},
       "module_bindings": [
         "compiled",
         "contextlib",
@@ -4685,6 +4719,7 @@
         "weather"
       ],
       "loggers": {},
+      "module_annotations": {},
       "module_bindings": [
         "campaigns_paths",
         "commitments",
@@ -4822,6 +4857,7 @@
         "write_focus"
       ],
       "loggers": {},
+      "module_annotations": {},
       "module_bindings": [
         "atomic",
         "image_hash",
@@ -4986,6 +5022,12 @@
       ],
       "loggers": {
         "_log": "grimoire.store.cache_sync"
+      },
+      "module_annotations": {
+        "FILE_RECIPES": "dict[str, FileRecipe]",
+        "HOOKS": "tuple[WarmHook, ...]",
+        "VECTOR_PROJECTIONS": "dict[str, Projection]",
+        "_warned": "set[str]"
       },
       "module_bindings": [
         "art",
@@ -5162,6 +5204,12 @@
         "ziputil"
       ],
       "loggers": {},
+      "module_annotations": {
+        "_FACTS_POOL": "dict",
+        "_IDENTITY_POOL": "dict",
+        "_ROW_POOL": "dict",
+        "_SUMMARY_POOL": "dict"
+      },
       "module_bindings": [
         "Image",
         "actor_hash",
@@ -5441,6 +5489,15 @@
         "unavailable_reason"
       ],
       "loggers": {},
+      "module_annotations": {
+        "HISTORY_OVER_BUDGET": "Mapping[Path, tuple]",
+        "KINDS": "dict[str, Kind]",
+        "OVERVIEW_CANDIDATES": "dict[str, Kind]",
+        "_OVER_BUDGET": "list[tuple]",
+        "_ctypes": "ModuleType | None",
+        "_inherited": "list[_State]",
+        "_sqlite": "ModuleType | None"
+      },
       "module_bindings": [
         "_ctypes",
         "_sqlite",
@@ -5624,6 +5681,9 @@
       "loggers": {
         "log": "grimoire.store.context.assemble"
       },
+      "module_annotations": {
+        "_NO_TRACKER": "tuple[dict, list, dict]"
+      },
       "module_bindings": [
         "activation",
         "actor",
@@ -5788,6 +5848,7 @@
       "loggers": {
         "log": "grimoire.store.context.epistemic"
       },
+      "module_annotations": {},
       "module_bindings": [
         "appearances_cast",
         "appearances_paths",
@@ -5983,6 +6044,10 @@
         "vocabulary"
       ],
       "loggers": {},
+      "module_annotations": {
+        "DECISIONS": "dict[str, tuple[str, ...]]",
+        "LABELS": "dict[str, str]"
+      },
       "module_bindings": [
         "aging",
         "calendars",
@@ -6163,6 +6228,7 @@
       "loggers": {
         "_log": "grimoire.store.image_gc"
       },
+      "module_annotations": {},
       "module_bindings": [
         "atomic",
         "contextlib",
@@ -6349,6 +6415,7 @@
         "work_map_path"
       ],
       "loggers": {},
+      "module_annotations": {},
       "module_bindings": [
         "assets",
         "atomic",
@@ -6467,6 +6534,10 @@
         "stated"
       ],
       "loggers": {},
+      "module_annotations": {
+        "OWNED_GLOBAL_KEYS": "tuple[str, ...]",
+        "REPRESENTABLE": "tuple[str, ...]"
+      },
       "module_bindings": [
         "capabilities",
         "cascade",
@@ -6581,6 +6652,12 @@
       ],
       "loggers": {
         "log": "grimoire.store.inference.migrate"
+      },
+      "module_annotations": {
+        "OWNED_GLOBAL_KEYS": "tuple[str, ...]",
+        "STATES": "tuple[str, ...]",
+        "_active": "dict[str, dict | None]",
+        "_queued": "set[str]"
       },
       "module_bindings": [
         "atomic",
@@ -6731,6 +6808,9 @@
         "wire"
       ],
       "loggers": {},
+      "module_annotations": {
+        "OPERATION_CAPABILITY": "dict[str, tuple[str, ...]]"
+      },
       "module_bindings": [
         "campaigns",
         "capabilities",
@@ -6836,6 +6916,19 @@
         "world_lifecycle_lock"
       ],
       "loggers": {},
+      "module_annotations": {
+        "DOMAIN_MODULES": "frozenset[str]",
+        "OUTSIDE_DOMAIN": "dict[str, str]",
+        "UNREVIEWED": "frozenset[str]",
+        "_campaign_locks": "dict[str, _ProcessScopedLock]",
+        "_image_collection_job_locks": "dict[tuple[str, str], _ProcessScopedLock]",
+        "_image_collection_locks": "dict[str, _ProcessScopedLock]",
+        "_image_ingest_gc_locks": "dict[str, _ProcessScopedLock]",
+        "_image_object_locks": "dict[tuple[str, int], _ProcessScopedLock]",
+        "_image_stripe_locks": "dict[tuple[str, str, int], StripeLock]",
+        "_world_actor_locks": "dict[str, _ProcessScopedLock]",
+        "_world_lifecycle_locks": "dict[tuple[str, str], _WorldLifecycleLock]"
+      },
       "module_bindings": [
         "hashlib",
         "os",
@@ -6930,6 +7023,10 @@
         "traceback"
       ],
       "loggers": {},
+      "module_annotations": {
+        "_capped": "set[str]",
+        "_written": "dict[str, int]"
+      },
       "module_bindings": [
         "atomic",
         "config",
@@ -7150,6 +7247,10 @@
       "loggers": {
         "log": "grimoire.store.overlay"
       },
+      "module_annotations": {
+        "INHERITED_FILES": "tuple[str, ...]",
+        "INHERITED_KINDS": "tuple[str, ...]"
+      },
       "module_bindings": [
         "appearances_paths",
         "assets",
@@ -7349,6 +7450,10 @@
         "validate_ideas"
       ],
       "loggers": {},
+      "module_annotations": {
+        "_NO_ANNOTATION": "dict[str, Any]",
+        "_RELATION_RULES": "dict[str, Callable[[int, int, int | None], bool]]"
+      },
       "module_bindings": [
         "appearances_cast",
         "appearances_paths",
@@ -7491,6 +7596,9 @@
       "loggers": {
         "log": "grimoire.store.sync"
       },
+      "module_annotations": {
+        "ACTOR_WORLD_SIDECARS": "tuple[str, ...]"
+      },
       "module_bindings": [
         "actor_names",
         "appearances_paths",
@@ -7629,6 +7737,9 @@
         "unpriced_models"
       ],
       "loggers": {},
+      "module_annotations": {
+        "_UNPRICED_POOL": "dict"
+      },
       "module_bindings": [
         "atomic",
         "calendar",
@@ -7739,6 +7850,7 @@
         "ziputil"
       ],
       "loggers": {},
+      "module_annotations": {},
       "module_bindings": [
         "assets",
         "atomic",
@@ -7863,6 +7975,11 @@
         "violation"
       ],
       "loggers": {},
+      "module_annotations": {
+        "CHOICES": "tuple[str, ...]",
+        "FINISHES": "tuple[str, ...]",
+        "LIMITS": "tuple[str, ...]"
+      },
       "module_bindings": [
         "asyncio",
         "inspect",

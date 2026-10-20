@@ -35,14 +35,15 @@ def test_original_bindings_and_star_surface_remain(name):
     exported = getattr(module, '__all__', [n for n in vars(module) if not n.startswith('_')])
     assert _digest(sorted(exported)) == expected['star_sha256']
     assert {n: getattr(module, n).name for n in expected['loggers']} == expected['loggers']
+    assert getattr(module, '__annotations__', {}) == expected['module_annotations']
 
 
 @pytest.mark.parametrize('name', [n for n, row in CONTRACT['modules'].items() if 'routes' in row])
 def test_original_route_table_remains(name):
     module = importlib.import_module(name)
-    rows = [dict(methods=sorted(r.methods), path=r.path, name=r.name,
-                 status_code=r.status_code,
-                 markers=sorted(n for n in vars(r.endpoint) if n.startswith('grimoire_')))
+    rows = [{'methods': sorted(r.methods), 'path': r.path, 'name': r.name,
+             'status_code': r.status_code,
+             'markers': sorted(n for n in vars(r.endpoint) if n.startswith('grimoire_'))}
             for r in module.router.routes]
     assert rows == CONTRACT['modules'][name]['routes']
     for route in module.router.routes:
