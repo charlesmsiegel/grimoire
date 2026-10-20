@@ -42,7 +42,7 @@ Source: [revision.py](../../../../../backend/src/grimoire/store/revision.py), [m
   (`POST /fork`, whose source is never written to) — otherwise a fork would
   invalidate the very expectation the caller took it to protect. What the token
   cannot see, and why a mismatch is a re-price rather than an error, is in that
-  module's docstring and in `docs/store-guarantees.md`.
+  module's docstring. `docs/reference/storage.md` introduces the locking boundaries.
   `PUT /campaigns/{cid}/settings` uses `@stamps_campaign_write` instead: its
   store writer stamps activity and revision inside the campaign lock only after
   publishing a changed setting, so an unchanged save moves neither. The marker

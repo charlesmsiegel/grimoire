@@ -1,11 +1,11 @@
-Source: [android-architecture.md](../../../../../docs/android-architecture.md), [build.gradle.kts](../../../../../android/app/build.gradle.kts), [test_android_manifest.py](../../../../../backend/tests/test_android_manifest.py).
+Source: [android.md](../../../../../docs/reference/android.md), [build.gradle.kts](../../../../../android/app/build.gradle.kts), [test_android_manifest.py](../../../../../backend/tests/test_android_manifest.py).
 
 ## Android (`android/`)
 
 The Android app is a thin Kotlin/WebView shell that packages `backend/src` and
 the built frontend **verbatim** (Chaquopy + APK assets) — never copy grimoire
 code into `android/`. Rules that keep the platforms in lockstep
-(docs/android-architecture.md):
+(docs/reference/android.md):
 
 - Backend code must not assume a repo checkout layout or a desktop `~`:
   filesystem access goes through `store.paths`, `prompts.templates_dir()`

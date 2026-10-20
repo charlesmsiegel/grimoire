@@ -230,7 +230,7 @@ def test_the_launcher_ports_agree_with_the_dev_proxy():
     vite = {_port(s, "VITE_PORT", "VitePort") for s in (RUN_UNIX, RUN_WINDOWS)}
     assert len(backend) == 1 and len(vite) == 1, (
         f"run.sh and run.ps1 disagree on their ports: backend {backend}, vite {vite}")
-    (backend_port,), (vite_port,) = backend, vite
+    (backend_port,) = backend
 
     proxy = _text(FRONTEND / "vite.config.ts")
     assert f"http://127.0.0.1:{backend_port}" in proxy, (

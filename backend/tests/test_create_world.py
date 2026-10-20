@@ -333,8 +333,10 @@ def test_cli_round_trip(home, tmp_path, capsys):
 
 def test_a_complete_plan_with_mechanics_and_climate_applies_cleanly(home):
     """A complete input is owned by the tests, independent of prose examples."""
-    plan = _plan(module="pool-basic")
+    plan = _plan(module="pool-basic", creatures=[])
     plan["locations"][0]["fields"]["climate"] = "temperate-coastal"
+    plan["groups"][0]["fields"]["members"] = ["characters:Mara", "pcs:Winifred"]
+    plan["greetings"][1]["predecessor_join"] = "all"
     assert create_world.validate_plan(plan, None, None) == []
     wid = _apply(plan)["world"]
     assert create_world.check_world(wid)["ok"]

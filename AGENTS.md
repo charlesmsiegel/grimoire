@@ -21,13 +21,15 @@ Companion documents own the detailed procedures this file points to:
 | You need | Read |
 |---|---|
 | how to run the gate, and what the guards want | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| what the store promises about atomicity and locks | [`docs/store-guarantees.md`](docs/store-guarantees.md) |
+| what the store promises about atomicity and locks | [`docs/reference/storage.md`](docs/reference/storage.md) |
 | what the app is and how a user runs it | [`README.md`](README.md) |
 | prompt template layout | [`templates/README.md`](templates/README.md) |
-| the Android packaging contract | [`docs/android-architecture.md`](docs/android-architecture.md) |
+| the Android packaging contract | [`docs/reference/android.md`](docs/reference/android.md) |
+| current user guides and technical references | [`docs/README.md`](docs/README.md) |
 
-The claims these documents make about this tree are checked by
-`backend/tests/test_docs_guard.py`.
+Documentation is maintained by review. Tests and tools must not parse
+repository prose as configuration or scenario data. Useful test scenarios
+belong in fixtures owned by the tests.
 
 ## Working agreements
 
@@ -104,8 +106,8 @@ branch when needed, then fast-forwarding it (`git merge --ff-only`). Never creat
 merge commits. If the target is already an ancestor, fast-forward directly.
 
 The spec → plan → implementation pipeline (`superpowers:brainstorming` writes
-specs to `docs/superpowers/specs/`; `superpowers:writing-plans` writes plans to
-`docs/superpowers/plans/`) has mandatory Codex checkpoints — do not advance to
+specs to `.superpowers/specs/`; `superpowers:writing-plans` writes plans to
+`.superpowers/plans/`) has mandatory Codex checkpoints — do not advance to
 the next stage until the gate passes and its findings are resolved:
 
 - **Spec → planning**: run `/codex:adversarial-review` against the spec before
@@ -129,13 +131,16 @@ If a gate surfaces findings, address them (or explicitly note why not) before
 moving on. Don't skip a gate because a change feels small — ask the user
 first if you think one should be skipped.
 
-**A Codex review on the pull request suffices in lieu of the Codex CLI
-gates.** Commenting `@codex review` on the PR asks Codex's GitHub reviewer
-(`chatgpt-codex-connector`) to review its current head, specs and plans
-included, since they ride the same diff. When every finding it raises is
-fixed or answered on its thread, the gates above are met, whether or not the
-CLI commands were run. Request a new review after a push that changes code it
-has not seen.
+Keep those temporary work records in the ignored `.superpowers/` workspace.
+Publish current behavior and constraints in the manual rather than accumulating
+designs, plans and review transcripts under `docs/`.
+
+**A Codex review on the pull request can cover the published diff.** Commenting
+`@codex review` asks Codex's GitHub reviewer (`chatgpt-codex-connector`) to review
+the current head. Supply the originating requirements and review context
+explicitly: ignored local specs and plans are not visible on the PR. A review
+does not cover context it was never given. Resolve findings and request another
+review after a push that changes code it has not seen.
 
 ## Task-specific instructions
 
@@ -164,7 +169,6 @@ detects drift. Supporting paths resolve from the authoritative package.
 
 Keep skill descriptions specific, entry points short, and conditional details
 in linked Markdown references. Explain when to read each branch. When moving a
-page, update its incoming links and the guards that validate its claims.
-`backend/tests/test_skills_guard.py` checks discovery, nested links and reference
-reachability; `backend/tests/test_docs_guard.py` checks the detailed conventions
-against the source. Read code before refreshing a claim.
+page, update its incoming links and review its claims against source. Use
+`sync_skills.py --check` to verify generated pointers. Read code before
+refreshing a claim; documentation review owns links and reference reachability.

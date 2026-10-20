@@ -2,7 +2,7 @@
 
 These notes describe the behavior-preserving modularization on
 `refactor/modularize-large-python`. They are a reading guide, not a new storage
-or execution contract. [Store guarantees](../store-guarantees.md) remains the
+or execution contract. [Store guarantees](../reference/storage.md) remains the
 authority for persistence and locking; [CLAUDE.md](../../CLAUDE.md) remains the
 authority for project conventions.
 

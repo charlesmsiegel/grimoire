@@ -1,177 +1,96 @@
-# <img src="frontend/public/grimoire-128.png" width="32" align="top"> Grimoire
+# <img src="frontend/public/grimoire-128.png" width="32" align="top" alt=""> Grimoire
 
-**Grimoire is a local-first app for AI-driven collaborative storytelling and
-character roleplay.** It runs entirely on your own machine, talks to whichever
-language model you choose through [OpenRouter](https://openrouter.ai/), and keeps
-your whole library — worlds, characters, campaigns, and every scene you play — as
-plain Markdown and JSON files under `~/.grimoire`. Nothing is locked in a
-database or a cloud account: your stories are files you own.
+**A local-first app for collaborative storytelling and character roleplay with
+language models.** Build a world, start a campaign, play scenes, and review what
+each scene changes. Your library lives on your machine as Markdown, JSON and
+images. Choose a hosted provider or an OpenAI-compatible local server.
+
+**[Documentation](docs/README.md)** · **[Getting started](docs/guides/getting-started.md)** · **[Troubleshooting](docs/guides/troubleshooting.md)**
 
 ## Status
 
-Grimoire is in active development. The core loop — worlds, campaigns, scenes,
-absorb — works, and the app is usable day to day.
-
-The issue tracker is a working backlog rather than a defect list — an open issue
-usually records a design decision made and not yet acted on.
-
-Grimoire is a restart of an earlier private implementation; the architecture here 
-reflects what that version taught me, rebuilt around plain files and local-first state.
+Grimoire is in active development. Worlds, campaigns, scene play, reviewed
+wrap-up, imports, exports and the Android shell are implemented. These docs
+describe the current application; the issue tracker holds ongoing work.
 
 ## A look at it
 
-![A scene mid-play: the transcript, the cast rail, and the response controls](docs/screenshots/scene.png)
+[![A synthetic Saltmarch scene in the current play interface](docs/screenshots/scene.png)](docs/screenshots/scene.png)
 
-*Playing a scene. The rail on the left carries who is present and what the
-campaign still owes; the composer below sets response length and opens the prompt
-inspector.*
+*A scene with its transcript, navigation and writing controls.*
 
 | A world | A character |
-| --- | --- |
-| ![A world's overview page, with record counts and a setup checklist](docs/screenshots/world-overview.png) | ![A character's world record, in the two-pane list/detail editor](docs/screenshots/character-editor.png) |
-| Characters, PCs, locations, lore and greetings — with a checklist of what the world still needs before it plays well. | Every record page is the same two-pane editor: pick on the left, read on the right, edit deliberately. |
+|---|---|
+| [![The Realm fixture world's overview](docs/screenshots/world-overview.png)](docs/screenshots/world-overview.png) | [![Seraphine's synthetic character record](docs/screenshots/character-editor.png)](docs/screenshots/character-editor.png) |
+| Browse the setting and its reusable records. | Read a character, then explicitly open its editor. |
 
-*Every screenshot here is captured against a throwaway store seeded with invented
-content — see [`docs/screenshots/README.md`](docs/screenshots/README.md) for why
-that is a rule and not a convenience.*
+[![The campaign list populated with synthetic fixtures](docs/screenshots/campaigns.png)](docs/screenshots/campaigns.png)
+
+All screenshots use an isolated library populated with synthetic test fixtures.
+The [capture procedure](docs/screenshots/README.md) records their provenance.
 
 ## What the model saw
 
-The scene inspector's **Context** panel breaks the assembled prompt down section
-by section with token counts, showing anything the budget packer dropped.
-**Turn history** beside it holds the same breakdown *frozen* for past turns, so
-you can read the exact prompt a reply came from after the chronicle, cast, and
-world info have all moved on.
+Open the scene inspector's **Context** section to inspect the assembled prompt,
+its token estimates and any sections removed by a configured context budget.
+**Turn history** opens retained prompt snapshots from earlier calls, so a past
+reply can be inspected after the campaign has changed.
 
-This is the part of Grimoire worth stealing. A long campaign's context is
-assembled from a dozen moving sources, and by the time a reply looks wrong every
-one of them has changed. A breakdown that is only current is not evidence about
-anything that already happened.
-
-Configurable under Settings → Context (Kept turn prompts; `0` records none).
+Use the stored entry when investigating a particular reply. Retention and the
+limits of these records are explained in [Context and memory](docs/guides/context.md).
 
 ## What it does
 
-Grimoire organizes roleplay the way a long-running campaign actually works, with
-three layers:
+- **Worlds** hold characters, player characters, locations, lore, items, groups,
+  creatures, greetings and images. Reuse one setting across campaigns.
+- **Campaigns** hold a playthrough: scenes, the chronicle, dossiers, facts,
+  relationships, plot threads, commitments and in-world time. Campaign edits
+  can diverge from the shared world.
+- **Scenes** hold the conversation. Play with a PC or stage an offscreen scene,
+  choose the cast, stream replies, steer rerolls and keep alternate responses.
+- **Wrap-up** prepares a review of a completed scene. Inspect the proposed
+  memory and state changes before saving them to the campaign.
 
-- **Worlds** — a setting and its cast. A world holds your **characters** (NPC
-  cards), **PCs** (the personas you play), reusable **greetings** (scene
-  openers), and worldbuilding records: **lore** and **locations**. Worlds can
-  have their own calendar, tags, and colour theme.
-- **Campaigns** — an ongoing playthrough set in a world. A campaign strings
-  together scenes over time and keeps continuity for you: a **chronicle**
-  (running recap/memory), **cast** with per-character **dossiers**, tracked
-  **relationships**, open **plot threads**, character **state**, in-world
-  **dates**, and a log of **changes** the story has made to the world.
-- **Scenes** — the actual chat. You roleplay turn by turn against a streaming
-  model response, with **retry** and **regenerate-with-guidance** when a reply
-  misses, an **opener** generator to start a scene, and **scene suggestions**
-  that propose what to play next based on where the campaign stands.
-
-When a scene wraps, **absorb** distills it back into the campaign: it updates the
-chronicle, refreshes each present NPC's dossier, and advances relationships, plot
-threads, and character state — so the next scene starts from an up-to-date world.
+See [Worldbuilding](docs/guides/worldbuilding.md) and
+[Playing a campaign](docs/guides/playing.md) for the complete loop.
 
 ### Other highlights
 
-- **Import character cards** — bring in character cards (including PNG cards with
-  embedded lorebooks) and import directly from [chub.ai](https://chub.ai/), with
-  galleries, avatars, and multiple versions per character.
-  **Import text** also accepts pasted descriptions and `.txt`/`.md` files:
-  parse offline, optionally refine with AI, then edit and save the draft.
-- **Export character cards** — send any version back out as JSON, PNG, or CHARX
-  from the character editor's Export menu, avatar embedded, so the file carries
-  the whole character into another app (or back into Grimoire).
-- **Art for every record** — characters, PCs, locations, lore, items, groups
-  and creatures share an Art tab and an original-image viewer with Fit, zoom,
-  and pan. **Manage art** offers uploads, reuse, descriptions, primary-image
-  selection, preview crop, and removal from the record. Greetings keep their
-  dedicated art controls.
-- **Lorebooks / world info** — parse and import character-book / world-info
-  entries into a world's lore.
-- **LLM-generated taglines** and **image localization** for characters.
-- **Model roles and routes** — four roles say which provider, model and preset
-  does which kind of work: **Primary** writes scene prose; **Fast** takes
-  absorb, dossier refreshes, summaries and the other background work (and is
-  Primary until set); **Decision** runs the routes you send to it (and is Fast
-  until set); **Embedding** serves recall, the art catalogue, search by meaning
-  and the continuity checks. Primary, Fast and Decision can each name a
-  fallback. Under **Advanced**, any single route can be sent to another role or
-  a specific model of its own; a route left to inherit runs on its role. All of
-  it is set on the
-  **Models** page (Settings → Inference → Models, `/models`; `/models/edit` to change it), the providers it names on
-  **Settings → Inference → Providers**, and a campaign overrides Primary, Fast, Decision and
-  its routes from Campaign settings → Models or the scene inspector's Models
-  section. An upgraded install has
-  its old connections and routing moved into these once, so it keeps the models
-  it had.
-- **Campaign settings** — open Settings from a campaign's hub or scene inspector
-  to choose its models, context and summary settings, calendar, system prompt,
-  and transcript labels. Fields follow global defaults until overridden;
-  removing an override restores inheritance. An explicitly empty system prompt
-  suppresses the global prompt for that campaign. Campaign default prompts stay
-  separate and additive. Storage and provider credentials remain global.
-- **Continuity review and the Story Graph** — after each wrap-up Grimoire looks
-  over the campaign's plot threads and commitments for ones that may be the
-  same business, belong together, or be finished, and lists what it finds in
-  the Ledger to merge, link, close or set aside; nothing changes until you
-  choose. It works without the Embedding role and catches more with it.
-  The Story Graph draws the scenes played so far beside what is still owed and
-  what is coming up.
-- **EPUB export** — turn a finished campaign into a readable book.
-- **Editable prompts** — every prompt Grimoire sends to the model lives as a
-  Jinja2 template under [`templates/`](templates/README.md). Edit a template and
-  the change takes effect immediately; nothing prompt-shaped is hard-coded.
-- **Themes** — ships with `codex`, `astral`, and `manuscript`.
-- **Manual dice rolls** — roll dice mid-scene with the 🎲 button; see
-  [Dice notation](#dice-notation) for the syntax.
-- **Custom calendars** — the only built-in calendars are Gregorian and Hebrew
-  (real-world, with their real holiday sets); everything else — homebrew
-  fictional calendars, house rules, or a system like the Calendar of Harptos — is
-  a plugin: drop a `.py` file implementing `CalendarProvider` (see
-  `backend/src/grimoire/store/calendars/base.py` and `plugins.py` for the
-  contract) into `<your grimoire home>/calendars/`, and it becomes choosable in
-  the Calendar dropdown. Nothing under your data directory is git-tracked, so
-  homebrew/personal calendars stay private.
+- Import and export character cards; import world info and existing transcripts.
+- Manage record art, with shared image descriptions and reusable images.
+- Assign **Primary**, **Fast**, **Decision** and **Embedding** model roles,
+  configure fallbacks, and override routes or campaign settings.
+- Review continuity suggestions in the Ledger and explore the Story Graph.
+- Inspect usage, latency and separately labelled cost figures.
+- Use style guides, response presets, editable prompt templates and output rules.
+- Roll dice, attach mechanics modules and edit character sheets.
+- Use Gregorian, Hebrew or a custom calendar provider.
+- Export campaigns, including EPUB books, and back up the library.
+
+Details: [models](docs/guides/models.md), [context](docs/guides/context.md),
+[data and backups](docs/guides/data.md), [mechanics](docs/reference/mechanics.md).
 
 ### Dice notation
 
-The 🎲 button in a scene's input bar takes a notation string:
-
-```
-[N]dM [khN|klN|dhN|dlN] [!] [+K|-K] [tN | vs N]
-```
-
-- **`NdM`** — roll `N` dice with `M` sides each. `N` defaults to 1, so `d20` is a
-  single d20. Example: `2d6`.
-- **`khN` / `klN`** — keep only the highest/lowest `N` dice. Example: `4d6kh3`
-  (roll 4d6, keep the best 3).
-- **`dhN` / `dlN`** — drop the highest/lowest `N` dice instead of keeping.
-- **`!`** — exploding dice: any die that rolls its max face rolls again and adds
-  on. Example: `5d6!`.
-- **`+K` / `-K`** — a flat modifier added to the total. Example: `2d6+3`.
-- **`tN`** — pool mode: count how many dice roll `N` or higher as successes,
-  instead of summing. Doesn't take a modifier. Example: `7d10t6`.
-- **`vs N`** — grade the summed total as success/failure against a target number.
-  Example: `1d20+5 vs 15`.
-
-`tN` and `vs N` are mutually exclusive with each other. Clauses can be combined
-freely otherwise, e.g. `4d6kh3!+2`.
+The scene's dice control accepts expressions such as `2d6+3`, `4d6kh3`,
+`5d6!`, `7d10t6` and `1d20+5 vs 15`. The
+[dice reference](docs/reference/mechanics.md#dice-notation) explains the modifiers
+and which combinations are valid.
 
 ## Requirements
 
 - **Python 3.11+**
 - **Node 24+**
-- An **[OpenRouter](https://openrouter.ai/) API key** (you supply the model;
-  Grimoire defaults to `anthropic/claude-opus-4.1` and you can change it in the
-  app).
+- Access to a supported language model: a provider account, a local server, or
+  the optional Claude subscription integration.
+
+An OpenRouter key is needed only when using OpenRouter. Your chosen provider
+receives the context sent to it; running the app locally does not make a hosted
+model local. See [provider setup](docs/guides/models.md).
 
 ## Install
 
-Clone the repo, then run the installer for your platform. It creates the backend
-virtualenv, installs the frontend packages, builds the UI, and adds a desktop
-launcher.
+Clone the repository and run the installer for your platform.
 
 **macOS / Linux**
 
@@ -189,237 +108,106 @@ cd grimoire
 scripts\windows\install.ps1
 ```
 
-The installer checks your Python and Node versions before it starts, and finishes
-by printing the directory your library will live in — see
-[Where your data lives](#where-your-data-lives) to move it somewhere else before
-the first run. Nothing is written there until you actually use the app.
+The installer creates the backend environment, installs dependencies, builds the
+frontend and creates a launcher. It prints the resolved library location.
+[Installation details](docs/guides/getting-started.md#install) include the optional
+Claude integration and development tools.
 
 ## Run
 
-**macOS / Linux**
+**macOS / Linux:** `scripts/unix/run.sh`
 
-```sh
-scripts/unix/run.sh
-```
+**Windows (PowerShell):** `scripts\windows\run.ps1`
 
-**Windows (PowerShell)**
+The normal launcher serves the built UI and API at **<http://127.0.0.1:8173>**.
+Keep its terminal open; **Ctrl+C** stops it. The desktop launcher starts the same
+application.
 
-```powershell
-scripts\windows\run.ps1
-```
+After `git pull`, the next normal launch rebuilds a stale UI. If rebuilding
+fails, the launcher reports the failure and may serve the previous bundle;
+rerun the installer to refresh dependencies.
 
-This starts Grimoire on a single port, **8173**, in the **current terminal**:
-one server answers both the API and the UI, which it serves from the build the
-installer made (`frontend/dist`). Once it is ready the script opens
-**<http://127.0.0.1:8173>** in your browser, then streams the server's log into
-that terminal so you can watch status and errors live. Bookmarks and reloads
-work on any page, not just the home screen. The installer also drops a
-**Grimoire** launcher on your desktop that opens the same console. On macOS it
-is `Grimoire.app`, so it has an icon; drag it to the Dock to keep it there. On
-Linux, pin the desktop entry from your application menu or dock. Re-running the
-installer rebuilds the launcher.
-
-**After an update** (`git pull`), the first launch notices that the UI's sources
-are newer than its build and rebuilds it before starting — a few seconds, once.
-If that build fails (usually because the update brought new dependencies),
-Grimoire starts on the previous build and says so, in the terminal and in a page
-it opens beside the app; re-run the installer.
-
-**Updating from a version that opened on port 5173?** The address is now
-**<http://127.0.0.1:8173>**, so a bookmark to `127.0.0.1:5173` needs updating
-(`:5173` is only the `--dev` address now). A browser keeps its settings per
-address, so what Grimoire keeps there — the campaign list's sort, focus mode,
-the campaign you last had open, the scene inspector's open sections — starts
-from its defaults on the new one.
-
-**The terminal stays open while Grimoire runs.** Closing the window — or pressing
-**Ctrl+C** — shuts it down cleanly (no leftover process holding a port).
-
-**Changing the code?** `scripts/unix/run.sh --dev` (Windows:
-`scripts\windows\run.ps1 -Dev`) runs the development setup instead — the
-backend with auto-reload on 8173, plus the Vite dev server with hot module
-replacement at **<http://127.0.0.1:5173>**, proxying API calls to the backend.
-It loads markedly slower (React's development build, one request per source
-module), so it is for editing, not for playing.
-
-If you ever start Grimoire another way and need to stop it, the shutdown scripts
-still work:
-
-```sh
-scripts/unix/shutdown.sh        # macOS / Linux
-scripts\windows\shutdown.ps1    # Windows
-```
+For development, use `scripts/unix/run.sh --dev` or
+`scripts\windows\run.ps1 -Dev`. The UI then opens at
+**<http://127.0.0.1:5173>**, with the backend on 8173.
 
 ## First steps
 
-Grimoire opens on your campaigns — one row each, newest play first, with
-**Continue** picking up the scene you left:
+1. Follow first-run setup: **Storage → Provider → Models → Look → World**.
+2. Add characters, a PC and a location to the world. A greeting is a reusable
+   opening, and is optional for a manually created scene.
+3. Create a campaign from that world, choose the PC and open a scene.
+4. Play a few turns. Open **Context** to inspect the prompt.
+5. Finish the scene, review its wrap-up and save the changes you accept.
 
-![The campaigns home: one row per campaign, with a Continue button](docs/screenshots/campaigns.png)
-
-1. Open **Config** (top-right) and paste your **OpenRouter API key**. The status
-   pill in the header turns to `CONNECTED`. Here you can also pick the model,
-   theme, and the default system prompt.
-2. Go to **Worlds → + New**, create a world, and add a character or two (build
-   one by hand or import a card / a chub.ai character).
-3. Add a **greeting** to open a scene, and optionally some **lore** and
-   **locations**.
-4. Go to **Campaigns → + New**, start a campaign in that world, and open a scene
-   to begin playing. Use **absorb** when a scene is done to fold it into the
-   campaign's memory.
+The [first-campaign walkthrough](docs/guides/getting-started.md#play-your-first-scene)
+continues from a fresh installation.
 
 ## Local and OpenAI-compatible backends
 
-Besides OpenRouter and Claude, a provider can be **OpenAI-compatible**: a base
-URL and an optional API key, spoken to in the OpenAI chat-completions format,
-with the model it runs chosen per role on the **Models** page. That covers local servers — Ollama, the llama.cpp
-server, LM Studio, vLLM, KoboldCpp, text-generation-webui — and most hosted
-providers that offer an OpenAI-style endpoint.
+Open **Settings → Inference → Providers**, create a provider, and choose its
+preset. Ollama and LM Studio presets prefill their usual addresses; **Custom
+(OpenAI-compatible)** accepts another server's base URL and optional key.
 
-1. Start the server and load a model. Each one serves an OpenAI-compatible root
-   at a default address:
-
-   | Server | Base URL |
-   |---|---|
-   | Ollama | `http://localhost:11434/v1` |
-   | llama.cpp (`llama-server`) | `http://localhost:8080/v1` |
-   | LM Studio | `http://localhost:1234/v1` |
-   | vLLM | `http://localhost:8000/v1` |
-   | KoboldCpp | `http://localhost:5001/v1` |
-   | text-generation-webui (`--api`) | `http://localhost:5000/v1` |
-
-2. Open **Library → Providers** and press **+ New provider**. Pick
-   **Ollama** or **LM Studio** if that is what you run — the address comes
-   filled in — or **Custom (OpenAI-compatible)** for any of the others, and
-   type the address above (change the port if yours differs). Leave the API
-   key blank unless the server asks for one.
-3. Press **Refresh** in the provider's sidebar. Grimoire asks the endpoint's
-   `/models` list and shows what it returns under **Models on this provider**;
-   a server that does not serve one (or is not running yet) lists nothing, so
-   open a model by the id the server uses from the column instead. The
-   provider's **Check** asks the same endpoint, so it costs no generation —
-   which also means a server with no `/models` fails the check even when
-   generation works. Send a turn to be sure.
-4. Some endpoints reject a system message part-way through a conversation. If
-   yours does, open the model on the provider's page (**Providers** ▸ the
-   provider ▸ the model, or *Open a model by id*), press **Edit**, and set
-   **Prompt post-processing** to *Strict*.
-
-A local model does not have to do everything. On the **Models** page, point the
-Fast role — which absorb, summaries and the other background work run on by
-default — at the local provider and leave Primary, which writes scene prose, on a
-hosted one (or the other way round). For finer control, open **Advanced** and
-send a single route such as *Absorb & mechanics audit* or *Summaries &
-scene-break checks* to another role or to a specific model; routes left to
-inherit run on their role.
-
-Two things behave differently from a hosted model:
-
-- **Token counts are estimates.** Grimoire counts with OpenAI's `cl100k_base`
-  tokenizer (or by length where that is not installed); a local model has its
-  own. The context inspector marks such counts with `≈` and says which
-  tokenizer produced them. The packer's budget is measured the same way, so
-  leave some headroom below the model's real context window.
-- **Slow replies.** A local model can take a long time to start answering. If
-  turns time out, raise **No-reply timeout** under Settings → Timeouts (`0`
-  removes the bound).
-
-The Android app can use a server on your computer too — see
-[Using a local LLM server from Android](android/README.md#using-a-local-llm-server).
+Then open **Models** and assign that provider and a model ID to a role. You can
+mix local and hosted roles. [Provider setup](docs/guides/models.md#local-servers)
+covers catalogs, capability tests, prompt compatibility and phone access.
 
 ## Where your data lives
 
-Everything is stored as Markdown and JSON under a single data directory, resolved
-by `store.home()` in this order:
+The app resolves its library from `GRIMOIRE_HOME`, then the storage location
+recorded in `~/.grimoire.json`, then `~/.grimoire`. **Configuration → Storage**
+shows the current location and lets you choose another one. An environment
+override takes precedence over the saved choice.
 
-1. the `GRIMOIRE_HOME` environment variable (used for tests / overrides), then
-2. the path you choose on the **Config** page (recorded in the bootstrap pointer
-   `~/.grimoire.json`), then
-3. the default `~/.grimoire`.
-
-`scripts/unix/install.sh` and `scripts\windows\install.ps1` print the resolved
-path when they finish; to ask again later, run `python -m grimoire.where` from
-the backend venv.
-
-Because the whole library is just files, you can back it up, version it, or
-**point the data directory at a synced folder (Dropbox, iCloud, etc.) to share
-one library across devices** — change the **Storage location** on the Config
-page.
+The library contains the records and images; disposable caches accelerate reads.
+Provider settings and private story content belong in this library, outside the
+public repository. Full backups should be treated as private too.
 
 ### What this cannot promise
 
-**Do not actively use Grimoire on two devices at once.** Sync clients resolve
-simultaneous edits by making conflict copies on their own schedule, and Grimoire
-cannot merge those — one side's edit wins and the other becomes a stray file. Let
-the sync settle before switching devices.
+Use one device at a time when sharing a library through a sync service, and let
+sync finish before switching. Atomic record replacement and same-machine locks
+help prevent partial or conflicting writes, but do not merge simultaneous edits
+from separate devices or make a multi-file operation transactional.
 
-Two Grimoire processes *on the same machine, signed in as the same user* fare
-better: scene, sheet, proposal and module-pack writes lock against each other
-across processes, so the desktop app and a dev server can share a store without
-shredding a transcript. That is not a blanket guarantee — a few writers
-(dice-roll history, campaign rename and delete, image assets) still don't
-participate, and two different OS accounts sharing one store aren't covered — so
-it makes accidents survivable rather than making two-at-once a supported way to
-work.
-
-The exact promises behind that paragraph — what is atomic, what the locks cover,
-and what is deliberately not guaranteed — are written up in
-[`docs/store-guarantees.md`](docs/store-guarantees.md).
+Read [Data and backups](docs/guides/data.md) for everyday operations and the
+[storage reference](docs/reference/storage.md) for the precise boundaries.
 
 ## Android app
 
-Grimoire also builds as an Android APK — the same app, unchanged: the APK embeds
-the real backend (via [Chaquopy](https://chaquo.com/chaquopy/)) and the built
-frontend in a full-screen WebView, storing its library under the app's files
-directory. Build it from the repo root with GNU make (on Windows, run from Git
-Bash; `winget install ezwinports.make` if you don't have make):
+The Android APK packages the same Python backend, React frontend and prompt
+templates inside a Kotlin/WebView shell.
 
 ```sh
-make android-bootstrap   # once per machine: JDK 17 + Android SDK + licenses (no admin needed)
-make apk                 # debug APK -> build/grimoire-debug.apk
-make apk-install         # build + adb install to a connected device
+make android-bootstrap
+make apk
+make apk-install
 ```
 
-See [`android/README.md`](android/README.md) for details (prerequisites, release
-builds, and the runtime layout on the device).
+The build needs additional Android tooling and Python 3.12. See the
+[Android reference](docs/reference/android.md) for prerequisites, outputs,
+device storage and access to a model server on another machine.
 
 ## Development
 
-Grimoire is a **FastAPI** backend (`backend/`, pytest) plus a **Vite/React**
-frontend (`frontend/`, vitest).
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup and `make check`.
+[AGENTS.md](AGENTS.md) owns coding conventions and routes agents to the
+[development skill](.agents/skills/grimoire-development/SKILL.md).
 
-```sh
-# Backend tests
-cd backend && .venv/bin/python -m pytest -q          # macOS / Linux
-#   backend\.venv\Scripts\python.exe -m pytest backend -q   (Windows)
+| Directory | Contents |
+|---|---|
+| `backend/` | FastAPI app, file store, model adapters and pytest suite |
+| `frontend/` | React/Vite interface and Vitest suite |
+| `templates/` | Jinja prompt templates; [template reference](templates/README.md) |
+| `android/` | Kotlin shell and APK packaging |
+| `scripts/` | Installation, launch, checks and device utilities |
+| `evals/` | Offline replay and opt-in live evaluations |
+| `docs/` | Current user guides and technical references |
 
-# Frontend tests + typecheck (run from frontend/)
-cd frontend
-npx vitest run
-npx tsc -b
-```
-
-Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to run the gate (`make
-check`), what each architecture guard is asking of you, and the privacy rule that
-governs everything committed here. Project conventions and the frontend
-list/detail page pattern are routed from [`AGENTS.md`](AGENTS.md) into the
-[development skill](.agents/skills/grimoire-development/SKILL.md); what the
-file store promises about atomicity and concurrency is in
-[`docs/store-guarantees.md`](docs/store-guarantees.md); the prompt template
-layout is in [`templates/README.md`](templates/README.md). Coding agents should
-read [`AGENTS.md`](AGENTS.md) first.
-
-Repository layout:
-
-```
-backend/    FastAPI app, the ~/.grimoire file store, OpenRouter client
-frontend/   Vite/React UI (Campaigns, Worlds, scene play, Config)
-android/    Kotlin/WebView shell that packages backend + frontend as an APK
-templates/  every LLM prompt, as Jinja2
-scripts/    install / run / shutdown / android-bootstrap for unix and windows
-docs/       design notes and specs
-Makefile    APK build targets (make android-bootstrap / apk / apk-install)
-```
+The [architecture map](docs/reference/architecture.md) explains the main flows;
+the [development reference](docs/reference/development.md) explains source
+navigation and verification.
 
 ## License
 
@@ -427,16 +215,7 @@ Makefile    APK build targets (make android-bootstrap / apk / apk-install)
 
 ## Related
 
-These share a commitment: a system should not be able to assert more than its
-artifacts support.
-
-- **[hardy](https://github.com/charlesmsiegel/hardy)** — a proof is proved only
-  if Lean's kernel says so, and a result cannot be reported unless the artifacts
-  carry it.
-- **[ludex-rpg](https://github.com/charlesmsiegel/ludex-rpg)** — a quote and a
-  paraphrase must never be confusable, anywhere in the app.
-- **[coding-skills](https://github.com/charlesmsiegel/coding-skills)** — a
-  finding asserts a defect and carries a fix; a candidate reports a lead and
-  carries the benign explanations. Confusing them raises.
-- **[rpg-bookbinder](https://github.com/charlesmsiegel/rpg-bookbinder)** — state
-  lives in files, not in a shared prompt.
+- [hardy](https://github.com/charlesmsiegel/hardy) — proof artifacts and verification.
+- [ludex-rpg](https://github.com/charlesmsiegel/ludex-rpg) — roleplaying tools.
+- [coding-skills](https://github.com/charlesmsiegel/coding-skills) — code analysis skills.
+- [rpg-bookbinder](https://github.com/charlesmsiegel/rpg-bookbinder) — stories stored as files.

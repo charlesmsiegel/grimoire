@@ -77,6 +77,33 @@ def test_bytecode_does_not_move_build(inputs, monkeypatch):
     assert build.fingerprint(*inputs) == before
 
 
+def test_documentation_is_not_a_build_input(inputs, monkeypatch):
+    """Fixtures stand in for prose; no repository documentation is read."""
+    build = _stable_build(monkeypatch)
+    before = build.fingerprint(*inputs)
+    assert before is not None
+    ignored = set()
+    for root in inputs:
+        for name in ("README.md", "readme.md", "docs/report.html", "nested/docs/map.json"):
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("Synthetic documentation fixture", encoding="utf-8")
+            ignored.add(path)
+    read_bytes = Path.read_bytes
+
+    def runtime_only(path):
+        assert path not in ignored, f"documentation entered the source manifest: {path}"
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", runtime_only)
+    assert build.fingerprint(*inputs) == before
+    # Markdown is also runtime data: excluding all .md files would hide style
+    # or mechanics changes. Those must still move the build identity.
+    (inputs[1] / "style.md").write_text("Synthetic runtime style", encoding="utf-8")
+    changed = build.fingerprint(*inputs)
+    assert changed is not None and changed != before
+
+
 @pytest.mark.parametrize("domain,suffix", [
     ("package", ".py"), ("package", ".json"), ("package", ".md"),
     ("package", ".html"), ("package", ".txt"), ("package", ".ttf"),
@@ -189,9 +216,13 @@ def test_manifest_and_dependency_roots_cover_shipped_inputs():
                 for requirement in build.metadata.requires("uvicorn") or []
                 if re.search(r"extra\s*==\s*['\"]standard['\"]", requirement)}
     assert standard <= set(build.DESKTOP_DEPENDENCIES)
+    # Generated reports and README files are not shipped runtime inputs; their
+    # extensions must not become a requirement of this source-manifest guard.
     for root in (ROOT / "backend" / "src" / "grimoire", ROOT / "templates"):
         uncovered = [str(p.relative_to(root)) for p in root.rglob("*")
-                     if p.is_file() and "__pycache__" not in p.parts
+                     if "__pycache__" not in p.parts
+                     and not any(part.casefold() == "docs" for part in p.relative_to(root).parts)
+                     and p.stem.casefold() != "readme" and p.is_file()
                      and p.suffix not in build.SOURCE_SUFFIXES]
         assert uncovered == []
 

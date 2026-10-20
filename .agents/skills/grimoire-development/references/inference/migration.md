@@ -1,6 +1,6 @@
 # Model settings migration and retirement
 
-Source: [migrate/](../../../../../backend/src/grimoire/store/inference/migrate/), [retire.py](../../../../../backend/src/grimoire/store/inference/retire.py), [store-guarantees.md](../../../../../docs/store-guarantees.md).
+Source: [migrate/](../../../../../backend/src/grimoire/store/inference/migrate/), [retire.py](../../../../../backend/src/grimoire/store/inference/retire.py), [storage.md](../../../../../docs/reference/storage.md).
 
 - **Model settings moved to a new layout, once, in the background**
   (`store/inference/migrate/`, started by `main.start` at startup and after a
@@ -32,4 +32,4 @@ Source: [migrate/](../../../../../backend/src/grimoire/store/inference/migrate/)
   legacy layout, which `test_legacy_reader_guard.py` holds to being the only
   one); a store a newer build switched refuses every
   model-settings write with 409 `newer_format`. Backup, marker, resume, busy
-  campaigns and older builds are all in `docs/store-guarantees.md`.
+  campaigns and older builds are all in `docs/reference/storage.md`.

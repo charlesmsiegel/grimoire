@@ -21,7 +21,6 @@ if str(REPO) not in sys.path:
 from evals import cases as case_mod  # noqa: E402
 from evals import runner  # noqa: E402
 
-
 # Each fixture names the case, recording, checks and expected check outcome.
 # A compliant anchor-on batch is deliberate: its date comes from the anchor,
 # so the useful assertion is that the date check runs and accepts that result.

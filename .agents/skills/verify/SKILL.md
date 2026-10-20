@@ -6,10 +6,11 @@ description: "Use when verifying Grimoire changes end to end in a browser agains
 # Verifying Grimoire end to end
 
 Use a scratch `GRIMOIRE_HOME` set before importing Grimoire and free loopback
-ports. The user's backend and frontend may be on 8173 and 5173; never reuse
-them. Exercise only placeholder data and keep captures in ignored scratch space.
+ports and a fresh browser profile. The user's backend and frontend may be on
+8173 and 5173; never reuse them. Exercise only placeholder data and keep captures in ignored scratch space.
 
-1. [Launch isolated servers and block real provider calls](references/launch.md).
+1. Reuse the shared pytest fixtures to isolate bootstrap paths and process locks.
+   [Launch isolated servers and block real provider calls](references/launch.md).
    Patch every provider door the tested flow can reach, not just generation.
 2. [Seed current settings, drive the browser and stop both servers](references/exercise.md).
 3. Report the behavior observed and any untested paths. Use the current browser

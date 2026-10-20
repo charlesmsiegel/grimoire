@@ -30,3 +30,6 @@ Current contract: [module validators](../../../backend/src/grimoire/store/module
 
 For CLI examples, select the interpreter and source path using
 [Python commands](../grimoire-store-editing/references/python.md).
+
+The current [mechanics reference](../../../docs/reference/mechanics.md) maps the
+pack files and supported extension points; source validators define the format.

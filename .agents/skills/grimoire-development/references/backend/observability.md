@@ -1,4 +1,4 @@
-Source: [logs/](../../../../../backend/src/grimoire/store/logs/), [incoming-llm-capture.md](../../../../../docs/incoming-llm-capture.md).
+Source: [logs/](../../../../../backend/src/grimoire/store/logs/), [logging guide](../../../../../docs/guides/troubleshooting.md#logs-and-incoming-model-responses).
 
 ## Observability: one writer, three views
 
@@ -40,7 +40,7 @@ payloads are split into numbered parts rather than clipped; the
 monthly cap still applies. Request bodies, URLs and headers are never passed
 to the sink. Response bodies can include private prose and reasoning, so the
 Settings page describes that sharing boundary. See
-[`docs/incoming-llm-capture.md`](../../../../../docs/incoming-llm-capture.md) for reconstruction
+[logging guide](../../../../../docs/guides/troubleshooting.md#logs-and-incoming-model-responses) for reconstruction
 and completeness limits.
 
 The two error counts on `/stats` come from two places **on purpose**: a latency

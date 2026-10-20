@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 # Base deps must stay Android-installable (pure python or Chaquopy-wheel'd).
 # Desktop-only pieces — uvicorn's compiled extras and tiktoken (Rust wheel,
 # count_tokens falls back to a heuristic without it) — live in the `desktop`
-# extra. See docs/android-architecture.md §6-7 and android/app/build.gradle.kts.
+# extra. See docs/reference/android.md and android/app/build.gradle.kts.
 dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
@@ -56,6 +56,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/grimoire"]
+# These are repository prose, not package data or runtime cache inputs.
+exclude = ["**/docs/**", "**/README.*", "**/readme.*"]
 
 [tool.coverage.run]
 # The package by import name, so coverage walks it and reports the modules no
