@@ -1,130 +1,15 @@
-"""Move a store from the legacy settings layout to format 2 (spec 11.2).
-
-Global, once, idempotent and resumable. `ensure` runs the steps in order:
-`llm_connections.ensure_migrated()` (today's format-1 seeding, not a migration
-write), then
-
-1. **backup** -- `backups.create_backup(prefix=SAFETY_PREFIX)`, which
-   retention never prunes. If it fails nothing is written, the status says
-   why, and the next start retries. Taken once per root: a run resuming after
-   a later step failed reuses the archive the status note names while it is
-   still there, so retries do not pile up never-pruned copies of the settings;
-2. **providers** -- each connection gains `preset` and `billing`, both
-   rev-neutral, so catalogs, verified tests and vector caches survive. A
-   connection that already has a preset is skipped: a no-op update would
-   still rewrite it;
-3. **model facts** -- each connection's legacy `vision`, `prefill` and
-   `post_process`, where they differ from the defaults, become the facts of its
-   model (an unset Claude model is `opus`; any other empty model is keyed "").
-   What is copied is recorded beside it (`facts.adopt_legacy`), so a resumed
-   run takes back a copy the record no longer says before copying afresh.
-   Copied in the `llm_connections.LOCK` hold that writes the marker
-   (`_switch`), so a legacy edit made before it is not switched past;
-4. *(derived reasoning presets: not the migration's.)* They are
-   retirement's, persisted after the marker by `retire` (slice I, rulings 4
-   and 6, below); the migration persists the planner's `mapped` only, never a
-   repoint, so every preset key it writes names a preset file that exists
-   (N2);
-5. **roles**, 6. **routes**, 7. **split routes**, 9. **marker** -- ONE
-   `config.md` write, the last, derived from a read taken inside the
-   `config_lock` hold that writes it: the planner's mapping of the legacy
-   settings (`legacy_plan.global_plan(...).mapped`, never its repoints),
-   persisted **verbatim** (padded ids, dangling references and
-   `PRESET_CLEAR` exactly as it gives them; the split routes are already in
-   it, read from their parents) with two enrichments -- an unset Claude model
-   is written as `opus` wherever it is a selection's model, and the Embedding
-   role is set only when the legacy configuration actually embeds
-   (`embed_space.resolve`'s answer over the run's strict lookup,
-   `legacy_plan.legacy_embeds`; ruling 5) -- plus `inference_format: "2"`.
-
-   Read late because the app serves at format 1 all through the backup, and a
-   legacy edit made meanwhile must not be reverted by a snapshot from before
-   it. Written whole because `write_config` merges: EVERY global key the
-   migration owns (`OWNED_GLOBAL_KEYS`) is written, "" where the translation
-   leaves it unset, so a format-2 key already in the file -- an interrupted
-   run of an earlier build, a hand edit -- is overwritten with what the
-   legacy settings say now rather than surviving because nothing named it.
-   The legacy routes' `preset_<k>` keys are the same keys in both layouts and
-   are left as they are.
-
-8. **campaigns** -- `campaign(cid)` for each unmarked one, under its own
-   `campaign_lock_nowait(cid)`, one at a time; a busy one is skipped and the
-   next `ensure` finishes it (it resolves through the planner, in memory,
-   meanwhile).
-   AFTER the marker, not before it: a campaign's routes are translated from
-   the connections they name, and before the marker a connection's legacy
-   `model` can still be edited -- by this server or another -- so a campaign
-   migrated then kept the model the edit replaced, for good. Once the store
-   is at format 2 those fields are frozen (refused on write), so what a
-   campaign is translated from cannot move under its step, and an unmarked
-   campaign reads the same mapping, in memory, until it is reached.
-
-10. **retirement** (`_retire`, slice I ruling 6) -- after the campaigns, in
-   the same run, and on every `ensure` of a current store that
-   `retire.left()` says has anything left: the `pre-retirement-` archive when
-   the pass deletes or replaces a stored value (skipped when this run CREATED
-   the `pre-inference-` one, reused when an earlier pass's is still there),
-   then `config.md`'s derived presets, repoint, legacy-key deletion and
-   retirement marker in one write, then each campaign likewise under its own
-   no-wait hold (an unmarked one migrated in that same write). It never moves
-   `status().state`; what it has left is `Status.retirement`.
-
-Every derived value is deterministic, so two devices migrating one synced
-store write the same bytes. The migration itself leaves the legacy keys and
-fields in place, frozen, for older builds; retirement then removes the keys
-(and, in Task 6b, the connection fields).
-
-**What `ensure` holds.** The migration lock (`locks.inference_migration_lock`,
-a process lock plus a proclock), TRIED and never waited on: a second `ensure`
-returns the current status at once. It takes no run exclusion -- that is a fact
-about one app's run registry, and `main.start` holds it (CLAUDE.md). It
-resolves the store root inside that hold (`PUT /config/data-dir` holds the
-same lock across a move, so the root cannot change between the two) and checks
-it before each step and each item, so a data-dir switch mid-run writes no
-marker into either tree: the run belongs to the root it started on. The same
-checks read the caller's `stop` flag, which lifespan shutdown sets; a stopped
-run is `pending` and resumes on the next `ensure`.
-
-**Failure policy.** A failed backup, an I/O error on the final global write,
-a connection file that exists but cannot be read, a `config.md` that holds no
-record (zero bytes, or unfenced: `RecordUnreadableError`) and a model-facts
-file that cannot be read (`facts.FactsUnreadableError`) fail the migration (no
-marker; the next start retries). None of them is "nothing there": every step
-persists what it reads, so a read a sync client blocked would otherwise be
-written down for good -- an empty model with no preset, an empty layout
-stamped current, a facts file holding only the copy. An item that cannot be
-migrated -- an unreadable `campaign.md` (undecodable, or holding no record;
-it is never rewritten), one naming an unreadable connection, a connection or
-model-facts write that fails or is refused, a busy campaign -- is skipped, its
-reason recorded in `skipped`, and the run goes on. A newer build's marker,
-whenever it is seen -- at the start, in the switch's hold, or under a
-campaign's hold while the loop runs -- ends the run as `newer` and nothing
-more is marked.
-
-**Status.** `done`, `pending` and `newer` are derived from the store on every
-call: the global marker, and whether any readable campaign is unmarked (an
-unreadable one is reported in `skipped`, also derived, and does not hold the
-store at `pending` -- nothing a re-run does can read it). Only `running`, a
-failure reason, the last run's skips and the safety archive's name are
-remembered, keyed by root, in `<home>/.cache/inference-migration.json` --
-derived data, outside every backup -- beside retirement's archive name and
-why its last pass stopped short (`retire_safety`, `retire_failed`).
-"""
+"""Strict mapping/campaign writes and the pinned-root resumable migration/retirement sequence under the original outer hold."""
 
 from __future__ import annotations
 
 import dataclasses
-import json
-import logging
-import os
 import threading
 import time
-import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from pathlib import Path
 
-from .. import (
+from ... import (
     atomic,
     backups,
     config,
@@ -132,367 +17,14 @@ from .. import (
     llm_connections,
     locks,
     paths,
-    proclock,
     revision,
     sampler_presets,
 )
-from .. import inference_keys as keys
-from .. import inference_retired as retired
-from ..campaigns import paths as campaign_paths
-from ..campaigns import read as campaign_read
-from . import facts, legacy_plan, providers, retire
-
-log = logging.getLogger(__name__)
-
-#: Every state `status` answers.
-STATES: tuple[str, ...] = ("done", "pending", "running", "failed", "newer")
-
-#: The global keys the migration writes, every one on every switch
-#: (`legacy_plan.OWNED_GLOBAL_KEYS`, where the mapping lives).
-OWNED_GLOBAL_KEYS: tuple[str, ...] = legacy_plan.OWNED_GLOBAL_KEYS
-
-#: The reason a run that found its root moved under it reports.
-MOVED = "the storage location changed during the upgrade; it resumes on the next start there"
-#: The reason a run stopped by its caller (app shutdown) reports.
-STOPPED = "the app shut down during the upgrade; it resumes on the next start"
-
-
-def _no_retirement() -> dict:
-    """`Status.retirement` when nothing about retirement was asked: a fresh
-    dict per Status, so no caller can edit another's."""
-    return {"left": [], "failed": ""}
-
-
-@dataclasses.dataclass(frozen=True)
-class Status:
-    state: str
-    reason: str = ""
-    skipped: tuple[str, ...] = ()
-    #: Retirement's own account (slice I): `left`, what it has still to do
-    #: (`retire.left()`), and `failed`, why the last pass on this root stopped
-    #: short ("" when it did not). Never moves `state`: a store whose
-    #: migration is done reads `done` whatever retirement has left.
-    retirement: dict = dataclasses.field(default_factory=_no_retirement)
-
-    active: bool = False
-    progress: dict | None = None
-
-    def as_dict(self) -> dict:
-        """The JSON shape (`not_migrated`'s `status`, Settings)."""
-        body = {"state": self.state, "reason": self.reason, "skipped": list(self.skipped),
-                "retirement": {"left": list(self.retirement.get("left") or ()),
-                               "failed": str(self.retirement.get("failed") or "")},
-                "active": self.active}
-        if self.active and self.progress is not None:
-            body["progress"] = dict(self.progress)
-        return body
-
-
-# ---- what is remembered ----
-_active_guard = threading.Lock()
-#: Roots a migration is running on in THIS process -- `running` for a caller
-#: on the migrating thread itself, which the reentrant lock would let through.
-_active: dict[str, dict | None] = {}
-
-
-@contextmanager
-def _running_on(root: Path) -> Iterator[None]:
-    with _active_guard:
-        _active[str(root)] = None
-    try:
-        yield
-    finally:
-        with _active_guard:
-            _active.pop(str(root), None)
-
-
-def _status_path(root: Path) -> Path:
-    return root / ".cache" / "inference-migration.json"
-
-
-def _recall(root: Path) -> dict:
-    """What the last run on `root` left: `{}` when nothing, when unreadable, or
-    when it was written for another root (a copied or synced store)."""
-    try:
-        raw = json.loads(_status_path(root).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(raw, dict) or raw.get("root") != str(root):
-        return {}
-    return raw
-
-
-def _remember(root: Path, *, running: bool, failed: str = "",
-              skipped: list[str] | tuple[str, ...] = (), safety: str = "",
-              retire_safety: str = "", retire_failed: str = "",
-              progress: dict | None = None, progress_owner: str = "") -> None:
-    """Record the run's state for `root`. Best effort: derived data, and a
-    status that cannot be written must not stop the migration it describes.
-    `retire_safety` is the `pre-retirement-` archive the pass took or reused,
-    and `retire_failed` why the last retirement pass stopped short."""
-    note = {"root": str(root), "running": running, "pid": os.getpid(),
-            "failed": failed, "skipped": list(skipped), "safety": safety,
-            "retire_safety": retire_safety, "retire_failed": retire_failed,
-            "progress": progress, "progress_owner": progress_owner}
-    path = _status_path(root)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic.write_text(path, json.dumps(note, indent=2) + "\n")
-    except OSError as exc:
-        log.warning("inference migration: could not record its status -- %s", exc)
-
-
-def _is_running(root: Path, note: dict) -> bool:
-    """A run on `root` in this process, or one another process says it has.
-
-    Another process's note can outlive a crash; that lasts until the next
-    start on this root, whose own run rewrites it -- or until the store is
-    done, which `status` checks first."""
-    with _active_guard:
-        if str(root) in _active:
-            return True
-    return bool(note.get("running")) and note.get("pid") != os.getpid()
-
-
-#: Roots whose startup pass is queued in THIS process and has not yet ended.
-#: A status read can take the migration lock in the gap before the queued
-#: thread takes it, which would otherwise read as no activity (#496).
-_queued: set[str] = set()
-
-
-def queue(root: Path) -> None:
-    """Mark `root`'s startup pass as queued, before its thread starts."""
-    with _active_guard:
-        _queued.add(str(root))
-
-
-def dequeue(root: Path) -> None:
-    """Clear the queued mark once the pass that was queued has ended."""
-    with _active_guard:
-        _queued.discard(str(root))
-
-
-def _activity(root: Path) -> bool:
-    """Activity spans planning and retirement, independently of format (#496).
-
-    Readers only try the existing outer lock, then release it immediately. A
-    local run on another root must not be attributed to this resolved root.
-    """
-    with _active_guard:
-        if str(root) in _active or str(root) in _queued:
-            return True
-        if _active:
-            return False
-    lock = locks.inference_migration_lock()
-    got = False
-    try:
-        if paths.home() != root:
-            return False
-        got = lock.acquire(blocking=False)
-        return not got and paths.home() == root
-    except OSError:
-        return False
-    finally:
-        if got:
-            with suppress(OSError):
-                lock.release()
-
-
-@contextmanager
-def _progress_lease(root: Path) -> Iterator[str]:
-    """Optional archive ownership, outside the synced library (#496).
-
-    A fresh nonce per archive prevents a crashed run's note resurfacing when
-    the next run holds the main lock but has not started archiving yet.
-    Failure only hides foreign progress; it cannot fail a valid backup.
-    """
-    nonce = uuid.uuid4().hex
-    fd = None
-    with suppress(OSError):
-        fd = proclock.acquire(proclock.lock_path(root, "inference-progress", nonce),
-                              proclock.NO_WAIT)
-    try:
-        yield nonce if fd is not None else ""
-    finally:
-        if fd is not None:
-            with suppress(OSError):
-                proclock.release(fd)
-
-
-def _owns_progress(root: Path, nonce: object) -> bool:
-    """Verify a foreign archive lease, excluding simultaneous probe readers.
-
-    Without the observer mutex, reader B's successful probe of an old free
-    lease impersonates a writer to reader C. All readers try the observer
-    first; the writer never does, so this cannot delay the archive (#496).
-    """
-    if (not isinstance(nonce, str) or len(nonce) != 32
-            or any(c not in "0123456789abcdef" for c in nonce)):
-        return False
-    observer = lease = None
-    try:
-        path = proclock.lock_path(root, "inference-progress", nonce)
-        if not path.is_file():
-            return False
-        observer = proclock.acquire(
-            proclock.lock_path(root, "inference-progress-reader", "probe"), proclock.NO_WAIT)
-        if observer is None:
-            return False
-        lease = proclock.acquire(path, proclock.NO_WAIT)
-        owned = lease is None
-    except OSError:
-        return False
-    finally:
-        # Release a successful lease probe BEFORE allowing another reader in.
-        # Cleanup errors make ownership unverifiable as well.
-        try:
-            if lease is not None:
-                proclock.release(lease)
-        finally:
-            if observer is not None:
-                proclock.release(observer)
-    return owned
-
-
-def _progress(root: Path, note: dict, active: bool) -> dict | None:
-    if not active or paths.home() != root:
-        return None
-    with _active_guard:
-        if str(root) in _active:
-            live = _active[str(root)]
-            return dict(live) if live is not None else None
-    progress = note.get("progress")
-    if not isinstance(progress, dict) or progress.get("phase") not in {
-            "safety_backup", "retirement_backup"}:
-        return None
-    done, total = progress.get("done"), progress.get("total")
-    if type(done) is not int or done < 0:
-        return None
-    if total is None:
-        if done != 0:
-            return None
-    elif type(total) is not int or total < done:
-        return None
-    try:
-        owned = _owns_progress(root, note.get("progress_owner"))
-    except OSError:
-        owned = False
-    return {"phase": progress["phase"], "done": done, "total": total} if owned else None
-
-
-def _kept_safety(note: dict, key: str = "safety",
-                prefix: str = backups.SAFETY_PREFIX) -> str:
-    """The safety archive an earlier run on this root took (`key` in its note,
-    named under `prefix`), when it is still in the backup directory; "" when
-    there is none to reuse. Retirement's is `_kept_retire_safety`."""
-    name = note.get(key)
-    if (not isinstance(name, str) or not name.startswith(prefix)
-            or Path(name).name != name):
-        return ""
-    try:
-        return name if (backups.backup_dir() / name).is_file() else ""
-    except OSError:
-        return ""
-
-
-def _kept_retire_safety(note: dict) -> str:
-    """The `pre-retirement-` archive an earlier pass on this root took, when
-    it is still there (R2-3): reused, so a resumed pass takes no second one."""
-    return _kept_safety(note, "retire_safety", backups.RETIRE_PREFIX)
-
-
-def _note_retire_failed(root: Path, failed: str) -> None:
-    """Record `failed` as why retirement stopped short on `root`, keeping the
-    rest of the note -- unless the note already says it."""
-    note = _recall(root)
-    if _note_text(note, "retire_failed") == failed:
-        return
-    skipped = [s for s in note.get("skipped") or () if isinstance(s, str)]
-    _remember(root, running=False, failed=_note_text(note, "failed"), skipped=skipped,
-              safety=_kept_safety(note), retire_safety=_kept_retire_safety(note),
-              retire_failed=failed)
-
-
-def _retirement(failed: str) -> dict:
-    """`Status.retirement`: what `retire.left()` says now, and `failed`."""
-    return {"left": list(retire.left()), "failed": failed}
-
-
-def _note_text(note: dict, key: str) -> str:
-    value = note.get(key)
-    return value if isinstance(value, str) else ""
-
-
-# ---- reading the store ----
-def _config_exists(root: Path) -> bool:
-    return (root / "config.md").exists()
-
-
-#: C's strict record read, moved to `store/frontmatter.py` (slice I) so
-#: retirement -- which this module calls, and so cannot import -- shares it.
-#: Bound here too: `migrate.RecordUnreadableError` is what callers catch.
-RecordUnreadableError = frontmatter.RecordUnreadableError
-
-
-def _config_record(root: Path) -> dict[str, str]:
-    """`config.md`'s raw frontmatter; `RecordUnreadableError` (or the read's
-    own `OSError`/`UnicodeDecodeError`) when it cannot be read as a record."""
-    return frontmatter.read_record(root / "config.md", "config.md")[0]
-
-
-def _campaign_marks() -> tuple[dict[str, bool], dict[str, str]]:
-    """(cid -> whether its `campaign.md` carries the current (or a newer)
-    marker, cid -> why it cannot be read) -- every campaign is in exactly
-    one of the two."""
-    marks: dict[str, bool] = {}
-    unreadable: dict[str, str] = {}
-    for cid, _name, _world in campaign_read.world_refs():
-        if not paths.safe_id(cid):
-            continue
-        try:
-            meta, _ = frontmatter.read_record(campaign_paths.campaign_meta_path(cid),
-                                              f"campaign {cid}'s campaign.md")
-        except (OSError, UnicodeDecodeError, ValueError) as exc:
-            unreadable[cid] = str(exc)
-            continue
-        marks[cid] = keys.is_current(meta) or keys.is_newer(meta)
-    return marks, unreadable
-
-
-def _unreadable_skips(unreadable: dict[str, str]) -> list[str]:
-    return [f"campaign {cid}: {why}" for cid, why in unreadable.items()]
-
-
-def _merged(*groups: list[str] | tuple[str, ...]) -> tuple[str, ...]:
-    """The skips of every group, in order, each once."""
-    return tuple(dict.fromkeys(s for group in groups for s in group))
-
-
-def status() -> Status:
-    """Where the store at `paths.home()` stands. Never writes."""
-    root = paths.home()
-    if not _config_exists(root):
-        # A fresh store is born current (ruling 13); there is nothing to move.
-        return Status("done")
-    cfg = config.read_config()
-    if keys.is_newer(cfg):
-        return Status("newer")
-    note = _recall(root)
-    active = _activity(root)
-    progress = _progress(root, note, active)
-    marks, unreadable = _campaign_marks()
-    remembered = [str(s) for s in note.get("skipped") or () if isinstance(s, str)]
-    skipped = _merged(remembered, _unreadable_skips(unreadable))
-    # Retirement's account rides beside the state and never moves it.
-    retirement = _retirement(_note_text(note, "retire_failed"))
-    # Done first: what the store says outranks a note that can outlive a crash.
-    if keys.is_current(cfg) and False not in marks.values():
-        return Status("done", "", skipped, retirement, active, progress)
-    if _is_running(root, note):
-        return Status("running", "", skipped, retirement, active, progress)
-    failed = _note_text(note, "failed")
-    return Status("failed" if failed else "pending", failed, skipped, retirement, active, progress)
-
+from ... import inference_keys as keys
+from ... import inference_retired as retired
+from ...campaigns import paths as campaign_paths
+from .. import facts, legacy_plan, providers, retire
+from . import _contracts, _tracking
 
 # ---- the translation, persisted ----
 #: What a connection or facts WRITE may raise that skips its item.
@@ -604,17 +136,17 @@ def held_still() -> Iterator[bool]:
             lock.release()
 
 
-def ensure(stop: threading.Event | None = None) -> Status:
+def ensure(stop: threading.Event | None = None) -> _contracts.Status:
     """Run the migration on the store at `paths.home()`, synchronously; return
     the status it leaves. Returns the current status at once, without waiting,
     when the migration lock is held. `stop`, once set, ends the run at the next
     item boundary, leaving it `pending`."""
     attempted = try_ensure(stop=stop)
-    return attempted if attempted is not None else status()
+    return attempted if attempted is not None else _tracking.status()
 
 
 def try_ensure(stop: threading.Event | None = None, *,
-               expected_root: Path | None = None) -> Status | None:
+               expected_root: Path | None = None) -> _contracts.Status | None:
     """One immediate acquisition attempt; None means contention only (#496).
 
     `ensure` keeps its status-returning no-wait contract. The background
@@ -630,12 +162,12 @@ def try_ensure(stop: threading.Event | None = None, *,
         # so the root read here is the one the run's first writes land in.
         root = paths.home()
         if expected_root is not None and root != expected_root:
-            return Status("pending", MOVED)
+            return _contracts.Status("pending", _contracts.MOVED)
         # `running` from the moment the lock is ours, so a second caller that
         # lost the lock never reads `pending` off a run that has begun.
-        with _running_on(root):
+        with _tracking._running_on(root):
             outcome = _run(root, stop)
-    return outcome if outcome is not None else status()
+    return outcome if outcome is not None else _tracking.status()
 
 
 class _Run:
@@ -660,13 +192,13 @@ class _Run:
     def halted(self) -> str:
         """Why the run must stop before its next item; "" to go on."""
         if self.stop is not None and self.stop.is_set():
-            return STOPPED
+            return _contracts.STOPPED
         if paths.home() != self.root:
-            return MOVED
+            return _contracts.MOVED
         return ""
 
     def remember(self, *, running: bool, failed: str = "") -> None:
-        _remember(self.root, running=running, failed=failed, skipped=self.skipped,
+        _tracking._remember(self.root, running=running, failed=failed, skipped=self.skipped,
                   safety=self.safety, retire_safety=self.retire_safety,
                   retire_failed=self.retire_failed, progress=self.progress,
                   progress_owner=self.progress_owner)
@@ -675,9 +207,9 @@ class _Run:
     def archive_progress(self, phase: str, done: int, total: int | None) -> None:
         """Local counters are exact; notes persist transitions and <=4 ticks/s."""
         self.progress = {"phase": phase, "done": done, "total": total}
-        with _active_guard:
-            if str(self.root) in _active:
-                _active[str(self.root)] = self.progress
+        with _tracking._active_guard:
+            if str(self.root) in _tracking._active:
+                _tracking._active[str(self.root)] = self.progress
         now = time.monotonic()
         previous = self._saved_progress
         transition = previous is None or (previous["phase"], previous["total"]) != (phase, total)
@@ -689,7 +221,7 @@ class _Run:
 
 def _archive(run: _Run, prefix: str, phase: str) -> Path:
     """Both safety phases share publication/progress teardown (#496)."""
-    with _progress_lease(run.root) as owner:
+    with _tracking._progress_lease(run.root) as owner:
         run.progress_owner = owner
         try:
             return backups.create_backup(
@@ -697,16 +229,16 @@ def _archive(run: _Run, prefix: str, phase: str) -> Path:
         finally:
             run.progress = None
             run.progress_owner = ""
-            with _active_guard:
-                if str(run.root) in _active:
-                    _active[str(run.root)] = None
+            with _tracking._active_guard:
+                if str(run.root) in _tracking._active:
+                    _tracking._active[str(run.root)] = None
             run.remember(running=True)
 
 
-def _run(root: Path, stop: threading.Event | None) -> Status | None:
+def _run(root: Path, stop: threading.Event | None) -> _contracts.Status | None:
     """The run, under the lock: None when the store's own status says how it
     ended, else the Status to report (a failure, a stop, a root that moved)."""
-    if not _config_exists(root):
+    if not _tracking._config_exists(root):
         return None                        # a fresh store is never migrated
     # A `config.md` that holds no record is not a legacy store with nothing
     # set: switched, it would be stamped current over an empty layout and its
@@ -714,14 +246,14 @@ def _run(root: Path, stop: threading.Event | None) -> Status | None:
     # the connection seeding below would write it too -- and the next start
     # retries.
     try:
-        _config_record(root)
+        _tracking._config_record(root)
     except (OSError, UnicodeDecodeError) as exc:
         reason = f"the upgrade stopped: {exc}"
-        note = _recall(root)
-        _remember(root, running=False, failed=reason, safety=_kept_safety(note),
-                  retire_safety=_kept_retire_safety(note),
-                  retire_failed=_note_text(note, "retire_failed"))
-        return Status("failed", reason, (), _retirement(_note_text(note, "retire_failed")))
+        note = _tracking._recall(root)
+        _tracking._remember(root, running=False, failed=reason, safety=_tracking._kept_safety(note),
+                  retire_safety=_tracking._kept_retire_safety(note),
+                  retire_failed=_tracking._note_text(note, "retire_failed"))
+        return _contracts.Status("failed", reason, (), _tracking._retirement(_tracking._note_text(note, "retire_failed")))
     # A newer build's store first: it is not this build's to touch at all, and
     # the connection seeding below writes (which it refuses on its own too).
     if keys.is_newer(config.read_config()):
@@ -731,24 +263,24 @@ def _run(root: Path, stop: threading.Event | None) -> Status | None:
     if keys.is_newer(cfg):
         return None
     current = keys.is_current(cfg)
-    marks, unreadable = _campaign_marks()
+    marks, unreadable = _tracking._campaign_marks()
     left = [cid for cid, marked in marks.items() if not marked]
     idle, planned = _idle(root, current, left)
     if idle:
         return None
-    note = _recall(root)
-    run = _Run(root, stop, _kept_safety(note), _unreadable_skips(unreadable),
-               _kept_retire_safety(note))
+    note = _tracking._recall(root)
+    run = _Run(root, stop, _tracking._kept_safety(note), _tracking._unreadable_skips(unreadable),
+               _tracking._kept_retire_safety(note))
     run.remember(running=True)
-    outcome: Status | None = None
+    outcome: _contracts.Status | None = None
     try:
         outcome = _steps(run, current, left, planned)
     except (OSError, UnicodeDecodeError, locks.StoreBusy) as exc:
-        outcome = Status("failed", f"the upgrade stopped: {exc}")
+        outcome = _contracts.Status("failed", f"the upgrade stopped: {exc}")
     except BaseException as exc:
         # Recorded, then raised: whatever it was, the note must not go on
         # saying `running` for a run that has ended.
-        outcome = Status("failed", f"the upgrade stopped: {exc!r}")
+        outcome = _contracts.Status("failed", f"the upgrade stopped: {exc!r}")
         raise
     finally:
         failed = outcome.reason if outcome is not None and outcome.state == "failed" else ""
@@ -756,7 +288,7 @@ def _run(root: Path, stop: threading.Event | None) -> Status | None:
     if outcome is None:
         return None
     return dataclasses.replace(outcome, skipped=tuple(run.skipped),
-                               retirement=_retirement(run.retire_failed))
+                               retirement=_tracking._retirement(run.retire_failed))
 
 
 def _idle(root: Path, current: bool, left: list[str]) -> tuple[bool, retire.PassPlan | None]:
@@ -775,13 +307,13 @@ def _idle(root: Path, current: bool, left: list[str]) -> tuple[bool, retire.Pass
         return True, None
     planned = retire.pass_plan(legacy_plan.lookup(mode="retire"))
     if not any(unit.work for unit in planned.units):
-        _note_retire_failed(root, "; ".join(planned.dropped))
+        _tracking._note_retire_failed(root, "; ".join(planned.dropped))
         return True, planned
     return False, planned
 
 
 def _steps(run: _Run, current: bool, left: list[str],
-           planned: retire.PassPlan | None = None) -> Status | None:
+           planned: retire.PassPlan | None = None) -> _contracts.Status | None:
     """The steps; None when they all ran, else the Status to stop on. The
     campaigns come after the switch (step 8, above), and retirement after
     them -- `planned` is its pass when `_run` already planned it, on a store
@@ -795,41 +327,41 @@ def _steps(run: _Run, current: bool, left: list[str],
         # run began was born at format 1 (before the switch) and is unmarked,
         # and one created (or forked) from here on is born marked
         # (`campaigns.lifecycle.publish_birth`, in the switch's own lock).
-        marks, _ = _campaign_marks()
+        marks, _ = _tracking._campaign_marks()
         left = [cid for cid, marked in marks.items() if not marked]
     for cid in left:
         if why := run.halted():
-            return Status("pending", why)
+            return _contracts.Status("pending", why)
         try:
             _campaign_step(cid, run.skipped)
         except config.NewerFormatError:
             # A newer build switched the store while the loop ran: what is
             # left is not this build's to mark (spec 11.3).
-            return Status("newer")
+            return _contracts.Status("newer")
     _retire(run, planned)
     return None
 
 
-def _before_campaigns(run: _Run) -> Status | None:
+def _before_campaigns(run: _Run) -> _contracts.Status | None:
     """Steps 1-2 (backup, providers); None when they all ran. Step 3, the
     model facts, is `_switch`'s."""
     if why := run.halted():
-        return Status("pending", why)
+        return _contracts.Status("pending", why)
     if not run.safety:
         try:
             made = _archive(run, backups.SAFETY_PREFIX, "safety_backup")
         except (OSError, locks.StoreBusy) as exc:
-            return Status("failed", f"the safety backup failed: {exc}")
+            return _contracts.Status("failed", f"the safety backup failed: {exc}")
         run.safety = made.name
         run.created_safety = True
         # At once, so a run killed from here on is not backed up again.
         run.remember(running=True)
     if why := run.halted() or _providers(run):
-        return Status("pending", why)
+        return _contracts.Status("pending", why)
     return None
 
 
-def _switch(run: _Run) -> Status | None:
+def _switch(run: _Run) -> _contracts.Status | None:
     """Step 3, then steps 5-7 and 9 as one write, from a read under the same
     hold.
 
@@ -846,22 +378,22 @@ def _switch(run: _Run) -> Status | None:
     and the marker either."""
     with llm_connections.LOCK:
         if why := run.halted():
-            return Status("pending", why)
-        _config_record(run.root)           # a placeholder fails the run
+            return _contracts.Status("pending", why)
+        _tracking._config_record(run.root)           # a placeholder fails the run
         early = config.read_config()
         if keys.is_newer(early):
-            return Status("newer")         # not this build's to go on with
+            return _contracts.Status("newer")         # not this build's to go on with
         if keys.is_current(early):
             return None                    # switched meanwhile, by another device
         if why := _facts(run):
-            return Status("pending", why)
+            return _contracts.Status("pending", why)
         with locks.config_lock():
             if why := run.halted():
-                return Status("pending", why)
-            _config_record(run.root)
+                return _contracts.Status("pending", why)
+            _tracking._config_record(run.root)
             cfg = config.read_config()
             if keys.is_newer(cfg):
-                return Status("newer")
+                return _contracts.Status("newer")
             if keys.is_current(cfg):
                 return None                # switched meanwhile, by another device
             lookup = _lookup()
