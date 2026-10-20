@@ -41,6 +41,9 @@ from grimoire.store import (
     recycle_bin,
     thumbs,
 )
+from grimoire.store.image_gc import _contracts as image_gc_contracts
+from grimoire.store.image_gc import _objects as image_gc_objects
+from grimoire.store.image_gc import _paths as image_gc_paths
 from grimoire.store.module_edit import staging as module_staging
 from grimoire.store.worlds import staging as world_staging
 
@@ -601,7 +604,7 @@ def test_a_concurrent_ingest_is_never_left_dangling(root, monkeypatch, fake_bin)
         assert "obj" not in result, "the ingest waits on the lock"
         return real(rootp, blob, name)
 
-    monkeypatch.setattr(image_gc, "_move_to_outbox", move)
+    monkeypatch.setattr(image_gc_paths, "_move_to_outbox", move)
     done = _collect(root, report["token"])
     worker.join(10)
     assert not worker.is_alive()
@@ -777,8 +780,8 @@ def test_deletion_is_batched_and_releases_the_ingest_lock(root, monkeypatch,
     report = _ready(root)
     counting = _Counting(locks.image_ingest_gc_lock)
     monkeypatch.setattr(locks, "image_ingest_gc_lock", counting)
-    monkeypatch.setattr(image_gc, "BATCH_OBJECTS", objects)
-    monkeypatch.setattr(image_gc, "BATCH_SECONDS", seconds)
+    monkeypatch.setattr(image_gc_contracts, "BATCH_OBJECTS", objects)
+    monkeypatch.setattr(image_gc_contracts, "BATCH_SECONDS", seconds)
     free_between: list[bool] = []
     real = image_gc._delete_file
 
@@ -786,7 +789,7 @@ def test_deletion_is_batched_and_releases_the_ingest_lock(root, monkeypatch,
         free_between.append(counting.held)
         return real(rootp, path)
 
-    monkeypatch.setattr(image_gc, "_delete_file", delete_file)
+    monkeypatch.setattr(image_gc_paths, "_delete_file", delete_file)
     done = _collect(root, report["token"])
     assert len(done["deleted"]["objects"]) == 5
     assert counting.entered == holds
@@ -811,7 +814,7 @@ def test_scan_and_collect_leave_a_report_on_success_failure_and_cancel(root, mon
         raise RuntimeError("disk on fire")
 
     with monkeypatch.context() as m:
-        m.setattr(image_gc, "_list_objects", boom)
+        m.setattr(image_gc_objects, "_list_objects", boom)
         with pytest.raises(RuntimeError):
             _scan(root, now=T, run_id="3" * 32)
     assert maintenance_reports.read(root, "3" * 32)["state"] == "failed"
@@ -1068,7 +1071,7 @@ def test_a_root_flip_between_sidecar_and_blob_reports_the_sidecar(root, monkeypa
 
     files = {o.id: (_sidecar(o), _blob(o)) for o in (first, second)}   # before the flip
     data = {o.id: _blob(o).read_bytes() for o in (first, second)}
-    monkeypatch.setattr(image_gc, "_move_to_outbox", move)
+    monkeypatch.setattr(image_gc_paths, "_move_to_outbox", move)
     done = _collect(root, report["token"])
     assert done["state"] == "root-changed"
     assert len(moved) == 1 and moved[0].is_file()
@@ -1275,7 +1278,7 @@ def test_bin_runs_after_the_ingest_lock_is_released(root, monkeypatch, fake_bin)
         fake_bin.send(path)
 
     monkeypatch.setattr(recycle_bin, "_send2trash", send)
-    monkeypatch.setattr(image_gc, "BATCH_OBJECTS", 1)
+    monkeypatch.setattr(image_gc_contracts, "BATCH_OBJECTS", 1)
     done = _collect(root, report["token"])
     assert done["state"] == "complete"
     assert free == [True, True], "every bin call runs with the ingest/GC lock free"
@@ -1344,7 +1347,7 @@ def test_cancel_after_outbox_move_drains_next_time(root, monkeypatch, fake_bin):
         moved.append(out)
         return out
 
-    monkeypatch.setattr(image_gc, "_move_to_outbox", move)
+    monkeypatch.setattr(image_gc_paths, "_move_to_outbox", move)
     done = image_gc.collect(root, report["token"], cancel=lambda: bool(moved), now=T + 60)
     assert done["state"] == "cancelled"
     assert len(moved) == 1 and moved[0].is_file()
@@ -1450,7 +1453,7 @@ def test_unverified_stops_the_run(root, monkeypatch, fake_bin):
         return result
 
     monkeypatch.setattr(recycle_bin, "send_batch", send_batch)
-    monkeypatch.setattr(image_gc, "BATCH_OBJECTS", 1)
+    monkeypatch.setattr(image_gc_contracts, "BATCH_OBJECTS", 1)
     done = _collect(root, report["token"])
     assert done["state"] == image_gc.RECYCLE_BIN_UNVERIFIED == "recycle-bin-unverified"
     assert len(fake_bin.paths) == 1
@@ -1463,7 +1466,7 @@ def test_unverified_stops_the_run(root, monkeypatch, fake_bin):
 def test_a_name_already_waiting_gets_a_suffix(root, monkeypatch, fake_bin):
     _obj(1), _obj(2)
     report = _ready(root)
-    monkeypatch.setattr(image_gc, "bin_name", lambda description, sha, ext: "grimoire - Mara.png")
+    monkeypatch.setattr(image_gc_paths, "bin_name", lambda description, sha, ext: "grimoire - Mara.png")
     done = _collect(root, report["token"])
     assert done["state"] == "complete"
     assert _binned(fake_bin) == ["grimoire - Mara.png", "grimoire - Mara (2).png"]
@@ -1492,7 +1495,7 @@ def _arriving(monkeypatch, *, every: bool = False) -> list[tuple[Path, bytes]]:
             planted.append((target, data))
         return target
 
-    monkeypatch.setattr(image_gc, "_free_name", free_name)
+    monkeypatch.setattr(image_gc_paths, "_free_name", free_name)
     return planted
 
 
@@ -1517,7 +1520,7 @@ def _emulate_windows_rename(monkeypatch) -> list[tuple[str, str]]:
     def link(*a, **kw):
         raise AssertionError("the Windows move never hard-links")
 
-    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", True)
+    monkeypatch.setattr(image_gc_contracts, "_RENAME_REFUSES_EXISTING", True)
     monkeypatch.setattr(os, "rename", rename)
     monkeypatch.setattr(os, "link", link)
     return calls
@@ -1530,7 +1533,7 @@ def test_a_file_arriving_at_the_chosen_name_is_never_overwritten(root, monkeypat
     picture = _blob(orphan).read_bytes()
     report = _ready(root)
     name = f"grimoire - {orphan.blob_sha256[:8]}.png"
-    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
+    monkeypatch.setattr(image_gc_contracts, "_RENAME_REFUSES_EXISTING", False)
     calls = _emulate_windows_rename(monkeypatch) if platform == "windows" else None
     planted = _arriving(monkeypatch)
     done = _collect(root, report["token"])
@@ -1555,7 +1558,7 @@ def test_a_name_that_never_comes_free_stops_the_run_with_the_blob_in_place(
     orphan = _obj(1)
     picture = _blob(orphan).read_bytes()
     report = _ready(root)
-    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
+    monkeypatch.setattr(image_gc_contracts, "_RENAME_REFUSES_EXISTING", False)
     if platform == "windows":
         _emulate_windows_rename(monkeypatch)
     planted = _arriving(monkeypatch, every=True)
@@ -1573,7 +1576,7 @@ def test_a_name_that_never_comes_free_stops_the_run_with_the_blob_in_place(
                                    OSError(18, "Invalid cross-device link")])
 def test_no_hard_links_stops_the_run_and_never_replaces(root, monkeypatch, fake_bin, error):
     # Exercise the hard-link implementation even on a Windows test host.
-    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
+    monkeypatch.setattr(image_gc_contracts, "_RENAME_REFUSES_EXISTING", False)
     orphan = _obj(1)
     picture = _blob(orphan).read_bytes()
     report = _ready(root)
@@ -1602,7 +1605,7 @@ def test_a_blob_that_will_not_unlink_after_the_link_keeps_both_copies(root, monk
     """Between the link and the unlink the picture has two names: a failure (or
     a crash) there loses neither, and the run stops."""
     # Exercise the hard-link implementation even on a Windows test host.
-    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
+    monkeypatch.setattr(image_gc_contracts, "_RENAME_REFUSES_EXISTING", False)
     orphan = _obj(1)
     blob = _blob(orphan)
     picture = blob.read_bytes()
@@ -1625,7 +1628,7 @@ def test_a_blob_that_will_not_unlink_after_the_link_keeps_both_copies(root, monk
 
 def test_a_blob_gone_before_the_link_is_released(root, monkeypatch, fake_bin):
     # Exercise the hard-link implementation even on a Windows test host.
-    monkeypatch.setattr(image_gc, "_RENAME_REFUSES_EXISTING", False)
+    monkeypatch.setattr(image_gc_contracts, "_RENAME_REFUSES_EXISTING", False)
     orphan = _obj(1)
     report = _ready(root)
     real_link = os.link
