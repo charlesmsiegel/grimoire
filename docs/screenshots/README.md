@@ -7,7 +7,7 @@ two places is a safety procedure with one stale copy.
 
 ## Every one of these is fake, and has to be
 
-`CLAUDE.md` forbids a real world, campaign or character name anywhere in this
+`AGENTS.md` forbids a real world, campaign or character name anywhere in this
 repo — and a screenshot of a working install shows a real library by default.
 So these are captured against an **isolated store** seeded with invented
 content, using only placeholder names the codebase already uses (Saltmarch,
@@ -20,7 +20,7 @@ fixture and re-capture.
 ## How to re-capture
 
 The harness is the `verify` skill
-([`.claude/skills/verify/SKILL.md`](../../.claude/skills/verify/SKILL.md)), which
+([`.agents/skills/verify/SKILL.md`](../../.agents/skills/verify/SKILL.md)), which
 exists for exactly this: a grimoire instance with `GRIMOIRE_HOME` pointed at a
 scratch directory and `grimoire.openrouter.API_URL` pointed at a local mock
 replaying `backend/tests/fixtures/llm/campaign_flow.json`.

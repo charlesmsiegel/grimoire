@@ -53,7 +53,10 @@ main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
 
 /* ---------- tabs: code-visualization's contract, so one shell serves all four
    documents. code-overview forces this template on assemble.py and on
-   build_measurement.py, so the markup those two emit has to fit here. ------- */
+   build_measurement.py, so the markup those two emit has to fit here. An atlas
+   needs no renderer code from this shell — assemble.py inlines its own — only
+   this contract: panels are .panel, the shown one is .active, and showing one
+   dispatches `tab:shown`, which is when a hidden tab's graphs are drawn. ---- */
 nav.tabs{
   display:flex;gap:2px;flex-wrap:wrap;max-width:1280px;margin:18px auto 0;
   padding:0 28px;border-bottom:1px solid var(--border);
@@ -83,6 +86,8 @@ a{color:var(--accent)}
 code,.mono{font-family:var(--mono);font-size:.92em}
 p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.card.hero{border-color:var(--border-strong);background:linear-gradient(180deg,var(--accent-dim),var(--surface) 60%)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;margin:10px 0}
 .grid{display:grid;gap:14px;margin:12px 0}
 .grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
 .grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
@@ -156,13 +161,37 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 footer.doc a{color:var(--text-dim)}
 @media(max-width:720px){header.doc,main,nav.tabs,footer.doc{padding-left:16px;padding-right:16px} h1.doc-title{font-size:24px} .gradecard .letter{font-size:48px;min-width:72px}}
 </style>
+<style id="atlas-renderers-css">
+/* The atlas renderers' styles, paired with renderers.js. assemble.py inlines
+   both into whatever page shell --template names; every colour here comes
+   from that shell's design tokens. */
+table.sortable thead th{cursor:pointer;user-select:none}
+table.sortable thead th::after{content:"↕";opacity:.35;margin-left:6px;font-size:10px}
+table.sortable thead th.asc::after{content:"↑";opacity:1;color:var(--accent)}
+table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
+
+/* ---------- viz containers ---------- */
+.viz{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden}
+.viz svg{display:block;width:100%;height:100%}
+.viz .zoombar{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5}
+.viz .zoombar button{width:28px;height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--surface-2);color:var(--text);font-family:var(--mono);cursor:pointer;font-size:14px;line-height:1}
+.viz .zoombar button:hover{background:var(--accent-dim);color:var(--accent)}
+.viz .legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:11px;color:var(--text-dim);background:color-mix(in srgb,var(--surface) 80%,transparent);padding:4px 8px;border-radius:6px;max-width:70%}
+.legend .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.viz-tip{position:fixed;pointer-events:none;z-index:200;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:12px;color:var(--text);box-shadow:0 6px 24px rgba(0,0,0,.35);display:none;max-width:380px}
+.mermaid-wrap{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden;min-height:120px}
+.mermaid-wrap .mviewport{overflow:hidden;cursor:grab;padding:14px}
+.mermaid-wrap .mviewport.dragging{cursor:grabbing}
+.mermaid{font-family:var(--sans)}
+.mermaid[data-processed="true"]{display:flex;justify-content:center}
+</style>
 </head>
 <body>
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire-store — Codebase Atlas</h1>
-  <p class="doc-sub">The filesystem-as-database layer: 172 modules over Markdown and JSON</p>
-  <div class="doc-meta">generated 2026-08-18 · a63cb05f5 · 200 files, 33,200 LOC</div>
+  <p class="doc-sub">Source-backed architecture, static analysis and explicit evidence limits.</p>
+  <div class="doc-meta">generated 2026-10-20 · 9d4985eb3 · 389 files, 113429 LOC</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -187,103 +216,45 @@ footer.doc a{color:var(--text-dim)}
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
 <button role="tab" data-tab="dependencies" aria-selected="false" aria-controls="dependencies">Dependencies</button>
 <button role="tab" data-tab="hotspots" aria-selected="false" aria-controls="hotspots">Hotspots</button>
-<button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button></nav>
+<button role="tab" data-tab="flows" aria-selected="false" aria-controls="flows">Critical Flows</button>
+<button role="tab" data-tab="boundaries" aria-selected="false" aria-controls="boundaries">Boundaries &amp; Ownership</button>
+<button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button>
+<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-<div class="card hero">
-  <h2>The database, written by hand</h2>
-  <p><code>backend/src/grimoire/store</code> is a filesystem-as-database layer: 172 Python modules,
-  33,200 lines, implementing over a directory of Markdown and JSON everything a database would
-  otherwise provide &mdash; atomic writes, locking, inheritance, migrations, tombstones, backups and
-  search. It is the largest package in the repository, larger than the entire frontend.</p>
-  <p>Its shape is a wide facade over a mostly-flat set of record modules. Roughly 84 modules sit
-  directly at the top level (one per record kind or concern) with 14 subpackages for the concepts
-  that grew past one file &mdash; <code>context</code>, <code>absorb</code>, <code>scenes</code>,
-  <code>modules</code>, <code>campaigns</code>, <code>weather</code>, <code>sheets</code>. There is
-  no ORM, no repository abstraction, and no service layer between it and the routes.</p>
-</div>
-
-<div class="kpis">
-  <div class="kpi"><div class="n">172</div><div class="l">modules</div></div>
-  <div class="kpi"><div class="n">33.2k</div><div class="l">lines of Python</div></div>
-  <div class="kpi good"><div class="n">0</div><div class="l">import cycles</div></div>
-  <div class="kpi accent"><div class="n">398/401</div><div class="l">first-party imports resolved</div></div>
-</div>
-
-<h2>The four modules that define the package</h2>
-<div class="tbl-wrap"><table class="sortable">
-<tr><th>Module</th><th>Why it matters</th></tr>
-<tr><td><code>backend/src/grimoire/store/paths.py:47</code></td>
-    <td><code>home()</code> &mdash; the resolution rule for the whole store: <code>GRIMOIRE_HOME</code>, then a bootstrap pointer, then the default. Every path in the package descends from it.</td></tr>
-<tr><td><code>backend/src/grimoire/store/atomic.py</code></td>
-    <td>The only write path. Temp file, fsync, <code>os.replace</code>, with Windows sharing-violation retries. Its header is explicit about the guarantees it does <em>not</em> make.</td></tr>
-<tr><td><code>backend/src/grimoire/store/locks.py</code></td>
-    <td>The campaign lock domain, declared as three data structures rather than prose, with a 30s timeout at <code>backend/src/grimoire/store/locks.py:323</code>.</td></tr>
-<tr><td><code>backend/src/grimoire/store/overlay.py</code></td>
-    <td>Copy-on-write campaign-over-world resolution &mdash; 964 lines, 172 branches, and the package's top hotspot.</td></tr>
-</table></div>
-
-<h2>Reading order</h2>
-<ol>
-  <li><code>backend/src/grimoire/store/paths.py</code> &mdash; where the data lives.</li>
-  <li><code>backend/src/grimoire/store/atomic.py</code> &mdash; how a record is written.</li>
-  <li><code>backend/src/grimoire/store/overlay.py</code> &mdash; how a record is <em>found</em>. The
-      hardest idea in the package: campaign copies shadow world originals, with two distinct kinds of
-      absence (tombstoned and detached) and two different overlay rules (whole-directory for actors,
-      per-file for everything else).</li>
-  <li><code>backend/src/grimoire/store/locks.py</code> &mdash; what may run at the same time.</li>
-  <li><code>backend/src/grimoire/store/context</code> &mdash; the prompt-assembly subpackage. Start at
-      <code>backend/src/grimoire/store/context/assemble.py</code>, which holds the section catalog,
-      then <code>backend/src/grimoire/store/context/world_state.py</code> (the package's third
-      hotspot, 1,089 lines).</li>
-  <li><code>backend/src/grimoire/store/absorb</code> &mdash; turning a played scene into proposed state
-      edits. <code>backend/src/grimoire/store/absorb/materializer.py</code> and
-      <code>backend/src/grimoire/store/absorb/apply.py</code> are the two halves.</li>
-  <li><span class="dim">Skip unless you need them:</span> the per-kind record modules
-      (<code>birthdays</code>, <code>taglines</code>, <code>thumbs</code>, &hellip;). They are small,
-      similar, and mostly obvious once the four modules above are understood.</li>
-</ol>
-
-<h2>Internal structure</h2>
+<div class="card hero"><h2>Files hold facts; campaigns hold divergence</h2><p>The store is a domain layer over a user-owned library, with world records inherited until a campaign edits, deletes or detaches them. Identity, reviewed mutation and atomic publication matter more than CRUD convenience. SQLite accelerates derivations without owning inventory: <code>backend/src/grimoire/store/overlay.py:3</code>, <code>backend/src/grimoire/store/compiled.py:3</code>.</p></div>
+<h3>Execution doors</h3>
+<div class="tbl-wrap"><table><thead><tr><th>Door</th><th>Responsibility</th></tr></thead><tbody><tr><td><code>backend/src/grimoire/store/paths.py:38</code></td><td>Pin a library root for an operation; avoid redirecting work after pointer movement.</td></tr><tr><td><code>backend/src/grimoire/store/overlay.py:1008</code></td><td>Resolve a campaign entity against its own copy, tombstone and world fallback.</td></tr><tr><td><code>backend/src/grimoire/store/absorb/apply.py:1</code></td><td>Apply approved edits through record-owning writers and journal outcomes.</td></tr><tr><td><code>backend/src/grimoire/store/context/assemble.py:3</code></td><td>Gather one scene-context model for the prompt and inspector.</td></tr></tbody></table></div>
+<h3>Reading order</h3><ol>
+<li><code>backend/src/grimoire/store/paths.py:18</code>: establish root resolution and pinning before following any record path.</li>
+<li><code>backend/src/grimoire/store/overlay.py:1</code>: learn flat records, actors, tombstones and detachments; they are different identity rules.</li>
+<li><code>backend/src/grimoire/store/locks.py:1</code>: read the declared campaign lock domain and ordering before adding a writer.</li>
+<li><code>backend/src/grimoire/store/atomic.py:225</code>: distinguish a complete record publication from a multi-record transaction.</li>
+<li><code>backend/src/grimoire/store/commits.py:15</code>: learn how interrupted approved saves resume.</li>
+<li><code>backend/src/grimoire/store/context/pack.py:8</code>: understand what prompt evidence gives way under pressure.</li>
+<li><code>backend/tests/test_frozen_campaign.py:14</code>: use historical-input and semantic assertions to interpret compatibility intent.</li></ol>
 <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
 flowchart TD
-  F["__init__.py - the facade"] --> R["~84 flat record modules"]
-  F --> SUB["14 subpackages"]
-  R --> P["paths.py - home()"]
-  R --> A["atomic.py - the only writer"]
-  R --> O["overlay.py - campaign over world"]
-  SUB --> CTX["context/ - prompt assembly"]
-  SUB --> ABS["absorb/ - scene to state edits"]
-  SUB --> SC["scenes/ - transcripts, serialized"]
-  O --> P
-  A --> P
-  SC --> L["locks.py - campaign mutex"]
-  ABS --> L
+  C["HTTP and operator callers"] --> O["Overlay and domain operations"]
+  O --> I["Stable identities and ledgers"]
+  O --> L["Campaign lock domain"]
+  L --> A["Atomic record publication"]
+  A --> F["Portable library files"]
+  F --> X["Context gathering and packing"]
+  F --> M["Disposable compiled artifacts"]
+  X --> P["Prompt templates"]
 </pre></div></div>
-
-<div class="callout">
-  <strong>Why the top level is flat.</strong> The package resists a layered structure because its unit
-  of organization is the <em>record kind</em>, not the operation: each kind gets a module owning its
-  read, its write and its path. The four cross-cutting modules above are the exception, and they are
-  precisely the ones with guard tests attached. Whether that is the right theory for a package this
-  size is the question the Theory page takes up.
-</div>
-
-<div class="callout warn">
-  <strong>Scope of this atlas.</strong> The Dependencies tab was built over
-  <code>backend/src/grimoire/store</code> alone, so the three unresolved first-party imports are
-  references upward to <code>prompts</code> and <code>llm_errors</code>, which live outside this root.
-  The repository atlas resolves them. Judgment tabs here cover Boundaries and Invariants; Critical
-  Flows and the Glossary are written once, at repository scope.
-</div>
+<div class="callout warn"><strong>Read the model before refactoring the hotspots.</strong> Fresh inventory/churn summaries concentrate complexity in overlay, context assembly and compiled-cache foundations. These carry cross-feature rules, not merely large functions; the overlay distinguishes actor directories from flat records and the assembler intentionally renders once (<code>backend/src/grimoire/store/overlay.py:7</code>, <code>backend/src/grimoire/store/context/assemble.py:8</code>).</div>
+<p>The dependency analysis was rerun at depth 4 to expose context, inference, continuity, absorb, history and the other actual subpackages. The large store-root node still groups leaf modules. Documentation and templates appear as referenced asset nodes; a documentation filename in a facade docstring can become a textual load edge (<code>backend/src/grimoire/store/__init__.py:18</code>). These are not additional executable store subsystems.</p>
+<p class="dim">Sampled architecture, not an exhaustive correctness audit. This scoped unit excludes backend tests and gateway execution. The LLM detector's “no usage detected” is not absence of model work: store code builds prompt data and decisions consumed by the inference boundary (<code>backend/src/grimoire/store/context/__init__.py:8</code>). Eval infrastructure exists outside this scope; no live quality result was produced in this run.</p>
 
 </section>
 <section class="panel" id="inventory" role="tabpanel">
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">200</div><div class="l">source files</div></div>
-  <div class="kpi"><div class="n">33,870</div><div class="l">lines of code</div></div>
+  <div class="kpi accent"><div class="n">389</div><div class="l">source files</div></div>
+  <div class="kpi"><div class="n">113,429</div><div class="l">lines of code</div></div>
   <div class="kpi"><div class="n">1</div><div class="l">languages</div></div>
   <div class="kpi warn"><div class="n">0%</div><div class="l">test code share</div></div>
 </div>
@@ -291,80 +262,67 @@ flowchart TD
 <h2>Languages</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
-<tbody><tr><td>Python</td><td class='num'>33,200</td><td class='num'>172</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>98.0%</td></tr>
-<tr><td>JSON</td><td class='num'>609</td><td class='num'>16</td><td><div class="bar "><i style="width:1.8%"></i></div></td><td class='num'>1.8%</td></tr>
-<tr><td>Markdown</td><td class='num'>61</td><td class='num'>12</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.2%</td></tr></tbody></table></div>
+<tbody><tr><td>Python</td><td class='num'>112,759</td><td class='num'>361</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>99.4%</td></tr>
+<tr><td>JSON</td><td class='num'>609</td><td class='num'>16</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.5%</td></tr>
+<tr><td>Markdown</td><td class='num'>61</td><td class='num'>12</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.1%</td></tr></tbody></table></div>
 
 
 <h2>Top-level directories</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
-<tbody><tr><td><code>(root)/</code></td><td class='num'>18,963</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>context/</code></td><td class='num'>3,268</td><td><div class="bar "><i style="width:17.2%"></i></div></td></tr>
-<tr><td><code>absorb/</code></td><td class='num'>2,827</td><td><div class="bar "><i style="width:14.9%"></i></div></td></tr>
-<tr><td><code>scenes/</code></td><td class='num'>1,513</td><td><div class="bar "><i style="width:8.0%"></i></div></td></tr>
-<tr><td><code>module_edit/</code></td><td class='num'>1,235</td><td><div class="bar "><i style="width:6.5%"></i></div></td></tr>
-<tr><td><code>modules/</code></td><td class='num'>1,156</td><td><div class="bar "><i style="width:6.1%"></i></div></td></tr>
-<tr><td><code>weather/</code></td><td class='num'>976</td><td><div class="bar "><i style="width:5.1%"></i></div></td></tr>
-<tr><td><code>sheets/</code></td><td class='num'>777</td><td><div class="bar "><i style="width:4.1%"></i></div></td></tr>
-<tr><td><code>campaigns/</code></td><td class='num'>746</td><td><div class="bar "><i style="width:3.9%"></i></div></td></tr>
-<tr><td><code>climates/</code></td><td class='num'>586</td><td><div class="bar "><i style="width:3.1%"></i></div></td></tr>
-<tr><td><code>calendars/</code></td><td class='num'>507</td><td><div class="bar "><i style="width:2.7%"></i></div></td></tr>
-<tr><td><code>appearances/</code></td><td class='num'>389</td><td><div class="bar "><i style="width:2.1%"></i></div></td></tr>
-<tr><td><code>audit/</code></td><td class='num'>387</td><td><div class="bar "><i style="width:2.0%"></i></div></td></tr>
-<tr><td><code>builtin_modules/</code></td><td class='num'>346</td><td><div class="bar "><i style="width:1.8%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>backend/</code></td><td class='num'>113,429</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr></tbody></table></div>
 
 <div class="grid cols-2">
 <div>
 <h2>Largest files</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">LOC</th><th>Size</th><th class="num">Branches</th></tr></thead>
-<tbody><tr><td><code>context/world_state.py</code></td><td class='num'>1,089</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>186</td></tr>
-<tr><td><code>overlay.py</code></td><td class='num'>964</td><td><div class="bar "><i style="width:88.5%"></i></div></td><td class='num'>172</td></tr>
-<tr><td><code>absorb/apply.py</code></td><td class='num'>748</td><td><div class="bar "><i style="width:68.7%"></i></div></td><td class='num'>97</td></tr>
-<tr><td><code>absorb/materializer.py</code></td><td class='num'>716</td><td><div class="bar "><i style="width:65.7%"></i></div></td><td class='num'>137</td></tr>
-<tr><td><code>characters.py</code></td><td class='num'>679</td><td><div class="bar "><i style="width:62.4%"></i></div></td><td class='num'>148</td></tr>
-<tr><td><code>context/assemble.py</code></td><td class='num'>675</td><td><div class="bar "><i style="width:62.0%"></i></div></td><td class='num'>94</td></tr>
-<tr><td><code>search.py</code></td><td class='num'>613</td><td><div class="bar "><i style="width:56.3%"></i></div></td><td class='num'>146</td></tr>
-<tr><td><code>weather/overrides.py</code></td><td class='num'>605</td><td><div class="bar "><i style="width:55.6%"></i></div></td><td class='num'>144</td></tr>
-<tr><td><code>locks.py</code></td><td class='num'>572</td><td><div class="bar "><i style="width:52.5%"></i></div></td><td class='num'>52</td></tr>
-<tr><td><code>alternates.py</code></td><td class='num'>548</td><td><div class="bar "><i style="width:50.3%"></i></div></td><td class='num'>83</td></tr>
-<tr><td><code>scenes/write.py</code></td><td class='num'>545</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>89</td></tr>
-<tr><td><code>turnstate.py</code></td><td class='num'>530</td><td><div class="bar "><i style="width:48.7%"></i></div></td><td class='num'>102</td></tr>
-<tr><td><code>usage.py</code></td><td class='num'>462</td><td><div class="bar "><i style="width:42.4%"></i></div></td><td class='num'>47</td></tr>
-<tr><td><code>undo.py</code></td><td class='num'>438</td><td><div class="bar "><i style="width:40.2%"></i></div></td><td class='num'>92</td></tr>
-<tr><td><code>assets.py</code></td><td class='num'>427</td><td><div class="bar "><i style="width:39.2%"></i></div></td><td class='num'>82</td></tr>
-<tr><td><code>export.py</code></td><td class='num'>421</td><td><div class="bar "><i style="width:38.7%"></i></div></td><td class='num'>97</td></tr>
-<tr><td><code>absorb/conflicts.py</code></td><td class='num'>421</td><td><div class="bar "><i style="width:38.7%"></i></div></td><td class='num'>89</td></tr>
-<tr><td><code>clock.py</code></td><td class='num'>412</td><td><div class="bar "><i style="width:37.8%"></i></div></td><td class='num'>64</td></tr>
-<tr><td><code>absorb/routing.py</code></td><td class='num'>410</td><td><div class="bar "><i style="width:37.6%"></i></div></td><td class='num'>56</td></tr>
-<tr><td><code>prompt_log.py</code></td><td class='num'>408</td><td><div class="bar "><i style="width:37.5%"></i></div></td><td class='num'>70</td></tr></tbody></table></div>
+<tbody><tr><td><code>backend/src/grimoire/store/overlay.py</code></td><td class='num'>2,866</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>562</td></tr>
+<tr><td><code>backend/src/grimoire/store/compiled.py</code></td><td class='num'>2,852</td><td><div class="bar "><i style="width:99.5%"></i></div></td><td class='num'>588</td></tr>
+<tr><td><code>backend/src/grimoire/store/context/assemble.py</code></td><td class='num'>2,172</td><td><div class="bar "><i style="width:75.8%"></i></div></td><td class='num'>378</td></tr>
+<tr><td><code>backend/src/grimoire/store/usage.py</code></td><td class='num'>1,704</td><td><div class="bar "><i style="width:59.5%"></i></div></td><td class='num'>249</td></tr>
+<tr><td><code>backend/src/grimoire/store/cache_sync.py</code></td><td class='num'>1,675</td><td><div class="bar "><i style="width:58.4%"></i></div></td><td class='num'>373</td></tr>
+<tr><td><code>backend/src/grimoire/store/characters.py</code></td><td class='num'>1,566</td><td><div class="bar "><i style="width:54.6%"></i></div></td><td class='num'>291</td></tr>
+<tr><td><code>backend/src/grimoire/store/suggest.py</code></td><td class='num'>1,532</td><td><div class="bar "><i style="width:53.5%"></i></div></td><td class='num'>419</td></tr>
+<tr><td><code>backend/src/grimoire/store/image_migration.py</code></td><td class='num'>1,526</td><td><div class="bar "><i style="width:53.2%"></i></div></td><td class='num'>349</td></tr>
+<tr><td><code>backend/src/grimoire/store/assets.py</code></td><td class='num'>1,525</td><td><div class="bar "><i style="width:53.2%"></i></div></td><td class='num'>308</td></tr>
+<tr><td><code>backend/src/grimoire/store/continuity/reconcile.py</code></td><td class='num'>1,486</td><td><div class="bar "><i style="width:51.8%"></i></div></td><td class='num'>327</td></tr>
+<tr><td><code>backend/src/grimoire/store/image_gc.py</code></td><td class='num'>1,416</td><td><div class="bar "><i style="width:49.4%"></i></div></td><td class='num'>314</td></tr>
+<tr><td><code>backend/src/grimoire/store/sync.py</code></td><td class='num'>1,350</td><td><div class="bar "><i style="width:47.1%"></i></div></td><td class='num'>257</td></tr>
+<tr><td><code>backend/src/grimoire/store/inference/resolve.py</code></td><td class='num'>1,309</td><td><div class="bar "><i style="width:45.7%"></i></div></td><td class='num'>209</td></tr>
+<tr><td><code>backend/src/grimoire/store/locks.py</code></td><td class='num'>1,137</td><td><div class="bar "><i style="width:39.7%"></i></div></td><td class='num'>101</td></tr>
+<tr><td><code>backend/src/grimoire/store/world_bundle.py</code></td><td class='num'>958</td><td><div class="bar "><i style="width:33.4%"></i></div></td><td class='num'>186</td></tr>
+<tr><td><code>backend/src/grimoire/store/logs.py</code></td><td class='num'>935</td><td><div class="bar "><i style="width:32.6%"></i></div></td><td class='num'>128</td></tr>
+<tr><td><code>backend/src/grimoire/store/inference/migrate.py</code></td><td class='num'>925</td><td><div class="bar "><i style="width:32.3%"></i></div></td><td class='num'>167</td></tr>
+<tr><td><code>backend/src/grimoire/store/absorb/materializer.py</code></td><td class='num'>913</td><td><div class="bar "><i style="width:31.9%"></i></div></td><td class='num'>154</td></tr>
+<tr><td><code>backend/src/grimoire/store/context/epistemic.py</code></td><td class='num'>902</td><td><div class="bar "><i style="width:31.5%"></i></div></td><td class='num'>255</td></tr>
+<tr><td><code>backend/src/grimoire/store/inference/legacy_plan.py</code></td><td class='num'>885</td><td><div class="bar "><i style="width:30.9%"></i></div></td><td class='num'>159</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Most branch-heavy files</h2>
 <p class="dim">Branch count ≈ decision points (if/for/while/case/catch/&amp;&amp;/||). A rough cyclomatic-complexity proxy.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Branches</th><th>Heat</th><th class="num">LOC</th><th class="num">Max depth</th></tr></thead>
-<tbody><tr><td><code>context/world_state.py</code></td><td class='num'>186</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>1,089</td><td class='num'>12</td></tr>
-<tr><td><code>overlay.py</code></td><td class='num'>172</td><td><div class="bar warn"><i style="width:92.5%"></i></div></td><td class='num'>964</td><td class='num'>9</td></tr>
-<tr><td><code>characters.py</code></td><td class='num'>148</td><td><div class="bar warn"><i style="width:79.6%"></i></div></td><td class='num'>679</td><td class='num'>7</td></tr>
-<tr><td><code>search.py</code></td><td class='num'>146</td><td><div class="bar warn"><i style="width:78.5%"></i></div></td><td class='num'>613</td><td class='num'>11</td></tr>
-<tr><td><code>weather/overrides.py</code></td><td class='num'>144</td><td><div class="bar warn"><i style="width:77.4%"></i></div></td><td class='num'>605</td><td class='num'>9</td></tr>
-<tr><td><code>absorb/materializer.py</code></td><td class='num'>137</td><td><div class="bar warn"><i style="width:73.7%"></i></div></td><td class='num'>716</td><td class='num'>10</td></tr>
-<tr><td><code>modules/validate.py</code></td><td class='num'>130</td><td><div class="bar warn"><i style="width:69.9%"></i></div></td><td class='num'>365</td><td class='num'>6</td></tr>
-<tr><td><code>module_edit/renaming.py</code></td><td class='num'>119</td><td><div class="bar warn"><i style="width:64.0%"></i></div></td><td class='num'>293</td><td class='num'>9</td></tr>
-<tr><td><code>modules/display.py</code></td><td class='num'>110</td><td><div class="bar warn"><i style="width:59.1%"></i></div></td><td class='num'>335</td><td class='num'>10</td></tr>
-<tr><td><code>turnstate.py</code></td><td class='num'>102</td><td><div class="bar warn"><i style="width:54.8%"></i></div></td><td class='num'>530</td><td class='num'>9</td></tr>
-<tr><td><code>export.py</code></td><td class='num'>97</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>421</td><td class='num'>7</td></tr>
-<tr><td><code>absorb/apply.py</code></td><td class='num'>97</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>748</td><td class='num'>11</td></tr>
-<tr><td><code>context/assemble.py</code></td><td class='num'>94</td><td><div class="bar warn"><i style="width:50.5%"></i></div></td><td class='num'>675</td><td class='num'>12</td></tr>
-<tr><td><code>undo.py</code></td><td class='num'>92</td><td><div class="bar warn"><i style="width:49.5%"></i></div></td><td class='num'>438</td><td class='num'>9</td></tr>
-<tr><td><code>absorb/conflicts.py</code></td><td class='num'>89</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>421</td><td class='num'>12</td></tr>
-<tr><td><code>scenes/write.py</code></td><td class='num'>89</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>545</td><td class='num'>6</td></tr>
-<tr><td><code>module_edit/migrate.py</code></td><td class='num'>87</td><td><div class="bar warn"><i style="width:46.8%"></i></div></td><td class='num'>354</td><td class='num'>8</td></tr>
-<tr><td><code>alternates.py</code></td><td class='num'>83</td><td><div class="bar warn"><i style="width:44.6%"></i></div></td><td class='num'>548</td><td class='num'>8</td></tr>
-<tr><td><code>assets.py</code></td><td class='num'>82</td><td><div class="bar warn"><i style="width:44.1%"></i></div></td><td class='num'>427</td><td class='num'>8</td></tr>
-<tr><td><code>suggest.py</code></td><td class='num'>81</td><td><div class="bar warn"><i style="width:43.5%"></i></div></td><td class='num'>320</td><td class='num'>6</td></tr></tbody></table></div>
+<tbody><tr><td><code>backend/src/grimoire/store/compiled.py</code></td><td class='num'>588</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>2,852</td><td class='num'>12</td></tr>
+<tr><td><code>backend/src/grimoire/store/overlay.py</code></td><td class='num'>562</td><td><div class="bar warn"><i style="width:95.6%"></i></div></td><td class='num'>2,866</td><td class='num'>11</td></tr>
+<tr><td><code>backend/src/grimoire/store/suggest.py</code></td><td class='num'>419</td><td><div class="bar warn"><i style="width:71.3%"></i></div></td><td class='num'>1,532</td><td class='num'>9</td></tr>
+<tr><td><code>backend/src/grimoire/store/context/assemble.py</code></td><td class='num'>378</td><td><div class="bar warn"><i style="width:64.3%"></i></div></td><td class='num'>2,172</td><td class='num'>12</td></tr>
+<tr><td><code>backend/src/grimoire/store/cache_sync.py</code></td><td class='num'>373</td><td><div class="bar warn"><i style="width:63.4%"></i></div></td><td class='num'>1,675</td><td class='num'>12</td></tr>
+<tr><td><code>backend/src/grimoire/store/image_migration.py</code></td><td class='num'>349</td><td><div class="bar warn"><i style="width:59.4%"></i></div></td><td class='num'>1,526</td><td class='num'>11</td></tr>
+<tr><td><code>backend/src/grimoire/store/continuity/reconcile.py</code></td><td class='num'>327</td><td><div class="bar warn"><i style="width:55.6%"></i></div></td><td class='num'>1,486</td><td class='num'>12</td></tr>
+<tr><td><code>backend/src/grimoire/store/image_gc.py</code></td><td class='num'>314</td><td><div class="bar warn"><i style="width:53.4%"></i></div></td><td class='num'>1,416</td><td class='num'>11</td></tr>
+<tr><td><code>backend/src/grimoire/store/assets.py</code></td><td class='num'>308</td><td><div class="bar warn"><i style="width:52.4%"></i></div></td><td class='num'>1,525</td><td class='num'>12</td></tr>
+<tr><td><code>backend/src/grimoire/store/characters.py</code></td><td class='num'>291</td><td><div class="bar warn"><i style="width:49.5%"></i></div></td><td class='num'>1,566</td><td class='num'>9</td></tr>
+<tr><td><code>backend/src/grimoire/store/sync.py</code></td><td class='num'>257</td><td><div class="bar warn"><i style="width:43.7%"></i></div></td><td class='num'>1,350</td><td class='num'>9</td></tr>
+<tr><td><code>backend/src/grimoire/store/context/epistemic.py</code></td><td class='num'>255</td><td><div class="bar warn"><i style="width:43.4%"></i></div></td><td class='num'>902</td><td class='num'>11</td></tr>
+<tr><td><code>backend/src/grimoire/store/usage.py</code></td><td class='num'>249</td><td><div class="bar warn"><i style="width:42.3%"></i></div></td><td class='num'>1,704</td><td class='num'>11</td></tr>
+<tr><td><code>backend/src/grimoire/store/inference/resolve.py</code></td><td class='num'>209</td><td><div class="bar warn"><i style="width:35.5%"></i></div></td><td class='num'>1,309</td><td class='num'>12</td></tr>
+<tr><td><code>backend/src/grimoire/store/world_bundle.py</code></td><td class='num'>186</td><td><div class="bar warn"><i style="width:31.6%"></i></div></td><td class='num'>958</td><td class='num'>8</td></tr>
+<tr><td><code>backend/src/grimoire/store/searchdocs/slices.py</code></td><td class='num'>179</td><td><div class="bar warn"><i style="width:30.4%"></i></div></td><td class='num'>806</td><td class='num'>12</td></tr>
+<tr><td><code>backend/src/grimoire/store/responses.py</code></td><td class='num'>175</td><td><div class="bar warn"><i style="width:29.8%"></i></div></td><td class='num'>794</td><td class='num'>9</td></tr>
+<tr><td><code>backend/src/grimoire/store/undo.py</code></td><td class='num'>171</td><td><div class="bar warn"><i style="width:29.1%"></i></div></td><td class='num'>746</td><td class='num'>9</td></tr>
+<tr><td><code>backend/src/grimoire/store/inference/migrate.py</code></td><td class='num'>167</td><td><div class="bar warn"><i style="width:28.4%"></i></div></td><td class='num'>925</td><td class='num'>11</td></tr>
+<tr><td><code>backend/src/grimoire/store/inference/settings.py</code></td><td class='num'>165</td><td><div class="bar warn"><i style="width:28.1%"></i></div></td><td class='num'>788</td><td class='num'>12</td></tr></tbody></table></div>
 </div>
 </div>
 
@@ -374,18 +332,18 @@ flowchart TD
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">14</div><div class="l">modules</div></div>
-  <div class="kpi"><div class="n">689</div><div class="l">file-level imports</div></div>
-  <div class="kpi"><div class="n">0</div><div class="l">runtime loads</div></div>
+  <div class="kpi accent"><div class="n">64</div><div class="l">modules</div></div>
+  <div class="kpi"><div class="n">3,153</div><div class="l">file-level imports</div></div>
+  <div class="kpi"><div class="n">339</div><div class="l">runtime loads</div></div>
   <div class="kpi bad"><div class="n">1</div><div class="l">cycles</div></div>
-  <div class="kpi"><div class="n">14</div><div class="l">top-level arms</div></div>
+  <div class="kpi"><div class="n">7</div><div class="l">top-level arms</div></div>
 </div>
-
-<div class="callout bad"><b>1 module-level dependency cycle detected</b> — modules that import each other directly or transitively. Cycles make modules impossible to understand or test in isolation.<ul style="margin-top:8px"><li><span class='badge bad'>cycle 1</span> <code></code> ⇄ <code>absorb</code> ⇄ <code>appearances</code> ⇄ <code>audit</code> ⇄ <code>campaigns</code> ⇄ <code>context</code> ⇄ <code>modules</code> ⇄ <code>scenes</code> ⇄ <code>sheets</code> ⇄ <code>worlds</code></li></ul></div><details><summary>File-level import cycles: 5 strongly-connected groups</summary><div class="body"><p class="dim">Files that (transitively) import each other. In Python these often include type-annotation or lazy in-function imports — less harmful than top-level cycles, but each one still couples the files' lifecycles. Worth explaining case-by-case in the Boundaries tab.</p><ul><li><span class='badge warn'>group 1</span> <code>appearances/__init__.py</code> ⇄ <code>appearances/cast.py</code> ⇄ <code>appearances/paths.py</code> ⇄ <code>appearances/transitions.py</code> ⇄ <code>appearances/versions.py</code> ⇄ <code>audit/__init__.py</code> ⇄ <code>audit/apply.py</code> ⇄ <code>audit/baselines.py</code> <span class='dim'>… 28 more</span></li><li><span class='badge warn'>group 2</span> <code>context/__init__.py</code> ⇄ <code>context/archive.py</code> ⇄ <code>context/assemble.py</code> ⇄ <code>context/macros.py</code> ⇄ <code>context/world_state.py</code></li><li><span class='badge warn'>group 3</span> <code>absorb/__init__.py</code> ⇄ <code>absorb/apply.py</code> ⇄ <code>absorb/materializer.py</code> ⇄ <code>absorb/weather.py</code></li><li><span class='badge warn'>group 4</span> <code>module_edit/__init__.py</code> ⇄ <code>module_edit/packs.py</code></li><li><span class='badge warn'>group 5</span> <code>weather/__init__.py</code> ⇄ <code>weather/overrides.py</code></li></ul></div></details>
+<p class="dim">Scoped to <code>backend/src/grimoire/store/</code>: 163 import(s) and load(s) reach 20 file(s) outside those roots. They resolved, and are not drawn.</p>
+<div class="callout bad"><b>1 module-level dependency cycle detected</b> — modules that import each other directly or transitively. Cycles make modules impossible to understand or test in isolation.<ul style="margin-top:8px"><li><span class='badge bad'>cycle 1</span> <code>backend/src/grimoire/store</code> ⇄ <code>backend/src/grimoire/store/absorb</code> ⇄ <code>backend/src/grimoire/store/appearances</code> ⇄ <code>backend/src/grimoire/store/audit</code> ⇄ <code>backend/src/grimoire/store/calendars</code> ⇄ <code>backend/src/grimoire/store/campaigns</code> ⇄ <code>backend/src/grimoire/store/climates</code> ⇄ <code>backend/src/grimoire/store/context</code> ⇄ <code>backend/src/grimoire/store/continuity</code> ⇄ <code>backend/src/grimoire/store/history</code> ⇄ <code>backend/src/grimoire/store/inference</code> ⇄ <code>backend/src/grimoire/store/module_edit</code> ⇄ <code>backend/src/grimoire/store/modules</code> ⇄ <code>backend/src/grimoire/store/overview</code> ⇄ <code>backend/src/grimoire/store/record_art</code> ⇄ <code>backend/src/grimoire/store/regex</code> ⇄ <code>backend/src/grimoire/store/scenes</code> ⇄ <code>backend/src/grimoire/store/searchdocs</code> ⇄ <code>backend/src/grimoire/store/sheets</code> ⇄ <code>backend/src/grimoire/store/tracker</code> ⇄ <code>backend/src/grimoire/store/weather</code> ⇄ <code>backend/src/grimoire/store/worlds</code></li></ul></div><details><summary>File-level import cycles: 4 strongly-connected groups</summary><div class="body"><p class="dim">Files that (transitively) import each other. In Python these often include type-annotation or lazy in-function imports — less harmful than top-level cycles, but each one still couples the files' lifecycles. Worth explaining case-by-case in the Boundaries tab.</p><ul><li><span class='badge warn'>group 1</span> <code>backend/src/grimoire/store/__init__.py</code> ⇄ <code>backend/src/grimoire/store/absorb/__init__.py</code> ⇄ <code>backend/src/grimoire/store/absorb/apply.py</code> ⇄ <code>backend/src/grimoire/store/absorb/conflicts.py</code> ⇄ <code>backend/src/grimoire/store/absorb/materializer.py</code> ⇄ <code>backend/src/grimoire/store/absorb/membership.py</code> ⇄ <code>backend/src/grimoire/store/absorb/parse.py</code> ⇄ <code>backend/src/grimoire/store/absorb/prompt.py</code> <span class='dim'>… 290 more</span></li><li><span class='badge warn'>group 2</span> <code>backend/src/grimoire/store/docs/codemap.html</code> ⇄ <code>backend/src/grimoire/store/docs/health.html</code> ⇄ <code>backend/src/grimoire/store/docs/measurement.html</code> ⇄ <code>backend/src/grimoire/store/docs/summary.html</code> ⇄ <code>backend/src/grimoire/store/docs/theory.html</code></li><li><span class='badge warn'>group 3</span> <code>backend/src/grimoire/store/investigation/__init__.py</code> ⇄ <code>backend/src/grimoire/store/investigation/final.py</code> ⇄ <code>backend/src/grimoire/store/investigation/tools.py</code> ⇄ <code>backend/src/grimoire/store/investigation/trace.py</code></li><li><span class='badge warn'>group 4</span> <code>backend/src/grimoire/store/overview/__init__.py</code> ⇄ <code>backend/src/grimoire/store/overview/read.py</code> ⇄ <code>backend/src/grimoire/store/overview/warm.py</code></li></ul></div></details>
 <h2>Module dependency graph</h2>
 <p class="dim">Node area = lines of code · solid arrows = imports, dashed = runtime loads (a rendered template, a prompt read off disk) · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
 <div class="viz" data-render="forcegraph" style="height:620px"></div>
-<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"cycle","size":18963,"fanIn":12,"fanOut":9,"meta":"(repo root) \u00b7 84 files \u00b7 in dependency cycle #1"},{"id":"absorb","label":"absorb","group":"cycle","size":2827,"fanIn":1,"fanOut":6,"meta":"absorb \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"appearances","label":"appearances","group":"cycle","size":389,"fanIn":6,"fanOut":3,"meta":"appearances \u00b7 5 files \u00b7 in dependency cycle #1"},{"id":"audit","label":"audit","group":"cycle","size":387,"fanIn":3,"fanOut":5,"meta":"audit \u00b7 4 files \u00b7 in dependency cycle #1"},{"id":"calendars","label":"calendars","group":"calendars","size":507,"fanIn":1,"fanOut":1,"meta":"calendars \u00b7 6 files"},{"id":"campaigns","label":"campaigns","group":"cycle","size":746,"fanIn":11,"fanOut":4,"meta":"campaigns \u00b7 4 files \u00b7 in dependency cycle #1"},{"id":"climates","label":"climates","group":"climates","size":262,"fanIn":0,"fanOut":1,"meta":"climates \u00b7 2 files"},{"id":"context","label":"context","group":"cycle","size":3268,"fanIn":1,"fanOut":6,"meta":"context \u00b7 12 files \u00b7 in dependency cycle #1"},{"id":"module_edit","label":"module_edit","group":"module_edit","size":1235,"fanIn":0,"fanOut":5,"meta":"module_edit \u00b7 9 files"},{"id":"modules","label":"modules","group":"cycle","size":1156,"fanIn":5,"fanOut":3,"meta":"modules \u00b7 8 files \u00b7 in dependency cycle #1"},{"id":"scenes","label":"scenes","group":"cycle","size":1513,"fanIn":7,"fanOut":4,"meta":"scenes \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"sheets","label":"sheets","group":"cycle","size":777,"fanIn":5,"fanOut":4,"meta":"sheets \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"weather","label":"weather","group":"weather","size":976,"fanIn":0,"fanOut":4,"meta":"weather \u00b7 7 files"},{"id":"worlds","label":"worlds","group":"cycle","size":194,"fanIn":5,"fanOut":2,"meta":"worlds \u00b7 4 files \u00b7 in dependency cycle #1"}],"links":[{"source":"","target":"absorb","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"","target":"appearances","weight":41,"imports":41,"loads":0,"kind":"import","cycle":true},{"source":"","target":"audit","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"","target":"campaigns","weight":61,"imports":61,"loads":0,"kind":"import","cycle":true},{"source":"","target":"context","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"","target":"modules","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"","target":"scenes","weight":40,"imports":40,"loads":0,"kind":"import","cycle":true},{"source":"","target":"sheets","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"","target":"worlds","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"appearances","weight":16,"imports":16,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"audit","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"campaigns","weight":10,"imports":10,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"scenes","weight":11,"imports":11,"loads":0,"kind":"import","cycle":true},{"source":"absorb","target":"sheets","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"appearances","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"appearances","target":"campaigns","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"appearances","target":"scenes","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"appearances","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"campaigns","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"modules","weight":12,"imports":12,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"scenes","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"audit","target":"sheets","weight":11,"imports":11,"loads":0,"kind":"import","cycle":true},{"source":"calendars","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"campaigns","target":"","weight":6,"imports":6,"loads":0,"kind":"import","cycle":true},{"source":"campaigns","target":"appearances","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"campaigns","target":"scenes","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"campaigns","target":"worlds","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"climates","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"context","target":"","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"appearances","weight":15,"imports":15,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"campaigns","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"modules","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"scenes","weight":13,"imports":13,"loads":0,"kind":"import","cycle":true},{"source":"context","target":"sheets","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"module_edit","target":"","weight":6,"imports":6,"loads":0,"kind":"import","cycle":false},{"source":"module_edit","target":"campaigns","weight":5,"imports":5,"loads":0,"kind":"import","cycle":false},{"source":"module_edit","target":"modules","weight":15,"imports":15,"loads":0,"kind":"import","cycle":false},{"source":"module_edit","target":"sheets","weight":2,"imports":2,"loads":0,"kind":"import","cycle":false},{"source":"module_edit","target":"worlds","weight":3,"imports":3,"loads":0,"kind":"import","cycle":false},{"source":"modules","target":"","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"modules","target":"campaigns","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"modules","target":"worlds","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"scenes","target":"","weight":11,"imports":11,"loads":0,"kind":"import","cycle":true},{"source":"scenes","target":"appearances","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"scenes","target":"audit","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"scenes","target":"campaigns","weight":6,"imports":6,"loads":0,"kind":"import","cycle":true},{"source":"sheets","target":"","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"sheets","target":"campaigns","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"sheets","target":"modules","weight":22,"imports":22,"loads":0,"kind":"import","cycle":true},{"source":"sheets","target":"worlds","weight":8,"imports":8,"loads":0,"kind":"import","cycle":true},{"source":"weather","target":"","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"weather","target":"calendars","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"weather","target":"campaigns","weight":4,"imports":4,"loads":0,"kind":"import","cycle":false},{"source":"weather","target":"scenes","weight":2,"imports":2,"loads":0,"kind":"import","cycle":false},{"source":"worlds","target":"","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"worlds","target":"campaigns","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
+<script type="application/json">{"nodes":[{"id":"android/docs","label":"docs","group":"android","size":1236,"fanIn":1,"fanOut":0,"meta":"android/docs \u00b7 5 files"},{"id":"backend/src/grimoire/assets/fonts","label":"fonts","group":"backend","size":150,"fanIn":1,"fanOut":0,"meta":"backend/src/grimoire/assets/fonts \u00b7 6 files"},{"id":"backend/src/grimoire/docs","label":"docs","group":"backend","size":1265,"fanIn":1,"fanOut":0,"meta":"backend/src/grimoire/docs \u00b7 5 files"},{"id":"backend/src/grimoire/routes/docs","label":"docs","group":"backend","size":1351,"fanIn":1,"fanOut":0,"meta":"backend/src/grimoire/routes/docs \u00b7 5 files"},{"id":"backend/src/grimoire/store","label":"store","group":"cycle","size":62460,"fanIn":23,"fanOut":42,"meta":"backend/src/grimoire/store \u00b7 165 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/absorb","label":"absorb","group":"cycle","size":4757,"fanIn":3,"fanOut":11,"meta":"backend/src/grimoire/store/absorb \u00b7 14 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/appearances","label":"appearances","group":"cycle","size":1000,"fanIn":12,"fanOut":3,"meta":"backend/src/grimoire/store/appearances \u00b7 6 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/audit","label":"audit","group":"cycle","size":428,"fanIn":3,"fanOut":7,"meta":"backend/src/grimoire/store/audit \u00b7 4 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/calendars","label":"calendars","group":"cycle","size":749,"fanIn":9,"fanOut":1,"meta":"backend/src/grimoire/store/calendars \u00b7 6 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/campaigns","label":"campaigns","group":"cycle","size":1282,"fanIn":21,"fanOut":8,"meta":"backend/src/grimoire/store/campaigns \u00b7 4 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/climates","label":"climates","group":"cycle","size":262,"fanIn":3,"fanOut":1,"meta":"backend/src/grimoire/store/climates \u00b7 2 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/context","label":"context","group":"cycle","size":9074,"fanIn":2,"fanOut":18,"meta":"backend/src/grimoire/store/context \u00b7 22 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/continuity","label":"continuity","group":"cycle","size":6458,"fanIn":7,"fanOut":11,"meta":"backend/src/grimoire/store/continuity \u00b7 16 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/docs","label":"docs","group":"backend","size":1430,"fanIn":0,"fanOut":18,"meta":"backend/src/grimoire/store/docs \u00b7 5 files"},{"id":"backend/src/grimoire/store/history","label":"history","group":"cycle","size":2594,"fanIn":3,"fanOut":12,"meta":"backend/src/grimoire/store/history \u00b7 16 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/inference","label":"inference","group":"cycle","size":7208,"fanIn":6,"fanOut":2,"meta":"backend/src/grimoire/store/inference \u00b7 16 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/investigation","label":"investigation","group":"backend","size":1286,"fanIn":0,"fanOut":10,"meta":"backend/src/grimoire/store/investigation \u00b7 7 files"},{"id":"backend/src/grimoire/store/module_edit","label":"module_edit","group":"cycle","size":1445,"fanIn":2,"fanOut":5,"meta":"backend/src/grimoire/store/module_edit \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/modules","label":"modules","group":"cycle","size":1214,"fanIn":7,"fanOut":3,"meta":"backend/src/grimoire/store/modules \u00b7 8 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/overview","label":"overview","group":"cycle","size":698,"fanIn":1,"fanOut":6,"meta":"backend/src/grimoire/store/overview \u00b7 5 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/record_art","label":"record_art","group":"cycle","size":579,"fanIn":1,"fanOut":3,"meta":"backend/src/grimoire/store/record_art \u00b7 4 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/regex","label":"regex","group":"cycle","size":1816,"fanIn":5,"fanOut":4,"meta":"backend/src/grimoire/store/regex \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/scenes","label":"scenes","group":"cycle","size":2546,"fanIn":15,"fanOut":6,"meta":"backend/src/grimoire/store/scenes \u00b7 11 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/searchdocs","label":"searchdocs","group":"cycle","size":2362,"fanIn":4,"fanOut":7,"meta":"backend/src/grimoire/store/searchdocs \u00b7 8 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/sheets","label":"sheets","group":"cycle","size":1165,"fanIn":7,"fanOut":4,"meta":"backend/src/grimoire/store/sheets \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/tracker","label":"tracker","group":"cycle","size":1579,"fanIn":3,"fanOut":6,"meta":"backend/src/grimoire/store/tracker \u00b7 9 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/weather","label":"weather","group":"cycle","size":977,"fanIn":3,"fanOut":5,"meta":"backend/src/grimoire/store/weather \u00b7 7 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store/worlds","label":"worlds","group":"cycle","size":820,"fanIn":10,"fanOut":2,"meta":"backend/src/grimoire/store/worlds \u00b7 5 files \u00b7 in dependency cycle #1"},{"id":"backend/tests/docs","label":"docs","group":"backend","size":1426,"fanIn":1,"fanOut":0,"meta":"backend/tests/docs \u00b7 5 files"},{"id":"backend/tests/fixtures/frozen_campaign_current","label":"frozen_campaign_current","group":"backend","size":45,"fanIn":1,"fanOut":0,"meta":"backend/tests/fixtures/frozen_campaign_current \u00b7 3 files"},{"id":"backend/tests/fixtures/images","label":"images","group":"backend","size":29,"fanIn":1,"fanOut":0,"meta":"backend/tests/fixtures/images \u00b7 23 files"},{"id":"docs","label":"docs","group":"docs","size":1695,"fanIn":1,"fanOut":0,"meta":"docs \u00b7 4 files"},{"id":"evals/docs","label":"docs","group":"evals","size":1243,"fanIn":1,"fanOut":0,"meta":"evals/docs \u00b7 5 files"},{"id":"frontend/docs","label":"docs","group":"frontend","size":1516,"fanIn":1,"fanOut":0,"meta":"frontend/docs \u00b7 5 files"},{"id":"scripts/docs","label":"docs","group":"scripts","size":1250,"fanIn":1,"fanOut":0,"meta":"scripts/docs \u00b7 5 files"},{"id":"templates/absorb","label":"absorb","group":"templates","size":91,"fanIn":1,"fanOut":0,"meta":"templates/absorb \u00b7 2 files"},{"id":"templates/audit","label":"audit","group":"templates","size":10,"fanIn":1,"fanOut":0,"meta":"templates/audit \u00b7 2 files"},{"id":"templates/capsule","label":"capsule","group":"templates","size":14,"fanIn":1,"fanOut":0,"meta":"templates/capsule \u00b7 2 files"},{"id":"templates/continuity_identity","label":"continuity_identity","group":"templates","size":83,"fanIn":1,"fanOut":0,"meta":"templates/continuity_identity \u00b7 4 files"},{"id":"templates/continuity_reconcile","label":"continuity_reconcile","group":"templates","size":120,"fanIn":1,"fanOut":0,"meta":"templates/continuity_reconcile \u00b7 7 files"},{"id":"templates/dossier","label":"dossier","group":"templates","size":7,"fanIn":1,"fanOut":0,"meta":"templates/dossier \u00b7 2 files"},{"id":"templates/epistemic_access","label":"epistemic_access","group":"templates","size":32,"fanIn":1,"fanOut":0,"meta":"templates/epistemic_access \u00b7 3 files"},{"id":"templates/epub","label":"epub","group":"templates","size":181,"fanIn":1,"fanOut":0,"meta":"templates/epub \u00b7 10 files"},{"id":"templates/history_check","label":"history_check","group":"templates","size":21,"fanIn":1,"fanOut":0,"meta":"templates/history_check \u00b7 2 files"},{"id":"templates/history_plan","label":"history_plan","group":"templates","size":75,"fanIn":1,"fanOut":0,"meta":"templates/history_plan \u00b7 2 files"},{"id":"templates/history_rerank","label":"history_rerank","group":"templates","size":28,"fanIn":1,"fanOut":0,"meta":"templates/history_rerank \u00b7 5 files"},{"id":"templates/image_description","label":"image_description","group":"templates","size":7,"fanIn":1,"fanOut":0,"meta":"templates/image_description \u00b7 2 files"},{"id":"templates/plaintext_import","label":"plaintext_import","group":"templates","size":12,"fanIn":1,"fanOut":0,"meta":"templates/plaintext_import \u00b7 2 files"},{"id":"templates/rolling_summary","label":"rolling_summary","group":"templates","size":38,"fanIn":1,"fanOut":0,"meta":"templates/rolling_summary \u00b7 2 files"},{"id":"templates/scenario","label":"scenario","group":"templates","size":31,"fanIn":1,"fanOut":0,"meta":"templates/scenario \u00b7 2 files"},{"id":"templates/scene","label":"scene","group":"templates","size":308,"fanIn":2,"fanOut":0,"meta":"templates/scene \u00b7 14 files"},{"id":"templates/scene/sections","label":"sections","group":"templates","size":586,"fanIn":2,"fanOut":0,"meta":"templates/scene/sections \u00b7 43 files"},{"id":"templates/scene_break","label":"scene_break","group":"templates","size":36,"fanIn":1,"fanOut":0,"meta":"templates/scene_break \u00b7 3 files"},{"id":"templates/scene_break_title","label":"scene_break_title","group":"templates","size":25,"fanIn":1,"fanOut":0,"meta":"templates/scene_break_title \u00b7 2 files"},{"id":"templates/scene_intent","label":"scene_intent","group":"templates","size":23,"fanIn":1,"fanOut":0,"meta":"templates/scene_intent \u00b7 2 files"},{"id":"templates/scene_suggestions","label":"scene_suggestions","group":"templates","size":151,"fanIn":1,"fanOut":0,"meta":"templates/scene_suggestions \u00b7 2 files"},{"id":"templates/snippets","label":"snippets","group":"templates","size":28,"fanIn":4,"fanOut":0,"meta":"templates/snippets \u00b7 5 files"},{"id":"templates/snippets/commitment_line","label":"commitment_line","group":"templates","size":6,"fanIn":1,"fanOut":0,"meta":"templates/snippets/commitment_line \u00b7 1 files"},{"id":"templates/snippets/plot_thread_line","label":"plot_thread_line","group":"templates","size":8,"fanIn":1,"fanOut":0,"meta":"templates/snippets/plot_thread_line \u00b7 1 files"},{"id":"templates/tagline","label":"tagline","group":"templates","size":5,"fanIn":1,"fanOut":0,"meta":"templates/tagline \u00b7 2 files"},{"id":"templates/tracker","label":"tracker","group":"templates","size":52,"fanIn":1,"fanOut":0,"meta":"templates/tracker \u00b7 2 files"},{"id":"templates/turn_plan","label":"turn_plan","group":"templates","size":73,"fanIn":1,"fanOut":0,"meta":"templates/turn_plan \u00b7 7 files"},{"id":"templates/voice_anchor","label":"voice_anchor","group":"templates","size":17,"fanIn":1,"fanOut":0,"meta":"templates/voice_anchor \u00b7 2 files"},{"id":"templates/voice_drift","label":"voice_drift","group":"templates","size":50,"fanIn":1,"fanOut":0,"meta":"templates/voice_drift \u00b7 4 files"}],"links":[{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/assets/fonts","weight":6,"imports":0,"loads":6,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/absorb","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/appearances","weight":53,"imports":53,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/audit","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/calendars","weight":9,"imports":9,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/campaigns","weight":110,"imports":110,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/climates","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/context","weight":13,"imports":13,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/continuity","weight":14,"imports":14,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/history","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/inference","weight":12,"imports":12,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/module_edit","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/modules","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/overview","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/record_art","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/regex","weight":9,"imports":9,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/scenes","weight":91,"imports":91,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/searchdocs","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/sheets","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/tracker","weight":14,"imports":14,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire/store/worlds","weight":35,"imports":35,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store","target":"backend/tests/fixtures/frozen_campaign_current","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"backend/tests/fixtures/images","weight":46,"imports":0,"loads":46,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/capsule","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/dossier","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/epistemic_access","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/epub","weight":10,"imports":0,"loads":10,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/history_rerank","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/image_description","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/plaintext_import","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/rolling_summary","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/scenario","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/scene","weight":6,"imports":0,"loads":6,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/scene_break","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/scene_break_title","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/scene_intent","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/scene_suggestions","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/snippets","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/tagline","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/turn_plan","weight":7,"imports":0,"loads":7,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/voice_anchor","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store","target":"templates/voice_drift","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/absorb","target":"backend/src/grimoire/store","weight":79,"imports":79,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/absorb","target":"backend/src/grimoire/store/appearances","weight":17,"imports":17,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/absorb","target":"backend/src/grimoire/store/audit","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/absorb","target":"backend/src/grimoire/store/calendars","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/absorb","target":"backend/src/grimoire/store/campaigns","weight":13,"imports":13,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/absorb","target":"backend/src/grimoire/store/continuity","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/absorb","target":"backend/src/grimoire/store/scenes","weight":8,"imports":8,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/absorb","target":"backend/src/grimoire/store/sheets","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/absorb","target":"backend/src/grimoire/store/weather","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/absorb","target":"templates/absorb","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/absorb","target":"templates/snippets","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/appearances","target":"backend/src/grimoire/store","weight":21,"imports":21,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/appearances","target":"backend/src/grimoire/store/campaigns","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/appearances","target":"backend/src/grimoire/store/scenes","weight":9,"imports":9,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/audit","target":"backend/src/grimoire/store","weight":9,"imports":9,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/audit","target":"backend/src/grimoire/store/appearances","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/audit","target":"backend/src/grimoire/store/campaigns","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/audit","target":"backend/src/grimoire/store/modules","weight":12,"imports":12,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/audit","target":"backend/src/grimoire/store/scenes","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/audit","target":"backend/src/grimoire/store/sheets","weight":11,"imports":11,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/audit","target":"templates/audit","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/calendars","target":"backend/src/grimoire/store","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/campaigns","target":"backend/src/grimoire/store","weight":29,"imports":29,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/campaigns","target":"backend/src/grimoire/store/appearances","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/campaigns","target":"backend/src/grimoire/store/calendars","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/campaigns","target":"backend/src/grimoire/store/climates","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/campaigns","target":"backend/src/grimoire/store/modules","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/campaigns","target":"backend/src/grimoire/store/scenes","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/campaigns","target":"backend/src/grimoire/store/sheets","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/campaigns","target":"backend/src/grimoire/store/worlds","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/climates","target":"backend/src/grimoire/store","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store","weight":114,"imports":114,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/appearances","weight":28,"imports":28,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/calendars","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/campaigns","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/continuity","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/history","weight":13,"imports":13,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/inference","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/modules","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/regex","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/scenes","weight":26,"imports":26,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/searchdocs","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/sheets","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/tracker","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/weather","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"backend/src/grimoire/store/worlds","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/context","target":"templates/scene","weight":8,"imports":0,"loads":8,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/context","target":"templates/scene/sections","weight":45,"imports":0,"loads":45,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/context","target":"templates/snippets","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/continuity","target":"backend/src/grimoire/store","weight":69,"imports":69,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/continuity","target":"backend/src/grimoire/store/absorb","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/continuity","target":"backend/src/grimoire/store/appearances","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/continuity","target":"backend/src/grimoire/store/calendars","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/continuity","target":"backend/src/grimoire/store/campaigns","weight":10,"imports":10,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/continuity","target":"backend/src/grimoire/store/inference","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/continuity","target":"backend/src/grimoire/store/scenes","weight":6,"imports":6,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/continuity","target":"templates/continuity_identity","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/continuity","target":"templates/continuity_reconcile","weight":7,"imports":0,"loads":7,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/continuity","target":"templates/snippets/commitment_line","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/continuity","target":"templates/snippets/plot_thread_line","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"android/docs","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/docs","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/routes/docs","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store","weight":44,"imports":0,"loads":44,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store/absorb","weight":9,"imports":0,"loads":9,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store/calendars","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store/campaigns","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store/context","weight":6,"imports":0,"loads":6,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store/module_edit","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store/modules","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store/scenes","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store/sheets","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/src/grimoire/store/weather","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"backend/tests/docs","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"docs","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"evals/docs","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"frontend/docs","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/docs","target":"scripts/docs","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/history","target":"backend/src/grimoire/store","weight":33,"imports":33,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/history","target":"backend/src/grimoire/store/appearances","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/history","target":"backend/src/grimoire/store/campaigns","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/history","target":"backend/src/grimoire/store/continuity","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/history","target":"backend/src/grimoire/store/inference","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/history","target":"backend/src/grimoire/store/regex","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/history","target":"backend/src/grimoire/store/scenes","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/history","target":"backend/src/grimoire/store/searchdocs","weight":10,"imports":10,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/history","target":"templates/history_check","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/history","target":"templates/history_plan","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/history","target":"templates/scene/sections","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/history","target":"templates/snippets","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/inference","target":"backend/src/grimoire/store","weight":83,"imports":83,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/inference","target":"backend/src/grimoire/store/campaigns","weight":12,"imports":12,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store","weight":22,"imports":22,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store/appearances","weight":2,"imports":2,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store/calendars","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store/campaigns","weight":2,"imports":2,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store/continuity","weight":9,"imports":9,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store/history","weight":7,"imports":7,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store/inference","weight":4,"imports":4,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store/regex","weight":2,"imports":2,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store/scenes","weight":6,"imports":6,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/investigation","target":"backend/src/grimoire/store/searchdocs","weight":2,"imports":2,"loads":0,"kind":"import","cycle":false},{"source":"backend/src/grimoire/store/module_edit","target":"backend/src/grimoire/store","weight":23,"imports":23,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/module_edit","target":"backend/src/grimoire/store/campaigns","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/module_edit","target":"backend/src/grimoire/store/modules","weight":15,"imports":15,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/module_edit","target":"backend/src/grimoire/store/sheets","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/module_edit","target":"backend/src/grimoire/store/worlds","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/modules","target":"backend/src/grimoire/store","weight":17,"imports":17,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/modules","target":"backend/src/grimoire/store/campaigns","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/modules","target":"backend/src/grimoire/store/worlds","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/overview","target":"backend/src/grimoire/store","weight":25,"imports":25,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/overview","target":"backend/src/grimoire/store/appearances","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/overview","target":"backend/src/grimoire/store/campaigns","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/overview","target":"backend/src/grimoire/store/continuity","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/overview","target":"backend/src/grimoire/store/scenes","weight":9,"imports":9,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/overview","target":"backend/src/grimoire/store/worlds","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/record_art","target":"backend/src/grimoire/store","weight":22,"imports":22,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/record_art","target":"backend/src/grimoire/store/campaigns","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/record_art","target":"backend/src/grimoire/store/worlds","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/regex","target":"backend/src/grimoire/store","weight":10,"imports":10,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/regex","target":"backend/src/grimoire/store/campaigns","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/regex","target":"backend/src/grimoire/store/scenes","weight":8,"imports":8,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/regex","target":"backend/src/grimoire/store/worlds","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/scenes","target":"backend/src/grimoire/store","weight":48,"imports":48,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/scenes","target":"backend/src/grimoire/store/appearances","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/scenes","target":"backend/src/grimoire/store/audit","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/scenes","target":"backend/src/grimoire/store/calendars","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/scenes","target":"backend/src/grimoire/store/campaigns","weight":8,"imports":8,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/scenes","target":"backend/src/grimoire/store/tracker","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/searchdocs","target":"backend/src/grimoire/store","weight":37,"imports":37,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/searchdocs","target":"backend/src/grimoire/store/appearances","weight":7,"imports":7,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/searchdocs","target":"backend/src/grimoire/store/campaigns","weight":6,"imports":6,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/searchdocs","target":"backend/src/grimoire/store/continuity","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/searchdocs","target":"backend/src/grimoire/store/inference","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/searchdocs","target":"backend/src/grimoire/store/regex","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/searchdocs","target":"backend/src/grimoire/store/scenes","weight":14,"imports":14,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/sheets","target":"backend/src/grimoire/store","weight":30,"imports":30,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/sheets","target":"backend/src/grimoire/store/campaigns","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/sheets","target":"backend/src/grimoire/store/modules","weight":22,"imports":22,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/sheets","target":"backend/src/grimoire/store/worlds","weight":8,"imports":8,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/tracker","target":"backend/src/grimoire/store","weight":18,"imports":18,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/tracker","target":"backend/src/grimoire/store/appearances","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/tracker","target":"backend/src/grimoire/store/campaigns","weight":8,"imports":8,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/tracker","target":"backend/src/grimoire/store/scenes","weight":6,"imports":6,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/tracker","target":"backend/src/grimoire/store/worlds","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/tracker","target":"templates/tracker","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"backend/src/grimoire/store/weather","target":"backend/src/grimoire/store","weight":8,"imports":8,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/weather","target":"backend/src/grimoire/store/calendars","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/weather","target":"backend/src/grimoire/store/campaigns","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/weather","target":"backend/src/grimoire/store/climates","weight":1,"imports":1,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/weather","target":"backend/src/grimoire/store/scenes","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/worlds","target":"backend/src/grimoire/store","weight":19,"imports":19,"loads":0,"kind":"import","cycle":true},{"source":"backend/src/grimoire/store/worlds","target":"backend/src/grimoire/store/campaigns","weight":2,"imports":2,"loads":0,"kind":"import","cycle":true}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span><span><i class=\"sw\" style=\"background:var(--text-faint)\"><\/i>dashed edges = runtime load<\/span>"}</script>
 
 <div class="grid cols-2">
 <div>
@@ -393,44 +351,76 @@ flowchart TD
 <p class="dim">Changes here ripple widely — review with extra care.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Fan-in</th><th></th><th class="num">Fan-out</th></tr></thead>
-<tbody><tr><td><code>paths.py</code></td><td class='num'>56</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>campaigns/__init__.py</code></td><td class='num'>53</td><td><div class="bar "><i style="width:94.6%"></i></div></td><td class='num'>3</td></tr>
-<tr><td><code>campaigns/paths.py</code></td><td class='num'>49</td><td><div class="bar "><i style="width:87.5%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>frontmatter.py</code></td><td class='num'>35</td><td><div class="bar "><i style="width:62.5%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>scenes/__init__.py</code></td><td class='num'>34</td><td><div class="bar "><i style="width:60.7%"></i></div></td><td class='num'>8</td></tr>
-<tr><td><code>appearances/__init__.py</code></td><td class='num'>32</td><td><div class="bar "><i style="width:57.1%"></i></div></td><td class='num'>4</td></tr>
-<tr><td><code>scenes/read.py</code></td><td class='num'>25</td><td><div class="bar "><i style="width:44.6%"></i></div></td><td class='num'>7</td></tr>
-<tr><td><code>appearances/paths.py</code></td><td class='num'>23</td><td><div class="bar "><i style="width:41.1%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>appearances/cast.py</code></td><td class='num'>19</td><td><div class="bar "><i style="width:33.9%"></i></div></td><td class='num'>3</td></tr>
-<tr><td><code>modules/__init__.py</code></td><td class='num'>18</td><td><div class="bar "><i style="width:32.1%"></i></div></td><td class='num'>7</td></tr>
-<tr><td><code>modules/pack.py</code></td><td class='num'>18</td><td><div class="bar "><i style="width:32.1%"></i></div></td><td class='num'>6</td></tr>
-<tr><td><code>scenes/serialize.py</code></td><td class='num'>15</td><td><div class="bar "><i style="width:26.8%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>appearances/versions.py</code></td><td class='num'>15</td><td><div class="bar "><i style="width:26.8%"></i></div></td><td class='num'>6</td></tr>
-<tr><td><code>campaigns/read.py</code></td><td class='num'>15</td><td><div class="bar "><i style="width:26.8%"></i></div></td><td class='num'>6</td></tr>
-<tr><td><code>worlds/__init__.py</code></td><td class='num'>13</td><td><div class="bar "><i style="width:23.2%"></i></div></td><td class='num'>3</td></tr></tbody></table></div>
+<tbody><tr><td><code>backend/src/grimoire/store/__init__.py</code></td><td class='num'>271</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>171</td></tr>
+<tr><td><code>backend/src/grimoire/store/paths.py</code></td><td class='num'>126</td><td><div class="bar "><i style="width:46.5%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>backend/src/grimoire/store/atomic.py</code></td><td class='num'>117</td><td><div class="bar "><i style="width:43.2%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>backend/src/grimoire/store/campaigns/__init__.py</code></td><td class='num'>102</td><td><div class="bar "><i style="width:37.6%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>backend/src/grimoire/store/locks.py</code></td><td class='num'>96</td><td><div class="bar "><i style="width:35.4%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>backend/src/grimoire/store/campaigns/paths.py</code></td><td class='num'>88</td><td><div class="bar "><i style="width:32.5%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>backend/src/grimoire/store/scenes/__init__.py</code></td><td class='num'>75</td><td><div class="bar "><i style="width:27.7%"></i></div></td><td class='num'>10</td></tr>
+<tr><td><code>backend/src/grimoire/store/appearances/__init__.py</code></td><td class='num'>56</td><td><div class="bar "><i style="width:20.7%"></i></div></td><td class='num'>5</td></tr>
+<tr><td><code>backend/src/grimoire/store/frontmatter.py</code></td><td class='num'>54</td><td><div class="bar "><i style="width:19.9%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>backend/src/grimoire/store/overlay.py</code></td><td class='num'>52</td><td><div class="bar "><i style="width:19.2%"></i></div></td><td class='num'>32</td></tr>
+<tr><td><code>backend/src/grimoire/store/scenes/read.py</code></td><td class='num'>50</td><td><div class="bar "><i style="width:18.5%"></i></div></td><td class='num'>12</td></tr>
+<tr><td><code>backend/src/grimoire/store/entities.py</code></td><td class='num'>47</td><td><div class="bar "><i style="width:17.3%"></i></div></td><td class='num'>8</td></tr>
+<tr><td><code>backend/src/grimoire/store/characters.py</code></td><td class='num'>38</td><td><div class="bar "><i style="width:14.0%"></i></div></td><td class='num'>18</td></tr>
+<tr><td><code>backend/src/grimoire/store/worlds/__init__.py</code></td><td class='num'>36</td><td><div class="bar "><i style="width:13.3%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>backend/src/grimoire/store/appearances/paths.py</code></td><td class='num'>36</td><td><div class="bar "><i style="width:13.3%"></i></div></td><td class='num'>5</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Highest fan-out (most dependencies)</h2>
 <p class="dim">High fan-out can indicate orchestrators — or god modules doing too much.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Fan-out</th><th></th><th class="num">Fan-in</th></tr></thead>
-<tbody><tr><td><code>__init__.py</code></td><td class='num'>23</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>context/assemble.py</code></td><td class='num'>20</td><td><div class="bar warn"><i style="width:87.0%"></i></div></td><td class='num'>1</td></tr>
-<tr><td><code>absorb/apply.py</code></td><td class='num'>17</td><td><div class="bar warn"><i style="width:73.9%"></i></div></td><td class='num'>1</td></tr>
-<tr><td><code>absorb/materializer.py</code></td><td class='num'>14</td><td><div class="bar warn"><i style="width:60.9%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>module_edit/migrate.py</code></td><td class='num'>14</td><td><div class="bar warn"><i style="width:60.9%"></i></div></td><td class='num'>4</td></tr>
-<tr><td><code>audit/apply.py</code></td><td class='num'>13</td><td><div class="bar warn"><i style="width:56.5%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>audit/prompt.py</code></td><td class='num'>13</td><td><div class="bar warn"><i style="width:56.5%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>playing.py</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>1</td></tr>
-<tr><td><code>context/__init__.py</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>5</td></tr>
-<tr><td><code>sheets/creation.py</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>appearances/transitions.py</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>4</td></tr>
-<tr><td><code>campaigns/lifecycle.py</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>module_edit/renaming.py</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>1</td></tr>
-<tr><td><code>scenes/lifecycle.py</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>3</td></tr>
-<tr><td><code>checks.py</code></td><td class='num'>10</td><td><div class="bar warn"><i style="width:43.5%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+<tbody><tr><td><code>backend/src/grimoire/store/__init__.py</code></td><td class='num'>171</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>271</td></tr>
+<tr><td><code>backend/src/grimoire/store/context/assemble.py</code></td><td class='num'>108</td><td><div class="bar warn"><i style="width:63.2%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/store/docs/codemap.html</code></td><td class='num'>82</td><td><div class="bar warn"><i style="width:48.0%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>backend/src/grimoire/store/export.py</code></td><td class='num'>48</td><td><div class="bar warn"><i style="width:28.1%"></i></div></td><td class='num'>9</td></tr>
+<tr><td><code>backend/src/grimoire/store/epub.py</code></td><td class='num'>42</td><td><div class="bar warn"><i style="width:24.6%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/store/continuity/reconcile.py</code></td><td class='num'>36</td><td><div class="bar warn"><i style="width:21.1%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>backend/src/grimoire/store/campaigns/lifecycle.py</code></td><td class='num'>34</td><td><div class="bar warn"><i style="width:19.9%"></i></div></td><td class='num'>6</td></tr>
+<tr><td><code>backend/src/grimoire/store/investigation/readers.py</code></td><td class='num'>34</td><td><div class="bar warn"><i style="width:19.9%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/store/overlay.py</code></td><td class='num'>32</td><td><div class="bar warn"><i style="width:18.7%"></i></div></td><td class='num'>52</td></tr>
+<tr><td><code>backend/src/grimoire/store/suggest.py</code></td><td class='num'>32</td><td><div class="bar warn"><i style="width:18.7%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/store/undo.py</code></td><td class='num'>32</td><td><div class="bar warn"><i style="width:18.7%"></i></div></td><td class='num'>5</td></tr>
+<tr><td><code>backend/src/grimoire/store/scenes/lifecycle.py</code></td><td class='num'>30</td><td><div class="bar warn"><i style="width:17.5%"></i></div></td><td class='num'>6</td></tr>
+<tr><td><code>backend/src/grimoire/store/branch.py</code></td><td class='num'>29</td><td><div class="bar warn"><i style="width:17.0%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/store/searchdocs/slices.py</code></td><td class='num'>28</td><td><div class="bar warn"><i style="width:16.4%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/store/sync.py</code></td><td class='num'>27</td><td><div class="bar warn"><i style="width:15.8%"></i></div></td><td class='num'>3</td></tr></tbody></table></div>
 </div>
 </div>
+
+<h2>Runtime resources</h2>
+<p class="dim">Files loaded rather than imported — templates, prompts, schemas, embedded data — and the
+code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 13 computed path(s) and 0 file(s) hit the reporting cap.</p>
+
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Asset</th><th class="num">Loaders</th><th>Loaded at</th></tr></thead>
+<tbody><tr><td><code>backend/src/grimoire/store/docs/codemap.html</code></td><td class='num'>4</td><td><code>backend/src/grimoire/store/docs/health.html:184</code> <code>backend/src/grimoire/store/docs/measurement.html:184</code> <code>backend/src/grimoire/store/docs/summary.html:184</code> <code>backend/src/grimoire/store/docs/theory.html:184</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/docs/health.html</code></td><td class='num'>4</td><td><code>backend/src/grimoire/store/docs/codemap.html:184</code> <code>backend/src/grimoire/store/docs/measurement.html:184</code> <code>backend/src/grimoire/store/docs/summary.html:184</code> <code>backend/src/grimoire/store/docs/theory.html:184</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/docs/measurement.html</code></td><td class='num'>4</td><td><code>backend/src/grimoire/store/docs/codemap.html:184</code> <code>backend/src/grimoire/store/docs/health.html:184</code> <code>backend/src/grimoire/store/docs/summary.html:184</code> <code>backend/src/grimoire/store/docs/theory.html:184</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/docs/summary.html</code></td><td class='num'>4</td><td><code>backend/src/grimoire/store/docs/codemap.html:184</code> <code>backend/src/grimoire/store/docs/health.html:184</code> <code>backend/src/grimoire/store/docs/measurement.html:184</code> <code>backend/src/grimoire/store/docs/theory.html:184</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/docs/theory.html</code></td><td class='num'>4</td><td><code>backend/src/grimoire/store/docs/codemap.html:184</code> <code>backend/src/grimoire/store/docs/health.html:184</code> <code>backend/src/grimoire/store/docs/measurement.html:184</code> <code>backend/src/grimoire/store/docs/summary.html:184</code></td></tr>
+<tr><td><code>templates/snippets/transcript.j2</code></td><td class='num'>3</td><td><code>backend/src/grimoire/store/chronicle.py:253</code> <code>backend/src/grimoire/store/context/history.py:318</code> <code>backend/src/grimoire/store/history/budget.py:62</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/absorb/apply.py</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/docs/codemap.html:452</code> <code>backend/src/grimoire/store/docs/health.html:235</code></td></tr>
+<tr><td><code>backend/src/grimoire/store/absorb/conflicts.py</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/docs/codemap.html:452</code> <code>backend/src/grimoire/store/docs/health.html:235</code></td></tr>
+<tr><td><code>backend/tests/fixtures/frozen_campaign_current/home/campaigns/the-drowned-ledger/revision.txt</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/backups.py:438</code> <code>backend/src/grimoire/store/revision.py:169</code></td></tr>
+<tr><td><code>backend/tests/fixtures/frozen_campaign_current/home/inference-retired.json</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/backups.py:423</code> <code>backend/src/grimoire/store/inference_retired.py:68</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/__init__.py</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/apng_anim.png</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/apng_oriented.png</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/base.png</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/gif_anim.gif</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/gif_anim_duration_changed.gif</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/gif_anim_frame_changed.gif</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/gif_anim_late_loop.gif</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/gif_anim_noloop.gif</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/gif_single.gif</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/jpeg_camera_exif.jpg</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/jpeg_cmyk.jpg</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/jpeg_plain.jpg</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/jpeg_plain_as.png</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr>
+<tr><td><code>backend/tests/fixtures/images/jpeg_rot6.jpg</code></td><td class='num'>2</td><td><code>backend/src/grimoire/store/epub.py:152</code> <code>backend/src/grimoire/store/export.py:633</code></td></tr></tbody></table></div>
 
 
 
@@ -439,8 +429,8 @@ flowchart TD
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">666</div><div class="l">commits (24 months ago)</div></div>
-  <div class="kpi"><div class="n">172</div><div class="l">files touched</div></div>
+  <div class="kpi accent"><div class="n">1,411</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi"><div class="n">361</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">overlay.py</div><div class="l">top hotspot</div></div>
 </div>
 <div class="callout"><b>How to read this:</b> files that are both <i>complex</i> and <i>frequently changed</i> are where defects concentrate — complexity makes mistakes likely, churn gives them opportunities. Prioritize refactoring and review attention here, not on complex-but-stable code.</div>
@@ -449,116 +439,136 @@ flowchart TD
 <h2>Churn × size map</h2>
 <p class="dim">Area = lines of code · color = commit count since 24 months ago · hover for details.</p>
 <div class="viz" data-render="treemap" style="height:540px"></div>
-<script type="application/json">{"items":[{"name":"overlay.py","value":964,"metric":43,"meta":"172 branches \u00b7 2 authors"},{"name":"characters.py","value":679,"metric":43,"meta":"148 branches \u00b7 2 authors"},{"name":"context/world_state.py","value":1089,"metric":27,"meta":"186 branches \u00b7 2 authors"},{"name":"absorb/materializer.py","value":716,"metric":18,"meta":"137 branches \u00b7 1 authors"},{"name":"context/assemble.py","value":675,"metric":23,"meta":"94 branches \u00b7 2 authors"},{"name":"suggest.py","value":320,"metric":24,"meta":"81 branches \u00b7 2 authors"},{"name":"locks.py","value":572,"metric":37,"meta":"52 branches \u00b7 2 authors"},{"name":"absorb/apply.py","value":748,"metric":19,"meta":"97 branches \u00b7 1 authors"},{"name":"assets.py","value":427,"metric":18,"meta":"82 branches \u00b7 1 authors"},{"name":"weather/overrides.py","value":605,"metric":10,"meta":"144 branches \u00b7 2 authors"},{"name":"greetings.py","value":252,"metric":20,"meta":"65 branches \u00b7 2 authors"},{"name":"export.py","value":421,"metric":12,"meta":"97 branches \u00b7 2 authors"},{"name":"scenes/write.py","value":545,"metric":13,"meta":"89 branches \u00b7 2 authors"},{"name":"playing.py","value":216,"metric":25,"meta":"42 branches \u00b7 2 authors"},{"name":"response_presets.py","value":372,"metric":14,"meta":"71 branches \u00b7 2 authors"},{"name":"sync.py","value":220,"metric":16,"meta":"55 branches \u00b7 2 authors"},{"name":"turnstate.py","value":530,"metric":8,"meta":"102 branches \u00b7 1 authors"},{"name":"checks.py","value":210,"metric":11,"meta":"73 branches \u00b7 2 authors"},{"name":"config.py","value":382,"metric":28,"meta":"28 branches \u00b7 2 authors"},{"name":"entities.py","value":216,"metric":19,"meta":"38 branches \u00b7 2 authors"},{"name":"search.py","value":613,"metric":5,"meta":"146 branches \u00b7 1 authors"},{"name":"campaigns/lifecycle.py","value":347,"metric":11,"meta":"64 branches \u00b7 1 authors"},{"name":"pcs.py","value":193,"metric":15,"meta":"42 branches \u00b7 1 authors"},{"name":"prompt_log.py","value":408,"metric":9,"meta":"70 branches \u00b7 1 authors"},{"name":"absorb/conflicts.py","value":421,"metric":7,"meta":"89 branches \u00b7 1 authors"},{"name":"proposals.py","value":319,"metric":16,"meta":"37 branches \u00b7 2 authors"},{"name":"cards.py","value":310,"metric":10,"meta":"59 branches \u00b7 1 authors"},{"name":"migrations.py","value":164,"metric":13,"meta":"40 branches \u00b7 2 authors"},{"name":"scenes/serialize.py","value":255,"metric":9,"meta":"54 branches \u00b7 1 authors"},{"name":"plot.py","value":161,"metric":12,"meta":"38 branches \u00b7 2 authors"},{"name":"epub.py","value":143,"metric":16,"meta":"27 branches \u00b7 2 authors"},{"name":"localize.py","value":253,"metric":7,"meta":"61 branches \u00b7 1 authors"},{"name":"absorb/routing.py","value":410,"metric":7,"meta":"56 branches \u00b7 1 authors"},{"name":"commits.py","value":304,"metric":8,"meta":"48 branches \u00b7 2 authors"},{"name":"context/cast.py","value":298,"metric":7,"meta":"55 branches \u00b7 1 authors"},{"name":"clock.py","value":412,"metric":5,"meta":"64 branches \u00b7 1 authors"},{"name":"campaigns/read.py","value":320,"metric":8,"meta":"39 branches \u00b7 1 authors"},{"name":"backups.py","value":353,"metric":4,"meta":"74 branches \u00b7 1 authors"},{"name":"calendars/base.py","value":171,"metric":9,"meta":"32 branches \u00b7 2 authors"},{"name":"scenario.py","value":358,"metric":4,"meta":"73 branches \u00b7 1 authors"},{"name":"facts.py","value":338,"metric":5,"meta":"58 branches \u00b7 1 authors"},{"name":"usage.py","value":462,"metric":6,"meta":"47 branches \u00b7 1 authors"},{"name":"pins.py","value":321,"metric":4,"meta":"69 branches \u00b7 1 authors"},{"name":"semsearch.py","value":346,"metric":5,"meta":"55 branches \u00b7 1 authors"},{"name":"undo.py","value":438,"metric":3,"meta":"92 branches \u00b7 1 authors"},{"name":"chronicle.py","value":107,"metric":16,"meta":"16 branches \u00b7 2 authors"},{"name":"fetch.py","value":188,"metric":7,"meta":"37 branches \u00b7 2 authors"},{"name":"paths.py","value":172,"metric":11,"meta":"23 branches \u00b7 2 authors"},{"name":"alternates.py","value":548,"metric":3,"meta":"83 branches \u00b7 1 authors"},{"name":"image_subjects.py","value":125,"metric":7,"meta":"34 branches \u00b7 1 authors"},{"name":"proclock.py","value":236,"metric":6,"meta":"37 branches \u00b7 1 authors"},{"name":"atomic.py","value":243,"metric":7,"meta":"30 branches \u00b7 2 authors"},{"name":"scenes/read.py","value":161,"metric":7,"meta":"27 branches \u00b7 2 authors"},{"name":"scenes/lifecycle.py","value":202,"metric":10,"meta":"18 branches \u00b7 1 authors"},{"name":"absorb/parse.py","value":254,"metric":4,"meta":"46 branches \u00b7 1 authors"},{"name":"commitments.py","value":234,"metric":4,"meta":"44 branches \u00b7 1 authors"},{"name":"rolls.py","value":105,"metric":8,"meta":"21 branches \u00b7 2 authors"},{"name":"llm_connections.py","value":198,"metric":5,"meta":"34 branches \u00b7 2 authors"},{"name":"changes.py","value":82,"metric":7,"meta":"23 branches \u00b7 2 authors"},{"name":"dice.py","value":136,"metric":4,"meta":"41 branches \u00b7 2 authors"},{"name":"briefing.py","value":226,"metric":3,"meta":"53 branches \u00b7 1 authors"},{"name":"context/semantic.py","value":294,"metric":3,"meta":"53 branches \u00b7 2 authors"},{"name":"context/pack.py","value":183,"metric":7,"meta":"22 branches \u00b7 2 authors"},{"name":"expressions.py","value":107,"metric":4,"meta":"39 branches \u00b7 1 authors"},{"name":"weather/__init__.py","value":134,"metric":7,"meta":"21 branches \u00b7 1 authors"},{"name":"provenance.py","value":173,"metric":4,"meta":"37 branches \u00b7 2 authors"},{"name":"styles.py","value":131,"metric":7,"meta":"20 branches \u00b7 1 authors"},{"name":"__init__.py","value":170,"metric":73,"meta":"1 branches \u00b7 2 authors"},{"name":"relationships.py","value":104,"metric":8,"meta":"16 branches \u00b7 2 authors"},{"name":"context/layout.py","value":198,"metric":4,"meta":"32 branches \u00b7 1 authors"},{"name":"modules/validate.py","value":365,"metric":1,"meta":"130 branches \u00b7 1 authors"},{"name":"sheets/writer.py","value":169,"metric":3,"meta":"41 branches \u00b7 1 authors"},{"name":"world_bundle.py","value":280,"metric":3,"meta":"40 branches \u00b7 1 authors"},{"name":"playstate.py","value":92,"metric":6,"meta":"19 branches \u00b7 2 authors"},{"name":"module_edit/renaming.py","value":293,"metric":1,"meta":"119 branches \u00b7 1 authors"},{"name":"voice_drift.py","value":300,"metric":4,"meta":"28 branches \u00b7 1 authors"},{"name":"calendars/hebrew.py","value":135,"metric":3,"meta":"37 branches \u00b7 1 authors"},{"name":"modules/display.py","value":335,"metric":1,"meta":"110 branches \u00b7 1 authors"},{"name":"calendars/config.py","value":63,"metric":9,"meta":"11 branches \u00b7 2 authors"},{"name":"absorb/snapshots.py","value":106,"metric":7,"meta":"14 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":73}</script>
+<script type="application/json">{"items":[{"name":"backend/src/grimoire/store/overlay.py","value":2866,"metric":108,"meta":"562 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/context/assemble.py","value":2172,"metric":84,"meta":"378 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/characters.py","value":1566,"metric":84,"meta":"291 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/suggest.py","value":1532,"metric":51,"meta":"419 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/assets.py","value":1525,"metric":59,"meta":"308 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/usage.py","value":1704,"metric":37,"meta":"249 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/sync.py","value":1350,"metric":35,"meta":"257 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/locks.py","value":1137,"metric":84,"meta":"101 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/continuity/reconcile.py","value":1486,"metric":19,"meta":"327 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/absorb/materializer.py","value":913,"metric":40,"meta":"154 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/export.py","value":727,"metric":33,"meta":"134 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/world_bundle.py","value":958,"metric":23,"meta":"186 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/campaigns/lifecycle.py","value":760,"metric":35,"meta":"120 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/config.py","value":730,"metric":56,"meta":"69 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/compiled.py","value":2852,"metric":6,"meta":"588 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/store/context/art.py","value":748,"metric":23,"meta":"151 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/inference/resolve.py","value":1309,"metric":16,"meta":"209 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/scenes/write.py","value":735,"metric":25,"meta":"133 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/responses.py","value":794,"metric":18,"meta":"175 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/image_migration.py","value":1526,"metric":9,"meta":"349 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/image_descriptions.py","value":707,"metric":20,"meta":"153 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/context/world_state.py","value":480,"metric":40,"meta":"76 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/llm_connections.py","value":741,"metric":22,"meta":"132 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/greetings.py","value":403,"metric":28,"meta":"96 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/undo.py","value":746,"metric":15,"meta":"171 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/playing.py","value":342,"metric":35,"meta":"67 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/absorb/apply.py","value":519,"metric":31,"meta":"75 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/pcs.py","value":453,"metric":31,"meta":"74 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/image_store.py","value":635,"metric":18,"meta":"127 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/image_gc.py","value":1416,"metric":7,"meta":"314 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/logs.py","value":935,"metric":17,"meta":"128 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/migrations.py","value":463,"metric":23,"meta":"93 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/continuity/review.py","value":694,"metric":16,"meta":"133 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/store/backups.py","value":674,"metric":15,"meta":"141 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/continuity/identity.py","value":707,"metric":16,"meta":"124 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/entities.py","value":431,"metric":27,"meta":"70 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/search.py","value":697,"metric":12,"meta":"158 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/inference/settings.py","value":788,"metric":11,"meta":"165 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/fork.py","value":670,"metric":18,"meta":"95 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/continuity/graph.py","value":723,"metric":11,"meta":"154 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/image_subjects.py","value":351,"metric":20,"meta":"82 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/thumbs.py","value":511,"metric":23,"meta":"68 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/inference/facts.py","value":670,"metric":10,"meta":"144 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/weather/overrides.py","value":605,"metric":10,"meta":"144 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/prompt_log.py","value":457,"metric":18,"meta":"79 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/image_collections.py","value":390,"metric":18,"meta":"78 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/campaign_images.py","value":369,"metric":18,"meta":"71 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/clock.py","value":592,"metric":15,"meta":"83 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/store/scenes/serialize.py","value":375,"metric":17,"meta":"73 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/context/activation.py","value":530,"metric":8,"meta":"153 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/commits.py","value":574,"metric":10,"meta":"119 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/continuity/similarity.py","value":573,"metric":13,"meta":"91 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/context/cast.py","value":376,"metric":16,"meta":"73 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/image_refs.py","value":429,"metric":11,"meta":"102 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/cache_sync.py","value":1675,"metric":3,"meta":"373 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/store/scene_import.py","value":609,"metric":10,"meta":"111 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/lorebook.py","value":332,"metric":15,"meta":"72 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/context/semantic.py","value":417,"metric":13,"meta":"83 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/response_presets.py","value":374,"metric":15,"meta":"71 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/absorb/conflicts.py","value":507,"metric":13,"meta":"82 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/checks.py","value":218,"metric":14,"meta":"73 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/alternates.py","value":644,"metric":10,"meta":"102 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/store/changes.py","value":267,"metric":17,"meta":"59 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/module_edit/migrate.py","value":459,"metric":10,"meta":"98 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/store/birthdays.py","value":375,"metric":10,"meta":"97 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/context/pack.py","value":357,"metric":18,"meta":"52 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/scenes/read.py","value":318,"metric":16,"meta":"57 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/cards.py","value":382,"metric":13,"meta":"67 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/context/layout.py","value":313,"metric":13,"meta":"66 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/image_surfaces.py","value":540,"metric":6,"meta":"139 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/routing.py","value":372,"metric":27,"meta":"30 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/replay.py","value":459,"metric":11,"meta":"74 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/continuity/effective.py","value":419,"metric":8,"meta":"102 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/proposals.py","value":351,"metric":20,"meta":"39 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/pending_reviews.py","value":473,"metric":11,"meta":"71 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/greeting_images.py","value":293,"metric":10,"meta":"78 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/inference/embed.py","value":510,"metric":10,"meta":"77 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/chronicle.py","value":208,"metric":24,"meta":"31 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/store/context/epistemic.py","value":902,"metric":3,"meta":"255 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/store/tracker/records.py","value":378,"metric":9,"meta":"78 branches \u00b7 2 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":136}</script>
 
 <h2>Hotspot ranking</h2>
-<p class="dim">Score = commits × (branch points + 1). Tests excluded. 28 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: builtin_modules/pool-basic/sheets.json (4), builtin_modules/d20-basic/sheets.json (3), builtin_modules/d20-basic/checks.json (2).</p>
+<p class="dim">Score = commits × (branch points + 1). Tests excluded. 28 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: backend/src/grimoire/store/builtin_modules/pool-basic/sheets.json (4), backend/src/grimoire/store/builtin_modules/d20-basic/sheets.json (3), backend/src/grimoire/store/builtin_modules/d20-basic/checks.json (2).</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
-<tbody><tr><td><code>overlay.py</code></td><td class='num'>43</td><td class='num'>172</td><td class='num'>964</td><td class='num'>2</td><td class='num' data-sort='7439'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>characters.py</code></td><td class='num'>43</td><td class='num'>148</td><td class='num'>679</td><td class='num'>2</td><td class='num' data-sort='6407'><div class="bar bad"><i style="width:86.1%"></i></div></td></tr>
-<tr><td><code>context/world_state.py</code></td><td class='num'>27</td><td class='num'>186</td><td class='num'>1,089</td><td class='num'>2</td><td class='num' data-sort='5049'><div class="bar bad"><i style="width:67.9%"></i></div></td></tr>
-<tr><td><code>absorb/materializer.py</code></td><td class='num'>18</td><td class='num'>137</td><td class='num'>716</td><td class='num'>1</td><td class='num' data-sort='2484'><div class="bar bad"><i style="width:33.4%"></i></div></td></tr>
-<tr><td><code>context/assemble.py</code></td><td class='num'>23</td><td class='num'>94</td><td class='num'>675</td><td class='num'>2</td><td class='num' data-sort='2185'><div class="bar bad"><i style="width:29.4%"></i></div></td></tr>
-<tr><td><code>suggest.py</code></td><td class='num'>24</td><td class='num'>81</td><td class='num'>320</td><td class='num'>2</td><td class='num' data-sort='1968'><div class="bar bad"><i style="width:26.5%"></i></div></td></tr>
-<tr><td><code>locks.py</code></td><td class='num'>37</td><td class='num'>52</td><td class='num'>572</td><td class='num'>2</td><td class='num' data-sort='1961'><div class="bar bad"><i style="width:26.4%"></i></div></td></tr>
-<tr><td><code>absorb/apply.py</code></td><td class='num'>19</td><td class='num'>97</td><td class='num'>748</td><td class='num'>1</td><td class='num' data-sort='1862'><div class="bar bad"><i style="width:25.0%"></i></div></td></tr>
-<tr><td><code>assets.py</code></td><td class='num'>18</td><td class='num'>82</td><td class='num'>427</td><td class='num'>1</td><td class='num' data-sort='1494'><div class="bar bad"><i style="width:20.1%"></i></div></td></tr>
-<tr><td><code>weather/overrides.py</code></td><td class='num'>10</td><td class='num'>144</td><td class='num'>605</td><td class='num'>2</td><td class='num' data-sort='1450'><div class="bar bad"><i style="width:19.5%"></i></div></td></tr>
-<tr><td><code>greetings.py</code></td><td class='num'>20</td><td class='num'>65</td><td class='num'>252</td><td class='num'>2</td><td class='num' data-sort='1320'><div class="bar bad"><i style="width:17.7%"></i></div></td></tr>
-<tr><td><code>export.py</code></td><td class='num'>12</td><td class='num'>97</td><td class='num'>421</td><td class='num'>2</td><td class='num' data-sort='1176'><div class="bar bad"><i style="width:15.8%"></i></div></td></tr>
-<tr><td><code>scenes/write.py</code></td><td class='num'>13</td><td class='num'>89</td><td class='num'>545</td><td class='num'>2</td><td class='num' data-sort='1170'><div class="bar bad"><i style="width:15.7%"></i></div></td></tr>
-<tr><td><code>playing.py</code></td><td class='num'>25</td><td class='num'>42</td><td class='num'>216</td><td class='num'>2</td><td class='num' data-sort='1075'><div class="bar bad"><i style="width:14.5%"></i></div></td></tr>
-<tr><td><code>response_presets.py</code></td><td class='num'>14</td><td class='num'>71</td><td class='num'>372</td><td class='num'>2</td><td class='num' data-sort='1008'><div class="bar bad"><i style="width:13.6%"></i></div></td></tr>
-<tr><td><code>sync.py</code></td><td class='num'>16</td><td class='num'>55</td><td class='num'>220</td><td class='num'>2</td><td class='num' data-sort='896'><div class="bar bad"><i style="width:12.0%"></i></div></td></tr>
-<tr><td><code>turnstate.py</code></td><td class='num'>8</td><td class='num'>102</td><td class='num'>530</td><td class='num'>1</td><td class='num' data-sort='824'><div class="bar bad"><i style="width:11.1%"></i></div></td></tr>
-<tr><td><code>checks.py</code></td><td class='num'>11</td><td class='num'>73</td><td class='num'>210</td><td class='num'>2</td><td class='num' data-sort='814'><div class="bar bad"><i style="width:10.9%"></i></div></td></tr>
-<tr><td><code>config.py</code></td><td class='num'>28</td><td class='num'>28</td><td class='num'>382</td><td class='num'>2</td><td class='num' data-sort='812'><div class="bar bad"><i style="width:10.9%"></i></div></td></tr>
-<tr><td><code>entities.py</code></td><td class='num'>19</td><td class='num'>38</td><td class='num'>216</td><td class='num'>2</td><td class='num' data-sort='741'><div class="bar bad"><i style="width:10.0%"></i></div></td></tr>
-<tr><td><code>search.py</code></td><td class='num'>5</td><td class='num'>146</td><td class='num'>613</td><td class='num'>1</td><td class='num' data-sort='735'><div class="bar bad"><i style="width:9.9%"></i></div></td></tr>
-<tr><td><code>campaigns/lifecycle.py</code></td><td class='num'>11</td><td class='num'>64</td><td class='num'>347</td><td class='num'>1</td><td class='num' data-sort='715'><div class="bar bad"><i style="width:9.6%"></i></div></td></tr>
-<tr><td><code>pcs.py</code></td><td class='num'>15</td><td class='num'>42</td><td class='num'>193</td><td class='num'>1</td><td class='num' data-sort='645'><div class="bar bad"><i style="width:8.7%"></i></div></td></tr>
-<tr><td><code>prompt_log.py</code></td><td class='num'>9</td><td class='num'>70</td><td class='num'>408</td><td class='num'>1</td><td class='num' data-sort='639'><div class="bar bad"><i style="width:8.6%"></i></div></td></tr>
-<tr><td><code>absorb/conflicts.py</code></td><td class='num'>7</td><td class='num'>89</td><td class='num'>421</td><td class='num'>1</td><td class='num' data-sort='630'><div class="bar bad"><i style="width:8.5%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>backend/src/grimoire/store/overlay.py</code></td><td class='num'>108</td><td class='num'>562</td><td class='num'>2,866</td><td class='num'>2</td><td class='num' data-sort='60804'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/context/assemble.py</code></td><td class='num'>84</td><td class='num'>378</td><td class='num'>2,172</td><td class='num'>2</td><td class='num' data-sort='31836'><div class="bar bad"><i style="width:52.4%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/characters.py</code></td><td class='num'>84</td><td class='num'>291</td><td class='num'>1,566</td><td class='num'>2</td><td class='num' data-sort='24528'><div class="bar bad"><i style="width:40.3%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/suggest.py</code></td><td class='num'>51</td><td class='num'>419</td><td class='num'>1,532</td><td class='num'>2</td><td class='num' data-sort='21420'><div class="bar bad"><i style="width:35.2%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/assets.py</code></td><td class='num'>59</td><td class='num'>308</td><td class='num'>1,525</td><td class='num'>2</td><td class='num' data-sort='18231'><div class="bar bad"><i style="width:30.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/usage.py</code></td><td class='num'>37</td><td class='num'>249</td><td class='num'>1,704</td><td class='num'>2</td><td class='num' data-sort='9250'><div class="bar bad"><i style="width:15.2%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/sync.py</code></td><td class='num'>35</td><td class='num'>257</td><td class='num'>1,350</td><td class='num'>2</td><td class='num' data-sort='9030'><div class="bar bad"><i style="width:14.9%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/locks.py</code></td><td class='num'>84</td><td class='num'>101</td><td class='num'>1,137</td><td class='num'>2</td><td class='num' data-sort='8568'><div class="bar bad"><i style="width:14.1%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/continuity/reconcile.py</code></td><td class='num'>19</td><td class='num'>327</td><td class='num'>1,486</td><td class='num'>2</td><td class='num' data-sort='6232'><div class="bar bad"><i style="width:10.2%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/absorb/materializer.py</code></td><td class='num'>40</td><td class='num'>154</td><td class='num'>913</td><td class='num'>2</td><td class='num' data-sort='6200'><div class="bar bad"><i style="width:10.2%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/export.py</code></td><td class='num'>33</td><td class='num'>134</td><td class='num'>727</td><td class='num'>2</td><td class='num' data-sort='4455'><div class="bar bad"><i style="width:7.3%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/world_bundle.py</code></td><td class='num'>23</td><td class='num'>186</td><td class='num'>958</td><td class='num'>2</td><td class='num' data-sort='4301'><div class="bar bad"><i style="width:7.1%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/campaigns/lifecycle.py</code></td><td class='num'>35</td><td class='num'>120</td><td class='num'>760</td><td class='num'>2</td><td class='num' data-sort='4235'><div class="bar bad"><i style="width:7.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/config.py</code></td><td class='num'>56</td><td class='num'>69</td><td class='num'>730</td><td class='num'>2</td><td class='num' data-sort='3920'><div class="bar bad"><i style="width:6.4%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/compiled.py</code></td><td class='num'>6</td><td class='num'>588</td><td class='num'>2,852</td><td class='num'>1</td><td class='num' data-sort='3534'><div class="bar bad"><i style="width:5.8%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/context/art.py</code></td><td class='num'>23</td><td class='num'>151</td><td class='num'>748</td><td class='num'>2</td><td class='num' data-sort='3496'><div class="bar bad"><i style="width:5.7%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/inference/resolve.py</code></td><td class='num'>16</td><td class='num'>209</td><td class='num'>1,309</td><td class='num'>2</td><td class='num' data-sort='3360'><div class="bar bad"><i style="width:5.5%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/scenes/write.py</code></td><td class='num'>25</td><td class='num'>133</td><td class='num'>735</td><td class='num'>2</td><td class='num' data-sort='3350'><div class="bar bad"><i style="width:5.5%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/responses.py</code></td><td class='num'>18</td><td class='num'>175</td><td class='num'>794</td><td class='num'>2</td><td class='num' data-sort='3168'><div class="bar bad"><i style="width:5.2%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/image_migration.py</code></td><td class='num'>9</td><td class='num'>349</td><td class='num'>1,526</td><td class='num'>2</td><td class='num' data-sort='3150'><div class="bar bad"><i style="width:5.2%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/image_descriptions.py</code></td><td class='num'>20</td><td class='num'>153</td><td class='num'>707</td><td class='num'>2</td><td class='num' data-sort='3080'><div class="bar bad"><i style="width:5.1%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/context/world_state.py</code></td><td class='num'>40</td><td class='num'>76</td><td class='num'>480</td><td class='num'>2</td><td class='num' data-sort='3080'><div class="bar bad"><i style="width:5.1%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/llm_connections.py</code></td><td class='num'>22</td><td class='num'>132</td><td class='num'>741</td><td class='num'>2</td><td class='num' data-sort='2926'><div class="bar bad"><i style="width:4.8%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/greetings.py</code></td><td class='num'>28</td><td class='num'>96</td><td class='num'>403</td><td class='num'>2</td><td class='num' data-sort='2716'><div class="bar bad"><i style="width:4.5%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/store/undo.py</code></td><td class='num'>15</td><td class='num'>171</td><td class='num'>746</td><td class='num'>2</td><td class='num' data-sort='2580'><div class="bar bad"><i style="width:4.2%"></i></div></td></tr></tbody></table></div>
 
 
 
 </section>
+<section class="panel" id="flows" role="tabpanel">
+
+<h2>Copy-on-write publication</h2>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+  participant C as Caller
+  participant O as Overlay
+  participant L as Campaign lock
+  participant W as World record
+  participant A as Atomic writer
+  C->>O: Materialize or prepare flat record
+  O->>L: Acquire shared hold
+  O->>O: Read strict identity ledgers
+  alt Campaign copy already exists
+    O-->>C: Existing ownership
+  else Inherited record is visible
+    O->>W: Read selected original bytes
+    O->>O: Validate group bindings and reserve base hash
+    O->>A: Write complete prepared record
+    A->>A: Flush, fsync, replace
+    O-->>C: Campaign now owns copy
+  else Missing or tombstoned
+    O-->>C: Not found
+  end
+</pre></div></div>
+<p>The source hash belongs to the original selected bytes, not the edited result or a second world read. Publication and binding validation share one campaign hold (<code>backend/src/grimoire/store/overlay.py:855</code>, <code>backend/src/grimoire/store/overlay.py:865</code>, <code>backend/src/grimoire/store/overlay.py:890</code>). Atomic replacement preserves one record, not every surrounding ledger as one filesystem transaction (<code>backend/src/grimoire/store/atomic.py:225</code>).</p>
+<h2>Prepare, commit, resume</h2>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+  participant R as Review client
+  participant T as Commit token and epoch
+  participant J as Positional journal
+  participant W as Domain writers
+  R->>T: Save approved review with token
+  alt Token already spent
+    T-->>R: Original stored result
+  else Fresh or unfinished commit
+    T->>J: Claim and inspect progress
+    J->>W: Apply pending steps only
+    W-->>J: One outcome per edit
+    alt Outside value changed during interruption
+      J-->>R: Fresh conflict row
+    else Steps settle
+      J->>T: Persist finished result
+      T-->>R: Replayable outcome
+    end
+  end
+</pre></div></div>
+<p>Review generation itself does not create the commit entry; the epoch travels in the token. On resume, a target/value pair is exempt only if this commit actually wrote it, preventing stale conflict verdicts from erasing an outside edit (<code>backend/src/grimoire/store/commits.py:15</code>, <code>backend/src/grimoire/store/commits.py:32</code>, <code>backend/src/grimoire/store/absorb/apply.py:53</code>).</p>
+<h3>Prompt lineage seam</h3><p>Context gathering feeds one rendered variant, then packing marks dropped sections for both outgoing messages and the inspector. Prompt text lives outside the store; new evidence must preserve the lower-tier additive rule (<code>backend/src/grimoire/store/context/assemble.py:3</code>, <code>backend/src/grimoire/store/context/pack.py:24</code>, <code>backend/src/grimoire/store/context/pack.py:78</code>).</p>
+
+</section>
+<section class="panel" id="boundaries" role="tabpanel">
+
+<h2>Own the record before owning its path</h2>
+<div class="tbl-wrap"><table><thead><tr><th>Concern</th><th>Owner and verdict</th></tr></thead><tbody><tr><td>Library selection</td><td><span class="badge good">one resolver</span> <code>backend/src/grimoire/store/paths.py:38</code> pins root identity for an operation.</td></tr><tr><td>Campaign inheritance</td><td><span class="badge good">one rule</span> <code>backend/src/grimoire/store/overlay.py:28</code> declares inheritable kinds/files.</td></tr><tr><td>Record bytes</td><td><span class="badge good">one primitive</span> <code>backend/src/grimoire/store/atomic.py:254</code> publishes complete replacements; append logs use a separate primitive.</td></tr><tr><td>Campaign exclusion</td><td><span class="badge warn">declared residuals</span> <code>backend/src/grimoire/store/locks.py:14</code> names reviewed, outside and unreviewed domains.</td></tr><tr><td>Approved edit progress</td><td><span class="badge good">explicit journal</span> <code>backend/src/grimoire/store/commits.py:15</code> owns token outcomes and epochs; <code>backend/src/grimoire/store/absorb/apply.py:3</code> delegates record writes.</td></tr><tr><td>Derived database</td><td><span class="badge good">disposable</span> <code>backend/src/grimoire/store/compiled.py:3</code> never establishes live membership.</td></tr><tr><td>Prompt content and order</td><td><span class="badge good">separate roles</span> <code>backend/src/grimoire/store/context/__init__.py:8</code> gathers data; templates own prose; section catalog owns ordering.</td></tr></tbody></table></div>
+<div class="callout warn"><strong>Several writing surfaces share records.</strong> Direct API edits, reviewed absorb edits and outside-app authoring can all change campaign content. The safe boundary is the record-owning store operation, not an assumption that all writes come from a single route. Resume conflict detection explicitly accounts for direct entity routes and another device (<code>backend/src/grimoire/store/absorb/apply.py:57</code>); direct editing's cache sync is a warm-up, not correctness repair (<code>backend/src/grimoire/cache.py:3</code>).</div>
+<h3>Dependency graph interpretation</h3><p>The graph is a textual model of imports and asset references, not a runtime lock or render graph. Package aggregation and compatibility re-exports need semantic checking against the import guard's submodule resolution; that guard treats module bindings differently from names cached from a sibling package (<code>backend/tests/test_import_guard.py:9</code>, <code>backend/src/grimoire/store/context/__init__.py:18</code>). Runtime resource references built without literal paths are outside the analyzer's reach.</p>
+<h3>Boundaries worth retaining</h3><p>An overlay View is request-local read-sweep state and must not survive mutation (<code>backend/src/grimoire/store/overlay.py:150</code>). Plugin calendar code is deliberately resolved and validated before campaign locking because its runtime is unbounded (<code>backend/src/grimoire/store/campaigns/lifecycle.py:69</code>). SQLite parsing stays outside the database exclusion, and hostile filesystem component replacement is expressly outside its link checks (<code>backend/src/grimoire/store/compiled.py:21</code>).</p>
+
+<h3>Fresh graph SCCs</h3><p>The depth-4 rerun reports four file SCC groups. Three are source groups passing through package aggregators: the broad store facade and smaller investigation/overview facades. Their representative edges combine aggregate re-exports with imports of sibling submodules (<code>backend/src/grimoire/store/__init__.py:28</code>, <code>backend/src/grimoire/store/investigation/__init__.py:18</code>, <code>backend/src/grimoire/store/investigation/final.py:23</code>, <code>backend/src/grimoire/store/overview/__init__.py:24</code>, <code>backend/src/grimoire/store/overview/warm.py:31</code>). This textual resolution over-approximates initialization dependencies; it does not establish an executable cycle. The fourth SCC links generated documentation pages through navigation/resource references and is not store control flow. The grouped module SCC similarly combines distinct leaf modules under shared directory names. The import guard documents the intended acyclic module boundary; this run did not execute it (<code>backend/tests/test_import_guard.py:9</code>).</p>
+
+</section>
 <section class="panel" id="invariants" role="tabpanel">
 
-<div class="card hero">
-  <h2>Four rules hold this package together, and all four are enforced by tests</h2>
-  <p>This package would be dangerous if its rules were conventions, because it has no type system
-  standing between a caller and a corrupted transcript. Instead each rule is compiled into a test
-  that parses the package's own AST and fails the build, with an explicit escape hatch that must
-  carry a stated reason.</p>
-</div>
+<h2>Preserve identity and recoverable writes</h2>
+<div class="tbl-wrap"><table><thead><tr><th>Invariant</th><th>Enforcement</th><th>Judgment</th></tr></thead><tbody><tr><td>A reader sees complete previous or complete new record bytes</td><td><code>backend/src/grimoire/store/atomic.py:225</code></td><td><span class="badge good">record atomicity</span></td></tr><tr><td>Campaign resolution applies the same inheritance rules everywhere</td><td><code>backend/src/grimoire/store/overlay.py:95</code>; representative <code>backend/tests/test_overlay.py:64</code></td><td><span class="badge good">declared and tested</span></td></tr><tr><td>A read-sweep View never crosses a mutation</td><td><code>backend/src/grimoire/store/overlay.py:150</code></td><td><span class="badge warn">caller lifetime rule</span></td></tr><tr><td>All campaign mutation follows one lock ordering</td><td><code>backend/src/grimoire/store/locks.py:61</code>; <code>backend/tests/test_lock_domain_guard.py:34</code></td><td><span class="badge warn">guarded syntax with residual backlog</span></td></tr><tr><td>Cache failure cannot replace a file-reader answer</td><td><code>backend/src/grimoire/store/compiled.py:3</code></td><td><span class="badge good">explicit fallback contract</span></td></tr><tr><td>Interrupted commit does not blindly replay an outside-modified target</td><td><code>backend/src/grimoire/store/absorb/apply.py:53</code></td><td><span class="badge good">fresh target comparison</span></td></tr></tbody></table></div>
+<h3>Failure and concurrency boundaries</h3><p>Atomic writes clean their temporary file on failure, while metadata preservation is best effort (<code>backend/src/grimoire/store/atomic.py:152</code>, <code>backend/src/grimoire/store/atomic.py:246</code>). Display reads may fail soft on malformed ledgers; identity-changing writes require strict ledgers, because treating corruption as “attached” can import unrelated world content (<code>backend/src/grimoire/store/overlay.py:388</code>, <code>backend/src/grimoire/store/overlay.py:428</code>). Locks serialize cooperating local writers; sync clients retain their own consistency semantics (<code>backend/src/grimoire/store/atomic.py:20</code>).</p>
+<h3>Maintainer risk order</h3><ol>
+<li><strong>Identity changes in overlay hotspots.</strong> A reused slug is not the same record; detachment, tombstones and sidecars must stay aligned (<code>backend/src/grimoire/store/overlay.py:21</code>, <code>backend/src/grimoire/store/overlay.py:368</code>).</li>
+<li><strong>Incomplete lock-domain reasoning.</strong> The source explicitly retains unreviewed scope; a syntactically accepted hold does not prove arbitrary computed campaign identity is covered (<code>backend/src/grimoire/store/overlay.py:420</code>, <code>backend/tests/test_lock_domain_guard.py:40</code>).</li>
+<li><strong>Multi-file interrupted commits.</strong> Token outcome, positional progress and outside-drift comparison must evolve together (<code>backend/src/grimoire/store/commits.py:19</code>, <code>backend/src/grimoire/store/absorb/apply.py:71</code>).</li>
+<li><strong>Prompt/inspector disagreement after packing changes.</strong> Preserve the single render and explicit drop marks (<code>backend/src/grimoire/store/context/assemble.py:8</code>, <code>backend/src/grimoire/store/context/pack.py:78</code>).</li>
+<li><strong>Overreading atomicity.</strong> Power loss and simultaneous sync-client edits remain outside the guarantee (<code>backend/src/grimoire/store/atomic.py:12</code>).</li></ol>
+<p class="dim">No dynamic verification or private-library inspection was performed. The absence of an automatic LLM tab is a wrapper-detection limit, not evidence that prompt paths are risk-free.</p>
 
-<h2>The enforced rules</h2>
-<div class="tbl-wrap"><table class="sortable">
-<tr><th>Rule</th><th>Guard</th><th>Escape hatch</th><th>Verdict</th></tr>
-<tr><td>Every record write goes through <code>atomic</code></td><td><code>backend/tests/test_atomic_guard.py</code></td><td><code>atomic-ok</code></td><td><span class="badge good">enforced</span></td></tr>
-<tr><td>No inheritable record is read off a raw campaign root</td><td><code>backend/tests/test_overlay_guard.py</code></td><td><code>overlay-ok</code></td><td><span class="badge good">enforced</span></td></tr>
-<tr><td>Filesystem access goes through the resolvers</td><td><code>backend/tests/test_paths_guard.py</code>, <code>backend/tests/test_path_guard_store.py</code></td><td><code>paths-ok</code></td><td><span class="badge good">enforced</span></td></tr>
-<tr><td>Campaign-scoped mutators take <code>campaign_lock(cid)</code></td><td><code>backend/tests/test_lock_domain_guard.py</code></td><td><code>lock-domain-ok</code></td><td><span class="badge warn">enforced, with a backlog</span></td></tr>
-<tr><td>Only <code>hold_all</code> may hold two campaign locks</td><td><code>backend/tests/test_lock_order_guard.py</code></td><td><code>lock-order-ok</code></td><td><span class="badge good">enforced</span></td></tr>
-<tr><td>Module graph acyclic; imports at module scope; cross-package imports bind submodules</td><td><code>backend/tests/test_import_guard.py</code></td><td><code>import-ok</code></td><td><span class="badge good">enforced</span></td></tr>
-</table></div>
-<div class="callout good">
-  <strong>The escape hatches are designed not to be cheap.</strong> A marker with no reason fails
-  deliberately, and each guard caps how many may exist. That converts "I'll add a suppression" from a
-  one-character edit into a reviewable claim.
-</div>
+<h3>Reconciliation with the previous atlas</h3>
+<p>The previous store atlas had no recovered Boundaries tab. Its risk checklist is retained here with current evidence; old detector totals and hotspot coordinates are not reused as current facts.</p>
+<div class="tbl-wrap"><table><thead><tr><th>Previous item</th><th>Current disposition</th></tr></thead><tbody>
+<tr><td>Atomic, overlay, resolver, lock-domain, lock-order and import rules</td><td>Retained as source-checked guard contracts, not universal proofs. Atomic/overlay guards disclose escape paths; resolver and caller-id checks remain distinct (<code>backend/tests/test_atomic_guard.py:7</code>, <code>backend/tests/test_overlay_guard.py:25</code>, <code>backend/tests/test_paths_guard.py:28</code>, <code>backend/tests/test_path_guard_store.py:1</code>, <code>backend/tests/test_lock_domain_guard.py:34</code>, <code>backend/tests/test_lock_order_guard.py:20</code>, <code>backend/tests/test_import_guard.py:3</code>). Exemptions require an actual comment reason (<code>backend/tests/guard_markers.py:79</code>).</td></tr>
+<tr><td>Overlay hotspot and unreviewed mutators</td><td>Retained. Fresh hotspot data supersedes old size/churn figures; the unreviewed declaration still exists at <code>backend/src/grimoire/store/locks.py:562</code>. The guard does not verify overlay's internal resolution semantics.</td></tr>
+<tr><td>Absorb complexity at old function locations</td><td>Retained as review focus, with the old metric claims unverified. Current apply delegates ordinary kinds to writers and treats sheets/membership separately (<code>backend/src/grimoire/store/absorb/apply.py:3</code>, <code>backend/src/grimoire/store/absorb/apply.py:92</code>); that organization does not by itself close complexity risk.</td></tr>
+<tr><td>Linear keyword search and scaling limit</td><td>Retained: each query still walks the corpus; fact files are reread through their owners. Search intentionally reports physical scope rather than inherited duplicates (<code>backend/src/grimoire/store/search.py:3</code>, <code>backend/src/grimoire/store/search.py:18</code>, <code>backend/src/grimoire/store/search.py:36</code>).</td></tr>
+<tr><td>Swallowed exceptions and unused-import overcount</td><td>The old package-wide counts and blanket classifications remain unverified and are not carried forward numerically. Sampled fail-soft boundaries are explained above; facade re-exports are explicitly an API contract (<code>backend/src/grimoire/store/__init__.py:18</code>). That does not establish that every other reported import or exception is harmless.</td></tr>
+</tbody></table></div>
 
-<h2>Risk ranking</h2>
-<div class="callout warn">
-  <strong>1. <code>backend/src/grimoire/store/overlay.py</code> is the package's hotspot and its hardest idea at the same time.</strong>
-  964 lines, 172 branches, 43 commits in 24 months, hotspot score 7,439 &mdash; the highest in the package.
-  It encodes four states (campaign copy, tombstoned, detached, inherited) and two different overlay
-  rules, and the guard that protects it can only check that <em>other</em> modules do not bypass it;
-  nothing checks the resolution logic inside it beyond ordinary tests.
-</div>
-<div class="callout warn">
-  <strong>2. <code>UNREVIEWED</code> is a list of campaign mutators nobody has confirmed.</strong>
-  <code>backend/src/grimoire/store/locks.py:298</code>. The guard permits it to shrink but not grow,
-  which is the right shape for a backlog &mdash; but its entries are by construction the exact bug class
-  the lock domain exists to prevent, and the module header records that <code>rolls</code> really was
-  outside the domain until it joined.
-</div>
-<div class="callout warn">
-  <strong>3. Complexity concentrates in the absorb pipeline.</strong>
-  <code>backend/src/grimoire/store/absorb/apply.py:83</code> trips four separate high-severity
-  detectors at once (cyclomatic, cognitive, nesting depth and function length), and
-  <code>backend/src/grimoire/store/absorb/apply.py:594</code> two more. Absorb is the step that writes
-  model-proposed edits into the user's world, so it is a poor place for a function nobody can hold in
-  their head.
-</div>
-<div class="callout warn">
-  <strong>4. Search is O(corpus) per query, by choice.</strong>
-  <code>backend/src/grimoire/store/search.py</code> walks every file on every query, with extraction
-  memoized on <code>(path, mtime, size)</code>. The docstring argues this is right at "hundreds of
-  files, one user, local disk" &mdash; a defensible trade that is also an undocumented scaling limit for
-  a library that grows by one scene per session forever.
-</div>
-<div class="callout">
-  <strong>5. 58 swallowed exceptions.</strong> The ones I read are individually argued in docstrings
-  and correct (a lost activity stamp must not fail a completed write; one malformed preset must not
-  abort a registry scan). But 58 is enough that "it's always argued" is a claim about the package
-  nobody has verified in one pass.
-</div>
+</section>
+<section class="panel" id="glossary" role="tabpanel">
 
-<h2>What the Health grade over-counts here</h2>
-<div class="callout">
-  <p>184 of this package's 1,394 findings are <code>unused_import</code>, and essentially all of them
-  are <code>from __future__ import annotations</code> &mdash; whose effect is on the compiler, so no
-  detector can see it used &mdash; plus the deliberate re-exports at
-  <code>backend/src/grimoire/store/__init__.py:21</code>, which is what a facade module is <em>for</em>.
-  None of the 184 is a defect. Excluding them, the package's high-severity findings drop from 289 to
-  105, and those are dominated by complexity metrics rather than correctness claims.</p>
-</div>
+<h2>Identity vocabulary matters</h2>
+<div class="tbl-wrap"><table><thead><tr><th>Domain term</th><th>Code name</th><th>Meaning and drift</th></tr></thead><tbody><tr><td>Inherited record</td><td>overlay</td><td><code>backend/src/grimoire/store/overlay.py:3</code>: world content remains live until campaign divergence.</td></tr><tr><td>Absent in this campaign</td><td>tombstone / deleted</td><td><code>backend/src/grimoire/store/overlay.py:18</code>: prevents inherited resurrection and reserves the id.</td></tr><tr><td>Campaign-owned identity</td><td>detached</td><td><code>backend/src/grimoire/store/overlay.py:368</code>: same slug does not authorize inheritance from a later world record.</td></tr><tr><td>Stable record key</td><td>kind/id</td><td><code>backend/src/grimoire/store/entities.py:3</code>: renaming changes display name, not entity identity.</td></tr><tr><td>Read-sweep context</td><td>View</td><td><code>backend/src/grimoire/store/overlay.py:131</code>: frozen inputs for one sweep, not a mutable unit of work.</td></tr><tr><td>Commit progress</td><td>journal</td><td><span class="badge warn">overloaded</span> <code>backend/src/grimoire/store/absorb/apply.py:27</code>: commit progress differs from the user-visible change journal.</td></tr><tr><td>Compiled cache</td><td>compiled</td><td><code>backend/src/grimoire/store/compiled.py:3</code>: an optional memo, not the library database.</td></tr><tr><td>Prompt priority</td><td>tier / pin</td><td><code>backend/src/grimoire/store/context/pack.py:55</code>: pin is an explicit veto on dropping, not another tier.</td></tr></tbody></table></div>
+<div class="callout warn">“Campaign-local” describes resolution ownership, not necessarily record lifetime. A slug can outlive the record whose sidecars used it (<code>backend/src/grimoire/store/overlay.py:42</code>).</div>
 
 </section><!--DOC_BODY--></main>
-<footer class="doc">Generated by code-visualization for the grimoire code-overview set. Automated tabs are script-generated; judgment tabs were authored from code reading and their citations verified against a63cb05f5.</footer>
+<footer class="doc">Automated tabs use installed code-visualization analyzers. Judgment tabs cite sampled source reading. Coverage omitted by user choice; custom model wrappers and dynamic resource loads have stated detection gaps.</footer>
 <script>
 (function(){
   const btns=[...document.querySelectorAll('nav.tabs button')];
@@ -568,6 +578,325 @@ flowchart TD
     window.dispatchEvent(new CustomEvent('tab:shown',{detail:{id}}));
   }
   btns.forEach(b=>b.addEventListener('click',()=>activate(b.dataset.tab)));
+})();
+</script>
+<script id="atlas-renderers">
+/* The atlas renderers: sortable tables, the force-directed graph, the
+   squarified treemap and Mermaid diagrams — one copy. assemble.py inlines this
+   into whatever page shell --template names, so a caller that restyles the page
+   keeps them.
+
+   What a shell owes them: the design tokens they read (--accent, --surface,
+   --text, ... as CSS custom properties), and the tab contract — panels are
+   `.panel`, the shown one carries `.active`, and showing one dispatches
+   `tab:shown` on window with {detail:{id}}. A hidden tab's diagrams are drawn
+   when it is first shown, at its real size. */
+(function(){
+/* A shell that already carries its own inline copy (an older template) keeps
+   it: binding the sort handlers twice would make every click cancel itself. */
+if(window.atlasRenderers||typeof window.renderForceGraph==='function')return;
+window.atlasRenderers=true;
+
+/* ============ helpers ============ */
+const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const tip=document.getElementById('viz-tip')||document.body.appendChild(
+  Object.assign(document.createElement('div'),{className:'viz-tip',id:'viz-tip'}));
+function showTip(html,x,y){tip.innerHTML=html;tip.style.display='block';
+  const r=tip.getBoundingClientRect();
+  tip.style.left=Math.min(x+14,innerWidth-r.width-10)+'px';
+  tip.style.top=Math.min(y+14,innerHeight-r.height-10)+'px';}
+function hideTip(){tip.style.display='none'}
+function lerpColor(a,b,t){
+  const pa=hex(a),pb=hex(b);
+  return `rgb(${pa.map((v,i)=>Math.round(v+(pb[i]-v)*t)).join(',')})`;
+  function hex(h){h=h.replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');
+    return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16));}
+}
+function fmt(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e4?(n/1e3).toFixed(0)+'k':n>=1e3?(n/1e3).toFixed(1)+'k':String(n)}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+/* sortable tables */
+document.querySelectorAll('table.sortable').forEach(tb=>{
+  tb.querySelectorAll('thead th').forEach((th,ci)=>{
+    th.addEventListener('click',()=>{
+      const dir=th.classList.contains('asc')?'desc':'asc';
+      tb.querySelectorAll('thead th').forEach(h=>h.classList.remove('asc','desc'));
+      th.classList.add(dir);
+      const rows=[...tb.querySelectorAll('tbody tr')];
+      const val=r=>{const td=r.children[ci];if(!td)return '';
+        const d=td.dataset.sort!==undefined?td.dataset.sort:td.textContent.trim();
+        const n=parseFloat(String(d).replace(/[,%]/g,''));return isNaN(n)?String(d).toLowerCase():n;};
+      rows.sort((a,b)=>{const va=val(a),vb=val(b);
+        const c=(typeof va==='number'&&typeof vb==='number')?va-vb:String(va).localeCompare(String(vb));
+        return dir==='asc'?c:-c;});
+      const tbody=tb.querySelector('tbody');rows.forEach(r=>tbody.appendChild(r));
+    });
+  });
+});
+
+/* pan/zoom for a container holding an inner element (svg group or div) */
+function panZoom(viewport,apply,getState){
+  let drag=null;
+  viewport.addEventListener('wheel',e=>{
+    if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();
+    const s=getState();const f=e.deltaY<0?1.15:1/1.15;
+    const r=viewport.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+    s.x=mx-(mx-s.x)*f; s.y=my-(my-s.y)*f; s.k=Math.max(.15,Math.min(8,s.k*f)); apply();
+  },{passive:false});
+  viewport.addEventListener('mousedown',e=>{
+    if(e.target.closest('.zoombar')||e.target.dataset.draggable)return;
+    drag={sx:e.clientX,sy:e.clientY,ox:getState().x,oy:getState().y};
+    viewport.classList.add('dragging');
+  });
+  window.addEventListener('mousemove',e=>{if(!drag)return;
+    const s=getState();s.x=drag.ox+e.clientX-drag.sx;s.y=drag.oy+e.clientY-drag.sy;apply();});
+  window.addEventListener('mouseup',()=>{drag=null;viewport.classList.remove('dragging')});
+}
+function addZoombar(container,zoomIn,zoomOut,reset){
+  const bar=document.createElement('div');bar.className='zoombar';
+  [['+',zoomIn],['−',zoomOut],['⟲',reset]].forEach(([t,fn])=>{
+    const b=document.createElement('button');b.textContent=t;b.title=t==='⟲'?'Reset view':(t==='+'?'Zoom in':'Zoom out');
+    b.addEventListener('click',fn);bar.appendChild(b);});
+  container.appendChild(bar);
+}
+
+/* ============ force-directed graph ============ */
+/* data: {nodes:[{id,label,group,size,fanIn,fanOut,meta}], links:[{source,target,cycle,weight}], groups:{name:colorKey}} */
+function renderForceGraph(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||560;
+  const groupNames=[...new Set(data.nodes.map(n=>n.group||''))];
+  const palette=[cssVar('--accent'),cssVar('--good'),cssVar('--warn'),cssVar('--violet'),cssVar('--bad'),'#5ec2c9','#c98fb8','#8fb0c9'];
+  const gcolor={};groupNames.forEach((g,i)=>gcolor[g]=palette[i%palette.length]);
+  const nodes=data.nodes.map(n=>({...n,x:W/2+(Math.random()-0.5)*W*0.7,y:H/2+(Math.random()-0.5)*H*0.7,vx:0,vy:0}));
+  const idx={};nodes.forEach((n,i)=>idx[n.id]=i);
+  const links=data.links.filter(l=>idx[l.source]!==undefined&&idx[l.target]!==undefined)
+    .map(l=>({...l,s:idx[l.source],t:idx[l.target]}));
+  const maxSize=Math.max(1,...nodes.map(n=>n.size||1));
+  const R=n=>6+14*Math.sqrt((n.size||1)/maxSize);
+  /* simulate */
+  const iter=nodes.length>60?220:320;
+  for(let k=0;k<iter;k++){
+    const t=1-k/iter, rep=9000*t+900;
+    for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+      const a=nodes[i],b=nodes[j];let dx=a.x-b.x,dy=a.y-b.y;let d2=dx*dx+dy*dy||1;
+      if(d2<250000){const f=rep/d2;dx*=f;dy*=f;a.vx+=dx;a.vy+=dy;b.vx-=dx;b.vy-=dy;}
+    }
+    links.forEach(l=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const want=90+R(a)+R(b);const f=0.02*(d-want)/d;
+      a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f;});
+    nodes.forEach(n=>{
+      n.vx+=(W/2-n.x)*0.0035;n.vy+=(H/2-n.y)*0.0035;
+      n.x+=Math.max(-14,Math.min(14,n.vx));n.y+=Math.max(-14,Math.min(14,n.vy));
+      n.vx*=0.6;n.vy*=0.6;});
+  }
+  /* fit */
+  const xs=nodes.map(n=>n.x),ys=nodes.map(n=>n.y);
+  const pad=60,minx=Math.min(...xs)-pad,maxx=Math.max(...xs)+pad,miny=Math.min(...ys)-pad,maxy=Math.max(...ys)+pad;
+  const fitK=Math.min(W/(maxx-minx),H/(maxy-miny),1.6);
+  const st={k:fitK,x:(W-(maxx+minx)*fitK)/2,y:(H-(maxy+miny)*fitK)/2};
+  const init={...st};
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const defs=document.createElementNS(svgNS,'defs');
+  defs.innerHTML=`<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--text-faint')}"/></marker>
+  <marker id="arr-cyc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--bad')}"/></marker>`;
+  svg.appendChild(defs);
+  const g=document.createElementNS(svgNS,'g');svg.appendChild(g);
+  const apply=()=>g.setAttribute('transform',`translate(${st.x},${st.y}) scale(${st.k})`);
+  const edgeEls=[],nodeEls=[];
+  links.forEach(l=>{
+    const p=document.createElementNS(svgNS,'path');
+    p.setAttribute('stroke',l.cycle?cssVar('--bad'):cssVar('--text-faint'));
+    p.setAttribute('stroke-opacity',l.cycle?'0.9':'0.4');
+    p.setAttribute('stroke-width',l.cycle?2:Math.min(3,0.7+Math.log2(1+(l.weight||1))*0.5));
+    p.setAttribute('fill','none');
+    /* dashed = loaded at runtime (template, prompt, data), not imported */
+    if(l.kind==='resource')p.setAttribute('stroke-dasharray','5 4');
+    p.setAttribute('marker-end',l.cycle?'url(#arr-cyc)':'url(#arr)');
+    g.appendChild(p);edgeEls.push(p);
+  });
+  nodes.forEach(n=>{
+    const grp=document.createElementNS(svgNS,'g');grp.style.cursor='grab';grp.dataset.draggable='1';
+    const c=document.createElementNS(svgNS,'circle');
+    c.setAttribute('r',R(n));c.setAttribute('fill',gcolor[n.group||'']);
+    c.setAttribute('fill-opacity','0.85');c.setAttribute('stroke',cssVar('--bg'));c.setAttribute('stroke-width','1.5');
+    c.dataset.draggable='1';
+    const t=document.createElementNS(svgNS,'text');
+    t.textContent=n.label||n.id;t.setAttribute('font-size','11');t.setAttribute('font-family',cssVar('--mono'));
+    t.setAttribute('fill',cssVar('--text'));t.setAttribute('text-anchor','middle');t.setAttribute('dy',R(n)+13);
+    t.style.pointerEvents='none';
+    grp.appendChild(c);grp.appendChild(t);g.appendChild(grp);nodeEls.push(grp);
+    grp.addEventListener('mouseenter',e=>{
+      showTip(`<b>${esc(n.label||n.id)}</b><br>${n.meta?esc(n.meta)+'<br>':''}fan-in ${n.fanIn??'–'} · fan-out ${n.fanOut??'–'}${n.size?` · ${fmt(n.size)} loc`:''}`,e.clientX,e.clientY);
+      hl(n.id);});
+    grp.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    grp.addEventListener('mouseleave',()=>{hideTip();hl(null)});
+    let dragN=null;
+    grp.addEventListener('mousedown',e=>{e.stopPropagation();dragN={mx:e.clientX,my:e.clientY,ox:n.x,oy:n.y};});
+    window.addEventListener('mousemove',e=>{if(!dragN)return;
+      n.x=dragN.ox+(e.clientX-dragN.mx)/st.k;n.y=dragN.oy+(e.clientY-dragN.my)/st.k;draw();});
+    window.addEventListener('mouseup',()=>dragN=null);
+  });
+  function hl(id){
+    if(id===null){edgeEls.forEach((p,i)=>p.setAttribute('stroke-opacity',links[i].cycle?'0.9':'0.4'));
+      nodeEls.forEach(el=>el.style.opacity='1');return;}
+    const near=new Set([id]);
+    links.forEach(l=>{if(l.source===id)near.add(l.target);if(l.target===id)near.add(l.source)});
+    edgeEls.forEach((p,i)=>{const l=links[i];
+      p.setAttribute('stroke-opacity',(l.source===id||l.target===id)?'1':'0.08');});
+    nodeEls.forEach((el,i)=>el.style.opacity=near.has(nodes[i].id)?'1':'0.25');
+  }
+  function draw(){
+    links.forEach((l,i)=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const tx=b.x-dx/d*(R(b)+3),ty=b.y-dy/d*(R(b)+3);
+      const sx=a.x+dx/d*R(a),sy=a.y+dy/d*R(a);
+      const mx=(sx+tx)/2-dy/d*10,my=(sy+ty)/2+dx/d*10;
+      edgeEls[i].setAttribute('d',`M${sx},${sy} Q${mx},${my} ${tx},${ty}`);});
+    nodes.forEach((n,i)=>nodeEls[i].setAttribute('transform',`translate(${n.x},${n.y})`));
+  }
+  draw();apply();
+  container.appendChild(svg);
+  panZoom(container,apply,()=>st);
+  addZoombar(container,
+    ()=>{st.k=Math.min(8,st.k*1.25);apply()},
+    ()=>{st.k=Math.max(.15,st.k/1.25);apply()},
+    ()=>{Object.assign(st,init);apply()});
+  if(groupNames.length>1||data.legendExtra){
+    const leg=document.createElement('div');leg.className='legend';
+    groupNames.forEach(gn=>{leg.innerHTML+=`<span><i class="sw" style="background:${gcolor[gn]}"></i>${esc(gn||'(root)')}</span>`});
+    if(data.legendExtra)leg.innerHTML+=data.legendExtra;
+    container.appendChild(leg);
+  }
+}
+
+/* ============ squarified treemap ============ */
+/* data: {items:[{name,value,metric,meta}], metricLabel, metricMax} — value drives area, metric drives heat color */
+function renderTreemap(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||520;
+  const items=data.items.filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
+  const total=items.reduce((s,d)=>s+d.value,0)||1;
+  const mmax=data.metricMax??Math.max(1,...items.map(d=>d.metric||0));
+  const rects=[];
+  (function squarify(list,x,y,w,h){
+    if(!list.length)return;
+    if(list.length===1){rects.push({d:list[0],x,y,w,h});return;}
+    let row=[],rest=list.slice(),best=Infinity;
+    while(rest.length){
+      const cand=row.concat(rest[0]);
+      const sum=cand.reduce((s,d)=>s+d.value,0);
+      const side=Math.min(w,h);
+      const scale=(w*h)*(sum/list.reduce((s,d)=>s+d.value,0));
+      const len=scale/side;
+      const worst=Math.max(...cand.map(d=>{
+        const a=(d.value/sum)*side*len;const r=Math.max(len*len/ (a/side*side/ (a/len)||1),1);
+        const iw=(d.value/sum)*side, ratio=Math.max(len/iw,iw/len);return ratio;}));
+      if(worst<=best){best=worst;row=cand;rest.shift();}
+      else break;
+    }
+    const sum=row.reduce((s,d)=>s+d.value,0);
+    const frac=sum/list.reduce((s,d)=>s+d.value,0);
+    if(w>=h){const cw=w*frac;let cy=y;
+      row.forEach(d=>{const ch=h*(d.value/sum);rects.push({d,x,y:cy,w:cw,h:ch});cy+=ch;});
+      squarify(rest,x+cw,y,w-cw,h);
+    }else{const ch=h*frac;let cx=x;
+      row.forEach(d=>{const cw=w*(d.value/sum);rects.push({d,x:cx,y,w:cw,h:ch});cx+=cw;});
+      squarify(rest,x,y+ch,w,h-ch);
+    }
+  })(items,0,0,W,H);
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const lo=cssVar('--heat-lo'),hi=cssVar('--heat-hi');
+  rects.forEach(r=>{
+    const t=Math.pow(Math.min(1,(r.d.metric||0)/mmax),0.6);
+    const g=document.createElementNS(svgNS,'g');
+    const rc=document.createElementNS(svgNS,'rect');
+    rc.setAttribute('x',r.x+1);rc.setAttribute('y',r.y+1);
+    rc.setAttribute('width',Math.max(0,r.w-2));rc.setAttribute('height',Math.max(0,r.h-2));
+    rc.setAttribute('rx',3);rc.setAttribute('fill',lerpColor(lo,hi,t));
+    rc.setAttribute('stroke',cssVar('--bg'));rc.setAttribute('stroke-width','1');
+    g.appendChild(rc);
+    if(r.w>66&&r.h>22){
+      const tx=document.createElementNS(svgNS,'text');
+      const nm=r.d.name.split('/').pop();
+      tx.textContent=nm.length>Math.floor(r.w/6.6)?nm.slice(0,Math.floor(r.w/6.6)-1)+'…':nm;
+      tx.setAttribute('x',r.x+7);tx.setAttribute('y',r.y+16);
+      tx.setAttribute('font-size','11');tx.setAttribute('font-family',cssVar('--mono'));
+      tx.setAttribute('fill',t>0.55?'#fff':cssVar('--text'));tx.style.pointerEvents='none';
+      g.appendChild(tx);
+    }
+    g.addEventListener('mouseenter',e=>{rc.setAttribute('stroke',cssVar('--text'));
+      showTip(`<b>${esc(r.d.name)}</b><br>${esc(data.valueLabel||'size')}: ${fmt(r.d.value)}<br>${esc(data.metricLabel||'metric')}: ${fmt(r.d.metric||0)}${r.d.meta?'<br>'+esc(r.d.meta):''}`,e.clientX,e.clientY);});
+    g.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    g.addEventListener('mouseleave',()=>{rc.setAttribute('stroke',cssVar('--bg'));hideTip();});
+    svg.appendChild(g);
+  });
+  container.appendChild(svg);
+  const leg=document.createElement('div');leg.className='legend';
+  leg.innerHTML=`<span>area = ${esc(data.valueLabel||'size')}</span><span><i class="sw" style="background:${lo}"></i>low ${esc(data.metricLabel||'')}</span><span><i class="sw" style="background:${hi}"></i>high ${esc(data.metricLabel||'')}</span>`;
+  container.appendChild(leg);
+}
+
+/* ============ auto-init viz blocks ============ */
+document.querySelectorAll('.viz[data-render]').forEach(el=>{
+  const dataEl=el.nextElementSibling;
+  if(!dataEl||dataEl.type!=='application/json')return;
+  let data;try{data=JSON.parse(dataEl.textContent)}catch(e){el.textContent='data parse error';return}
+  const render=()=>{
+    if(el.dataset.done)return;el.dataset.done='1';
+    try{
+      if(el.dataset.render==='forcegraph')renderForceGraph(el,data);
+      else if(el.dataset.render==='treemap')renderTreemap(el,data);
+    }catch(e){el.innerHTML='<p style="padding:16px" class="dim">render error: '+esc(e.message)+'</p>';}
+  };
+  const panel=el.closest('.panel');
+  if(panel&&panel.classList.contains('active'))render();
+  else window.addEventListener('tab:shown',ev=>{if(panel&&ev.detail.id===panel.id)render();});
+});
+
+/* ============ mermaid (lazy per tab, with pan/zoom) ============ */
+(function(){
+  if(!document.querySelector('.mermaid'))return;
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+  s.onload=()=>{
+    if(typeof mermaid==='undefined'){document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});return;}
+    mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:'base',
+      themeVariables:{
+        primaryColor:cssVar('--surface-2'),primaryTextColor:cssVar('--text'),
+        primaryBorderColor:cssVar('--border-strong'),lineColor:cssVar('--text-dim'),
+        secondaryColor:cssVar('--accent-dim'),tertiaryColor:cssVar('--surface'),
+        background:cssVar('--surface'),mainBkg:cssVar('--surface-2'),
+        nodeTextColor:cssVar('--text'),fontFamily:cssVar('--sans'),fontSize:'14px',
+        actorBkg:cssVar('--surface-2'),actorBorder:cssVar('--accent'),actorTextColor:cssVar('--text'),
+        signalColor:cssVar('--text-dim'),signalTextColor:cssVar('--text'),
+        labelBoxBkgColor:cssVar('--surface-2'),labelTextColor:cssVar('--text'),
+        loopTextColor:cssVar('--text-dim'),noteBkgColor:cssVar('--warn-dim'),noteTextColor:cssVar('--text'),noteBorderColor:cssVar('--warn'),
+        clusterBkg:cssVar('--accent-dim'),clusterBorder:cssVar('--border-strong'),titleColor:cssVar('--text'),
+        edgeLabelBackground:cssVar('--surface')
+      }});
+    async function renderIn(panel){
+      const nodes=[...panel.querySelectorAll('.mermaid:not([data-processed])')];
+      if(!nodes.length)return;
+      try{await mermaid.run({nodes});}catch(e){/* leaves source visible */}
+      nodes.forEach(n=>{
+        const wrap=n.closest('.mermaid-wrap');if(!wrap||wrap.dataset.pz)return;wrap.dataset.pz='1';
+        const vp=wrap.querySelector('.mviewport')||wrap;
+        const svg=n.querySelector('svg');if(!svg)return;
+        svg.style.maxWidth='none';
+        const st={k:1,x:0,y:0},init={k:1,x:0,y:0};
+        const apply=()=>{svg.style.transformOrigin='0 0';svg.style.transform=`translate(${st.x}px,${st.y}px) scale(${st.k})`};
+        panZoom(vp,apply,()=>st);
+        addZoombar(wrap,()=>{st.k=Math.min(8,st.k*1.25);apply()},()=>{st.k=Math.max(.2,st.k/1.25);apply()},()=>{Object.assign(st,init);apply()});
+      });
+    }
+    const active=document.querySelector('.panel.active');if(active)renderIn(active);
+    window.addEventListener('tab:shown',e=>{const p=document.getElementById(e.detail.id);if(p)renderIn(p);});
+  };
+  s.onerror=()=>{document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});};
+  document.head.appendChild(s);
+})();
 })();
 </script>
 </body>

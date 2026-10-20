@@ -1,5 +1,5 @@
 {
-  ".claude/skills/populate-world-content/scripts/populate_world_content.py": {
+  ".agents/skills/populate-world-content/scripts/populate_world_content.py": {
     "C901": 2,
     "PERF401": 5,
     "PLW1510": 1
@@ -408,9 +408,6 @@
   },
   "backend/tests/test_context_layout.py": {
     "RUF015": 1
-  },
-  "backend/tests/test_docs_guard.py": {
-    "RUF005": 1
   },
   "backend/tests/test_eval_graders.py": {
     "ISC002": 1

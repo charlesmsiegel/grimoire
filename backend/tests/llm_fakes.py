@@ -70,7 +70,7 @@ sequence it triggers.
 
 A **cassette** answers by what the request looks like — the same trick the
 `verify` skill's browser-driven mock plays, promoted out of that throwaway
-launcher into a fixture file both can read (`.claude/skills/verify/SKILL.md`
+launcher into a fixture file both can read (`.agents/skills/verify/SKILL.md`
 now points at it). That is right for a flow whose
 call *order* is an implementation detail (absorb makes several calls of
 different kinds), and for proving the fixture bodies still match the prompts the

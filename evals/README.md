@@ -437,7 +437,7 @@ The procedure, per task:
    the task and the run's date, and the task's `TASK_POLICY` entry carries a
    comment naming this section and that date. The corpus is synthetic, so no
    library's content enters it. A continuity task's switching change also
-   adds the hop's time to CLAUDE.md's stated bound on a sweep.
+   adds the hop's time to AGENTS.md's stated bound on a sweep.
 
 No task has been switched on yet.
 
@@ -1021,7 +1021,7 @@ length budget's, and it is one reworded section away from quietly ceasing to
 be true.
 
 Fixture content uses invented placeholder names only (Realm, Saltmarch,
-Seraphine Vale, Mara, Winifred, Rowan, Tobin). See CLAUDE.md: real world, campaign and
+Seraphine Vale, Mara, Winifred, Rowan, Tobin). See AGENTS.md: real world, campaign and
 character names must never enter this repo, not even as examples.
 
 Historical retrieval has its own isolated matrix:

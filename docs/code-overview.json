@@ -1,6 +1,6 @@
 {
   "schema": "code-overview/1",
-  "generated": "2026-08-18",
+  "generated": "2026-10-20",
   "packages": [
     {
       "name": "grimoire-store",
@@ -16,7 +16,9 @@
       "roots": [
         "backend/src/grimoire/routes",
         "backend/src/grimoire/main.py",
-        "backend/src/grimoire/__init__.py"
+        "backend/src/grimoire/__init__.py",
+        "backend/src/grimoire/runner.py",
+        "backend/src/grimoire/cache_warm.py"
       ],
       "docs": "backend/src/grimoire/routes/docs",
       "language": "python",
@@ -25,14 +27,32 @@
     {
       "name": "grimoire-llm",
       "roots": [
-        "backend/src/grimoire/llm.py",
-        "backend/src/grimoire/llm_errors.py",
-        "backend/src/grimoire/llm_usage.py",
-        "backend/src/grimoire/openrouter.py",
-        "backend/src/grimoire/openai_compatible.py",
+        "backend/src/grimoire/adapters.py",
+        "backend/src/grimoire/anthropic.py",
+        "backend/src/grimoire/catalog.py",
         "backend/src/grimoire/claude_agent.py",
+        "backend/src/grimoire/content_parts.py",
+        "backend/src/grimoire/deadline.py",
+        "backend/src/grimoire/decisions.py",
+        "backend/src/grimoire/draws.py",
         "backend/src/grimoire/embeddings.py",
+        "backend/src/grimoire/health.py",
+        "backend/src/grimoire/inference.py",
+        "backend/src/grimoire/llm.py",
+        "backend/src/grimoire/llm_capture.py",
+        "backend/src/grimoire/llm_errors.py",
+        "backend/src/grimoire/llm_reasoning.py",
+        "backend/src/grimoire/llm_sampling.py",
+        "backend/src/grimoire/llm_usage.py",
+        "backend/src/grimoire/model_guidance.py",
+        "backend/src/grimoire/model_schema.py",
+        "backend/src/grimoire/openai_compatible.py",
+        "backend/src/grimoire/openrouter.py",
         "backend/src/grimoire/prompts.py",
+        "backend/src/grimoire/schemas.py",
+        "backend/src/grimoire/template_paths.py",
+        "backend/src/grimoire/tool_calls.py",
+        "backend/src/grimoire/wire.py",
         "templates"
       ],
       "docs": "backend/src/grimoire/docs",
@@ -51,7 +71,7 @@
     {
       "name": "frontend",
       "roots": [
-        "frontend/src"
+        "frontend"
       ],
       "docs": "frontend/docs",
       "language": "typescript",
@@ -71,7 +91,11 @@
       "roots": [
         "scripts",
         "backend/scripts",
-        ".claude/skills/populate-world-content/scripts/populate_world_content.py"
+        ".agents/skills/populate-world-content/scripts",
+        ".agents/skills/world-card-integration/scripts",
+        "backend/src/grimoire/cache.py",
+        "backend/src/grimoire/compiled_build.py",
+        "backend/src/grimoire/where.py"
       ],
       "docs": "scripts/docs",
       "language": "python",
@@ -86,5 +110,12 @@
       "language": "kotlin",
       "doctor": ""
     }
+  ],
+  "notes": [
+    "Existing eight package identities retained; source roots refreshed with user confirmation.",
+    "Android health remains ungraded: no Kotlin specialist is installed. Python glue and Kotlin remain one packaging unit.",
+    "Scripts health covers Python-supported categories and language-agnostic signals; shell and PowerShell semantic coverage is incomplete.",
+    "Installed skill helper roots remain mapped to scripts for architecture and theory, but are excluded from health scoring and sizing because the root doctors do not scan them.",
+    "Root-level backend modules are assigned between API/runtime, LLM boundary contracts, and operator CLIs; templates stay with LLM."
   ]
 }

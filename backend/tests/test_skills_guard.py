@@ -18,6 +18,8 @@ import io
 import os
 import re
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,8 +30,11 @@ from tests import test_docs_guard as docs_guard
 from tests import test_install_scripts as install_scripts
 
 ROOT = Path(__file__).resolve().parents[2]
-CANONICAL_DIR = ROOT / ".claude" / "skills"
-ADAPTER_DIRS = (ROOT / ".agents" / "skills",)
+CANONICAL_DIR = ROOT / ".agents" / "skills"
+ADAPTER_DIRS = (ROOT / ".claude" / "skills",)
+# The operational vocabulary below belongs to outside-app store maintenance.
+# Discovery and link checks cover every skill; these specialized checks must
+# not impose cache-sync commands and result fields on unrelated procedures.
 ROUTING_SKILLS = ("grimoire-store-editing",)
 ADAPTER_MAX_BODY_LINES = 12
 
@@ -108,6 +113,30 @@ def _link_problems(path: Path, text: str) -> list[str]:
         elif anchor and (not target.is_file() or anchor not in docs_guard._anchors(
                 text if target == path else target.read_text(encoding="utf-8"))):
             problems.append(f"{path}: missing anchor: {ref}")
+    return problems
+
+
+def _reference_problems(directory: Path) -> list[str]:
+    """Follow the skill's Markdown graph, including conditional deep references.
+
+    A valid link in SKILL.md cannot establish that the next index still works.
+    Inspect every page, and require each one to be discoverable from the entry
+    point so a moved procedure cannot silently become an orphan. Other skills
+    and repo documents keep their own inventories; only traverse this package.
+    """
+    documents = {path.resolve(): path.read_text(encoding="utf-8") for path in directory.rglob("*.md")}
+    problems = [problem for path, text in documents.items() for problem in _link_problems(path, text)]
+    pending = [(directory / "SKILL.md").resolve()]
+    reached = set()
+    while pending:
+        path = pending.pop()
+        if path in reached or path not in documents:
+            continue
+        reached.add(path)
+        pending.extend((path.parent / ref.split("#", 1)[0]).resolve()
+                       for ref in docs_guard._refs(documents[path])
+                       if not ref.startswith(("https://", "http://", "mailto:")))
+    problems.extend(f"unreachable reference: {path}" for path in sorted(documents.keys() - reached))
     return problems
 
 
@@ -319,26 +348,31 @@ def _write(path, text):
 @pytest.fixture
 def skill_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(docs_guard, "ROOT", tmp_path)
-    canonical_dir = tmp_path / ".claude" / "skills"
-    adapter_dir = tmp_path / ".agents" / "skills"
+    canonical_dir = tmp_path / ".agents" / "skills"
+    adapter_dir = tmp_path / ".claude" / "skills"
     canonical = canonical_dir / "grimoire-store-editing" / "SKILL.md"
     adapter = adapter_dir / "grimoire-store-editing" / "SKILL.md"
     header = "---\nname: grimoire-store-editing\ndescription: Use when editing records outside the app.\n---\n\n"
-    _write(tmp_path / "CLAUDE.md", "# Privacy\n\nPrivate content stays outside the repository.\n")
-    _write(canonical, header + "# Store editing\n\nRead [privacy](../../../CLAUDE.md#privacy).\n")
-    _write(adapter, header + "# Store editing\n\nRead [the procedure](../../../.claude/skills/grimoire-store-editing/SKILL.md).\n")
+    _write(tmp_path / "AGENTS.md", "# Privacy\n\nPrivate content stays outside the repository.\n")
+    _write(canonical, header + "# Store editing\n\nRead [privacy](../../../AGENTS.md#privacy).\n")
+    _write(adapter, header + "# Store editing\n\nRead [the procedure](../../../.agents/skills/grimoire-store-editing/SKILL.md).\n")
     return canonical_dir, adapter_dir, canonical, adapter
 
 
 def test_required_skill_files_exist():
-    for name in ROUTING_SKILLS:
+    names = [path.name for path in CANONICAL_DIR.iterdir() if path.is_dir()]
+    assert names, "there are no authoritative skills"
+    for name in names:
         assert (CANONICAL_DIR / name / "SKILL.md").is_file(), f"missing canonical skill: {name}"
         for directory in ADAPTER_DIRS:
             assert (directory / name / "SKILL.md").is_file(), f"missing discovery adapter: {name}"
 
 
 def test_repository_skills_obey_the_contract():
-    problems = _diagnose("_pair_problems", CANONICAL_DIR, ADAPTER_DIRS, ROUTING_SKILLS)
+    names = tuple(path.name for path in CANONICAL_DIR.iterdir() if path.is_dir())
+    problems = _diagnose("_pair_problems", CANONICAL_DIR, ADAPTER_DIRS, names)
+    for name in names:
+        problems += _diagnose("_reference_problems", CANONICAL_DIR / name)
     other_skills = tuple((str(p), p.read_text(encoding="utf-8")) for p in CANONICAL_DIR.glob("*/SKILL.md")
                          if p.parent.name not in ROUTING_SKILLS)
     prose = tuple((str(p), p.read_text(encoding="utf-8")) for p in docs_guard.PROSE)
@@ -346,12 +380,22 @@ def test_repository_skills_obey_the_contract():
         path = CANONICAL_DIR / name / "SKILL.md"
         if not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8")
-        problems += _diagnose("_link_problems", path, text)
+        text = "\n\n".join(p.read_text(encoding="utf-8") for p in sorted(path.parent.rglob("*.md")))
         problems += _diagnose("_code_problems", text)
         problems += _diagnose("_vocabulary_problems", text)
         problems += _diagnose("_routing_problems", text, prose + other_skills)
     assert not problems, "\n".join(problems)
+
+
+def test_generated_discovery_entries_are_current():
+    """The generator is also the exact-content check, so new skills need no
+    second hand-maintained inventory and short handwritten workflows cannot
+    hide inside otherwise valid discovery entries."""
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "sync_skills.py"), "--check"],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_valid_adapter_pair_passes(skill_tree):
@@ -378,7 +422,7 @@ def test_adapter_defects_are_rejected(skill_tree, defect, want):
         "description": ("records", "recordx"),
         "raw_description": ("outside the app.\n", "outside the app. \n"),
         "name": ("name: grimoire-store-editing", "name: store-editing"),
-        "bad_pointer": ("../../../.claude/", "../../.claude/"),
+        "bad_pointer": ("../../../.agents/", "../../.agents/"),
     }
     if defect in replacements:
         adapter.write_text(text.replace(*replacements[defect]), encoding="utf-8")
@@ -406,10 +450,30 @@ def test_relative_links_and_anchors_pass(skill_tree):
     assert _diagnose("_link_problems", canonical, canonical.read_text(encoding="utf-8")) == []
 
 
+def test_nested_skill_references_are_reachable_and_checked(skill_tree):
+    _, _, canonical, _ = skill_tree
+    canonical.write_text(canonical.read_text(encoding="utf-8") + "\n[Choose a task](references/index.md).\n",
+                         encoding="utf-8")
+    _write(canonical.parent / "references" / "index.md", "# Tasks\n\n[Sync](sync/result.md#result).\n")
+    leaf = _write(canonical.parent / "references" / "sync" / "result.md", "# Result\n\nRead the report.\n")
+    assert _diagnose("_reference_problems", canonical.parent) == []
+
+    leaf.write_text("# Result\n\n[Missing heading](../index.md#missing).\n", encoding="utf-8")
+    problems = _diagnose("_reference_problems", canonical.parent)
+    assert any("missing anchor" in problem for problem in problems), problems
+
+
+def test_unlinked_reference_is_not_hidden_from_discovery(skill_tree):
+    _, _, canonical, _ = skill_tree
+    _write(canonical.parent / "references" / "forgotten.md", "# Forgotten procedure\n")
+    problems = _diagnose("_reference_problems", canonical.parent)
+    assert any("unreachable reference" in problem and "forgotten.md" in problem for problem in problems), problems
+
+
 @pytest.mark.parametrize("target,want", [
     ("../../../missing.md", "missing path"),
-    ("../../../CLAUDE.md#missing", "missing anchor"),
-    ("../../../claude.md#privacy", "case"),
+    ("../../../AGENTS.md#missing", "missing anchor"),
+    ("../../../agents.md#privacy", "case"),
     ("#missing", "missing anchor"),
 ])
 def test_link_defects_are_rejected(skill_tree, target, want):
@@ -497,15 +561,15 @@ def test_report_vocabulary_defects_are_rejected(old, new, want):
 
 def test_long_copied_prose_is_rejected_but_fences_are_not():
     copied = "The app and its data live in a markdown/JSON store rooted at `~/.grimoire` by default. The root"
-    other = (("CLAUDE.md", (ROOT / "CLAUDE.md").read_text(encoding="utf-8")),)
-    assert any("CLAUDE.md" in p for p in _diagnose("_routing_problems", copied, other))
+    other = (("AGENTS.md", (ROOT / "AGENTS.md").read_text(encoding="utf-8")),)
+    assert any("AGENTS.md" in p for p in _diagnose("_routing_problems", copied, other))
     assert _diagnose("_routing_problems", "```text\n" + copied + "\n```", other) == []
 
 
 def test_description_participates_in_the_routing_check():
     copied = "The app and its data live in a markdown/JSON store rooted at `~/.grimoire` by default. The root"
     text = "---\nname: grimoire-store-editing\ndescription: " + copied + "\n---\n\nShort body."
-    other = (("CLAUDE.md", (ROOT / "CLAUDE.md").read_text(encoding="utf-8")),)
+    other = (("AGENTS.md", (ROOT / "AGENTS.md").read_text(encoding="utf-8")),)
     assert _diagnose("_routing_problems", text, other)
 
 
