@@ -3,7 +3,7 @@
     "misc": 1,
     "union-attr": 2
   },
-  "backend/src/grimoire/llm.py": {
+  "backend/src/grimoire/llm/_retry.py": {
     "attr-defined": 1,
     "union-attr": 3
   },
@@ -13,10 +13,10 @@
   "backend/src/grimoire/routes/mechanics.py": {
     "index": 1
   },
-  "backend/src/grimoire/routes/scenes.py": {
+  "backend/src/grimoire/routes/scenes/_review_phases.py": {
     "var-annotated": 1
   },
-  "backend/src/grimoire/routes/streaming.py": {
+  "backend/src/grimoire/routes/streaming/_persistence.py": {
     "arg-type": 1,
     "misc": 1
   },
@@ -53,10 +53,12 @@
   "backend/src/grimoire/store/cards.py": {
     "index": 2
   },
-  "backend/src/grimoire/store/characters.py": {
-    "arg-type": 2,
+  "backend/src/grimoire/store/characters/_avatar.py": {
     "index": 1,
     "union-attr": 4
+  },
+  "backend/src/grimoire/store/characters/_chub.py": {
+    "arg-type": 2
   },
   "backend/src/grimoire/store/checks.py": {
     "arg-type": 1,
@@ -68,9 +70,11 @@
   "backend/src/grimoire/store/commits.py": {
     "assignment": 1
   },
-  "backend/src/grimoire/store/context/assemble.py": {
-    "arg-type": 1,
+  "backend/src/grimoire/store/context/assemble/_catalog.py": {
     "var-annotated": 1
+  },
+  "backend/src/grimoire/store/context/assemble/_inputs.py": {
+    "arg-type": 1
   },
   "backend/src/grimoire/store/context/cast.py": {
     "arg-type": 1
@@ -94,7 +98,7 @@
   "backend/src/grimoire/store/groupstate.py": {
     "var-annotated": 1
   },
-  "backend/src/grimoire/store/locks.py": {
+  "backend/src/grimoire/store/locks/_runtime.py": {
     "attr-defined": 2
   },
   "backend/src/grimoire/store/module_edit/migrate.py": {
@@ -158,14 +162,14 @@
   "backend/src/grimoire/store/sheets/tally.py": {
     "misc": 1
   },
-  "backend/src/grimoire/store/sync.py": {
+  "backend/src/grimoire/store/sync/_pull.py": {
     "assignment": 1
   },
   "backend/src/grimoire/store/undo.py": {
     "assignment": 1,
     "union-attr": 3
   },
-  "backend/src/grimoire/store/usage.py": {
+  "backend/src/grimoire/store/usage/_meter.py": {
     "exit-return": 1
   },
   "backend/src/grimoire/store/weather/overrides.py": {
