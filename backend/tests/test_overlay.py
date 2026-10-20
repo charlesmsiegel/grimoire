@@ -34,6 +34,7 @@ from grimoire.store import (
 )
 from grimoire.store.campaigns import read as campaigns_read
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from grimoire.store.locks import _runtime as lock_runtime
 from grimoire.store.overlay import _world_lifecycle as overlay_world
 
 
@@ -1802,7 +1803,7 @@ def test_writing_the_detached_ledger_takes_the_campaign_lock(monkeypatch, tmp_pa
     half would leave the file racing the subtracting half -- an entity delete
     dropping an actor's marker it has nothing to do with."""
     _wroot, cid, _croot = _dependent(monkeypatch, tmp_path)
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(lock_runtime, "LOCK_TIMEOUT", 0.2)
     release, t = _hold_campaign(cid)
     try:
         with pytest.raises(locks.CampaignBusy):
@@ -1833,7 +1834,7 @@ def test_a_busy_campaign_does_not_cost_the_other_dependents_their_sweep(monkeypa
     busy = overlay.dependent_campaigns(wroot)[0]
     other = second_cid if busy == first_cid else first_cid
 
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(lock_runtime, "LOCK_TIMEOUT", 0.2)
     characters.delete_character(wroot, aid)
     release, t = _hold_campaign(busy)
     try:

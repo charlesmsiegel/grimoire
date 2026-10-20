@@ -37,6 +37,7 @@ from grimoire.store import (
 )
 from grimoire.store.campaigns import lifecycle as campaigns_lifecycle
 from grimoire.store.campaigns import paths as campaigns_paths
+from grimoire.store.locks import _runtime as lock_runtime
 from grimoire.store.overlay import _identity as overlay_identity
 from grimoire.store.overlay import _world_lifecycle as overlay_world
 
@@ -390,6 +391,7 @@ def test_world_identity_holder_acquires_campaigns_in_sorted_order(case, monkeypa
 
     monkeypatch.setattr(overlay_world, "dependent_campaigns", lambda root: cids)
     monkeypatch.setattr(locks, "campaign_lock", observed)
+    monkeypatch.setattr(lock_runtime, "campaign_lock", observed)
     with overlay.world_identity_change(case["world"]) as held:
         assert set(held) == set(cids)
     assert requested == sorted(cids)

@@ -39,6 +39,7 @@ from grimoire.store import atomic, calendars, campaigns, cards, chub, climates, 
 from grimoire.store import audit as audit_mod
 from grimoire.store import inference_keys as keys
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from grimoire.store.world_bundle import _contracts as bundle_contracts
 from tests import draft_runs as drafts
 from tests import review_runs, wire_kit
 from tests.inference_fixtures import (
@@ -15655,7 +15656,7 @@ def test_world_export_answers_an_image_too_large_to_bundle_with_422(client, monk
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
     client.put(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar",
                files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
-    monkeypatch.setattr(store.world_bundle, "MAX_BUNDLE_BLOB_BYTES", 8)
+    monkeypatch.setattr(bundle_contracts, "MAX_BUNDLE_BLOB_BYTES", 8)
     r = client.get(f"/api/worlds/{wid}/export.zip")
     assert r.status_code == 422
     assert r.json()["detail"].startswith("image too large to bundle: ")
@@ -15663,7 +15664,7 @@ def test_world_export_answers_an_image_too_large_to_bundle_with_422(client, monk
 
 def test_world_export_answers_a_bundle_too_large_to_import_with_422(client, monkeypatch):
     wid = _world(client, "Saltmarch")
-    monkeypatch.setattr(store.world_bundle, "MAX_BUNDLE_BYTES", 64)
+    monkeypatch.setattr(bundle_contracts, "MAX_BUNDLE_BYTES", 64)
     r = client.get(f"/api/worlds/{wid}/export.zip")
     assert r.status_code == 422 and "too large to import" in r.json()["detail"]
 
