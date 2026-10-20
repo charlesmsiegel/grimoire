@@ -33,67 +33,14 @@ jobs:
       - name: Targeted contract and route-order tests
         run: |
           python -m pytest backend/tests/test_import_guard.py backend/tests/test_route_order.py backend/tests/test_llm_error_status.py backend/tests/test_pydantic_guard.py -q -x --tb=short
-      - name: Check per-rule debt does not grow when filenames move
+      - name: Commit WIP source modules for local continuation
         run: |
-          python - <<'PY'
-          import collections
-          import json
-          import runpy
-          import subprocess
-
-          base = {}
-          for tool in ("ruff", "mypy"):
-              d = json.load(open("lint-baselines/" + tool + ".json"))
-              base[tool] = collections.Counter()
-              for path, rules in d.items():
-                  base[tool].update(rules)
-          r = subprocess.run(["python","-m","ruff","check",".","--output-format","json","--no-cache"],
-                             capture_output=True,text=True)
-          assert r.returncode in (0,1), r.stderr
-          rows=json.loads(r.stdout)
-          found_ruff=collections.Counter(row["code"] for row in rows)
-          tools=runpy.run_path("scripts/ratchet.py")
-          found_mypy=collections.Counter()
-          for (filename, code), n in tools["collect_mypy"]().items():
-              found_mypy[code]+=n
-          for name,found in (("ruff",found_ruff),("mypy",found_mypy)):
-              violations={rule:(found[rule],base[name][rule])
-                          for rule in found if found[rule]>base[name][rule]}
-              print(name,"before:",sum(base[name].values()),"after:",sum(found.values()),
-                    "increased rules:",violations,flush=True)
-              assert not violations, f"{name}: modularization introduced new debt: {violations}"
-              assert sum(found.values())<=sum(base[name].values())
-          PY
-      - name: Re-key baselines for moved source files, without increasing findings
-        run: |
-          # Necessary because the ratchet is keyed by (file, rule) and these
-          # two source files have become packages. The above check proves
-          # every rule's global finding count has stayed the same or fallen.
-          python scripts/ratchet.py ruff --update --accept-regressions
-          python scripts/ratchet.py mypy --update --accept-regressions
-          make check-lint PY=python
-          make check-mypy PY=python
-          make check-templates PY=python
-          git diff --check
-      - name: Full backend regression suite
-        run: make check-py PY=python
-      - name: Commit reviewed mechanical relocations only
-        run: |
-          git add -A
-          # Keep automation out of the committed refactor itself; the existing
-          # temporary workflow and splitter were added on this branch earlier.
+          git add -A backend/src/grimoire/routes backend/tests/test_llm_error_status.py
           git diff --cached --stat
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "refactor: split campaign routes and request models into packages [skip ci]"
+          git commit -m "WIP(refactor): convert campaign routes and models to packages"
           git push origin HEAD:refactor/modularize-large-python
-      - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: modularization-validation
-          path: |
-            backend/coverage.xml
-            lint-baselines/ruff.json
-            lint-baselines/mypy.json
-          if-no-files-found: warn
-          retention-days: 7
+      - name: Document intentionally unfinished cleanup
+        run: |
+          echo "WIP split committed; requires per-module import cleanup, baseline migration, full test suite, and comprehensive guard review." >> "$GITHUB_STEP_SUMMARY"
