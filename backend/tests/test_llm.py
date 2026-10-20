@@ -1108,7 +1108,7 @@ def _sibling_imports(name: str) -> set[str]:
     found: set[str] = set()
     for path in paths:
         relative = path.relative_to(root).with_suffix("")
-        package = "grimoire." + ".".join(relative.parts[:-1])
+        package = ".".join(("grimoire", *relative.parts[:-1]))
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             modules = []
             if isinstance(node, ast.ImportFrom):
@@ -1124,6 +1124,26 @@ def _sibling_imports(name: str) -> set[str]:
                     if sibling != name:
                         found.add(sibling)
     return found
+
+
+@pytest.mark.parametrize(("name", "source", "expected"), [
+    ("draws", "from . import decisions\n", {"decisions"}),
+    ("llm", "from .. import decisions\n", {"decisions"}),
+    ("llm", "from ..store import compiled\n", {"store"}),
+    ("llm", "from . import _client\n", set()),
+])
+def test_sibling_imports_resolves_top_level_and_package_relative_imports(
+        tmp_path, monkeypatch, name, source, expected):
+    root = tmp_path / "grimoire"
+    root.mkdir()
+    (root / "__init__.py").touch()
+    (root / "decisions").mkdir()
+    (root / "decisions" / "__init__.py").touch()
+    target = root / "draws.py" if name == "draws" else root / "llm" / "__init__.py"
+    target.parent.mkdir(exist_ok=True)
+    target.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(grimoire, "__file__", str(root / "__init__.py"))
+    assert _sibling_imports(name) == expected
 
 
 def _find_cycle(graph: dict[str, set[str]]) -> list[str] | None:
