@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 from contextlib import contextmanager, suppress
 from pathlib import Path
@@ -1079,6 +1080,16 @@ def _enable_case_sensitive(directory):
                                 capture_output=True, timeout=10, check=False)
         if result.returncode:
             pytest.skip("native case-sensitive fixture directory is unavailable")
+    # fsutil can return zero while printing access denied. Prove the policy
+    # through the same filesystem API the test uses before asserting identity.
+    fd, filename = tempfile.mkstemp(prefix=".case-probe-", dir=directory)
+    os.close(fd)
+    probe = Path(filename)
+    try:
+        if probe.with_name(probe.name.upper()).exists():
+            pytest.skip("native case-sensitive fixture directory is unavailable")
+    finally:
+        probe.unlink()
 
 
 def test_native_marker_capture_obeys_selected_source_namespace(case):

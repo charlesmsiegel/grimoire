@@ -139,8 +139,11 @@ def test_a_call_after_the_deadline_is_refused_unsent(monkeypatch):
 
     first, refused, pending = asyncio.run(go())
     assert first == "answered" and started == [True]
-    # Never awaited, and closed rather than left to warn.
-    assert pending.cr_frame is None
+    # Closed rather than left to warn or start later. Python 3.12.0 retains
+    # cr_frame on a closed, never-started coroutine; test the actual behavior.
+    with pytest.raises(RuntimeError, match="cannot reuse already awaited coroutine"):
+        pending.send(None)
+    assert started == [True]
     # Unsent: the decide chain ends here rather than trying a later stage, and
     # nothing reaches the error store.
     assert inference._refused_unsent(refused)
