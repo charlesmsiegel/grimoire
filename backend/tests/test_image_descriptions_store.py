@@ -361,7 +361,7 @@ def test_a_failed_deletion_keeps_the_description_it_would_have_dropped(tmp_path,
     d = _dir_of(tmp_path, cid, vid)
     image_descriptions.write_in(d, {"gallery_1": "Half-plate in the rain."})
 
-    monkeypatch.setattr(assets, "delete_in", lambda *a, **kw: None)  # the unlink that did not
+    monkeypatch.setattr(assets._writes, "delete_in", lambda *a, **kw: None)  # the unlink that did not
     assets.delete_image(tmp_path, cid, vid, "gallery_1")
     assert image_descriptions.read_in(d) == {"gallery_1": "Half-plate in the rain."}
 
@@ -384,7 +384,7 @@ def test_a_delete_that_lost_the_race_to_an_upload_keeps_its_hands_off_the_sideca
         inside.set()
         done.wait(5)          # the window an upload used to slip through
 
-    monkeypatch.setattr(assets, "delete_in", slow_delete_in)
+    monkeypatch.setattr(assets._writes, "delete_in", slow_delete_in)
     deleting = threading.Thread(
         target=assets.delete_image, args=(tmp_path, cid, vid, "gallery_1"))
     deleting.start()
@@ -911,7 +911,7 @@ def test_the_r12_decision_and_drop_hold_the_sidecar_lock(tmp_path, monkeypatch):
         held.append(lock._is_owned())
         return real(dd, *a, **kw)
 
-    monkeypatch.setattr(assets, "_sheds_caption", observe)
+    monkeypatch.setattr(assets._placements, "_sheds_caption", observe)
     assets.put_in(d, "avatar", b"png-r12-new", "png")
     assert held == [True]
     assert "avatar" not in image_descriptions.read_raw(d)

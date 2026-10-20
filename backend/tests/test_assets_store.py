@@ -125,7 +125,7 @@ def test_a_file_that_vanishes_mid_scan_is_dropped_not_raised(tmp_path, monkeypat
             doomed.unlink()
         return real(stem)
 
-    monkeypatch.setattr(assets, "_addressable_name", vanishing)
+    monkeypatch.setattr(assets._contracts, "_addressable_name", vanishing)
     assert _named(assets.list_images(tmp_path, "sera", "default")) == [("gallery_0", "png")]
 
 
@@ -546,7 +546,7 @@ def test_recovery_re_decides_when_its_chosen_slot_is_taken(tmp_path, monkeypatch
             (dd / f"{slot}.png").write_bytes(b"UPLOADED")
         return slot
 
-    monkeypatch.setattr(assets, "_free_gallery", racing)
+    monkeypatch.setattr(assets._legacy_rescue, "_free_gallery", racing)
     assets.list_images(tmp_path, "sera", "default")
     monkeypatch.undo()
 
@@ -564,7 +564,7 @@ def test_recovery_repairs_every_temp_even_on_a_tight_retry_budget(tmp_path, monk
     d = _stranded(tmp_path, ext="png", data=b"one")
     for ext, data in (("webp", b"two"), ("jpg", b"three"), ("gif", b"four")):
         (d / f"promote-tmp.{ext}").write_bytes(data)
-    monkeypatch.setattr(assets, "_HEAL_RETRIES", 1)  # no room for a single retry
+    monkeypatch.setattr(assets._legacy_rescue, "_HEAL_RETRIES", 1)  # no room for a single retry
 
     assets.list_images(tmp_path, "sera", "default")
 
@@ -1440,7 +1440,7 @@ def test_promote_never_overwrites_a_journal_it_could_not_finish(tmp_path, monkey
     # `gallery_2` or `avatar` and this promotion would wait on the holder
     # rather than meet the journal. Pin the three to stripes of their own.
     stripes = {"avatar": 1, "gallery_1": 2, "gallery_2": 3}
-    monkeypatch.setattr(locks, "_image_stripe",
+    monkeypatch.setattr(locks._runtime, "_image_stripe",
                         lambda dd, key: stripes.get(key.casefold(), 0))
 
     held, release = threading.Event(), threading.Event()
