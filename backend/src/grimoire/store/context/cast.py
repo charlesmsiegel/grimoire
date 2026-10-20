@@ -268,7 +268,7 @@ def _voice_notes(cid: str, croot, cast: list[dict]) -> list[dict]:
     for a in cast:
         if a["kind"] != "characters" or a["role"] != "npc":
             continue
-        # The RAW card name, like the judge reads (routes/scenes.py). `a["name"]`
+        # The RAW card name, like the judge reads (routes/scenes/). `a["name"]`
         # substitutes the actor id for a card carrying no usable one, and a slug
         # is not a name the model can match to anything: the NPC card in front of
         # it has no `name` at all, so a corrective addressed to the slug is an

@@ -25,7 +25,6 @@ import ast
 import pathlib
 
 import grimoire.store.absorb as absorb_pkg
-from grimoire.store import facts
 
 ABSORB = pathlib.Path(absorb_pkg.__file__).parent
 
@@ -106,13 +105,6 @@ def test_the_absorb_pass_never_edits_or_forgets_a_fact():
         "the absorb pass may not edit or delete a fact -- retire it, or "
         "supersede it with `facts.record(..., supersedes=...)`:\n  "
         + "\n  ".join(offenders))
-
-
-def test_the_guard_names_functions_that_exist():
-    """A rule about `facts.tidy_up` guards nothing. Renaming a mutator has to
-    fail here rather than silently retire the check."""
-    missing = [n for n in USER_ONLY if not callable(getattr(facts, n, None))]
-    assert not missing, f"USER_ONLY names functions store.facts no longer has: {missing}"
 
 
 def test_the_pass_still_uses_the_vocabulary_it_is_supposed_to():

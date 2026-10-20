@@ -32,7 +32,10 @@ import grimoire.store as store
 from grimoire import decisions, inference, llm, routes, wire
 from grimoire.decisions import Answer, Choice, Item, ItemResult, Option, Predicate
 from grimoire.inference import NATIVE_CONCURRENCY, Stage
+from grimoire.inference import _decision as inference_decision
+from grimoire.inference import _decision_calls as inference_decision_calls
 from grimoire.llm import LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import common
@@ -52,7 +55,7 @@ SPARE = ("spare", "vendor/spare")
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 @pytest.fixture
@@ -1206,7 +1209,7 @@ def test_an_auth_from_native_first_leaves_the_riding_fallback(client, monkeypatc
     not the all-routes rule (which `spare` alone would satisfy), that keeps
     it."""
     if todays_dead_rule:
-        monkeypatch.setattr(inference, "_all_dead", lambda stage, dead: any(
+        monkeypatch.setattr(inference_decision, "_all_dead", lambda stage, dead: any(
             inference._same_connection(stage.chain.primary.provider_id, d) for d in dead))
     resolved = _both(client, monkeypatch, fallback=True)
     assert resolved.chain.fallback is not None
@@ -1555,9 +1558,9 @@ def test_no_messages_are_built_without_a_capture(client, monkeypatch, mode):
             return real(*args, **kwargs)
         return wrapper
 
-    monkeypatch.setattr(inference, "_native_request",
+    monkeypatch.setattr(inference_decision_calls, "_native_request",
                         spy("request", inference._native_request))
-    monkeypatch.setattr(inference, "_outcome", spy("outcome", inference._outcome))
+    monkeypatch.setattr(inference_decision_calls, "_outcome", spy("outcome", inference._outcome))
 
     def fake():
         return FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()])

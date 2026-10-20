@@ -78,7 +78,7 @@ PREFERRED: dict[str, tuple[str, ...]] = {
     "frontend/src/components/review/ReviewPanel.tsx": (
         "Basic matching active", "Semantic matching not configured"),
     "frontend/src/components/SceneIdeaPicker.tsx": ("Claims to address",),
-    "backend/src/grimoire/routes/todo.py": (
+    "backend/src/grimoire/routes/todo/_continuity.py": (
         "Possible overlap", "May be finished", "Needs resolution review"),
 }
 
@@ -165,8 +165,8 @@ def test_no_continuity_surface_uses_a_phrase_section_30_avoids():
         assert any(n.startswith(folder) for n in names), folder
     for required in ("frontend/src/components/inference/copy.ts",
                      "frontend/src/components/StoryPressure.tsx",
-                     "backend/src/grimoire/store/suggest.py",
-                     "backend/src/grimoire/routes/scenes.py", "README.md"):
+                     "backend/src/grimoire/store/suggest/__init__.py",
+                     "backend/src/grimoire/routes/scenes/__init__.py", "README.md"):
         assert required in names, required
     assert not any(".test." in n or n.startswith("frontend/src/testkit/") for n in names)
     found = [(_rel(path), source) for path in SOURCES

@@ -16,7 +16,7 @@ from .llm_errors import LLMError
 
 # claude-agent-sdk lives in the `claude` extra, which Android does not install
 # (android/app/build.gradle.kts mirrors the *base* deps only), so the import has
-# to be survivable. `llm.py` imports ClaudeAgentClient at module scope, so an
+# to be survivable. `llm/_client.py` imports ClaudeAgentClient at module scope, so an
 # exception escaping here would stop the app from starting; stream() reports what
 # was captured instead, leaving the failure at the same call it hit before.
 try:

@@ -32,5 +32,16 @@ def test_guard_rejects_retrieval_under_lock():
 
 def test_routes_never_retrieve_under_campaign_lock():
     root = Path(__file__).parents[1] / "src" / "grimoire" / "routes"
-    assert not [(p.name, violations(p.read_text(encoding="utf-8"))) for p in root.glob("*.py")
-                if violations(p.read_text(encoding="utf-8"))]
+    assert not _violating_routes(root)
+
+
+def _violating_routes(root):
+    return [(p.relative_to(root).as_posix(), found) for p in root.rglob("*.py")
+            if (found := violations(p.read_text(encoding="utf-8")))]
+
+
+def test_route_scan_reaches_new_package_leaves(tmp_path):
+    leaf = tmp_path / "scenes" / "_unexpected.py"
+    leaf.parent.mkdir()
+    leaf.write_text("with locks.campaign_lock(cid):\n    history.retrieve(cid)\n", encoding="utf-8")
+    assert _violating_routes(tmp_path) == [("scenes/_unexpected.py", [2])]

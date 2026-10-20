@@ -1,3 +1,4 @@
+
 import asyncio
 import dataclasses
 import json
@@ -5,8 +6,9 @@ import json
 import httpx
 import pytest
 
-from grimoire import llm, llm_reasoning, routes, store, wire
+from grimoire import llm_reasoning, routes, store, wire
 from grimoire.llm import LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.store.inference import resolve
 from tests.inference_fixtures import primary
@@ -130,7 +132,7 @@ async def test_reasoning_is_delivered_while_provider_is_still_thinking():
 
 
 async def test_retry_resets_failed_attempt_reasoning(monkeypatch):
-    monkeypatch.setattr(llm, "_backoff_delay", lambda attempt: 0)
+    monkeypatch.setattr(llm_retry, "_backoff_delay", lambda attempt: 0)
     calls = []
     class Broken(httpx.AsyncByteStream):
         async def __aiter__(self):

@@ -28,6 +28,7 @@ from grimoire import llm_sampling
 from grimoire.store import routing
 from grimoire.store.inference import migrate
 from grimoire.store.inference import resolve as inference
+from grimoire.store.inference.migrate import _execution as migrate_execution
 from tests import wire_kit
 
 from . import inference_baseline as baseline
@@ -142,7 +143,7 @@ def test_each_baseline_state_resolves_identically_after_migration(state, tmp_pat
         # memory, so `retired_expectation`'s differences apply here too. The
         # retired store is held to the same answer by
         # `test_planned_equals_persisted`.
-        with mock.patch.object(migrate, "_retire", lambda *_args: None):
+        with mock.patch.object(migrate_execution, "_retire", lambda *_args: None):
             got = baseline.migrate_state(state)
         assert got.state == "done", got
         assert store.inference_keys.is_current(store.read_config())

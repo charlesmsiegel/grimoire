@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from grimoire.store.compiled import _filesystem as compiled_filesystem
 from tests import test_compiled as cache_tests
 
 cache = cache_tests.cache
@@ -111,7 +112,7 @@ def test_collection_failure_permanently_aborts_staging(cache, root, monkeypatch,
                 if candidate == path:
                     candidate.unlink()
                 return original(boundary, candidate)
-            monkeypatch.setattr(cache, '_source_info', vanished)
+            monkeypatch.setattr(compiled_filesystem, '_source_info', vanished)
         with pytest.raises(cache.InputUnavailable):
             request.collection(kind, cache.Collection('scenes', root))
         assert request.disabled and not request._rows and not request._sources
@@ -127,12 +128,12 @@ def test_collection_captures_clock_before_single_member_stat(cache, root, monkey
     events = []
     original = cache._source_info
     now = max(path.stat().st_mtime_ns, path.stat().st_ctime_ns) + cache.PERSIST_WINDOW_NS + 1
-    monkeypatch.setattr(cache, 'filesystem_clock', lambda boundary: (
+    monkeypatch.setattr(compiled_filesystem, 'filesystem_clock', lambda boundary: (
         events.append('clock'), cache.FilesystemClock(now, root.stat().st_dev))[1])
     def info(boundary, candidate):
         events.append(candidate.name)
         return original(boundary, candidate)
-    monkeypatch.setattr(cache, '_source_info', info)
+    monkeypatch.setattr(compiled_filesystem, '_source_info', info)
     cold = _collect(cache, root, kind)
     assert events[0] == 'clock' and events.count('Realm.md') == 1
     assert cold.members[0].data == b'Realm'
@@ -206,6 +207,6 @@ def test_collection_order_and_filter_do_not_depend_on_enumeration(cache, root, m
         return original_info(boundary, path)
 
     monkeypatch.setattr(cache.os, 'scandir', reversed_listing)
-    monkeypatch.setattr(cache, '_source_info', captured)
+    monkeypatch.setattr(compiled_filesystem, '_source_info', captured)
     assert _collect(cache, root, kind).content_hash == before.content_hash
     assert 'Realm.review.md' not in seen

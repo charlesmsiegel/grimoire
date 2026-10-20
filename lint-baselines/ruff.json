@@ -17,8 +17,11 @@
   "backend/src/grimoire/embeddings.py": {
     "C901": 1
   },
-  "backend/src/grimoire/llm.py": {
-    "ASYNC109": 2,
+  "backend/src/grimoire/llm/_lifecycle.py": {
+    "ASYNC109": 1
+  },
+  "backend/src/grimoire/llm/_retry.py": {
+    "ASYNC109": 1,
     "C901": 1
   },
   "backend/src/grimoire/openai_compatible.py": {
@@ -30,15 +33,17 @@
   "backend/src/grimoire/prompts.py": {
     "A002": 1
   },
-  "backend/src/grimoire/routes/campaigns.py": {
+  "backend/src/grimoire/routes/campaigns/_ledger.py": {
     "RUF003": 1
   },
-  "backend/src/grimoire/routes/characters.py": {
+  "backend/src/grimoire/routes/characters/_exchange.py": {
     "A002": 2,
     "SIM105": 1
   },
-  "backend/src/grimoire/routes/config.py": {
-    "A002": 4,
+  "backend/src/grimoire/routes/config/_providers.py": {
+    "A002": 4
+  },
+  "backend/src/grimoire/routes/config/_world_options.py": {
     "PERF401": 1
   },
   "backend/src/grimoire/routes/entities.py": {
@@ -50,21 +55,31 @@
   "backend/src/grimoire/routes/modules.py": {
     "A002": 3
   },
-  "backend/src/grimoire/routes/scenes.py": {
-    "A002": 3,
-    "C901": 2,
-    "N818": 2,
+  "backend/src/grimoire/routes/scenes/_alternates.py": {
     "RUF003": 2
   },
-  "backend/src/grimoire/routes/streaming.py": {
-    "C901": 4,
-    "SIM105": 2
+  "backend/src/grimoire/routes/scenes/_review_budget.py": {
+    "N818": 2
+  },
+  "backend/src/grimoire/routes/scenes/_review_phases.py": {
+    "C901": 2
+  },
+  "backend/src/grimoire/routes/scenes/_stage.py": {
+    "A002": 3
+  },
+  "backend/src/grimoire/routes/streaming/_persistence.py": {
+    "C901": 1,
+    "SIM105": 1
+  },
+  "backend/src/grimoire/routes/streaming/_streams.py": {
+    "C901": 3,
+    "SIM105": 1
   },
   "backend/src/grimoire/routes/weather.py": {
     "C901": 1,
     "RET504": 1
   },
-  "backend/src/grimoire/routes/worlds.py": {
+  "backend/src/grimoire/routes/worlds/_imports.py": {
     "A002": 2
   },
   "backend/src/grimoire/store/__init__.py": {
@@ -105,9 +120,11 @@
     "RUF002": 1,
     "RUF003": 1
   },
-  "backend/src/grimoire/store/characters.py": {
-    "N818": 2,
+  "backend/src/grimoire/store/characters/_avatar.py": {
     "PERF401": 1
+  },
+  "backend/src/grimoire/store/characters/_paths.py": {
+    "N818": 2
   },
   "backend/src/grimoire/store/checks.py": {
     "C901": 1
@@ -176,7 +193,7 @@
   "backend/src/grimoire/store/localize.py": {
     "C901": 2
   },
-  "backend/src/grimoire/store/locks.py": {
+  "backend/src/grimoire/store/locks/_runtime.py": {
     "C901": 1,
     "N818": 1
   },
@@ -213,9 +230,14 @@
     "C901": 5,
     "PERF401": 1
   },
-  "backend/src/grimoire/store/overlay.py": {
-    "RET504": 2,
+  "backend/src/grimoire/store/overlay/_copying.py": {
     "SIM105": 2
+  },
+  "backend/src/grimoire/store/overlay/_entities.py": {
+    "RET504": 1
+  },
+  "backend/src/grimoire/store/overlay/_greetings.py": {
+    "RET504": 1
   },
   "backend/src/grimoire/store/pcs.py": {
     "N818": 2
@@ -280,11 +302,13 @@
   "backend/src/grimoire/store/styles.py": {
     "N818": 2
   },
-  "backend/src/grimoire/store/suggest.py": {
-    "A001": 2,
+  "backend/src/grimoire/store/suggest/_prompts.py": {
+    "A001": 2
+  },
+  "backend/src/grimoire/store/suggest/_snapshot.py": {
     "C901": 1
   },
-  "backend/src/grimoire/store/sync.py": {
+  "backend/src/grimoire/store/sync/_pull.py": {
     "C901": 1
   },
   "backend/src/grimoire/store/tags.py": {
@@ -294,7 +318,7 @@
     "C901": 3,
     "N818": 4
   },
-  "backend/src/grimoire/store/usage.py": {
+  "backend/src/grimoire/store/usage/_ledger.py": {
     "PERF403": 1
   },
   "backend/src/grimoire/store/vectors.py": {
@@ -314,7 +338,7 @@
     "PERF401": 1,
     "PLW2901": 1
   },
-  "backend/src/grimoire/store/world_bundle.py": {
+  "backend/src/grimoire/store/world_bundle/_contracts.py": {
     "N818": 1
   },
   "backend/src/grimoire/store/worlds/lifecycle.py": {

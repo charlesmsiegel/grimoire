@@ -19,9 +19,11 @@ import pytest
 
 import grimoire.store as store
 from grimoire import deadline, inference, model_guidance, schemas, tool_calls, wire
+from grimoire.inference import _requests as inference_requests
 from grimoire.llm_errors import LLMError
 from grimoire.store.inference.capabilities import Cap
 from grimoire.tool_calls import RunBudget, ToolOutput, Toolset, ToolSpec
+from grimoire.tool_calls import _runs as tool_runs
 from tests import frozen_copy, wire_kit
 from tests.llm_fakes import FakeToolTurns, ToolTurn
 
@@ -392,7 +394,7 @@ def test_a_tool_result_is_held_to_its_own_cap_marker_included():
 
 
 def test_the_runs_wall_is_a_budget_stop_with_an_aborted_row(monkeypatch):
-    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.05)
+    monkeypatch.setattr(tool_runs, "MIN_TURN_SECONDS", 0.05)
     fake = FakeToolTurns(ToolTurn("", (("read", {}),)), ToolTurn("late", (), delay=3))
     # A wall of a second leaves the setup room on a loaded runner; the late
     # turn (3s) still outlasts it.
@@ -460,7 +462,7 @@ def test_a_spent_wait_is_an_overrun_and_none_is_no_bound():
 def test_an_unreadable_answer_after_the_wall_gets_no_repair_turn(monkeypatch):
     """The repair turn is a send like any other: admitted on the wall too,
     not on `max_turns` alone."""
-    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.05)
+    monkeypatch.setattr(tool_runs, "MIN_TURN_SECONDS", 0.05)
     # The wall leaves the run's setup (a store read, the root check, both in
     # worker threads) most of a second before turn 1 could be refused, so a
     # loaded runner still sends it; the turn itself outlasts the wall.
@@ -745,7 +747,7 @@ def test_the_spend_preflight_never_prices_a_fallback_the_loop_drops(monkeypatch)
     primary, spare = resolved.attempts
     resolved = replace(resolved, attempts=(
         primary, replace(spare, capabilities={"tools": Cap("no", "user")})))
-    monkeypatch.setattr(inference, "cap_sent", lambda target: True)
+    monkeypatch.setattr(inference_requests, "cap_sent", lambda target: True)
     prices = {("openrouter", "vendor/active"): inference.Price("catalog", 1e-6, 2e-6)}
     assert inference.tool_run_refusal("chat", resolved, RunBudget(spend_ceiling_usd=1.0),
                                       prices) is None

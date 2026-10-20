@@ -19,8 +19,9 @@ from fastapi import HTTPException
 from evals.epistemic import cases, runner, synth
 from grimoire import content_parts, routes, store
 from grimoire.llm_errors import LLMError
-from grimoire.routes import character_turns, common, history_recall
+from grimoire.routes import character_turns, history_recall
 from grimoire.routes import epistemic as stage
+from grimoire.routes.common import _deadlines as common_deadlines
 from grimoire.store import epistemic_access, routing
 from grimoire.store.context import assemble, epistemic
 from grimoire.store.context import epistemic_items as items_mod
@@ -295,7 +296,7 @@ def test_a_spent_deadline_is_refused_unsent_and_never_noted(home, monkeypatch):
     # the refusal is the app's clock, never the connection's health.
     cast, items, _ = plant("7")
     clock = iter([0.0, 100.0, 100.0, 100.0, 100.0, 100.0])
-    monkeypatch.setattr(common, "_plan_clock", lambda: next(clock, 100.0))
+    monkeypatch.setattr(common_deadlines, "_plan_clock", lambda: next(clock, 100.0))
     fake = answering("known")
     out = refine(cast, view_for(cast, cast.mara, items), fake)
     assert fake.calls == 0 and _withheld(out)

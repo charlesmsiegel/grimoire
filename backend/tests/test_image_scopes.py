@@ -23,6 +23,7 @@ from grimoire.store import (
     logs,
     worlds,
 )
+from grimoire.store.locks import _runtime as lock_runtime
 
 
 @pytest.fixture
@@ -167,6 +168,7 @@ def test_campaign_scope_wrappers_take_the_campaign_lock(home, monkeypatch):
         return real(cid)
 
     monkeypatch.setattr(locks, "campaign_lock", spy)
+    monkeypatch.setattr(lock_runtime, "campaign_lock", spy)
     image_id = _object(b"png-1", [_assoc("campaign:saltmarch")], ["campaign:saltmarch"])
     assert image_scopes.copy_campaign("saltmarch", "saltmarch-2") == 1
     assert image_scopes.strip_campaign("saltmarch") == 1

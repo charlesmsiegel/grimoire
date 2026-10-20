@@ -221,8 +221,8 @@ def test_a_failed_input_read_takes_the_live_path_and_counts_it(client, monkeypat
 
 def test_an_unregistered_kind_never_touches_the_cache(client, monkeypatch):
     _library(client)
-    monkeypatch.setattr(compiled, "KINDS", {k: v for k, v in compiled.KINDS.items()
-                                            if k not in compiled.OVERVIEW_CANDIDATES})
+    for name in compiled.OVERVIEW_CANDIDATES:
+        monkeypatch.delitem(compiled.KINDS, name, raising=False)
     monkeypatch.setattr(compiled, "batch", lambda *a, **k: pytest.fail("an unregistered kind opened a batch"))
     clear_memos()
     assert overview.campaign_cards()

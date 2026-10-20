@@ -23,9 +23,12 @@ from fastapi import HTTPException
 import grimoire.store as store
 from grimoire import adapters, decisions, inference, llm, llm_usage, prompts, routes, wire
 from grimoire.decisions import Choice, Item, Option, Predicate, Score
+from grimoire.inference import _decision_calls as inference_decision_calls
 from grimoire.llm import ATTEMPTED, LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.routes import common
+from grimoire.routes.scenes import _review_budget as scenes_review_budget
 from grimoire.store.inference import capabilities, facts, migrate, providers, settings
 from grimoire.store.inference import resolve as inf
 from tests.llm_fakes import (
@@ -43,7 +46,7 @@ from . import inference_fixtures as fx
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 @pytest.fixture
@@ -528,7 +531,7 @@ def test_the_prompt_renders_off_the_event_loop(client, monkeypatch):
         rendered_on.append(threading.get_ident())
         return real(items, **kwargs)
 
-    monkeypatch.setattr(inference, "structured_messages", spy)
+    monkeypatch.setattr(inference_decision_calls, "structured_messages", spy)
     fake = FakeLLM([[decision_reply({"over": True})]])
 
     async def go():
@@ -832,7 +835,7 @@ def _clock_after_the_first_call(monkeypatch):
     """An absorb budget (`routes.scenes._Budget`) whose clock runs out the
     moment the first call it ran returns: every later call is refused unsent."""
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     budget = routes.scenes._Budget(60)
 
     async def around(call, holder):

@@ -83,7 +83,7 @@ def test_variants_repack_frozen_content_and_preserve_extras(scene, template_root
     messages.on_variant = lambda model, detail: captured.append((model, detail))
     def forbidden(*args, **kwargs):
         raise AssertionError("Fallback reread or rerendered generation inputs")
-    monkeypatch.setattr(assemble, "_assemble", forbidden)
+    monkeypatch.setattr(assemble._snapshot, "_assemble", forbidden)
     monkeypatch.setattr(config, "read_config", forbidden)
     monkeypatch.setattr(macros, "expand_macros", forbidden)
     monkeypatch.setattr(prompts, "render", forbidden)
@@ -171,8 +171,8 @@ def test_shared_heading_split_and_absent_guidance(scene, monkeypatch):
     a["data"]["offscene_known"] = [{"id": "winifred", "name": "Winifred", "tagline": "Known", "versions": []}]
     wanted = ("off_scene_cast_active", "model_guidance", "off_scene_cast_known")
     selected = {s.id: s for s in assemble.SECTIONS}
-    monkeypatch.setattr(assemble, "SECTIONS", [selected[sid] for sid in wanted])
-    monkeypatch.setattr(assemble, "_assemble", lambda *args, **kwargs: a)
+    monkeypatch.setattr(assemble._catalog, "SECTIONS", [selected[sid] for sid in wanted])
+    monkeypatch.setattr(assemble._snapshot, "_assemble", lambda *args, **kwargs: a)
     messages, detail = context.compose_turn(*scene, model="glm-5.3")
     heading = prompts.render("scene/off_scene_cast_heading.j2").strip()
     assert messages[0]["content"].count(heading) == 2
@@ -210,9 +210,9 @@ def test_blank_shared_heading_keeps_bodies_for_known_and_unknown_models(scene, t
     a["data"]["offscene_active"] = [{"name": "Mara", "dossier": "Elsewhere"}]
     a["data"]["offscene_known"] = [{"id": "winifred", "name": "Winifred", "tagline": "Known", "versions": []}]
     selected = {s.id: s for s in assemble.SECTIONS}
-    monkeypatch.setattr(assemble, "SECTIONS", [selected[sid] for sid in
+    monkeypatch.setattr(assemble._catalog, "SECTIONS", [selected[sid] for sid in
                         ("off_scene_cast_active", "model_guidance", "off_scene_cast_known")])
-    monkeypatch.setattr(assemble, "_assemble", lambda *args, **kwargs: a)
+    monkeypatch.setattr(assemble._snapshot, "_assemble", lambda *args, **kwargs: a)
     messages, _ = context.compose_turn(*scene, model="glm-5.3")
     for outgoing in (messages, messages.for_model("unknown")):
         assert "Mara" in outgoing[0]["content"]

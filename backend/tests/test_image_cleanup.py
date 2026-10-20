@@ -65,7 +65,7 @@ def test_bulk_subject_write_waits_for_sidecar_before_validation(
 
     thread = threading.Thread(target=holder, daemon=True)
     thread.start()
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.05)
+    monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.05)
     try:
         assert held.wait(10), "holder did not acquire the subjects sidecar"
         with pytest.raises(locks.StoreBusy):

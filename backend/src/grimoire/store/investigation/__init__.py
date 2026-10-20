@@ -11,7 +11,7 @@ model lives in `routes/investigation.py`, the house split.
 Nothing here writes. The one write an investigation may lead to -- one
 proposal on one continuity candidate -- is `continuity.reconcile`'s
 `persist_investigation`, called by the route. `test_investigation_writer_guard`
-holds that, and the package sits in no `store/locks.py` list because it holds
+holds that, and the package sits in no `store/locks/_domain.py` list because it holds
 no mutator to classify.
 """
 

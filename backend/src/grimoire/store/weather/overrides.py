@@ -1,7 +1,7 @@
 """The campaign-local override store: `campaigns/<cid>/weather.json`.
 
 A JSON sidecar keyed by location id, with `_default` applying campaign-wide.
-Campaign-local by construction — never a world file — so `sync.py`'s hash
+Campaign-local by construction — never a world file — so `store/sync/`'s hash
 diffing of entity blobs is undisturbed.
 
 Each record is a *span*, not a point, because GM fiat is usually "it snows for

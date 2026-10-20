@@ -243,12 +243,12 @@ PACKAGE_DIR = ROUTES_DIR.parent
 #: Everything else generates through `inference.generate`.
 GENERATION_DOORS: dict[str, frozenset[str]] = {
     # `generate` itself, and `decide`'s structured backend.
-    "stream": frozenset({"inference.py"}),
-    "complete": frozenset({"inference.py"}),
+    "stream": frozenset({"inference/_generation.py"}),
+    "complete": frozenset({"inference/_generation.py", "inference/_decision_calls.py"}),
     # The model test's generate probe: one attempt, no retry, no fallback.
-    "single": frozenset({"routes/config.py"}),
+    "single": frozenset({"routes/config/_probes.py"}),
     # `decide`'s native stage, and the model test's native probe (slice H).
-    "decide_native": frozenset({"inference.py", "routes/config.py"}),
+    "decide_native": frozenset({"inference/_decision_calls.py", "routes/config/_probes.py"}),
 }
 
 
@@ -289,12 +289,19 @@ def test_the_generate_check_flags_a_planted_call():
                        ("client.decide_native(item, conn, m.usage)\n", "routes/scenes.py"),
                        ("client.complete(messages, conn)\n", "backend/scripts/ingest_scene.py")):
         assert _direct_generations(src, where), (src, where)
-    for src, where in (("client.complete(messages, conn, usage)\n", "inference.py"),
-                       ("client.single(messages, conn, m.usage)\n", "routes/config.py"),
-                       ("client.decide_native(item, conn, m.usage)\n", "routes/config.py"),
+    for src, where in (("client.complete(messages, conn, usage)\n", "inference/_generation.py"),
+                       ("client.single(messages, conn, m.usage)\n", "routes/config/_probes.py"),
+                       ("client.decide_native(item, conn, m.usage)\n", "routes/config/_probes.py"),
                        # Not the facade: another receiver's `stream`.
                        ("http.stream('POST', url)\n", "openrouter.py")):
         assert _direct_generations(src, where) == [], (src, where)
+
+
+def test_a_new_inference_leaf_is_not_a_generation_door():
+    """Only reviewed owners may reach the client; the package is no exemption."""
+    for name in GENERATION_DOORS:
+        source = f"client.{name}(messages, conn, m.usage)\n"
+        assert _direct_generations(source, "inference/_unreviewed.py")
 
 
 def test_the_generate_check_sees_every_door():

@@ -15,7 +15,7 @@ from grimoire.embeddings import EmbeddingsClient
 from grimoire.store import config, embed_space, llm_connections
 from grimoire.store import inference_keys as keys
 from grimoire.store.inference import facts, providers
-from grimoire.store.inference import resolve as inference_resolve
+from grimoire.store.inference.resolve import _targeting as resolve_targeting
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +35,7 @@ def test_the_embedding_role_is_what_resolves(monkeypatch):
                            keys.role_key("embedding", "model"): "stored"})
     # `resolve.embedding` reads the role through `_embedding_view` (slice D;
     # the format-2 keys of the settings the planner overlays, slice I).
-    monkeypatch.setattr(inference_resolve, "_embedding_view", lambda cfg: {
+    monkeypatch.setattr(resolve_targeting, "_embedding_view", lambda cfg: {
         keys.role_key("embedding", "provider"): conn,
         keys.role_key("embedding", "model"): "m2"})
     out = embed_space.resolve()

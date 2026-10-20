@@ -25,6 +25,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from grimoire.store import characters, compiled, statcache
+from grimoire.store.compiled import _filesystem as compiled_filesystem
 from grimoire.store.scenes import read as scenes_read
 
 
@@ -104,10 +105,8 @@ def register_overview_kinds(monkeypatch, *names: str) -> None:
     whatever the measured registration in `compiled.KINDS` says, so the
     persisted layer is exercised either way. No names: all four."""
     chosen = names or tuple(compiled.OVERVIEW_CANDIDATES)
-    kinds = dict(compiled.KINDS)
     for name in chosen:
-        kinds[name] = compiled.OVERVIEW_CANDIDATES[name]
-    monkeypatch.setattr(compiled, "KINDS", kinds)
+        monkeypatch.setitem(compiled.KINDS, name, compiled.OVERVIEW_CANDIDATES[name])
     # Persist every scene, however short, so a test's small fixture exercises
     # the persisted layer the admission size keeps for long transcripts.
     from grimoire.store.overview import read as overview_read
@@ -115,8 +114,8 @@ def register_overview_kinds(monkeypatch, *names: str) -> None:
 
 
 def unregister_overview_kinds(monkeypatch) -> None:
-    monkeypatch.setattr(compiled, "KINDS", {k: v for k, v in compiled.KINDS.items()
-                                            if k not in compiled.OVERVIEW_CANDIDATES})
+    for name in compiled.OVERVIEW_CANDIDATES:
+        monkeypatch.delitem(compiled.KINDS, name, raising=False)
 
 
 def cache_clock_forward(monkeypatch, seconds: float = 30.0) -> None:
@@ -130,7 +129,7 @@ def cache_clock_forward(monkeypatch, seconds: float = 30.0) -> None:
         if clock is None:
             return None
         return compiled.FilesystemClock(clock.now_ns + int(seconds * 1e9), clock.device)
-    monkeypatch.setattr(compiled, "filesystem_clock", ahead)
+    monkeypatch.setattr(compiled_filesystem, "filesystem_clock", ahead)
 
 
 def restart() -> None:

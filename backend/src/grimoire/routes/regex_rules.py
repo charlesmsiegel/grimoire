@@ -197,7 +197,7 @@ def post_regex_import_preview(body: RegexImportPreview):
 def _level_lock(level: str, key: str):
     """The campaign lock for a campaign level, held across the read and the
     write so an append cannot lose a PUT that lands in between; the other
-    levels' writers take none (`store/locks.py` says why)."""
+    levels' writers take none (`store/locks/_domain.py` says why)."""
     if level == "campaign":
         return store.locks.campaign_lock(key)
     return contextlib.nullcontext()

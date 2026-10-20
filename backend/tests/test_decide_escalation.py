@@ -22,8 +22,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import decisions, inference, llm
+from grimoire import decisions, inference
 from grimoire.decisions import Answer, Choice, Item, ItemResult, Option, Predicate
+from grimoire.inference import _decision as inference_decision
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import common
@@ -41,7 +43,7 @@ SECOND = "vendor/second"
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 @pytest.fixture
@@ -163,7 +165,7 @@ def test_no_policy_returns_the_base_decision(client, monkeypatch):
         returned.append(await real(*args, **kwargs))
         return returned[-1]
 
-    monkeypatch.setattr(inference, "run_stages", recording)
+    monkeypatch.setattr(inference_decision, "run_stages", recording)
     fake = FakeLLM([["unused"]], decisions=[_p(0.55)])
     got = _decide(fake, [_item()], resolved=resolved)
     assert got is returned[0] and got.escalations == ()

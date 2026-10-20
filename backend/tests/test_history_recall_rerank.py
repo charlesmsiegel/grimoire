@@ -17,6 +17,7 @@ from grimoire.store import routing
 from grimoire.store.history import budget, expand, query
 from grimoire.store.inference import facts, migrate
 from grimoire.store.inference import resolve as inference_resolve
+from grimoire.store.inference.migrate import _execution as migrate_execution
 from tests import inference_baseline, inference_baseline_c
 from tests.history_fixtures import absorbed, played
 from tests.history_fixtures import cid as cid
@@ -268,7 +269,7 @@ def test_new_route_uses_decision_defaults_in_all_frozen_states_and_formats(suite
         ctx = suite.STATES[state](client)
         for phase in ("legacy", "migrated", "retired"):
             if phase == "migrated":
-                with mock.patch.object(migrate, "_retire", lambda *_a: None):
+                with mock.patch.object(migrate_execution, "_retire", lambda *_a: None):
                     status = (inference_baseline.migrate_state(state)
                               if suite is inference_baseline else migrate.ensure())
                 assert status.state == "done"

@@ -15,7 +15,7 @@ anything beyond it.
 
 Enforcement lives in the tests, not here. Each rule below names the guard that
 fails when code breaks it, because a paragraph cannot fail a test run — that
-lesson is why `store/locks.py` turned its domain from prose into constants
+lesson is why `store/locks/_domain.py` turned its domain from prose into constants
 (#255).
 
 ---
@@ -149,7 +149,8 @@ fails, deliberately**, and the guard caps how many exist.
 
 ## The campaign lock
 
-**Module:** `backend/src/grimoire/store/locks.py` ·
+**Modules:** `backend/src/grimoire/store/locks/_domain.py`,
+`backend/src/grimoire/store/locks/_runtime.py` ·
 **Guards:** `test_lock_domain_guard.py`, `test_lock_order_guard.py`,
 `test_locks_store.py`
 
@@ -168,7 +169,7 @@ threads.
 
 ### What it covers
 
-The domain is declared, not described. `store/locks.py` carries three
+The domain is declared, not described. `store/locks/_domain.py` carries three
 constants, and `test_lock_domain_guard.py` holds them and the code to each
 other:
 
@@ -295,7 +296,7 @@ a stale field; refusing would cost the turn.
 | `locks.config_lock()` | global `config.md`, and every model-settings read-modify-write (`llm_connections.LOCK` is this same lock; `config.format_hold()` is it with the format check) | cross-process; taken inside a campaign lock (a campaign settings write), never around one, and the only lock under it is `inference.facts`' process-local file lock; see [Model settings across processes](#model-settings-across-processes) |
 | `locks.backup_lock()` | one archive of one store at a time (#32) | a leaf; deliberately does **not** take the campaign locks |
 | `locks.module_edit_lock()` | whole-directory module-pack publication | outermost in the ordering above |
-| `locks.inference_migration_lock()` | the inference-settings migration (`store/inference/migrate.py`), one per store | only ever **tried**, never waited on: `migrate.ensure` returns the current status and `PUT /config/data-dir` answers 409 `busy`; outermost for its holder, which takes the backup, config and facts locks and, one at a time and never waiting, a campaign lock under it |
+| `locks.inference_migration_lock()` | the inference-settings migration (`store/inference/migrate/`), one per store | only ever **tried**, never waited on: `migrate.ensure` returns the current status and `PUT /config/data-dir` answers 409 `busy`; outermost for its holder, which takes the backup, config and facts locks and, one at a time and never waiting, a campaign lock under it |
 | `locks.image_object_lock(image_id)`, `locks.image_ingest_gc_lock()` | the image store | leaves; see [The image store](#the-image-store) |
 | `locks.image_name_lock(d, name)`, `locks.image_sidecar_lock(d, filename)` | one image slot in one directory; one `descriptions.json` or `subjects.json` | striped, process-scoped, and taken **after** the campaign and collection locks and **before** the leaves above; see [Image locks](#image-locks-and-the-order-they-are-taken-in) |
 | `locks.image_collection_job_lock(wid, job)`, `locks.image_collection_lock(wid)` | one harvest journal; one world's collection manifests and library-name checks | taken in that order, and before any image lock; see [Collections](#collections-members-by-id) |
@@ -344,8 +345,9 @@ signed in as one user. This section is what happens when you do.
 
 ### Cross-process exclusion
 
-`store/locks.py` owns the *domain* (which campaign, which hierarchy);
-`store/proclock.py` owns the *mechanism* and knows nothing about campaigns. It
+`store/locks/_domain.py` declares the reviewed writer domain;
+`store/locks/_runtime.py` selects and orders campaign and resource holds.
+`store/proclock.py` owns the OS exclusion mechanism and knows nothing about campaigns. It
 takes an OS advisory file lock — `fcntl` on POSIX, `msvcrt` on Windows.
 
 **Where the lock files live:** machine-local, per-user, **outside the store**,
@@ -496,7 +498,7 @@ section asks for it and renders the result in `StoreConflictNotice.tsx`.
 
 **It never opens, moves, renames or deletes one.** Which side of a conflict to
 keep is a question only the person who made both edits can answer, so this
-mirrors `sync.py`: flag, and let the user choose.
+mirrors `store/sync/`: flag, and let the user choose.
 
 Both the walk and its results are bounded (`MAX_ENTRIES` / `MAX_RESULTS`), and
 a truncated answer says so — "found nothing" and "stopped looking" must not
@@ -520,7 +522,7 @@ still take the lock on its own account — `set_campaign_routing` does — and t
 module stays out there for the neighbours that do not. So the honest summary is that the failure this
 protects against — two processes interleaving a read-modify-write of the same
 transcript — is closed, while a rename racing a `touch` is still open and
-documented as such in `store/locks.py`.
+documented as such in `store/locks/_domain.py`.
 
 **Two devices through a synced folder:** no, and nothing in this file changes
 that. Every mechanism above is machine-local by construction — the lock is an
@@ -537,11 +539,11 @@ engineering reason it cannot be fixed at this layer.
 
 ## The image store
 
-**Modules:** `store/image_store.py`, `store/image_refs.py`, `store/assets.py`,
+**Modules:** `store/image_store.py`, `store/image_refs.py`, `store/assets/__init__.py`,
 `store/image_descriptions.py`, `store/image_subjects.py`,
 `store/image_scopes.py`, `store/image_usage.py`,
 `store/image_collections.py`, `store/image_collection_imports.py`,
-`store/image_surfaces.py`, `store/image_migration.py`, `store/image_gc.py`,
+`store/image_surfaces.py`, `store/image_migration/__init__.py`, `store/image_gc/__init__.py`,
 `store/recycle_bin.py`, `store/maintenance_reports.py` ·
 **Spec:** [the content-addressed image store](superpowers/specs/2026-10-05-content-addressed-image-store-design.md) ·
 **Tests:** `test_image_store.py`, `test_image_refs.py`, `test_assets_store.py`,
@@ -669,7 +671,7 @@ containment (`test_each_multi_step_caller_is_safe_to_rerun_after_store_busy`).
 
 The ingest lock and the stripe are leaves relative to the campaign lock: either
 may be taken while a campaign lock is held, and nothing acquires a campaign lock
-while holding one of them. No AST guard holds that rule; `store/locks.py`
+while holding one of them. No AST guard holds that rule; `store/locks/_runtime.py`
 states it beside the code. The one place a caller's code runs under an object
 stripe is an `image_store.update` callback, and it may not call back into the
 store: `ingest`, `update` and `identify` raise `RuntimeError` from inside one
@@ -887,7 +889,7 @@ Pinned by `test_a_local_legacy_key_wins_over_the_object`,
 
 ### Migration: legacy files into the store
 
-**Modules:** `store/image_surfaces.py`, `store/image_migration.py`
+**Modules:** `store/image_surfaces.py`, `store/image_migration/__init__.py`
 
 Pictures written before the store are legacy files in record directories.
 Migration moves each into the store and leaves a placement, **on request, from
@@ -971,7 +973,7 @@ everything and writes only its report, and it has the same shape as a real one
 
 ### Garbage collection
 
-**Modules:** `store/image_gc.py`, `store/recycle_bin.py`
+**Modules:** `store/image_gc/__init__.py`, `store/recycle_bin.py`
 
 Deleting a placement deletes only the placement. An object and its blob go only
 when the collector, run from Settings as the `gc` kind of a maintenance run,
@@ -1201,7 +1203,7 @@ references (#479).
 
 ### Maintenance runs
 
-**Modules:** `routes/runs.py`, `runner.py`, `routes/maintenance.py`,
+**Modules:** `routes/runs/__init__.py`, `runner.py`, `routes/maintenance.py`,
 `store/maintenance_reports.py`
 
 Migration and collection are the `maintenance` run class, started from
@@ -1293,7 +1295,7 @@ exclude.
 
 ## Model settings migration
 
-**Module:** `backend/src/grimoire/store/inference/migrate.py` · **Keys:**
+**Module:** `backend/src/grimoire/store/inference/migrate/` · **Keys:**
 `store/inference_keys.py` · **Started by:** `main.start`
 
 Which provider, model and sampler preset each kind of call runs on used to be
@@ -1353,7 +1355,7 @@ an interrupted run or a hand edit is overwritten by what the legacy settings
 say now rather than surviving because nothing named it.
 
 Until that write lands the resolver reads the legacy settings through the
-planner, in memory (`store/inference/legacy_plan.py`, the one reader of the
+planner, in memory (`store/inference/legacy_plan/`, the one reader of the
 legacy layout), which answers as the new layout would and writes nothing, so
 play is the same on either side of the switch.
 
@@ -1650,7 +1652,7 @@ reads it fail-soft.
 
 ## The compiled cache
 
-**Module:** `backend/src/grimoire/store/compiled.py` · **Spec:**
+**Module:** `backend/src/grimoire/store/compiled/__init__.py` · **Spec:**
 `docs/superpowers/specs/2026-10-09-roadmap-03-content-addressed-compiled-cache-design.md`
 · **Guard:** `backend/tests/test_compiled_guard.py`
 
@@ -1752,7 +1754,7 @@ Collected, so that nothing here has to be inferred from an absence.
   campaign locks, so an archive can catch one campaign's two files a moment
   apart.
 - **Not every campaign-scoped mutator serializes.** `OUTSIDE_DOMAIN` and the
-  frozen `UNREVIEWED` backlog in `store/locks.py` are the current, honest list.
+  frozen `UNREVIEWED` backlog in `store/locks/_domain.py` are the current, honest list.
 - **The derived sidecars do not expire.** A tagline, a voice anchor and a
   campaign dossier stand until something writes over them; none carries a hash
   of what it was derived from, so none is ever marked out of date when the card
@@ -1809,13 +1811,13 @@ Collected, so that nothing here has to be inferred from an absence.
 | Question | File |
 |---|---|
 | how a record is published | `backend/src/grimoire/store/atomic.py` |
-| who takes which lock, and the domain lists | `backend/src/grimoire/store/locks.py` |
+| who takes which lock, and the domain lists | `backend/src/grimoire/store/locks/_runtime.py`, `_domain.py` |
 | how the cross-process lock is taken | `backend/src/grimoire/store/proclock.py` |
 | what a sync client leaves behind | `backend/src/grimoire/store/external.py` |
 | the memo that makes external writes visible | `backend/src/grimoire/store/statcache.py` |
 | what the campaign write token is, and is not | `backend/src/grimoire/store/revision.py` |
-| how an image is stored, placed and resolved | `backend/src/grimoire/store/image_store.py`, `image_refs.py`, `assets.py` |
-| how legacy images migrate, and how unused ones are collected | `backend/src/grimoire/store/image_migration.py`, `image_gc.py`, `recycle_bin.py`, `routes/maintenance.py` |
-| how model settings move to the new layout, and what is frozen for older builds | `backend/src/grimoire/store/inference/migrate.py`, `store/inference_keys.py` |
+| how an image is stored, placed and resolved | `backend/src/grimoire/store/image_store.py`, `image_refs.py`, `store/assets/` |
+| how legacy images migrate, and how unused ones are collected | `backend/src/grimoire/store/image_migration/__init__.py`, `store/image_gc/__init__.py`, `recycle_bin.py`, `routes/maintenance.py` |
+| how model settings move to the new layout, and what is frozen for older builds | `backend/src/grimoire/store/inference/migrate/`, `store/inference_keys.py` |
 | the rules, as tests | `backend/tests/test_atomic_guard.py`, `test_lock_domain_guard.py`, `test_lock_order_guard.py` |
 | designs | `docs/superpowers/specs/2026-07-28-atomic-store-writes-design.md`, `docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md`, `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md` |

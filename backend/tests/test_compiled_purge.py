@@ -11,6 +11,14 @@ from pathlib import Path
 import pytest
 
 from grimoire.store import maintenance_reports
+from grimoire.store.compiled import _deletion as compiled_deletion
+from grimoire.store.compiled import _encoding as compiled_encoding
+from grimoire.store.compiled import _fences as compiled_fences
+from grimoire.store.compiled import _filesystem as compiled_filesystem
+from grimoire.store.compiled import _path_checks as compiled_path_checks
+from grimoire.store.compiled import _runtime as compiled_runtime
+from grimoire.store.compiled import _sqlite_support as compiled_sqlite_support
+from grimoire.store.compiled import _storage as compiled_storage
 from tests import test_compiled as cache_tests
 
 cache = cache_tests.cache
@@ -69,9 +77,9 @@ def test_purge_works_when_optional_storage_is_disabled(cache, root, monkeypatch,
     if disabled == 'kill':
         monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
     elif disabled == 'build':
-        monkeypatch.setattr(cache, '_build', lambda: None)
+        monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
     else:
-        monkeypatch.setattr(cache, '_sqlite', None)
+        monkeypatch.setattr(compiled_sqlite_support, '_sqlite', None)
     cache.purge_for_delete(root)
     assert (path.parent / 'purge').is_file()
     if disabled != 'sqlite':
@@ -193,7 +201,7 @@ def test_marker_arriving_during_decode_rejects_hit(cache, root, monkeypatch):
         result = original(key, row)
         cache.purge_for_delete(root)
         return result
-    monkeypatch.setattr(cache, '_decode', moved)
+    monkeypatch.setattr(compiled_encoding, '_decode', moved)
     with cache.batch(root) as request:
         assert not request.lookup(key).hit
 
@@ -204,7 +212,7 @@ def test_marker_change_discards_all_staged_families(cache, root, monkeypatch):
     path = root / 'Mara.md'
     path.write_bytes(b'Mara')
     now = max(path.stat().st_mtime_ns, path.stat().st_ctime_ns) + cache.PERSIST_WINDOW_NS + 1
-    monkeypatch.setattr(cache, 'filesystem_clock', lambda boundary: cache.FilesystemClock(now, root.stat().st_dev))
+    monkeypatch.setattr(compiled_filesystem, 'filesystem_clock', lambda boundary: cache.FilesystemClock(now, root.stat().st_dev))
     monkeypatch.setattr(cache.time, 'time', lambda: 1000000)
     with cache.batch(root) as request:
         request.lookup(key)
@@ -355,7 +363,7 @@ def test_disabled_batch_recovers_existing_pending_erasure(cache, root, monkeypat
     if disabled == 'kill':
         monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
     else:
-        monkeypatch.setattr(cache, '_build', lambda: None)
+        monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
     with cache.batch(root):
         pass
     assert session.conn.execute('SELECT count(*) FROM artifacts').fetchone() == (0,)
@@ -374,7 +382,7 @@ def test_unchanged_foreign_fence_does_not_repeat_completed_secure_purge(cache, r
     def counted(conn, generation):
         calls.append(generation)
         return original(conn, generation)
-    monkeypatch.setattr(cache, '_purge_connection', counted)
+    monkeypatch.setattr(compiled_deletion, '_purge_connection', counted)
     for _ in range(2):
         with cache.batch(root) as request:
             assert not request.lookup(key).hit
@@ -488,7 +496,7 @@ def test_delete_erases_owned_aside_after_failed_replacement(cache, root, monkeyp
     error = sqlite3.DatabaseError('owned artifacts table corruption')
     error.sqlite_errorcode = sqlite3.SQLITE_CORRUPT
     with monkeypatch.context() as replacement:
-        replacement.setattr(cache, '_open_locked', lambda *args, **kwargs: None)
+        replacement.setattr(compiled_storage, '_open_locked', lambda *args, **kwargs: None)
         assert cache._recover(root, path, error) is None
     aside = Path(str(path) + '.corrupt')
     assert not path.exists() and body.encode() in aside.read_bytes()
@@ -564,7 +572,7 @@ def test_synchronization_exception_never_yields_unpurged_session(cache, root, mo
     assert cache._publish_marker(root)
     def unreadable_directory(*args):
         raise PermissionError('directory enumeration denied')
-    monkeypatch.setattr(cache, '_purge_local_files', unreadable_directory)
+    monkeypatch.setattr(compiled_deletion, '_purge_local_files', unreadable_directory)
     with cache.batch(root) as request:
         assert not request.lookup(key).hit
         request.put(key, 'Mara')
@@ -581,7 +589,7 @@ def test_zero_input_derivation_cannot_adopt_post_key_purge(cache, root, monkeypa
             deleted.append(True)
             cache.purge_for_delete(root)
         return real_key(candidate, *args, **kwargs)
-    monkeypatch.setattr(cache, 'make_key', delete_during_key)
+    monkeypatch.setattr(compiled_encoding, 'make_key', delete_during_key)
     with cache.batch(root) as request:
         assert request.derive(kind, [], params={}, compute=lambda *args: 'Mara') == 'Mara'
     key = real_key(kind, [], params={})
@@ -679,7 +687,7 @@ def test_oversized_abandoned_intent_backlog_recovers_in_bounded_pages(cache, roo
     if disabled == 'kill':
         monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
     elif disabled == 'build':
-        monkeypatch.setattr(cache, '_build', lambda: None)
+        monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
     for _ in range(3):
         with cache.batch(root) as request:
             assert not request.lookup(key).hit
@@ -791,7 +799,7 @@ def test_read_side_retirement_never_waits_for_preparing_intent(cache, root, monk
     if disabled == 'kill':
         monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
     elif disabled == 'build':
-        monkeypatch.setattr(cache, '_build', lambda: None)
+        monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
     preparing, release, completed = threading.Event(), threading.Event(), threading.Event()
     original = cache.atomic.write_text
     failures = []
@@ -928,14 +936,14 @@ def test_pending_control_leaf_work_is_bounded_with_large_foreign_backlog(cache, 
     if disabled == 'kill':
         monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
     else:
-        monkeypatch.setattr(cache, '_build', lambda: None)
+        monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
     original = cache._leaf
     calls = []
     def measured(path):
         if path.parent == directory:
             calls.append(path.name)
         return original(path)
-    monkeypatch.setattr(cache, '_leaf', measured)
+    monkeypatch.setattr(compiled_path_checks, '_leaf', measured)
     with cache.batch(root):
         pass
     assert len(calls) <= 1024
@@ -988,7 +996,7 @@ def test_owned_delete_triggers_cannot_repopulate_erased_tables(cache, root, monk
         if mode == 'kill':
             monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
         elif mode == 'build':
-            monkeypatch.setattr(cache, '_build', lambda: None)
+            monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
         cache.purge_for_delete(root)
         for _ in range(4):
             with cache.batch(root):
@@ -1021,7 +1029,7 @@ def test_disappearing_intents_still_consume_the_inspection_budget(cache, root, m
         inspected.append(token)
         (parent / token).unlink()
         return original_read(parent, token)
-    monkeypatch.setattr(cache, '_read_intent', disappeared)
+    monkeypatch.setattr(compiled_fences, '_read_intent', disappeared)
     assert cache._read_intents(root) is None
     assert len(inspected) <= 128
     with original_scan(directory) as remaining:
@@ -1036,7 +1044,7 @@ def test_delete_completion_never_waits_for_another_preparation(cache, root, monk
     if mode == 'kill':
         monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
     elif mode == 'build':
-        monkeypatch.setattr(cache, '_build', lambda: None)
+        monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
     preparing, release, completed = threading.Event(), threading.Event(), threading.Event()
     original = cache.atomic.write_text
     failures, second = [], []
@@ -1106,7 +1114,7 @@ def test_owned_virtual_tables_and_shadow_storage_are_erased_in_place(cache, root
         if mode == 'kill':
             monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
         elif mode == 'build':
-            monkeypatch.setattr(cache, '_build', lambda: None)
+            monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
         intent = cache.prepare_delete(root)
         cache.purge_for_delete(root, intent=intent)
         for _ in range(4):
@@ -1153,7 +1161,7 @@ def test_owned_schema_literals_are_erased_before_completion(cache, root, monkeyp
         if mode == 'kill':
             monkeypatch.setenv('GRIMOIRE_COMPILED_CACHE', '0')
         elif mode == 'build':
-            monkeypatch.setattr(cache, '_build', lambda: None)
+            monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
         intent = cache.prepare_delete(root)
         cache.purge_for_delete(root, intent=intent)
         for _ in range(4):

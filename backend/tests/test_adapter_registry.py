@@ -43,6 +43,7 @@ from grimoire.decisions import Choice, Item, Option, Predicate, Score
 from grimoire.llm_errors import LLMError
 from grimoire.store import image_drafts, usage_rollup
 from grimoire.store.inference import capabilities, migrate, providers, resolve
+from grimoire.store.inference.migrate import _execution as migrate_execution
 
 from . import inference_baseline as baseline
 from . import inference_baseline_c as baseline_c
@@ -134,7 +135,7 @@ def _resolved(state: str, tmp_path, *, stage: str):
     with baseline.client_at(tmp_path) as client:
         ctx = family.STATES[name](client)
         if stage == "migrated":
-            with mock.patch.object(migrate, "_retire", lambda *_args: None):
+            with mock.patch.object(migrate_execution, "_retire", lambda *_args: None):
                 assert baseline.migrate_state(name).state == "done"
             assert not store.read_config()[store.inference_keys.RETIRED_KEY]
         elif stage == "retired":
@@ -456,8 +457,9 @@ async def test_the_facade_takes_no_dict():
 
 def test_the_facade_reads_no_dict_as_a_chain():
     """`llm.py` no longer reads a lowered dict as a chain anywhere."""
-    tree = ast.parse(Path(llm.__file__).read_text(encoding="utf-8"))
-    assert not [node for node in ast.walk(tree)
+    trees = [ast.parse(path.read_text(encoding="utf-8"))
+             for path in Path(llm.__file__).parent.rglob("*.py")]
+    assert not [node for tree in trees for node in ast.walk(tree)
                 if isinstance(node, (ast.Attribute, ast.Name))
                 and getattr(node, "attr", getattr(node, "id", "")) == "from_lowered"]
 

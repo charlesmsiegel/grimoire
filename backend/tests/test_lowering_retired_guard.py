@@ -244,7 +244,7 @@ def _lowers(node: ast.AST, aliases: set[str], rel: str) -> str | None:
             return f"reads {node.value.id}.lower (the resolver's lowering)"
         if isinstance(node.value, ast.Attribute) and node.value.attr == "resolve":
             return "reads resolve.lower (the resolver's lowering)"
-    if rel != RESOLVER:
+    if rel != RESOLVER and not rel.startswith(RESOLVER.removesuffix(".py") + "/"):
         return None
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "lower":
         return "defines lower in the resolver"
@@ -316,7 +316,7 @@ def test_the_guard_reaches_every_tree():
     for root in ROOTS:
         assert any(root.rglob("*.py")), root
     rels = {rel for rel, _ in _files()}
-    assert "backend/src/grimoire/llm.py" in rels
+    assert "backend/src/grimoire/llm/__init__.py" in rels
     assert any(r.startswith("evals/") for r in rels)
     assert any(r.startswith("backend/scripts/") for r in rels)
 
@@ -433,6 +433,14 @@ def test_a_lower_outside_the_resolver_is_not_the_lowering():
     only the resolver's own module once held this one."""
     source = "def lower(x):\n    return x\nlower(1)\n"
     assert scan(source, "backend/src/grimoire/store/inference/controls.py") == []
+
+
+def test_a_lower_in_any_resolver_leaf_is_still_the_lowering():
+    source = "def lower(x):\n    return x\nlower(1)\n"
+    for leaf in ("_resolution", "_unexpected"):
+        found = scan(source, RESOLVER.removesuffix(".py") + f"/{leaf}.py")
+        assert any("defines lower" in hit for hit in found)
+        assert any("calls lower" in hit for hit in found)
 
 
 def test_the_guard_passes_what_is_not_the_lowering():

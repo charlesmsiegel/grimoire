@@ -8,17 +8,15 @@ held here is the part the `tools` capability's probe stands on.
 
 from __future__ import annotations
 
-import ast
 import json
-from pathlib import Path
 
 import pytest
 
-import grimoire
 from grimoire import anthropic as anthropic_mod
 from grimoire import schemas, tool_calls
 from grimoire.openai_compatible import _strict_messages
 from grimoire.tool_calls import Collector, ToolCall, Toolset, ToolSpec
+from tests.test_llm import _sibling_imports
 
 PING = {"name": "ping", "description": "Says the caller is here.",
         "parameters": {"type": "object", "properties": {}, "required": [],
@@ -57,10 +55,7 @@ def test_parameters_are_held_to_the_portable_subset():
 
 
 def test_the_module_imports_only_the_standard_library_and_schemas():
-    tree = ast.parse(Path(grimoire.__file__).with_name("tool_calls.py").read_text("utf-8"))
-    local = {(n.module, tuple(a.name for a in n.names)) for n in ast.walk(tree)
-             if isinstance(n, ast.ImportFrom) and n.level}
-    assert local == {(None, ("schemas",))}
+    assert _sibling_imports("tool_calls") == {"schemas"}
 
 
 # ---- the lowering ----

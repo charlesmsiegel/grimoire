@@ -1628,7 +1628,7 @@ export const SceneInspector = memo(function SceneInspector({
                 <img className="inspector-loc-thumb" alt={setting.current.name} decoding="async"
                      src={api.entityImageUrl({ kind: "campaign", id: cid }, "locations",
                                              setting.current.id, "avatar")}
-                     onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                     onError={(e) => { (e.currentTarget).style.display = "none"; }} />
               )}
               <span>{setting.current.name}</span>
             </button>

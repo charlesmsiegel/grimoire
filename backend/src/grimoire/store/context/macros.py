@@ -18,7 +18,7 @@ from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
 
-# Aliased to match `assemble.py` and `world_state.py`, where the plain name
+# Aliased to match `store/context/assemble/` and `world_state.py`, where the plain name
 # `cast` is taken by a local holding the scene's cast list.
 from . import cast as cast_data
 from . import source_text

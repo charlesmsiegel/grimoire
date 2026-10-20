@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from grimoire.store.compiled import _filesystem as compiled_filesystem
+from grimoire.store.compiled import _path_checks as compiled_path_checks
 from tests import test_compiled as cache_tests
 
 cache = cache_tests.cache
@@ -175,14 +177,14 @@ def test_linked_clock_never_touches_external_target(cache, root, tmp_path, monke
 def test_windows_remote_or_unknown_clock_is_unavailable_before_touch(cache, root, monkeypatch, drive_type):
     _kind(cache, monkeypatch)
     sentinel = cache._clock_path(root)
-    monkeypatch.setattr(cache, "_WINDOWS_CLOCK", True)
+    monkeypatch.setattr(compiled_filesystem, "_WINDOWS_CLOCK", True)
 
     def volume(path, result, size):
         result.value = "C:/"
         return 1
 
     kernel = SimpleNamespace(GetVolumePathNameW=volume, GetDriveTypeW=lambda path: drive_type)
-    monkeypatch.setattr(cache, "_kernel32", kernel)
+    monkeypatch.setattr(compiled_filesystem, "_kernel32", kernel)
 
     def forbidden(*args, **kw):
         raise AssertionError("unproven remote clock reached utime")
@@ -196,14 +198,14 @@ def test_windows_remote_or_unknown_clock_is_unavailable_before_touch(cache, root
 def test_windows_local_clock_classification_uses_final_volume(cache, root, monkeypatch, drive_type):
     _kind(cache, monkeypatch)
     captured = []
-    monkeypatch.setattr(cache, "_WINDOWS_CLOCK", True)
+    monkeypatch.setattr(compiled_filesystem, "_WINDOWS_CLOCK", True)
 
     def volume(path, result, size):
         captured.append(path)
         result.value = "C:/"
         return 1
 
-    monkeypatch.setattr(cache, "_kernel32", SimpleNamespace(
+    monkeypatch.setattr(compiled_filesystem, "_kernel32", SimpleNamespace(
         GetVolumePathNameW=volume, GetDriveTypeW=lambda path: drive_type))
     # The filesystem half (NTFS/ReFS) is file_stats' own query against the
     # real kernel32; fake it so this runs, and means the same, on every host.
@@ -220,14 +222,14 @@ def test_windows_local_clock_classification_uses_final_volume(cache, root, monke
 
 @pytest.mark.parametrize("failure", ["missing", "api", "exception"])
 def test_windows_clock_api_failure_opts_out(cache, root, monkeypatch, failure):
-    monkeypatch.setattr(cache, "_WINDOWS_CLOCK", True)
+    monkeypatch.setattr(compiled_filesystem, "_WINDOWS_CLOCK", True)
 
     def volume(*args):
         if failure == "exception":
             raise OSError("unavailable")
         return 0
 
-    monkeypatch.setattr(cache, "_kernel32", None if failure == "missing" else SimpleNamespace(
+    monkeypatch.setattr(compiled_filesystem, "_kernel32", None if failure == "missing" else SimpleNamespace(
         GetVolumePathNameW=volume, GetDriveTypeW=lambda path: 3))
     assert not cache._clock_supported(root / "Realm.md")
 
@@ -237,7 +239,7 @@ def test_source_reparse_parent_is_not_trusted(cache, root, monkeypatch):
     path.parent.mkdir()
     path.write_bytes(b"Mara")
     original = cache._linked
-    monkeypatch.setattr(cache, "_linked", lambda info: original(info) or info.st_ino == path.parent.stat().st_ino)
+    monkeypatch.setattr(compiled_path_checks, "_linked", lambda info: original(info) or info.st_ino == path.parent.stat().st_ino)
     info = cache._source_info(root, path)
     assert not info.plain
     assert not cache._eligible(info, cache.FilesystemClock(max(info.stamp[1:3]) + 10**10, info.device))
@@ -246,7 +248,7 @@ def test_source_reparse_parent_is_not_trusted(cache, root, monkeypatch):
 def _aged(cache, root, monkeypatch):
     stamps = [p.stat() for p in root.rglob("*.md")]
     now = max((max(st.st_mtime_ns, st.st_ctime_ns) for st in stamps), default=0) + 10**10
-    monkeypatch.setattr(cache, "filesystem_clock", lambda root: cache.FilesystemClock(now, root.stat().st_dev))
+    monkeypatch.setattr(compiled_filesystem, "filesystem_clock", lambda root: cache.FilesystemClock(now, root.stat().st_dev))
 
 
 @pytest.mark.parametrize("data", [b"Realm\r\n", b"\xef\xbb\xbfRealm", b"\xffRealm"])
@@ -271,8 +273,8 @@ def test_clock_once_precedes_every_source_stat_and_duplicate_read(cache, root, m
     events = []
     original = cache._source_info
     read = Path.read_bytes
-    monkeypatch.setattr(cache, "filesystem_clock", lambda root: events.append("clock"))
-    monkeypatch.setattr(cache, "_source_info", lambda *args: (events.append("stat"), original(*args))[1])
+    monkeypatch.setattr(compiled_filesystem, "filesystem_clock", lambda root: events.append("clock"))
+    monkeypatch.setattr(compiled_filesystem, "_source_info", lambda *args: (events.append("stat"), original(*args))[1])
     monkeypatch.setattr(Path, "read_bytes", lambda p: (events.append("read"), read(p))[1])
     with cache.batch(root) as request:
         request.validate(kind, [cache.Input("a", path), cache.Input("b", path)])
@@ -304,7 +306,7 @@ def test_slow_read_never_ages_fresh_stamp_into_persistence(cache, root, monkeypa
     path = root / "Realm.md"
     path.write_bytes(b"Realm")
     now = [max(path.stat().st_mtime_ns, path.stat().st_ctime_ns)]
-    monkeypatch.setattr(cache, "filesystem_clock", lambda root: cache.FilesystemClock(now[0], root.stat().st_dev))
+    monkeypatch.setattr(compiled_filesystem, "filesystem_clock", lambda root: cache.FilesystemClock(now[0], root.stat().st_dev))
     read = Path.read_bytes
     monkeypatch.setattr(Path, "read_bytes", lambda p: (now.__setitem__(0, now[0] + 10**10), read(p))[1])
     with cache.batch(root) as request:
@@ -374,7 +376,7 @@ def test_unavailable_input_permanently_discards_whole_batch(cache, root, monkeyp
             path.unlink()
         return value
 
-    monkeypatch.setattr(cache, "_source_info", info)
+    monkeypatch.setattr(compiled_filesystem, "_source_info", info)
     with cache.batch(root) as request:
         request.put(key, "Realm")
         request._stage_source("Realm.md", ("Realm.md", 11, 12, 5, 2), _digest())
@@ -403,7 +405,7 @@ def test_source_shortcuts_require_registry_policy_and_clock(cache, root, monkeyp
     elif policy == "disabled":
         monkeypatch.setenv("GRIMOIRE_COMPILED_CACHE", "0")
     else:
-        monkeypatch.setattr(cache, "filesystem_clock", lambda root: None if policy == "no_clock" else cache.FilesystemClock(10**30, -1))
+        monkeypatch.setattr(compiled_filesystem, "filesystem_clock", lambda root: None if policy == "no_clock" else cache.FilesystemClock(10**30, -1))
     with cache.batch(root) as request:
         assert request.validate_one(kind, cache.Input("a", path)).data == b"Realm"
         assert not request._sources
@@ -421,7 +423,7 @@ def test_known_hashes_stats_live_paths_without_source_byte_io(cache, root, monke
     expected = _digest()
     statted = []
     original = cache._source_info
-    monkeypatch.setattr(cache, "_source_info", lambda *args: (statted.append(args[1]), original(*args))[1])
+    monkeypatch.setattr(compiled_filesystem, "_source_info", lambda *args: (statted.append(args[1]), original(*args))[1])
 
     def forbidden(*args):
         raise AssertionError("probe read source bytes")
@@ -494,7 +496,7 @@ def test_unprovable_source_stays_readable_but_unrecorded(cache, root, tmp_path, 
     else:
         path.write_bytes(b"Mara")
         original = cache._source_info
-        monkeypatch.setattr(cache, "_source_info", lambda *args: replace(original(*args), device=-1))
+        monkeypatch.setattr(compiled_filesystem, "_source_info", lambda *args: replace(original(*args), device=-1))
     _aged(cache, root, monkeypatch)
     with cache.batch(root) as request:
         result = request.validate_one(kind, cache.Input("a", path))
@@ -533,7 +535,7 @@ def test_damaged_and_fresh_rows_are_probe_misses(cache, root, monkeypatch):
         assert request.known_hashes(kind, [path]) == {path: None}
         assert request.validate_one(kind, cache.Input("a", path)).data == b"Realm"
     now = max(path.stat().st_mtime_ns, path.stat().st_ctime_ns)
-    monkeypatch.setattr(cache, "filesystem_clock", lambda root: cache.FilesystemClock(now, root.stat().st_dev))
+    monkeypatch.setattr(compiled_filesystem, "filesystem_clock", lambda root: cache.FilesystemClock(now, root.stat().st_dev))
     with cache.batch(root) as request:
         assert request.known_hashes(kind, [path]) == {path: None}
         assert request.validate_one(kind, cache.Input("a", path)).data == b"Realm"
@@ -565,14 +567,14 @@ def test_remote_windows_provider_cannot_authorize_existing_source_row(cache, roo
     _aged(cache, root, monkeypatch)
     with cache.batch(root) as request:
         request.validate_one(kind, cache.Input("a", path))
-    monkeypatch.setattr(cache, "filesystem_clock", provider)
-    monkeypatch.setattr(cache, "_WINDOWS_CLOCK", True)
+    monkeypatch.setattr(compiled_filesystem, "filesystem_clock", provider)
+    monkeypatch.setattr(compiled_filesystem, "_WINDOWS_CLOCK", True)
 
     def volume(path, buffer, size):
         buffer.value = "C:/"
         return 1
 
-    monkeypatch.setattr(cache, "_kernel32", SimpleNamespace(GetVolumePathNameW=volume, GetDriveTypeW=lambda path: 4))
+    monkeypatch.setattr(compiled_filesystem, "_kernel32", SimpleNamespace(GetVolumePathNameW=volume, GetDriveTypeW=lambda path: 4))
     monkeypatch.setattr(cache.time, "time_ns", lambda: max(path.stat().st_mtime_ns, path.stat().st_ctime_ns) + 10**10)
 
     def forbidden(*args):
@@ -669,28 +671,28 @@ def test_parent_traversal_through_link_never_trusts_an_unrelated_local_file(cach
 @pytest.mark.parametrize("filesystem", [0xFF534D42, 0x6969, 0x65735546, 0x794C7630, 0])
 def test_posix_unproven_filesystem_clock_is_refused_before_touch(cache, root, monkeypatch, filesystem):
     _kind(cache, monkeypatch)
-    monkeypatch.setattr(cache, "_WINDOWS_CLOCK", False)
-    monkeypatch.setattr(cache, "_LINUX_CLOCK", True, raising=False)
-    monkeypatch.setattr(cache, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
+    monkeypatch.setattr(compiled_filesystem, "_WINDOWS_CLOCK", False)
+    monkeypatch.setattr(compiled_filesystem, "_LINUX_CLOCK", True, raising=False)
+    monkeypatch.setattr(compiled_filesystem, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
 
     def statfs(path, output):
         output[0] = filesystem
         return 0
 
-    monkeypatch.setattr(cache, "_libc", SimpleNamespace(statfs=statfs), raising=False)
+    monkeypatch.setattr(compiled_filesystem, "_libc", SimpleNamespace(statfs=statfs), raising=False)
 
     def forbidden(*args):
         raise AssertionError("unproven POSIX clock touched sentinel")
 
-    monkeypatch.setattr(cache.os, "utime", forbidden)
+    monkeypatch.setattr(compiled_filesystem.os, "utime", forbidden)
     assert cache.filesystem_clock(root) is None
 
 
 @pytest.mark.parametrize("filesystem", [0xEF53, 0x9123683E, 0x58465342, 0x01021994, 0xF2F52010])
 def test_linux_local_filesystem_type_is_sampled_from_final_path(cache, root, monkeypatch, filesystem):
-    monkeypatch.setattr(cache, "_WINDOWS_CLOCK", False)
-    monkeypatch.setattr(cache, "_LINUX_CLOCK", True, raising=False)
-    monkeypatch.setattr(cache, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
+    monkeypatch.setattr(compiled_filesystem, "_WINDOWS_CLOCK", False)
+    monkeypatch.setattr(compiled_filesystem, "_LINUX_CLOCK", True, raising=False)
+    monkeypatch.setattr(compiled_filesystem, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
     captured = []
 
     def statfs(path, output):
@@ -698,7 +700,7 @@ def test_linux_local_filesystem_type_is_sampled_from_final_path(cache, root, mon
         output[0] = filesystem
         return 0
 
-    monkeypatch.setattr(cache, "_libc", SimpleNamespace(statfs=statfs), raising=False)
+    monkeypatch.setattr(compiled_filesystem, "_libc", SimpleNamespace(statfs=statfs), raising=False)
     assert cache._clock_supported(root / "Realm.md")
     assert captured == [os.fsencode(root.resolve())]
 
@@ -711,22 +713,22 @@ def test_posix_remote_clock_cannot_reuse_matching_device_sources(cache, root, mo
     _aged(cache, root, monkeypatch)
     with cache.batch(root) as request:
         request.validate_one(kind, cache.Input("a", path))
-    monkeypatch.setattr(cache, "filesystem_clock", provider)
-    monkeypatch.setattr(cache, "_WINDOWS_CLOCK", False)
-    monkeypatch.setattr(cache, "_LINUX_CLOCK", True, raising=False)
-    monkeypatch.setattr(cache, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
+    monkeypatch.setattr(compiled_filesystem, "filesystem_clock", provider)
+    monkeypatch.setattr(compiled_filesystem, "_WINDOWS_CLOCK", False)
+    monkeypatch.setattr(compiled_filesystem, "_LINUX_CLOCK", True, raising=False)
+    monkeypatch.setattr(compiled_filesystem, "os", SimpleNamespace(**{**vars(os), "name": "posix"}))
 
     def statfs(path, output):
         output[0] = 0xFF534D42
         return 0
 
-    monkeypatch.setattr(cache, "_libc", SimpleNamespace(statfs=statfs), raising=False)
+    monkeypatch.setattr(compiled_filesystem, "_libc", SimpleNamespace(statfs=statfs), raising=False)
     monkeypatch.setattr(cache.time, "time_ns", lambda: max(path.stat().st_mtime_ns, path.stat().st_ctime_ns) + 10**10)
 
     def forbidden(*args):
         raise AssertionError("remote POSIX clock authorized source reuse")
 
-    monkeypatch.setattr(cache.os, "utime", forbidden)
+    monkeypatch.setattr(compiled_filesystem.os, "utime", forbidden)
     monkeypatch.setattr(cache.Batch, "_source_rows", forbidden)
     with cache.batch(root) as request:
         assert request.validate_one(kind, cache.Input("a", path)).data == b"Realm"
@@ -736,15 +738,15 @@ def test_posix_remote_clock_cannot_reuse_matching_device_sources(cache, root, mo
 
 @pytest.mark.parametrize("failure", ["missing", "api", "exception", "unsupported_host"])
 def test_posix_clock_probe_failures_opt_out(cache, root, monkeypatch, failure):
-    monkeypatch.setattr(cache, "_WINDOWS_CLOCK", False)
-    monkeypatch.setattr(cache, "_LINUX_CLOCK", failure != "unsupported_host")
+    monkeypatch.setattr(compiled_filesystem, "_WINDOWS_CLOCK", False)
+    monkeypatch.setattr(compiled_filesystem, "_LINUX_CLOCK", failure != "unsupported_host")
 
     def statfs(*args):
         if failure == "exception":
             raise OSError("unavailable")
         return -1
 
-    monkeypatch.setattr(cache, "_libc", None if failure == "missing" else SimpleNamespace(statfs=statfs))
+    monkeypatch.setattr(compiled_filesystem, "_libc", None if failure == "missing" else SimpleNamespace(statfs=statfs))
     assert not cache._clock_supported(root)
 
 
@@ -753,8 +755,8 @@ def test_existing_clock_leaf_is_classified_instead_of_its_parent(cache, root, mo
     sentinel = cache._clock_path(root)
     sentinel.write_bytes(b"Mara")
     before = sentinel.stat()
-    monkeypatch.setattr(cache, "_WINDOWS_CLOCK", False)
-    monkeypatch.setattr(cache, "_LINUX_CLOCK", True)
+    monkeypatch.setattr(compiled_filesystem, "_WINDOWS_CLOCK", False)
+    monkeypatch.setattr(compiled_filesystem, "_LINUX_CLOCK", True)
     queried = []
 
     def statfs(path, output):
@@ -762,7 +764,7 @@ def test_existing_clock_leaf_is_classified_instead_of_its_parent(cache, root, mo
         output[0] = 0xFF534D42 if path == os.fsencode(sentinel.resolve()) else 0xEF53
         return 0
 
-    monkeypatch.setattr(cache, "_libc", SimpleNamespace(statfs=statfs))
+    monkeypatch.setattr(compiled_filesystem, "_libc", SimpleNamespace(statfs=statfs))
     assert cache.filesystem_clock(root) is None
     assert queried == [os.fsencode(sentinel.resolve())]
     after = sentinel.stat()
@@ -870,7 +872,7 @@ def test_the_filesystem_clock_decides_trust_whatever_the_local_clock_says(cache,
         fs_now, local_shift, persisted = newest + 10 * 1_000_000_000, -hour, 1
     real = time.time_ns
     monkeypatch.setattr(cache.time, "time_ns", lambda: real() + local_shift)
-    monkeypatch.setattr(cache, "filesystem_clock", lambda r: cache.FilesystemClock(fs_now, r.stat().st_dev))
+    monkeypatch.setattr(compiled_filesystem, "filesystem_clock", lambda r: cache.FilesystemClock(fs_now, r.stat().st_dev))
     with cache.batch(root) as request:
         request.validate(kind, [cache.Input("document", path)])
     session = cache_tests._open(cache, root)

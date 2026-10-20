@@ -8,10 +8,12 @@ metadata, and absent on anything written before it existed.
 import contextlib
 import json
 
-from grimoire import llm, routes, store
+from grimoire import routes, store
 from grimoire.llm import LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
+from grimoire.routes.character_turns import _persistence as character_turns_persistence
 from grimoire.store.scenes import serialize
 from tests.inference_fixtures import primary, put_settings
 from tests.llm_fakes import FakeLLM, FlakyProvider
@@ -94,7 +96,7 @@ def test_reroll_records_connection(client):
 def with_fallback(client, monkeypatch):
     """The real facade over a provider that fails its first attempt: with no
     retries the primary is exhausted at once and the fallback serves."""
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
     backup = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Backup", "api_key": "sk-backup"}).json()["id"]
     assert client.put("/api/config", json={"llm_retries": "0"}).status_code == 200
@@ -131,7 +133,7 @@ def test_a_rescued_partial_keeps_the_serving_connection(client, monkeypatch):
             raise RuntimeError("the terminal write failed")
         return real_save(claim, turn, status)
 
-    monkeypatch.setattr(character_turns, "_save", failing_once)
+    monkeypatch.setattr(character_turns_persistence, "_save", failing_once)
     with contextlib.suppress(Exception):   # the rescue re-raises what broke the turn
         send(client, cid, sid)
 

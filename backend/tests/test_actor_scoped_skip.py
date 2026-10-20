@@ -160,7 +160,7 @@ def test_skipping_changes_no_byte_of_any_variant(saltmarch, monkeypatch):
         gathered.append(view)
         return view
 
-    monkeypatch.setattr(assemble, "_campaign_view", unguarded)
+    monkeypatch.setattr(assemble._inputs, "_campaign_view", unguarded)
     reference = _npc_turn(monkeypatch, cid, sid)
 
     assert shipped == reference

@@ -38,6 +38,7 @@ from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import facts, legacy_plan, migrate
 from grimoire.store.inference import resolve as inference
 from grimoire.store.inference.capabilities import Cap
+from grimoire.store.inference.legacy_plan import _mapping as legacy_plan_mapping
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
 from . import inference_baseline as base
@@ -515,7 +516,7 @@ def test_overlay_is_free_on_a_retired_store(monkeypatch):
     def forbid(*_args, **_kwargs):
         raise AssertionError("a retired store reads nothing")
 
-    monkeypatch.setattr(legacy_plan, "lookup", forbid)
+    monkeypatch.setattr(legacy_plan_mapping, "lookup", forbid)
     monkeypatch.setattr(store.sampler_presets, "read_preset", forbid)
     monkeypatch.setattr(store.llm_connections, "list_connections", forbid)
     retired = store.inference_keys.RETIRED_KEY

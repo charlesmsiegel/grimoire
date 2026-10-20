@@ -5,6 +5,7 @@ import io
 import json
 import threading
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -1135,13 +1136,13 @@ def test_proposal_derivation_excluded_by_edit_lock(monkeypatch, tmp_path):
 
 
 def test_proposal_route_sites_locked():
-    src = inspect.getsource(streaming)
+    src = "\n".join(source for _path, source in _streaming_sources())
     for line_marker in ("proposals.new(",):
         # every proposals.new call site sits inside a
         # `with store.locks.campaign_lock(` block — enforced by review, smoke-
         # checked here: the file must contain at least one such wrap. The
-        # proposal finalizers all live in routes/streaming.py, so scanning that
-        # one module (rather than the whole package) keeps the check tight.
+        # Keep the same logical streaming subsystem covered after its split,
+        # including a finalizer added to another leaf in the future.
         assert line_marker in src
         assert "locks.campaign_lock(" in src
 
@@ -1334,7 +1335,7 @@ def test_duplicate_module_drops_dotfiles_and_os_cruft(monkeypatch, tmp_path):
     assert (copied / "sheets.json").exists()
 
 
-def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
+def _proposal_lock_sites(source):
     """T11. Replaces a whole-module substring check that passed as long as the
     file mentioned both names somewhere. Every `proposals.new(` call in the
     streaming finalizers must be lexically inside a `with ...campaign_lock(...)`
@@ -1342,7 +1343,7 @@ def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
     proves at runtime for one site is here proved for all of them."""
 
 
-    tree = ast.parse(inspect.getsource(streaming))
+    tree = ast.parse(source)
     parents: dict[ast.AST, ast.AST] = {}
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
@@ -1356,8 +1357,8 @@ def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
              and n.func.attr == "new" and isinstance(n.func.value, ast.Attribute)
              and n.func.value.attr == "proposals"]
-    assert sites, "no proposals.new call sites found -- did the finalizers move?"
     scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+    findings = []
     for call in sites:
         node = call
         covered = False
@@ -1371,7 +1372,33 @@ def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
             if isinstance(node, ast.With) and any(is_lock(i.context_expr) for i in node.items):
                 covered = True
                 break
-        assert covered, f"proposals.new at line {call.lineno} is outside a campaign lock"
+        findings.append((call.lineno, covered))
+    return findings
+
+
+def _streaming_sources():
+    root = Path(streaming.__file__).parent
+    return [(path.relative_to(root).as_posix(), path.read_text(encoding="utf-8"))
+            for path in sorted(root.rglob("*.py"))]
+
+
+def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
+    sites = [(path, line, held) for path, source in _streaming_sources()
+             for line, held in _proposal_lock_sites(source)]
+    assert sites, "no proposals.new call sites found -- did the finalizers move?"
+    missing = [(path, line) for path, line, held in sites if not held]
+    assert not missing, f"proposals.new outside a campaign lock: {missing}"
+
+
+def test_proposal_guard_reaches_a_new_streaming_leaf(tmp_path, monkeypatch):
+    root = tmp_path / "streaming"
+    root.mkdir()
+    (root / "__init__.py").write_text("", encoding="utf-8")
+    (root / "_persistence.py").write_text(
+        "def unsafe(cid):\n    return store.proposals.new(cid, 's1', {})\n", encoding="utf-8")
+    monkeypatch.setattr(streaming, "__file__", str(root / "__init__.py"))
+    with pytest.raises(AssertionError, match="outside a campaign lock"):
+        test_every_proposal_creation_site_sits_inside_a_campaign_lock()
 
 
 def test_a_journal_whose_migration_is_torn_is_quarantined_not_replayed(monkeypatch, tmp_path):

@@ -11,6 +11,7 @@ import pytest
 
 from grimoire.store import assets, cards, image_refs, image_store, image_subjects, locks
 from grimoire.store import characters as ch
+from grimoire.store.characters import _bundled as character_bundled
 
 
 def _picture(name="base.png"):
@@ -165,7 +166,7 @@ def test_charx_import_bounds_member_lookups_including_empty_members(tmp_path, mo
         return real_read(data, path, max_bytes, **kwargs)
 
     monkeypatch.setattr(cards, "read_charx_asset", read)
-    monkeypatch.setattr(ch, "_MAX_BUNDLED_IMAGES", 3)
+    monkeypatch.setattr(character_bundled, "_MAX_BUNDLED_IMAGES", 3)
 
     cid, _vid = ch.import_card(tmp_path, _bundle(entries, members), "charx")
 
@@ -175,7 +176,7 @@ def test_charx_import_bounds_member_lookups_including_empty_members(tmp_path, mo
 
 def test_charx_import_bounds_placements_even_when_members_are_shared(tmp_path, monkeypatch):
     entries = [_entry(f"emotion_{i}", "assets/shared.png") for i in range(5)]
-    monkeypatch.setattr(ch, "_MAX_BUNDLED_IMAGES", 3)
+    monkeypatch.setattr(character_bundled, "_MAX_BUNDLED_IMAGES", 3)
 
     cid, _vid = ch.import_card(tmp_path, _bundle(entries, {"assets/shared.png": _picture()}), "charx")
 
@@ -587,7 +588,7 @@ def test_gallery_walk_stops_at_the_candidate_cap(tmp_path, monkeypatch):
     png = _picture()
     entries = [_entry(f"missing_{i}", f"assets/missing_{i}.png") for i in range(5)]
     entries.append(_entry("happy", "assets/happy.png"))
-    monkeypatch.setattr(ch, "_MAX_BUNDLED_CANDIDATES", 3)
+    monkeypatch.setattr(character_bundled, "_MAX_BUNDLED_CANDIDATES", 3)
 
     cid, _vid = ch.import_card(tmp_path, _bundle(entries, {"assets/happy.png": png}), "charx")
 

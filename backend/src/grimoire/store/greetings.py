@@ -167,7 +167,7 @@ def read_greeting_rev(root: Path, gid: str) -> dict:
 
     `entities.content_hash`, not a local sha256, on purpose: the write side
     compares against `entities.entity_hash(root, "greetings", gid)` -- the same
-    call `sync.py` already hashes greetings through, greetings being one of
+    call `store/sync/` already hashes greetings through, greetings being one of
     `entities.SYNCED_KINDS` and living at the same `<root>/<kind>/<id>.md`
     path. Two spellings of "hash this record" that had to agree by convention
     would agree right up until one of them was tuned.

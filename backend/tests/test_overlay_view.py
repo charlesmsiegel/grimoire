@@ -31,6 +31,7 @@ from grimoire.store import (
     taglines,
     worlds,
 )
+from grimoire.store.overlay import _record_paths as overlay_paths
 
 client = TestClient(app)
 
@@ -228,7 +229,7 @@ def test_views_on_different_threads_do_not_queue_behind_each_other(monkeypatch, 
             release.wait(5)
         return real(c)
 
-    monkeypatch.setattr(overlay, "wroot_of", slow)
+    monkeypatch.setattr(overlay_paths, "wroot_of", slow)
     held = threading.Thread(target=lambda: overlay.view(cid).wroot, name="slow-view")
     held.start()
     assert inside.wait(5)

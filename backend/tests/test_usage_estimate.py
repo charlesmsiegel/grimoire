@@ -38,6 +38,8 @@ from grimoire import (
     wire,
 )
 from grimoire.llm import LLMClient
+from grimoire.llm import _accounting as llm_accounting
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.store import tokens, usage
@@ -54,8 +56,8 @@ CHUNKS = ["The ferryman ", "points at the ", "drowned stair."]
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
-    monkeypatch.setattr(llm, "_backoff_delay", lambda attempt: 0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "_backoff_delay", lambda attempt: 0)
 
 
 @pytest.fixture
@@ -250,7 +252,7 @@ def test_a_slow_count_costs_the_estimate_not_the_reply(home, monkeypatch):
     finished: timed inside the coroutine, against a counter that would block
     for seconds (released once measured, so the counting thread is free for
     the next test)."""
-    monkeypatch.setattr(llm, "COUNT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(llm_accounting, "COUNT_TIMEOUT_S", 0.05)
     release = threading.Event()
     blocked_for = 5.0
 
@@ -596,13 +598,14 @@ def test_build_llm_wires_a_late_bound_counter(monkeypatch):
 
 
 def test_usage_imports_no_counter():
-    source = pathlib.Path(usage.__file__).read_text(encoding="utf-8")
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.ImportFrom):
-            assert "tokens" not in (node.module or "").split(".")
-            assert "tokens" not in {alias.name for alias in node.names}
-        elif isinstance(node, ast.Import):
-            assert not any("tokens" in alias.name.split(".") for alias in node.names)
+    sources = pathlib.Path(usage.__file__).parent.rglob("*.py")
+    for path in sources:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom):
+                assert "tokens" not in (node.module or "").split(".")
+                assert "tokens" not in {alias.name for alias in node.names}
+            elif isinstance(node, ast.Import):
+                assert not any("tokens" in alias.name.split(".") for alias in node.names)
 
 
 def test_estimate_keys_are_one_spelling():

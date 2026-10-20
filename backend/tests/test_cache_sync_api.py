@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from grimoire.main import create_app
 from grimoire.store import cache_sync, compiled, revision
+from grimoire.store.cache_sync import _engine as cache_sync_engine
 from tests import cache_sync_fixtures as fx
 
 cache, upper = fx.cache, fx.upper
@@ -53,7 +54,8 @@ def gated(monkeypatch):
         release.wait(10)
         return real(relpaths, **kwargs)
 
-    monkeypatch.setattr(cache_sync, "sync_paths", slow)
+    # The route enters run(), whose scope adapter calls the engine directly.
+    monkeypatch.setattr(cache_sync_engine, "sync_paths", slow)
     yield entered, release
     release.set()
 

@@ -64,7 +64,7 @@ def flag_path(croot: Path, char_id: str) -> Path:
         raise BadDriftId(char_id)
     # overlay-ok: voice_drift.md is campaign-local, merely filed inside the
     # actor's dir for locality (like dossier.md/state.md) -- it is never
-    # inherited from the world, so there is nothing for store/overlay.py to
+    # inherited from the world, so there is nothing for store/overlay/ to
     # resolve here. The ANCHOR it is judged against is the world-level half,
     # and that one does go through overlay.voice_anchor().
     return croot / "characters" / char_id / "voice_drift.md"

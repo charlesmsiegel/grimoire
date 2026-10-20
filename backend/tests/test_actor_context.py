@@ -22,6 +22,7 @@ from grimoire.store import (
 from grimoire.store.appearances import paths
 from grimoire.store.context import actor as actor_context
 from grimoire.store.context import semantic
+from grimoire.store.context.assemble import _snapshot as context_snapshot
 
 
 @pytest.fixture
@@ -103,7 +104,7 @@ def test_snapshot_roundtrip_freezes_undispatched_profiles(cast_scene, monkeypatc
     snapshot = json.loads(json.dumps(prepared.snapshot()))
     def forbidden(*args, **kwargs):
         raise AssertionError("Historical context reread")
-    monkeypatch.setattr(context.assemble, "_assemble", forbidden)
+    monkeypatch.setattr(context_snapshot, "_assemble", forbidden)
     restored = model_guidance.PreparedMessages.from_snapshot(snapshot, "glm-5.3")
     assert restored == prepared.for_model("glm-5.3")
     assert restored.for_model("new-model") == prepared.for_model("")

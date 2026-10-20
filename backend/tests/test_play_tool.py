@@ -13,6 +13,7 @@ import pytest
 from grimoire import routes, store, tool_calls
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
+from grimoire.routes.character_turns import _generation as character_turns_generation
 from grimoire.store import response_protocol
 from tests.llm_fakes import FakeLLM, FakeToolTurns, ToolTurn, decision_reply
 
@@ -306,7 +307,7 @@ def test_a_stop_during_the_turn_decision_sends_no_generation(client, monkeypatch
             run.cancel_requested = True
         return {"task": "turn-intent", "stance": "deflect"}, store.responses.mint_id()
 
-    monkeypatch.setattr(character_turns, "_pre_generation", decided_then_stopped)
+    monkeypatch.setattr(character_turns_generation, "_pre_generation", decided_then_stopped)
     fake = _install(client, FakeLLM([["Mara answers." + _HANDOFF]]))
     result = client.post(base + "/chat", json={"content": "Mara, the ledger?",
                                                 "speaker_ref": MARA})

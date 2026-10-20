@@ -28,8 +28,9 @@ import grimoire.store as store
 from grimoire import decisions, embeddings, llm_errors, routes
 from grimoire.llm import LLMClient
 from grimoire.main import create_app
+from grimoire.routes.scenes import _review_budget as scenes_review_budget
 from grimoire.store import llm_connections
-from grimoire.store.absorb import materializer
+from grimoire.store.absorb.materializer import _continuity_rows as materializer_continuity_rows
 from grimoire.store.continuity import identity, similarity
 
 from . import inference_fixtures, review_runs
@@ -294,7 +295,7 @@ def test_a_failing_identity_staging_pass_fails_only_the_phase(client, scene, mon
     def broken(*a, **k):
         raise RuntimeError("alternatives broke")
 
-    monkeypatch.setattr(materializer, "_attach_alternatives", broken)
+    monkeypatch.setattr(materializer_continuity_rows, "_attach_alternatives", broken)
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
          decision_reply(_row("new"), rationales=("a second search",)))
 
@@ -367,7 +368,7 @@ def test_a_budget_cut_embed_is_the_budget_not_the_provider(client, scene, monkey
     _seed_ledger(cid, s0)
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
 
     def cut(text):
         # The client's own words for a read the deadline cut mid-flight.
@@ -398,7 +399,7 @@ def test_budget_refused_identity_reports_budget_exhausted(client, scene, monkeyp
     _seed_ledger(cid, s0)
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     real = identity.examine
     monkeypatch.setattr(identity, "examine",
                         lambda *a, **k: (clock.__setitem__(0, 1e6), real(*a, **k))[1])
@@ -1076,7 +1077,7 @@ def test_the_budget_running_out_between_chunks_leaves_the_rest_unchecked(
     _one_per_chunk(monkeypatch)
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     parse = decisions.parse
 
     def parse_then_spend(*args, **kwargs):
@@ -1231,7 +1232,7 @@ def test_a_budget_stopped_native_stage_is_the_budget_through_its_fallback(
     inference_fixtures.decide_only(client, fallback=True)
     assert client.put("/api/config", json={"absorb_budget": "60"}).status_code == 200
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     real_explain = identity.explain
 
     def explain_then_tick():
@@ -1499,7 +1500,7 @@ def test_both_routes_refusing_and_the_clock_stopping_the_re_sends_is_the_clock(
             conn_id, [{"id": model, "params": ["temperature", "structured_outputs"]}], rev)
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     refused = llm_errors.LLMError(
         "bad_response", "response_format: json_schema strict mode is not supported", status=400)
     provider = _SpendsOnTheSecondRefusal(
@@ -1529,7 +1530,7 @@ def test_a_budget_spent_after_a_garbled_chunk_says_the_check_ran_partly(
     _one_per_chunk(monkeypatch)
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     parse = decisions.parse
 
     def parse_then_spend(*args, **kwargs):

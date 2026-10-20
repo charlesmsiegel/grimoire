@@ -130,11 +130,49 @@ PURE_WRITERS = frozenset({
 #: Scoped to functions rather than whole files on purpose. A file-wide exemption
 #: left the store's largest modules permanently unguarded: `campaigns.py` was
 #: exempt because of `ensure_campaign_slim`, so any unrelated helper added
-#: anywhere else in it inherited the pass. Only `overlay.py` is genuinely
-#: file-wide, and it says why.
+#: anywhere else in it inherited the pass. The extracted overlay now names its
+#: actual resolver functions too, so a new sibling has no inherited exemption.
 OWNERS: dict[str, dict[str, str]] = {
-    "store/overlay.py": {
-        "*": "is the resolver -- raw campaign reads are its whole job",
+    "store/overlay/_actors.py": {
+        "create_character": "resolves campaign actor authority before publication",
+        "create_pc": "resolves campaign actor authority before publication",
+    },
+    "store/overlay/_entities.py": {
+        "create_entity": "resolves the campaign overlay before flat-record creation",
+        "delete_entity": "resolves owned versus inherited authority before removal",
+        "entity_rev": "computes the resolved overlay revision across both sources",
+        "read_entity_rev": "reads the resolved overlay revision across both sources",
+        "require_owned_entity": "proves owned identity before campaign-only mutation",
+        "update_entity": "materializes the resolved flat record before mutation",
+    },
+    "store/overlay/_greetings.py": {
+        "create_greeting": "resolves campaign greeting authority before creation",
+        "delete_greeting": "resolves owned versus inherited greeting before removal",
+        "list_greetings": "merges the two sources under the overlay visibility rule",
+        "materialize_plotmap": "copies the inherited plot map to campaign authority",
+        "read_greeting_rev": "reads the overlay-selected greeting and its revision",
+        "read_plotmap": "selects owned or inherited plot map under the overlay rule",
+        "set_edges": "materializes the overlay plot map before editing its edges",
+        "update_greeting": "materializes the overlay greeting before changing it",
+    },
+    "store/overlay/_images.py": {
+        "delete_image": "resolves image source before deleting or tombstoning it",
+        "promote_image": "resolves per-file authority before image promotion",
+    },
+    "store/overlay/_reclassification.py": {
+        "reclassify_entity": "resolves and materializes the record before moving it",
+    },
+    "store/overlay/_rosters.py": {
+        "pc_revision": "reads campaign-local revisions beside the resolved actor",
+        "pc_revisions": "reads campaign-local revisions beside the resolved actor",
+    },
+    "store/overlay/_sidecars.py": {
+        "set_tagline": "resolves per-file sidecar authority before changing it",
+        "set_voice_anchor": "resolves per-file sidecar authority before changing it",
+    },
+    "store/overlay/_world_lifecycle.py": {
+        "_drop_plotmap_edges": "cleans campaign-local edges after source retirement",
+        "dematerialize": "retires the proved owned copy to reveal world authority",
     },
     "store/campaigns/lifecycle.py": {
         "ensure_campaign_slim": "rewrites the raw pre-overlay tree, by definition",
@@ -142,11 +180,15 @@ OWNERS: dict[str, dict[str, str]] = {
     "store/appearances/versions.py": {
         "_set_default": "runs inside _lock, after the copy that materializes the actor",
     },
-    "store/sync.py": {
+    "store/sync/_incoming.py": {
         "incoming": "three-way merge needs the campaign's own copy, unresolved",
-        "_advance": "advances a base against the copy the campaign actually holds",
         "_actor_incoming": "compares the campaign's actor bytes with the world's",
         "_plotmap_incoming": "same, for the plot map",
+    },
+    "store/sync/_pull.py": {
+        "_advance": "advances a base against the copy the campaign actually holds",
+    },
+    "store/sync/_composition.py": {
         "_manifest_row": "derives a composition state from the campaign's own copy, unresolved (#71)",
         "_locked_rows": "same, for a version-locked actor's campaign bytes",
     },
@@ -547,8 +589,7 @@ def test_owner_exemptions_are_scoped_to_functions_not_whole_files():
     was exempt for `ensure_campaign_slim`, so anything else added to it inherited
     that. Only the resolver itself gets a whole file."""
     whole_file = [rel for rel, funcs in OWNERS.items() if "*" in funcs]
-    assert whole_file == ["store/overlay.py"], \
-        f"only the overlay may be exempt file-wide; also found: {whole_file}"
+    assert whole_file == [], f"owners must name their resolver functions: {whole_file}"
 
     # and the scoping must actually bite: a read in a non-exempt function of an
     # owner file is still an offender
@@ -564,6 +605,19 @@ def test_owner_exemptions_are_scoped_to_functions_not_whole_files():
     assert "ensure_campaign_slim" in inside and "some_new_helper" in inside
     assert "some_new_helper" not in owners, \
         "the new helper must not be exempt just because it shares a file"
+
+
+def test_new_overlay_functions_and_siblings_have_no_inherited_permission(tmp_path, monkeypatch):
+    directory = tmp_path / "store" / "overlay"
+    directory.mkdir(parents=True)
+    source = ("def some_new_helper(cid):\n"
+              "    croot = campaigns.campaign_root(cid)\n"
+              "    return characters.read_card(croot, aid, vid)\n")
+    for name in ("_actors.py", "_unreviewed.py"):
+        (directory / name).write_text(source, encoding="utf-8")
+    monkeypatch.setitem(globals(), "PACKAGE", tmp_path)
+    assert {rel for rel, _node, _what, reason in _scan() if reason is None} == {
+        "store/overlay/_actors.py", "store/overlay/_unreviewed.py"}
 
 
 def test_the_inheritable_set_comes_from_the_overlay():

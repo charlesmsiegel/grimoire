@@ -20,6 +20,7 @@ import pytest
 from grimoire import decisions, llm, llm_capture, llm_usage, openai_compatible, wire
 from grimoire.decisions import Answer, Choice, Item, ItemResult, Option, Predicate, Score
 from grimoire.llm import LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import DECISIONS_URL, OpenRouterClient, decision_body, decision_result
@@ -131,7 +132,7 @@ TENSION = {"openrouter": ({"0": 0.1, "1": 0.4, "2": 0.5}, 1.4),
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 class Wire:

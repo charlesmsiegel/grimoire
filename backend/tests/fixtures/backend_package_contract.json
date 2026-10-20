@@ -1,0 +1,2682 @@
+{
+  "modules": {
+    "grimoire.decisions": {
+      "loggers": {
+        "log": "grimoire.decisions"
+      },
+      "module_annotations": {
+        "ESCALATION_OUTCOMES": "tuple[str, ...]",
+        "TRIGGERS": "tuple[str, ...]",
+        "UNSTATED": "Final",
+        "_UNOFFERED": "Final"
+      }
+    },
+    "grimoire.inference": {
+      "loggers": {
+        "log": "grimoire.inference"
+      },
+      "module_annotations": {
+        "_BACKENDS": "dict[str, Backend]",
+        "_LOOPING": "weakref.WeakSet[asyncio.Task]"
+      }
+    },
+    "grimoire.llm": {
+      "loggers": {
+        "log": "grimoire.llm"
+      },
+      "module_annotations": {}
+    },
+    "grimoire.routes.character_turns": {
+      "loggers": {
+        "_log": "grimoire.character_turns"
+      },
+      "module_annotations": {
+        "_rng": "Callable[[], random.Random]"
+      },
+      "routes": [
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_group",
+          "path": "/campaigns/{cid}/scenes/{sid}/group",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_group",
+          "path": "/campaigns/{cid}/scenes/{sid}/group",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_response",
+          "path": "/campaigns/{cid}/scenes/{sid}/responses/{rid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_response_swipe",
+          "path": "/campaigns/{cid}/scenes/{sid}/responses/{rid}/swipe",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_response",
+          "path": "/campaigns/{cid}/scenes/{sid}/responses/{rid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "activate_response",
+          "path": "/campaigns/{cid}/scenes/{sid}/responses/{rid}/variants/{vid}/activate",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "regenerate_response",
+          "path": "/campaigns/{cid}/scenes/{sid}/responses/{rid}/regenerate",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "extend_response",
+          "path": "/campaigns/{cid}/scenes/{sid}/responses/{rid}/extend",
+          "status_code": null
+        }
+      ]
+    },
+    "grimoire.routes.characters": {
+      "loggers": {},
+      "module_annotations": {},
+      "routes": [
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_characters",
+          "path": "/worlds/{wid}/characters",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_character",
+          "path": "/worlds/{wid}/characters",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_characters_chub_unlinked",
+          "path": "/worlds/{wid}/characters/chub-unlinked",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_character_parse_text",
+          "path": "/worlds/{wid}/characters/parse-text",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_character_refine_text",
+          "path": "/worlds/{wid}/characters/refine-text",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_character",
+          "path": "/worlds/{wid}/characters/{cid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_character",
+          "path": "/worlds/{wid}/characters/{cid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_character_name",
+          "path": "/worlds/{wid}/characters/{cid}/name",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_character_birthdate",
+          "path": "/worlds/{wid}/characters/{cid}/birthdate",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_character_tags",
+          "path": "/worlds/{wid}/characters/{cid}/tags",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_character_chub_source",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/chub-source",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_world_character_chub_source",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/chub-source",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_character_chub_gallery",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/chub-gallery",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_character_chub_lorebooks",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/chub-lorebooks",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_world_character",
+          "path": "/worlds/{wid}/characters/{cid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_version",
+          "path": "/worlds/{wid}/characters/{cid}/versions",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_version",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_world_version",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_character_tagline",
+          "path": "/worlds/{wid}/characters/{cid}/tagline",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_character_tagline",
+          "path": "/worlds/{wid}/characters/{cid}/tagline",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_character_tagline_generate",
+          "path": "/worlds/{wid}/characters/{cid}/tagline/generate",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_taglines_generate",
+          "path": "/worlds/{wid}/characters/taglines/generate",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_character_voice_anchor",
+          "path": "/worlds/{wid}/characters/{cid}/voice-anchor",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_character_voice_anchor",
+          "path": "/worlds/{wid}/characters/{cid}/voice-anchor",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_character_voice_anchor_generate",
+          "path": "/worlds/{wid}/characters/{cid}/voice-anchor/generate",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_character_import",
+          "path": "/worlds/{wid}/characters/import",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_character_import_chub",
+          "path": "/worlds/{wid}/characters/import/chub",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_character_export",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/export",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_character_localize",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/localize",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_character_lorebook_import",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/lorebook/import",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "list_undescribed_images",
+          "path": "/worlds/{wid}/images/undescribed",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "list_world_gallery",
+          "path": "/worlds/{wid}/gallery",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "list_campaign_gallery",
+          "path": "/campaigns/{cid}/gallery",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "list_world_images",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/images",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_image",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_image",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_world_image",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "promote_world_image",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/promote",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_avatar_focus",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/images/avatar/focus",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_image_description_draft",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description/draft",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_image_description",
+          "path": "/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/description",
+          "status_code": null
+        }
+      ]
+    },
+    "grimoire.routes.common": {
+      "loggers": {
+        "log": "grimoire.routes.common"
+      },
+      "module_annotations": {}
+    },
+    "grimoire.routes.config": {
+      "loggers": {
+        "log": "grimoire.routes.config"
+      },
+      "module_annotations": {
+        "GENERATING_CHECK_KINDS": "frozenset[str]"
+      },
+      "routes": [
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_config",
+          "path": "/config",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_config",
+          "path": "/config",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_play_decisions",
+          "path": "/play-decisions",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_campaign_play_decisions",
+          "path": "/campaigns/{cid}/play-decisions",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_campaign_play_decisions",
+          "path": "/campaigns/{cid}/play-decisions",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_prompt_layout",
+          "path": "/prompt-layout",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_prompt_layout",
+          "path": "/prompt-layout",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_data_dir",
+          "path": "/config/data-dir",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_data_dir",
+          "path": "/config/data-dir",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_backups",
+          "path": "/backups",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_backup",
+          "path": "/backups",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_image_backup",
+          "path": "/backups/images",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_store_conflicts",
+          "path": "/store/conflicts",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_connections",
+          "path": "/llm-connections",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_connection",
+          "path": "/llm-connections",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_connection",
+          "path": "/llm-connections/{id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_connection",
+          "path": "/llm-connections/{id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_connection_route",
+          "path": "/llm-connections/{id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_connection_models_refresh",
+          "path": "/llm-connections/{id}/models/refresh",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_model_catalog",
+          "path": "/model-catalog",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_provider_presets",
+          "path": "/providers/presets",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_connection_health",
+          "path": "/llm-connections/{conn_id}/health",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_connection_test_preview",
+          "path": "/llm-connections/{conn_id}/test/preview",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_connection_test",
+          "path": "/llm-connections/{conn_id}/test",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_styles",
+          "path": "/styles",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_style",
+          "path": "/styles",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_style",
+          "path": "/styles/{sid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_style",
+          "path": "/styles/{sid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_style",
+          "path": "/styles/{sid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_style_duplicate",
+          "path": "/styles/{sid}/duplicate",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_global_response",
+          "path": "/response",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_global_response",
+          "path": "/response",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_sampler_presets",
+          "path": "/sampler-presets",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_sampler_preset",
+          "path": "/sampler-presets",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_sampler_preset_import",
+          "path": "/sampler-presets/import",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_sampler_preset",
+          "path": "/sampler-presets/{pid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_sampler_preset",
+          "path": "/sampler-presets/{pid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_sampler_preset",
+          "path": "/sampler-presets/{pid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_connection_capabilities",
+          "path": "/llm-connections/{conn_id}/capabilities",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_connection_facts",
+          "path": "/llm-connections/{conn_id}/facts",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_connection_facts",
+          "path": "/llm-connections/{conn_id}/facts",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_inference_controls",
+          "path": "/inference/controls",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_entity_kinds",
+          "path": "/entity-kinds",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_calendar_providers",
+          "path": "/calendars/providers",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_calendar_year",
+          "path": "/calendars/{provider}/year",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_climates",
+          "path": "/climates",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_climate",
+          "path": "/climates/{climate_id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_climate",
+          "path": "/climates/{climate_id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_climate_referrers",
+          "path": "/climates/{climate_id}/referrers",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_climate",
+          "path": "/climates/{climate_id}",
+          "status_code": null
+        }
+      ]
+    },
+    "grimoire.routes.ledger": {
+      "loggers": {
+        "log": "grimoire.routes.ledger"
+      },
+      "module_annotations": {},
+      "routes": [
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_thread",
+          "path": "/campaigns/{cid}/ledger/threads",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_thread",
+          "path": "/campaigns/{cid}/ledger/threads/{pid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_thread",
+          "path": "/campaigns/{cid}/ledger/threads/{pid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_commitment",
+          "path": "/campaigns/{cid}/ledger/commitments",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_commitment",
+          "path": "/campaigns/{cid}/ledger/commitments/{mid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_commitment",
+          "path": "/campaigns/{cid}/ledger/commitments/{mid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_fact",
+          "path": "/campaigns/{cid}/ledger/facts",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_fact",
+          "path": "/campaigns/{cid}/ledger/facts/{fid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_fact_retire",
+          "path": "/campaigns/{cid}/ledger/facts/{fid}/retire",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_fact",
+          "path": "/campaigns/{cid}/ledger/facts/{fid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_relationship",
+          "path": "/campaigns/{cid}/ledger/relationships",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_relationship",
+          "path": "/campaigns/{cid}/ledger/relationships",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_chronicle_line",
+          "path": "/campaigns/{cid}/ledger/chronicle/{sid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_knowledge_scene",
+          "path": "/campaigns/{cid}/ledger/knowledge/scenes/{sid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_knowledge",
+          "path": "/campaigns/{cid}/ledger/knowledge",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_knowledge",
+          "path": "/campaigns/{cid}/ledger/knowledge",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_knowledge",
+          "path": "/campaigns/{cid}/ledger/knowledge/{kid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_knowledge",
+          "path": "/campaigns/{cid}/ledger/knowledge/{kid}",
+          "status_code": null
+        }
+      ]
+    },
+    "grimoire.routes.runs": {
+      "loggers": {
+        "_log": "grimoire.routes.runs"
+      },
+      "module_annotations": {
+        "ATTACHABLE": "frozenset[str]",
+        "GLOBAL_SUBJECT": "Subject",
+        "_EXCLUSIVE": "frozenset[str]"
+      },
+      "routes": [
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_by_identity",
+          "path": "/campaigns/{cid}/scene-by-identity",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_run",
+          "path": "/campaigns/{cid}/scenes/{sid}/run",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_run",
+          "path": "/campaigns/{cid}/scenes/{sid}/runs/{run_id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_run_cancel",
+          "path": "/campaigns/{cid}/scenes/{sid}/runs/{run_id}/cancel",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_attempt_cancel",
+          "path": "/campaigns/{cid}/scenes/{sid}/attempt-cancel",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_attempt_state",
+          "path": "/campaigns/{cid}/scenes/{sid}/attempt-state",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_run_stream",
+          "path": "/campaigns/{cid}/scenes/{sid}/runs/{run_id}/stream",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_campaign_runs",
+          "path": "/campaigns/{cid}/runs",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_campaign_run",
+          "path": "/campaigns/{cid}/runs/{run_id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_campaign_run_stream",
+          "path": "/campaigns/{cid}/runs/{run_id}/stream",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_campaign_run_cancel",
+          "path": "/campaigns/{cid}/runs/{run_id}/cancel",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_runs",
+          "path": "/worlds/{wid}/runs",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_run",
+          "path": "/worlds/{wid}/runs/{run_id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_run_stream",
+          "path": "/worlds/{wid}/runs/{run_id}/stream",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_run_cancel",
+          "path": "/worlds/{wid}/runs/{run_id}/cancel",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_global_runs",
+          "path": "/runs",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_global_run",
+          "path": "/runs/{run_id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_global_run_stream",
+          "path": "/runs/{run_id}/stream",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_global_run_cancel",
+          "path": "/runs/{run_id}/cancel",
+          "status_code": null
+        }
+      ]
+    },
+    "grimoire.routes.scenes": {
+      "loggers": {
+        "log": "grimoire.routes.scenes"
+      },
+      "module_annotations": {
+        "_rolling_inflight": "set[tuple[str, str]]"
+      },
+      "routes": [
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scenes",
+          "path": "/campaigns/{cid}/scenes",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene",
+          "path": "/campaigns/{cid}/scenes",
+          "status_code": null
+        },
+        {
+          "markers": [
+            "grimoire_computes_only"
+          ],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_import_parse",
+          "path": "/campaigns/{cid}/scenes/import/parse",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_import",
+          "path": "/campaigns/{cid}/scenes/import",
+          "status_code": null
+        },
+        {
+          "markers": [
+            "grimoire_computes_only"
+          ],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_suggestions",
+          "path": "/campaigns/{cid}/scene-suggestions",
+          "status_code": 202
+        },
+        {
+          "markers": [
+            "grimoire_computes_only"
+          ],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_intent",
+          "path": "/campaigns/{cid}/scene-intent",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_ideas",
+          "path": "/campaigns/{cid}/scene-ideas",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_idea",
+          "path": "/campaigns/{cid}/scene-ideas",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_scene_idea",
+          "path": "/campaigns/{cid}/scene-ideas/{lid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene",
+          "path": "/campaigns/{cid}/scenes/{sid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_rewrites",
+          "path": "/campaigns/{cid}/scenes/{sid}/rewrites",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_branch",
+          "path": "/campaigns/{cid}/scenes/{sid}/branch",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_scene",
+          "path": "/campaigns/{cid}/scenes/{sid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_scene",
+          "path": "/campaigns/{cid}/scenes/{sid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_chat",
+          "path": "/campaigns/{cid}/scenes/{sid}/chat",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_retry",
+          "path": "/campaigns/{cid}/scenes/{sid}/retry",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_regenerate",
+          "path": "/campaigns/{cid}/scenes/{sid}/regenerate",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_alternates",
+          "path": "/campaigns/{cid}/scenes/{sid}/alternates",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_alternate",
+          "path": "/campaigns/{cid}/scenes/{sid}/alternates/{vid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_chronicle",
+          "path": "/campaigns/{cid}/chronicle",
+          "status_code": null
+        },
+        {
+          "markers": [
+            "grimoire_computes_only"
+          ],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_absorb",
+          "path": "/campaigns/{cid}/scenes/{sid}/absorb",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_pending_review",
+          "path": "/campaigns/{cid}/scenes/{sid}/pending-review",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_pending_review",
+          "path": "/campaigns/{cid}/scenes/{sid}/pending-review",
+          "status_code": null
+        },
+        {
+          "markers": [
+            "grimoire_computes_only"
+          ],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_audit",
+          "path": "/campaigns/{cid}/scenes/{sid}/audit",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_rolling_summary",
+          "path": "/campaigns/{cid}/scenes/{sid}/rolling-summary",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_rolling_summary",
+          "path": "/campaigns/{cid}/scenes/{sid}/rolling-summary",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_break",
+          "path": "/campaigns/{cid}/scenes/{sid}/scene-break",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_break",
+          "path": "/campaigns/{cid}/scenes/{sid}/scene-break",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_break_dismiss",
+          "path": "/campaigns/{cid}/scenes/{sid}/scene-break/dismiss",
+          "status_code": null
+        },
+        {
+          "markers": [
+            "grimoire_computes_only"
+          ],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_dossiers",
+          "path": "/campaigns/{cid}/scenes/{sid}/dossiers",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_chronicle",
+          "path": "/campaigns/{cid}/scenes/{sid}/chronicle",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_briefing",
+          "path": "/campaigns/{cid}/scenes/{sid}/briefing",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_cast",
+          "path": "/campaigns/{cid}/scenes/{sid}/cast",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_cast",
+          "path": "/campaigns/{cid}/scenes/{sid}/cast",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_scene_cast",
+          "path": "/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_cast_batch",
+          "path": "/campaigns/{cid}/scenes/{sid}/cast/batch",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_emergent_cast",
+          "path": "/campaigns/{cid}/scenes/{sid}/cast/emergent",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_cast_changes",
+          "path": "/campaigns/{cid}/scenes/{sid}/cast-changes",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_suggestions",
+          "path": "/campaigns/{cid}/scenes/{sid}/suggestions",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_dismiss",
+          "path": "/campaigns/{cid}/scenes/{sid}/suggestions/dismiss",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_location",
+          "path": "/campaigns/{cid}/scenes/{sid}/location",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_scene_location",
+          "path": "/campaigns/{cid}/scenes/{sid}/location",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_datetime",
+          "path": "/campaigns/{cid}/scenes/{sid}/datetime",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_scene_datetime",
+          "path": "/campaigns/{cid}/scenes/{sid}/datetime",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_response",
+          "path": "/campaigns/{cid}/scenes/{sid}/response",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_scene_response",
+          "path": "/campaigns/{cid}/scenes/{sid}/response",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_context",
+          "path": "/campaigns/{cid}/scenes/{sid}/context",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_prompts",
+          "path": "/campaigns/{cid}/scenes/{sid}/prompts",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_prompt",
+          "path": "/campaigns/{cid}/scenes/{sid}/prompts/{eid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_campaign_prompts",
+          "path": "/campaigns/{cid}/prompts",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_campaign_prompt",
+          "path": "/campaigns/{cid}/prompts/{eid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_prompt_diff",
+          "path": "/campaigns/{cid}/scenes/{sid}/prompts/{eid}/diff",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_cast_casefile",
+          "path": "/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}/casefile",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_cast_detail",
+          "path": "/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_scene_message",
+          "path": "/campaigns/{cid}/scenes/{sid}/messages/{index}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_scene_message_excluded",
+          "path": "/campaigns/{cid}/scenes/{sid}/messages/{index}/excluded",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_scene_messages_from",
+          "path": "/campaigns/{cid}/scenes/{sid}/messages/{index}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scene_retcon",
+          "path": "/campaigns/{cid}/scenes/{sid}/messages/{index}/retcon",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_replay_preview",
+          "path": "/campaigns/{cid}/scenes/{sid}/replay/preview",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_replay",
+          "path": "/campaigns/{cid}/scenes/{sid}/replay",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_replay",
+          "path": "/campaigns/{cid}/scenes/{sid}/replay",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_replay_turn",
+          "path": "/campaigns/{cid}/scenes/{sid}/replay/turn",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_replay_accept",
+          "path": "/campaigns/{cid}/scenes/{sid}/replay/accept",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_replay_cancel",
+          "path": "/campaigns/{cid}/scenes/{sid}/replay/cancel",
+          "status_code": null
+        }
+      ]
+    },
+    "grimoire.routes.streaming": {
+      "loggers": {
+        "_log": "grimoire.routes.streaming"
+      },
+      "module_annotations": {
+        "_turn_tokens": "dict[tuple[str, str], int]"
+      }
+    },
+    "grimoire.routes.todo": {
+      "loggers": {},
+      "module_annotations": {},
+      "routes": [
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_todo",
+          "path": "/todo",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_todo_items",
+          "path": "/todo/{chore_id}/items",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_todo_ignored",
+          "path": "/todo/{chore_id}/ignored",
+          "status_code": null
+        }
+      ]
+    },
+    "grimoire.routes.tracker": {
+      "loggers": {
+        "log": "grimoire.routes.tracker"
+      },
+      "module_annotations": {},
+      "routes": [
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_campaign_tracker",
+          "path": "/campaigns/{cid}/tracker",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_campaign_tracker",
+          "path": "/campaigns/{cid}/tracker",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_tracker_fields",
+          "path": "/worlds/{wid}/tracker-fields",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_tracker_fields",
+          "path": "/worlds/{wid}/tracker-fields",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_campaign_tracker_fields",
+          "path": "/campaigns/{cid}/tracker-fields",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_campaign_tracker_fields",
+          "path": "/campaigns/{cid}/tracker-fields",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_tracker_fields",
+          "path": "/campaigns/{cid}/scenes/{sid}/tracker-fields",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_scene_tracker_fields",
+          "path": "/campaigns/{cid}/scenes/{sid}/tracker-fields",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_scene_tracker",
+          "path": "/campaigns/{cid}/scenes/{sid}/tracker",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_tracker_record",
+          "path": "/campaigns/{cid}/scenes/{sid}/tracker/records/{key}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_tracker_record",
+          "path": "/campaigns/{cid}/scenes/{sid}/tracker/records/{key}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_tracker_retry",
+          "path": "/campaigns/{cid}/scenes/{sid}/tracker/records/{key}/retry",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_tracker_rerun_from",
+          "path": "/campaigns/{cid}/scenes/{sid}/tracker/records/{key}/rerun-from",
+          "status_code": null
+        }
+      ]
+    },
+    "grimoire.routes.worlds": {
+      "loggers": {},
+      "module_annotations": {},
+      "routes": [
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_worlds",
+          "path": "/worlds",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world",
+          "path": "/worlds",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world",
+          "path": "/worlds/{wid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world",
+          "path": "/worlds/{wid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_world",
+          "path": "/worlds/{wid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_fork",
+          "path": "/worlds/{wid}/fork",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_campaigns",
+          "path": "/worlds/{wid}/campaigns",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_export",
+          "path": "/worlds/{wid}/export.zip",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_import",
+          "path": "/worlds/import",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_module",
+          "path": "/worlds/{wid}/module",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_sheets_index",
+          "path": "/worlds/{wid}/sheets",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_sheets",
+          "path": "/worlds/{wid}/sheets/{mid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_sheet",
+          "path": "/worlds/{wid}/sheets/{mid}/{kind}/{eid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_sheet",
+          "path": "/worlds/{wid}/sheets/{mid}/{kind}/{eid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_sheet_creation",
+          "path": "/worlds/{wid}/sheets/{mid}/{kind}/{eid}/creation",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_world_sheet",
+          "path": "/worlds/{wid}/sheets/{mid}/{kind}/{eid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_instantiate",
+          "path": "/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_tags",
+          "path": "/worlds/{wid}/tags",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_tag",
+          "path": "/worlds/{wid}/tags",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_tag",
+          "path": "/worlds/{wid}/tags/{tid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_world_tag",
+          "path": "/worlds/{wid}/tags/{tid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_pcs",
+          "path": "/worlds/{wid}/pcs",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_campaign_pc_name",
+          "path": "/worlds/{wid}/campaign-pc-name",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_pc",
+          "path": "/worlds/{wid}/pcs",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_pc",
+          "path": "/worlds/{wid}/pcs/{pid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_pc",
+          "path": "/worlds/{wid}/pcs/{pid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_world_pc",
+          "path": "/worlds/{wid}/pcs/{pid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_pc_version",
+          "path": "/worlds/{wid}/pcs/{pid}/versions",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_pc_version",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_pc_revisions",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/revisions",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_pc_revision",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/revisions/{rid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_pc_revision_restore",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/revisions/{rid}/restore",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_pc_version",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "list_world_pc_images",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/images",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_pc_image",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_pc_image",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "DELETE"
+          ],
+          "name": "delete_world_pc_image",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "promote_world_pc_image",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/promote",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_pc_avatar_focus",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/images/avatar/focus",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_world_pc_image_description_draft",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/description/draft",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_pc_image_description",
+          "path": "/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}/description",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_lorebook_parse",
+          "path": "/worlds/{wid}/lorebook/parse",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_lorebook_import",
+          "path": "/worlds/{wid}/lorebook/import",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scenario_parse",
+          "path": "/worlds/{wid}/scenario/parse",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scenario_parse_url",
+          "path": "/worlds/{wid}/scenario/parse-url",
+          "status_code": 202
+        },
+        {
+          "markers": [],
+          "methods": [
+            "POST"
+          ],
+          "name": "post_scenario_import",
+          "path": "/worlds/{wid}/scenario/import",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_calendar_config",
+          "path": "/worlds/{wid}/calendar",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "PUT"
+          ],
+          "name": "put_world_calendar_config",
+          "path": "/worlds/{wid}/calendar",
+          "status_code": null
+        },
+        {
+          "markers": [],
+          "methods": [
+            "GET"
+          ],
+          "name": "get_world_calendar_months",
+          "path": "/worlds/{wid}/calendar/months",
+          "status_code": null
+        }
+      ]
+    },
+    "grimoire.store.absorb.materializer": {
+      "loggers": {},
+      "module_annotations": {}
+    },
+    "grimoire.store.assets": {
+      "loggers": {},
+      "module_annotations": {}
+    },
+    "grimoire.store.cache_sync": {
+      "loggers": {
+        "_log": "grimoire.store.cache_sync"
+      },
+      "module_annotations": {
+        "FILE_RECIPES": "dict[str, FileRecipe]",
+        "HOOKS": "tuple[WarmHook, ...]",
+        "VECTOR_PROJECTIONS": "dict[str, Projection]",
+        "_warned": "set[str]"
+      }
+    },
+    "grimoire.store.characters": {
+      "loggers": {},
+      "module_annotations": {
+        "_FACTS_POOL": "dict",
+        "_IDENTITY_POOL": "dict",
+        "_ROW_POOL": "dict",
+        "_SUMMARY_POOL": "dict"
+      }
+    },
+    "grimoire.store.compiled": {
+      "loggers": {},
+      "module_annotations": {
+        "HISTORY_OVER_BUDGET": "Mapping[Path, tuple]",
+        "KINDS": "dict[str, Kind]",
+        "OVERVIEW_CANDIDATES": "dict[str, Kind]",
+        "_OVER_BUDGET": "list[tuple]",
+        "_ctypes": "ModuleType | None",
+        "_inherited": "list[_State]",
+        "_sqlite": "ModuleType | None"
+      }
+    },
+    "grimoire.store.context.assemble": {
+      "loggers": {
+        "log": "grimoire.store.context.assemble"
+      },
+      "module_annotations": {
+        "_NO_TRACKER": "tuple[dict, list, dict]"
+      }
+    },
+    "grimoire.store.context.epistemic": {
+      "loggers": {
+        "log": "grimoire.store.context.epistemic"
+      },
+      "module_annotations": {}
+    },
+    "grimoire.store.continuity.reconcile": {
+      "loggers": {},
+      "module_annotations": {
+        "DECISIONS": "dict[str, tuple[str, ...]]",
+        "LABELS": "dict[str, str]"
+      }
+    },
+    "grimoire.store.image_gc": {
+      "loggers": {
+        "_log": "grimoire.store.image_gc"
+      },
+      "module_annotations": {}
+    },
+    "grimoire.store.image_migration": {
+      "loggers": {},
+      "module_annotations": {}
+    },
+    "grimoire.store.inference.legacy_plan": {
+      "loggers": {},
+      "module_annotations": {
+        "OWNED_GLOBAL_KEYS": "tuple[str, ...]",
+        "REPRESENTABLE": "tuple[str, ...]"
+      }
+    },
+    "grimoire.store.inference.migrate": {
+      "loggers": {
+        "log": "grimoire.store.inference.migrate"
+      },
+      "module_annotations": {
+        "OWNED_GLOBAL_KEYS": "tuple[str, ...]",
+        "STATES": "tuple[str, ...]",
+        "_active": "dict[str, dict | None]",
+        "_queued": "set[str]"
+      }
+    },
+    "grimoire.store.inference.resolve": {
+      "loggers": {},
+      "module_annotations": {
+        "OPERATION_CAPABILITY": "dict[str, tuple[str, ...]]"
+      }
+    },
+    "grimoire.store.locks": {
+      "loggers": {},
+      "module_annotations": {
+        "DOMAIN_MODULES": "frozenset[str]",
+        "OUTSIDE_DOMAIN": "dict[str, str]",
+        "UNREVIEWED": "frozenset[str]",
+        "_campaign_locks": "dict[str, _ProcessScopedLock]",
+        "_image_collection_job_locks": "dict[tuple[str, str], _ProcessScopedLock]",
+        "_image_collection_locks": "dict[str, _ProcessScopedLock]",
+        "_image_ingest_gc_locks": "dict[str, _ProcessScopedLock]",
+        "_image_object_locks": "dict[tuple[str, int], _ProcessScopedLock]",
+        "_image_stripe_locks": "dict[tuple[str, str, int], StripeLock]",
+        "_world_actor_locks": "dict[str, _ProcessScopedLock]",
+        "_world_lifecycle_locks": "dict[tuple[str, str], _WorldLifecycleLock]"
+      }
+    },
+    "grimoire.store.logs": {
+      "loggers": {},
+      "module_annotations": {
+        "_capped": "set[str]",
+        "_written": "dict[str, int]"
+      }
+    },
+    "grimoire.store.overlay": {
+      "loggers": {
+        "log": "grimoire.store.overlay"
+      },
+      "module_annotations": {
+        "INHERITED_FILES": "tuple[str, ...]",
+        "INHERITED_KINDS": "tuple[str, ...]"
+      }
+    },
+    "grimoire.store.suggest": {
+      "loggers": {},
+      "module_annotations": {
+        "_NO_ANNOTATION": "dict[str, Any]",
+        "_RELATION_RULES": "dict[str, Callable[[int, int, int | None], bool]]"
+      }
+    },
+    "grimoire.store.sync": {
+      "loggers": {
+        "log": "grimoire.store.sync"
+      },
+      "module_annotations": {
+        "ACTOR_WORLD_SIDECARS": "tuple[str, ...]"
+      }
+    },
+    "grimoire.store.usage": {
+      "loggers": {},
+      "module_annotations": {
+        "_UNPRICED_POOL": "dict"
+      }
+    },
+    "grimoire.store.world_bundle": {
+      "loggers": {},
+      "module_annotations": {}
+    },
+    "grimoire.tool_calls": {
+      "loggers": {},
+      "module_annotations": {
+        "CHOICES": "tuple[str, ...]",
+        "FINISHES": "tuple[str, ...]",
+        "LIMITS": "tuple[str, ...]"
+      }
+    }
+  },
+  "openapi_sha256": {
+    "1": "4e802d0e74f03e2632c01ff7979e89437a1b8c513c522e2530ff3e5e38488067",
+    "2": "268b3652e857ec893c7a2f08d05dbf395fb932e46f6019955998226ca2333316"
+  },
+  "source_commit": "a7ebe3961"
+}

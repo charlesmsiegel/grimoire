@@ -102,7 +102,7 @@ def test_case_aliases_share_a_lock(monkeypatch, tmp_path):
     assert locks.image_name_lock(d / ".." / "default", "avatar") is locks.image_name_lock(d, "avatar")
 
     # And it is the lock a writer takes: an upload under the other spelling waits.
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.3)
+    monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.3)
     done = _hold(assets._image_lock(d, "Gallery_1"))
     try:
         with pytest.raises(locks.StoreBusy):
@@ -116,7 +116,7 @@ def test_the_two_families_never_share_a_lock(monkeypatch, tmp_path):
     """A name and a sidecar on the same stripe number are still two locks: the
     order is name THEN sidecar, and one family's stripe standing in for the
     other's would make that order a cycle."""
-    monkeypatch.setattr(locks, "_image_stripe", lambda d, key: 0)
+    monkeypatch.setattr(locks._runtime, "_image_stripe", lambda d, key: 0)
     d = tmp_path / "v"
     name, side = locks.image_name_lock(d, "a"), locks.image_sidecar_lock(d, "a")
     assert name is not side
@@ -131,7 +131,7 @@ def test_the_two_families_never_share_a_lock(monkeypatch, tmp_path):
 def test_a_shared_stripe_is_taken_once(monkeypatch, tmp_path):
     """Two names on one stripe are one acquisition, not two: the set is
     deduplicated before it is taken."""
-    monkeypatch.setattr(locks, "_image_stripe", lambda d, key: 3)
+    monkeypatch.setattr(locks._runtime, "_image_stripe", lambda d, key: 3)
     d = tmp_path / "v"
     got = locks.image_name_locks(d, ["avatar", "gallery_1", "Gallery_1"])
     assert got == [locks.image_name_lock(d, "avatar")]
@@ -142,7 +142,7 @@ def test_a_shared_stripe_is_taken_once(monkeypatch, tmp_path):
 def test_cross_directory_name_set_is_sorted_and_deduplicated(monkeypatch, tmp_path):
     table = {("world", "avatar"): 9, ("campaign", "avatar"): 2,
              ("world", "gallery_1"): 2}
-    monkeypatch.setattr(locks, "_image_stripe", lambda d, key: table[(d.name, key)])
+    monkeypatch.setattr(locks._runtime, "_image_stripe", lambda d, key: table[(d.name, key)])
     keyed = [(tmp_path / "world", "avatar"), (tmp_path / "campaign", "avatar"),
              (tmp_path / "world", "gallery_1")]
     expected = [locks.image_name_lock(*keyed[1]), locks.image_name_lock(*keyed[0])]
@@ -153,7 +153,7 @@ def test_cross_directory_name_set_is_sorted_and_deduplicated(monkeypatch, tmp_pa
 
 def test_stripes_are_taken_in_stripe_order_not_name_order(monkeypatch, tmp_path):
     table = {"avatar": 9, "gallery_1": 2, "promote-tmp": 5}
-    monkeypatch.setattr(locks, "_image_stripe", lambda d, key: table[key.casefold()])
+    monkeypatch.setattr(locks._runtime, "_image_stripe", lambda d, key: table[key.casefold()])
     d = tmp_path / "v"
     got = locks.image_name_locks(d, ["avatar", "promote-tmp", "gallery_1"])
     assert got == [locks.image_name_lock(d, n) for n in ("gallery_1", "promote-tmp", "avatar")]
@@ -190,8 +190,8 @@ def test_forced_stripe_collisions_do_not_deadlock(monkeypatch, tmp_path):
       it waits for `avatar`.
 
     A wedge surfaces as `StoreBusy` once the (shortened) timeout runs out."""
-    monkeypatch.setattr(locks, "_image_stripe", _forced_stripes)
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 3.0)
+    monkeypatch.setattr(locks._runtime, "_image_stripe", _forced_stripes)
+    monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 3.0)
     root = tmp_path / "root"
     for cid in ("sera", "mara"):
         for i, name in enumerate((assets.AVATAR, "gallery_1", "gallery_2", "gallery_3")):
@@ -268,8 +268,8 @@ def test_a_nested_heal_never_waits(monkeypatch, tmp_path):
     Timed, not merely "returns": a heal that waited would also return, once
     the timeout ran out and its `StoreBusy` was swallowed. With a 2 s timeout,
     returning inside 0.2 s is what proves it never waited."""
-    monkeypatch.setattr(locks, "_image_stripe", _forced_stripes)
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 2.0)
+    monkeypatch.setattr(locks._runtime, "_image_stripe", _forced_stripes)
+    monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 2.0)
     root = tmp_path / "root"
     assets.put_image(root, "sera", "default", "gallery_1", _png(1), "png")
     d = assets.version_dir(root, "sera", "default")
@@ -298,8 +298,8 @@ def test_a_writer_never_writes_over_a_journal_its_recovery_skipped(monkeypatch, 
     gone. The writer refuses instead, and the swap finishes once the stripe is
     free."""
     stripes = {"avatar": 1, "gallery_1": 7, "gallery_9": 7}
-    monkeypatch.setattr(locks, "_image_stripe", lambda dd, key: stripes.get(key.casefold(), 3))
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 2.0)
+    monkeypatch.setattr(locks._runtime, "_image_stripe", lambda dd, key: stripes.get(key.casefold(), 3))
+    monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 2.0)
     root = tmp_path / "root"
     assets.put_image(root, "sera", "default", assets.AVATAR, _png(1), "png")
     assets.put_image(root, "sera", "default", "gallery_1", _png(2), "png")
@@ -336,7 +336,7 @@ def test_a_writer_never_writes_over_a_journal_its_recovery_skipped(monkeypatch, 
 
 def test_copy_slots_never_writes_over_a_skipped_journal(monkeypatch, tmp_path):
     stripes = {"avatar": 1, "gallery_1": 7, "gallery_9": 7}
-    monkeypatch.setattr(locks, "_image_stripe", lambda dd, key: stripes.get(key.casefold(), 3))
+    monkeypatch.setattr(locks._runtime, "_image_stripe", lambda dd, key: stripes.get(key.casefold(), 3))
     src = tmp_path / "src"
     assets.put_in(src, assets.AVATAR, _png(5), "png")
     dst = tmp_path / "dst"
@@ -386,7 +386,7 @@ def test_the_stripe_scheme_is_in_the_lock_domain(tmp_path):
 
 
 def test_a_busy_stripe_says_the_image_is_busy(monkeypatch, tmp_path):
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.2)
     d = tmp_path / "v"
     done = _hold(locks.image_name_lock(d, "avatar"))
     try:
@@ -404,7 +404,7 @@ def test_two_instances_serialize_across_the_file_lock(monkeypatch, tmp_path):
     d = tmp_path / "v"
     for factory in (locks.image_name_lock, locks.image_sidecar_lock):
         first = factory(d, "avatar")
-        monkeypatch.setattr(locks, "_image_stripe_locks", {})
+        monkeypatch.setattr(locks._runtime, "_image_stripe_locks", {})
         second = factory(d, "Avatar")
         assert second is not first
         with first:
@@ -705,8 +705,8 @@ def test_record_art_promotion_never_blocks_on_a_nested_heal_stripe(client, monke
     rows = {row["name"]: row for row in assets.list_images(root, rid, "default")}
     d = assets.version_dir(root, rid, "default")
     (d / "promote-tmp.png").write_bytes(_png(3))
-    monkeypatch.setattr(locks, "_image_stripe", _forced_stripes)
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+    monkeypatch.setattr(locks._runtime, "_image_stripe", _forced_stripes)
+    monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.5)
     temp_lock = locks.image_name_lock(d, "promote-tmp")
     done = _hold(temp_lock)
     real_acquire = locks._ProcessScopedLock.acquire

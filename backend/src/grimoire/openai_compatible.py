@@ -131,7 +131,7 @@ def _strict_messages(messages: list[dict]) -> list[dict]:
         elif m["role"] == "tool":
             folded.append(dict(m))
         else:
-            # grimoire's context/assemble.py only ever emits system/user/assistant
+            # grimoire's store/context/assemble/ only ever emits system/user/assistant
             # today, but silently folding an unrecognized role into
             # "assistant" would misattribute its content as model-authored.
             raise OpenAICompatibleError("bad_response", f"unsupported message role: {m['role']!r}")

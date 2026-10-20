@@ -17,6 +17,8 @@ import pytest
 from grimoire import routes, store
 from grimoire.routes import character_turns
 from grimoire.routes import tracker as tracker_routes
+from grimoire.routes.tracker import _locks as tracker_locks
+from grimoire.routes.tracker import _persistence as tracker_persistence
 
 from .llm_fakes import FakeLLM, HeldCassette, from_entries
 
@@ -693,13 +695,13 @@ def test_a_post_after_an_edited_post_text_lands_flagged(client):
 # both still share is the real cross-process one.
 
 def _unordered(monkeypatch) -> None:
-    monkeypatch.setattr(tracker_routes, "_scene_lock",
+    monkeypatch.setattr(tracker_locks, "_scene_lock",
                         lambda app, cid, identity: asyncio.Lock())
 
 
 def _count_prepares(monkeypatch) -> list[threading.Event]:
     """`[first, second]`: set once that many updates have read their inputs."""
-    real, seen = tracker_routes._prepare, []
+    real, seen = tracker_persistence._prepare, []
     reached = [threading.Event(), threading.Event()]
 
     def prepare(*a, **k):
@@ -710,7 +712,7 @@ def _count_prepares(monkeypatch) -> list[threading.Event]:
                 event.set()
         return out
 
-    monkeypatch.setattr(tracker_routes, "_prepare", prepare)
+    monkeypatch.setattr(tracker_persistence, "_prepare", prepare)
     return reached
 
 
@@ -913,7 +915,7 @@ def test_a_duplicate_retry_cannot_land_over_an_edit(client, monkeypatch):
     llm = _held(client)
     # The second run is held at its prepare, so the window between the two
     # runs' commits is the test's to look into.
-    real_prepare, go_second, prepared = tracker_routes._prepare, threading.Event(), []
+    real_prepare, go_second, prepared = tracker_persistence._prepare, threading.Event(), []
 
     def prepare(*a, **k):
         prepared.append(a)
@@ -921,7 +923,7 @@ def test_a_duplicate_retry_cannot_land_over_an_edit(client, monkeypatch):
             assert go_second.wait(RUN_TIMEOUT)
         return real_prepare(*a, **k)
 
-    monkeypatch.setattr(tracker_routes, "_prepare", prepare)
+    monkeypatch.setattr(tracker_persistence, "_prepare", prepare)
     edit = {"edits": {"characters:mara": {"clothing": {"value": "red coat"}}}}
     try:
         assert client.post(f"{_base(cid, sid)}/records/{keys[1]}/retry").status_code == 200

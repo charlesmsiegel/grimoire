@@ -17,6 +17,8 @@ from types import SimpleNamespace
 import pytest
 
 from grimoire.store import cache_sync, compiled, logs, revision
+from grimoire.store.cache_sync import _contracts as cache_sync_contracts
+from grimoire.store.compiled import _contracts as compiled_contracts
 from tests import cache_sync_fixtures as fx
 
 # The shared fixtures, bound here so pytest finds them by name.
@@ -294,7 +296,7 @@ def test_an_absolute_path_inside_the_store_is_accepted_and_reported_as_given(hom
 
 
 def test_a_batch_past_max_paths_is_truncated_and_says_so(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 2)
     for name in ("a", "b", "c"):
         _write(home, f"worlds/realm/lore/{name}.md", "x")
     report = cache_sync.sync_paths([f"worlds/realm/lore/{n}.md" for n in "abc"], mode="explicit")
@@ -541,7 +543,7 @@ def test_a_stop_inside_a_hook_leaves_the_unreached_paths_unsynced(home, upper):
 def test_an_unreadable_history_is_unsynced_never_cold(home, upper, monkeypatch):
     _write(home, "worlds/realm/lore/pact.md", "x")
     _read(home, upper, "worlds/realm/lore/pact.md")
-    monkeypatch.setattr(compiled, "STRICT_LOCK_SECONDS", 0.01)
+    monkeypatch.setattr(compiled_contracts, "STRICT_LOCK_SECONDS", 0.01)
     with compiled._state.lock:                         # a concurrent reader holds the cache
         report = cache_sync.sync_paths(["worlds/realm/lore/pact.md"], mode="explicit")
     assert [p.status for p in report.paths] == ["unsynced"] and not report.ok
@@ -564,7 +566,7 @@ def test_only_a_path_inside_an_existing_campaign_bumps(home, monkeypatch):
 
 
 def test_duplicates_do_not_use_up_the_quota(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 2)
     for name in "ab":
         _write(home, f"worlds/realm/lore/{name}.md", "x")
     report = cache_sync.sync_paths(["worlds/realm/lore/a.md", "worlds/realm/lore/a.md",
@@ -581,7 +583,7 @@ def test_the_top_level_directory_is_matched_without_case(home):
 
 
 def test_a_repeated_delete_does_not_use_up_the_quota(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 2)
     _write(home, "worlds/realm/lore/a.md", "x")
     report = cache_sync.sync_paths(["worlds/realm/lore/a.md"], mode="explicit",
                                    deleted=["worlds/realm/lore/gone.md"] * 3)
@@ -590,7 +592,7 @@ def test_a_repeated_delete_does_not_use_up_the_quota(home, monkeypatch):
 
 
 def test_a_directory_cut_short_by_the_quota_is_refused_not_quietly_partial(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 2)
     for name in "abc":
         _write(home, f"worlds/realm/lore/{name}.md", "x")
     report = cache_sync.sync_paths(["worlds/realm/lore"], mode="explicit")
@@ -615,7 +617,7 @@ def test_a_directory_that_cannot_be_fully_read_is_refused_unreadable(home, monke
 
 
 def test_a_file_named_twice_through_its_directory_does_not_use_up_the_quota(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 3)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 3)
     for name in "abc":
         _write(home, f"worlds/realm/lore/{name}.md", "x")
     report = cache_sync.sync_paths(["worlds/realm/lore/a.md", "worlds/realm/lore"], mode="explicit")
@@ -624,7 +626,7 @@ def test_a_file_named_twice_through_its_directory_does_not_use_up_the_quota(home
 
 
 def test_selectors_past_the_limit_leave_one_bounded_refusal(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 2)
     names = [f"worlds/realm/lore/{n}.md" for n in range(50)]
     for rel in names[:2]:
         _write(home, rel, "x")
@@ -661,7 +663,7 @@ def test_an_explicit_batch_waiting_for_the_lane_hears_a_cancel(home, upper):
 
 
 def test_refused_and_missing_selectors_count_toward_the_bound(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 2)
     names = [f"worlds/realm/lore/gone{n}.md" for n in range(50)] + ["logs/x.jsonl"] * 3
     report = cache_sync.sync_paths(names, mode="explicit")
     assert [p.reason for p in report.paths].count("too_many") == 1
@@ -677,7 +679,7 @@ def test_a_token_that_could_not_be_written_is_not_counted_and_fails_the_sync(hom
 
 
 def test_unreadable_directories_count_toward_the_bound(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 2)
     names = []
     for n in range(20):
         (home / "worlds" / "realm" / "lore" / f"locked{n}").mkdir()

@@ -69,7 +69,7 @@ from .test_operation_guard import (
 
 ROUTES = pathlib.Path(routes_pkg.__file__).parent
 #: Files outside `routes/` that hold an `LLMClient` and are scanned beside it.
-EXTRA_SOURCES = (pathlib.Path(inference_mod.__file__),)
+EXTRA_SOURCES = tuple(sorted(pathlib.Path(inference_mod.__file__).parent.rglob("*.py")))
 
 #: The `LLMClient` methods that reach a provider. `aclose` does not. `single`
 #: is the model test call's one attempt (slice B Task 9), and `decide_native`
@@ -87,7 +87,7 @@ MARKER = "usage-ok:"
 #: meter: `{file under the package: function names}`. Such a call is metered
 #: where the function is called, which `test_every_generate_call_passes_a_
 #: meters_holder` checks.
-FORWARDERS: dict[str, tuple[str, ...]] = {"inference.py": ("generate",)}
+FORWARDERS: dict[str, tuple[str, ...]] = {"inference/_generation.py": ("generate",)}
 
 
 def _generation_calls(tree: ast.AST):
@@ -210,10 +210,10 @@ def test_the_guard_catches_an_unmetered_native_decision():
     for src in ("client.decide_native(item, conn, m.usage, retries=call.retries)",
                 "client.decide_native(item, conn, usage=m.usage)"):
         assert _is_metered(next(_generation_calls(ast.parse(src)))), src
-    found = list(_generation_calls(ast.parse(
-        pathlib.Path(inference_mod.__file__).read_text(encoding="utf-8"))))
+    found = [node for path in EXTRA_SOURCES
+             for node in _generation_calls(ast.parse(path.read_text(encoding="utf-8")))]
     assert any(node.func.attr == "decide_native" for node in found), (
-        "inference.py makes no client.decide_native call the guard can see")
+        "the inference package makes no client.decide_native call the guard can see")
 
 
 def test_the_guard_is_not_fooled_by_a_holder_that_files_nothing():
@@ -296,21 +296,22 @@ def test_the_extra_sources_are_scanned():
     """Vacuity insurance for `EXTRA_SOURCES`: `decide`'s facade calls are
     seen, and each hands over its meter's holder -- all but `generate`'s,
     which forward their caller's (`FORWARDERS`)."""
-    (path,) = EXTRA_SOURCES
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    calls = list(_generation_calls(tree))
-    forwarded = _forwarded(tree, path)
+    calls, forwarded = [], set()
+    for path in EXTRA_SOURCES:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        calls.extend(_generation_calls(tree))
+        forwarded.update(_forwarded(tree, path))
     assert {c.func.attr for c in calls if id(c) in forwarded} == {"stream", "complete"}, (
         "generate's stream and complete were not both found")
     own = [c for c in calls if id(c) not in forwarded]
-    assert own and all(_is_metered(c) for c in own), path
+    assert own and all(_is_metered(c) for c in own)
 
 
 def test_a_forwarder_forwards_only_its_own_holder():
     """`FORWARDERS` clears a call that passes the function's `usage`
     parameter, and nothing else: a call inside it with no holder, or with a
     name that is not its parameter, is still an offender."""
-    path = EXTRA_SOURCES[0]
+    path = ROUTES.parent / "inference" / "_generation.py"
     src = ("def generate(task, messages, *, client, resolved, usage=None):\n"
            "    client.stream(messages, conn, usage)\n"
            "    client.complete(messages, conn, usage=usage)\n"

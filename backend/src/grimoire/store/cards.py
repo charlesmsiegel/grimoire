@@ -125,7 +125,7 @@ def card_data(card: dict) -> dict:
     path is stricter -- `bake_char_name` raises on it, so version PUT never
     stores one -- but a read must survive what is already on disk.
 
-    **Reach, stated rather than implied:** every `data` read in `characters.py`
+    **Reach, stated rather than implied:** every `data` read in `store/characters/`
     goes through this, which is what the listing and detail routes need. The
     same shape is still read unguarded in `lorebook`, `localize`, `export`,
     `greetings`, `scenario`, `appearances` and `context.cast` -- a hand-edited

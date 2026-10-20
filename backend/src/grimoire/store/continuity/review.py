@@ -473,7 +473,7 @@ def forget_ref(cid: str, ref: str, name: str = "") -> list[str]:
 # mean what the reader looked at (`check_candidate`, §22 steps 1-5), validate
 # every part of the operation before the first write (`plan_apply`, step 6),
 # and clean the cache up in an order whose failure costs nothing (`settle`).
-# The status writes themselves are `routes/ledger.py`'s, so the route that
+# The status writes themselves are `routes/ledger/`'s, so the route that
 # applies a closure calls its helpers with the plan made here.
 
 #: The verdicts that mean "no longer pending": hidden from the candidates read,

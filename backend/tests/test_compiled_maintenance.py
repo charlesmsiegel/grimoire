@@ -4,6 +4,8 @@ import hashlib
 
 import pytest
 
+from grimoire.store.compiled import _contracts as compiled_contracts
+from grimoire.store.compiled import _filesystem as compiled_filesystem
 from tests import test_compiled as cache_tests
 
 cache = cache_tests.cache
@@ -18,7 +20,7 @@ def _seed(cache, root, monkeypatch):
     path = root / 'Realm.md'
     path.write_bytes(b'Realm')
     now = max(path.stat().st_mtime_ns, path.stat().st_ctime_ns) + cache.PERSIST_WINDOW_NS + 1
-    monkeypatch.setattr(cache, 'filesystem_clock', lambda boundary: cache.FilesystemClock(now, root.stat().st_dev))
+    monkeypatch.setattr(compiled_filesystem, 'filesystem_clock', lambda boundary: cache.FilesystemClock(now, root.stat().st_dev))
     monkeypatch.setattr(cache.time, 'time', lambda: 100000)
     with cache.batch(root) as request:
         request.derive(kind, [cache.Input('body', path)], params=PARAMS, compute=lambda *args: 'Realm')
@@ -53,9 +55,9 @@ def test_next_day_all_tables_touch_once_in_one_commit(cache, root, monkeypatch):
 
 def test_lru_low_water_and_incremental_vacuum(cache, root, monkeypatch):
     kind = _kind(cache, monkeypatch)
-    monkeypatch.setattr(cache, 'SIZE_CAP_BYTES', 80 << 10, raising=False)
-    monkeypatch.setattr(cache, 'LOW_WATER_BYTES', 60 << 10, raising=False)
-    monkeypatch.setattr(cache, 'MAINTENANCE_INTERVAL_S', 0, raising=False)
+    monkeypatch.setattr(compiled_contracts, 'SIZE_CAP_BYTES', 80 << 10, raising=False)
+    monkeypatch.setattr(compiled_contracts, 'LOW_WATER_BYTES', 60 << 10, raising=False)
+    monkeypatch.setattr(compiled_contracts, 'MAINTENANCE_INTERVAL_S', 0, raising=False)
     monkeypatch.setattr(cache.time, 'time', lambda: 100000)
     with cache.batch(root) as request:
         for position in range(8):
@@ -63,7 +65,7 @@ def test_lru_low_water_and_incremental_vacuum(cache, root, monkeypatch):
     session = _open(cache, root)
     conn = session.conn
     live = (conn.execute('PRAGMA page_count').fetchone()[0] - conn.execute('PRAGMA freelist_count').fetchone()[0]) * conn.execute('PRAGMA page_size').fetchone()[0]
-    assert live <= cache.LOW_WATER_BYTES
+    assert live <= compiled_contracts.LOW_WATER_BYTES
     assert session.path.stat().st_size < 8 * 20000
 
 
@@ -115,12 +117,12 @@ def test_malformed_timestamp_cannot_permanently_stop_eviction(cache, root, monke
     key = cache_tests._key(cache, kind, 'Realm-0')
     conn.execute('UPDATE artifacts SET last_used=? WHERE kind=? AND key_digest=?',
                  (damage, key.kind, key.digest))
-    monkeypatch.setattr(cache, 'SIZE_CAP_BYTES', 80 << 10)
-    monkeypatch.setattr(cache, 'LOW_WATER_BYTES', 60 << 10)
-    monkeypatch.setattr(cache, 'MAINTENANCE_INTERVAL_S', 0)
+    monkeypatch.setattr(compiled_contracts, 'SIZE_CAP_BYTES', 80 << 10)
+    monkeypatch.setattr(compiled_contracts, 'LOW_WATER_BYTES', 60 << 10)
+    monkeypatch.setattr(compiled_contracts, 'MAINTENANCE_INTERVAL_S', 0)
     with cache.batch(root) as request:
         request.put(cache_tests._key(cache, kind, 'Mara'), 'Mara')
-    assert cache._live_bytes(_open(cache, root).conn) <= cache.LOW_WATER_BYTES
+    assert cache._live_bytes(_open(cache, root).conn) <= compiled_contracts.LOW_WATER_BYTES
 
 
 def test_lru_query_transfers_only_integer_timestamp_metadata(cache, root, monkeypatch):
@@ -142,9 +144,9 @@ def test_eviction_preserves_newer_materialized_association(cache, root, monkeypa
     monkeypatch.setattr(cache.time, 'time', lambda: 200000)
     with cache.batch(root) as request:
         new = request.store_written(kind, [cache.WrittenInput('body', path, b'Mara')], 'Mara', params=PARAMS)
-    monkeypatch.setattr(cache, 'SIZE_CAP_BYTES', 60 << 10, raising=False)
-    monkeypatch.setattr(cache, 'LOW_WATER_BYTES', 52 << 10, raising=False)
-    monkeypatch.setattr(cache, 'MAINTENANCE_INTERVAL_S', 0, raising=False)
+    monkeypatch.setattr(compiled_contracts, 'SIZE_CAP_BYTES', 60 << 10, raising=False)
+    monkeypatch.setattr(compiled_contracts, 'LOW_WATER_BYTES', 52 << 10, raising=False)
+    monkeypatch.setattr(compiled_contracts, 'MAINTENANCE_INTERVAL_S', 0, raising=False)
     with cache.batch(root) as request:
         request.put(cache_tests._key(cache, kind, 'Saltmarch'), 'Saltmarch')
     with cache.batch(root) as request:
@@ -155,9 +157,9 @@ def test_eviction_preserves_newer_materialized_association(cache, root, monkeypa
 def test_partial_eviction_remains_eligible_until_low_water(cache, root, monkeypatch):
     kind = _kind(cache, monkeypatch)
     session = _open(cache, root)
-    monkeypatch.setattr(cache, 'SIZE_CAP_BYTES', 90 << 10)
-    monkeypatch.setattr(cache, 'LOW_WATER_BYTES', 60 << 10)
-    monkeypatch.setattr(cache, 'MAX_EVICTION_CHUNKS', 16, raising=False)
+    monkeypatch.setattr(compiled_contracts, 'SIZE_CAP_BYTES', 90 << 10)
+    monkeypatch.setattr(compiled_contracts, 'LOW_WATER_BYTES', 60 << 10)
+    monkeypatch.setattr(compiled_contracts, 'MAX_EVICTION_CHUNKS', 16, raising=False)
     monkeypatch.setattr(cache.time, 'time', lambda: 100000)
     payload = '"' + 'x' * 150 + '"'
     rows = []
@@ -171,17 +173,17 @@ def test_partial_eviction_remains_eligible_until_low_water(cache, root, monkeypa
     for position in range(12):
         with cache.batch(root) as request:
             request.put(cache_tests._key(cache, kind, f'Mara-{position}'), 'Mara')
-        if cache._live_bytes(session.conn) <= cache.LOW_WATER_BYTES:
+        if cache._live_bytes(session.conn) <= compiled_contracts.LOW_WATER_BYTES:
             break
-    assert cache._live_bytes(session.conn) <= cache.LOW_WATER_BYTES
+    assert cache._live_bytes(session.conn) <= compiled_contracts.LOW_WATER_BYTES
 
 
 def test_pending_trim_survives_session_close_below_cap(cache, root, monkeypatch):
     kind = _kind(cache, monkeypatch)
     session = _open(cache, root)
-    monkeypatch.setattr(cache, 'SIZE_CAP_BYTES', 160 << 10)
-    monkeypatch.setattr(cache, 'LOW_WATER_BYTES', 80 << 10)
-    monkeypatch.setattr(cache, 'MAX_EVICTION_CHUNKS', 1)
+    monkeypatch.setattr(compiled_contracts, 'SIZE_CAP_BYTES', 160 << 10)
+    monkeypatch.setattr(compiled_contracts, 'LOW_WATER_BYTES', 80 << 10)
+    monkeypatch.setattr(compiled_contracts, 'MAX_EVICTION_CHUNKS', 1)
     payload = '"' + 'x' * 1000 + '"'
     rows = []
     for position in range(200):
@@ -193,8 +195,8 @@ def test_pending_trim_survives_session_close_below_cap(cache, root, monkeypatch)
         session.conn.commit()
     with cache.batch(root) as request:
         request.put(cache_tests._key(cache, kind, 'Mara'), 'Mara')
-    assert cache.LOW_WATER_BYTES < cache._live_bytes(session.conn) <= cache.SIZE_CAP_BYTES
+    assert compiled_contracts.LOW_WATER_BYTES < cache._live_bytes(session.conn) <= compiled_contracts.SIZE_CAP_BYTES
     cache.close()
     with cache.batch(root) as request:
         request.put(cache_tests._key(cache, kind, 'Winifred'), 'Winifred')
-    assert cache._live_bytes(_open(cache, root).conn) <= cache.LOW_WATER_BYTES
+    assert cache._live_bytes(_open(cache, root).conn) <= compiled_contracts.LOW_WATER_BYTES

@@ -31,6 +31,7 @@ from grimoire.store import (
     world_images,
     worlds,
 )
+from grimoire.store.overlay import _images as overlay_images
 from tests.collection_fixtures import format1, format2
 
 COLLECTION = "0123456789abcdef0123456789abcdef"
@@ -107,7 +108,7 @@ def test_overlay_detail_reuses_caption_listing(world, base):
     image_descriptions.set_description(root, actor, vid, "gallery_1", "The quay.", base=base)
     camp = campaigns.create_campaign("Saltmarch", wid)
     read = overlay.read_character if base == "characters" else overlay.read_pc
-    with patch.object(overlay, "_image_halves", wraps=overlay._image_halves) as calls:
+    with patch.object(overlay_images, "_image_halves", wraps=overlay._image_halves) as calls:
         detail = read(camp, actor)
     assert detail["versions"][0]["image_descriptions"] == {"gallery_1": "The quay."}
     assert calls.call_count == 1
@@ -167,6 +168,11 @@ def test_warm_scope_sweep_does_not_read_unrelated_sidecars(world, monkeypatch):
     monkeypatch.setattr(statcache, "RACY_WINDOW_NS", 0)
     ident = image_store.ingest(png(), "png").id
     image_store.update(ident, lambda raw: {**raw, "reviews": {"subjects": ["world:realm"]}})
+    # Python 3.12's Windows wall clock can lag native file timestamps even
+    # with a zero racy window. This cache-hit case needs settled writes;
+    # advance its clock instead of depending on which filesystem tick ran it.
+    settled = statcache.time.time_ns() + 2_000_000_000
+    monkeypatch.setattr(statcache.time, "time_ns", lambda: settled)
     assert image_scopes.strip(CAMPAIGN_SCOPE) == 0
     with patch.object(image_store, "read_fresh", wraps=image_store.read_fresh) as reads:
         assert image_scopes.strip(CAMPAIGN_SCOPE) == 0

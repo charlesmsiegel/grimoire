@@ -23,7 +23,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from grimoire.store import overview, paths
+from grimoire.store import compiled, overview, paths
+from grimoire.store.compiled import _contracts as compiled_contracts
+from grimoire.store.compiled import _filesystem as compiled_filesystem
 from grimoire.store.overview import read as overview_read
 from scripts import bench_overview, synth_library
 from tests.overview_support import audited
@@ -48,6 +50,20 @@ def _warm_restarted(bench):
     bench.warm()
     bench.warm()
     bench.restart()
+
+
+def test_bench_restores_the_shared_registry_and_source_clock(library, monkeypatch):
+    monkeypatch.delenv("GRIMOIRE_HOME", raising=False)
+    registry = compiled.KINDS
+    registered = dict(registry)
+    source_clock = compiled_filesystem.filesystem_clock
+    with bench_overview.Bench(library, register="all", clocks="injected"):
+        assert compiled.KINDS is registry
+        assert compiled_contracts.KINDS is registry
+        assert set(compiled.OVERVIEW_CANDIDATES) <= registry.keys()
+        assert compiled_filesystem.filesystem_clock is not source_clock
+    assert registry == registered
+    assert compiled_filesystem.filesystem_clock is source_clock
 
 
 # ---- 12.3 -------------------------------------------------------------------

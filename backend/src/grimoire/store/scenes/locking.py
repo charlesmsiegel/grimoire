@@ -49,7 +49,7 @@ def _serialized(fn):
     here too. Two *devices* sharing a synced folder still race — no filesystem
     lock can cross them, and the sync client resolves it with conflict copies.
     So do two different OS accounts, whose lock directories differ. See
-    `store/locks.py`.
+    `store/locks/__init__.py`.
     """
     @functools.wraps(fn)
     def locked(cid, *args, **kwargs):

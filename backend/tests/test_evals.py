@@ -23,6 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 from grimoire import decisions, inference
+from grimoire.inference import _decision_calls as inference_decision_calls
 from grimoire.llm_errors import LLMError
 from grimoire.store import (
     config,
@@ -38,6 +39,7 @@ from grimoire.store import (
 )
 from grimoire.store.continuity import identity, reconcile
 from grimoire.store.inference import capabilities, facts
+from grimoire.store.usage import _clock as usage_clock
 from tests.llm_fakes import FakeLLM
 
 REPO = Path(__file__).resolve().parents[2]
@@ -1054,8 +1056,10 @@ def test_a_run_crossing_midnight_keeps_its_rows(monkeypatch, tmp_path):
     real = tmp_path / "real"
     case, target = _generate_store(monkeypatch, real)
     isolate, _made = _isolates(monkeypatch, tmp_path, real)
-    monkeypatch.setattr(usage, "_now", lambda: "2026-10-31T23:59:59Z")
+    monkeypatch.setattr(usage_clock, "_now", lambda: "2026-10-31T23:59:59Z")
     monkeypatch.setattr(usage, "_today", lambda: "2026-11-01")
+    # The runner reads the facade; the ledger reads its clock owner.
+    monkeypatch.setattr(usage_clock, "_today", usage._today)
     with isolate():
         result = runner.live(case, target, client=FakeLLM([[_compliant(case)]], usage=BILLED),
                              real_home=real, run_day="2026-10-31")
@@ -1309,7 +1313,7 @@ def test_a_mixed_chains_items_name_the_stage_that_answered(monkeypatch, tmp_path
     failure = LLMError("bad_response", "the decisions endpoint sent no answers", status=502)
     fake = FakeLLM([[json.dumps({"0": recorded["1"], "1": recorded["2"]})]],
                    decisions=[decisions.ItemResult(parsed[0].answers), failure, failure])
-    monkeypatch.setattr(inference_module(), "NATIVE_CONCURRENCY", 1)
+    monkeypatch.setattr(inference_decision_calls, "NATIVE_CONCURRENCY", 1)
     isolate, _made = _isolates(monkeypatch, tmp_path, tmp_path / "home")
     with isolate():
         result = runner.live(case, target, client=fake, real_home=tmp_path / "home")

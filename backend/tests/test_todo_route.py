@@ -26,6 +26,7 @@ import grimoire.store as store
 from grimoire.main import create_app
 from grimoire.routes import todo
 from grimoire.routes.common import thumb_query
+from grimoire.routes.todo import _catalog as todo_catalog
 from grimoire.store import inference_keys
 from grimoire.store.continuity import candidates, canon, involvement, pending, similarity
 from grimoire.store.continuity import doc as continuity_doc
@@ -502,7 +503,7 @@ def test_items_with_no_campaign_are_empty_rather_than_an_error(client):
 
 def test_a_capped_list_reports_that_it_was_capped(client, campaign, monkeypatch):
     """A short list nobody labels reads as a complete one."""
-    monkeypatch.setattr(todo, "ITEM_CAP", 2)
+    monkeypatch.setattr(todo_catalog, "ITEM_CAP", 2)
     cid, _ = campaign
     for t in ("A", "B", "C", "D"):
         client.post(f"/api/campaigns/{cid}/scenes", json={"title": t})

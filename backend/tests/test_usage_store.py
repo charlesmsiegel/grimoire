@@ -9,6 +9,7 @@ import pytest
 
 from grimoire.llm_errors import LLMError
 from grimoire.store import usage
+from grimoire.store.usage import _clock as usage_clock
 
 
 @pytest.fixture
@@ -73,7 +74,7 @@ def _seed(day: str, **fields):
 
 
 def test_monthly_campaigns_project_all_price_sources_and_keep_unassigned(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-09-28")
     _seed("2026-08-31", campaign="saltmarch", cost_usd=5)
     _seed("2026-09-01", campaign="saltmarch", cost_usd=1)
     _seed("2026-09-02", campaign="", cost_usd=2, cost_basis="equivalent")
@@ -90,7 +91,7 @@ def test_monthly_campaigns_project_all_price_sources_and_keep_unassigned(home, m
 
 
 def test_monthly_trend_can_be_scoped_to_one_campaign(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-09-28")
     _seed("2026-08-31", campaign="saltmarch", cost_usd=5)
     _seed("2026-09-01", campaign="saltmarch", cost_usd=1)
     _seed("2026-09-02", campaign="realm", cost_usd=9)
@@ -101,7 +102,7 @@ def test_monthly_trend_can_be_scoped_to_one_campaign(home, monkeypatch):
 
 
 def test_modelled_only_month_still_has_an_estimated_total(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-09-28")
     _rates(home, {"realm/opus": {"prompt_usd_per_1k": 1.0,
                                    "completion_usd_per_1k": 2.0}})
     _seed("2026-09-03", campaign="saltmarch", prompt_tokens=1000,
@@ -114,7 +115,7 @@ def test_modelled_only_month_still_has_an_estimated_total(home, monkeypatch):
 
 
 def test_monthly_projection_sums_mixed_sources_without_changing_accounting(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-09-28")
     _rates(home, {"realm/opus": {"prompt_usd_per_1k": 1.0,
                                    "completion_usd_per_1k": 2.0}})
     _seed("2026-09-01", cost_usd=1)
@@ -138,7 +139,7 @@ def test_month_bounds_rejects_bad_input_and_handles_year_rollover(home):
 
 
 def test_monthly_report_defaults_to_current_utc_month_even_when_empty(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-09-28")
     out = usage.monthly_campaigns()
     assert out["month"] == "2026-09"
     assert out["totals"]["calls"] == 0
@@ -146,7 +147,7 @@ def test_monthly_report_defaults_to_current_utc_month_even_when_empty(home, monk
 
 
 def test_monthly_scene_read_limits_rows_but_all_time_read_still_sees_both(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-09-28")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-09-28")
     _seed("2026-08-31", campaign="saltmarch", scene="one", cost_usd=5)
     _seed("2026-09-01", campaign="saltmarch", scene="two", cost_usd=1)
     assert usage.campaign_scenes("saltmarch", month="2026-09")["totals"]["cost_usd"] == 1
@@ -154,7 +155,7 @@ def test_monthly_scene_read_limits_rows_but_all_time_read_still_sees_both(home, 
 
 
 def test_summary_totals_the_window(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", prompt_tokens=100, completion_tokens=20, cost_usd=0.01)
     _seed("2026-08-13", prompt_tokens=200, completion_tokens=40, cost_usd=0.02)
 
@@ -167,7 +168,7 @@ def test_summary_totals_the_window(home, monkeypatch):
 
 
 def test_summary_ignores_rows_older_than_the_window(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", prompt_tokens=100)
     _seed("2026-07-01", prompt_tokens=999)
 
@@ -177,7 +178,7 @@ def test_summary_ignores_rows_older_than_the_window(home, monkeypatch):
 
 
 def test_summary_reads_the_previous_month_when_the_window_reaches_back_into_it(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-02")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-02")
     _seed("2026-08-02", prompt_tokens=1)
     _seed("2026-07-31", prompt_tokens=10)
 
@@ -187,7 +188,7 @@ def test_summary_reads_the_previous_month_when_the_window_reaches_back_into_it(h
 
 
 def test_summary_buckets_by_day_model_task_and_campaign(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", task="chat", model="realm/opus", campaign="saltmarch",
           prompt_tokens=100)
     _seed("2026-08-14", task="absorb", model="realm/haiku", campaign="saltmarch",
@@ -204,7 +205,7 @@ def test_summary_buckets_by_day_model_task_and_campaign(home, monkeypatch):
 
 
 def test_summary_can_be_scoped_to_one_campaign(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", prompt_tokens=100)
     _seed("2026-08-14", campaign="winifred", prompt_tokens=7)
 
@@ -214,7 +215,7 @@ def test_summary_can_be_scoped_to_one_campaign(home, monkeypatch):
 
 
 def test_summary_counts_failures_without_letting_them_look_like_traffic(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", prompt_tokens=100)
     _seed("2026-08-14", status="error", error="rate_limit")
 
@@ -224,7 +225,7 @@ def test_summary_counts_failures_without_letting_them_look_like_traffic(home, mo
 
 
 def test_a_cancelled_turn_is_a_call_but_not_a_failure(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", status="aborted", prompt_tokens=80)
 
     out = usage.summary(days=30)
@@ -235,7 +236,7 @@ def test_a_cancelled_turn_is_a_call_but_not_a_failure(home, monkeypatch):
 
 
 def test_summary_keeps_subscription_billed_dollars_out_of_the_spend_total(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", cost_usd=0.02, cost_basis="billed")
     _seed("2026-08-14", cost_usd=0.50, cost_basis="equivalent")
 
@@ -245,7 +246,7 @@ def test_summary_keeps_subscription_billed_dollars_out_of_the_spend_total(home, 
 
 
 def test_summary_says_how_much_of_the_window_carries_no_price_at_all(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", cost_usd=0.02, cost_basis="billed")
     _seed("2026-08-14", prompt_tokens=5)
 
@@ -255,8 +256,8 @@ def test_summary_says_how_much_of_the_window_carries_no_price_at_all(home, monke
 
 
 def test_the_session_bucket_holds_only_calls_made_since_this_process_started(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
-    monkeypatch.setattr(usage, "_SESSION_START", "2026-08-14T09:00:00Z")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_SESSION_START", "2026-08-14T09:00:00Z")
     usage.record(task="chat", model="realm/opus", prompt_tokens=3,
                  ts="2026-08-14T08:59:59Z")
     usage.record(task="chat", model="realm/opus", prompt_tokens=40,
@@ -269,8 +270,8 @@ def test_the_session_bucket_holds_only_calls_made_since_this_process_started(hom
 
 
 def test_todays_bucket_is_the_calendar_day_not_the_process(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
-    monkeypatch.setattr(usage, "_SESSION_START", "2026-08-14T09:00:00Z")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_SESSION_START", "2026-08-14T09:00:00Z")
     _seed("2026-08-14", prompt_tokens=40)
     _seed("2026-08-13", prompt_tokens=5)
 
@@ -279,7 +280,7 @@ def test_todays_bucket_is_the_calendar_day_not_the_process(home, monkeypatch):
 
 
 def test_an_empty_ledger_summarizes_to_zero_rather_than_failing(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     out = usage.summary(days=30)
     assert out["totals"] == {"calls": 0, "errors": 0, "prompt_tokens": 0,
                             "completion_tokens": 0, "total_tokens": 0,
@@ -293,7 +294,7 @@ def test_an_empty_ledger_summarizes_to_zero_rather_than_failing(home, monkeypatc
 
 
 def test_a_torn_or_hand_edited_line_is_skipped_not_fatal(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", prompt_tokens=100)
     path = home / "usage" / "2026-08.jsonl"
     path.write_text(path.read_text(encoding="utf-8") + '{"ts": "2026-08-1\n[]\n',
@@ -304,7 +305,7 @@ def test_a_torn_or_hand_edited_line_is_skipped_not_fatal(home, monkeypatch):
 
 
 def test_days_is_clamped_so_a_hostile_query_cannot_walk_the_whole_disk(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     assert usage.summary(days=0)["days"] == 1
     assert usage.summary(days=10_000)["days"] == usage.MAX_DAYS
 
@@ -328,7 +329,7 @@ def test_a_call_that_never_went_out_is_not_a_row(home):
 
 
 def test_the_meter_records_what_the_facade_filled_in(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     with usage.meter("chat", campaign="saltmarch", scene="001-arrival") as m:
         m.usage.update({"model": "realm/opus", "connection": "Main",
                         "prompt_tokens": 12, "completion_tokens": 3,
@@ -388,8 +389,8 @@ def test_the_session_bucket_is_clipped_to_the_window(home, monkeypatch):
     """`summary` only reads the window, so a process older than it reports a
     session that is really the window. Pinned rather than fixed -- see
     `summary`'s docstring for why widening the scan is the worse trade."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
-    monkeypatch.setattr(usage, "_SESSION_START", "2026-07-01T09:00:00Z")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_SESSION_START", "2026-07-01T09:00:00Z")
     _seed("2026-07-02", prompt_tokens=500)      # this session, outside days=2
     _seed("2026-08-14", prompt_tokens=7)
 
@@ -399,7 +400,7 @@ def test_the_session_bucket_is_clipped_to_the_window(home, monkeypatch):
 
 
 def test_a_hand_edited_negative_count_cannot_subtract_from_a_total(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", prompt_tokens=100)
     path = home / "usage" / "2026-08.jsonl"
     path.write_text(path.read_text(encoding="utf-8")
@@ -413,7 +414,7 @@ def test_a_hand_edited_negative_count_cannot_subtract_from_a_total(home, monkeyp
 def test_a_month_file_is_never_slurped_whole(home, monkeypatch):
     """A year of heavy play is tens of megabytes; a report that needs two rows
     at a time must not hold all of them plus a list of every line."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", prompt_tokens=1)
 
     def refuse(*_a, **_kw):
@@ -514,7 +515,7 @@ def test_the_cache_split_is_summed_apart_from_the_token_total(home, monkeypatch)
     """The line worth reading twice: a cache read is part of the prompt the
     provider already counted, so folding it into `total_tokens` would bill a
     cached prefix to the total twice over."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     usage.record(task="chat", prompt_tokens=5000, completion_tokens=100,
                  cache_read_tokens=4000, cache_write_tokens=500,
                  ts="2026-08-14T10:00:00Z")
@@ -533,7 +534,7 @@ def test_a_window_with_no_caching_reports_zeroes_rather_than_missing_keys(home, 
     """A bucket is read straight by the frontend, so the columns are always
     there even when nothing cached — absence is a per-ROW claim, not a
     per-bucket one."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     usage.record(task="chat", prompt_tokens=100, completion_tokens=10,
                  ts="2026-08-14T10:00:00Z")
 
@@ -546,7 +547,7 @@ def test_a_hand_edited_cache_count_costs_that_field_and_not_the_report(home, mon
     """Same defensive read the other counts get: a ledger line is a file a human
     can edit, and a string where a number belongs must not take the rollup down
     or subtract from a month."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     (home / "usage").mkdir(parents=True)
     (home / "usage" / "2026-08.jsonl").write_text(
         json.dumps({"ts": "2026-08-14T10:00:00Z", "kind": "llm", "task": "chat",
@@ -562,7 +563,7 @@ def test_a_hand_edited_cache_count_costs_that_field_and_not_the_report(home, mon
 
 # ---- one scene's turns (#153) ----
 def test_scene_usage_lists_only_that_scenes_calls(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
           prompt_tokens=100, completion_tokens=20, cost_usd=0.01)
     _seed("2026-08-14", campaign="saltmarch", scene="002-departure",
@@ -578,7 +579,7 @@ def test_scene_usage_lists_only_that_scenes_calls(home, monkeypatch):
 
 
 def test_scene_usage_breaks_the_scene_down_by_task(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     for task, cost in (("chat", 0.01), ("chat", 0.02), ("retry", 0.05)):
         _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
               cost_usd=cost)
@@ -589,7 +590,7 @@ def test_scene_usage_breaks_the_scene_down_by_task(home, monkeypatch):
 
 
 def test_scene_turns_come_back_newest_first_whatever_order_they_landed_in(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     # A slow turn that finished after a fast one started files its row later,
     # so file order is not turn order. Sorting on the stamp is what fixes it.
     for stamp in ("2026-08-14T10:00:00Z", "2026-08-14T09:00:00Z", "2026-08-14T11:00:00Z"):
@@ -602,7 +603,7 @@ def test_scene_turns_come_back_newest_first_whatever_order_they_landed_in(home, 
 
 
 def test_a_long_scenes_list_is_cut_but_its_totals_are_not(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     for _ in range(5):
         _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
               prompt_tokens=10, cost_usd=0.01)
@@ -616,7 +617,7 @@ def test_a_long_scenes_list_is_cut_but_its_totals_are_not(home, monkeypatch):
 
 
 def test_a_scene_turn_the_provider_never_priced_is_unpriced_not_free(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", prompt_tokens=10)
 
     turn, = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")["turns"]
@@ -624,7 +625,7 @@ def test_a_scene_turn_the_provider_never_priced_is_unpriced_not_free(home, monke
 
 
 def test_a_scenes_window_starts_at_the_date_it_was_created(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-06-02", campaign="saltmarch", scene="001-arrival", cost_usd=0.5)
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.25)
 
@@ -636,13 +637,13 @@ def test_a_scenes_window_starts_at_the_date_it_was_created(home, monkeypatch):
 
 
 def test_a_scene_with_no_usable_created_stamp_falls_back_to_the_default_window(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     out = usage.scene_usage("saltmarch", "001-arrival", since="not a date")
     assert out["since"] == "2026-07-16"
 
 
 def test_a_scene_stamped_in_the_future_scans_today_rather_than_nothing(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.25)
 
     out = usage.scene_usage("saltmarch", "001-arrival", since="2027-01-01")
@@ -651,13 +652,13 @@ def test_a_scene_stamped_in_the_future_scans_today_rather_than_nothing(home, mon
 
 
 def test_a_scenes_scan_cannot_be_widened_past_the_ledgers_own_bound(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     out = usage.scene_usage("saltmarch", "001-arrival", since="2019-01-01")
     assert out["since"] == "2025-08-14", "MAX_DAYS back, not the date asked for"
 
 
 def test_a_scene_that_has_generated_nothing_reports_zeroes(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     out = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")
     assert out["turns"] == []
     assert out["totals"]["calls"] == 0
@@ -665,7 +666,7 @@ def test_a_scene_that_has_generated_nothing_reports_zeroes(home, monkeypatch):
 
 
 def test_a_scene_turn_keeps_the_cache_split_out_of_its_token_total(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
           prompt_tokens=1000, completion_tokens=50,
           cache_read_tokens=900, cache_write_tokens=100)
@@ -677,7 +678,7 @@ def test_a_scene_turn_keeps_the_cache_split_out_of_its_token_total(home, monkeyp
 
 
 def test_a_hand_edited_turn_row_cannot_take_the_panel_down(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     path = home / "usage" / "2026-08.jsonl"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({
@@ -695,7 +696,7 @@ def test_a_hand_edited_turn_row_cannot_take_the_panel_down(home, monkeypatch):
 
 # ---- budgets (#153) ----
 def test_a_campaign_with_no_budget_is_not_measured_at_all(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", cost_usd=5.0)
 
     out = usage.budget("saltmarch", None)
@@ -704,7 +705,7 @@ def test_a_campaign_with_no_budget_is_not_measured_at_all(home, monkeypatch):
 
 
 def test_a_budget_reports_the_campaigns_share_of_it(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", cost_usd=2.0)
     _seed("2026-08-14", campaign="realm", cost_usd=90.0)
 
@@ -716,21 +717,21 @@ def test_a_budget_reports_the_campaigns_share_of_it(home, monkeypatch):
 
 
 def test_the_warning_starts_before_the_budget_is_broken(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", cost_usd=8.0)
 
     assert usage.budget("saltmarch", 10)["level"] == "warn"
 
 
 def test_spending_the_whole_budget_is_over_not_merely_warned(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", cost_usd=10.0)
 
     assert usage.budget("saltmarch", 10)["level"] == "over"
 
 
 def test_a_monthly_budget_starts_again_on_the_first(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-07-31", campaign="saltmarch", cost_usd=40.0)
     _seed("2026-08-01", campaign="saltmarch", cost_usd=1.0)
 
@@ -741,7 +742,7 @@ def test_a_monthly_budget_starts_again_on_the_first(home, monkeypatch):
 
 
 def test_a_total_budget_counts_the_months_before_this_one(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-07-31", campaign="saltmarch", cost_usd=40.0)
     _seed("2026-08-01", campaign="saltmarch", cost_usd=1.0)
 
@@ -751,12 +752,12 @@ def test_a_total_budget_counts_the_months_before_this_one(home, monkeypatch):
 
 
 def test_a_total_budget_still_scans_no_further_than_the_ledger_ever_does(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     assert usage.budget("saltmarch", 10, "total")["since"] == "2025-08-14"
 
 
 def test_subscription_billed_dollars_are_reported_but_never_charged(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", cost_usd=50.0, cost_basis="equivalent")
     _seed("2026-08-14", campaign="saltmarch", cost_usd=1.0, cost_basis="billed")
 
@@ -767,7 +768,7 @@ def test_subscription_billed_dollars_are_reported_but_never_charged(home, monkey
 
 
 def test_a_budget_says_how_much_of_the_period_carries_no_price(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", cost_usd=1.0)
     _seed("2026-08-14", campaign="saltmarch", prompt_tokens=5)
 
@@ -782,7 +783,7 @@ def test_a_budget_nobody_can_read_is_no_budget_rather_than_a_broken_one(home, st
 
 
 def test_an_unknown_period_is_read_as_the_monthly_one(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     out = usage.budget("saltmarch", 10, "fortnightly")
     assert out["period"] == "monthly"
     assert out["since"] == "2026-08-01"
@@ -793,8 +794,8 @@ def _pin(monkeypatch, day: str) -> None:
     """Freeze both clocks the ledger reads. `_seed` stamps its own rows, but a
     rename stamps itself from `_now`, and a rename dated by the real wall clock
     falls outside a window pinned to a made-up day."""
-    monkeypatch.setattr(usage, "_today", lambda: day)
-    monkeypatch.setattr(usage, "_now", lambda: f"{day}T12:00:00Z")
+    monkeypatch.setattr(usage_clock, "_today", lambda: day)
+    monkeypatch.setattr(usage_clock, "_now", lambda: f"{day}T12:00:00Z")
 
 
 def test_a_renamed_scene_still_reports_what_it_spent_before_the_rename(home, monkeypatch):
@@ -862,7 +863,7 @@ def test_another_campaigns_rename_cannot_pull_its_scene_into_this_one(home, monk
 
 
 def test_a_rename_trail_that_loops_cannot_hang_the_report(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     path = home / "usage" / "2026-08.jsonl"
     path.parent.mkdir(parents=True)
     path.write_text("\n".join(json.dumps(row) for row in [
@@ -932,14 +933,14 @@ def test_a_title_renamed_and_renamed_back_does_not_silence_the_scene(home, monke
     """One typo and its fix walks a trail that returns to where it started
     (a -> b -> a). The live id must never take a cutoff from its own trail, or
     every row the scene has filed since would drop out of its own total."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     # Two renames at two different moments, which is what makes the trail a
     # cycle rather than a pair of simultaneous edits.
     stamps = ["2026-08-14T10:00:00Z", "2026-08-14T12:00:00Z"]
     # Holds its last value rather than running out: `scene_usage` stamps its own
     # `generated_at` from the same clock, and a StopIteration there would fail
     # the test for a reason that has nothing to do with renames.
-    monkeypatch.setattr(usage, "_now", lambda: stamps.pop(0) if len(stamps) > 1
+    monkeypatch.setattr(usage_clock, "_now", lambda: stamps.pop(0) if len(stamps) > 1
                         else stamps[0])
     usage.record(task="chat", campaign="c", scene="a", cost_usd=0.1,
                  ts="2026-08-14T09:00:00Z")
@@ -963,7 +964,7 @@ def _rates(home, table):
 def test_with_no_rate_table_an_unpriced_call_stays_unpriced(home, monkeypatch):
     """The default state, and the one every existing reader was written
     against: an empty table models nothing at all."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", model="local/glm", prompt_tokens=1000, completion_tokens=500)
 
     totals = usage.summary(days=30)["totals"]
@@ -973,7 +974,7 @@ def test_with_no_rate_table_an_unpriced_call_stays_unpriced(home, monkeypatch):
 
 
 def test_a_rate_moves_an_unpriced_call_into_its_own_money_column(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"local/glm": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 2.0}})
     _seed("2026-08-14", model="local/glm", prompt_tokens=1000, completion_tokens=500)
 
@@ -987,7 +988,7 @@ def test_a_rate_moves_an_unpriced_call_into_its_own_money_column(home, monkeypat
 def test_a_modelled_figure_is_never_added_to_what_was_billed(home, monkeypatch):
     """Three money columns, no two of which may be summed — the rule the whole
     ledger rests on, checked where the third one enters."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", model="realm/opus", prompt_tokens=1000,
           completion_tokens=0, cost_usd=0.5)
@@ -1006,7 +1007,7 @@ def test_a_modelled_figure_is_never_added_to_what_was_billed(home, monkeypatch):
 
 def test_a_priced_call_is_never_re_priced_by_the_table(home, monkeypatch):
     """The table fills gaps. A provider that said what it charged has said it."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 99.0, "completion_usd_per_1k": 99.0}})
     _seed("2026-08-14", model="realm/opus", prompt_tokens=1000, cost_usd=0.01)
 
@@ -1018,7 +1019,7 @@ def test_a_priced_call_is_never_re_priced_by_the_table(home, monkeypatch):
 def test_a_call_nobody_counted_stays_unpriced_however_good_the_table(home, monkeypatch):
     """Rates times nothing is zero, and a scene of those rendered as $0.00 is
     the claim this feature exists not to make."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", model="local/glm")
 
@@ -1030,7 +1031,7 @@ def test_a_call_nobody_counted_stays_unpriced_however_good_the_table(home, monke
 def test_a_budget_is_never_charged_for_a_modelled_figure(home, monkeypatch):
     """A cap measures money owed. Hitting it on arithmetic nobody was invoiced
     for would be the feature warning about its own guess."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 100.0, "completion_usd_per_1k": 100.0}})
     _seed("2026-08-14", campaign="saltmarch", model="local/glm", prompt_tokens=1000)
 
@@ -1041,7 +1042,7 @@ def test_a_budget_is_never_charged_for_a_modelled_figure(home, monkeypatch):
 
 
 def test_a_turn_carries_the_modelled_figure_beside_its_absent_price(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
           model="local/glm", prompt_tokens=2000, completion_tokens=0)
@@ -1052,7 +1053,7 @@ def test_a_turn_carries_the_modelled_figure_beside_its_absent_price(home, monkey
 
 
 def test_a_priced_turn_reports_no_modelled_figure(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival",
           model="realm/opus", prompt_tokens=2000, cost_usd=0.02)
@@ -1064,7 +1065,7 @@ def test_a_priced_turn_reports_no_modelled_figure(home, monkeypatch):
 
 # ---- what one player post cost, across every reroll of it (#153) ----
 def test_a_post_and_its_rerolls_bucket_together(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     for task, cost in (("chat", 0.01), ("retry", 0.02), ("regenerate", 0.04)):
         _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
               cost_usd=cost, post=6)
@@ -1082,7 +1083,7 @@ def test_a_post_and_its_rerolls_bucket_together(home, monkeypatch):
 def test_a_call_that_answers_no_post_is_in_the_scene_but_in_no_post_bucket(home, monkeypatch):
     """An absorb belongs to the scene, not to a post. Filed under one it would
     make whichever post it followed look expensive."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", task="absorb", campaign="saltmarch", scene="001-arrival",
           cost_usd=0.30)
     _seed("2026-08-14", task="chat", campaign="saltmarch", scene="001-arrival",
@@ -1097,7 +1098,7 @@ def test_a_call_that_answers_no_post_is_in_the_scene_but_in_no_post_bucket(home,
 def test_post_zero_is_a_post_and_an_absent_one_is_not(home, monkeypatch):
     """`0` and "no post" are different claims, and the field is absent rather
     than zero for the second — the same absent-not-zero rule as the counts."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", task="chat", campaign="saltmarch", scene="001-arrival",
           cost_usd=0.01, post=0)
     _seed("2026-08-14", task="absorb", campaign="saltmarch", scene="001-arrival",
@@ -1118,7 +1119,7 @@ def test_a_negative_post_index_is_not_recorded(home):
 
 # ---- a campaign's scenes, all-time ----
 def test_campaign_scenes_buckets_each_scenes_spend(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.10)
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.05)
     _seed("2026-08-14", campaign="saltmarch", scene="002-market", cost_usd=0.40)
@@ -1135,7 +1136,7 @@ def test_campaign_scenes_buckets_each_scenes_spend(home, monkeypatch):
 def test_campaign_scenes_keeps_the_calls_that_belong_to_no_scene(home, monkeypatch):
     """A breakdown that quietly excluded them would not add up to the total
     printed above it."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", task="suggestions", campaign="saltmarch", cost_usd=0.02)
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.10)
 
@@ -1179,7 +1180,7 @@ def test_an_id_handed_on_does_not_take_the_new_scenes_rows_with_it(home, monkeyp
 def test_campaign_scenes_reaches_back_past_the_windowed_rollups(home, monkeypatch):
     """"All time" is the question this one answers; a year-long clamp would be
     answering a different one."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2023-01-05", campaign="saltmarch", scene="001-arrival", cost_usd=1.0)
     _seed("2026-08-14", campaign="saltmarch", scene="002-market", cost_usd=2.0)
 
@@ -1189,7 +1190,7 @@ def test_campaign_scenes_reaches_back_past_the_windowed_rollups(home, monkeypatc
 
 
 def test_an_empty_ledger_has_a_campaign_spending_nothing_rather_than_failing(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
 
     out = usage.campaign_scenes("saltmarch")
     assert out["scenes"] == []
@@ -1198,7 +1199,7 @@ def test_an_empty_ledger_has_a_campaign_spending_nothing_rather_than_failing(hom
 
 
 def test_the_scene_list_is_capped_without_moving_the_total(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     for n in range(5):
         _seed("2026-08-14", campaign="saltmarch", scene=f"00{n}-scene", cost_usd=0.1)
 
@@ -1212,7 +1213,7 @@ def test_the_scene_list_is_capped_without_moving_the_total(home, monkeypatch):
 def test_a_continuation_is_not_counted_as_a_reroll(home, monkeypatch):
     """Two calls, one answer: a turn that ran on past a dice roll. `calls - 1`
     would tell a player they had redone a turn they never touched."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     for task in ("chat", "continuation"):
         _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
               cost_usd=0.01, post=4)
@@ -1223,7 +1224,7 @@ def test_a_continuation_is_not_counted_as_a_reroll(home, monkeypatch):
 
 
 def test_rerolls_counts_the_calls_that_re_answered_the_post(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     for task in ("chat", "retry", "regenerate", "continuation"):
         _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
               cost_usd=0.01, post=4)
@@ -1237,7 +1238,7 @@ def test_a_filename_that_is_not_a_month_cannot_break_the_all_time_window(home, m
     """`_MONTH` accepts `2026-00`, which sorts before every real month and
     which `_window_files` then raises on — one stray filename turning the
     campaign cost endpoint into a 500 on every request."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", campaign="saltmarch", scene="001-arrival", cost_usd=0.10)
     (home / "usage" / "2026-00.jsonl").write_text("", encoding="utf-8")
 
@@ -1249,7 +1250,7 @@ def test_a_filename_that_is_not_a_month_cannot_break_the_all_time_window(home, m
 def test_a_scene_older_than_the_scan_window_says_its_breakdown_is_short(home, monkeypatch):
     """A post with no bucket looks exactly like a post that cost nothing, so
     the payload has to say the scan never reached that far back."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
 
     reachable = usage.scene_usage("saltmarch", "001-arrival", since="2026-08-01")
     assert reachable["clamped"] is False
@@ -1262,7 +1263,7 @@ def test_a_scene_older_than_the_scan_window_says_its_breakdown_is_short(home, mo
 def test_a_scene_with_no_usable_start_date_is_not_reported_as_clamped(home, monkeypatch):
     """`clamped` means "your window was cut short", not "we defaulted": nobody
     asked for a start, so nothing was taken away from them."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
 
     assert usage.scene_usage("saltmarch", "001-arrival", since="")["clamped"] is False
 
@@ -1272,7 +1273,7 @@ def test_a_call_nobody_counted_is_reported_apart_from_one_no_rate_covers(home, m
     anything about: typing a rate cannot price a call whose provider reported
     no token counts, and telling them to go and try is sending them to an
     action that cannot resolve the warning."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", model="local/glm")                      # no counts at all
     _seed("2026-08-14", model="other/thing", prompt_tokens=100,
           completion_tokens=50)                                  # counted, unrated
@@ -1284,7 +1285,7 @@ def test_a_call_nobody_counted_is_reported_apart_from_one_no_rate_covers(home, m
 
 def test_a_half_counted_call_is_unmetered_too(home, monkeypatch):
     """Half a call counted is half a call priceable, which is not priceable."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", model="local/glm", prompt_tokens=1000)   # no completion count
 
@@ -1300,7 +1301,7 @@ def test_an_unpriced_embed_row_is_modelled_once_a_rate_exists(home, monkeypatch)
     is a structural zero, not a count nobody took: a prompt rate prices the
     call completely, and the figure is arithmetic in `modelled_usd`, never
     spend."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 5.0}})
     _seed("2026-08-14", task="semantic-recall", model="local/vectors",
           prompt_tokens=2000, operation=usage.EMBED_OPERATION)
@@ -1316,7 +1317,7 @@ def test_an_unpriced_embed_row_is_modelled_once_a_rate_exists(home, monkeypatch)
 def test_an_unpriced_embed_row_with_no_rate_is_not_reported_as_uncounted(home, monkeypatch):
     """With no rate it stays unpriced -- but its provider DID count it, so the
     Costs card must offer rates rather than say no rate can price it."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", task="semantic-recall", model="local/vectors",
           prompt_tokens=2000, operation=usage.EMBED_OPERATION)
 
@@ -1328,7 +1329,7 @@ def test_an_unpriced_embed_row_with_no_rate_is_not_reported_as_uncounted(home, m
 def test_an_embed_row_nobody_counted_stays_unmetered(home, monkeypatch):
     """The structural zero is the completion side only: an embed whose provider
     reported no prompt count is still a call nobody measured."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", task="semantic-recall", model="local/vectors",
           operation=usage.EMBED_OPERATION)
@@ -1346,15 +1347,15 @@ def test_a_reused_id_renamed_again_keeps_each_scene_its_own_rows(home, monkeypat
     `c`, including the ones written before `b` existed — the first scene's
     whole cost, charged to a scene that did not exist when it was spent.
     """
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
-    monkeypatch.setattr(usage, "_now", lambda: "2026-08-14T11:00:00Z")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_now", lambda: "2026-08-14T11:00:00Z")
     usage.record(task="chat", campaign="saltmarch", scene="a", cost_usd=0.10,
                  ts="2026-08-14T10:00:00Z")
     usage.repoint_scenes("saltmarch", {"a": "b"})                  # stamped 11:00
     # The freed id is taken by a new scene, which spends and is renamed in turn.
     usage.record(task="chat", campaign="saltmarch", scene="a", cost_usd=0.70,
                  ts="2026-08-14T12:00:00Z")
-    monkeypatch.setattr(usage, "_now", lambda: "2026-08-14T13:00:00Z")
+    monkeypatch.setattr(usage_clock, "_now", lambda: "2026-08-14T13:00:00Z")
     usage.repoint_scenes("saltmarch", {"a": "c"})                  # stamped 13:00
 
     spend = {b["scene"]: b["cost_usd"]
@@ -1373,7 +1374,7 @@ def test_a_reused_id_renamed_again_keeps_each_scene_its_own_rows(home, monkeypat
 def test_every_ordering_is_exercised_and_breaks_ties_the_same_way(home, monkeypatch):
     """The two non-default orderings had no test at all, which is how a sort
     nobody runs comes to disagree with the heading above it."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     usage.record(task="chat", campaign="saltmarch", scene="cheap-but-new",
                  cost_usd=0.01, ts="2026-08-14T18:00:00Z")
     for n in range(3):
@@ -1394,7 +1395,7 @@ def test_every_ordering_is_exercised_and_breaks_ties_the_same_way(home, monkeypa
 def test_ties_break_on_the_id_in_every_ordering(home, monkeypatch):
     """`reverse=True` over one key tuple would flip the tie-break too, giving
     each ordering a different idea of what "equal" means."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     for scene in ("b", "a", "c"):
         usage.record(task="chat", campaign="saltmarch", scene=scene,
                      cost_usd=0.5, ts="2026-08-14T10:00:00Z")
@@ -1405,7 +1406,7 @@ def test_ties_break_on_the_id_in_every_ordering(home, monkeypatch):
 
 
 def test_a_malformed_rename_row_is_skipped_rather_than_followed(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     path = home / "usage" / "2026-08.jsonl"
     path.parent.mkdir(parents=True)
     path.write_text("\n".join(json.dumps(row) for row in [
@@ -1423,14 +1424,14 @@ def test_a_malformed_rename_row_is_skipped_rather_than_followed(home, monkeypatc
 
 
 def test_a_row_with_no_scene_resolves_to_the_no_scene_bucket(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
 
     assert usage._scene_now(None, "2026-08-14T10:00:00Z", {}) == usage.NO_SCENE
     assert usage._scene_now("", "2026-08-14T10:00:00Z", {}) == usage.NO_SCENE
 
 
 def test_a_blank_or_undated_line_is_skipped(home, monkeypatch):
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     path = home / "usage" / "2026-08.jsonl"
     path.parent.mkdir(parents=True)
     path.write_text("\n".join([
@@ -1447,7 +1448,7 @@ def test_a_blank_or_undated_line_is_skipped(home, monkeypatch):
 
 def test_a_scene_start_that_is_not_a_string_falls_back_to_the_default_window(home, monkeypatch):
     """`since` reaches here off a hand-editable scene frontmatter."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
 
     out = usage.scene_usage("saltmarch", "001-arrival", since=42)
     assert out["since"] == "2026-07-16", "the default 30-day window"
@@ -1462,12 +1463,12 @@ def test_a_hop_does_not_carry_a_row_through_an_earlier_tenancy_of_the_next_id(ho
     and happened before this row's scene ever held it. Compared against the
     row's original stamp it looks applicable, and the row lands on `c`.
     """
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     usage.record(task="chat", campaign="saltmarch", scene="a", cost_usd=0.10,
                  ts="2026-08-14T09:00:00Z")
-    monkeypatch.setattr(usage, "_now", lambda: "2026-08-14T10:00:00Z")
+    monkeypatch.setattr(usage_clock, "_now", lambda: "2026-08-14T10:00:00Z")
     usage.repoint_scenes("saltmarch", {"b": "c"})       # somebody else vacates `b`
-    monkeypatch.setattr(usage, "_now", lambda: "2026-08-14T11:00:00Z")
+    monkeypatch.setattr(usage_clock, "_now", lambda: "2026-08-14T11:00:00Z")
     usage.repoint_scenes("saltmarch", {"a": "b"})       # `a` takes the freed id
 
     spend = {x["scene"]: x["cost_usd"]
@@ -1482,7 +1483,7 @@ def test_a_replayed_answer_counts_as_a_reroll(home, monkeypatch):
     replayed generation re-answers text a previous take already answered — and
     that earlier take was cut. Leaving it out hid the discarded generation the
     count exists to show."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     for task in ("chat", "replay"):
         _seed("2026-08-14", task=task, campaign="saltmarch", scene="001-arrival",
               cost_usd=0.01, post=2)
@@ -1497,7 +1498,7 @@ def test_a_rename_trail_that_keeps_swapping_two_ids_is_bounded(home, monkeypatch
     """The `_MAX_RENAMES` bound, reached. A pair of ids swapped back and forth
     with ever-later stamps is a walk that never runs out of applicable hops —
     one typo's worth of hand-editing away from spinning inside a report."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     path = home / "usage" / "2026-08.jsonl"
     path.parent.mkdir(parents=True)
     rows = [{"ts": "2026-08-14T00:00:00Z", "kind": "llm", "task": "chat",
@@ -1518,7 +1519,7 @@ def test_a_positive_estimate_below_the_rounding_floor_is_not_reported_as_zero(ho
     tokens at $0.00002/1k is 4e-7. Rounded to 0.0 beside a positive call count,
     every cost surface renders a priced call as `$0.00` — the claim this module
     exists to prevent, made by the rounding rather than by the ledger."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 0.00002, "completion_usd_per_1k": 0.0}})
     _seed("2026-08-14", model="local/glm", prompt_tokens=20, completion_tokens=0)
 
@@ -1530,7 +1531,7 @@ def test_a_positive_estimate_below_the_rounding_floor_is_not_reported_as_zero(ho
 
 def test_an_ordinary_figure_is_still_rounded(home, monkeypatch):
     """The floor is a guard on zero, not a licence to hand back float noise."""
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     _seed("2026-08-14", cost_usd=0.1)
     _seed("2026-08-14", cost_usd=0.2)
 

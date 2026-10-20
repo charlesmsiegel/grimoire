@@ -37,7 +37,7 @@ from . import activation, semantic, suspects
 # Aliased because `_actor_aliases` and `_character_states` below bind `actor`.
 from . import actor as actor_scope
 
-# Aliased to match `assemble.py` and `macros.py`, and because `_character_states`
+# Aliased to match `store/context/assemble/` and `macros.py`, and because `_character_states`
 # below takes a parameter named `cast`.
 from . import cast as cast_data
 

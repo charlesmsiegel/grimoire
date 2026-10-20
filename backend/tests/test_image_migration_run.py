@@ -49,6 +49,12 @@ from grimoire.store import (
     world_images,
     worlds,
 )
+from grimoire.store.image_migration import (
+    _collection_conversion as image_migration_collection_conversion,
+)
+from grimoire.store.image_migration import _folding as image_migration_folding
+from grimoire.store.image_migration import _placements as image_migration_placements
+from grimoire.store.image_migration import _planning as image_migration_planning
 from tests.collection_fixtures import format1_journal, place
 
 #: The temp store every test here runs against; `_run` refuses any other.
@@ -209,7 +215,7 @@ def test_crash_before_ref_write_leaves_legacy_only(monkeypatch):
     avatar = _legacy(wchar, "avatar.png", _png(1))
     _sidecar(wchar, "descriptions.json", {"avatar": "Grey"})
     real = image_migration._write_placement
-    monkeypatch.setattr(image_migration, "_write_placement", _crash)
+    monkeypatch.setattr(image_migration_placements, "_write_placement", _crash)
 
     rep = _run()
 
@@ -219,7 +225,7 @@ def test_crash_before_ref_write_leaves_legacy_only(monkeypatch):
     assert image_refs.read(wchar, "avatar") is None
     assert _json(wchar / "descriptions.json") == {"avatar": "Grey"}
 
-    monkeypatch.setattr(image_migration, "_write_placement", real)
+    monkeypatch.setattr(image_migration_placements, "_write_placement", real)
     assert _run()["legacy_deleted"] == 1
     assert not avatar.exists() and image_refs.read(wchar, "avatar") is not None
 
@@ -229,7 +235,7 @@ def test_crash_after_ref_write_leaves_both_and_rerun_cleans(monkeypatch):
     avatar = _legacy(wchar, "avatar.png", _png(1))
     _sidecar(wchar, "descriptions.json", {"avatar": "Grey"})
     real = image_migration._unlink_same
-    monkeypatch.setattr(image_migration, "_unlink_same", _crash)
+    monkeypatch.setattr(image_migration_placements, "_unlink_same", _crash)
 
     rep = _run()
 
@@ -238,7 +244,7 @@ def test_crash_after_ref_write_leaves_both_and_rerun_cleans(monkeypatch):
     assert image_refs.read(wchar, "avatar").image == _id(_png(1))
     assert _json(wchar / "descriptions.json") == {"avatar": "Grey"}
 
-    monkeypatch.setattr(image_migration, "_unlink_same", real)
+    monkeypatch.setattr(image_migration_placements, "_unlink_same", real)
     again = _run()
     assert again["already_placed"] == 1 and again["legacy_deleted"] == 1
     assert not avatar.exists() and not (wchar / "descriptions.json").exists()
@@ -250,7 +256,7 @@ def test_crash_after_cleanup_is_new_only(monkeypatch):
     avatar = _legacy(wchar, "avatar.png", _png(1))
     _sidecar(wchar, "descriptions.json", {"avatar": "Grey"})
     real = image_migration._fold_description
-    monkeypatch.setattr(image_migration, "_fold_description", _crash)
+    monkeypatch.setattr(image_migration_folding, "_fold_description", _crash)
 
     rep = _run()
 
@@ -259,7 +265,7 @@ def test_crash_after_cleanup_is_new_only(monkeypatch):
     # The key still answers for the picture (R1) until a rerun folds it.
     assert image_descriptions.text_in(wchar, "avatar") == "Grey"
 
-    monkeypatch.setattr(image_migration, "_fold_description", real)
+    monkeypatch.setattr(image_migration_folding, "_fold_description", real)
     again = _run()
     assert again["metadata_only"]["c"] == 1 and again["descriptions_folded"] == 1
     assert not (wchar / "descriptions.json").exists()
@@ -344,7 +350,7 @@ def test_world_library_migration_takes_the_collection_lock(monkeypatch):
     def spy(d, name, image_id, focus):
         held.append(locks.image_collection_lock(wid)._is_owned())
         return real(d, name, image_id, focus)
-    monkeypatch.setattr(image_migration, "_write_placement", spy)
+    monkeypatch.setattr(image_migration_placements, "_write_placement", spy)
 
     assert _run()["placed"] == 1
     assert held == [True]
@@ -447,7 +453,7 @@ def test_a_file_changed_after_hashing_is_skipped(monkeypatch):
         avatar.write_bytes(_png(5))
         os.utime(avatar, ns=(1, 1))
         return got
-    monkeypatch.setattr(image_migration, "plan", plan_then_edit)
+    monkeypatch.setattr(image_migration_planning, "plan", plan_then_edit)
 
     rep = _run()
 
@@ -482,8 +488,8 @@ def test_an_edit_during_the_fold_is_not_lost(monkeypatch):
         if calls["subjects"] == 1:
             _sidecar(gdir, "subjects.json", {"art_1": ["seraphine", "mara"]})
         return real_subjects(raw, scope, cids)
-    monkeypatch.setattr(image_migration, "_with_text", text_edited)
-    monkeypatch.setattr(image_migration, "_with_subjects", subjects_edited)
+    monkeypatch.setattr(image_migration_folding, "_with_text", text_edited)
+    monkeypatch.setattr(image_migration_folding, "_with_subjects", subjects_edited)
 
     rep = _run()
 
@@ -619,7 +625,7 @@ def test_a_campaign_write_stopped_part_way_still_bumps_its_revision(monkeypatch)
 
     def busy(*_a, **_k):
         raise locks.StoreBusy("image")
-    monkeypatch.setattr(image_migration, "_unlink_same", busy)
+    monkeypatch.setattr(image_migration_placements, "_unlink_same", busy)
 
     rep = _run()
 
@@ -755,7 +761,7 @@ def test_a_run_stopped_after_a_conversion_is_settled_by_a_rerun(monkeypatch):
     member_key = f"/api/worlds/{wid}/image-collections/{_COLLECTION}/members/0"
     _sidecar(gdir2, "subjects.json", {lib_key: [char2]})
     real = image_migration._settle_converted
-    monkeypatch.setattr(image_migration, "_settle_converted", _crash)
+    monkeypatch.setattr(image_migration_collection_conversion, "_settle_converted", _crash)
 
     first = _run()
 
@@ -763,7 +769,7 @@ def test_a_run_stopped_after_a_conversion_is_settled_by_a_rerun(monkeypatch):
     assert _json(gdir2 / "subjects.json") == {lib_key: [char2], member_key: [char2]}
     assert image_subjects.read_subjects(wroot2, gid2) == {member_key: [char2]}
 
-    monkeypatch.setattr(image_migration, "_settle_converted", real)
+    monkeypatch.setattr(image_migration_collection_conversion, "_settle_converted", real)
     again = _run()
 
     assert again["errors"] == [] and again["collections_converted"] == [] and wid2
@@ -874,7 +880,7 @@ def test_the_work_map_holds_only_pending_entries_and_is_removed_on_completion(mo
     def spy(d, name, image_id, focus):
         seen.append(image_migration.pending_ids(_root()))
         return real(d, name, image_id, focus)
-    monkeypatch.setattr(image_migration, "_write_placement", spy)
+    monkeypatch.setattr(image_migration_placements, "_write_placement", spy)
 
     _run()
 
@@ -890,7 +896,7 @@ def test_a_run_that_dies_mid_item_leaves_its_ingested_object_pending(monkeypatch
 
     def die(*_a, **_k):
         raise _Died
-    monkeypatch.setattr(image_migration, "_write_placement", die)
+    monkeypatch.setattr(image_migration_placements, "_write_placement", die)
 
     with pytest.raises(_Died):
         _run()
@@ -912,7 +918,7 @@ def test_a_failed_run_still_reports(monkeypatch):
 
     def boom(*_a, **_k):
         raise RuntimeError("planner fell over")
-    monkeypatch.setattr(image_migration, "plan", boom)
+    monkeypatch.setattr(image_migration_planning, "plan", boom)
 
     rep = _run()
 
@@ -930,14 +936,14 @@ def test_a_failure_is_reported_by_type_and_never_by_its_path(monkeypatch):
 
     def denied(*_a, **_k):
         raise PermissionError(errno.EACCES, "Permission denied", str(avatar.resolve()))
-    monkeypatch.setattr(image_migration, "_write_placement", denied)
+    monkeypatch.setattr(image_migration_placements, "_write_placement", denied)
 
     rep = _run()
 
     assert [e["error"] for e in rep["errors"]] == ["PermissionError [EACCES]"]
     assert str(_root()) not in json.dumps(rep)
 
-    monkeypatch.setattr(image_migration, "plan", denied)
+    monkeypatch.setattr(image_migration_planning, "plan", denied)
     failed = _run()
     assert failed["outcome"] == "failed" and failed["error"] == "PermissionError [EACCES]"
     assert str(_root()) not in json.dumps(failed)
@@ -1014,7 +1020,7 @@ def test_an_unreadable_legacy_focus_is_kept(monkeypatch):
     _wid, _wroot, _char, wchar = _world()
     avatar = _legacy(wchar, "avatar.png", _png(1))
     focus = _sidecar(wchar, "focus.json", {"avatar": 40})
-    monkeypatch.setattr(image_migration, "_focus_file", lambda d: None)   # EACCES, say
+    monkeypatch.setattr(image_migration_placements, "_focus_file", lambda d: None)   # EACCES, say
 
     rep = _run()
 
@@ -1034,7 +1040,7 @@ def test_a_root_flip_during_a_conversion_leaves_the_manifest_format_1(tmp_path, 
     def flip(ex, *a, **kw):
         real(ex, *a, **kw)
         monkeypatch.setenv("GRIMOIRE_HOME", str(other))
-    monkeypatch.setattr(image_migration, "_rekey", flip)
+    monkeypatch.setattr(image_migration_collection_conversion, "_rekey", flip)
 
     rep = _run()
 
@@ -1241,7 +1247,7 @@ def test_url_target_replaced_after_verification_keeps_its_subject_key(monkeypatc
         return real(ex, occ, image_id)
 
     with monkeypatch.context() as concurrent:
-        concurrent.setattr(image_migration, "_metadata_one", replace_before_fold)
+        concurrent.setattr(image_migration_placements, "_metadata_one", replace_before_fold)
         rep = _run()
 
     assert _json(side) == {url: [char]}
@@ -1309,7 +1315,7 @@ def test_url_target_synced_right_after_the_key_delete_restores_it(monkeypatch):
         return done
 
     with monkeypatch.context() as concurrent:
-        concurrent.setattr(image_migration, "_delete_key_if", delete_then_sync)
+        concurrent.setattr(image_migration_folding, "_delete_key_if", delete_then_sync)
         rep = _run()
 
     assert synced and _json(side) == {url: [char]}
@@ -1354,7 +1360,7 @@ def test_url_key_unreferenced_after_the_inventory_is_left_alone(monkeypatch):
             greetings.update_greeting(wroot, gid, body="No art any more.")
         return real(ex, occ, image_id)
 
-    monkeypatch.setattr(image_migration, "_metadata_one", edit_then_fold)
+    monkeypatch.setattr(image_migration_placements, "_metadata_one", edit_then_fold)
     rep = _run()
 
     assert edited and _json(side) == {url: [char]}
@@ -1378,7 +1384,7 @@ def test_url_subject_fold_holds_its_target_name_lock(monkeypatch):
         held.append(locks.image_name_lock(wchar, "avatar")._is_owned())
         return result
 
-    monkeypatch.setattr(image_migration, "_fold_subjects", fold_under_lock)
+    monkeypatch.setattr(image_migration_folding, "_fold_subjects", fold_under_lock)
     _run()
 
     assert held == [True, True]
@@ -1453,8 +1459,8 @@ def test_record_directory_alias_locks_the_canonical_upload_target(monkeypatch):
             seen.append(upload.submit(replace_if_unlocked).result(timeout=10))
             return real_fold(*a, **kw)
 
-        monkeypatch.setattr(image_migration, "_metadata_one", check_target)
-        monkeypatch.setattr(image_migration, "_fold_subjects", fold_while_upload_attempts)
+        monkeypatch.setattr(image_migration_placements, "_metadata_one", check_target)
+        monkeypatch.setattr(image_migration_folding, "_fold_subjects", fold_while_upload_attempts)
         rep = _run()
 
     assert rep["outcome"] == "done" and not rep["errors"]
@@ -1498,7 +1504,7 @@ def test_a_previously_verified_target_that_becomes_linked_keeps_its_key(tmp_path
         ref.symlink_to(outside)
         return result
 
-    monkeypatch.setattr(image_migration, "_unlink_same", link_after_verify)
+    monkeypatch.setattr(image_migration_placements, "_unlink_same", link_after_verify)
     rep = _run()
 
     assert _json(side) == {"avatar": "A portrait."}
@@ -1569,7 +1575,7 @@ def test_a_root_flip_before_pending_map_write_creates_no_map(tmp_path, monkeypat
         monkeypatch.setenv("GRIMOIRE_HOME", str(other))
         return data
 
-    monkeypatch.setattr(image_migration, "_reread", flip)
+    monkeypatch.setattr(image_migration_placements, "_reread", flip)
     rep = _run()
 
     assert rep["outcome"] == "root-changed"
@@ -1618,7 +1624,7 @@ def test_a_crash_before_thumbnail_cleanup_keeps_the_legacy_file(monkeypatch):
     legacy = _legacy(wchar, "avatar.png", _png(1))
     thumb = thumbs.thumbnail(legacy, 128)
     with monkeypatch.context() as patch:
-        patch.setattr(image_migration, "_drop_thumbs", _crash)
+        patch.setattr(image_migration_placements, "_drop_thumbs", _crash)
         rep = _run()
     assert rep["errors"]
     assert legacy.exists() and thumb.exists()

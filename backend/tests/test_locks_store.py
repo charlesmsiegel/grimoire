@@ -406,7 +406,7 @@ def test_hold_all_acquires_in_sorted_order(monkeypatch, tmp_path):
         order.append(cid)
         return real(cid)
 
-    monkeypatch.setattr(locks, "campaign_lock", spy)
+    monkeypatch.setattr(locks._runtime, "campaign_lock", spy)
     with locks.hold_all(["zeta", "alpha", "mid"]):
         pass
     assert order == ["alpha", "mid", "zeta"]
@@ -460,7 +460,7 @@ def test_module_edit_acquires_campaign_locks_in_sorted_order(monkeypatch, tmp_pa
 
     order = []
     real = locks.campaign_lock
-    monkeypatch.setattr(locks, "campaign_lock",
+    monkeypatch.setattr(locks._runtime, "campaign_lock",
                         lambda c: (order.append(c), real(c))[1])
     with module_edit._campaign_locks():
         pass
@@ -479,7 +479,7 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 
     order = []
     real = locks.campaign_lock
-    monkeypatch.setattr(locks, "campaign_lock",
+    monkeypatch.setattr(locks._runtime, "campaign_lock",
                         lambda c: (order.append(c), real(c))[1])
     client = TestClient(main.create_app())
     # A DIFFERENT module from the campaigns' current one, so the route cannot
@@ -512,7 +512,7 @@ def test_fork_acquires_both_campaign_locks_in_sorted_order(monkeypatch, tmp_path
 
     order = []
     real = locks.campaign_lock
-    monkeypatch.setattr(locks, "campaign_lock",
+    monkeypatch.setattr(locks._runtime, "campaign_lock",
                         lambda c: (order.append(c), real(c))[1])
     fork.fork_campaign(cid, "Alpha")
 
@@ -576,7 +576,7 @@ def test_a_second_process_cannot_hold_the_same_campaign(monkeypatch, tmp_path):
     _wid, cid = _campaign(monkeypatch, tmp_path)
     p = _hold_in_child(tmp_path, "campaign_lock(%r)" % cid)
     try:
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+        monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.5)
         with pytest.raises(locks.CampaignBusy), locks.campaign_lock(cid):
             pass
     finally:
@@ -602,7 +602,7 @@ def test_different_campaigns_do_not_block_across_processes(monkeypatch, tmp_path
     b = campaigns.create_campaign("Two", wid, module="pool-basic")
     p = _hold_in_child(tmp_path, "campaign_lock(%r)" % a)
     try:
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 5.0)
+        monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 5.0)
         with locks.campaign_lock(b):
             pass
     finally:
@@ -768,7 +768,7 @@ def test_hold_all_unwinds_everything_when_a_later_lock_is_busy(monkeypatch, tmp_
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     p = _hold_in_child(tmp_path, "campaign_lock('zulu')")
     try:
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+        monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.5)
         with pytest.raises(locks.CampaignBusy), locks.hold_all(["alpha", "zulu"]):
             pass
         assert not locks.campaign_lock("alpha")._is_owned(), "alpha was stranded"
@@ -793,7 +793,7 @@ def test_hold_all_spends_one_shared_deadline_across_the_whole_span(monkeypatch, 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     p = _hold_in_child(tmp_path, "campaign_lock('zzz')")
     try:
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 2.0)
+        monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 2.0)
         real = locks.campaign_lock
 
         def slow(cid):
@@ -802,7 +802,7 @@ def test_hold_all_spends_one_shared_deadline_across_the_whole_span(monkeypatch, 
                 time.sleep(1.7)        # eats most of the shared budget
             return lock
 
-        monkeypatch.setattr(locks, "campaign_lock", slow)
+        monkeypatch.setattr(locks._runtime, "campaign_lock", slow)
         started = time.monotonic()
         with pytest.raises(locks.CampaignBusy):
             with locks.hold_all(["aaa", "zzz"]):   # sorted: aaa first, then zzz
@@ -826,7 +826,7 @@ def test_a_second_process_cannot_hold_the_module_edit_lock(monkeypatch, tmp_path
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     p = _hold_in_child(tmp_path, "module_edit_lock()")
     try:
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+        monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.5)
         with pytest.raises(locks.ModuleEditBusy):
             with module_edit._M:            # the lock module_edit really uses
                 pass
@@ -852,7 +852,7 @@ def test_a_campaign_named_module_edit_does_not_collide_with_the_module_lock(
 
     # and the real consequence: holding one must not block the other
     with locks.module_edit_lock():
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 2.0)
+        monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 2.0)
         with locks.campaign_lock("module-edit"):
             pass
 
@@ -873,7 +873,7 @@ def test_a_held_module_edit_lock_blocks_a_real_publication(monkeypatch, tmp_path
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     p = _hold_in_child(tmp_path, "module_edit_lock()")
     try:
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+        monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.5)
         with pytest.raises(locks.ModuleEditBusy):
             module_edit.create_module("Blocked Pack")
     finally:
@@ -946,7 +946,7 @@ def test_a_contended_create_scene_leaves_no_scene_behind(monkeypatch, tmp_path):
 
     p = _hold_in_child(tmp_path, "campaign_lock(%r)" % cid)
     try:
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+        monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.5)
         with pytest.raises(locks.CampaignBusy):
             scenes.create_scene(cid, "Saltmarch")
     finally:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import grimoire
 from grimoire.store import paths, scenes, search
 from grimoire.store.campaigns import read as campaigns_read
 from grimoire.store.worlds import read as worlds_read
@@ -140,7 +141,7 @@ def test_fresh_worker_preserves_parent_import_paths_with_only_source_environment
     module.generate(target, module.Shape(worlds=1, campaigns_per_world=1, scenes_per_campaign=1,
                                          records_per_world=1, body_words=20))
     benchmark = importlib.import_module('scripts.benchmark_compiled')
-    source = Path(benchmark.compiled.__file__).resolve().parents[2]
+    source = Path(grimoire.__file__).resolve().parent.parent
     # make check sets package src, while pytest alone adds backend/scripts to
     # this parent's sys.path. Fresh workers must inherit both actual imports.
     monkeypatch.setenv('PYTHONPATH', str(source))

@@ -5,7 +5,7 @@ instant-overview-pages-design.md`).
 A surface's answer splits into what grows with play -- scenes, transcripts,
 ledgers -- and what is bounded by the roster or the world's size. The first
 half is projected here, under keys that name every file each projection reads;
-the second stays a live read in the routes. That is `routes/todo.py`'s cost
+the second stays a live read in the routes. That is `routes/todo/`'s cost
 rule turned into a test for what to project.
 
 Only the four overview read routes reach these entry points -- `GET /worlds`,
@@ -16,7 +16,7 @@ write). The store functions they stand beside (`list_scenes`, `read_scene`,
 `store/` imports this package, so the graph stays acyclic.
 
 No module here mutates campaign-scoped state, so the package takes no entry
-in `store/locks.py`.
+in `store/locks/_domain.py`.
 """
 
 from __future__ import annotations

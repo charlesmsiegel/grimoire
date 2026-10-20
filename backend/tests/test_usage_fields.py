@@ -28,6 +28,7 @@ import pytest
 import grimoire.store as store
 from grimoire import llm, llm_reasoning, llm_usage, wire
 from grimoire.llm import LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.routes.common import require_inference
 from grimoire.store import inference_keys as keys
 from grimoire.store import llm_connections, usage, usage_rollup
@@ -43,7 +44,7 @@ NEW_FIELDS = ("operation", "provider_id", "requested_model", "role", "preset",
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 @pytest.fixture

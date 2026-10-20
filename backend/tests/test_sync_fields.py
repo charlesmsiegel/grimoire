@@ -4,6 +4,7 @@ import pytest
 
 from grimoire.store import campaigns, characters, entities, entity_schema, overlay, sync, worlds
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from grimoire.store.sync import _display_refs as sync_display_refs
 
 
 @pytest.fixture
@@ -114,7 +115,7 @@ def test_exact_owned_actor_name_needs_no_native_alias_scan(case, monkeypatch):
     def unnecessary(*_args):
         pytest.fail("exact owned ID performed native alias scan")
 
-    monkeypatch.setattr(sync, "_incoming_identity", unnecessary)
+    monkeypatch.setattr(sync_display_refs, "_incoming_identity", unnecessary)
     assert sync._incoming_names(cid, overlay.view(cid), {"characters"},
                                 {"characters:mara", "Mara", "characters:../mara"})["characters:mara"] == "Mara"
 

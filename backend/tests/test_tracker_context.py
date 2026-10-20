@@ -245,7 +245,7 @@ def test_the_opener_reads_no_tracker_state(cast_scene, monkeypatch):
     def read(*a, **k):
         raise AssertionError("the opener read the tracker")
 
-    monkeypatch.setattr(assemble, "_tracker_read", read)
+    monkeypatch.setattr(assemble._inputs, "_tracker_read", read)
     for actor_ref in ("grimoire", MARA):
         context.compose_opener(cid, sid, "Set the scene.", actor_ref=actor_ref)
 

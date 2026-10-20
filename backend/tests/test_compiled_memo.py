@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from grimoire.store.compiled import _fences as compiled_fences
 from tests import test_compiled as cache_tests
 
 cache = cache_tests.cache
@@ -25,7 +26,7 @@ def _settled(cache, monkeypatch):
     # Every scenario here needs the memos engaged, whichever clock the shared
     # fixture chose.
     real = time.time_ns
-    monkeypatch.setattr(cache, "_wall_ns", lambda: real() + 3_600_000_000_000)
+    monkeypatch.setattr(compiled_fences, "_wall_ns", lambda: real() + 3_600_000_000_000)
 
 
 def _seed(cache, root, key):
@@ -38,7 +39,7 @@ def test_warm_lookups_reuse_the_fence_instead_of_rereading_controls(cache, root,
     _seed(cache, root, key)
     reads = []
     original = cache._read_marker
-    monkeypatch.setattr(cache, "_read_marker", lambda r: reads.append(r) or original(r))
+    monkeypatch.setattr(compiled_fences, "_read_marker", lambda r: reads.append(r) or original(r))
 
     def marker_reads(lookups):
         reads.clear()
@@ -107,7 +108,7 @@ def test_a_link_replacing_the_cache_directory_turns_the_cache_off(cache, root, t
 def test_an_unsettled_snapshot_is_never_remembered(cache, root, monkeypatch):
     # Everything here was written a moment ago; with the real clock no
     # snapshot has settled, so every check keeps taking its full path.
-    monkeypatch.setattr(cache, "_wall_ns", time.time_ns)
+    monkeypatch.setattr(compiled_fences, "_wall_ns", time.time_ns)
     key = _key(cache, _kind(cache, monkeypatch))
     _seed(cache, root, key)
     with cache.batch(root) as request:

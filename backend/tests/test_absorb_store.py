@@ -29,6 +29,7 @@ from grimoire.store import (
 from grimoire.store.absorb import apply as absorb_apply
 from grimoire.store.absorb import conflicts as absorb_conflicts
 from grimoire.store.absorb import materializer
+from grimoire.store.absorb.materializer import _continuity_rows as materializer_continuity_rows
 from grimoire.store.continuity import doc, review
 
 
@@ -3821,7 +3822,7 @@ def test_a_failing_alternatives_pass_stages_the_rows_without_alternatives(monkey
         raise RuntimeError("alternatives exploded")
 
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
-    monkeypatch.setattr(materializer, "_attach_alternatives", boom)
+    monkeypatch.setattr(materializer_continuity_rows, "_attach_alternatives", boom)
     seen: list[BaseException] = []
     [row] = absorb.materialize(cid, sid, {"plot_movements": [
         _chart_row(identity_check=_ic("uncertain", "accepted", _MAP))]},
@@ -3836,7 +3837,7 @@ def test_a_failing_recheck_pass_stages_the_rows_as_given(monkeypatch, tmp_path):
         raise RuntimeError("recheck exploded")
 
     cid, sid = _identity_campaign(monkeypatch, tmp_path)
-    monkeypatch.setattr(materializer, "_recheck_accepted", boom)
+    monkeypatch.setattr(materializer_continuity_rows, "_recheck_accepted", boom)
     seen: list[BaseException] = []
     [row] = absorb.materialize(cid, sid, {"plot_movements": [
         _accepted("mara-s-map", _MAP)]}, on_identity_error=seen.append)

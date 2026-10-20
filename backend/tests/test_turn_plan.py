@@ -9,7 +9,7 @@ import pytest
 
 from grimoire import decisions, routes, store
 from grimoire.decisions import NONE_KEY, Answer, ItemResult
-from grimoire.routes import character_turns
+from grimoire.routes.character_turns import _generation as character_turns_generation
 from grimoire.store import turn_plan
 from tests.llm_fakes import FakeLLM, decision_reply
 
@@ -118,7 +118,7 @@ def test_extra_items_ride_the_same_call_and_are_stored_by_their_owner(client, mo
         seen.append(result)
         return {"chosen": result.answers["action"].answer}
 
-    monkeypatch.setattr(character_turns, "_plan_extras", lambda *_a: (
+    monkeypatch.setattr(character_turns_generation, "_plan_extras", lambda *_a: (
         turn_plan.Extra("npc-action", _action_item(), read),
         turn_plan.Extra("npc-plain", _action_item())))
     fake = _fake(client, [decision_reply(PLAN, {"action": "wait"}, {"action": "shove"})],
@@ -137,7 +137,7 @@ def test_extra_items_ride_the_same_call_and_are_stored_by_their_owner(client, mo
 def test_two_extras_under_one_owner_skip_the_plan(client, monkeypatch):
     cid, sid, base = seed(client)
     store.write_config(decide_turn_plan="plan")
-    monkeypatch.setattr(character_turns, "_plan_extras", lambda *_a: (
+    monkeypatch.setattr(character_turns_generation, "_plan_extras", lambda *_a: (
         turn_plan.Extra("npc", _action_item()), turn_plan.Extra("npc", _action_item())))
     fake = _fake(client, ["Mara answers." + _HANDOFF])
     _send(client, base)

@@ -46,7 +46,9 @@ from grimoire.store.continuity import (
     review,
     similarity,
 )
+from grimoire.store.continuity.reconcile import _discovery as reconcile_discovery
 from grimoire.store.inference import facts
+from grimoire.store.locks import _runtime as locks_runtime
 from tests.inference_fixtures import embedding
 from tests.llm_fakes import FakeEmbeddings
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
@@ -323,7 +325,7 @@ def test_an_incremental_sweep_keeps_no_more_neighbours_than_a_full_one(cid, s0):
 
 def test_a_capped_full_sweep_keeps_at_most_top_k_per_finished_ref(cid, s0, monkeypatch):
     others = _errands(cid, s0)
-    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 6)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_MAX_PAIRS", 6)
     _write_basis(cid, dict.fromkeys(others, "old"))   # ERRAND is missing: scored first
 
     sweep = _sweep(cid)
@@ -384,7 +386,7 @@ def test_a_capped_sweep_reaches_the_rest_next_time(cid, s0, monkeypatch):
     basis_hashes = dict(hashes)
     scored = {ref: _stamp(1) for ref in refs}
     _write_basis(cid, basis_hashes, scored=scored)
-    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 5)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_MAX_PAIRS", 5)
 
     calls = _counting(monkeypatch)
     union: set[str] = set()
@@ -420,7 +422,7 @@ def test_a_capped_sweep_after_a_space_change_reaches_the_tail(cid, s0, monkeypat
     texts = _sweep(cid).text_hashes
     _write_basis(cid, old, space="old", texts=texts)
     _space(monkeypatch, "new")
-    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 5)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_MAX_PAIRS", 5)
 
     sweep = _sweep(cid, full=False, stamp=_stamp(2))
     assert sweep.space == "new"
@@ -747,7 +749,7 @@ def _window_spy(monkeypatch):
 def test_sweep_embeds_at_most_the_warm_limit(cid, s0, fake, monkeypatch):
     _configure()
     _chores(cid, s0)
-    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 4)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_WARM_LIMIT", 4)
     loads = _load_spy(monkeypatch)
 
     sweep = _embedded(cid)
@@ -806,7 +808,7 @@ def test_a_runs_passes_share_one_embedding_budget(cid, s0, monkeypatch):
 def test_incremental_changed_texts_are_required(cid, s0, fake, monkeypatch):
     _configure()
     texts = _chores(cid, s0)
-    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 2)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_WARM_LIMIT", 2)
     changed = "thread:saltmarch-errand-9"
     first = _sweep(cid)                         # embed=False: nothing cached yet
     _write_basis(cid, {**first.hashes, changed: "moved"}, space=first.space,
@@ -814,7 +816,7 @@ def test_incremental_changed_texts_are_required(cid, s0, fake, monkeypatch):
     uncached = [texts[ref] for ref in sorted(texts)]
     stamp = next(s for s in (f"0000000000000000001{i}-run" for i in range(10))
                  if texts[changed] not in embed_space.warm_window(
-                     uncached, f"{cid}\0{s}", reconcile.RECONCILE_WARM_LIMIT))
+                     uncached, f"{cid}\0{s}", reconcile_discovery.RECONCILE_WARM_LIMIT))
 
     sweep = _embedded(cid, full=False, stamp=stamp)
     assert texts[changed] in fake.calls[0]
@@ -829,7 +831,7 @@ def test_warm_window_rotates_between_runs(cid, s0, monkeypatch):
     # same ten uncached texts.
     double = FakeEmbeddings(vector_for=lambda t: [0.0, 0.0])
     monkeypatch.setattr(similarity, "_CLIENT", double)
-    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 4)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_WARM_LIMIT", 4)
     windows = _window_spy(monkeypatch)
     one, two = "00000000000000000010-a", "00000000000000000020-b"
     assert (zlib.crc32(f"{cid}\0{one}".encode()) % 10
@@ -1290,7 +1292,7 @@ def test_basis_keeps_old_hashes_for_unscored_refs(cid, s0, monkeypatch):
     scored = {ref: _stamp(1) for ref in [*refs, deleted]}
     texts = {ref: f"text-{ref}" for ref in [*refs, deleted]}
     _write_basis(cid, old, scored=scored, texts=texts)
-    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 5)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_MAX_PAIRS", 5)
 
     sweep = _sweep(cid, stamp=_stamp(2))
     assert sweep.pairs_capped is True and sweep.rescored == {refs[0]}
@@ -1343,7 +1345,7 @@ def test_embedding_failure_keeps_prior_semantic_pairs_and_rescores_next_time(
 def test_warm_overflow_refs_are_not_marked_scored(cid, s0, fake, monkeypatch):
     _configure()
     texts = _chores(cid, s0, n=5)
-    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 2)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_WARM_LIMIT", 2)
 
     sweep = _embedded(cid, full=False, stamp=_stamp(10))
     assert len(sweep.rescored) == 2
@@ -1371,7 +1373,7 @@ def _no_longer_found(monkeypatch, how):
     if how == "implausible":
         monkeypatch.setattr(similarity, "admitted_by", lambda signals: None)
     else:
-        monkeypatch.setattr(reconcile, "RECONCILE_TOP_K", 0)
+        monkeypatch.setattr(reconcile_discovery, "RECONCILE_TOP_K", 0)
 
 
 @pytest.mark.parametrize("how", ["implausible", "ranked_out"])
@@ -1608,7 +1610,7 @@ def test_a_capped_sweep_that_rotates_still_writes(cid, s0, monkeypatch):
     full = _sweep(cid, stamp=_stamp(1))
     _write_basis(cid, full.hashes, scored=dict.fromkeys(refs, _stamp(1)),
                  texts=full.text_hashes)
-    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 5)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_MAX_PAIRS", 5)
     for i, ref in enumerate(refs):
         sweep = _sweep(cid, stamp=_stamp(10 + i))
         assert sweep.rescored == {ref}
@@ -1618,7 +1620,7 @@ def test_a_capped_sweep_that_rotates_still_writes(cid, s0, monkeypatch):
 
 def test_persists_hold_the_campaign_lock(cid, s0, monkeypatch):
     sweep = _found(cid, s0)
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(locks_runtime, "LOCK_TIMEOUT", 0.2)
     held, release = threading.Event(), threading.Event()
 
     def holder():

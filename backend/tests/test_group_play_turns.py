@@ -12,6 +12,7 @@ import pytest
 from grimoire import routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns, streaming
+from grimoire.routes.character_turns import _planning as character_turns_planning
 from grimoire.store import group_play
 from grimoire.store.appearances import paths as appearance_paths
 from tests import wire_kit
@@ -68,7 +69,7 @@ def _follow_on(monkeypatch, *next_speakers):
         return character_turns._successor_answer(
             round_record, used, actor, steps.pop(0))
 
-    monkeypatch.setattr(character_turns, "_select_successor", choose)
+    monkeypatch.setattr(character_turns_planning, "_select_successor", choose)
 
 
 def latest_round(cid, sid):
@@ -221,7 +222,7 @@ def test_retry_resumes_plan_without_replanning(client, monkeypatch):
     def boom():
         raise AssertionError("retry must not re-plan")
 
-    monkeypatch.setattr(character_turns, "_rng", boom)
+    monkeypatch.setattr(character_turns_planning, "_rng", boom)
     retry = FakeLLM([reply("Winifred finishes.", None)])
     use(client, retry)
     response = client.post(base + "/retry")
@@ -727,7 +728,7 @@ def test_natural_follow_on_never_repeats_the_last_speaker(client, monkeypatch):
     for n in range(8):
         # A fresh seed per planning call, so the two rounds shuffle apart.
         seeds = iter(range(n * 10, n * 10 + 10))
-        monkeypatch.setattr(character_turns, "_rng", lambda seeds=seeds: random.Random(next(seeds)))
+        monkeypatch.setattr(character_turns_planning, "_rng", lambda seeds=seeds: random.Random(next(seeds)))
         sid = store.scenes.create_scene(cid, f"Round {n}")
         base = f"/api/campaigns/{cid}/scenes/{sid}"
         for actor in ("mara", "winifred"):

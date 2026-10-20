@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from grimoire import main, store
 from grimoire.routes import streaming
+from grimoire.routes.streaming import _persistence as streaming_persistence
 from grimoire.store import audit, campaigns, locks, worlds
 from tests import wire_kit
 
@@ -111,7 +112,7 @@ def test_a_busy_finalize_emits_an_error_frame_and_persists_nothing(
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     persisted = []
-    monkeypatch.setattr(streaming, "_persist_reply",
+    monkeypatch.setattr(streaming_persistence, "_persist_reply",
                         lambda *a, **k: persisted.append(("persist",) + a))
 
     class _Client:

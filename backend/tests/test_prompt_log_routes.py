@@ -12,6 +12,7 @@ import time
 import pytest
 
 from grimoire import routes, store
+from grimoire.routes.character_turns import _prompts as character_turns_prompts
 
 
 @pytest.fixture
@@ -172,7 +173,7 @@ def test_a_regenerate_that_never_reaches_the_model_records_nothing(client, monke
     def boom(*_a, **_k):
         raise RuntimeError("capture failed")
 
-    monkeypatch.setattr(routes.character_turns, "_capture", boom)
+    monkeypatch.setattr(character_turns_prompts, "_capture", boom)
     response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
     assert '"error"' in response.text
 

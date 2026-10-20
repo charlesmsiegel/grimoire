@@ -10,6 +10,7 @@ import pytest
 from grimoire import inference, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import common
+from grimoire.routes.common import _deadlines as common_deadlines
 from grimoire.store import (
     appearances,
     campaigns,
@@ -107,7 +108,7 @@ def test_put_config_stores_the_switches_and_refuses_a_mistake(client):
 
 
 def test_a_call_inside_the_deadline_runs(monkeypatch):
-    monkeypatch.setattr(common, "_plan_clock", lambda: 100.0)
+    monkeypatch.setattr(common_deadlines, "_plan_clock", lambda: 100.0)
 
     async def call():
         return "answered"
@@ -121,7 +122,7 @@ def test_a_call_inside_the_deadline_runs(monkeypatch):
 
 def test_a_call_after_the_deadline_is_refused_unsent(monkeypatch):
     now = [100.0]
-    monkeypatch.setattr(common, "_plan_clock", lambda: now[0])
+    monkeypatch.setattr(common_deadlines, "_plan_clock", lambda: now[0])
     started = []
 
     async def call():
@@ -139,8 +140,11 @@ def test_a_call_after_the_deadline_is_refused_unsent(monkeypatch):
 
     first, refused, pending = asyncio.run(go())
     assert first == "answered" and started == [True]
-    # Never awaited, and closed rather than left to warn.
-    assert pending.cr_frame is None
+    # Closed rather than left to warn or start later. Python 3.12.0 retains
+    # cr_frame on a closed, never-started coroutine; test the actual behavior.
+    with pytest.raises(RuntimeError, match="cannot reuse already awaited coroutine"):
+        pending.send(None)
+    assert started == [True]
     # Unsent: the decide chain ends here rather than trying a later stage, and
     # nothing reaches the error store.
     assert inference._refused_unsent(refused)
@@ -148,7 +152,7 @@ def test_a_call_after_the_deadline_is_refused_unsent(monkeypatch):
 
 
 def test_an_overrun_is_the_calls_own_timeout(monkeypatch):
-    monkeypatch.setattr(common, "PLAN_CEILING_S", 0.05)
+    monkeypatch.setattr(common_deadlines, "PLAN_CEILING_S", 0.05)
 
     async def slow():
         await asyncio.sleep(5)

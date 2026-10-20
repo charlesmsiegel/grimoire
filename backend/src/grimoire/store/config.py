@@ -196,7 +196,7 @@ DEFAULT_BACKUP_KEEP = "7"
 # stop being sync traffic, and stop being included in the very thing they back
 # up. Either way the backup dir is excluded from its own archives.
 DEFAULT_BACKUP_DIR = ""
-# --- the structured log (store/logs.py, #155) ---
+# --- the structured log (store/logs/, #155) ---
 # The quietest level that reaches the log file. "info" rather than "debug"
 # because the file is the one a user is asked to attach to a bug report and
 # DEBUG is where the volume lives; turning it up is one dropdown away, and

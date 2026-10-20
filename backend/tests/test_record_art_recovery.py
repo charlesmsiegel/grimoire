@@ -5,7 +5,8 @@ from contextlib import contextmanager
 
 import pytest
 
-from grimoire.store import assets, image_refs, image_store, locks, overlay
+from grimoire.store import assets, image_refs, image_store, overlay
+from grimoire.store.locks import _runtime as lock_runtime
 from grimoire.store.record_art import write
 from tests.record_art_fixtures import KINDS, art_url, image_url, png, setup_records, upload
 
@@ -17,7 +18,7 @@ def records(client, monkeypatch):
     # Pin independent stripes as the existing promotion-journal tests do. A
     # hash collision must not make the facade wait on the journal's other slot.
     stripes = {"avatar": 1, "gallery_1": 2, "gallery_2": 3}
-    monkeypatch.setattr(locks, "_image_stripe", lambda dd, key: stripes.get(key.casefold(), 0))
+    monkeypatch.setattr(lock_runtime, "_image_stripe", lambda dd, key: stripes.get(key.casefold(), 0))
     return setup_records(client)
 
 

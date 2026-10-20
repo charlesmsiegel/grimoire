@@ -9,6 +9,7 @@ from grimoire.llm import ATTEMPTED
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.routes import runs as runs_mod
+from grimoire.routes.character_turns import _prompts as character_turns_prompts
 from grimoire.store import response_protocol
 from tests.inference_fixtures import put_settings
 from tests.llm_fakes import FakeLLM, ScriptedProvider
@@ -566,7 +567,7 @@ def test_a_fallback_capture_records_the_tail_that_fallback_was_sent(monkeypatch,
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     recorded = []
     monkeypatch.setattr(store.prompt_log, "capturing", lambda: True)
-    monkeypatch.setattr(character_turns, "_record_prompt",
+    monkeypatch.setattr(character_turns_prompts, "_record_prompt",
                         lambda cid, sid, task, breakdown, **kw: recorded.append((task, kw)))
     # The fallback this call carries, as the resolver attaches it.
     fallback = _t("openai_compatible", "fb", provider_id="local",

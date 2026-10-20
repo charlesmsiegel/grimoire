@@ -32,6 +32,7 @@ from grimoire.store import (
     vectors,
     worlds,
 )
+from grimoire.store.compiled import _contracts as compiled_contracts
 from grimoire.store.searchdocs import embedded, live, rolling, scene, slices
 
 
@@ -346,7 +347,7 @@ def test_a_partly_refused_batch_is_not_remembered_as_written(cid, monkeypatch):
     """Rows 03 turned away while staging (here: past its byte bound) are not
     written, so the batch is not committed even though what fit was."""
     _three(cid)
-    monkeypatch.setattr(compiled, "MAX_STAGED_BYTES", 2000)
+    monkeypatch.setattr(compiled_contracts, "MAX_STAGED_BYTES", 2000)
     live.scene_documents(cid)
     assert not live._RECORDED
 

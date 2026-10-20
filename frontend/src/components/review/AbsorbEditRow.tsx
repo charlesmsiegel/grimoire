@@ -285,7 +285,7 @@ export default function AbsorbEditRow({ e, i, review }: {
             than opening a second editing mode nobody asked for. */}
         <button className="subtle" aria-label={`Edit ${e.label}`}
                 onClick={(ev) => {
-                  const card = (ev.currentTarget.closest(".absorb-edit") as HTMLElement | null);
+                  const card = (ev.currentTarget.closest(".absorb-edit"));
                   card?.querySelector("textarea")?.focus();
                 }}>Edit</button>
         <button className="subtle absorb-reject" aria-label={`Reject ${e.label}`}

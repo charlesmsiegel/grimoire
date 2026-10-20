@@ -14,9 +14,11 @@ import asyncio
 import pytest
 
 import grimoire.store as store
-from grimoire import inference, llm, llm_reasoning, tool_calls
+from grimoire import inference, llm_reasoning, tool_calls
+from grimoire.llm import _lifecycle as llm_lifecycle
 from grimoire.store import response_protocol
 from grimoire.tool_calls import RunBudget, ToolOutput, Toolset, ToolSpec
+from grimoire.tool_calls import _runs as tool_runs
 from tests import wire_kit
 from tests.llm_fakes import FakeLLM, FakeToolTurns, ToolTurn
 
@@ -119,7 +121,7 @@ def test_text_deltas_hands_on_the_result():
 
 
 def test_heartbeats_arrive_during_a_slow_tool(monkeypatch):
-    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0.05)
+    monkeypatch.setattr(llm_lifecycle, "HEARTBEAT_INTERVAL", 0.05)
     events = _events(FakeToolTurns(("", [("slow", {})]), ("done", [])))
     kinds = [(e.kind, e.delta) for e in events]
     start = kinds.index(("tool_start", ""))
@@ -148,7 +150,7 @@ def test_the_reasoning_buffer_rides_every_turn():
 
 
 def test_the_wall_never_cuts_a_turn_that_has_shown_text(monkeypatch):
-    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
+    monkeypatch.setattr(tool_runs, "MIN_TURN_SECONDS", 0.01)
     # Walls of a second, not a fraction: the run's setup (worker-thread store
     # reads) must never spend the wall before turn 1 on a loaded runner. The
     # turn still outlasts it.
@@ -158,7 +160,7 @@ def test_the_wall_never_cuts_a_turn_that_has_shown_text(monkeypatch):
 
 
 def test_before_visible_text_the_turn_is_bounded(monkeypatch):
-    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
+    monkeypatch.setattr(tool_runs, "MIN_TURN_SECONDS", 0.01)
     fake = FakeToolTurns(("", [("read", {})]),
                          ToolTurn(deltas=("", "", "late"), pause=1.2))
     result = _events(fake, budget=RunBudget(wall_seconds=1.0, reserve_final=False))[-1].result
@@ -170,7 +172,7 @@ def test_text_the_caller_hides_does_not_lift_the_turn_bound(monkeypatch):
     """With a visibility predicate (roadmap 02 §8.2), a leading perception
     fence has shown the reader nothing: a turn that writes only that and
     stalls is still cut, where text the reader sees would lift the bound."""
-    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.01)
+    monkeypatch.setattr(tool_runs, "MIN_TURN_SECONDS", 0.01)
     hidden = FakeToolTurns(("", [("read", {})]), ToolTurn(
         deltas=("```perception\nShe waits.\n```\n", "", "late"), pause=1.2))
     result = _events(hidden, budget=RunBudget(wall_seconds=1.0, reserve_final=False),

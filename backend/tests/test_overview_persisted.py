@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire.main import create_app
 from grimoire.store import compiled, overview, readstats
+from grimoire.store.compiled import _sqlite_support as compiled_sqlite_support
 from grimoire.store.overview import read as overview_read
 from tests.overview_support import (
     audited,
@@ -200,7 +201,7 @@ def test_a_corrupt_database_answers_through_the_live_path(client, home):
 def test_an_absent_database_answers_identically(client, home, monkeypatch):
     lib = _library(client)
     cold = _payloads(client, lib)
-    monkeypatch.setattr(compiled, "_sqlite", None)
+    monkeypatch.setattr(compiled_sqlite_support, "_sqlite", None)
     clear_memos()
     assert _payloads(client, lib) == cold
 

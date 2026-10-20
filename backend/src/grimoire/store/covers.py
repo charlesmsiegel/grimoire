@@ -3,13 +3,13 @@
 One image per campaign, used as the EPUB cover and as the campaigns-list
 thumbnail. Deliberately *not* a key in ``campaign.md``: that file is
 read-modify-written unlocked by ``campaigns.read.touch``, ``rename_campaign``
-and ``set_campaign_response`` (see ``OUTSIDE_DOMAIN`` in ``locks.py``), so a
+and ``set_campaign_response`` (see ``OUTSIDE_DOMAIN`` in ``store/locks/_domain.py``), so a
 cover recorded there could be dropped by a concurrent rename. The file's
 presence on disk is the record.
 
 Not under the overlay either: a cover is campaign-local and is never inherited
 from the campaign's world, so there is no world-side copy to shadow and
-nothing to tombstone. ``store/overlay.py`` does not know about covers.
+nothing to tombstone. ``store/overlay/`` does not know about covers.
 
 The image work itself is ``assets``' directory-level primitives -- extension
 allowlist, per-image lock, write-before-cleanup, newest-wins -- with
@@ -117,7 +117,7 @@ def _assets_dir(cid: str) -> Path:
         raise campaigns_paths.CampaignNotFound(cid)
     # overlay-ok: a cover is campaign-local and is never inherited from the
     # campaign's world -- there is no world-side copy to shadow and nothing
-    # to tombstone, which is why `store/overlay.py` does not know about covers.
+    # to tombstone, which is why `store/overlay/` does not know about covers.
     return campaigns_paths.campaign_root(cid) / "assets"
 
 

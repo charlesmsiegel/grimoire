@@ -186,9 +186,9 @@ def _violations(source: str, module: str) -> list[str]:
             sqlite_import = (node.module or "").split(".")[0] == "sqlite3"
         else:
             sqlite_import = False
-        if sqlite_import and module != "store.compiled":
-            failures.append("sqlite3 belongs to store.compiled")
-        if module == "store.compiled":
+        if sqlite_import and module != "store.compiled._sqlite_support":
+            failures.append("sqlite3 belongs to store.compiled._sqlite_support")
+        if module == "store.compiled" or module.startswith("store.compiled."):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 failures.extend(_read_interface(node, constants))
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -204,7 +204,13 @@ def _violations(source: str, module: str) -> list[str]:
 def test_sqlite_imports_have_one_runtime_owner(source):
     assert "_violations" in globals(), "compiled architecture guard is missing"
     assert _violations(source, "store.other")
-    assert not _violations(source, "store.compiled")
+    assert not _violations(source, "store.compiled._sqlite_support")
+
+
+@pytest.mark.parametrize("module", ["store.compiled", "store.compiled._unreviewed"])
+def test_new_compiled_siblings_cannot_import_sqlite(module):
+    assert _violations("import sqlite3", module)
+    assert _violations("conn.execute('SELECT * FROM artifacts')", module)
 
 
 @pytest.mark.parametrize("source", [

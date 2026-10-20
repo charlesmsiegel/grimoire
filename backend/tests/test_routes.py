@@ -1,3 +1,4 @@
+
 import asyncio
 import contextlib
 import hashlib
@@ -24,16 +25,21 @@ import grimoire.store.suggest as suggest_mod
 from grimoire import catalog, decisions, inference, llm, routes, schemas, wire
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm import LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.openrouter import OpenRouterError
 from grimoire.routes import campaigns as campaign_routes
 from grimoire.routes import character_turns
 from grimoire.routes import scenes as scene_routes
 from grimoire.routes.models import ConfigUpdate
+from grimoire.routes.scenes import _review_budget as scenes_review_budget
+from grimoire.routes.streaming import _persistence as streaming_persistence
+from grimoire.routes.streaming import _state as streaming_state
 from grimoire.store import atomic, calendars, campaigns, cards, chub, climates, image_hash
 from grimoire.store import audit as audit_mod
 from grimoire.store import inference_keys as keys
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from grimoire.store.world_bundle import _contracts as bundle_contracts
 from tests import draft_runs as drafts
 from tests import review_runs, wire_kit
 from tests.inference_fixtures import (
@@ -3944,7 +3950,7 @@ def _real_facade(client, provider, **kw):
 def _instant_backoff(monkeypatch):
     """Keep the schedule's shape (test_llm.py pins that) but do not sleep
     through it in a route test."""
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 def test_a_streamed_turn_retries_before_a_delta_has_been_sent(client):
@@ -4211,7 +4217,7 @@ def test_a_turn_claims_its_scene_under_the_campaign_lock(monkeypatch, tmp_path):
     held_at_claim = []
     real_claim = routes.streaming._claim_turn
     monkeypatch.setattr(store.locks, "campaign_lock", counting_lock)
-    monkeypatch.setattr(routes.streaming, "_claim_turn",
+    monkeypatch.setattr(streaming_state, "_claim_turn",
                         lambda c, s: (held_at_claim.append(depth[0]), real_claim(c, s))[1])
 
     _unfenced_stream(
@@ -9407,7 +9413,7 @@ def test_absorb_reports_a_partially_skipped_dossier_phase_as_degraded(
     _cast_npc(client, wid, cid, sid, "Winifred", "winifred")
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     # extraction (10s), aese's dossier (55s -> over), so winifred is dropped
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 33.0, [ABSORB_JSON, "A standing paragraph."])
@@ -9423,7 +9429,7 @@ def test_absorb_within_budget_runs_every_step(client, npc_module_scene, monkeypa
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     fake = ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
@@ -9443,7 +9449,7 @@ def test_absorb_budget_of_zero_is_unbounded(client, npc_module_scene, monkeypatc
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "0"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     fake = ClockEatingFake(clock, 10_000.0, [ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
@@ -9477,7 +9483,7 @@ def test_audit_retry_gets_a_fresh_budget(client, npc_module_scene, monkeypatch):
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [1_000.0]  # well past any earlier absorb's deadline
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     _open_review(client, cid, sid)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, [AUDIT_OK])
@@ -9606,7 +9612,7 @@ def _wedged(client, monkeypatch, provider):
     ends one now is the reviewer's own Cancel, and the tests below drive the
     real `DELETE .../pending-review` for it.
     """
-    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    monkeypatch.setattr(scenes_review_budget, "ABANDON_POLL", 0.02)
     client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
         openrouter=provider, claude=provider, openai_compatible=provider, timeout=120)
 
@@ -9784,7 +9790,7 @@ def test_dossier_retry_reports_the_block_absorb_carries(client, npc_module_scene
     cid, sid = npc_module_scene
     _open_review(client, cid, sid)
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, ["Aese is steady."])
     body = review_runs.dossiers(client, cid, sid).json()
@@ -9799,7 +9805,7 @@ def test_dossier_retry_stages_but_never_writes(client, npc_module_scene, monkeyp
     cid, sid = npc_module_scene
     _open_review(client, cid, sid)
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, ["Aese is steady."])
     body = review_runs.dossiers(client, cid, sid).json()
@@ -9869,7 +9875,7 @@ def test_absorb_reports_every_phase_attempted(client, npc_module_scene, monkeypa
     commitment, so it is skipped without ever reaching the model."""
     cid, sid = npc_module_scene
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.",
                                             VOICE_OK, AUDIT_OK])
@@ -9920,7 +9926,7 @@ def test_absorb_phases_mirror_the_dossier_and_mechanics_blocks(
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 90.0, [ABSORB_JSON])
 
@@ -9939,7 +9945,7 @@ def test_a_genuine_audit_failure_is_not_blamed_on_the_budget(
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "600"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", "not json"])
 
@@ -10003,7 +10009,7 @@ def test_a_budget_spent_by_the_reads_before_the_call_is_not_an_attempt(
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     fake = ClockEatingFake(clock, 0.0, [ABSORB_JSON, "Aese is steady."])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     real_read = store.dossiers.read
@@ -10045,7 +10051,7 @@ def test_the_budget_refuses_a_call_it_cannot_start(monkeypatch):
     def clock():
         return ticks.pop(0) if len(ticks) > 1 else ticks[0]
 
-    monkeypatch.setattr(routes.scenes, "_clock", clock)
+    monkeypatch.setattr(scenes_review_budget, "_clock", clock)
     budget = routes.scenes._Budget(1.0)
     assert budget.spent() is False          # the caller looks, and there is room
     events: list = []
@@ -10094,7 +10100,7 @@ def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "600"})
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
 
     class StallsOnAudit(ClockEatingFake):
         async def complete(self, m, cfg, usage=None, *, schema=None):
@@ -10124,7 +10130,7 @@ def test_audit_retry_reports_its_own_fresh_budget(client, npc_module_scene, monk
     cid, sid = npc_module_scene
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [1_000.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     _open_review(client, cid, sid)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: ClockEatingFake(clock, 1.0, [AUDIT_OK])
@@ -13575,7 +13581,7 @@ def test_crash_mid_continuation_persist_heals(client, monkeypatch):
     def boom_persist(c, s, text, connection=""):
         store.scenes.append_message(c, s, "assistant", "PARTIAL")
         raise RuntimeError("crash mid persist")
-    monkeypatch.setattr(routes.streaming, "_persist_reply", boom_persist)
+    monkeypatch.setattr(streaming_persistence, "_persist_reply", boom_persist)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["full continuation"])
     try:
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
@@ -13585,7 +13591,7 @@ def test_crash_mid_continuation_persist_heals(client, monkeypatch):
     assert rec_mid["status"] == "resolved" and "narration_intent" in rec_mid
     assert any(m["content"] == "PARTIAL"
                for m in client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"])
-    monkeypatch.setattr(routes.streaming, "_persist_reply", real_persist)  # not undo()
+    monkeypatch.setattr(streaming_persistence, "_persist_reply", real_persist)  # not undo()
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["full continuation"])
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
@@ -13606,13 +13612,13 @@ def test_manual_roll_in_crash_window_survives_trim(client, monkeypatch):
     def boom_persist(c, s, text, connection=""):
         store.scenes.append_message(c, s, "assistant", "PARTIAL")
         raise RuntimeError("crash")
-    monkeypatch.setattr(routes.streaming, "_persist_reply", boom_persist)
+    monkeypatch.setattr(streaming_persistence, "_persist_reply", boom_persist)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["cont"])
     try:
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
     except Exception:  # noqa: BLE001
         pass
-    monkeypatch.setattr(routes.streaming, "_persist_reply", real_persist)  # not undo()
+    monkeypatch.setattr(streaming_persistence, "_persist_reply", real_persist)  # not undo()
     mr = client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",
                      json={"check": "perception", "actor": "characters:mara"})
     assert mr.status_code == 200
@@ -15650,7 +15656,7 @@ def test_world_export_answers_an_image_too_large_to_bundle_with_422(client, monk
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
     client.put(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar",
                files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
-    monkeypatch.setattr(store.world_bundle, "MAX_BUNDLE_BLOB_BYTES", 8)
+    monkeypatch.setattr(bundle_contracts, "MAX_BUNDLE_BLOB_BYTES", 8)
     r = client.get(f"/api/worlds/{wid}/export.zip")
     assert r.status_code == 422
     assert r.json()["detail"].startswith("image too large to bundle: ")
@@ -15658,7 +15664,7 @@ def test_world_export_answers_an_image_too_large_to_bundle_with_422(client, monk
 
 def test_world_export_answers_a_bundle_too_large_to_import_with_422(client, monkeypatch):
     wid = _world(client, "Saltmarch")
-    monkeypatch.setattr(store.world_bundle, "MAX_BUNDLE_BYTES", 64)
+    monkeypatch.setattr(bundle_contracts, "MAX_BUNDLE_BYTES", 64)
     r = client.get(f"/api/worlds/{wid}/export.zip")
     assert r.status_code == 422 and "too large to import" in r.json()["detail"]
 

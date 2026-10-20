@@ -9,12 +9,13 @@ import json
 import pytest
 
 from grimoire.store import usage, usage_rollup
+from grimoire.store.usage import _clock as usage_clock
 
 
 @pytest.fixture
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     return tmp_path
 
 

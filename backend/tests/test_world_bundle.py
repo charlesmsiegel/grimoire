@@ -317,14 +317,14 @@ def test_import_rejects_a_symlink_member(monkeypatch, tmp_path):
 
 def test_import_enforces_the_uncompressed_size_cap(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    monkeypatch.setattr(world_bundle, "MAX_UNCOMPRESSED", 32)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_UNCOMPRESSED", 32)
     _reject(tmp_path, "too-big",
             {world_bundle.MANIFEST_NAME: _manifest(), "world/world.md": "x" * 4096})
 
 
 def test_import_enforces_the_member_cap(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    monkeypatch.setattr(world_bundle, "MAX_MEMBERS", 2)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_MEMBERS", 2)
     _reject(tmp_path, "too-many",
             {world_bundle.MANIFEST_NAME: _manifest(), "world/world.md": "x",
              "world/a.md": "a", "world/b.md": "b"})
@@ -410,7 +410,7 @@ def test_import_counts_directory_entries_against_the_member_cap(monkeypatch, tmp
     """A cap applied after directories are filtered out would wave through the
     archive it exists to stop: a million empty directories holds two files."""
     _home(monkeypatch, tmp_path)
-    monkeypatch.setattr(world_bundle, "MAX_MEMBERS", 4)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_MEMBERS", 4)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr(world_bundle.MANIFEST_NAME, _manifest())
@@ -541,9 +541,9 @@ def test_publish_retries_when_the_chosen_id_is_taken(monkeypatch, tmp_path):
         # published between our uniquify and our rename would leave it.
         return "occupied" if len(picks) == 1 else real_uniquify(base, exists)
 
-    monkeypatch.setattr(world_bundle, "uniquify", racing)
+    monkeypatch.setattr(world_bundle._import, "uniquify", racing)
     new = world_bundle.import_bundle(bundle)
-    monkeypatch.setattr(world_bundle, "uniquify", real_uniquify)
+    monkeypatch.setattr(world_bundle._import, "uniquify", real_uniquify)
 
     assert new not in ("occupied", "saltmarch")
     assert worlds.read_world("occupied")["meta"]["name"] == "Occupied"   # untouched
@@ -1001,7 +1001,7 @@ def test_import_refuses_an_oversized_blob(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     data = _pixels(12)
     _sha, blob_name = _blob_entry(data)
-    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BLOB_BYTES", len(data) - 1)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_BUNDLE_BLOB_BYTES", len(data) - 1)
     with pytest.raises(world_bundle.BundleError):
         world_bundle.import_bundle(_hand_bundle(tmp_path, "huge", {blob_name: data}))
     assert worlds.list_worlds() == []
@@ -1021,7 +1021,7 @@ def test_export_refuses_an_image_import_would_refuse(monkeypatch, tmp_path):
     cid, vid = characters.create_character(root, "Seraphine", "default")
     assets.put_image(root, cid, vid, "avatar", _pixels(1), "png")
     obj = image_store.read(assets.image_id(root, cid, vid, "avatar"))
-    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BLOB_BYTES", obj.size - 1)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_BUNDLE_BLOB_BYTES", obj.size - 1)
     dest = tmp_path / "out" / "bundle.zip"
     dest.parent.mkdir()
     with pytest.raises(world_bundle.BundleError) as caught:
@@ -1084,7 +1084,7 @@ def test_export_refuses_a_world_import_would_refuse_whole(monkeypatch, tmp_path,
     """Checked before the archive is opened: a refused export writes nothing."""
     _home(monkeypatch, tmp_path)
     wid = _plain_world()
-    monkeypatch.setattr(world_bundle, cap, value)
+    monkeypatch.setattr(world_bundle._contracts, cap, value)
     dest = tmp_path / "out" / "bundle.zip"
     dest.parent.mkdir()
     with pytest.raises(world_bundle.BundleError):
@@ -1097,7 +1097,7 @@ def test_export_removes_an_archive_past_the_import_cap(monkeypatch, tmp_path):
     the import route takes is removed, never left at `dest`."""
     _home(monkeypatch, tmp_path)
     wid = _plain_world()
-    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BYTES", 256)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_BUNDLE_BYTES", 256)
     dest = tmp_path / "bundle.zip"
     with pytest.raises(world_bundle.BundleError, match="too large to import"):
         world_bundle.write_bundle(wid, dest)
@@ -1110,16 +1110,16 @@ def test_a_bundle_under_every_cap_exports_and_imports(monkeypatch, tmp_path):
     bundle = _export(wid, tmp_path)
     with zipfile.ZipFile(bundle) as z:
         infos = z.infolist()
-    monkeypatch.setattr(world_bundle, "MAX_MEMBERS", len(infos))
-    monkeypatch.setattr(world_bundle, "MAX_UNCOMPRESSED", sum(i.file_size for i in infos))
-    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BYTES", bundle.stat().st_size)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_MEMBERS", len(infos))
+    monkeypatch.setattr(world_bundle._contracts, "MAX_UNCOMPRESSED", sum(i.file_size for i in infos))
+    monkeypatch.setattr(world_bundle._contracts, "MAX_BUNDLE_BYTES", bundle.stat().st_size)
     assert world_bundle.import_bundle(_export(wid, tmp_path, "again")) != wid
 
 def test_a_bundle_at_the_cap_exports_and_imports(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid, shared, avatar = _placed_realm()
     biggest = max(image_store.read(i).size for i in (shared, avatar))
-    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BLOB_BYTES", biggest)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_BUNDLE_BLOB_BYTES", biggest)
     new = world_bundle.import_bundle(_export(wid, tmp_path))
     assert new != wid
 
@@ -1209,7 +1209,7 @@ def test_import_refuses_object_bytes_past_the_total_cap(monkeypatch, tmp_path):
     sha, blob_name = _blob_entry(data)
     claimed = "px1-" + "c" * 64
     body = _object_body(claimed, sha, len(data), description="Mara at the gate.")
-    monkeypatch.setattr(world_bundle, "MAX_OBJECT_BYTES", len(body) - 1)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_OBJECT_BYTES", len(body) - 1)
     bundle = _hand_bundle(tmp_path, "fat", {
         blob_name: data, f"image-store/objects/cc/{claimed}.json": body})
     with pytest.raises(world_bundle.BundleError, match="too large"):
@@ -1286,7 +1286,7 @@ def test_import_refuses_one_object_past_the_per_object_cap(monkeypatch, tmp_path
     sha, blob_name = _blob_entry(data)
     claimed = "px1-" + "c" * 64
     body = _object_body(claimed, sha, len(data), description="Mara at the gate.")
-    monkeypatch.setattr(world_bundle, "MAX_OBJECT_MEMBER_BYTES", len(body) - 1)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_OBJECT_MEMBER_BYTES", len(body) - 1)
     assert len(body) < world_bundle.MAX_OBJECT_BYTES
     bundle = _hand_bundle(tmp_path, "one-fat", {
         blob_name: data, f"image-store/objects/cc/{claimed}.json": body})
@@ -1688,7 +1688,7 @@ def test_export_refuses_a_collection_blob_changed_after_preflight(monkeypatch, t
         else:
             blob.write_bytes(_pixels(64))
 
-    monkeypatch.setattr(world_bundle, "_check_whole", replace_after_preflight)
+    monkeypatch.setattr(world_bundle._export, "_check_whole", replace_after_preflight)
     dest = tmp_path / "bundle.zip"
     try:
         with pytest.raises(world_bundle.BundleError, match="member 0"):
@@ -1736,7 +1736,7 @@ def test_an_optional_blob_lost_before_packing_still_exports_an_importable_world(
         real(entries)
         blob.unlink()
 
-    monkeypatch.setattr(world_bundle, "_check_whole", vanish)
+    monkeypatch.setattr(world_bundle._export, "_check_whole", vanish)
     dest = _export(wid, tmp_path)
     blobs, objects = _store_members(dest)
     assert len(blobs) == 1
@@ -1757,7 +1757,7 @@ def test_a_collection_blob_lost_during_packing_refuses_the_export(monkeypatch, t
         real(entries)
         blob.unlink()
 
-    monkeypatch.setattr(world_bundle, "_check_whole", vanish)
+    monkeypatch.setattr(world_bundle._export, "_check_whole", vanish)
     dest = tmp_path / 'bundle.zip'
     with pytest.raises(world_bundle.BundleError, match='member 0'):
         world_bundle.write_bundle(wid, dest)
@@ -1893,7 +1893,7 @@ def test_export_refuses_an_oversized_member_blob(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
     [member] = format2(wid, COLL, _pixels(73))
-    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BLOB_BYTES", image_store.read(member).size - 1)
+    monkeypatch.setattr(world_bundle._contracts, "MAX_BUNDLE_BLOB_BYTES", image_store.read(member).size - 1)
     dest = tmp_path / "out" / "bundle.zip"
     dest.parent.mkdir()
     with pytest.raises(world_bundle.BundleError) as caught:
@@ -2016,7 +2016,7 @@ def test_export_packs_the_manifest_it_validated(monkeypatch, tmp_path):
         real(entries)
         image_collections.manifest_path(wid, COLL).write_text(_format2(ids[1], ids[0]) + "\n")
 
-    monkeypatch.setattr(world_bundle, "_check_whole", replace_after_validation)
+    monkeypatch.setattr(world_bundle._export, "_check_whole", replace_after_validation)
     with zipfile.ZipFile(_export(wid, tmp_path)) as z:
         packed = json.loads(z.read(COLL_MEMBER))
     assert packed["members"] == ids
@@ -2042,7 +2042,7 @@ def test_export_packs_an_unchecked_manifest_as_it_was_read(monkeypatch, tmp_path
         real(entries)
         path.write_text(_format2(ids[0]) + "\n")
 
-    monkeypatch.setattr(world_bundle, "_check_whole", swap_after_read)
+    monkeypatch.setattr(world_bundle._export, "_check_whole", swap_after_read)
     with zipfile.ZipFile(_export(wid, tmp_path)) as z:
         assert z.read(COLL2_MEMBER) == read
 
@@ -2064,7 +2064,7 @@ def test_export_leaves_out_a_manifest_gone_when_it_was_read(monkeypatch, tmp_pat
         finally:
             path.write_text(_format2(ids[0]) + "\n")
 
-    monkeypatch.setattr(world_bundle, "_packed_manifests", gone_then_back)
+    monkeypatch.setattr(world_bundle._export, "_packed_manifests", gone_then_back)
     with zipfile.ZipFile(_export(wid, tmp_path)) as z:
         assert COLL2_MEMBER not in z.namelist()
         assert json.loads(z.read(COLL_MEMBER))["members"] == ids

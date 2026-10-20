@@ -91,7 +91,7 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire"
 #: one that sorts. `test_hold_all_earns_its_exemption_by_sorting` checks that
 #: claim instead of taking it, and a rename or a move fails this guard rather
 #: than silently widening it.
-SORTER = ("store/locks.py", "hold_all")
+SORTER = ("store/locks/_runtime.py", "hold_all")
 
 # The comprehension forms are here for the same reason as `for`: they iterate.
 # `ast.comprehension` is deliberately not the node to look for -- the element
@@ -577,7 +577,7 @@ def test_the_guard_still_recognizes_the_package_s_own_acquisitions():
     # recognizing the lock (renamed, wrapped, reached through an object) lands
     # under it rather than sailing past with a handful of accidental matches.
     assert len(seen) > 50, f"the matcher sees only {len(seen)} acquisitions: {seen}"
-    assert any(s.startswith("routes/worlds.py") for s in seen), seen
+    assert any(s.startswith("routes/worlds/_mechanics.py") for s in seen), seen
     assert any(s.startswith("store/module_edit/") for s in seen), seen
 
 

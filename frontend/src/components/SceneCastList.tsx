@@ -25,7 +25,7 @@ export function SceneCastList({ cid, cast, roster }: {
                      src={api.actorImageUrl({ kind: "campaign", id: cid },
                                             a.kind, a.id, ver, "avatar",
                                             { w: THUMB.row, v: locked?.avatar_v })}
-                     onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                     onError={(e) => { (e.currentTarget).style.display = "none"; }} />
               : null}
             <span>{a.id}</span>
             <span className="role">{a.kind === "pcs" ? "PC" : "character"} · {a.role}</span>

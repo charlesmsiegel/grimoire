@@ -6,7 +6,7 @@ speakers for that round (`plan_post`, `plan_continue`, `next_planned`).
 
 PURE: nothing here reads or writes the store, the clock or the filesystem, and
 all randomness arrives through an injected `random.Random`. That is why this
-module has no entry in `store/locks.py` -- it mutates no campaign state. The
+module has no entry in `store/locks/_domain.py` -- it mutates no campaign state. The
 caller (the character-turn engine) stores the result on the round record so a
 retry, a recovery or a roll resume continues the same plan and never re-rolls.
 

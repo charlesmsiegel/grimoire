@@ -18,6 +18,7 @@ from grimoire import routes
 from grimoire.main import create_app
 from grimoire.routes import character_turns
 from grimoire.routes import continuity as continuity_routes
+from grimoire.routes.character_turns import _planning as turn_planning
 from grimoire.store import (
     appearances,
     campaigns,
@@ -456,4 +457,4 @@ def single_contribution_decision(monkeypatch):
     async def hand_back(cid, sid, client, round_record, used, actor, response_id=""):
         return character_turns._successor_answer(round_record, used, actor, None)
 
-    monkeypatch.setattr(character_turns, "_select_successor", hand_back)
+    monkeypatch.setattr(turn_planning, "_select_successor", hand_back)

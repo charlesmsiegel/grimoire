@@ -270,7 +270,7 @@ def get_world_greeting(wid: str, gid: str):
 def put_world_greeting(wid: str, gid: str, body: GreetingUpdate):
     root = _world_root_or_404(wid)
     # Greetings are one of `entities.SYNCED_KINDS`, stored at the same flat
-    # `<root>/<kind>/<id>.md` path, so they hash through the same call sync.py
+    # `<root>/<kind>/<id>.md` path, so they hash through the same call store/sync/
     # already uses for them (#35).
     _fresh_or_409(body.rev, store.entities.entity_hash(root, "greetings", gid))
     try:
@@ -554,7 +554,7 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, reques
     _require_scene(cid, sid)
     try:
         # This module was the one an inventory of the freeze kept missing, for
-        # the plain reason that every other guarded route is in `scenes.py` or
+        # the plain reason that every other guarded route is in `routes/scenes/` or
         # `mechanics.py`. Both routes here mutate a live scene: this one seats a
         # cast and writes the greeting as the opener, and can RENAME the scene
         # while doing it.

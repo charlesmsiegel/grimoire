@@ -10,6 +10,7 @@ from PIL import Image
 from grimoire import content_parts as cp
 from grimoire import prompts, routes, store
 from grimoire.routes import character_turns
+from grimoire.routes.character_turns import _planning as character_turns_planning
 from grimoire.store import (
     appearances,
     authors_notes,
@@ -152,7 +153,7 @@ def test_character_note_only_in_its_own_call(client, monkeypatch):
     async def next_speaker(cid, sid, client, round_record, used, actor, response_id=""):
         return character_turns._successor_answer(round_record, used, actor, next(planned))
 
-    monkeypatch.setattr(character_turns, "_select_successor", next_speaker)
+    monkeypatch.setattr(character_turns_planning, "_select_successor", next_speaker)
     cid, sid = seed(client)
     store.authors_notes.set_character(cid, "characters:winifred",
                                       {"text": "Winifred whispers.", "depth": 0, "every": 1})

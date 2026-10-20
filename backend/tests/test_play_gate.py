@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from grimoire import store
-from grimoire.routes import character_turns
+from grimoire.routes.character_turns import _generation as character_turns_generation
 from grimoire.store import paths, play_decisions, turn_plan
 from tests.llm_fakes import FakeLLM, decision_reply
 
@@ -163,7 +163,7 @@ def test_a_configuration_that_skipped_fails_the_gate(real, monkeypatch):
     async def skipped(*_args, **_kwargs):
         return {"task": "turn-intent", "skipped": "missing_key"}
 
-    monkeypatch.setattr(character_turns, "_turn_plan", skipped)
+    monkeypatch.setattr(character_turns_generation, "_turn_plan", skipped)
     _results, graded = _run("intent", _Scripted(), fixtures=play.FIXTURES[:1])
     hard = {c.name: c for c in play.gate(graded)}
     assert not hard["gate.on_is_on"].ok

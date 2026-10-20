@@ -4063,7 +4063,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
       // `rerolling`: a reroll that fails wants a different recovery offered
       // than a failed send does — see `runStream`.
-      api.regenerate(cid, activeId!, onEvent, body, signal, attempt, onIndex),
+      api.regenerate(cid, activeId, onEvent, body, signal, attempt, onIndex),
       undefined, true, "", false, null, route);
     if (landed) {
       setPendingResponse(null);
@@ -4291,7 +4291,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (renamesInFlight || !canGenerate) return;
     setProposalNow(null);
     await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
-      api.resolveProposal(cid, activeId!, body, onEvent, signal, attempt, onIndex));
+      api.resolveProposal(cid, activeId, body, onEvent, signal, attempt, onIndex));
   }
 
   // No-op unless a turn is in flight; the abort rejects the fetch, `runStream`

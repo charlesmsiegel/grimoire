@@ -147,6 +147,7 @@ class Bench:
     # -- setup
     def __enter__(self) -> Bench:
         from grimoire.store import compiled, statcache
+        from grimoire.store.compiled import _filesystem as compiled_filesystem
         self._tmp = tempfile.TemporaryDirectory(prefix="grimoire-bench-")
         self.work = Path(self._tmp.name) / "library"
         shutil.copytree(self.library, self.work, symlinks=True)
@@ -160,18 +161,27 @@ class Bench:
                 raise ValueError(f"unknown overview kinds: {sorted(unknown)}")
             kinds = {k: v for k, v in compiled.KINDS.items() if k not in compiled.OVERVIEW_CANDIDATES}
             kinds.update({k: compiled.OVERVIEW_CANDIDATES[k] for k in chosen})
-            self._swap(compiled, "KINDS", kinds)
+            # Readers in the facade and its leaves share this registry object.
+            registry = compiled.KINDS
+            registered = dict(registry)
+            registry.clear()
+            registry.update(kinds)
+
+            def restore_kinds():
+                registry.clear()
+                registry.update(registered)
+            self._undo.append(restore_kinds)
             # A kind registered for measurement is measured at every size.
             from grimoire.store.overview import read as overview_read
             self._swap(overview_read, "SCENE_TURNS_PERSIST_MIN_BYTES", 0)
         if self.clocks == "injected":
             ahead = 60 * 1_000_000_000
-            real_clock = compiled.filesystem_clock
+            real_clock = compiled_filesystem.filesystem_clock
 
             def forward(root):
                 clock = real_clock(root)
                 return None if clock is None else compiled.FilesystemClock(clock.now_ns + ahead, clock.device)
-            self._swap(compiled, "filesystem_clock", forward)
+            self._swap(compiled_filesystem, "filesystem_clock", forward)
             self._swap(statcache, "time", _AheadTime(ahead))
         self._largest = self._find_largest()
         self.restart()

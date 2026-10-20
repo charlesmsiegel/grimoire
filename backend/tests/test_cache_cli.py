@@ -14,6 +14,11 @@ import pytest
 
 from grimoire import cache as cli
 from grimoire.store import atomic, cache_sync, compiled, revision, writeset
+from grimoire.store.cache_sync import _contracts as cache_sync_contracts
+from grimoire.store.cache_sync import _engine as cache_sync_engine
+from grimoire.store.cache_sync import _scopes as cache_sync_scopes
+from grimoire.store.compiled import _contracts as compiled_contracts
+from grimoire.store.compiled import _filesystem as compiled_filesystem
 from tests import cache_sync_fixtures as fx
 
 # The shared fixtures, bound here so pytest finds them by name.
@@ -30,7 +35,7 @@ def trusted_clock(monkeypatch, cache, home):
     persist window, so a `sources` row can be recorded and trusted."""
     def clock(boundary):
         return compiled.FilesystemClock(time.time_ns() + 3_600_000_000_000, home.stat().st_dev)
-    monkeypatch.setattr(compiled, "filesystem_clock", clock)
+    monkeypatch.setattr(compiled_filesystem, "filesystem_clock", clock)
 
 
 def _run(argv, capsys):
@@ -306,24 +311,24 @@ def test_a_busy_cache_never_makes_a_scoped_file_cold(home, upper, monkeypatch):
     _write(home, "worlds/realm/lore/pact.md", "x")
     _read(home, upper, "worlds/realm/lore/pact.md")
     _write(home, "worlds/realm/lore/pact.md", "edited")
-    monkeypatch.setattr(compiled, "STRICT_LOCK_SECONDS", 0.01)
+    monkeypatch.setattr(compiled_contracts, "STRICT_LOCK_SECONDS", 0.01)
     with compiled._state.lock:
         scope = cache_sync.expand_scopes(home, worlds=["realm"])
     assert scope.candidates == ["worlds/realm/lore/pact.md"]
 
 
 def test_scope_candidates_are_not_held_to_max_paths(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 1)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 1)
     for name in "abc":
         _write(home, f"worlds/realm/lore/{name}.md", "x")
-    monkeypatch.setattr(cache_sync, "expand_scopes", lambda root, **kw: cache_sync.ScopeResult(
+    monkeypatch.setattr(cache_sync_scopes, "expand_scopes", lambda root, **kw: cache_sync.ScopeResult(
         candidates=[f"worlds/realm/lore/{n}.md" for n in "abc"]))
     report = cache_sync.run(worlds=["realm"])
     assert report.counts()["cold"] == 3 and not report.truncated and report.ok
 
 
 def test_both_sides_of_a_rename_count_against_the_quota(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 3)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 3)
     renamed = {}
     for n in range(4):
         _write(home, f"worlds/realm/lore/new{n}.md", "x")
@@ -369,7 +374,7 @@ def test_a_chunk_past_the_history_budget_is_asked_path_by_path_never_called_cold
     for n in range(3):
         _write(home, f"worlds/realm/lore/{n}.md", f"entry {n}")
         _read(home, upper, f"worlds/realm/lore/{n}.md")
-    monkeypatch.setattr(compiled, "MAX_HISTORY_ROWS", 1)     # the chunk together is past it; one path is not
+    monkeypatch.setattr(compiled_contracts, "MAX_HISTORY_ROWS", 1)     # the chunk together is past it; one path is not
     scope = cache_sync.expand_scopes(home, worlds=["realm"])
     assert sorted(scope.candidates) == [f"worlds/realm/lore/{n}.md" for n in range(3)]
     assert scope.known == {}
@@ -397,7 +402,7 @@ def test_a_root_purge_runs_before_any_rebuild_and_leaves_nothing_hot(home, upper
     _write(home, "worlds/realm/lore/pact.md", "edited")
     order = []
     monkeypatch.setattr(compiled, "purge_for_delete", lambda root: order.append("purge") or True)
-    monkeypatch.setattr(cache_sync, "_run_hooks", lambda *a, **k: order.append("rebuild"))
+    monkeypatch.setattr(cache_sync_engine, "_run_hooks", lambda *a, **k: order.append("rebuild"))
     report = cache_sync.run(["worlds/realm/lore/pact.md"], deleted=["campaigns/winifred"])
     assert order == ["purge"] and report.purged is True
     assert _by_path(report)["worlds/realm/lore/pact.md"].status == "cold"
@@ -407,7 +412,7 @@ def test_overlapping_scopes_are_listed_once_and_charged_once(home, monkeypatch):
     for name in "ab":
         _write(home, f"worlds/realm/lore/{name}.md", "x")
     _write(home, "campaigns/saltmarch/plot.json", "{}")
-    monkeypatch.setattr(cache_sync, "MAX_SCOPE_FILES", 3)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_SCOPE_FILES", 3)
     scope = cache_sync.expand_scopes(home, worlds=["realm", "realm"], all_records=True)
     assert not scope.truncated and not scope.refused
     assert sorted(scope.known) == ["campaigns/saltmarch/plot.json",
@@ -417,7 +422,7 @@ def test_overlapping_scopes_are_listed_once_and_charged_once(home, monkeypatch):
 def test_a_scope_past_its_file_limit_fails_the_sync(home, monkeypatch):
     for name in "abc":
         _write(home, f"worlds/realm/lore/{name}.md", "x")
-    monkeypatch.setattr(cache_sync, "MAX_SCOPE_FILES", 2)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_SCOPE_FILES", 2)
     report = cache_sync.run(worlds=["realm"])
     assert ("worlds/realm", "too_many") in [(p.given, p.reason) for p in report.paths]
     assert report.truncated and not report.ok
@@ -443,7 +448,7 @@ def test_a_purge_that_could_not_be_published_fails_the_sync(home, monkeypatch):
 
 
 def test_scope_selectors_are_deduplicated_and_bounded(home, monkeypatch):
-    monkeypatch.setattr(cache_sync, "MAX_PATHS", 2)
+    monkeypatch.setattr(cache_sync_contracts, "MAX_PATHS", 2)
     scope = cache_sync.expand_scopes(home, worlds=["realm"] * 5 + [f"gone{n}" for n in range(50)])
     assert len(scope.refused) == 2 and scope.truncated
     assert sorted(p.reason for p in scope.refused) == ["not_found", "too_many"]

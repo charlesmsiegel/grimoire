@@ -25,7 +25,7 @@ def campaign_root(cid: str) -> Path:
     playstate, calendar.json, the climate default, ...) and for writes, which is how a
     record materializes. It is *not* a place to read a record the campaign
     inherits: `overlay.INHERITED_KINDS` / `INHERITED_FILES` say which those are,
-    and `store/overlay.py` is the only thing that resolves them. Reading one
+    and `store/overlay/` is the only thing that resolves them. Reading one
     here misses everything still live-inherited from the world, and misses the
     campaign's tombstones — silently, which is why `tests/test_overlay_guard.py`
     checks for it (#248).
@@ -81,7 +81,7 @@ def campaign_activity_path(cid: str) -> Path:
     whole meta file from a copy it read a moment earlier -- so putting it in
     campaign.md would race `rename_campaign` and `set_campaign_response` and
     silently restore the name or the response settings they had just changed
-    (see OUTSIDE_DOMAIN in locks.py, which records that hazard for `touch`).
+    (see OUTSIDE_DOMAIN in store/locks/_domain.py, which records that hazard for `touch`).
 
     A single-value file has no such failure: nothing else writes it, so there
     is nothing for a stale copy to clobber. Last writer wins, which is the

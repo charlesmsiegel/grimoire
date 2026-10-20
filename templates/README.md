@@ -134,7 +134,7 @@ prompt is in a decide-era template verbatim (`VOICE_DRIFT_CARRIED`), and that
 (`VOICE_DRIFT_OPTIONS`, keyed by verdict).
 
 ### `scene_suggestions/` — POST /campaigns/{cid}/scene-suggestions
-Mirrors `store/suggest.py:build_prompt`. Messages: system, user.
+Mirrors `store/suggest/_prompts.py:build_prompt`. Messages: system, user.
 Vars (both files take the same set):
 - `s` — `suggest.build_snapshot()` dict (the `drivers=True` shape: no
   `upcoming`; adds `commitments`, `timeline`, `driver_index`, `anchors`,
@@ -193,7 +193,7 @@ are captured at Debug level like every other LLM response, under the existing
 Settings disclosure.
 
 ### `scene_intent/` — POST /campaigns/{cid}/scene-intent
-Mirrors `store/suggest.py:build_intent_prompt`. Messages: system, user.
+Mirrors `store/suggest/_prompts.py:build_intent_prompt`. Messages: system, user.
 `user.j2` includes `scene_suggestions/user.j2` verbatim, so it takes that
 file's vars plus `typed`. It renders with `drivers=False` and `view=None`, over
 `build_snapshot(drivers=False)` — the legacy snapshot, `upcoming` included —
@@ -309,7 +309,7 @@ keyed by decision, `IDENTITY_REWORDED` with why); the reply format is
 `decide/system.j2`'s.
 
 ### `continuity_reconcile/` — the reconciliation sweep after End Scene or a refresh
-Mirrors `store/continuity/reconcile.py:build_items`. One `decide()` per sweep,
+Mirrors `store/continuity/reconcile/_answers.py:build_items`. One `decide()` per sweep,
 chunked, over at most `RECONCILE_MAX_CANDIDATES` findings chosen by
 `reconcile.select`, as one item per payload candidate, in order, with `decide/`
 rendering the prompt around them. The question and evidence wording repeats
@@ -497,7 +497,7 @@ current values and the new post, and replies with only what the post changes
   the message, so the reply is anchored on it
 
 ### `decide/` — every structured decision (`inference.decide`, slice F)
-Mirrors `grimoire/inference.py:structured_messages`. Messages: system, user.
+Mirrors `grimoire/inference/_decision_calls.py:structured_messages`. Messages: system, user.
 One call per chunk of items (at most `decisions.MAX_ITEMS_PER_CALL`, and at most
 `decisions.MAX_ENUM_VALUES` enum values across its schema); each item is a
 context and its ordered questions, and the reply is the JSON object
@@ -515,7 +515,7 @@ context and its ordered questions, and the reply is the JSON object
 - `explain` -- the rationale instruction, rendered last; "" renders nothing
 
 ### `tools/` — the finalize turn of a tool loop (`inference.run_tools`, 01g)
-Mirrors `grimoire/inference.py:finalize_message`. One user message, appended
+Mirrors `grimoire/inference/_tool_policy.py:finalize_message`. One user message, appended
 after a run's last tool results when the run must answer now: a `final_schema`
 was not met, or a budget limit stopped the run with a finalize turn reserved.
 It is sent with the tool definitions still attached and `tool_choice` "none".
@@ -577,7 +577,7 @@ context budget, composition still skips token counting.
 See [GLM dialogue notes](../docs/glm-dialogue-prompts.md) for the evidence and
 the live evaluation still needed.
 
-Message assembly (code-side, mirrored from `context/assemble.py`):
+Message assembly (code-side, mirrored from `store/context/assemble/`):
 1. `system.j2` — one system message; omitted if it renders empty.
 2. The projected history: each stored message through
    `scene/history_line.j2`, consecutive same-role lines merged with a blank
@@ -686,7 +686,7 @@ substituted by code:
   recorded, or the tracker could not be read (fail-soft). Never in the opener.
   A reroll replays its frozen prompt, so it keeps the state it was first
   composed with. Read `c["values"]`, not `c.values`: on a dict that names the
-  method. — `context/assemble.py: _tracker_read / _tracker_lines`
+  method. — `store/context/assemble/_inputs.py: _tracker_read / _tracker_lines`
 - `tracker_narrator` — `True` when the reader is the narrator: no
   "(what you can perceive)" on other characters' names, and private values
   labelled "(private: never state or imply in narration)" instead of
@@ -1034,11 +1034,14 @@ happen. For the visible state of the others (appearance, mood, injuries) it
 points at the Scene state section (`scene/sections/tracker_state.j2`) instead,
 so the two do not describe the same thing twice. With the rider off, the
 paragraph is absent. The setting gates only the prompt instruction, never the
-stripping: `routes/character_turns.py` always builds its `ResponseWatcher` with
-`perception=True` for an NPC, because a reroll replays a frozen prompt that may
+stripping: ordinary NPC turns and rerolls in `routes/character_turns/_rounds.py`
+and `_responses.py` build their `ResponseWatcher` with `perception=True`,
+because a reroll replays a frozen prompt that may
 have been composed with the rider on, and a switch flipped between composing a
 prompt and reading the reply would otherwise leave a fence in the stored text.
-Stripping a leading fence nothing asked for is harmless. The surrounding "What
+Stripping a leading fence nothing asked for is harmless. A prefilled Keep-writing
+extension disables that leading-fence reader because it continues existing text.
+The surrounding "What
 this actor can perceive" and continuity-notes guidance stays either way.
 
 ### History rendering shared with retrieval (roadmap 09-S1)
@@ -1077,5 +1080,5 @@ through one `section`:
   known slices, and its suspected ones, each restating the perception rule
   in one sentence.
 
-Which item goes where is `store/context/epistemic.py`'s classification, never
+Which item goes where is `store/context/epistemic/_classification.py`'s classification, never
 a template's; its basis codes are inspector data and never rendered.

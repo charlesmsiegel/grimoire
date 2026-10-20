@@ -13,7 +13,7 @@ survived.
 
 This module finds them and says where they are. It never opens, moves,
 renames or deletes one: which side of a conflict to keep is a question only
-the person who made both edits can answer, so this mirrors ``sync.py`` --
+the person who made both edits can answer, so this mirrors ``store/sync/`` --
 flag, and let the user choose -- rather than resolving anything.
 
 Deliberately on demand, not resident. The rebuilt app runs no background

@@ -665,7 +665,7 @@ def test_shutdown_sets_cancel_and_waits(monkeypatch, tmp_path):
 def test_the_exclusion_holds_until_the_thread_returns(client, world_and_campaign,
                                                       monkeypatch, tmp_path):
     wid, _, _ = world_and_campaign
-    monkeypatch.setattr(runs, "CANCEL_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(runs._contracts, "CANCEL_TIMEOUT_SECONDS", 0.2)
     work = Held(honour_cancel=False)        # a step that does not look up
     run = _start(client, work)
     assert work.entered.wait(WAIT)
