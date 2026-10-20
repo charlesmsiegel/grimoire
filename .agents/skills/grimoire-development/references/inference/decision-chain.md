@@ -1,6 +1,6 @@
 # Decision backends and fallback
 
-Source: [inference.py](../../../../../backend/src/grimoire/inference.py), [resolve.py](../../../../../backend/src/grimoire/store/inference/resolve.py), [decisions.py](../../../../../backend/src/grimoire/decisions.py).
+Source: [inference/](../../../../../backend/src/grimoire/inference/), [resolve/](../../../../../backend/src/grimoire/store/inference/resolve/), [decisions/](../../../../../backend/src/grimoire/decisions/).
 
   **A decide call is answered down a chain** (`inference.stages`, run by
   `inference.run_stages`): the selection's one backend, then the role

@@ -1,6 +1,6 @@
 # Decision call sites
 
-Source: [inference.py](../../../../../backend/src/grimoire/inference.py), [test_operation_guard.py](../../../../../backend/tests/test_operation_guard.py).
+Source: [inference/](../../../../../backend/src/grimoire/inference/), [test_operation_guard.py](../../../../../backend/tests/test_operation_guard.py).
 
   **A yes/no, pick-one or graded question is a `decide` call**, never prose
   parsed afterwards. Resolve it with `require_inference(<task>, cid,

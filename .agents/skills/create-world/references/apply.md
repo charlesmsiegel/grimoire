@@ -58,7 +58,7 @@ Open the World in the app and start a campaign from it: the new-scene pane shoul
 offer the openings `check` called startable. For a dry run that can't touch the
 user's library, build the World under a scratch `GRIMOIRE_HOME` and drive it with
 the `verify` skill. When the World is ready to share, the Worlds page exports it as
-a bundle (`store/world_bundle.py`).
+a bundle (`store/world_bundle/`).
 
 ## Common mistakes
 

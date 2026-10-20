@@ -1,6 +1,6 @@
 # Model settings migration and retirement
 
-Source: [migrate.py](../../../../../backend/src/grimoire/store/inference/migrate.py), [retire.py](../../../../../backend/src/grimoire/store/inference/retire.py), [store-guarantees.md](../../../../../docs/store-guarantees.md).
+Source: [migrate/](../../../../../backend/src/grimoire/store/inference/migrate/), [retire.py](../../../../../backend/src/grimoire/store/inference/retire.py), [store-guarantees.md](../../../../../docs/store-guarantees.md).
 
 - **Model settings moved to a new layout, once, in the background**
   (`store/inference/migrate/`, started by `main.start` at startup and after a

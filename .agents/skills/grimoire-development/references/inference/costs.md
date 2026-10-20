@@ -1,6 +1,6 @@
 # Accounting
 
-Source: [usage.py](../../../../../backend/src/grimoire/store/usage.py), [cost.tsx](../../../../../frontend/src/components/cost.tsx).
+Source: [usage/](../../../../../backend/src/grimoire/store/usage/), [cost.tsx](../../../../../frontend/src/components/cost.tsx).
 
 ## Costs: three money columns, and no two of them may be added
 

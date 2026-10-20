@@ -1,6 +1,6 @@
 # Prompt perspective, activation and voice
 
-Source: [epistemic.py](../../../../../backend/src/grimoire/store/context/epistemic.py), [activation.py](../../../../../backend/src/grimoire/store/context/activation.py), [voice_anchors.py](../../../../../backend/src/grimoire/store/voice_anchors.py).
+Source: [epistemic/](../../../../../backend/src/grimoire/store/context/epistemic/), [activation.py](../../../../../backend/src/grimoire/store/context/activation.py), [voice_anchors.py](../../../../../backend/src/grimoire/store/voice_anchors.py).
 
 - **History reaches a prompt only through the view built for that prompt's
   reader** (roadmap 11-S3). Each compose step retrieves for its own

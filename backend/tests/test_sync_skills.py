@@ -13,7 +13,6 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "sync_skills.py"
 
 
 def _repository(tmp_path: Path) -> Path:
-    assert SCRIPT.is_file(), "the skill pointer generator does not exist"
     root = tmp_path / "Realm"
     (root / "scripts").mkdir(parents=True)
     shutil.copyfile(SCRIPT, root / "scripts" / SCRIPT.name)

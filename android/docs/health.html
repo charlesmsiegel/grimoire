@@ -53,7 +53,10 @@ main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
 
 /* ---------- tabs: code-visualization's contract, so one shell serves all four
    documents. code-overview forces this template on assemble.py and on
-   build_measurement.py, so the markup those two emit has to fit here. ------- */
+   build_measurement.py, so the markup those two emit has to fit here. An atlas
+   needs no renderer code from this shell — assemble.py inlines its own — only
+   this contract: panels are .panel, the shown one is .active, and showing one
+   dispatches `tab:shown`, which is when a hidden tab's graphs are drawn. ---- */
 nav.tabs{
   display:flex;gap:2px;flex-wrap:wrap;max-width:1280px;margin:18px auto 0;
   padding:0 28px;border-bottom:1px solid var(--border);
@@ -83,6 +86,8 @@ a{color:var(--accent)}
 code,.mono{font-family:var(--mono);font-size:.92em}
 p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.card.hero{border-color:var(--border-strong);background:linear-gradient(180deg,var(--accent-dim),var(--surface) 60%)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;margin:10px 0}
 .grid{display:grid;gap:14px;margin:12px 0}
 .grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
 .grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
@@ -162,7 +167,7 @@ footer.doc a{color:var(--text-dim)}
   <div class="doc-label">CODE HEALTH</div>
   <h1 class="doc-title">android — Code Health</h1>
   <p class="doc-sub">Graded health of the android package.</p>
-  <div class="doc-meta">generated 2026-08-18 · a63cb05f5 · 7 files, 535 lines · 0 findings, 0 candidates</div>
+  <div class="doc-meta">generated 2026-10-20 · 9d4985eb3 · 8 files, 1105 lines · 0 findings, 0 candidates</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -196,7 +201,7 @@ footer.doc a{color:var(--text-dim)}
   <div class="what">
     <h2>android</h2>
     <p class="dim">android</p>
-    <div><span class="badge neutral">kotlin</span> <span class="badge neutral">7 files · 535 lines</span> <span class="badge good">0 finding(s)</span></div>
+    <div><span class="badge neutral">kotlin</span> <span class="badge neutral">8 files · 1105 lines</span> <span class="badge good">0 finding(s)</span></div>
   </div>
 </section>
 <div class="callout warn">Nothing in this analysis could be graded — the grade shown is a placeholder.</div>
@@ -223,16 +228,16 @@ means nothing measured it, which is not the same as clean.</p>
 
 </section>
 <section class="panel" id="tab-candidates" role="tabpanel">
-<div class="callout warn"><strong>These did not affect the grade.</strong> A candidate is an unverified lead, not a defect: it names what was observed and the ways healthy code produces the same observation, and it deliberately carries no fix. Confirm one before acting on it.</div><p class="dim">No candidates were reported for this unit.</p>
+<div class="callout warn"><strong>These did not affect the grade.</strong> A candidate is an unverified lead, not a defect: it names what was observed and the ways healthy code produces the same observation, and it deliberately carries no fix. Confirm one before acting on it.</div><p class="dim">Showing 0 of 0 candidates; 0 omitted from this page. The display limit does not change analysis counts or grades.</p><p class="dim">No candidates were reported for this unit.</p>
 
 
 </section>
 <section class="panel" id="tab-coverage" role="tabpanel">
 <div class="callout bad">No doctor contributed to this page, so nothing on it was measured. The grade is a placeholder.</div><div class="callout warn"><strong>Ungraded: </strong>Correctness, Security, Tests &amp; Safety Net, Complexity, Design &amp; Structure, Duplication &amp; Dead Code, Dependencies &amp; Hygiene. Nothing measured these, so they are dropped from the mean rather than counted as zero or as a hundred.</div>
-<h2>Caveats</h2><div class="callout warn"><strong>Ungraded categories:</strong> Correctness, Security, Tests &amp; Safety Net, Complexity, Design &amp; Structure, Duplication &amp; Dead Code, Dependencies &amp; Hygiene. Nothing measured them, so they were dropped from the weighted mean and the remaining weights renormalized.</div><div class="callout">No code doctor ships for Kotlin, so nothing analyzed this package&#x27;s 296 lines of Kotlin. The score is null rather than a number produced by a doctor that could not read the language.</div><div class="callout">The Python entry point at android/app/src/main/python/android_entry.py IS covered by the repository-wide Python run, but 4 files with no tests are most honestly reported as ungraded.</div>
+<h2>Caveats</h2><div class="callout warn"><strong>Ungraded categories:</strong> Correctness, Security, Tests &amp; Safety Net, Complexity, Design &amp; Structure, Duplication &amp; Dead Code, Dependencies &amp; Hygiene. Nothing measured them, so they were dropped from the weighted mean and the remaining weights renormalized.</div><div class="callout">Static detector density at the recorded source revision; findings require contextual review. It is not a correctness proof or a test result.</div><div class="callout">Test Coverage tabs were omitted by user choice: no existing artifact was found. The health Coverage tab describes detector coverage, a different question.</div><div class="callout">Ungraded by user choice: no Kotlin specialist is installed. No language-specific Kotlin health assessment is implied.</div>
 
 </section>
-<script type="application/json" id="code-health-meta">{"schema":"code-health/1","scope":"package","package":"android","roots":["android"],"language":"kotlin","doctor":"","generated":"2026-08-18","commit":"a63cb05f5","size":{"files":7,"loc":535},"sized_extensions":[],"missing_roots":[],"score":null,"grade":"\u2014","categories":[{"key":"correctness","label":"Correctness","weight":25.0,"half_life":6.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"security","label":"Security","weight":15.0,"half_life":2.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"tests","label":"Tests & Safety Net","weight":15.0,"half_life":8.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"complexity","label":"Complexity","weight":15.0,"half_life":12.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"design","label":"Design & Structure","weight":12.0,"half_life":10.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"duplication","label":"Duplication & Dead Code","weight":10.0,"half_life":10.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"hygiene","label":"Dependencies & Hygiene","weight":8.0,"half_life":25.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}}],"ungraded":["correctness","security","tests","complexity","design","duplication","hygiene"],"unmapped_types":[],"analyzer_errors":{},"analyzers_skipped":{},"findings_out_of_scope":0,"duplicates_merged":0,"findings_total":0,"findings_by_severity":{"high":0,"medium":0,"low":0},"top_findings":[],"doctors":[],"doctor_errors":{},"completeness":{},"candidates_total":0}</script></main>
+<script type="application/json" id="code-health-meta">{"schema":"code-health/1","scope":"package","package":"android","roots":["android"],"language":"kotlin","doctor":"","generated":"2026-10-20","commit":"9d4985eb3","size":{"files":8,"loc":1105},"sized_extensions":[],"missing_roots":[],"score":null,"grade":"\u2014","categories":[{"key":"correctness","label":"Correctness","weight":25.0,"half_life":6.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"security","label":"Security","weight":15.0,"half_life":2.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"tests","label":"Tests & Safety Net","weight":15.0,"half_life":8.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"complexity","label":"Complexity","weight":15.0,"half_life":12.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"design","label":"Design & Structure","weight":12.0,"half_life":10.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"duplication","label":"Duplication & Dead Code","weight":10.0,"half_life":10.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}},{"key":"hygiene","label":"Dependencies & Hygiene","weight":8.0,"half_life":25.0,"graded":false,"score":null,"grade":"\u2014","density":0.0,"findings":{"high":0,"medium":0,"low":0,"total":0}}],"ungraded":["correctness","security","tests","complexity","design","duplication","hygiene"],"unmapped_types":[],"analyzer_errors":{},"analyzers_skipped":{},"findings_out_of_scope":0,"duplicates_merged":0,"findings_total":0,"findings_by_severity":{"high":0,"medium":0,"low":0},"top_findings":[],"doctors":[],"doctor_errors":{},"completeness":{},"candidates_total":0,"candidates_shown":0}</script></main>
 <footer class="doc">Generated by code-overview. The grade is a density of detectable problems, not a verdict on the design — read the code map beside it. Candidates are leads and are excluded from the score.</footer>
 <script>
 (function(){

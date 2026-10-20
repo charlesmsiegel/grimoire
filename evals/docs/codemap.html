@@ -53,7 +53,10 @@ main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
 
 /* ---------- tabs: code-visualization's contract, so one shell serves all four
    documents. code-overview forces this template on assemble.py and on
-   build_measurement.py, so the markup those two emit has to fit here. ------- */
+   build_measurement.py, so the markup those two emit has to fit here. An atlas
+   needs no renderer code from this shell — assemble.py inlines its own — only
+   this contract: panels are .panel, the shown one is .active, and showing one
+   dispatches `tab:shown`, which is when a hidden tab's graphs are drawn. ---- */
 nav.tabs{
   display:flex;gap:2px;flex-wrap:wrap;max-width:1280px;margin:18px auto 0;
   padding:0 28px;border-bottom:1px solid var(--border);
@@ -83,6 +86,8 @@ a{color:var(--accent)}
 code,.mono{font-family:var(--mono);font-size:.92em}
 p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.card.hero{border-color:var(--border-strong);background:linear-gradient(180deg,var(--accent-dim),var(--surface) 60%)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;margin:10px 0}
 .grid{display:grid;gap:14px;margin:12px 0}
 .grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
 .grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
@@ -156,13 +161,37 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 footer.doc a{color:var(--text-dim)}
 @media(max-width:720px){header.doc,main,nav.tabs,footer.doc{padding-left:16px;padding-right:16px} h1.doc-title{font-size:24px} .gradecard .letter{font-size:48px;min-width:72px}}
 </style>
+<style id="atlas-renderers-css">
+/* The atlas renderers' styles, paired with renderers.js. assemble.py inlines
+   both into whatever page shell --template names; every colour here comes
+   from that shell's design tokens. */
+table.sortable thead th{cursor:pointer;user-select:none}
+table.sortable thead th::after{content:"↕";opacity:.35;margin-left:6px;font-size:10px}
+table.sortable thead th.asc::after{content:"↑";opacity:1;color:var(--accent)}
+table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
+
+/* ---------- viz containers ---------- */
+.viz{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden}
+.viz svg{display:block;width:100%;height:100%}
+.viz .zoombar{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5}
+.viz .zoombar button{width:28px;height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--surface-2);color:var(--text);font-family:var(--mono);cursor:pointer;font-size:14px;line-height:1}
+.viz .zoombar button:hover{background:var(--accent-dim);color:var(--accent)}
+.viz .legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:11px;color:var(--text-dim);background:color-mix(in srgb,var(--surface) 80%,transparent);padding:4px 8px;border-radius:6px;max-width:70%}
+.legend .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.viz-tip{position:fixed;pointer-events:none;z-index:200;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:12px;color:var(--text);box-shadow:0 6px 24px rgba(0,0,0,.35);display:none;max-width:380px}
+.mermaid-wrap{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden;min-height:120px}
+.mermaid-wrap .mviewport{overflow:hidden;cursor:grab;padding:14px}
+.mermaid-wrap .mviewport.dragging{cursor:grabbing}
+.mermaid{font-family:var(--sans)}
+.mermaid[data-processed="true"]{display:flex;justify-content:center}
+</style>
 </head>
 <body>
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">evals — Codebase Atlas</h1>
-  <p class="doc-sub">Four pass/fail questions about what the model actually writes</p>
-  <div class="doc-meta">generated 2026-08-18 · a63cb05f5 · 5 files, 868 LOC</div>
+  <p class="doc-sub">Source-backed architecture, static analysis and explicit evidence limits.</p>
+  <div class="doc-meta">generated 2026-10-20 · 9d4985eb3 · 174 files, 16796 LOC</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -186,73 +215,39 @@ footer.doc a{color:var(--text-dim)}
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
 <button role="tab" data-tab="dependencies" aria-selected="false" aria-controls="dependencies">Dependencies</button>
-<button role="tab" data-tab="hotspots" aria-selected="false" aria-controls="hotspots">Hotspots</button></nav>
+<button role="tab" data-tab="hotspots" aria-selected="false" aria-controls="hotspots">Hotspots</button>
+<button role="tab" data-tab="flows" aria-selected="false" aria-controls="flows">Critical Flows</button>
+<button role="tab" data-tab="boundaries" aria-selected="false" aria-controls="boundaries">Boundaries &amp; Ownership</button>
+<button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button>
+<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-<div class="card hero">
-  <h2>Four pass/fail questions about what the model actually writes</h2>
-  <p><code>evals</code> is 868 lines across five modules, and it is the only thing in this repository
-  that tries to check a hypothesis about <em>model behaviour</em> rather than about code. Its own
-  README states the gap it closes: much of the backend exists to shape LLM prose &mdash; the style chain,
-  the length budget, drift correction, the roll-fence protocol &mdash; and every one of those is a
-  hypothesis, while a template edit takes effect live with no restart and no code change.</p>
-  <p>It is deliberately not a framework. Four cases, thirteen checked-in recordings, no human
-  judgement, and no LLM judge.</p>
-</div>
+<div class="card hero"><h2>Experiments must exercise the application the user runs</h2><p>The eval package builds synthetic libraries, assembles production prompts or retrieval inputs, and scores explicit hypotheses. Replay tests the harness and prompt contracts; live mode observes a selected provider and records cost and incompleteness. The distinction is part of the design, not an execution detail. <code>evals/cases.py:4</code> <code>evals/runner.py:4</code></p></div>
+<div class="tbl-wrap"><table><thead><tr><th>Entry</th><th>Starts</th></tr></thead><tbody><tr><td><code>evals/run.py:1</code></td><td>Replay, opt-in live cases, comparison and specialized evaluation families.</td></tr><tr><td><code>backend/tests/test_evals.py:55</code></td><td>Offline recording/expectation checks in the ordinary backend suite.</td></tr><tr><td><code>evals/history/runner.py:3</code></td><td>Retrieval ablations with production eligibility, expansion and prompt packing.</td></tr><tr><td><code>evals/embed/harness.py:1</code></td><td>Lexical and embedding rankings, deterministic endpoint control, recorded rankings.</td></tr></tbody></table></div>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+flowchart TD
+ C["CLI or pytest"] --> I["Isolated synthetic library"]
+ I --> B["Production builders"]
+ B --> O["Replay or live inference"]
+ O --> G["Deterministic graders"]
+ G --> R["Results and cost observations"]
+ R --> F["Portable run file"]
+</pre></div></div>
+<h3>Read in this order</h3><ol><li><code>evals/cases.py:105</code>: Recording and Case define the hypothesis and exact failure expectations; skim case bodies until changing a particular behavior.</li><li><code>evals/runner.py:219</code>: counterexample success means exactly the declared checks fail.</li><li><code>evals/graders.py:1</code>: learn when production parsing is reused and why some raw-output checks must bypass tolerant normalization.</li><li><code>evals/runner.py:743</code>: live-call ownership, isolation tripwires and settlement.</li><li><code>evals/runfile.py:1</code>: which observations are retained and which private text is excluded.</li><li><code>evals/history/runner.py:82</code>: see how a non-response experiment adapts into the shared report shape.</li></ol>
+<h3>What the checked-in evidence says</h3><p>The bounded artifact audit found 30 embedding queries over 100 documents, with 10 queries in each recall/search/identity shape. The sole recorded ranking, the deterministic bag-of-words control, has R@1/3/5 = 0, R@10 = 0.0667 and MRR = 0.00889. This diagnoses a synthetic control; it says nothing about a real embedding model. <code>evals/embed/corpus.json</code> <code>evals/recordings/embed/bow-1-none.json</code> <code>evals/embed/harness.py:5</code> <code>evals/embed/metrics.py:56</code></p>
+<p>The dated first play report used three repeats over four fixtures, 12 runs per configuration. It reports empty-response/handoff failures, noisy concurrent latency and unfinished adherence/ensemble measurements; the results are a narrow historical observation, not a current model-quality grade. <code>docs/superpowers/validation/2026-10-12-roadmap-02-play-gate.md:22</code> <code>docs/superpowers/validation/2026-10-12-roadmap-02-play-gate.md:31</code> <code>docs/superpowers/validation/2026-10-12-roadmap-02-play-gate.md:120</code></p>
+<div class="callout warn"><strong>Primary review seam:</strong> isolation is caller-owned, and helpers change the process-wide environment. Treat execution as serial unless a separate process owns each library; concurrent contexts are not independent. <code>evals/runner.py:19</code> <code>evals/runner.py:101</code></div>
+<p class="dim">Source reading and existing artifact arithmetic only; no eval, provider or test was run. Coverage tabs were skipped by user choice. Analyzer inventory/hotspots describe structure, not measured quality or coverage.</p>
 
-<div class="kpis">
-  <div class="kpi"><div class="n">4</div><div class="l">cases</div></div>
-  <div class="kpi"><div class="n">13</div><div class="l">hand-authored recordings</div></div>
-  <div class="kpi"><div class="n">868</div><div class="l">lines</div></div>
-  <div class="kpi warn"><div class="n">0</div><div class="l">live runs in CI</div></div>
-</div>
-
-<h2>The cases</h2>
-<div class="tbl-wrap"><table class="sortable">
-<tr><th>Case</th><th>The hypothesis it tests</th></tr>
-<tr><td><code>scene-length</code></td><td>A reply respects the resolved length budget.</td></tr>
-<tr><td><code>roll-fence</code></td><td>A roll-requiring prompt emits a closed, parseable roll fence naming a check and an actor that exist.</td></tr>
-<tr><td><code>absorb</code></td><td>Absorb returns JSON with every required section, and it materializes into applicable edits.</td></tr>
-<tr><td><code>owned-lore</code></td><td>Lore owned by an absent character stays out of both the prompt and the reply.</td></tr>
-</table></div>
-
-<h2>Modules</h2>
-<div class="tbl-wrap"><table class="sortable">
-<tr><th>File</th><th class="num">Lines</th><th>Role</th></tr>
-<tr><td><code>evals/cases.py</code></td><td class="num">417</td><td>The four case definitions and their fixtures.</td></tr>
-<tr><td><code>evals/graders.py</code></td><td class="num">222</td><td>Pure pass/fail scorers. No store reads, no network.</td></tr>
-<tr><td><code>evals/runner.py</code></td><td class="num">156</td><td>Replay and live execution, connection resolution, reporting.</td></tr>
-<tr><td><code>evals/run.py</code></td><td class="num">69</td><td>The CLI: replay by default, <code>--live</code> for one real call per case, <code>--record</code> to overwrite baselines.</td></tr>
-</table></div>
-
-<div class="callout good">
-  <strong>The design decision worth copying.</strong> Every grader reuses the <em>production</em> code
-  that consumes model output &mdash; <code>split_reply</code>, <code>length_drift.measure</code>,
-  <code>FenceWatcher</code>, <code>absorb.extract_object</code> &mdash; rather than reimplementing the
-  parsing. <code>evals/graders.py</code> states the reason: an eval that parses output its own way
-  stops testing the app the moment the app's parser changes, and would go green through exactly the
-  regression it exists to catch. The one deliberate inversion (<code>grade_absorb</code> scores the raw
-  object) is documented with its reason.
-</div>
-
-<div class="callout warn">
-  <strong>The limit, which the package states itself.</strong> Offline replay proves the graders still
-  score recorded output correctly and that the instructions still appear in the assembled prompt. It
-  cannot prove a model <em>obeys</em> a reworded instruction &mdash; only <code>--live</code> answers that,
-  and it is opt-in, absent from CI, and its baselines are hand-authored rather than recorded from a
-  real model. The Measurement page grades this in full.
-</div>
-
-<p class="dim">Package size is 868 lines, so this atlas carries the automated tabs plus this
-overview; per-package flow, boundary and glossary tabs are written once at repository scope.</p>
+<h3>Fresh graph interpretation</h3><p>All 164 detected first-party Python imports resolve, but 308 edges leave this unit for production modules. The 19 groups include loaded template assets, rather than nineteen services. One grouped cycle spans core evals and epistemic/history/investigation families, with zero file cycles: the CLI selects families which import shared report/cost helpers. <code>evals/run.py:49</code> <code>evals/history/runner.py:24</code></p><p>Nine planner recordings flagged as orphan assets are dynamically selected by case shape, so textual orphan status is not proof of dead files. The LLM scanner reports no calls because the custom inference facade is unrecognized; live execution exists. Runtime-built paths and 13 truncated resource patterns limit completeness. <code>evals/history/planning.py:122</code> <code>evals/runner.py:751</code></p>
 
 </section>
 <section class="panel" id="inventory" role="tabpanel">
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">19</div><div class="l">source files</div></div>
-  <div class="kpi"><div class="n">1,106</div><div class="l">lines of code</div></div>
+  <div class="kpi accent"><div class="n">174</div><div class="l">source files</div></div>
+  <div class="kpi"><div class="n">16,796</div><div class="l">lines of code</div></div>
   <div class="kpi"><div class="n">1</div><div class="l">languages</div></div>
   <div class="kpi warn"><div class="n">0%</div><div class="l">test code share</div></div>
 </div>
@@ -260,38 +255,67 @@ overview; per-package flow, boundary and glossary tabs are written once at repos
 <h2>Languages</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
-<tbody><tr><td>Python</td><td class='num'>868</td><td class='num'>5</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>78.5%</td></tr>
-<tr><td>Markdown</td><td class='num'>144</td><td class='num'>10</td><td><div class="bar "><i style="width:16.6%"></i></div></td><td class='num'>13.0%</td></tr>
-<tr><td>JSON</td><td class='num'>94</td><td class='num'>4</td><td><div class="bar "><i style="width:10.8%"></i></div></td><td class='num'>8.5%</td></tr></tbody></table></div>
+<tbody><tr><td>Python</td><td class='num'>11,413</td><td class='num'>37</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>68.0%</td></tr>
+<tr><td>JSON</td><td class='num'>4,318</td><td class='num'>119</td><td><div class="bar "><i style="width:37.8%"></i></div></td><td class='num'>25.7%</td></tr>
+<tr><td>Markdown</td><td class='num'>1,065</td><td class='num'>18</td><td><div class="bar "><i style="width:9.3%"></i></div></td><td class='num'>6.3%</td></tr></tbody></table></div>
 
 
 <h2>Top-level directories</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
-<tbody><tr><td><code>(root)/</code></td><td class='num'>984</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>recordings/</code></td><td class='num'>122</td><td><div class="bar "><i style="width:12.4%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>evals/</code></td><td class='num'>16,796</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr></tbody></table></div>
 
 <div class="grid cols-2">
 <div>
 <h2>Largest files</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">LOC</th><th>Size</th><th class="num">Branches</th></tr></thead>
-<tbody><tr><td><code>cases.py</code></td><td class='num'>417</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>26</td></tr>
-<tr><td><code>graders.py</code></td><td class='num'>222</td><td><div class="bar "><i style="width:53.2%"></i></div></td><td class='num'>31</td></tr>
-<tr><td><code>runner.py</code></td><td class='num'>156</td><td><div class="bar "><i style="width:37.4%"></i></div></td><td class='num'>52</td></tr>
-<tr><td><code>run.py</code></td><td class='num'>69</td><td><div class="bar "><i style="width:16.5%"></i></div></td><td class='num'>25</td></tr>
-<tr><td><code>__init__.py</code></td><td class='num'>4</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+<tbody><tr><td><code>evals/cases.py</code></td><td class='num'>2,437</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>178</td></tr>
+<tr><td><code>evals/runner.py</code></td><td class='num'>887</td><td><div class="bar "><i style="width:36.4%"></i></div></td><td class='num'>300</td></tr>
+<tr><td><code>evals/run.py</code></td><td class='num'>884</td><td><div class="bar "><i style="width:36.3%"></i></div></td><td class='num'>259</td></tr>
+<tr><td><code>evals/graders.py</code></td><td class='num'>785</td><td><div class="bar "><i style="width:32.2%"></i></div></td><td class='num'>181</td></tr>
+<tr><td><code>evals/gate.py</code></td><td class='num'>764</td><td><div class="bar "><i style="width:31.4%"></i></div></td><td class='num'>95</td></tr>
+<tr><td><code>evals/play.py</code></td><td class='num'>641</td><td><div class="bar "><i style="width:26.3%"></i></div></td><td class='num'>204</td></tr>
+<tr><td><code>evals/history/planning.py</code></td><td class='num'>498</td><td><div class="bar "><i style="width:20.4%"></i></div></td><td class='num'>176</td></tr>
+<tr><td><code>evals/investigation/runner.py</code></td><td class='num'>443</td><td><div class="bar "><i style="width:18.2%"></i></div></td><td class='num'>146</td></tr>
+<tr><td><code>evals/legacy.py</code></td><td class='num'>380</td><td><div class="bar "><i style="width:15.6%"></i></div></td><td class='num'>76</td></tr>
+<tr><td><code>evals/slop.py</code></td><td class='num'>354</td><td><div class="bar "><i style="width:14.5%"></i></div></td><td class='num'>46</td></tr>
+<tr><td><code>evals/epistemic/cases.py</code></td><td class='num'>315</td><td><div class="bar "><i style="width:12.9%"></i></div></td><td class='num'>10</td></tr>
+<tr><td><code>evals/epistemic/live.py</code></td><td class='num'>299</td><td><div class="bar "><i style="width:12.3%"></i></div></td><td class='num'>107</td></tr>
+<tr><td><code>evals/history/runner.py</code></td><td class='num'>267</td><td><div class="bar "><i style="width:11.0%"></i></div></td><td class='num'>92</td></tr>
+<tr><td><code>evals/runfile.py</code></td><td class='num'>263</td><td><div class="bar "><i style="width:10.8%"></i></div></td><td class='num'>115</td></tr>
+<tr><td><code>evals/investigation/synth.py</code></td><td class='num'>240</td><td><div class="bar "><i style="width:9.8%"></i></div></td><td class='num'>19</td></tr>
+<tr><td><code>evals/continuity_floors/metrics.py</code></td><td class='num'>212</td><td><div class="bar "><i style="width:8.7%"></i></div></td><td class='num'>57</td></tr>
+<tr><td><code>evals/escalation.py</code></td><td class='num'>202</td><td><div class="bar "><i style="width:8.3%"></i></div></td><td class='num'>67</td></tr>
+<tr><td><code>evals/embed/harness.py</code></td><td class='num'>194</td><td><div class="bar "><i style="width:8.0%"></i></div></td><td class='num'>41</td></tr>
+<tr><td><code>evals/history/synth.py</code></td><td class='num'>173</td><td><div class="bar "><i style="width:7.1%"></i></div></td><td class='num'>53</td></tr>
+<tr><td><code>evals/costs.py</code></td><td class='num'>167</td><td><div class="bar "><i style="width:6.9%"></i></div></td><td class='num'>41</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Most branch-heavy files</h2>
 <p class="dim">Branch count ≈ decision points (if/for/while/case/catch/&amp;&amp;/||). A rough cyclomatic-complexity proxy.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Branches</th><th>Heat</th><th class="num">LOC</th><th class="num">Max depth</th></tr></thead>
-<tbody><tr><td><code>runner.py</code></td><td class='num'>52</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>156</td><td class='num'>5</td></tr>
-<tr><td><code>graders.py</code></td><td class='num'>31</td><td><div class="bar warn"><i style="width:59.6%"></i></div></td><td class='num'>222</td><td class='num'>7</td></tr>
-<tr><td><code>cases.py</code></td><td class='num'>26</td><td><div class="bar warn"><i style="width:50.0%"></i></div></td><td class='num'>417</td><td class='num'>9</td></tr>
-<tr><td><code>run.py</code></td><td class='num'>25</td><td><div class="bar warn"><i style="width:48.1%"></i></div></td><td class='num'>69</td><td class='num'>5</td></tr>
-<tr><td><code>__init__.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>4</td><td class='num'>0</td></tr></tbody></table></div>
+<tbody><tr><td><code>evals/runner.py</code></td><td class='num'>300</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>887</td><td class='num'>12</td></tr>
+<tr><td><code>evals/run.py</code></td><td class='num'>259</td><td><div class="bar warn"><i style="width:86.3%"></i></div></td><td class='num'>884</td><td class='num'>12</td></tr>
+<tr><td><code>evals/play.py</code></td><td class='num'>204</td><td><div class="bar warn"><i style="width:68.0%"></i></div></td><td class='num'>641</td><td class='num'>12</td></tr>
+<tr><td><code>evals/graders.py</code></td><td class='num'>181</td><td><div class="bar warn"><i style="width:60.3%"></i></div></td><td class='num'>785</td><td class='num'>12</td></tr>
+<tr><td><code>evals/cases.py</code></td><td class='num'>178</td><td><div class="bar warn"><i style="width:59.3%"></i></div></td><td class='num'>2,437</td><td class='num'>12</td></tr>
+<tr><td><code>evals/history/planning.py</code></td><td class='num'>176</td><td><div class="bar warn"><i style="width:58.7%"></i></div></td><td class='num'>498</td><td class='num'>12</td></tr>
+<tr><td><code>evals/investigation/runner.py</code></td><td class='num'>146</td><td><div class="bar warn"><i style="width:48.7%"></i></div></td><td class='num'>443</td><td class='num'>12</td></tr>
+<tr><td><code>evals/runfile.py</code></td><td class='num'>115</td><td><div class="bar warn"><i style="width:38.3%"></i></div></td><td class='num'>263</td><td class='num'>11</td></tr>
+<tr><td><code>evals/epistemic/live.py</code></td><td class='num'>107</td><td><div class="bar warn"><i style="width:35.7%"></i></div></td><td class='num'>299</td><td class='num'>9</td></tr>
+<tr><td><code>evals/gate.py</code></td><td class='num'>95</td><td><div class="bar warn"><i style="width:31.7%"></i></div></td><td class='num'>764</td><td class='num'>12</td></tr>
+<tr><td><code>evals/history/runner.py</code></td><td class='num'>92</td><td><div class="bar warn"><i style="width:30.7%"></i></div></td><td class='num'>267</td><td class='num'>10</td></tr>
+<tr><td><code>evals/legacy.py</code></td><td class='num'>76</td><td><div class="bar warn"><i style="width:25.3%"></i></div></td><td class='num'>380</td><td class='num'>5</td></tr>
+<tr><td><code>evals/escalation.py</code></td><td class='num'>67</td><td><div class="bar warn"><i style="width:22.3%"></i></div></td><td class='num'>202</td><td class='num'>9</td></tr>
+<tr><td><code>evals/continuity_floors/metrics.py</code></td><td class='num'>57</td><td><div class="bar warn"><i style="width:19.0%"></i></div></td><td class='num'>212</td><td class='num'>10</td></tr>
+<tr><td><code>evals/history/synth.py</code></td><td class='num'>53</td><td><div class="bar warn"><i style="width:17.7%"></i></div></td><td class='num'>173</td><td class='num'>9</td></tr>
+<tr><td><code>evals/epistemic/decision.py</code></td><td class='num'>48</td><td><div class="bar warn"><i style="width:16.0%"></i></div></td><td class='num'>157</td><td class='num'>12</td></tr>
+<tr><td><code>evals/slop.py</code></td><td class='num'>46</td><td><div class="bar warn"><i style="width:15.3%"></i></div></td><td class='num'>354</td><td class='num'>9</td></tr>
+<tr><td><code>evals/continuity_floors/corpus.py</code></td><td class='num'>43</td><td><div class="bar warn"><i style="width:14.3%"></i></div></td><td class='num'>162</td><td class='num'>12</td></tr>
+<tr><td><code>evals/costs.py</code></td><td class='num'>41</td><td><div class="bar warn"><i style="width:13.7%"></i></div></td><td class='num'>167</td><td class='num'>6</td></tr>
+<tr><td><code>evals/embed/harness.py</code></td><td class='num'>41</td><td><div class="bar warn"><i style="width:13.7%"></i></div></td><td class='num'>194</td><td class='num'>9</td></tr></tbody></table></div>
 </div>
 </div>
 
@@ -301,18 +325,18 @@ overview; per-package flow, boundary and glossary tabs are written once at repos
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">1</div><div class="l">modules</div></div>
-  <div class="kpi"><div class="n">3</div><div class="l">file-level imports</div></div>
-  <div class="kpi"><div class="n">0</div><div class="l">runtime loads</div></div>
-  <div class="kpi good"><div class="n">0</div><div class="l">cycles</div></div>
-  <div class="kpi"><div class="n">1</div><div class="l">top-level arm</div></div>
+  <div class="kpi accent"><div class="n">19</div><div class="l">modules</div></div>
+  <div class="kpi"><div class="n">107</div><div class="l">file-level imports</div></div>
+  <div class="kpi"><div class="n">35</div><div class="l">runtime loads</div></div>
+  <div class="kpi bad"><div class="n">1</div><div class="l">cycles</div></div>
+  <div class="kpi"><div class="n">2</div><div class="l">top-level arms</div></div>
 </div>
-
-<div class="callout good"><b>No module-level dependency cycles detected.</b> The import graph is a DAG at this grouping level.</div>
+<p class="dim">Scoped to <code>evals/</code>: 308 import(s) and load(s) reach 120 file(s) outside those roots. They resolved, and are not drawn.</p>
+<div class="callout bad"><b>1 module-level dependency cycle detected</b> — modules that import each other directly or transitively. Cycles make modules impossible to understand or test in isolation.<ul style="margin-top:8px"><li><span class='badge bad'>cycle 1</span> <code>evals</code> ⇄ <code>evals/epistemic</code> ⇄ <code>evals/history</code> ⇄ <code>evals/investigation</code></li></ul></div>
 <h2>Module dependency graph</h2>
 <p class="dim">Node area = lines of code · solid arrows = imports, dashed = runtime loads (a rendered template, a prompt read off disk) · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
 <div class="viz" data-render="forcegraph" style="height:620px"></div>
-<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"(root)","size":868,"fanIn":0,"fanOut":0,"meta":"(repo root) \u00b7 5 files"}],"links":[],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
+<script type="application/json">{"nodes":[{"id":"evals","label":"evals","group":"cycle","size":7768,"fanIn":3,"fanOut":17,"meta":"evals \u00b7 12 files \u00b7 in dependency cycle #1"},{"id":"evals/continuity_floors","label":"continuity_floors","group":"evals","size":633,"fanIn":1,"fanOut":1,"meta":"evals/continuity_floors \u00b7 4 files"},{"id":"evals/embed","label":"embed","group":"evals","size":1215,"fanIn":2,"fanOut":0,"meta":"evals/embed \u00b7 5 files"},{"id":"evals/epistemic","label":"epistemic","group":"cycle","size":982,"fanIn":1,"fanOut":1,"meta":"evals/epistemic \u00b7 7 files \u00b7 in dependency cycle #1"},{"id":"evals/gate","label":"gate","group":"evals","size":1965,"fanIn":1,"fanOut":0,"meta":"evals/gate \u00b7 5 files"},{"id":"evals/history","label":"history","group":"cycle","size":980,"fanIn":1,"fanOut":2,"meta":"evals/history \u00b7 6 files \u00b7 in dependency cycle #1"},{"id":"evals/investigation","label":"investigation","group":"cycle","size":927,"fanIn":1,"fanOut":1,"meta":"evals/investigation \u00b7 5 files \u00b7 in dependency cycle #1"},{"id":"evals/recordings/history","label":"history","group":"evals","size":121,"fanIn":1,"fanOut":0,"meta":"evals/recordings/history \u00b7 2 files"},{"id":"templates/continuity_identity","label":"continuity_identity","group":"templates","size":14,"fanIn":1,"fanOut":0,"meta":"templates/continuity_identity \u00b7 1 files"},{"id":"templates/continuity_reconcile","label":"continuity_reconcile","group":"templates","size":54,"fanIn":1,"fanOut":0,"meta":"templates/continuity_reconcile \u00b7 3 files"},{"id":"templates/epistemic_access","label":"epistemic_access","group":"templates","size":9,"fanIn":1,"fanOut":0,"meta":"templates/epistemic_access \u00b7 1 files"},{"id":"templates/history_check","label":"history_check","group":"templates","size":3,"fanIn":1,"fanOut":0,"meta":"templates/history_check \u00b7 1 files"},{"id":"templates/history_rerank","label":"history_rerank","group":"templates","size":5,"fanIn":1,"fanOut":0,"meta":"templates/history_rerank \u00b7 1 files"},{"id":"templates/scene","label":"scene","group":"templates","size":41,"fanIn":1,"fanOut":0,"meta":"templates/scene \u00b7 3 files"},{"id":"templates/scene/sections","label":"sections","group":"templates","size":136,"fanIn":1,"fanOut":0,"meta":"templates/scene/sections \u00b7 8 files"},{"id":"templates/scene_break","label":"scene_break","group":"templates","size":8,"fanIn":1,"fanOut":0,"meta":"templates/scene_break \u00b7 1 files"},{"id":"templates/scene_suggestions/instruction","label":"instruction","group":"templates","size":42,"fanIn":1,"fanOut":0,"meta":"templates/scene_suggestions/instruction \u00b7 2 files"},{"id":"templates/turn_plan","label":"turn_plan","group":"templates","size":28,"fanIn":1,"fanOut":0,"meta":"templates/turn_plan \u00b7 4 files"},{"id":"templates/voice_drift","label":"voice_drift","group":"templates","size":11,"fanIn":1,"fanOut":0,"meta":"templates/voice_drift \u00b7 1 files"}],"links":[{"source":"evals","target":"evals/continuity_floors","weight":3,"imports":3,"loads":0,"kind":"import","cycle":false},{"source":"evals","target":"evals/embed","weight":4,"imports":4,"loads":0,"kind":"import","cycle":false},{"source":"evals","target":"evals/epistemic","weight":4,"imports":4,"loads":0,"kind":"import","cycle":true},{"source":"evals","target":"evals/gate","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"evals","target":"evals/history","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"evals","target":"evals/investigation","weight":3,"imports":3,"loads":0,"kind":"import","cycle":true},{"source":"evals","target":"templates/continuity_identity","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"evals","target":"templates/continuity_reconcile","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"evals","target":"templates/epistemic_access","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"evals","target":"templates/history_check","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"evals","target":"templates/history_rerank","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"evals","target":"templates/scene","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"evals","target":"templates/scene/sections","weight":8,"imports":0,"loads":8,"kind":"resource","cycle":false},{"source":"evals","target":"templates/scene_break","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"evals","target":"templates/scene_suggestions/instruction","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"evals","target":"templates/turn_plan","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false},{"source":"evals","target":"templates/voice_drift","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"evals/continuity_floors","target":"evals/embed","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"evals/epistemic","target":"evals","weight":10,"imports":10,"loads":0,"kind":"import","cycle":true},{"source":"evals/history","target":"evals","weight":10,"imports":10,"loads":0,"kind":"import","cycle":true},{"source":"evals/history","target":"evals/recordings/history","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"evals/investigation","target":"evals","weight":5,"imports":5,"loads":0,"kind":"import","cycle":true}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span><span><i class=\"sw\" style=\"background:var(--text-faint)\"><\/i>dashed edges = runtime load<\/span>"}</script>
 
 <div class="grid cols-2">
 <div>
@@ -320,21 +344,76 @@ overview; per-package flow, boundary and glossary tabs are written once at repos
 <p class="dim">Changes here ripple widely — review with extra care.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Fan-in</th><th></th><th class="num">Fan-out</th></tr></thead>
-<tbody><tr><td><code>graders.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>cases.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>1</td></tr></tbody></table></div>
+<tbody><tr><td><code>evals/__init__.py</code></td><td class='num'>14</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>evals/cases.py</code></td><td class='num'>10</td><td><div class="bar "><i style="width:71.4%"></i></div></td><td class='num'>29</td></tr>
+<tr><td><code>evals/runner.py</code></td><td class='num'>10</td><td><div class="bar "><i style="width:71.4%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>evals/graders.py</code></td><td class='num'>8</td><td><div class="bar "><i style="width:57.1%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>evals/costs.py</code></td><td class='num'>7</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>evals/epistemic/__init__.py</code></td><td class='num'>5</td><td><div class="bar "><i style="width:35.7%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>evals/embed/corpus.py</code></td><td class='num'>4</td><td><div class="bar "><i style="width:28.6%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>evals/epistemic/synth.py</code></td><td class='num'>4</td><td><div class="bar "><i style="width:28.6%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>evals/investigation/__init__.py</code></td><td class='num'>3</td><td><div class="bar "><i style="width:21.4%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>evals/history/__init__.py</code></td><td class='num'>3</td><td><div class="bar "><i style="width:21.4%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>evals/epistemic/runner.py</code></td><td class='num'>3</td><td><div class="bar "><i style="width:21.4%"></i></div></td><td class='num'>6</td></tr>
+<tr><td><code>evals/epistemic/cases.py</code></td><td class='num'>3</td><td><div class="bar "><i style="width:21.4%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>evals/slop.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:14.3%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>evals/investigation/cases.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:14.3%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>evals/history/runner.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:14.3%"></i></div></td><td class='num'>10</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Highest fan-out (most dependencies)</h2>
 <p class="dim">High fan-out can indicate orchestrators — or god modules doing too much.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Fan-out</th><th></th><th class="num">Fan-in</th></tr></thead>
-<tbody><tr><td><code>runner.py</code></td><td class='num'>2</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>cases.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:50.0%"></i></div></td><td class='num'>1</td></tr>
-<tr><td><code>__init__.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>graders.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>run.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+<tbody><tr><td><code>evals/cases.py</code></td><td class='num'>29</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>10</td></tr>
+<tr><td><code>evals/run.py</code></td><td class='num'>25</td><td><div class="bar warn"><i style="width:86.2%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>evals/history/planning.py</code></td><td class='num'>10</td><td><div class="bar warn"><i style="width:34.5%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>evals/history/runner.py</code></td><td class='num'>10</td><td><div class="bar warn"><i style="width:34.5%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>evals/epistemic/live.py</code></td><td class='num'>9</td><td><div class="bar warn"><i style="width:31.0%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>evals/investigation/runner.py</code></td><td class='num'>9</td><td><div class="bar warn"><i style="width:31.0%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>evals/epistemic/decision.py</code></td><td class='num'>8</td><td><div class="bar warn"><i style="width:27.6%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>evals/gate.py</code></td><td class='num'>7</td><td><div class="bar warn"><i style="width:24.1%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>evals/epistemic/runner.py</code></td><td class='num'>6</td><td><div class="bar warn"><i style="width:20.7%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>evals/play.py</code></td><td class='num'>5</td><td><div class="bar warn"><i style="width:17.2%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>evals/runfile.py</code></td><td class='num'>4</td><td><div class="bar warn"><i style="width:13.8%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>evals/runner.py</code></td><td class='num'>4</td><td><div class="bar warn"><i style="width:13.8%"></i></div></td><td class='num'>10</td></tr>
+<tr><td><code>evals/escalation.py</code></td><td class='num'>3</td><td><div class="bar warn"><i style="width:10.3%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>evals/graders.py</code></td><td class='num'>2</td><td><div class="bar warn"><i style="width:6.9%"></i></div></td><td class='num'>8</td></tr>
+<tr><td><code>evals/continuity_floors/corpus.py</code></td><td class='num'>2</td><td><div class="bar warn"><i style="width:6.9%"></i></div></td><td class='num'>2</td></tr></tbody></table></div>
 </div>
 </div>
+
+<h2>Runtime resources</h2>
+<p class="dim">Files loaded rather than imported — templates, prompts, schemas, embedded data — and the
+code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 13 computed path(s) and 0 file(s) hit the reporting cap.</p>
+<div class="callout warn"><b>9 assets nothing references</b> — same file type, same directories as the loaded ones, but no code path names them. Either dead weight or loaded by a computed path this analysis cannot see.<p style="margin-top:8px"><code>evals/recordings/history/plan.1.json</code> <code>evals/recordings/history/plan.2.json</code> <code>evals/recordings/history/plan.3.json</code> <code>evals/recordings/history/plan.4.json</code> <code>evals/recordings/history/plan.5.json</code> <code>evals/recordings/history/plan.6.json</code> <code>evals/recordings/history/plan.7.json</code> <code>evals/recordings/history/plan.8.json</code> <code>evals/recordings/history/plan.9.json</code></p></div>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Asset</th><th class="num">Loaders</th><th>Loaded at</th></tr></thead>
+<tbody><tr><td><code>evals/continuity_floors/corpus.json</code></td><td class='num'>1</td><td><code>evals/continuity_floors/corpus.py:46</code></td></tr>
+<tr><td><code>evals/embed/corpus.json</code></td><td class='num'>1</td><td><code>evals/embed/corpus.py:27</code></td></tr>
+<tr><td><code>evals/gate/continuity-identity.json</code></td><td class='num'>1</td><td><code>evals/gate.py:542</code></td></tr>
+<tr><td><code>evals/gate/continuity-reconcile.json</code></td><td class='num'>1</td><td><code>evals/gate.py:847</code></td></tr>
+<tr><td><code>evals/gate/scene-break.json</code></td><td class='num'>1</td><td><code>evals/gate.py:311</code></td></tr>
+<tr><td><code>evals/gate/speaker.json</code></td><td class='num'>1</td><td><code>evals/gate.py:423</code></td></tr>
+<tr><td><code>evals/gate/voice-drift.json</code></td><td class='num'>1</td><td><code>evals/gate.py:358</code></td></tr>
+<tr><td><code>evals/recordings/history/plan.validation.json</code></td><td class='num'>1</td><td><code>evals/history/planning.py:127</code></td></tr>
+<tr><td><code>evals/recordings/history/vectors-synthetic-history-1.json</code></td><td class='num'>1</td><td><code>evals/history/runner.py:39</code></td></tr>
+<tr><td><code>templates/continuity_identity/question.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:1851</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/direction.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:1900</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/evidence.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:1902</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/question.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:1897</code></td></tr>
+<tr><td><code>templates/epistemic_access/question.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:2593</code></td></tr>
+<tr><td><code>templates/history_check/question.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:2677</code></td></tr>
+<tr><td><code>templates/history_rerank/question.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:2636</code></td></tr>
+<tr><td><code>templates/scene/authors_note.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:774</code></td></tr>
+<tr><td><code>templates/scene/response_selector_grimoire.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:1611</code></td></tr>
+<tr><td><code>templates/scene/response_selector_question.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:1618</code></td></tr>
+<tr><td><code>templates/scene/sections/active_speaker.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:817</code></td></tr>
+<tr><td><code>templates/scene/sections/mechanics_response_format.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:380</code></td></tr>
+<tr><td><code>templates/scene/sections/natural_prose.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:919</code></td></tr>
+<tr><td><code>templates/scene/sections/prose_style.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:921</code></td></tr>
+<tr><td><code>templates/scene/sections/response_budget.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:292</code></td></tr>
+<tr><td><code>templates/scene/sections/tracker_state.j2</code></td><td class='num'>1</td><td><code>evals/cases.py:841</code></td></tr></tbody></table></div>
 
 
 
@@ -343,8 +422,8 @@ overview; per-package flow, boundary and glossary tabs are written once at repos
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">6</div><div class="l">commits (24 months ago)</div></div>
-  <div class="kpi"><div class="n">5</div><div class="l">files touched</div></div>
+  <div class="kpi accent"><div class="n">89</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi"><div class="n">37</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">cases.py</div><div class="l">top hotspot</div></div>
 </div>
 <div class="callout"><b>How to read this:</b> files that are both <i>complex</i> and <i>frequently changed</i> are where defects concentrate — complexity makes mistakes likely, churn gives them opportunities. Prioritize refactoring and review attention here, not on complex-but-stable code.</div>
@@ -353,22 +432,138 @@ overview; per-package flow, boundary and glossary tabs are written once at repos
 <h2>Churn × size map</h2>
 <p class="dim">Area = lines of code · color = commit count since 24 months ago · hover for details.</p>
 <div class="viz" data-render="treemap" style="height:540px"></div>
-<script type="application/json">{"items":[{"name":"cases.py","value":417,"metric":5,"meta":"26 branches \u00b7 2 authors"},{"name":"graders.py","value":222,"metric":2,"meta":"31 branches \u00b7 2 authors"},{"name":"runner.py","value":156,"metric":1,"meta":"52 branches \u00b7 1 authors"},{"name":"run.py","value":69,"metric":1,"meta":"25 branches \u00b7 1 authors"},{"name":"__init__.py","value":4,"metric":1,"meta":"0 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":5}</script>
+<script type="application/json">{"items":[{"name":"evals/cases.py","value":2437,"metric":51,"meta":"178 branches \u00b7 2 authors"},{"name":"evals/run.py","value":884,"metric":20,"meta":"259 branches \u00b7 2 authors"},{"name":"evals/runner.py","value":887,"metric":16,"meta":"300 branches \u00b7 2 authors"},{"name":"evals/graders.py","value":785,"metric":18,"meta":"181 branches \u00b7 2 authors"},{"name":"evals/runfile.py","value":263,"metric":7,"meta":"115 branches \u00b7 1 authors"},{"name":"evals/slop.py","value":354,"metric":10,"meta":"46 branches \u00b7 1 authors"},{"name":"evals/investigation/runner.py","value":443,"metric":3,"meta":"146 branches \u00b7 2 authors"},{"name":"evals/play.py","value":641,"metric":2,"meta":"204 branches \u00b7 2 authors"},{"name":"evals/gate.py","value":764,"metric":4,"meta":"95 branches \u00b7 1 authors"},{"name":"evals/history/runner.py","value":267,"metric":3,"meta":"92 branches \u00b7 1 authors"},{"name":"evals/history/planning.py","value":498,"metric":1,"meta":"176 branches \u00b7 1 authors"},{"name":"evals/legacy.py","value":380,"metric":2,"meta":"76 branches \u00b7 1 authors"},{"name":"evals/continuity_floors/corpus.py","value":162,"metric":3,"meta":"43 branches \u00b7 1 authors"},{"name":"evals/continuity_floors/metrics.py","value":212,"metric":2,"meta":"57 branches \u00b7 1 authors"},{"name":"evals/epistemic/live.py","value":299,"metric":1,"meta":"107 branches \u00b7 1 authors"},{"name":"evals/embed/harness.py","value":194,"metric":2,"meta":"41 branches \u00b7 1 authors"},{"name":"evals/escalation.py","value":202,"metric":1,"meta":"67 branches \u00b7 1 authors"},{"name":"evals/history/synth.py","value":173,"metric":1,"meta":"53 branches \u00b7 1 authors"},{"name":"evals/epistemic/decision.py","value":157,"metric":1,"meta":"48 branches \u00b7 1 authors"},{"name":"evals/costs.py","value":167,"metric":1,"meta":"41 branches \u00b7 1 authors"},{"name":"evals/epistemic/runner.py","value":53,"metric":2,"meta":"16 branches \u00b7 1 authors"},{"name":"evals/embed/corpus.py","value":106,"metric":1,"meta":"29 branches \u00b7 1 authors"},{"name":"evals/investigation/graders.py","value":90,"metric":1,"meta":"29 branches \u00b7 1 authors"},{"name":"evals/embed/metrics.py","value":75,"metric":1,"meta":"23 branches \u00b7 1 authors"},{"name":"evals/epistemic/graders.py","value":46,"metric":1,"meta":"19 branches \u00b7 1 authors"},{"name":"evals/investigation/synth.py","value":240,"metric":1,"meta":"19 branches \u00b7 1 authors"},{"name":"evals/history/graders.py","value":17,"metric":1,"meta":"11 branches \u00b7 1 authors"},{"name":"evals/epistemic/cases.py","value":315,"metric":1,"meta":"10 branches \u00b7 1 authors"},{"name":"evals/epistemic/synth.py","value":110,"metric":1,"meta":"10 branches \u00b7 1 authors"},{"name":"evals/investigation/cases.py","value":147,"metric":2,"meta":"3 branches \u00b7 2 authors"},{"name":"evals/investigation/__init__.py","value":7,"metric":1,"meta":"1 branches \u00b7 1 authors"},{"name":"evals/__init__.py","value":4,"metric":1,"meta":"0 branches \u00b7 1 authors"},{"name":"evals/continuity_floors/__init__.py","value":4,"metric":1,"meta":"0 branches \u00b7 1 authors"},{"name":"evals/embed/__init__.py","value":3,"metric":1,"meta":"0 branches \u00b7 1 authors"},{"name":"evals/epistemic/__init__.py","value":2,"metric":1,"meta":"0 branches \u00b7 1 authors"},{"name":"evals/history/__init__.py","value":1,"metric":1,"meta":"0 branches \u00b7 1 authors"},{"name":"evals/history/cases.py","value":24,"metric":1,"meta":"0 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":51}</script>
 
 <h2>Hotspot ranking</h2>
-<p class="dim">Score = commits × (branch points + 1). Tests excluded. 14 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: recordings/absorb.compliant.json (3), recordings/absorb.laundered.json (3), recordings/absorb.no-summary.json (3).</p>
+<p class="dim">Score = commits × (branch points + 1). Tests excluded. 138 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: evals/README.md (42), evals/recordings/absorb.compliant.json (4), evals/recordings/absorb.laundered.json (4).</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
-<tbody><tr><td><code>cases.py</code></td><td class='num'>5</td><td class='num'>26</td><td class='num'>417</td><td class='num'>2</td><td class='num' data-sort='135'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>graders.py</code></td><td class='num'>2</td><td class='num'>31</td><td class='num'>222</td><td class='num'>2</td><td class='num' data-sort='64'><div class="bar bad"><i style="width:47.4%"></i></div></td></tr>
-<tr><td><code>runner.py</code></td><td class='num'>1</td><td class='num'>52</td><td class='num'>156</td><td class='num'>1</td><td class='num' data-sort='53'><div class="bar bad"><i style="width:39.3%"></i></div></td></tr>
-<tr><td><code>run.py</code></td><td class='num'>1</td><td class='num'>25</td><td class='num'>69</td><td class='num'>1</td><td class='num' data-sort='26'><div class="bar bad"><i style="width:19.3%"></i></div></td></tr>
-<tr><td><code>__init__.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>4</td><td class='num'>1</td><td class='num' data-sort='1'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>evals/cases.py</code></td><td class='num'>51</td><td class='num'>178</td><td class='num'>2,437</td><td class='num'>2</td><td class='num' data-sort='9129'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>evals/run.py</code></td><td class='num'>20</td><td class='num'>259</td><td class='num'>884</td><td class='num'>2</td><td class='num' data-sort='5200'><div class="bar bad"><i style="width:57.0%"></i></div></td></tr>
+<tr><td><code>evals/runner.py</code></td><td class='num'>16</td><td class='num'>300</td><td class='num'>887</td><td class='num'>2</td><td class='num' data-sort='4816'><div class="bar bad"><i style="width:52.8%"></i></div></td></tr>
+<tr><td><code>evals/graders.py</code></td><td class='num'>18</td><td class='num'>181</td><td class='num'>785</td><td class='num'>2</td><td class='num' data-sort='3276'><div class="bar bad"><i style="width:35.9%"></i></div></td></tr>
+<tr><td><code>evals/runfile.py</code></td><td class='num'>7</td><td class='num'>115</td><td class='num'>263</td><td class='num'>1</td><td class='num' data-sort='812'><div class="bar bad"><i style="width:8.9%"></i></div></td></tr>
+<tr><td><code>evals/slop.py</code></td><td class='num'>10</td><td class='num'>46</td><td class='num'>354</td><td class='num'>1</td><td class='num' data-sort='470'><div class="bar bad"><i style="width:5.1%"></i></div></td></tr>
+<tr><td><code>evals/investigation/runner.py</code></td><td class='num'>3</td><td class='num'>146</td><td class='num'>443</td><td class='num'>2</td><td class='num' data-sort='441'><div class="bar bad"><i style="width:4.8%"></i></div></td></tr>
+<tr><td><code>evals/play.py</code></td><td class='num'>2</td><td class='num'>204</td><td class='num'>641</td><td class='num'>2</td><td class='num' data-sort='410'><div class="bar bad"><i style="width:4.5%"></i></div></td></tr>
+<tr><td><code>evals/gate.py</code></td><td class='num'>4</td><td class='num'>95</td><td class='num'>764</td><td class='num'>1</td><td class='num' data-sort='384'><div class="bar bad"><i style="width:4.2%"></i></div></td></tr>
+<tr><td><code>evals/history/runner.py</code></td><td class='num'>3</td><td class='num'>92</td><td class='num'>267</td><td class='num'>1</td><td class='num' data-sort='279'><div class="bar bad"><i style="width:3.1%"></i></div></td></tr>
+<tr><td><code>evals/history/planning.py</code></td><td class='num'>1</td><td class='num'>176</td><td class='num'>498</td><td class='num'>1</td><td class='num' data-sort='177'><div class="bar bad"><i style="width:1.9%"></i></div></td></tr>
+<tr><td><code>evals/legacy.py</code></td><td class='num'>2</td><td class='num'>76</td><td class='num'>380</td><td class='num'>1</td><td class='num' data-sort='154'><div class="bar bad"><i style="width:1.7%"></i></div></td></tr>
+<tr><td><code>evals/continuity_floors/corpus.py</code></td><td class='num'>3</td><td class='num'>43</td><td class='num'>162</td><td class='num'>1</td><td class='num' data-sort='132'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/continuity_floors/metrics.py</code></td><td class='num'>2</td><td class='num'>57</td><td class='num'>212</td><td class='num'>1</td><td class='num' data-sort='116'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/epistemic/live.py</code></td><td class='num'>1</td><td class='num'>107</td><td class='num'>299</td><td class='num'>1</td><td class='num' data-sort='108'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/embed/harness.py</code></td><td class='num'>2</td><td class='num'>41</td><td class='num'>194</td><td class='num'>1</td><td class='num' data-sort='84'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/escalation.py</code></td><td class='num'>1</td><td class='num'>67</td><td class='num'>202</td><td class='num'>1</td><td class='num' data-sort='68'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/history/synth.py</code></td><td class='num'>1</td><td class='num'>53</td><td class='num'>173</td><td class='num'>1</td><td class='num' data-sort='54'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/epistemic/decision.py</code></td><td class='num'>1</td><td class='num'>48</td><td class='num'>157</td><td class='num'>1</td><td class='num' data-sort='49'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/costs.py</code></td><td class='num'>1</td><td class='num'>41</td><td class='num'>167</td><td class='num'>1</td><td class='num' data-sort='42'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/epistemic/runner.py</code></td><td class='num'>2</td><td class='num'>16</td><td class='num'>53</td><td class='num'>1</td><td class='num' data-sort='34'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/embed/corpus.py</code></td><td class='num'>1</td><td class='num'>29</td><td class='num'>106</td><td class='num'>1</td><td class='num' data-sort='30'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/investigation/graders.py</code></td><td class='num'>1</td><td class='num'>29</td><td class='num'>90</td><td class='num'>1</td><td class='num' data-sort='30'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/embed/metrics.py</code></td><td class='num'>1</td><td class='num'>23</td><td class='num'>75</td><td class='num'>1</td><td class='num' data-sort='24'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>evals/epistemic/graders.py</code></td><td class='num'>1</td><td class='num'>19</td><td class='num'>46</td><td class='num'>1</td><td class='num' data-sort='20'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
 
 
+
+</section>
+<section class="panel" id="flows" role="tabpanel">
+
+<h2>Replay proves the grader, live mode observes the system</h2>
+<h3>1. Replay with exact counterexample expectations</h3>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+ participant C as CLI or pytest
+ participant I as Isolate
+ participant R as runner.replay
+ participant B as Production builder
+ participant G as Grader
+ C->>I: Enter fresh home
+ C->>R: Case and Recording
+ R->>B: Build fixture and actual prompt
+ B-->>R: Context with messages
+ R->>R: Read recorded reply
+ opt Native decisions recording
+ R->>R: Parse through production adapter
+ end
+ R->>G: Context and output
+ G-->>R: Named checks
+ alt Counterexample
+ R->>R: Actual failures equal declared set
+ else Baseline
+ R->>R: Every check passes
+ end
+ R-->>C: Result
+ C->>I: Leave isolate
+</pre></div></div>
+<ul><li>The prompt is rebuilt even for a fixed reply, so replay can catch deleted instructions but cannot observe changed live model behavior. <code>evals/cases.py:22</code> <code>evals/runner.py:173</code></li><li>Native recordings are read by the actual provider parser, including unread/abstained result distinctions. <code>evals/runner.py:187</code></li><li>Equality of failure sets prevents an unrelated failure from hiding a dead check. <code>evals/runner.py:219</code> <code>backend/tests/test_evals.py:55</code></li></ul>
+<h3>2. Live generation, drain and harvest</h3>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+ participant C as Live caller
+ participant I as Temporary home
+ participant R as runner.live
+ participant P as Production inference
+ participant L as Isolate ledger
+ participant F as Run report
+ C->>I: Set isolated root
+ C->>R: Resolved target and real-home tripwire
+ alt Active root equals real home
+ R-->>C: Isolate refusal
+ else Isolated root
+ R->>R: Build fixture and prompt
+ R->>P: Generate or decision stages
+ P->>L: Meter every call
+ P-->>R: Output or provider failure
+ R->>R: Drain detached follow-ups
+ alt Drain exceeds ceiling
+ R-->>I: FollowUpsRunningError
+ I->>I: Keep home and environment
+ else Settled
+ R->>L: Strict harvest of call rows
+ R->>F: Checks, rows, wall time, missing-data markers
+ end
+ end
+</pre></div></div>
+<ul><li>Passing no real-home argument skips the tripwire; the helper is not a self-contained safety sandbox. <code>evals/runner.py:520</code> <code>evals/runner.py:743</code></li><li>A drain failure preserves the home/environment because a surviving worker can still resolve paths; ordinary cleanup would misdirect later writes. <code>evals/run.py:68</code> <code>evals/runner.py:509</code></li><li>Unreadable usage is an error, not free execution, and harvesting precedes grading so a grader crash retains cost observations. <code>evals/runner.py:549</code> <code>evals/runner.py:802</code></li><li>Optional recording overwrites the baseline only; it never rewrites counterexamples. <code>evals/runner.py:747</code> <code>evals/runner.py:809</code></li></ul>
+
+</section>
+<section class="panel" id="boundaries" role="tabpanel">
+
+<h2>Observation ownership matters as much as execution ownership</h2>
+<div class="tbl-wrap"><table><thead><tr><th>Concern</th><th>Owner</th><th>Assessment</th></tr></thead><tbody><tr><td>Hypothesis, synthetic fixture, prompt, expected failures</td><td><code>evals/cases.py:105</code> <code>evals/cases.py:133</code></td><td><span class="badge good">explicit case contract</span></td></tr><tr><td>Pure pass/fail checks</td><td><code>evals/graders.py:1</code></td><td><span class="badge good">no network or store reads</span></td></tr><tr><td>Live inference and cost settlement</td><td><code>evals/runner.py:743</code> <code>evals/runner.py:562</code></td><td><span class="badge good">named orchestration</span></td></tr><tr><td>Library isolation and cleanup</td><td><code>evals/runner.py:92</code> <code>evals/run.py:68</code></td><td><span class="badge warn">caller and context cooperate</span></td></tr><tr><td>Saved report and comparison</td><td><code>evals/runfile.py:1</code></td><td><span class="badge good">observations only</span></td></tr><tr><td>Retrieval-family report adaptation</td><td><code>evals/history/runner.py:82</code></td><td><span class="badge warn">dummy prompt Case</span></td></tr></tbody></table></div>
+<h3>Data ownership</h3><p>The case builder writes only the active throwaway library, production metering writes that library's ledger, and harvest copies the rows into the result with eval scope. The CLI may then write an explicitly named run report; report comparison reads that file without consulting private settings or current rates. <code>evals/cases.py:6</code> <code>evals/runner.py:24</code> <code>evals/runner.py:549</code> <code>evals/runfile.py:10</code></p>
+<p>Checked-in reply artifacts have two owners with intentionally different privileges: hand-authored counterexamples remain fixed; opt-in live recording replaces only the compliant baseline. A recording is evidence about how code handles that text, not a statement about what a provider currently emits. <code>evals/cases.py:100</code> <code>evals/runner.py:747</code> <code>backend/tests/llm_fakes.py:80</code></p>
+<div class="callout warn">The core report shape still thinks in prompt-response cases: the history experiment constructs a Case with dummy builders and empty graders/recordings. This preserves reuse, but maintainers adding another experiment family should not infer that every report field has the same experimental meaning. <code>evals/history/runner.py:82</code> <code>evals/runfile.py:79</code></div>
+<p>The production dependency is deliberate: cases call real builders and graders reuse real consuming parsers, with documented exceptions when tolerant parsing would normalize away the violation. A shared parser can create correlated blind spots, so independent raw checks and counterexamples remain load-bearing. <code>evals/cases.py:9</code> <code>evals/graders.py:4</code> <code>evals/graders.py:11</code></p>
+<p class="dim">The dependency graph is textual; runtime-selected cases, templates and optional transports need source reading. Module grouping and analyzer limitations are recorded in Overview after the fresh graph run. No source ownership is inferred from graph sparsity.</p>
+
+<h3>Grouped cycle versus file cycle</h3><p>The CLI imports specialized families, while those families import core costs, results and Case adapters. This explains the core/family grouped cycle without circular file initialization: no file cycle was detected. All 164 detected first-party Python imports resolve; 308 out-of-unit edges intentionally reach production code. <code>evals/run.py:49</code> <code>evals/history/runner.py:24</code> <code>evals/history/runner.py:82</code></p>
+
+</section>
+<section class="panel" id="invariants" role="tabpanel">
+
+<h2>The harness must fail in the right way</h2>
+<div class="tbl-wrap"><table><thead><tr><th>Invariant</th><th>Enforcement</th><th>Status</th></tr></thead><tbody><tr><td>Every core case has a baseline and a counterexample</td><td><code>backend/tests/test_evals.py:71</code></td><td><span class="badge good">structural test</span></td></tr><tr><td>Counterexamples trip exactly their named checks</td><td><code>evals/runner.py:239</code></td><td><span class="badge good">set equality</span></td></tr><tr><td>Fixture/prompt construction happens in replay too</td><td><code>evals/runner.py:173</code> <code>evals/runner.py:208</code></td><td><span class="badge good">actual prompt checked</span></td></tr><tr><td>A live case never builds in the private root</td><td><code>evals/runner.py:520</code> <code>evals/runner.py:775</code></td><td><span class="badge warn">requires caller tripwire</span></td></tr><tr><td>Missing usage is not reported as zero</td><td><code>evals/runner.py:125</code> <code>evals/runner.py:549</code></td><td><span class="badge good">explicit missing/partial data</span></td></tr><tr><td>Planner token totals indicate incomplete accounting</td><td><code>evals/history/planning.py:497</code></td><td><span class="badge warn">partial sums unmarked</span></td></tr></tbody></table></div>
+<h3>Failure and concurrency boundaries</h3><p>A provider failure and a grader crash become case results with distinct errors; baseline-write failures retain the paid observations. Follow-up timeout is stronger: it propagates so the isolate can keep its root, preventing a straggler from writing after environment restoration. <code>evals/runner.py:798</code> <code>evals/runner.py:802</code> <code>evals/runner.py:809</code> <code>evals/run.py:68</code></p>
+<p>The library selector is process-global environment state. Overlapping isolate contexts in one process can point a worker at another case; these context managers should not be mistaken for task-local roots. <code>evals/runner.py:101</code> <code>evals/run.py:75</code></p>
+<h3>Risk ranking</h3>
+<div class="callout bad"><strong>1. Wrong isolation caller can mutate the wrong library.</strong> A direct live call with real_home omitted skips both tripwires, then prepares the fixture in the active root. The intended CLI context is essential. <code>evals/runner.py:743</code> <code>evals/runner.py:775</code> <code>evals/runner.py:778</code></div>
+<div class="callout warn"><strong>2. Partial token accounting can look complete.</strong> For one turn with missing planner counts and present check counts, _per_turn drops the missing values and divides the remaining sum by all rows. A displayed numeric total then lacks a coverage marker. <code>evals/history/planning.py:497</code></div>
+<div class="callout warn"><strong>3. Offline green is easy to over-interpret.</strong> Replay holds a fixed reply and the bag-of-words endpoint explicitly proves wiring, not embedding quality. The dated live report still lists missing adherence/ensemble measures and noisy latency. <code>evals/cases.py:22</code> <code>evals/embed/harness.py:5</code> <code>docs/superpowers/validation/2026-10-12-roadmap-02-play-gate.md:120</code></div>
+<p><strong>4. Change concentration raises review cost.</strong> Fresh hotspot analysis ranks cases, CLI, runner and graders first. Their shared types and counterexample contracts are the most useful reading order for a change; churn × branches is an attention heuristic, not observed failure probability. <code>evals/cases.py:133</code> <code>evals/runner.py:219</code> <code>evals/run.py:96</code></p>
+<p class="dim">These are source-backed review risks, not results of new test/eval runs. Coverage was skipped; corpus size does not substitute for production adoption, current provider observations or statistical power.</p>
+
+<details><summary>Reconciliation with the prior atlas</summary><div class="body"><p>The recovered prior eval atlas contained no Boundaries or Invariants fragments. There were no previous risk/invariant/cycle claims in those tabs to carry forward; the fresh findings above were developed from current source and analyzer summaries.</p></div></details>
+
+</section>
+<section class="panel" id="glossary" role="tabpanel">
+
+<h2>Similar words name different kinds of evidence</h2>
+<div class="tbl-wrap"><table><thead><tr><th>Domain term</th><th>Code name</th><th>Meaning and drift</th></tr></thead><tbody><tr><td>Hypothesis and executable setup</td><td>Case</td><td><code>evals/cases.py:133</code> binds build, prompt, grade and recordings. Retrieval families use a dummy Case for reporting, so its shape is not always a runnable prompt case. <code>evals/history/runner.py:82</code></td></tr><tr><td>Declared counterexample</td><td>Recording.expect_fail</td><td>Successful replay of bad output means exactly the expected checks fail. <code>evals/cases.py:105</code> <code>evals/runner.py:239</code></td></tr><tr><td>Replay</td><td>runner.replay</td><td>Rebuilds the current prompt and grades frozen text; does not ask a model. <code>evals/runner.py:219</code></td></tr><tr><td>Compliant baseline</td><td>BASELINE</td><td>The one live-recordable variant, not a neutral control or statistical baseline in every experiment. <code>evals/cases.py:100</code></td></tr><tr><td>Settled case</td><td>drain / harvest</td><td>Wait for detached work, then strictly copy metered rows before cleanup. <code>evals/runner.py:530</code> <code>evals/runner.py:549</code></td></tr><tr><td>Whole ranking</td><td>Grade.whole</td><td>All query IDs answered using known document IDs; this says completeness, not quality. <code>evals/embed/metrics.py:45</code></td></tr><tr><td>Reported token cost</td><td>_per_turn</td><td><span class="badge warn">partial possible</span> Missing planner/check counts are dropped without marking coverage. <code>evals/history/planning.py:497</code></td></tr><tr><td>Run file</td><td>eval-run v1</td><td>Saved observations and configuration axes; excludes full prompts/replies and provider error text. <code>evals/runfile.py:1</code></td></tr></tbody></table></div>
 
 </section><!--DOC_BODY--></main>
-<footer class="doc">Generated by code-visualization for the grimoire code-overview set. Automated tabs are script-generated; judgment tabs were authored from code reading and their citations verified against a63cb05f5.</footer>
+<footer class="doc">Automated tabs use installed code-visualization analyzers. Judgment tabs cite sampled source reading. Coverage omitted by user choice; custom model wrappers and dynamic resource loads have stated detection gaps.</footer>
 <script>
 (function(){
   const btns=[...document.querySelectorAll('nav.tabs button')];
@@ -378,6 +573,325 @@ overview; per-package flow, boundary and glossary tabs are written once at repos
     window.dispatchEvent(new CustomEvent('tab:shown',{detail:{id}}));
   }
   btns.forEach(b=>b.addEventListener('click',()=>activate(b.dataset.tab)));
+})();
+</script>
+<script id="atlas-renderers">
+/* The atlas renderers: sortable tables, the force-directed graph, the
+   squarified treemap and Mermaid diagrams — one copy. assemble.py inlines this
+   into whatever page shell --template names, so a caller that restyles the page
+   keeps them.
+
+   What a shell owes them: the design tokens they read (--accent, --surface,
+   --text, ... as CSS custom properties), and the tab contract — panels are
+   `.panel`, the shown one carries `.active`, and showing one dispatches
+   `tab:shown` on window with {detail:{id}}. A hidden tab's diagrams are drawn
+   when it is first shown, at its real size. */
+(function(){
+/* A shell that already carries its own inline copy (an older template) keeps
+   it: binding the sort handlers twice would make every click cancel itself. */
+if(window.atlasRenderers||typeof window.renderForceGraph==='function')return;
+window.atlasRenderers=true;
+
+/* ============ helpers ============ */
+const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const tip=document.getElementById('viz-tip')||document.body.appendChild(
+  Object.assign(document.createElement('div'),{className:'viz-tip',id:'viz-tip'}));
+function showTip(html,x,y){tip.innerHTML=html;tip.style.display='block';
+  const r=tip.getBoundingClientRect();
+  tip.style.left=Math.min(x+14,innerWidth-r.width-10)+'px';
+  tip.style.top=Math.min(y+14,innerHeight-r.height-10)+'px';}
+function hideTip(){tip.style.display='none'}
+function lerpColor(a,b,t){
+  const pa=hex(a),pb=hex(b);
+  return `rgb(${pa.map((v,i)=>Math.round(v+(pb[i]-v)*t)).join(',')})`;
+  function hex(h){h=h.replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');
+    return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16));}
+}
+function fmt(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e4?(n/1e3).toFixed(0)+'k':n>=1e3?(n/1e3).toFixed(1)+'k':String(n)}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+/* sortable tables */
+document.querySelectorAll('table.sortable').forEach(tb=>{
+  tb.querySelectorAll('thead th').forEach((th,ci)=>{
+    th.addEventListener('click',()=>{
+      const dir=th.classList.contains('asc')?'desc':'asc';
+      tb.querySelectorAll('thead th').forEach(h=>h.classList.remove('asc','desc'));
+      th.classList.add(dir);
+      const rows=[...tb.querySelectorAll('tbody tr')];
+      const val=r=>{const td=r.children[ci];if(!td)return '';
+        const d=td.dataset.sort!==undefined?td.dataset.sort:td.textContent.trim();
+        const n=parseFloat(String(d).replace(/[,%]/g,''));return isNaN(n)?String(d).toLowerCase():n;};
+      rows.sort((a,b)=>{const va=val(a),vb=val(b);
+        const c=(typeof va==='number'&&typeof vb==='number')?va-vb:String(va).localeCompare(String(vb));
+        return dir==='asc'?c:-c;});
+      const tbody=tb.querySelector('tbody');rows.forEach(r=>tbody.appendChild(r));
+    });
+  });
+});
+
+/* pan/zoom for a container holding an inner element (svg group or div) */
+function panZoom(viewport,apply,getState){
+  let drag=null;
+  viewport.addEventListener('wheel',e=>{
+    if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();
+    const s=getState();const f=e.deltaY<0?1.15:1/1.15;
+    const r=viewport.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+    s.x=mx-(mx-s.x)*f; s.y=my-(my-s.y)*f; s.k=Math.max(.15,Math.min(8,s.k*f)); apply();
+  },{passive:false});
+  viewport.addEventListener('mousedown',e=>{
+    if(e.target.closest('.zoombar')||e.target.dataset.draggable)return;
+    drag={sx:e.clientX,sy:e.clientY,ox:getState().x,oy:getState().y};
+    viewport.classList.add('dragging');
+  });
+  window.addEventListener('mousemove',e=>{if(!drag)return;
+    const s=getState();s.x=drag.ox+e.clientX-drag.sx;s.y=drag.oy+e.clientY-drag.sy;apply();});
+  window.addEventListener('mouseup',()=>{drag=null;viewport.classList.remove('dragging')});
+}
+function addZoombar(container,zoomIn,zoomOut,reset){
+  const bar=document.createElement('div');bar.className='zoombar';
+  [['+',zoomIn],['−',zoomOut],['⟲',reset]].forEach(([t,fn])=>{
+    const b=document.createElement('button');b.textContent=t;b.title=t==='⟲'?'Reset view':(t==='+'?'Zoom in':'Zoom out');
+    b.addEventListener('click',fn);bar.appendChild(b);});
+  container.appendChild(bar);
+}
+
+/* ============ force-directed graph ============ */
+/* data: {nodes:[{id,label,group,size,fanIn,fanOut,meta}], links:[{source,target,cycle,weight}], groups:{name:colorKey}} */
+function renderForceGraph(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||560;
+  const groupNames=[...new Set(data.nodes.map(n=>n.group||''))];
+  const palette=[cssVar('--accent'),cssVar('--good'),cssVar('--warn'),cssVar('--violet'),cssVar('--bad'),'#5ec2c9','#c98fb8','#8fb0c9'];
+  const gcolor={};groupNames.forEach((g,i)=>gcolor[g]=palette[i%palette.length]);
+  const nodes=data.nodes.map(n=>({...n,x:W/2+(Math.random()-0.5)*W*0.7,y:H/2+(Math.random()-0.5)*H*0.7,vx:0,vy:0}));
+  const idx={};nodes.forEach((n,i)=>idx[n.id]=i);
+  const links=data.links.filter(l=>idx[l.source]!==undefined&&idx[l.target]!==undefined)
+    .map(l=>({...l,s:idx[l.source],t:idx[l.target]}));
+  const maxSize=Math.max(1,...nodes.map(n=>n.size||1));
+  const R=n=>6+14*Math.sqrt((n.size||1)/maxSize);
+  /* simulate */
+  const iter=nodes.length>60?220:320;
+  for(let k=0;k<iter;k++){
+    const t=1-k/iter, rep=9000*t+900;
+    for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+      const a=nodes[i],b=nodes[j];let dx=a.x-b.x,dy=a.y-b.y;let d2=dx*dx+dy*dy||1;
+      if(d2<250000){const f=rep/d2;dx*=f;dy*=f;a.vx+=dx;a.vy+=dy;b.vx-=dx;b.vy-=dy;}
+    }
+    links.forEach(l=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const want=90+R(a)+R(b);const f=0.02*(d-want)/d;
+      a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f;});
+    nodes.forEach(n=>{
+      n.vx+=(W/2-n.x)*0.0035;n.vy+=(H/2-n.y)*0.0035;
+      n.x+=Math.max(-14,Math.min(14,n.vx));n.y+=Math.max(-14,Math.min(14,n.vy));
+      n.vx*=0.6;n.vy*=0.6;});
+  }
+  /* fit */
+  const xs=nodes.map(n=>n.x),ys=nodes.map(n=>n.y);
+  const pad=60,minx=Math.min(...xs)-pad,maxx=Math.max(...xs)+pad,miny=Math.min(...ys)-pad,maxy=Math.max(...ys)+pad;
+  const fitK=Math.min(W/(maxx-minx),H/(maxy-miny),1.6);
+  const st={k:fitK,x:(W-(maxx+minx)*fitK)/2,y:(H-(maxy+miny)*fitK)/2};
+  const init={...st};
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const defs=document.createElementNS(svgNS,'defs');
+  defs.innerHTML=`<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--text-faint')}"/></marker>
+  <marker id="arr-cyc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--bad')}"/></marker>`;
+  svg.appendChild(defs);
+  const g=document.createElementNS(svgNS,'g');svg.appendChild(g);
+  const apply=()=>g.setAttribute('transform',`translate(${st.x},${st.y}) scale(${st.k})`);
+  const edgeEls=[],nodeEls=[];
+  links.forEach(l=>{
+    const p=document.createElementNS(svgNS,'path');
+    p.setAttribute('stroke',l.cycle?cssVar('--bad'):cssVar('--text-faint'));
+    p.setAttribute('stroke-opacity',l.cycle?'0.9':'0.4');
+    p.setAttribute('stroke-width',l.cycle?2:Math.min(3,0.7+Math.log2(1+(l.weight||1))*0.5));
+    p.setAttribute('fill','none');
+    /* dashed = loaded at runtime (template, prompt, data), not imported */
+    if(l.kind==='resource')p.setAttribute('stroke-dasharray','5 4');
+    p.setAttribute('marker-end',l.cycle?'url(#arr-cyc)':'url(#arr)');
+    g.appendChild(p);edgeEls.push(p);
+  });
+  nodes.forEach(n=>{
+    const grp=document.createElementNS(svgNS,'g');grp.style.cursor='grab';grp.dataset.draggable='1';
+    const c=document.createElementNS(svgNS,'circle');
+    c.setAttribute('r',R(n));c.setAttribute('fill',gcolor[n.group||'']);
+    c.setAttribute('fill-opacity','0.85');c.setAttribute('stroke',cssVar('--bg'));c.setAttribute('stroke-width','1.5');
+    c.dataset.draggable='1';
+    const t=document.createElementNS(svgNS,'text');
+    t.textContent=n.label||n.id;t.setAttribute('font-size','11');t.setAttribute('font-family',cssVar('--mono'));
+    t.setAttribute('fill',cssVar('--text'));t.setAttribute('text-anchor','middle');t.setAttribute('dy',R(n)+13);
+    t.style.pointerEvents='none';
+    grp.appendChild(c);grp.appendChild(t);g.appendChild(grp);nodeEls.push(grp);
+    grp.addEventListener('mouseenter',e=>{
+      showTip(`<b>${esc(n.label||n.id)}</b><br>${n.meta?esc(n.meta)+'<br>':''}fan-in ${n.fanIn??'–'} · fan-out ${n.fanOut??'–'}${n.size?` · ${fmt(n.size)} loc`:''}`,e.clientX,e.clientY);
+      hl(n.id);});
+    grp.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    grp.addEventListener('mouseleave',()=>{hideTip();hl(null)});
+    let dragN=null;
+    grp.addEventListener('mousedown',e=>{e.stopPropagation();dragN={mx:e.clientX,my:e.clientY,ox:n.x,oy:n.y};});
+    window.addEventListener('mousemove',e=>{if(!dragN)return;
+      n.x=dragN.ox+(e.clientX-dragN.mx)/st.k;n.y=dragN.oy+(e.clientY-dragN.my)/st.k;draw();});
+    window.addEventListener('mouseup',()=>dragN=null);
+  });
+  function hl(id){
+    if(id===null){edgeEls.forEach((p,i)=>p.setAttribute('stroke-opacity',links[i].cycle?'0.9':'0.4'));
+      nodeEls.forEach(el=>el.style.opacity='1');return;}
+    const near=new Set([id]);
+    links.forEach(l=>{if(l.source===id)near.add(l.target);if(l.target===id)near.add(l.source)});
+    edgeEls.forEach((p,i)=>{const l=links[i];
+      p.setAttribute('stroke-opacity',(l.source===id||l.target===id)?'1':'0.08');});
+    nodeEls.forEach((el,i)=>el.style.opacity=near.has(nodes[i].id)?'1':'0.25');
+  }
+  function draw(){
+    links.forEach((l,i)=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const tx=b.x-dx/d*(R(b)+3),ty=b.y-dy/d*(R(b)+3);
+      const sx=a.x+dx/d*R(a),sy=a.y+dy/d*R(a);
+      const mx=(sx+tx)/2-dy/d*10,my=(sy+ty)/2+dx/d*10;
+      edgeEls[i].setAttribute('d',`M${sx},${sy} Q${mx},${my} ${tx},${ty}`);});
+    nodes.forEach((n,i)=>nodeEls[i].setAttribute('transform',`translate(${n.x},${n.y})`));
+  }
+  draw();apply();
+  container.appendChild(svg);
+  panZoom(container,apply,()=>st);
+  addZoombar(container,
+    ()=>{st.k=Math.min(8,st.k*1.25);apply()},
+    ()=>{st.k=Math.max(.15,st.k/1.25);apply()},
+    ()=>{Object.assign(st,init);apply()});
+  if(groupNames.length>1||data.legendExtra){
+    const leg=document.createElement('div');leg.className='legend';
+    groupNames.forEach(gn=>{leg.innerHTML+=`<span><i class="sw" style="background:${gcolor[gn]}"></i>${esc(gn||'(root)')}</span>`});
+    if(data.legendExtra)leg.innerHTML+=data.legendExtra;
+    container.appendChild(leg);
+  }
+}
+
+/* ============ squarified treemap ============ */
+/* data: {items:[{name,value,metric,meta}], metricLabel, metricMax} — value drives area, metric drives heat color */
+function renderTreemap(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||520;
+  const items=data.items.filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
+  const total=items.reduce((s,d)=>s+d.value,0)||1;
+  const mmax=data.metricMax??Math.max(1,...items.map(d=>d.metric||0));
+  const rects=[];
+  (function squarify(list,x,y,w,h){
+    if(!list.length)return;
+    if(list.length===1){rects.push({d:list[0],x,y,w,h});return;}
+    let row=[],rest=list.slice(),best=Infinity;
+    while(rest.length){
+      const cand=row.concat(rest[0]);
+      const sum=cand.reduce((s,d)=>s+d.value,0);
+      const side=Math.min(w,h);
+      const scale=(w*h)*(sum/list.reduce((s,d)=>s+d.value,0));
+      const len=scale/side;
+      const worst=Math.max(...cand.map(d=>{
+        const a=(d.value/sum)*side*len;const r=Math.max(len*len/ (a/side*side/ (a/len)||1),1);
+        const iw=(d.value/sum)*side, ratio=Math.max(len/iw,iw/len);return ratio;}));
+      if(worst<=best){best=worst;row=cand;rest.shift();}
+      else break;
+    }
+    const sum=row.reduce((s,d)=>s+d.value,0);
+    const frac=sum/list.reduce((s,d)=>s+d.value,0);
+    if(w>=h){const cw=w*frac;let cy=y;
+      row.forEach(d=>{const ch=h*(d.value/sum);rects.push({d,x,y:cy,w:cw,h:ch});cy+=ch;});
+      squarify(rest,x+cw,y,w-cw,h);
+    }else{const ch=h*frac;let cx=x;
+      row.forEach(d=>{const cw=w*(d.value/sum);rects.push({d,x:cx,y,w:cw,h:ch});cx+=cw;});
+      squarify(rest,x,y+ch,w,h-ch);
+    }
+  })(items,0,0,W,H);
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const lo=cssVar('--heat-lo'),hi=cssVar('--heat-hi');
+  rects.forEach(r=>{
+    const t=Math.pow(Math.min(1,(r.d.metric||0)/mmax),0.6);
+    const g=document.createElementNS(svgNS,'g');
+    const rc=document.createElementNS(svgNS,'rect');
+    rc.setAttribute('x',r.x+1);rc.setAttribute('y',r.y+1);
+    rc.setAttribute('width',Math.max(0,r.w-2));rc.setAttribute('height',Math.max(0,r.h-2));
+    rc.setAttribute('rx',3);rc.setAttribute('fill',lerpColor(lo,hi,t));
+    rc.setAttribute('stroke',cssVar('--bg'));rc.setAttribute('stroke-width','1');
+    g.appendChild(rc);
+    if(r.w>66&&r.h>22){
+      const tx=document.createElementNS(svgNS,'text');
+      const nm=r.d.name.split('/').pop();
+      tx.textContent=nm.length>Math.floor(r.w/6.6)?nm.slice(0,Math.floor(r.w/6.6)-1)+'…':nm;
+      tx.setAttribute('x',r.x+7);tx.setAttribute('y',r.y+16);
+      tx.setAttribute('font-size','11');tx.setAttribute('font-family',cssVar('--mono'));
+      tx.setAttribute('fill',t>0.55?'#fff':cssVar('--text'));tx.style.pointerEvents='none';
+      g.appendChild(tx);
+    }
+    g.addEventListener('mouseenter',e=>{rc.setAttribute('stroke',cssVar('--text'));
+      showTip(`<b>${esc(r.d.name)}</b><br>${esc(data.valueLabel||'size')}: ${fmt(r.d.value)}<br>${esc(data.metricLabel||'metric')}: ${fmt(r.d.metric||0)}${r.d.meta?'<br>'+esc(r.d.meta):''}`,e.clientX,e.clientY);});
+    g.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    g.addEventListener('mouseleave',()=>{rc.setAttribute('stroke',cssVar('--bg'));hideTip();});
+    svg.appendChild(g);
+  });
+  container.appendChild(svg);
+  const leg=document.createElement('div');leg.className='legend';
+  leg.innerHTML=`<span>area = ${esc(data.valueLabel||'size')}</span><span><i class="sw" style="background:${lo}"></i>low ${esc(data.metricLabel||'')}</span><span><i class="sw" style="background:${hi}"></i>high ${esc(data.metricLabel||'')}</span>`;
+  container.appendChild(leg);
+}
+
+/* ============ auto-init viz blocks ============ */
+document.querySelectorAll('.viz[data-render]').forEach(el=>{
+  const dataEl=el.nextElementSibling;
+  if(!dataEl||dataEl.type!=='application/json')return;
+  let data;try{data=JSON.parse(dataEl.textContent)}catch(e){el.textContent='data parse error';return}
+  const render=()=>{
+    if(el.dataset.done)return;el.dataset.done='1';
+    try{
+      if(el.dataset.render==='forcegraph')renderForceGraph(el,data);
+      else if(el.dataset.render==='treemap')renderTreemap(el,data);
+    }catch(e){el.innerHTML='<p style="padding:16px" class="dim">render error: '+esc(e.message)+'</p>';}
+  };
+  const panel=el.closest('.panel');
+  if(panel&&panel.classList.contains('active'))render();
+  else window.addEventListener('tab:shown',ev=>{if(panel&&ev.detail.id===panel.id)render();});
+});
+
+/* ============ mermaid (lazy per tab, with pan/zoom) ============ */
+(function(){
+  if(!document.querySelector('.mermaid'))return;
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+  s.onload=()=>{
+    if(typeof mermaid==='undefined'){document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});return;}
+    mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:'base',
+      themeVariables:{
+        primaryColor:cssVar('--surface-2'),primaryTextColor:cssVar('--text'),
+        primaryBorderColor:cssVar('--border-strong'),lineColor:cssVar('--text-dim'),
+        secondaryColor:cssVar('--accent-dim'),tertiaryColor:cssVar('--surface'),
+        background:cssVar('--surface'),mainBkg:cssVar('--surface-2'),
+        nodeTextColor:cssVar('--text'),fontFamily:cssVar('--sans'),fontSize:'14px',
+        actorBkg:cssVar('--surface-2'),actorBorder:cssVar('--accent'),actorTextColor:cssVar('--text'),
+        signalColor:cssVar('--text-dim'),signalTextColor:cssVar('--text'),
+        labelBoxBkgColor:cssVar('--surface-2'),labelTextColor:cssVar('--text'),
+        loopTextColor:cssVar('--text-dim'),noteBkgColor:cssVar('--warn-dim'),noteTextColor:cssVar('--text'),noteBorderColor:cssVar('--warn'),
+        clusterBkg:cssVar('--accent-dim'),clusterBorder:cssVar('--border-strong'),titleColor:cssVar('--text'),
+        edgeLabelBackground:cssVar('--surface')
+      }});
+    async function renderIn(panel){
+      const nodes=[...panel.querySelectorAll('.mermaid:not([data-processed])')];
+      if(!nodes.length)return;
+      try{await mermaid.run({nodes});}catch(e){/* leaves source visible */}
+      nodes.forEach(n=>{
+        const wrap=n.closest('.mermaid-wrap');if(!wrap||wrap.dataset.pz)return;wrap.dataset.pz='1';
+        const vp=wrap.querySelector('.mviewport')||wrap;
+        const svg=n.querySelector('svg');if(!svg)return;
+        svg.style.maxWidth='none';
+        const st={k:1,x:0,y:0},init={k:1,x:0,y:0};
+        const apply=()=>{svg.style.transformOrigin='0 0';svg.style.transform=`translate(${st.x}px,${st.y}px) scale(${st.k})`};
+        panZoom(vp,apply,()=>st);
+        addZoombar(wrap,()=>{st.k=Math.min(8,st.k*1.25);apply()},()=>{st.k=Math.max(.2,st.k/1.25);apply()},()=>{Object.assign(st,init);apply()});
+      });
+    }
+    const active=document.querySelector('.panel.active');if(active)renderIn(active);
+    window.addEventListener('tab:shown',e=>{const p=document.getElementById(e.detail.id);if(p)renderIn(p);});
+  };
+  s.onerror=()=>{document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});};
+  document.head.appendChild(s);
+})();
 })();
 </script>
 </body>

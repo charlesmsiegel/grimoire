@@ -1,6 +1,6 @@
 # Settings actions that spend
 
-Source: [llm_connections.py](../../../../../backend/src/grimoire/routes/config.py), [embed_space.py](../../../../../backend/src/grimoire/store/embed_space.py).
+Source: [llm_connections/](../../../../../backend/src/grimoire/routes/config/), [embed_space.py](../../../../../backend/src/grimoire/store/embed_space.py).
 
 - **A settings surface never spends unasked, and the server is what holds
   that.** Play is not gated -- sending a turn *is* the request -- but a call a

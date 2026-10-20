@@ -53,7 +53,10 @@ main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
 
 /* ---------- tabs: code-visualization's contract, so one shell serves all four
    documents. code-overview forces this template on assemble.py and on
-   build_measurement.py, so the markup those two emit has to fit here. ------- */
+   build_measurement.py, so the markup those two emit has to fit here. An atlas
+   needs no renderer code from this shell — assemble.py inlines its own — only
+   this contract: panels are .panel, the shown one is .active, and showing one
+   dispatches `tab:shown`, which is when a hidden tab's graphs are drawn. ---- */
 nav.tabs{
   display:flex;gap:2px;flex-wrap:wrap;max-width:1280px;margin:18px auto 0;
   padding:0 28px;border-bottom:1px solid var(--border);
@@ -83,6 +86,8 @@ a{color:var(--accent)}
 code,.mono{font-family:var(--mono);font-size:.92em}
 p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.card.hero{border-color:var(--border-strong);background:linear-gradient(180deg,var(--accent-dim),var(--surface) 60%)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;margin:10px 0}
 .grid{display:grid;gap:14px;margin:12px 0}
 .grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
 .grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
@@ -156,13 +161,37 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 footer.doc a{color:var(--text-dim)}
 @media(max-width:720px){header.doc,main,nav.tabs,footer.doc{padding-left:16px;padding-right:16px} h1.doc-title{font-size:24px} .gradecard .letter{font-size:48px;min-width:72px}}
 </style>
+<style id="atlas-renderers-css">
+/* The atlas renderers' styles, paired with renderers.js. assemble.py inlines
+   both into whatever page shell --template names; every colour here comes
+   from that shell's design tokens. */
+table.sortable thead th{cursor:pointer;user-select:none}
+table.sortable thead th::after{content:"↕";opacity:.35;margin-left:6px;font-size:10px}
+table.sortable thead th.asc::after{content:"↑";opacity:1;color:var(--accent)}
+table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
+
+/* ---------- viz containers ---------- */
+.viz{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden}
+.viz svg{display:block;width:100%;height:100%}
+.viz .zoombar{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5}
+.viz .zoombar button{width:28px;height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--surface-2);color:var(--text);font-family:var(--mono);cursor:pointer;font-size:14px;line-height:1}
+.viz .zoombar button:hover{background:var(--accent-dim);color:var(--accent)}
+.viz .legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:11px;color:var(--text-dim);background:color-mix(in srgb,var(--surface) 80%,transparent);padding:4px 8px;border-radius:6px;max-width:70%}
+.legend .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.viz-tip{position:fixed;pointer-events:none;z-index:200;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:12px;color:var(--text);box-shadow:0 6px 24px rgba(0,0,0,.35);display:none;max-width:380px}
+.mermaid-wrap{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden;min-height:120px}
+.mermaid-wrap .mviewport{overflow:hidden;cursor:grab;padding:14px}
+.mermaid-wrap .mviewport.dragging{cursor:grabbing}
+.mermaid{font-family:var(--sans)}
+.mermaid[data-processed="true"]{display:flex;justify-content:center}
+</style>
 </head>
 <body>
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">scripts — Codebase Atlas</h1>
-  <p class="doc-sub">Repository tooling: CI gates, store sync, and offline ingestion</p>
-  <div class="doc-meta">generated 2026-08-18 · a63cb05f5 · 10 files, 3,454 LOC</div>
+  <p class="doc-sub">Source-backed architecture, static analysis and explicit evidence limits.</p>
+  <div class="doc-meta">generated 2026-10-20 · 9d4985eb3 · 28 files, 9452 LOC</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -186,65 +215,40 @@ footer.doc a{color:var(--text-dim)}
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
 <button role="tab" data-tab="dependencies" aria-selected="false" aria-controls="dependencies">Dependencies</button>
-<button role="tab" data-tab="hotspots" aria-selected="false" aria-controls="hotspots">Hotspots</button></nav>
+<button role="tab" data-tab="hotspots" aria-selected="false" aria-controls="hotspots">Hotspots</button>
+<button role="tab" data-tab="flows" aria-selected="false" aria-controls="flows">Critical Flows</button>
+<button role="tab" data-tab="boundaries" aria-selected="false" aria-controls="boundaries">Boundaries &amp; Ownership</button>
+<button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button>
+<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-<div class="card hero">
-  <h2>Repository tooling: three roots, one purpose</h2>
-  <p>This package is the repository's out-of-band tooling &mdash; 3,454 lines that never run inside the
-  server. It deliberately spans three directories, because the code was filed by who wrote it rather
-  than by what it is: <code>scripts</code> (CI harnesses and launchers),
-  <code>backend/scripts</code> (offline store operations that need the <code>grimoire</code> package),
-  and one script belonging to a repository-local authoring skill.</p>
-  <p>Two of these are load-bearing for correctness rather than convenience:
-  <code>scripts/verify_templates.py</code> is a CI gate, and
-  <code>scripts/validate_partition.py</code> encodes a review check that was previously done by hand.</p>
-</div>
+<div class="card hero"><h2>A toolbox around production contracts</h2><p>Operator scripts import the same store and inference seams as the app, while contributor scripts verify contracts, lint debt and build inputs. This mapped package intentionally combines several command lifecycles rather than one service. Its best abstractions are pure hash planning, version-pinned finding counters, synthetic empty-target data and derived-cache warm-up. <code>scripts/grimoire_sync.py:1</code> <code>scripts/ratchet.py:1</code> <code>backend/scripts/synth_library.py:1</code> <code>backend/src/grimoire/cache.py:1</code></p></div>
+<div class="tbl-wrap"><table><thead><tr><th>Entry</th><th>Purpose</th></tr></thead><tbody><tr><td><code>scripts/ratchet.py:332</code></td><td>Compare checker findings with committed per-file/per-rule debt.</td></tr><tr><td><code>scripts/verify_templates.py:1</code></td><td>Build a throwaway library and compare production prompt wiring with an independent gather mirror.</td></tr><tr><td><code>scripts/grimoire_sync.py:551</code></td><td>Plan USB sync; opt-in transfer and conflict copies.</td></tr><tr><td><code>backend/scripts/create_world.py:1</code></td><td>Validate and apply a named-record plan through store constructors.</td></tr><tr><td><code>backend/scripts/ingest_scene.py:1</code></td><td>Run rewritten transcript scenes through actual absorb/inference routing.</td></tr><tr><td><code>backend/src/grimoire/cache.py:48</code></td><td>Warm derived state after direct edits, with dry-run/verification modes.</td></tr></tbody></table></div>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+flowchart TD
+ O["Operator commands"] --> S["Public store writers"]
+ O --> I["Inference operation seam"]
+ S --> L["Editable library"]
+ D["Contributor checks"] --> P["Production builders"]
+ D --> T["Pinned tool collectors"]
+ T --> B["Committed baselines"]
+ U["USB sync"] --> H["Pure hash plan"]
+ H --> X["ADB transfer or conflict copy"]
+</pre></div></div>
+<h3>Read in this order</h3><ol><li><code>scripts/grimoire_sync.py:365</code>: inspect the pure sync decision table before transfer plumbing.</li><li><code>scripts/grimoire_sync.py:606</code>: trace when hashes are captured relative to stopping the phone and copying bytes.</li><li><code>scripts/ratchet.py:300</code>: understand why both more findings and stale larger baselines fail.</li><li><code>scripts/ratchet.py:357</code>: baseline regeneration normally permits only downward changes.</li><li><code>scripts/verify_templates.py:1</code>: the largest and hottest script checks wiring/data agreement, not prompt quality.</li><li><code>backend/scripts/create_world.py:20</code>: omission means preserve, not delete.</li><li><code>backend/src/grimoire/cache.py:1</code>: missing warm-up costs latency, not authoritative correctness.</li></ol>
+<div class="callout warn"><strong>Primary operational seam:</strong> USB sync plans from hashes before force-stopping the phone and later copies against that old plan. An edit between those steps can invalidate the overwrite decision; the PC is not serialized either. <code>scripts/grimoire_sync.py:606</code> <code>scripts/grimoire_sync.py:663</code> <code>scripts/grimoire_sync.py:683</code></div>
+<h3>Analyzer and measurement limits</h3><p>The fresh inventory recognizes Python and shell here but excludes four PowerShell files. The Windows launcher was therefore read manually; sparse automated support must not be read as small platform risk. The hottest file is the template verifier, followed by scene ingestion and world creation; that is a review-attention ranking, not a defect count. <code>scripts/windows/run.ps1:1</code> <code>scripts/verify_templates.py:1</code> <code>backend/scripts/ingest_scene.py:1</code> <code>backend/scripts/create_world.py:1</code></p>
+<p>Template verification compares builder wiring and input data; synthetic library profiles support repeatable performance work. Neither is evidence of current live model quality or private-library performance. No checker, benchmark, importer, library writer or provider ran for this overview; coverage was skipped by user choice. <code>scripts/verify_templates.py:3</code> <code>backend/scripts/synth_library.py:7</code></p>
 
-<div class="kpis">
-  <div class="kpi"><div class="n">10</div><div class="l">files, 3.4k lines</div></div>
-  <div class="kpi"><div class="n">3</div><div class="l">roots</div></div>
-  <div class="kpi warn"><div class="n">827</div><div class="l">lines in the CI gate</div></div>
-  <div class="kpi bad"><div class="n">0</div><div class="l">tests of their own</div></div>
-</div>
-
-<h2>What is here</h2>
-<div class="tbl-wrap"><table class="sortable">
-<tr><th>File</th><th class="num">Lines</th><th>Role</th></tr>
-<tr><td><code>scripts/verify_templates.py</code></td><td class="num">827</td><td><strong>A CI gate.</strong> Proves the prompt builders and the template files agree byte-for-byte &mdash; both the wiring (each builder passes the documented variables) and the data contract (a mirror of the gather pass, assembled from public store reads). Builds a throwaway store to do it. 32 commits: the most-changed file in the package.</td></tr>
-<tr><td><code>backend/scripts/ingest_scene.py</code></td><td class="num">742</td><td>Imports one rewritten campaign-log scene through the real absorb pipeline. The engine behind the repository's log-ingestion skill.</td></tr>
-<tr><td><code>scripts/grimoire_sync.py</code></td><td class="num">618</td><td>Two-way store sync between a PC and a USB-connected phone. A file-level three-way merge that never parses a record &mdash; which is exactly what keeps it correct for record kinds it has never heard of.</td></tr>
-<tr><td><code>scripts/validate_partition.py</code></td><td class="num">394</td><td>Checks a proposed function-to-file mapping for intra-package import cycles, reading the partition tables straight out of a spec document. Written because three rounds of review kept doing it by hand.</td></tr>
-<tr><td><code>backend/scripts/redownload_chub.py</code></td><td class="num">112</td><td>Re-imports every externally-linked character version. Failures are per-version, so one bad card never stops the sweep.</td></tr>
-<tr><td><code>scripts/unix</code>, <code>scripts/windows</code></td><td class="num">185</td><td>Launchers and the Android bootstrap.</td></tr>
-</table></div>
-
-<div class="callout warn">
-  <strong>The riskiest property of this package is that nothing tests it.</strong>
-  <code>scripts/verify_templates.py</code> is a gate in <code>.github/workflows/ci.yml</code>: if it
-  silently stops checking something, the prompt/template contract it guards degrades with no signal
-  at all. It carries 159 branches and no test of its own. The same is true of
-  <code>backend/scripts/ingest_scene.py</code>, which writes into a real user store through the absorb
-  pipeline.
-</div>
-
-<div class="callout">
-  <strong>Scope of this atlas.</strong> The analyzers were scoped to <code>scripts</code>, so
-  <code>backend/scripts/ingest_scene.py</code>, <code>backend/scripts/redownload_chub.py</code> and the
-  skill script are counted in this package's grade and theory but do not appear in the Inventory,
-  Dependencies or Hotspots tabs. The repository atlas covers them.
-</div>
-
-<p class="dim">Package size is 3,454 lines, so this atlas carries the automated tabs plus this
-overview; flow, boundary and glossary tabs are written once at repository scope.</p>
+<p>The graph resolves all 91 detected first-party Python imports, but draws only three intra-scope import edges while 194 leave for production modules. Loaded templates/build resources create additional groups; sparse imports do not imply app independence. No file or grouped cycle was detected in this scope. The LLM scanner's no-usage result misses custom operations: ingestion explicitly resolves absorb through the application seam. Textual resources are incomplete and 13 patterns were truncated. <code>backend/scripts/ingest_scene.py:19</code> <code>backend/scripts/ingest_scene.py:46</code> <code>scripts/verify_templates.py:25</code></p>
 
 </section>
 <section class="panel" id="inventory" role="tabpanel">
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">7</div><div class="l">source files</div></div>
-  <div class="kpi"><div class="n">2,024</div><div class="l">lines of code</div></div>
+  <div class="kpi accent"><div class="n">28</div><div class="l">source files</div></div>
+  <div class="kpi"><div class="n">9,452</div><div class="l">lines of code</div></div>
   <div class="kpi"><div class="n">2</div><div class="l">languages</div></div>
   <div class="kpi warn"><div class="n">0%</div><div class="l">test code share</div></div>
 </div>
@@ -252,41 +256,68 @@ overview; flow, boundary and glossary tabs are written once at repository scope.
 <h2>Languages</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
-<tbody><tr><td>Python</td><td class='num'>1,839</td><td class='num'>3</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>90.9%</td></tr>
-<tr><td>Shell</td><td class='num'>185</td><td class='num'>4</td><td><div class="bar "><i style="width:10.1%"></i></div></td><td class='num'>9.1%</td></tr></tbody></table></div>
+<tbody><tr><td>Python</td><td class='num'>9,033</td><td class='num'>23</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>95.6%</td></tr>
+<tr><td>Shell</td><td class='num'>419</td><td class='num'>5</td><td><div class="bar "><i style="width:4.6%"></i></div></td><td class='num'>4.4%</td></tr></tbody></table></div>
 <p class="dim">Coverage: 4 file(s) in unrecognized languages are not counted above (.ps1 (4)).</p>
 
 <h2>Top-level directories</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
-<tbody><tr><td><code>(root)/</code></td><td class='num'>1,839</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>unix/</code></td><td class='num'>185</td><td><div class="bar "><i style="width:10.1%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>scripts/</code></td><td class='num'>5,295</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/</code></td><td class='num'>3,304</td><td><div class="bar "><i style="width:62.4%"></i></div></td></tr>
+<tr><td><code>.agents/</code></td><td class='num'>853</td><td><div class="bar "><i style="width:16.1%"></i></div></td></tr></tbody></table></div>
 
 <div class="grid cols-2">
 <div>
 <h2>Largest files</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">LOC</th><th>Size</th><th class="num">Branches</th></tr></thead>
-<tbody><tr><td><code>verify_templates.py</code></td><td class='num'>827</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>159</td></tr>
-<tr><td><code>grimoire_sync.py</code></td><td class='num'>618</td><td><div class="bar "><i style="width:74.7%"></i></div></td><td class='num'>128</td></tr>
-<tr><td><code>validate_partition.py</code></td><td class='num'>394</td><td><div class="bar "><i style="width:47.6%"></i></div></td><td class='num'>144</td></tr>
-<tr><td><code>unix/run.sh</code></td><td class='num'>67</td><td><div class="bar "><i style="width:8.1%"></i></div></td><td class='num'>18</td></tr>
-<tr><td><code>unix/android-bootstrap.sh</code></td><td class='num'>62</td><td><div class="bar "><i style="width:7.5%"></i></div></td><td class='num'>9</td></tr>
-<tr><td><code>unix/install.sh</code></td><td class='num'>34</td><td><div class="bar "><i style="width:4.1%"></i></div></td><td class='num'>4</td></tr>
-<tr><td><code>unix/shutdown.sh</code></td><td class='num'>22</td><td><div class="bar "><i style="width:2.7%"></i></div></td><td class='num'>8</td></tr></tbody></table></div>
+<tbody><tr><td><code>scripts/verify_templates.py</code></td><td class='num'>2,404</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>362</td></tr>
+<tr><td><code>backend/scripts/create_world.py</code></td><td class='num'>983</td><td><div class="bar "><i style="width:40.9%"></i></div></td><td class='num'>308</td></tr>
+<tr><td><code>backend/scripts/ingest_scene.py</code></td><td class='num'>695</td><td><div class="bar "><i style="width:28.9%"></i></div></td><td class='num'>107</td></tr>
+<tr><td><code>.agents/skills/populate-world-content/scripts/populate_world_content.py</code></td><td class='num'>687</td><td><div class="bar "><i style="width:28.6%"></i></div></td><td class='num'>164</td></tr>
+<tr><td><code>scripts/grimoire_sync.py</code></td><td class='num'>620</td><td><div class="bar "><i style="width:25.8%"></i></div></td><td class='num'>127</td></tr>
+<tr><td><code>scripts/validate_partition.py</code></td><td class='num'>394</td><td><div class="bar "><i style="width:16.4%"></i></div></td><td class='num'>144</td></tr>
+<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>372</td><td><div class="bar "><i style="width:15.5%"></i></div></td><td class='num'>58</td></tr>
+<tr><td><code>scripts/ratchet.py</code></td><td class='num'>365</td><td><div class="bar "><i style="width:15.2%"></i></div></td><td class='num'>50</td></tr>
+<tr><td><code>backend/scripts/benchmark_compiled.py</code></td><td class='num'>352</td><td><div class="bar "><i style="width:14.6%"></i></div></td><td class='num'>64</td></tr>
+<tr><td><code>scripts/roadmap_slices.py</code></td><td class='num'>349</td><td><div class="bar "><i style="width:14.5%"></i></div></td><td class='num'>112</td></tr>
+<tr><td><code>backend/scripts/synth_library.py</code></td><td class='num'>319</td><td><div class="bar "><i style="width:13.3%"></i></div></td><td class='num'>48</td></tr>
+<tr><td><code>scripts/profile_report.py</code></td><td class='num'>318</td><td><div class="bar "><i style="width:13.2%"></i></div></td><td class='num'>72</td></tr>
+<tr><td><code>scripts/coverage_arcs.py</code></td><td class='num'>248</td><td><div class="bar "><i style="width:10.3%"></i></div></td><td class='num'>68</td></tr>
+<tr><td><code>scripts/unix/run.sh</code></td><td class='num'>205</td><td><div class="bar "><i style="width:8.5%"></i></div></td><td class='num'>39</td></tr>
+<tr><td><code>.agents/skills/world-card-integration/scripts/inspect_cards.py</code></td><td class='num'>166</td><td><div class="bar "><i style="width:6.9%"></i></div></td><td class='num'>33</td></tr>
+<tr><td><code>backend/scripts/benchmark_membership.py</code></td><td class='num'>135</td><td><div class="bar "><i style="width:5.6%"></i></div></td><td class='num'>13</td></tr>
+<tr><td><code>backend/src/grimoire/cache.py</code></td><td class='num'>124</td><td><div class="bar "><i style="width:5.2%"></i></div></td><td class='num'>35</td></tr>
+<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>121</td><td><div class="bar "><i style="width:5.0%"></i></div></td><td class='num'>29</td></tr>
+<tr><td><code>scripts/sync_skills.py</code></td><td class='num'>104</td><td><div class="bar "><i style="width:4.3%"></i></div></td><td class='num'>30</td></tr>
+<tr><td><code>backend/scripts/redownload_chub.py</code></td><td class='num'>94</td><td><div class="bar "><i style="width:3.9%"></i></div></td><td class='num'>22</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Most branch-heavy files</h2>
 <p class="dim">Branch count ≈ decision points (if/for/while/case/catch/&amp;&amp;/||). A rough cyclomatic-complexity proxy.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Branches</th><th>Heat</th><th class="num">LOC</th><th class="num">Max depth</th></tr></thead>
-<tbody><tr><td><code>verify_templates.py</code></td><td class='num'>159</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>827</td><td class='num'>12</td></tr>
-<tr><td><code>validate_partition.py</code></td><td class='num'>144</td><td><div class="bar warn"><i style="width:90.6%"></i></div></td><td class='num'>394</td><td class='num'>9</td></tr>
-<tr><td><code>grimoire_sync.py</code></td><td class='num'>128</td><td><div class="bar warn"><i style="width:80.5%"></i></div></td><td class='num'>618</td><td class='num'>6</td></tr>
-<tr><td><code>unix/run.sh</code></td><td class='num'>18</td><td><div class="bar warn"><i style="width:11.3%"></i></div></td><td class='num'>67</td><td class='num'>1</td></tr>
-<tr><td><code>unix/android-bootstrap.sh</code></td><td class='num'>9</td><td><div class="bar warn"><i style="width:5.7%"></i></div></td><td class='num'>62</td><td class='num'>2</td></tr>
-<tr><td><code>unix/shutdown.sh</code></td><td class='num'>8</td><td><div class="bar warn"><i style="width:5.0%"></i></div></td><td class='num'>22</td><td class='num'>1</td></tr>
-<tr><td><code>unix/install.sh</code></td><td class='num'>4</td><td><div class="bar warn"><i style="width:2.5%"></i></div></td><td class='num'>34</td><td class='num'>0</td></tr></tbody></table></div>
+<tbody><tr><td><code>scripts/verify_templates.py</code></td><td class='num'>362</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>2,404</td><td class='num'>12</td></tr>
+<tr><td><code>backend/scripts/create_world.py</code></td><td class='num'>308</td><td><div class="bar warn"><i style="width:85.1%"></i></div></td><td class='num'>983</td><td class='num'>12</td></tr>
+<tr><td><code>.agents/skills/populate-world-content/scripts/populate_world_content.py</code></td><td class='num'>164</td><td><div class="bar warn"><i style="width:45.3%"></i></div></td><td class='num'>687</td><td class='num'>11</td></tr>
+<tr><td><code>scripts/validate_partition.py</code></td><td class='num'>144</td><td><div class="bar warn"><i style="width:39.8%"></i></div></td><td class='num'>394</td><td class='num'>9</td></tr>
+<tr><td><code>scripts/grimoire_sync.py</code></td><td class='num'>127</td><td><div class="bar warn"><i style="width:35.1%"></i></div></td><td class='num'>620</td><td class='num'>6</td></tr>
+<tr><td><code>scripts/roadmap_slices.py</code></td><td class='num'>112</td><td><div class="bar warn"><i style="width:30.9%"></i></div></td><td class='num'>349</td><td class='num'>7</td></tr>
+<tr><td><code>backend/scripts/ingest_scene.py</code></td><td class='num'>107</td><td><div class="bar warn"><i style="width:29.6%"></i></div></td><td class='num'>695</td><td class='num'>9</td></tr>
+<tr><td><code>scripts/profile_report.py</code></td><td class='num'>72</td><td><div class="bar warn"><i style="width:19.9%"></i></div></td><td class='num'>318</td><td class='num'>9</td></tr>
+<tr><td><code>scripts/coverage_arcs.py</code></td><td class='num'>68</td><td><div class="bar warn"><i style="width:18.8%"></i></div></td><td class='num'>248</td><td class='num'>7</td></tr>
+<tr><td><code>backend/scripts/benchmark_compiled.py</code></td><td class='num'>64</td><td><div class="bar warn"><i style="width:17.7%"></i></div></td><td class='num'>352</td><td class='num'>8</td></tr>
+<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>58</td><td><div class="bar warn"><i style="width:16.0%"></i></div></td><td class='num'>372</td><td class='num'>9</td></tr>
+<tr><td><code>scripts/ratchet.py</code></td><td class='num'>50</td><td><div class="bar warn"><i style="width:13.8%"></i></div></td><td class='num'>365</td><td class='num'>8</td></tr>
+<tr><td><code>backend/scripts/synth_library.py</code></td><td class='num'>48</td><td><div class="bar warn"><i style="width:13.3%"></i></div></td><td class='num'>319</td><td class='num'>8</td></tr>
+<tr><td><code>scripts/unix/run.sh</code></td><td class='num'>39</td><td><div class="bar warn"><i style="width:10.8%"></i></div></td><td class='num'>205</td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/cache.py</code></td><td class='num'>35</td><td><div class="bar warn"><i style="width:9.7%"></i></div></td><td class='num'>124</td><td class='num'>9</td></tr>
+<tr><td><code>.agents/skills/world-card-integration/scripts/inspect_cards.py</code></td><td class='num'>33</td><td><div class="bar warn"><i style="width:9.1%"></i></div></td><td class='num'>166</td><td class='num'>4</td></tr>
+<tr><td><code>scripts/sync_skills.py</code></td><td class='num'>30</td><td><div class="bar warn"><i style="width:8.3%"></i></div></td><td class='num'>104</td><td class='num'>4</td></tr>
+<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>29</td><td><div class="bar warn"><i style="width:8.0%"></i></div></td><td class='num'>121</td><td class='num'>9</td></tr>
+<tr><td><code>backend/scripts/redownload_chub.py</code></td><td class='num'>22</td><td><div class="bar warn"><i style="width:6.1%"></i></div></td><td class='num'>94</td><td class='num'>6</td></tr>
+<tr><td><code>backend/scripts/benchmark_membership.py</code></td><td class='num'>13</td><td><div class="bar warn"><i style="width:3.6%"></i></div></td><td class='num'>135</td><td class='num'>9</td></tr></tbody></table></div>
 </div>
 </div>
 
@@ -296,18 +327,18 @@ overview; flow, boundary and glossary tabs are written once at repository scope.
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">2</div><div class="l">modules</div></div>
-  <div class="kpi"><div class="n">0</div><div class="l">file-level imports</div></div>
-  <div class="kpi"><div class="n">0</div><div class="l">runtime loads</div></div>
+  <div class="kpi accent"><div class="n">43</div><div class="l">modules</div></div>
+  <div class="kpi"><div class="n">3</div><div class="l">file-level imports</div></div>
+  <div class="kpi"><div class="n">148</div><div class="l">runtime loads</div></div>
   <div class="kpi good"><div class="n">0</div><div class="l">cycles</div></div>
-  <div class="kpi"><div class="n">2</div><div class="l">top-level arms</div></div>
+  <div class="kpi"><div class="n">6</div><div class="l">top-level arms</div></div>
 </div>
-
+<p class="dim">Scoped to <code>.agents/skills/populate-world-content/scripts/</code>, <code>.agents/skills/world-card-integration/scripts/</code>, <code>backend/scripts/</code>, <code>backend/src/grimoire/cache.py/</code>, <code>backend/src/grimoire/compiled_build.py/</code>, <code>backend/src/grimoire/where.py/</code>, <code>scripts/</code>: 194 import(s) and load(s) reach 108 file(s) outside those roots. They resolved, and are not drawn.</p>
 <div class="callout good"><b>No module-level dependency cycles detected.</b> The import graph is a DAG at this grouping level.</div>
 <h2>Module dependency graph</h2>
 <p class="dim">Node area = lines of code · solid arrows = imports, dashed = runtime loads (a rendered template, a prompt read off disk) · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
 <div class="viz" data-render="forcegraph" style="height:620px"></div>
-<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"(root)","size":1839,"fanIn":0,"fanOut":0,"meta":"(repo root) \u00b7 3 files"},{"id":"unix","label":"unix","group":"unix","size":185,"fanIn":0,"fanOut":0,"meta":"unix \u00b7 4 files"}],"links":[],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
+<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"(root)","size":830,"fanIn":1,"fanOut":0,"meta":"(repo root) \u00b7 1 files"},{"id":".agents/skills/populate-world-content","label":"populate-world-content","group":".agents","size":687,"fanIn":0,"fanOut":0,"meta":".agents/skills/populate-world-content \u00b7 1 files"},{"id":".agents/skills/world-card-integration","label":"world-card-integration","group":".agents","size":166,"fanIn":0,"fanOut":0,"meta":".agents/skills/world-card-integration \u00b7 1 files"},{"id":"backend","label":"backend","group":"backend","size":88,"fanIn":1,"fanOut":0,"meta":"backend \u00b7 1 files"},{"id":"backend/scripts","label":"scripts","group":"backend","size":2970,"fanIn":0,"fanOut":1,"meta":"backend/scripts \u00b7 8 files"},{"id":"backend/src/grimoire","label":"grimoire","group":"backend","size":334,"fanIn":1,"fanOut":0,"meta":"backend/src/grimoire \u00b7 3 files"},{"id":"frontend/public","label":"public","group":"frontend","size":0,"fanIn":1,"fanOut":0,"meta":"frontend/public \u00b7 1 files"},{"id":"scripts","label":"scripts","group":"scripts","size":4876,"fanIn":0,"fanOut":37,"meta":"scripts \u00b7 10 files"},{"id":"scripts/unix","label":"unix","group":"scripts","size":419,"fanIn":0,"fanOut":0,"meta":"scripts/unix \u00b7 5 files"},{"id":"templates/absorb","label":"absorb","group":"templates","size":91,"fanIn":1,"fanOut":0,"meta":"templates/absorb \u00b7 2 files"},{"id":"templates/audit","label":"audit","group":"templates","size":10,"fanIn":1,"fanOut":0,"meta":"templates/audit \u00b7 2 files"},{"id":"templates/capsule","label":"capsule","group":"templates","size":14,"fanIn":1,"fanOut":0,"meta":"templates/capsule \u00b7 2 files"},{"id":"templates/character_from_passage","label":"character_from_passage","group":"templates","size":8,"fanIn":1,"fanOut":0,"meta":"templates/character_from_passage \u00b7 2 files"},{"id":"templates/continuity_identity","label":"continuity_identity","group":"templates","size":83,"fanIn":1,"fanOut":0,"meta":"templates/continuity_identity \u00b7 4 files"},{"id":"templates/continuity_reconcile","label":"continuity_reconcile","group":"templates","size":130,"fanIn":1,"fanOut":0,"meta":"templates/continuity_reconcile \u00b7 8 files"},{"id":"templates/decide","label":"decide","group":"templates","size":89,"fanIn":1,"fanOut":0,"meta":"templates/decide \u00b7 2 files"},{"id":"templates/dossier","label":"dossier","group":"templates","size":7,"fanIn":1,"fanOut":0,"meta":"templates/dossier \u00b7 2 files"},{"id":"templates/epistemic_access","label":"epistemic_access","group":"templates","size":32,"fanIn":1,"fanOut":0,"meta":"templates/epistemic_access \u00b7 3 files"},{"id":"templates/history_check","label":"history_check","group":"templates","size":21,"fanIn":1,"fanOut":0,"meta":"templates/history_check \u00b7 2 files"},{"id":"templates/history_plan","label":"history_plan","group":"templates","size":75,"fanIn":1,"fanOut":0,"meta":"templates/history_plan \u00b7 2 files"},{"id":"templates/history_rerank","label":"history_rerank","group":"templates","size":28,"fanIn":1,"fanOut":0,"meta":"templates/history_rerank \u00b7 5 files"},{"id":"templates/image_description","label":"image_description","group":"templates","size":7,"fanIn":1,"fanOut":0,"meta":"templates/image_description \u00b7 2 files"},{"id":"templates/investigation/continuity","label":"continuity","group":"templates","size":17,"fanIn":1,"fanOut":0,"meta":"templates/investigation/continuity \u00b7 2 files"},{"id":"templates/investigation/question","label":"question","group":"templates","size":15,"fanIn":1,"fanOut":0,"meta":"templates/investigation/question \u00b7 2 files"},{"id":"templates/plaintext_import","label":"plaintext_import","group":"templates","size":12,"fanIn":1,"fanOut":0,"meta":"templates/plaintext_import \u00b7 2 files"},{"id":"templates/rolling_summary","label":"rolling_summary","group":"templates","size":38,"fanIn":1,"fanOut":0,"meta":"templates/rolling_summary \u00b7 2 files"},{"id":"templates/scenario","label":"scenario","group":"templates","size":31,"fanIn":1,"fanOut":0,"meta":"templates/scenario \u00b7 2 files"},{"id":"templates/scene","label":"scene","group":"templates","size":346,"fanIn":1,"fanOut":0,"meta":"templates/scene \u00b7 20 files"},{"id":"templates/scene/model_guidance","label":"model_guidance","group":"templates","size":3,"fanIn":1,"fanOut":0,"meta":"templates/scene/model_guidance \u00b7 1 files"},{"id":"templates/scene/sections","label":"sections","group":"templates","size":518,"fanIn":1,"fanOut":0,"meta":"templates/scene/sections \u00b7 39 files"},{"id":"templates/scene_break","label":"scene_break","group":"templates","size":36,"fanIn":1,"fanOut":0,"meta":"templates/scene_break \u00b7 3 files"},{"id":"templates/scene_break_title","label":"scene_break_title","group":"templates","size":25,"fanIn":1,"fanOut":0,"meta":"templates/scene_break_title \u00b7 2 files"},{"id":"templates/scene_intent","label":"scene_intent","group":"templates","size":23,"fanIn":1,"fanOut":0,"meta":"templates/scene_intent \u00b7 2 files"},{"id":"templates/scene_suggestions","label":"scene_suggestions","group":"templates","size":151,"fanIn":1,"fanOut":0,"meta":"templates/scene_suggestions \u00b7 2 files"},{"id":"templates/snippets","label":"snippets","group":"templates","size":28,"fanIn":1,"fanOut":0,"meta":"templates/snippets \u00b7 5 files"},{"id":"templates/snippets/commitment_line","label":"commitment_line","group":"templates","size":11,"fanIn":1,"fanOut":0,"meta":"templates/snippets/commitment_line \u00b7 2 files"},{"id":"templates/snippets/plot_thread_line","label":"plot_thread_line","group":"templates","size":15,"fanIn":1,"fanOut":0,"meta":"templates/snippets/plot_thread_line \u00b7 2 files"},{"id":"templates/tagline","label":"tagline","group":"templates","size":5,"fanIn":1,"fanOut":0,"meta":"templates/tagline \u00b7 2 files"},{"id":"templates/tools","label":"tools","group":"templates","size":19,"fanIn":1,"fanOut":0,"meta":"templates/tools \u00b7 1 files"},{"id":"templates/tracker","label":"tracker","group":"templates","size":52,"fanIn":1,"fanOut":0,"meta":"templates/tracker \u00b7 2 files"},{"id":"templates/turn_plan","label":"turn_plan","group":"templates","size":81,"fanIn":1,"fanOut":0,"meta":"templates/turn_plan \u00b7 8 files"},{"id":"templates/voice_anchor","label":"voice_anchor","group":"templates","size":17,"fanIn":1,"fanOut":0,"meta":"templates/voice_anchor \u00b7 2 files"},{"id":"templates/voice_drift","label":"voice_drift","group":"templates","size":50,"fanIn":1,"fanOut":0,"meta":"templates/voice_drift \u00b7 4 files"}],"links":[{"source":"backend/scripts","target":"backend/src/grimoire","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"scripts","target":"","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"backend","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"frontend/public","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/absorb","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/audit","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/capsule","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/character_from_passage","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/continuity_identity","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/continuity_reconcile","weight":8,"imports":0,"loads":8,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/decide","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/dossier","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/epistemic_access","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/history_check","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/history_plan","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/history_rerank","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/image_description","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/investigation/continuity","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/investigation/question","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/plaintext_import","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/rolling_summary","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scenario","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene","weight":20,"imports":0,"loads":20,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene/model_guidance","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene/sections","weight":39,"imports":0,"loads":39,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene_break","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene_break_title","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene_intent","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene_suggestions","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/snippets","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/snippets/commitment_line","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/snippets/plot_thread_line","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/tagline","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/tools","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/tracker","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/turn_plan","weight":8,"imports":0,"loads":8,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/voice_anchor","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/voice_drift","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span><span><i class=\"sw\" style=\"background:var(--text-faint)\"><\/i>dashed edges = runtime load<\/span>"}</script>
 
 <div class="grid cols-2">
 <div>
@@ -315,22 +346,76 @@ overview; flow, boundary and glossary tabs are written once at repository scope.
 <p class="dim">Changes here ripple widely — review with extra care.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Fan-in</th><th></th><th class="num">Fan-out</th></tr></thead>
-<tbody></tbody></table></div>
+<tbody><tr><td><code>backend/scripts/synth_library.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>frontend/public/grimoire-512.png</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/pyproject.toml</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>ROADMAP-CHECKLIST.md</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/prose_style.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/character_from_passage/user.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/image_description/user.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/turn_plan/tension_question.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/offscreen_scene.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/available_art.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/dossier/system.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/model_guidance.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/commitments.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/current_setting.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Highest fan-out (most dependencies)</h2>
 <p class="dim">High fan-out can indicate orchestrators — or god modules doing too much.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Fan-out</th><th></th><th class="num">Fan-in</th></tr></thead>
-<tbody><tr><td><code>grimoire_sync.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>validate_partition.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>verify_templates.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>unix/android-bootstrap.sh</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>unix/install.sh</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>unix/run.sh</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>unix/shutdown.sh</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+<tbody><tr><td><code>scripts/verify_templates.py</code></td><td class='num'>145</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/scripts/benchmark_compiled.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/scripts/compiled_build.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>scripts/gen_android_icon.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>scripts/ratchet.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>scripts/roadmap_slices.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/scripts/benchmark_membership.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/scripts/create_world.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/scripts/ingest_scene.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/scripts/redownload_chub.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/scripts/synth_library.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/cache.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>1</td></tr>
+<tr><td><code>backend/src/grimoire/where.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
 </div>
 </div>
+
+<h2>Runtime resources</h2>
+<p class="dim">Files loaded rather than imported — templates, prompts, schemas, embedded data — and the
+code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 13 computed path(s) and 0 file(s) hit the reporting cap.</p>
+
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Asset</th><th class="num">Loaders</th><th>Loaded at</th></tr></thead>
+<tbody><tr><td><code>ROADMAP-CHECKLIST.md</code></td><td class='num'>1</td><td><code>scripts/roadmap_slices.py:45</code></td></tr>
+<tr><td><code>backend/pyproject.toml</code></td><td class='num'>1</td><td><code>scripts/ratchet.py:75</code></td></tr>
+<tr><td><code>frontend/public/grimoire-512.png</code></td><td class='num'>1</td><td><code>scripts/gen_android_icon.py:19</code></td></tr>
+<tr><td><code>templates/absorb/system.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:896</code></td></tr>
+<tr><td><code>templates/absorb/user.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:907</code></td></tr>
+<tr><td><code>templates/audit/system.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:2378</code></td></tr>
+<tr><td><code>templates/audit/user.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:2380</code></td></tr>
+<tr><td><code>templates/capsule/system.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:2493</code></td></tr>
+<tr><td><code>templates/capsule/user.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:2494</code></td></tr>
+<tr><td><code>templates/character_from_passage/system.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:2503</code></td></tr>
+<tr><td><code>templates/character_from_passage/user.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:2506</code></td></tr>
+<tr><td><code>templates/continuity_identity/explain.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1063</code></td></tr>
+<tr><td><code>templates/continuity_identity/item.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1042</code></td></tr>
+<tr><td><code>templates/continuity_identity/option.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1053</code></td></tr>
+<tr><td><code>templates/continuity_identity/question.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1051</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/directed_option.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1262</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/direction.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1250</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/evidence.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1278</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/evidence_more.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1279</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/explain.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1289</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/item.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1242</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/question.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1247</code></td></tr>
+<tr><td><code>templates/continuity_reconcile/scene_option.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1274</code></td></tr>
+<tr><td><code>templates/decide/system.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1497</code></td></tr>
+<tr><td><code>templates/decide/user.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1503</code></td></tr></tbody></table></div>
 
 
 
@@ -339,8 +424,8 @@ overview; flow, boundary and glossary tabs are written once at repository scope.
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">87</div><div class="l">commits (24 months ago)</div></div>
-  <div class="kpi"><div class="n">7</div><div class="l">files touched</div></div>
+  <div class="kpi accent"><div class="n">226</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi"><div class="n">28</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">verify_templates.py</div><div class="l">top hotspot</div></div>
 </div>
 <div class="callout"><b>How to read this:</b> files that are both <i>complex</i> and <i>frequently changed</i> are where defects concentrate — complexity makes mistakes likely, churn gives them opportunities. Prioritize refactoring and review attention here, not on complex-but-stable code.</div>
@@ -349,24 +434,145 @@ overview; flow, boundary and glossary tabs are written once at repository scope.
 <h2>Churn × size map</h2>
 <p class="dim">Area = lines of code · color = commit count since 24 months ago · hover for details.</p>
 <div class="viz" data-render="treemap" style="height:540px"></div>
-<script type="application/json">{"items":[{"name":"verify_templates.py","value":827,"metric":32,"meta":"159 branches \u00b7 2 authors"},{"name":"validate_partition.py","value":394,"metric":9,"meta":"144 branches \u00b7 1 authors"},{"name":"grimoire_sync.py","value":618,"metric":2,"meta":"128 branches \u00b7 1 authors"},{"name":"unix/run.sh","value":67,"metric":5,"meta":"18 branches \u00b7 1 authors"},{"name":"unix/android-bootstrap.sh","value":62,"metric":2,"meta":"9 branches \u00b7 1 authors"},{"name":"unix/shutdown.sh","value":22,"metric":2,"meta":"8 branches \u00b7 1 authors"},{"name":"unix/install.sh","value":34,"metric":2,"meta":"4 branches \u00b7 2 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":32}</script>
+<script type="application/json">{"items":[{"name":"scripts/verify_templates.py","value":2404,"metric":80,"meta":"362 branches \u00b7 2 authors"},{"name":"backend/scripts/ingest_scene.py","value":695,"metric":33,"meta":"107 branches \u00b7 2 authors"},{"name":"backend/scripts/create_world.py","value":983,"metric":8,"meta":"308 branches \u00b7 2 authors"},{"name":"scripts/validate_partition.py","value":394,"metric":10,"meta":"144 branches \u00b7 1 authors"},{"name":"scripts/roadmap_slices.py","value":349,"metric":6,"meta":"112 branches \u00b7 2 authors"},{"name":"scripts/grimoire_sync.py","value":620,"metric":4,"meta":"127 branches \u00b7 2 authors"},{"name":"scripts/profile_report.py","value":318,"metric":6,"meta":"72 branches \u00b7 1 authors"},{"name":"scripts/unix/run.sh","value":205,"metric":9,"meta":"39 branches \u00b7 2 authors"},{"name":"scripts/coverage_arcs.py","value":248,"metric":5,"meta":"68 branches \u00b7 1 authors"},{"name":"scripts/ratchet.py","value":365,"metric":5,"meta":"50 branches \u00b7 1 authors"},{"name":".agents/skills/populate-world-content/scripts/populate_world_content.py","value":687,"metric":1,"meta":"164 branches \u00b7 1 authors"},{"name":"backend/scripts/synth_library.py","value":319,"metric":3,"meta":"48 branches \u00b7 1 authors"},{"name":"backend/scripts/benchmark_compiled.py","value":352,"metric":1,"meta":"64 branches \u00b7 1 authors"},{"name":"scripts/sync_skills.py","value":104,"metric":2,"meta":"30 branches \u00b7 1 authors"},{"name":"scripts/unix/install.sh","value":59,"metric":6,"meta":"9 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/compiled_build.py","value":121,"metric":2,"meta":"29 branches \u00b7 1 authors"},{"name":"backend/scripts/bench_overview.py","value":372,"metric":1,"meta":"58 branches \u00b7 1 authors"},{"name":"backend/scripts/redownload_chub.py","value":94,"metric":2,"meta":"22 branches \u00b7 1 authors"},{"name":"scripts/unix/shutdown.sh","value":24,"metric":4,"meta":"8 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/cache.py","value":124,"metric":1,"meta":"35 branches \u00b7 1 authors"},{"name":".agents/skills/world-card-integration/scripts/inspect_cards.py","value":166,"metric":1,"meta":"33 branches \u00b7 1 authors"},{"name":"scripts/unix/android-bootstrap.sh","value":62,"metric":2,"meta":"9 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/where.py","value":89,"metric":2,"meta":"8 branches \u00b7 1 authors"},{"name":"backend/scripts/benchmark_membership.py","value":135,"metric":1,"meta":"13 branches \u00b7 1 authors"},{"name":"scripts/gen_android_icon.py","value":61,"metric":1,"meta":"6 branches \u00b7 1 authors"},{"name":"scripts/backup_images.py","value":13,"metric":1,"meta":"2 branches \u00b7 1 authors"},{"name":"scripts/unix/macos-launcher.sh","value":69,"metric":1,"meta":"2 branches \u00b7 1 authors"},{"name":"backend/scripts/compiled_build.py","value":20,"metric":1,"meta":"1 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":80}</script>
 
 <h2>Hotspot ranking</h2>
-<p class="dim">Score = commits × (branch points + 1). Tests excluded. 4 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: windows/run.ps1 (8), windows/install.ps1 (4), windows/android-bootstrap.ps1 (3).</p>
+<p class="dim">Score = commits × (branch points + 1). Tests excluded. 4 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: scripts/windows/run.ps1 (10), scripts/windows/install.ps1 (7), scripts/windows/shutdown.ps1 (4).</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
-<tbody><tr><td><code>verify_templates.py</code></td><td class='num'>32</td><td class='num'>159</td><td class='num'>827</td><td class='num'>2</td><td class='num' data-sort='5120'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>validate_partition.py</code></td><td class='num'>9</td><td class='num'>144</td><td class='num'>394</td><td class='num'>1</td><td class='num' data-sort='1305'><div class="bar bad"><i style="width:25.5%"></i></div></td></tr>
-<tr><td><code>grimoire_sync.py</code></td><td class='num'>2</td><td class='num'>128</td><td class='num'>618</td><td class='num'>1</td><td class='num' data-sort='258'><div class="bar bad"><i style="width:5.0%"></i></div></td></tr>
-<tr><td><code>unix/run.sh</code></td><td class='num'>5</td><td class='num'>18</td><td class='num'>67</td><td class='num'>1</td><td class='num' data-sort='95'><div class="bar bad"><i style="width:1.9%"></i></div></td></tr>
-<tr><td><code>unix/android-bootstrap.sh</code></td><td class='num'>2</td><td class='num'>9</td><td class='num'>62</td><td class='num'>1</td><td class='num' data-sort='20'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
-<tr><td><code>unix/shutdown.sh</code></td><td class='num'>2</td><td class='num'>8</td><td class='num'>22</td><td class='num'>1</td><td class='num' data-sort='18'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
-<tr><td><code>unix/install.sh</code></td><td class='num'>2</td><td class='num'>4</td><td class='num'>34</td><td class='num'>2</td><td class='num' data-sort='10'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>scripts/verify_templates.py</code></td><td class='num'>80</td><td class='num'>362</td><td class='num'>2,404</td><td class='num'>2</td><td class='num' data-sort='29040'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/scripts/ingest_scene.py</code></td><td class='num'>33</td><td class='num'>107</td><td class='num'>695</td><td class='num'>2</td><td class='num' data-sort='3564'><div class="bar bad"><i style="width:12.3%"></i></div></td></tr>
+<tr><td><code>backend/scripts/create_world.py</code></td><td class='num'>8</td><td class='num'>308</td><td class='num'>983</td><td class='num'>2</td><td class='num' data-sort='2472'><div class="bar bad"><i style="width:8.5%"></i></div></td></tr>
+<tr><td><code>scripts/validate_partition.py</code></td><td class='num'>10</td><td class='num'>144</td><td class='num'>394</td><td class='num'>1</td><td class='num' data-sort='1450'><div class="bar bad"><i style="width:5.0%"></i></div></td></tr>
+<tr><td><code>scripts/roadmap_slices.py</code></td><td class='num'>6</td><td class='num'>112</td><td class='num'>349</td><td class='num'>2</td><td class='num' data-sort='678'><div class="bar bad"><i style="width:2.3%"></i></div></td></tr>
+<tr><td><code>scripts/grimoire_sync.py</code></td><td class='num'>4</td><td class='num'>127</td><td class='num'>620</td><td class='num'>2</td><td class='num' data-sort='512'><div class="bar bad"><i style="width:1.8%"></i></div></td></tr>
+<tr><td><code>scripts/profile_report.py</code></td><td class='num'>6</td><td class='num'>72</td><td class='num'>318</td><td class='num'>1</td><td class='num' data-sort='438'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/unix/run.sh</code></td><td class='num'>9</td><td class='num'>39</td><td class='num'>205</td><td class='num'>2</td><td class='num' data-sort='360'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/coverage_arcs.py</code></td><td class='num'>5</td><td class='num'>68</td><td class='num'>248</td><td class='num'>1</td><td class='num' data-sort='345'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/ratchet.py</code></td><td class='num'>5</td><td class='num'>50</td><td class='num'>365</td><td class='num'>1</td><td class='num' data-sort='255'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>.agents/skills/populate-world-content/scripts/populate_world_content.py</code></td><td class='num'>1</td><td class='num'>164</td><td class='num'>687</td><td class='num'>1</td><td class='num' data-sort='165'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/scripts/synth_library.py</code></td><td class='num'>3</td><td class='num'>48</td><td class='num'>319</td><td class='num'>1</td><td class='num' data-sort='147'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/scripts/benchmark_compiled.py</code></td><td class='num'>1</td><td class='num'>64</td><td class='num'>352</td><td class='num'>1</td><td class='num' data-sort='65'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/sync_skills.py</code></td><td class='num'>2</td><td class='num'>30</td><td class='num'>104</td><td class='num'>1</td><td class='num' data-sort='62'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/unix/install.sh</code></td><td class='num'>6</td><td class='num'>9</td><td class='num'>59</td><td class='num'>2</td><td class='num' data-sort='60'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>2</td><td class='num'>29</td><td class='num'>121</td><td class='num'>1</td><td class='num' data-sort='60'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>1</td><td class='num'>58</td><td class='num'>372</td><td class='num'>1</td><td class='num' data-sort='59'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/scripts/redownload_chub.py</code></td><td class='num'>2</td><td class='num'>22</td><td class='num'>94</td><td class='num'>1</td><td class='num' data-sort='46'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/unix/shutdown.sh</code></td><td class='num'>4</td><td class='num'>8</td><td class='num'>24</td><td class='num'>2</td><td class='num' data-sort='36'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/cache.py</code></td><td class='num'>1</td><td class='num'>35</td><td class='num'>124</td><td class='num'>1</td><td class='num' data-sort='36'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>.agents/skills/world-card-integration/scripts/inspect_cards.py</code></td><td class='num'>1</td><td class='num'>33</td><td class='num'>166</td><td class='num'>1</td><td class='num' data-sort='34'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/unix/android-bootstrap.sh</code></td><td class='num'>2</td><td class='num'>9</td><td class='num'>62</td><td class='num'>1</td><td class='num' data-sort='20'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/where.py</code></td><td class='num'>2</td><td class='num'>8</td><td class='num'>89</td><td class='num'>1</td><td class='num' data-sort='18'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/scripts/benchmark_membership.py</code></td><td class='num'>1</td><td class='num'>13</td><td class='num'>135</td><td class='num'>1</td><td class='num' data-sort='14'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/gen_android_icon.py</code></td><td class='num'>1</td><td class='num'>6</td><td class='num'>61</td><td class='num'>1</td><td class='num' data-sort='7'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
 
 
+
+</section>
+<section class="panel" id="flows" role="tabpanel">
+
+<h2>Make plans reviewable before applying effects</h2>
+<h3>1. USB file reconciliation</h3><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+ participant C as CLI
+ participant H as Hash readers
+ participant P as Pure planner
+ participant A as ADB
+ participant L as PC library
+ participant B as Baseline
+ C->>H: Resolve and hash PC plus phone
+ H-->>C: Path hashes and unreadable paths
+ C->>B: Read common hashes and conflicts
+ C->>P: Hashes plus baseline
+ P-->>C: Copy lists and conflicts
+ alt Dry run
+ C-->>C: Describe without writes
+ else Apply
+ alt Unreadable phone and no override
+ C-->>C: Refuse transfer
+ else Readable
+ C->>L: Optional Git snapshot
+ C->>A: Force-stop phone by default
+ C->>A: Pull and push old plan
+ A-->>L: Files and conflict siblings
+ C->>B: Record planned hashes and failures
+ end
+ end
+</pre></div></div>
+<ul><li>Absence always copies, so deleting on one side resurrects the file; conflicts preserve originals and pull a sibling copy. <code>scripts/grimoire_sync.py:24</code> <code>scripts/grimoire_sync.py:384</code></li><li>Hashing precedes the stop, and successful transfers record the earlier hashes without a post-transfer rehash. Concurrent writers can therefore invalidate both overwrite safety and baseline accuracy. <code>scripts/grimoire_sync.py:606</code> <code>scripts/grimoire_sync.py:663</code> <code>scripts/grimoire_sync.py:683</code> <code>scripts/grimoire_sync.py:714</code></li><li>The pure planner is tested without ADB; those tests establish decisions on supplied hashes, not device transport/concurrency behavior. <code>backend/tests/test_grimoire_sync.py:1</code></li></ul>
+<h3>2. Lint ratchet</h3><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+ participant C as Check or update
+ participant T as Pinned collector
+ participant B as Baseline
+ participant D as Counter comparison
+ C->>T: Require exact tool version
+ T-->>C: Findings or ToolError
+ C->>B: Read prior counts
+ C->>D: Compare file and rule pairs
+ alt Check
+ D-->>C: Fail on growth or unrecorded improvement
+ else Update
+ alt Counts grow without explicit override
+ C-->>C: Refuse baseline write
+ else Counts do not grow
+ C->>B: Write canonical LF JSON
+ end
+ end
+</pre></div></div>
+<ul><li>Tool failure must not become an empty findings set. Collector errors and JSON failures are explicit. <code>scripts/ratchet.py:43</code> <code>scripts/ratchet.py:108</code> <code>scripts/ratchet.py:120</code></li><li>Counts ignore line numbers so inserting a line does not invent a new finding, but a rule is still independent of other rules in that file. <code>scripts/ratchet.py:18</code> <code>backend/tests/test_ratchet_guard.py:85</code></li><li>Regeneration is not an unrestricted way to turn failures green: increases require an explicit accept-regressions action. <code>scripts/ratchet.py:357</code></li></ul>
+<h3>3. Direct edit followed by cache warm-up</h3><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+ participant O as Operator
+ participant S as Store writer
+ participant F as Authoritative files
+ participant C as cache sync CLI
+ participant D as Derived projections
+ O->>S: Validated plan or edit
+ S->>F: Publish records
+ O->>C: Named paths or scope
+ C->>C: Resolve and report active root
+ alt Dry run
+ C-->>O: Classification and plan
+ else Apply
+ C->>D: Rebuild previously hot representations
+ C-->>O: Per-path status and incomplete markers
+ end
+</pre></div></div>
+<p>Omitting warm-up leaves the next reader to rebuild; it is not an alternate write API. Missing paths and truncated/unsynced work are reported rather than blanket success. <code>backend/src/grimoire/cache.py:3</code> <code>backend/src/grimoire/cache.py:16</code> <code>backend/src/grimoire/cache.py:21</code> <code>backend/src/grimoire/cache.py:106</code></p>
+
+</section>
+<section class="panel" id="boundaries" role="tabpanel">
+
+<h2>Shared rules, several effect lifetimes</h2><div class="tbl-wrap"><table><thead><tr><th>Concern</th><th>Owner</th><th>Assessment</th></tr></thead><tbody><tr><td>Sync overwrite decision</td><td><code>scripts/grimoire_sync.py:365</code></td><td><span class="badge good">pure planner</span></td></tr><tr><td>File transport and baseline publication</td><td><code>scripts/grimoire_sync.py:464</code> <code>scripts/grimoire_sync.py:484</code> <code>scripts/grimoire_sync.py:714</code></td><td><span class="badge warn">several fallible phases</span></td></tr><tr><td>Checker output and debt policy</td><td><code>scripts/ratchet.py:120</code> <code>scripts/ratchet.py:300</code></td><td><span class="badge good">collect versus compare</span></td></tr><tr><td>Desktop startup and stale bundles</td><td><code>scripts/unix/run.sh:39</code> <code>scripts/windows/run.ps1:60</code></td><td><span class="badge warn">mirrored platform implementations</span></td></tr><tr><td>World plan/domain validation</td><td><code>backend/scripts/create_world.py:1</code></td><td><span class="badge good">delegates IDs and writes</span></td></tr><tr><td>Absorb connection selection</td><td><code>backend/scripts/ingest_scene.py:46</code></td><td><span class="badge good">same inference seam as app</span></td></tr><tr><td>Template/build data contract</td><td><code>scripts/verify_templates.py:3</code></td><td><span class="badge warn">independent gather mirror</span></td></tr></tbody></table></div>
+<h3>Authoritative versus generated data</h3><p>World-plan apply uses public store constructors; IDs are allocated there and omitted keys retain their current values. Population also delegates entity creation while recording touched files and stage outcomes. These entrypoints write the real selected library when executed, unlike synthetic generators and the template verifier. <code>backend/scripts/create_world.py:6</code> <code>backend/scripts/create_world.py:20</code> <code>.agents/skills/populate-world-content/scripts/populate_world_content.py:73</code> <code>backend/scripts/synth_library.py:1</code> <code>scripts/verify_templates.py:25</code></p>
+<p>Sync intentionally reaches below record APIs: a file is an opaque blob and a common hash is the agreement boundary. That extends to unseen record kinds, but bypasses campaign locks and record-level validation, so it needs quiescent endpoint state. <code>scripts/grimoire_sync.py:3</code> <code>scripts/grimoire_sync.py:365</code> <code>scripts/grimoire_sync.py:663</code></p>
+<div class="callout warn">Startup semantics differ by platform: Bash refuses an occupied production port, while PowerShell stops processes owning configured listening ports. A Windows listener that is unrelated to Grimoire can therefore be terminated by ordinary startup. This is a concrete ownership distinction beyond shared input-list tests. <code>scripts/unix/run.sh:84</code> <code>scripts/windows/run.ps1:50</code></div>
+<p>The historical partition helper is intentionally less portable than app CLIs: it hardcodes one design document and checkout-relative source location. Treat it as a project-specific maintenance aid, not a generic package splitter. <code>scripts/validate_partition.py:16</code> <code>scripts/validate_partition.py:20</code></p>
+
+<p>No file or grouped import cycle was detected in this scoped toolbox. Most dependencies intentionally leave it for production store/build code; graph sparsity reflects package selection, not duplicate independent implementations. PowerShell semantics remain outside automated support. <code>backend/scripts/create_world.py:35</code> <code>backend/scripts/ingest_scene.py:19</code> <code>backend/src/grimoire/cache.py:36</code></p>
+
+</section>
+<section class="panel" id="invariants" role="tabpanel">
+
+<h2>Tooling must not hide new debt or overwrite unobserved work</h2>
+<div class="tbl-wrap"><table><thead><tr><th>Invariant</th><th>Enforcement</th><th>Status</th></tr></thead><tbody><tr><td>Checker failure cannot mean zero findings</td><td><code>scripts/ratchet.py:43</code> <code>scripts/ratchet.py:120</code></td><td><span class="badge good">ToolError boundary</span></td></tr><tr><td>New debt and stale excessive baselines both fail</td><td><code>scripts/ratchet.py:300</code> <code>scripts/ratchet.py:332</code></td><td><span class="badge good">two-direction check</span></td></tr><tr><td>Baseline updates cannot silently allow growth</td><td><code>scripts/ratchet.py:357</code></td><td><span class="badge good">downward by default</span></td></tr><tr><td>Synthetic generation starts in a plain empty directory</td><td><code>backend/scripts/synth_library.py:55</code></td><td><span class="badge good">lstat and emptiness checks</span></td></tr><tr><td>Unreadable phone data is not absence without an override</td><td><code>scripts/grimoire_sync.py:632</code></td><td><span class="badge good">default refusal</span></td></tr><tr><td>Sync writes are based on a quiescent snapshot</td><td><code>scripts/grimoire_sync.py:606</code> <code>scripts/grimoire_sync.py:663</code></td><td><span class="badge warn">hashes precede stop</span></td></tr><tr><td>Population target actually exists</td><td><code>.agents/skills/populate-world-content/scripts/populate_world_content.py:701</code></td><td><span class="badge good">prewrite world check</span></td></tr></tbody></table></div>
+<h3>Failure handling and concurrency</h3><p>Sync preserves conflicting originals and collects transfer failures, but effects can land before the command returns a nonzero status. Baselines are updated from pre-transfer hash dictionaries. The planner tests do not simulate edits racing the capture or transport; their input is already a fixed set of hashes. <code>scripts/grimoire_sync.py:683</code> <code>scripts/grimoire_sync.py:714</code> <code>backend/tests/test_grimoire_sync.py:1</code></p>
+<p>Domain writers supply their own locking semantics, while USB transport writes files directly. A before-sync Git snapshot is recovery material, not exclusion against an app or external editor writing concurrently. <code>scripts/grimoire_sync.py:657</code> <code>scripts/grimoire_sync.py:464</code> <code>scripts/grimoire_sync.py:484</code></p>
+<h3>Risk ranking</h3><div class="callout bad"><strong>1. Stale sync plan can overwrite an intervening edit.</strong> If a phone target is unchanged during hashing but edited before force-stop, an already-planned PC push still replaces it. PC-side edits can likewise race a pull, and successful-transfer baselines retain the earlier hashes. No device experiment was run. <code>scripts/grimoire_sync.py:606</code> <code>scripts/grimoire_sync.py:663</code> <code>scripts/grimoire_sync.py:683</code></div>
+<div class="callout warn"><strong>2. Windows startup owns ports more broadly than recorded processes.</strong> An unrelated listener on a configured port is stopped by owner PID, whereas Bash refuses the collision. <code>scripts/windows/run.ps1:50</code> <code>scripts/unix/run.sh:84</code></div>
+<div class="callout warn"><strong>3. Template agreement is not semantic prompt quality.</strong> The independent gather mirror checks wiring/bytes while allowing prompt text edits; it can pass when an instruction is poor. Eval counterexamples and live evidence answer different questions. <code>scripts/verify_templates.py:3</code> <code>evals/cases.py:22</code></div>
+<p><strong>4. Drift cost concentrates in large mutable harnesses.</strong> Fresh hotspots put template verification first, then scene ingestion and world creation. Read their reuse boundaries before extending a mirrored contract. PowerShell semantic analysis is absent from the automated inventory; it was sampled manually. <code>scripts/verify_templates.py:1</code> <code>backend/scripts/ingest_scene.py:37</code> <code>backend/scripts/create_world.py:6</code></p>
+
+<details><summary>Reconciliation with the prior atlas</summary><div class="body"><p>The recovered prior scripts atlas contained no Boundaries or Invariants fragments. There were no previous risk/invariant/cycle claims in those tabs to carry forward; the fresh findings above were developed from current source and analyzer summaries.</p></div></details>
+
+</section>
+<section class="panel" id="glossary" role="tabpanel">
+
+<h2>Several commands use the same word for different operations</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Code name</th><th>Meaning</th></tr></thead><tbody><tr><td>USB synchronization</td><td>plan_sync / reconcile</td><td>Opaque file/hash decisions with no deletion propagation. <code>scripts/grimoire_sync.py:365</code> <code>scripts/grimoire_sync.py:333</code></td></tr><tr><td>Derived-state warm-up</td><td>cache sync</td><td><span class="badge warn">different sync</span> Rebuilds hot projections after authoritative edits; not replication. <code>backend/src/grimoire/cache.py:1</code></td></tr><tr><td>Last agreed bytes</td><td>sync baseline</td><td>Common file hashes, distinct from lint baselines and model baselines. <code>scripts/grimoire_sync.py:17</code></td></tr><tr><td>Accepted existing debt</td><td>Findings baseline</td><td>Counts by file/rule against an exact checker version; a lower actual count still requires recording the improvement. <code>scripts/ratchet.py:10</code> <code>scripts/ratchet.py:38</code></td></tr><tr><td>Patch input</td><td>World plan</td><td>Named records/refs; omission preserves, explicit values update, absent records do not get deleted. <code>backend/scripts/create_world.py:6</code> <code>backend/scripts/create_world.py:20</code></td></tr><tr><td>Template verification</td><td>gather mirror / Report</td><td>Independent input-data assembly compared to builder output, not a frozen instruction snapshot or quality score. <code>scripts/verify_templates.py:3</code> <code>scripts/verify_templates.py:66</code></td></tr><tr><td>Synthetic library</td><td>Shape / generate_library</td><td>Deterministic placeholder data on an empty target; a marker proves provenance, not permission to overwrite. <code>backend/scripts/synth_library.py:1</code></td></tr></tbody></table></div>
 
 </section><!--DOC_BODY--></main>
-<footer class="doc">Generated by code-visualization for the grimoire code-overview set. Automated tabs are script-generated; judgment tabs were authored from code reading and their citations verified against a63cb05f5.</footer>
+<footer class="doc">Automated tabs use installed code-visualization analyzers. Judgment tabs cite sampled source reading. Coverage omitted by user choice; custom model wrappers and dynamic resource loads have stated detection gaps.</footer>
 <script>
 (function(){
   const btns=[...document.querySelectorAll('nav.tabs button')];
@@ -376,6 +582,325 @@ overview; flow, boundary and glossary tabs are written once at repository scope.
     window.dispatchEvent(new CustomEvent('tab:shown',{detail:{id}}));
   }
   btns.forEach(b=>b.addEventListener('click',()=>activate(b.dataset.tab)));
+})();
+</script>
+<script id="atlas-renderers">
+/* The atlas renderers: sortable tables, the force-directed graph, the
+   squarified treemap and Mermaid diagrams — one copy. assemble.py inlines this
+   into whatever page shell --template names, so a caller that restyles the page
+   keeps them.
+
+   What a shell owes them: the design tokens they read (--accent, --surface,
+   --text, ... as CSS custom properties), and the tab contract — panels are
+   `.panel`, the shown one carries `.active`, and showing one dispatches
+   `tab:shown` on window with {detail:{id}}. A hidden tab's diagrams are drawn
+   when it is first shown, at its real size. */
+(function(){
+/* A shell that already carries its own inline copy (an older template) keeps
+   it: binding the sort handlers twice would make every click cancel itself. */
+if(window.atlasRenderers||typeof window.renderForceGraph==='function')return;
+window.atlasRenderers=true;
+
+/* ============ helpers ============ */
+const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const tip=document.getElementById('viz-tip')||document.body.appendChild(
+  Object.assign(document.createElement('div'),{className:'viz-tip',id:'viz-tip'}));
+function showTip(html,x,y){tip.innerHTML=html;tip.style.display='block';
+  const r=tip.getBoundingClientRect();
+  tip.style.left=Math.min(x+14,innerWidth-r.width-10)+'px';
+  tip.style.top=Math.min(y+14,innerHeight-r.height-10)+'px';}
+function hideTip(){tip.style.display='none'}
+function lerpColor(a,b,t){
+  const pa=hex(a),pb=hex(b);
+  return `rgb(${pa.map((v,i)=>Math.round(v+(pb[i]-v)*t)).join(',')})`;
+  function hex(h){h=h.replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');
+    return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16));}
+}
+function fmt(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e4?(n/1e3).toFixed(0)+'k':n>=1e3?(n/1e3).toFixed(1)+'k':String(n)}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+/* sortable tables */
+document.querySelectorAll('table.sortable').forEach(tb=>{
+  tb.querySelectorAll('thead th').forEach((th,ci)=>{
+    th.addEventListener('click',()=>{
+      const dir=th.classList.contains('asc')?'desc':'asc';
+      tb.querySelectorAll('thead th').forEach(h=>h.classList.remove('asc','desc'));
+      th.classList.add(dir);
+      const rows=[...tb.querySelectorAll('tbody tr')];
+      const val=r=>{const td=r.children[ci];if(!td)return '';
+        const d=td.dataset.sort!==undefined?td.dataset.sort:td.textContent.trim();
+        const n=parseFloat(String(d).replace(/[,%]/g,''));return isNaN(n)?String(d).toLowerCase():n;};
+      rows.sort((a,b)=>{const va=val(a),vb=val(b);
+        const c=(typeof va==='number'&&typeof vb==='number')?va-vb:String(va).localeCompare(String(vb));
+        return dir==='asc'?c:-c;});
+      const tbody=tb.querySelector('tbody');rows.forEach(r=>tbody.appendChild(r));
+    });
+  });
+});
+
+/* pan/zoom for a container holding an inner element (svg group or div) */
+function panZoom(viewport,apply,getState){
+  let drag=null;
+  viewport.addEventListener('wheel',e=>{
+    if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();
+    const s=getState();const f=e.deltaY<0?1.15:1/1.15;
+    const r=viewport.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+    s.x=mx-(mx-s.x)*f; s.y=my-(my-s.y)*f; s.k=Math.max(.15,Math.min(8,s.k*f)); apply();
+  },{passive:false});
+  viewport.addEventListener('mousedown',e=>{
+    if(e.target.closest('.zoombar')||e.target.dataset.draggable)return;
+    drag={sx:e.clientX,sy:e.clientY,ox:getState().x,oy:getState().y};
+    viewport.classList.add('dragging');
+  });
+  window.addEventListener('mousemove',e=>{if(!drag)return;
+    const s=getState();s.x=drag.ox+e.clientX-drag.sx;s.y=drag.oy+e.clientY-drag.sy;apply();});
+  window.addEventListener('mouseup',()=>{drag=null;viewport.classList.remove('dragging')});
+}
+function addZoombar(container,zoomIn,zoomOut,reset){
+  const bar=document.createElement('div');bar.className='zoombar';
+  [['+',zoomIn],['−',zoomOut],['⟲',reset]].forEach(([t,fn])=>{
+    const b=document.createElement('button');b.textContent=t;b.title=t==='⟲'?'Reset view':(t==='+'?'Zoom in':'Zoom out');
+    b.addEventListener('click',fn);bar.appendChild(b);});
+  container.appendChild(bar);
+}
+
+/* ============ force-directed graph ============ */
+/* data: {nodes:[{id,label,group,size,fanIn,fanOut,meta}], links:[{source,target,cycle,weight}], groups:{name:colorKey}} */
+function renderForceGraph(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||560;
+  const groupNames=[...new Set(data.nodes.map(n=>n.group||''))];
+  const palette=[cssVar('--accent'),cssVar('--good'),cssVar('--warn'),cssVar('--violet'),cssVar('--bad'),'#5ec2c9','#c98fb8','#8fb0c9'];
+  const gcolor={};groupNames.forEach((g,i)=>gcolor[g]=palette[i%palette.length]);
+  const nodes=data.nodes.map(n=>({...n,x:W/2+(Math.random()-0.5)*W*0.7,y:H/2+(Math.random()-0.5)*H*0.7,vx:0,vy:0}));
+  const idx={};nodes.forEach((n,i)=>idx[n.id]=i);
+  const links=data.links.filter(l=>idx[l.source]!==undefined&&idx[l.target]!==undefined)
+    .map(l=>({...l,s:idx[l.source],t:idx[l.target]}));
+  const maxSize=Math.max(1,...nodes.map(n=>n.size||1));
+  const R=n=>6+14*Math.sqrt((n.size||1)/maxSize);
+  /* simulate */
+  const iter=nodes.length>60?220:320;
+  for(let k=0;k<iter;k++){
+    const t=1-k/iter, rep=9000*t+900;
+    for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+      const a=nodes[i],b=nodes[j];let dx=a.x-b.x,dy=a.y-b.y;let d2=dx*dx+dy*dy||1;
+      if(d2<250000){const f=rep/d2;dx*=f;dy*=f;a.vx+=dx;a.vy+=dy;b.vx-=dx;b.vy-=dy;}
+    }
+    links.forEach(l=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const want=90+R(a)+R(b);const f=0.02*(d-want)/d;
+      a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f;});
+    nodes.forEach(n=>{
+      n.vx+=(W/2-n.x)*0.0035;n.vy+=(H/2-n.y)*0.0035;
+      n.x+=Math.max(-14,Math.min(14,n.vx));n.y+=Math.max(-14,Math.min(14,n.vy));
+      n.vx*=0.6;n.vy*=0.6;});
+  }
+  /* fit */
+  const xs=nodes.map(n=>n.x),ys=nodes.map(n=>n.y);
+  const pad=60,minx=Math.min(...xs)-pad,maxx=Math.max(...xs)+pad,miny=Math.min(...ys)-pad,maxy=Math.max(...ys)+pad;
+  const fitK=Math.min(W/(maxx-minx),H/(maxy-miny),1.6);
+  const st={k:fitK,x:(W-(maxx+minx)*fitK)/2,y:(H-(maxy+miny)*fitK)/2};
+  const init={...st};
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const defs=document.createElementNS(svgNS,'defs');
+  defs.innerHTML=`<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--text-faint')}"/></marker>
+  <marker id="arr-cyc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--bad')}"/></marker>`;
+  svg.appendChild(defs);
+  const g=document.createElementNS(svgNS,'g');svg.appendChild(g);
+  const apply=()=>g.setAttribute('transform',`translate(${st.x},${st.y}) scale(${st.k})`);
+  const edgeEls=[],nodeEls=[];
+  links.forEach(l=>{
+    const p=document.createElementNS(svgNS,'path');
+    p.setAttribute('stroke',l.cycle?cssVar('--bad'):cssVar('--text-faint'));
+    p.setAttribute('stroke-opacity',l.cycle?'0.9':'0.4');
+    p.setAttribute('stroke-width',l.cycle?2:Math.min(3,0.7+Math.log2(1+(l.weight||1))*0.5));
+    p.setAttribute('fill','none');
+    /* dashed = loaded at runtime (template, prompt, data), not imported */
+    if(l.kind==='resource')p.setAttribute('stroke-dasharray','5 4');
+    p.setAttribute('marker-end',l.cycle?'url(#arr-cyc)':'url(#arr)');
+    g.appendChild(p);edgeEls.push(p);
+  });
+  nodes.forEach(n=>{
+    const grp=document.createElementNS(svgNS,'g');grp.style.cursor='grab';grp.dataset.draggable='1';
+    const c=document.createElementNS(svgNS,'circle');
+    c.setAttribute('r',R(n));c.setAttribute('fill',gcolor[n.group||'']);
+    c.setAttribute('fill-opacity','0.85');c.setAttribute('stroke',cssVar('--bg'));c.setAttribute('stroke-width','1.5');
+    c.dataset.draggable='1';
+    const t=document.createElementNS(svgNS,'text');
+    t.textContent=n.label||n.id;t.setAttribute('font-size','11');t.setAttribute('font-family',cssVar('--mono'));
+    t.setAttribute('fill',cssVar('--text'));t.setAttribute('text-anchor','middle');t.setAttribute('dy',R(n)+13);
+    t.style.pointerEvents='none';
+    grp.appendChild(c);grp.appendChild(t);g.appendChild(grp);nodeEls.push(grp);
+    grp.addEventListener('mouseenter',e=>{
+      showTip(`<b>${esc(n.label||n.id)}</b><br>${n.meta?esc(n.meta)+'<br>':''}fan-in ${n.fanIn??'–'} · fan-out ${n.fanOut??'–'}${n.size?` · ${fmt(n.size)} loc`:''}`,e.clientX,e.clientY);
+      hl(n.id);});
+    grp.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    grp.addEventListener('mouseleave',()=>{hideTip();hl(null)});
+    let dragN=null;
+    grp.addEventListener('mousedown',e=>{e.stopPropagation();dragN={mx:e.clientX,my:e.clientY,ox:n.x,oy:n.y};});
+    window.addEventListener('mousemove',e=>{if(!dragN)return;
+      n.x=dragN.ox+(e.clientX-dragN.mx)/st.k;n.y=dragN.oy+(e.clientY-dragN.my)/st.k;draw();});
+    window.addEventListener('mouseup',()=>dragN=null);
+  });
+  function hl(id){
+    if(id===null){edgeEls.forEach((p,i)=>p.setAttribute('stroke-opacity',links[i].cycle?'0.9':'0.4'));
+      nodeEls.forEach(el=>el.style.opacity='1');return;}
+    const near=new Set([id]);
+    links.forEach(l=>{if(l.source===id)near.add(l.target);if(l.target===id)near.add(l.source)});
+    edgeEls.forEach((p,i)=>{const l=links[i];
+      p.setAttribute('stroke-opacity',(l.source===id||l.target===id)?'1':'0.08');});
+    nodeEls.forEach((el,i)=>el.style.opacity=near.has(nodes[i].id)?'1':'0.25');
+  }
+  function draw(){
+    links.forEach((l,i)=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const tx=b.x-dx/d*(R(b)+3),ty=b.y-dy/d*(R(b)+3);
+      const sx=a.x+dx/d*R(a),sy=a.y+dy/d*R(a);
+      const mx=(sx+tx)/2-dy/d*10,my=(sy+ty)/2+dx/d*10;
+      edgeEls[i].setAttribute('d',`M${sx},${sy} Q${mx},${my} ${tx},${ty}`);});
+    nodes.forEach((n,i)=>nodeEls[i].setAttribute('transform',`translate(${n.x},${n.y})`));
+  }
+  draw();apply();
+  container.appendChild(svg);
+  panZoom(container,apply,()=>st);
+  addZoombar(container,
+    ()=>{st.k=Math.min(8,st.k*1.25);apply()},
+    ()=>{st.k=Math.max(.15,st.k/1.25);apply()},
+    ()=>{Object.assign(st,init);apply()});
+  if(groupNames.length>1||data.legendExtra){
+    const leg=document.createElement('div');leg.className='legend';
+    groupNames.forEach(gn=>{leg.innerHTML+=`<span><i class="sw" style="background:${gcolor[gn]}"></i>${esc(gn||'(root)')}</span>`});
+    if(data.legendExtra)leg.innerHTML+=data.legendExtra;
+    container.appendChild(leg);
+  }
+}
+
+/* ============ squarified treemap ============ */
+/* data: {items:[{name,value,metric,meta}], metricLabel, metricMax} — value drives area, metric drives heat color */
+function renderTreemap(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||520;
+  const items=data.items.filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
+  const total=items.reduce((s,d)=>s+d.value,0)||1;
+  const mmax=data.metricMax??Math.max(1,...items.map(d=>d.metric||0));
+  const rects=[];
+  (function squarify(list,x,y,w,h){
+    if(!list.length)return;
+    if(list.length===1){rects.push({d:list[0],x,y,w,h});return;}
+    let row=[],rest=list.slice(),best=Infinity;
+    while(rest.length){
+      const cand=row.concat(rest[0]);
+      const sum=cand.reduce((s,d)=>s+d.value,0);
+      const side=Math.min(w,h);
+      const scale=(w*h)*(sum/list.reduce((s,d)=>s+d.value,0));
+      const len=scale/side;
+      const worst=Math.max(...cand.map(d=>{
+        const a=(d.value/sum)*side*len;const r=Math.max(len*len/ (a/side*side/ (a/len)||1),1);
+        const iw=(d.value/sum)*side, ratio=Math.max(len/iw,iw/len);return ratio;}));
+      if(worst<=best){best=worst;row=cand;rest.shift();}
+      else break;
+    }
+    const sum=row.reduce((s,d)=>s+d.value,0);
+    const frac=sum/list.reduce((s,d)=>s+d.value,0);
+    if(w>=h){const cw=w*frac;let cy=y;
+      row.forEach(d=>{const ch=h*(d.value/sum);rects.push({d,x,y:cy,w:cw,h:ch});cy+=ch;});
+      squarify(rest,x+cw,y,w-cw,h);
+    }else{const ch=h*frac;let cx=x;
+      row.forEach(d=>{const cw=w*(d.value/sum);rects.push({d,x:cx,y,w:cw,h:ch});cx+=cw;});
+      squarify(rest,x,y+ch,w,h-ch);
+    }
+  })(items,0,0,W,H);
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const lo=cssVar('--heat-lo'),hi=cssVar('--heat-hi');
+  rects.forEach(r=>{
+    const t=Math.pow(Math.min(1,(r.d.metric||0)/mmax),0.6);
+    const g=document.createElementNS(svgNS,'g');
+    const rc=document.createElementNS(svgNS,'rect');
+    rc.setAttribute('x',r.x+1);rc.setAttribute('y',r.y+1);
+    rc.setAttribute('width',Math.max(0,r.w-2));rc.setAttribute('height',Math.max(0,r.h-2));
+    rc.setAttribute('rx',3);rc.setAttribute('fill',lerpColor(lo,hi,t));
+    rc.setAttribute('stroke',cssVar('--bg'));rc.setAttribute('stroke-width','1');
+    g.appendChild(rc);
+    if(r.w>66&&r.h>22){
+      const tx=document.createElementNS(svgNS,'text');
+      const nm=r.d.name.split('/').pop();
+      tx.textContent=nm.length>Math.floor(r.w/6.6)?nm.slice(0,Math.floor(r.w/6.6)-1)+'…':nm;
+      tx.setAttribute('x',r.x+7);tx.setAttribute('y',r.y+16);
+      tx.setAttribute('font-size','11');tx.setAttribute('font-family',cssVar('--mono'));
+      tx.setAttribute('fill',t>0.55?'#fff':cssVar('--text'));tx.style.pointerEvents='none';
+      g.appendChild(tx);
+    }
+    g.addEventListener('mouseenter',e=>{rc.setAttribute('stroke',cssVar('--text'));
+      showTip(`<b>${esc(r.d.name)}</b><br>${esc(data.valueLabel||'size')}: ${fmt(r.d.value)}<br>${esc(data.metricLabel||'metric')}: ${fmt(r.d.metric||0)}${r.d.meta?'<br>'+esc(r.d.meta):''}`,e.clientX,e.clientY);});
+    g.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    g.addEventListener('mouseleave',()=>{rc.setAttribute('stroke',cssVar('--bg'));hideTip();});
+    svg.appendChild(g);
+  });
+  container.appendChild(svg);
+  const leg=document.createElement('div');leg.className='legend';
+  leg.innerHTML=`<span>area = ${esc(data.valueLabel||'size')}</span><span><i class="sw" style="background:${lo}"></i>low ${esc(data.metricLabel||'')}</span><span><i class="sw" style="background:${hi}"></i>high ${esc(data.metricLabel||'')}</span>`;
+  container.appendChild(leg);
+}
+
+/* ============ auto-init viz blocks ============ */
+document.querySelectorAll('.viz[data-render]').forEach(el=>{
+  const dataEl=el.nextElementSibling;
+  if(!dataEl||dataEl.type!=='application/json')return;
+  let data;try{data=JSON.parse(dataEl.textContent)}catch(e){el.textContent='data parse error';return}
+  const render=()=>{
+    if(el.dataset.done)return;el.dataset.done='1';
+    try{
+      if(el.dataset.render==='forcegraph')renderForceGraph(el,data);
+      else if(el.dataset.render==='treemap')renderTreemap(el,data);
+    }catch(e){el.innerHTML='<p style="padding:16px" class="dim">render error: '+esc(e.message)+'</p>';}
+  };
+  const panel=el.closest('.panel');
+  if(panel&&panel.classList.contains('active'))render();
+  else window.addEventListener('tab:shown',ev=>{if(panel&&ev.detail.id===panel.id)render();});
+});
+
+/* ============ mermaid (lazy per tab, with pan/zoom) ============ */
+(function(){
+  if(!document.querySelector('.mermaid'))return;
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+  s.onload=()=>{
+    if(typeof mermaid==='undefined'){document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});return;}
+    mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:'base',
+      themeVariables:{
+        primaryColor:cssVar('--surface-2'),primaryTextColor:cssVar('--text'),
+        primaryBorderColor:cssVar('--border-strong'),lineColor:cssVar('--text-dim'),
+        secondaryColor:cssVar('--accent-dim'),tertiaryColor:cssVar('--surface'),
+        background:cssVar('--surface'),mainBkg:cssVar('--surface-2'),
+        nodeTextColor:cssVar('--text'),fontFamily:cssVar('--sans'),fontSize:'14px',
+        actorBkg:cssVar('--surface-2'),actorBorder:cssVar('--accent'),actorTextColor:cssVar('--text'),
+        signalColor:cssVar('--text-dim'),signalTextColor:cssVar('--text'),
+        labelBoxBkgColor:cssVar('--surface-2'),labelTextColor:cssVar('--text'),
+        loopTextColor:cssVar('--text-dim'),noteBkgColor:cssVar('--warn-dim'),noteTextColor:cssVar('--text'),noteBorderColor:cssVar('--warn'),
+        clusterBkg:cssVar('--accent-dim'),clusterBorder:cssVar('--border-strong'),titleColor:cssVar('--text'),
+        edgeLabelBackground:cssVar('--surface')
+      }});
+    async function renderIn(panel){
+      const nodes=[...panel.querySelectorAll('.mermaid:not([data-processed])')];
+      if(!nodes.length)return;
+      try{await mermaid.run({nodes});}catch(e){/* leaves source visible */}
+      nodes.forEach(n=>{
+        const wrap=n.closest('.mermaid-wrap');if(!wrap||wrap.dataset.pz)return;wrap.dataset.pz='1';
+        const vp=wrap.querySelector('.mviewport')||wrap;
+        const svg=n.querySelector('svg');if(!svg)return;
+        svg.style.maxWidth='none';
+        const st={k:1,x:0,y:0},init={k:1,x:0,y:0};
+        const apply=()=>{svg.style.transformOrigin='0 0';svg.style.transform=`translate(${st.x}px,${st.y}px) scale(${st.k})`};
+        panZoom(vp,apply,()=>st);
+        addZoombar(wrap,()=>{st.k=Math.min(8,st.k*1.25);apply()},()=>{st.k=Math.max(.2,st.k/1.25);apply()},()=>{Object.assign(st,init);apply()});
+      });
+    }
+    const active=document.querySelector('.panel.active');if(active)renderIn(active);
+    window.addEventListener('tab:shown',e=>{const p=document.getElementById(e.detail.id);if(p)renderIn(p);});
+  };
+  s.onerror=()=>{document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});};
+  document.head.appendChild(s);
+})();
 })();
 </script>
 </body>

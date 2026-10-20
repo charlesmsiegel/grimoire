@@ -53,7 +53,10 @@ main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
 
 /* ---------- tabs: code-visualization's contract, so one shell serves all four
    documents. code-overview forces this template on assemble.py and on
-   build_measurement.py, so the markup those two emit has to fit here. ------- */
+   build_measurement.py, so the markup those two emit has to fit here. An atlas
+   needs no renderer code from this shell — assemble.py inlines its own — only
+   this contract: panels are .panel, the shown one is .active, and showing one
+   dispatches `tab:shown`, which is when a hidden tab's graphs are drawn. ---- */
 nav.tabs{
   display:flex;gap:2px;flex-wrap:wrap;max-width:1280px;margin:18px auto 0;
   padding:0 28px;border-bottom:1px solid var(--border);
@@ -83,6 +86,8 @@ a{color:var(--accent)}
 code,.mono{font-family:var(--mono);font-size:.92em}
 p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.card.hero{border-color:var(--border-strong);background:linear-gradient(180deg,var(--accent-dim),var(--surface) 60%)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;margin:10px 0}
 .grid{display:grid;gap:14px;margin:12px 0}
 .grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))}
 .grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
@@ -162,7 +167,7 @@ footer.doc a{color:var(--text-dim)}
   <div class="doc-label">CODE OVERVIEW</div>
   <h1 class="doc-title">android — Overview</h1>
   <p class="doc-sub">Summary of the android package: what it is, how healthy it is, and where to read next.</p>
-  <div class="doc-meta">generated 2026-08-18 · a63cb05f5</div>
+  <div class="doc-meta">generated 2026-10-20 · 9d4985eb3</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -187,14 +192,7 @@ footer.doc a{color:var(--text-dim)}
 <main><!-- Body layout for summary.html. Filled by build_summary.py. This is the page a
      reader lands on: it says what the unit is, what grade it carries, and sends
      them to the two documents that show the working. -->
-<p>A 535-line Kotlin WebView shell whose entire job is to contain no product logic. It boots the
-repository's own FastAPI backend in-process through Chaquopy and points a full-screen WebView at it,
-packaging <code>backend/src</code> and the built frontend verbatim.</p>
-<p>That constraint is why the backend looks the way it does elsewhere: environment-override path
-resolution, pure-Python base dependencies, and version-agnostic pydantic usage all exist to satisfy
-this directory. Its shutdown path is "Android reclaims the process", which is safe only because the
-store is file-per-record with atomic writes &mdash; a real dependency between two packages that never
-import each other.</p>
+<p>Android is a process shell for the shared Python/React product: Gradle consumes backend source and stages freshly built frontend/templates, while Kotlin supplies lifecycle, WebView files/downloads and notifications. Process startup binds before heavy imports and preserves a preferred port to keep the browser origin stable. <code>android/app/build.gradle.kts:95</code>, <code>android/app/build.gradle.kts:143</code>, <code>android/app/src/main/python/android_entry.py:163</code>.</p><p>The main risks lie at process boundaries: foreground promotion may fail, failed startup has no retry transition, and host-only navigation is broader than the bound server origin. The automatic graph omits same-package Kotlin and Chaquopy callback coupling, so the atlas supplies a manual map. <code>android/app/src/main/java/app/grimoire/ServerService.kt:79</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:85</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt:226</code>. Android health is explicitly ungraded without a Kotlin specialist; coverage tabs are omitted and no APK/device tests ran.</p>
 
 
 <section class="gradecard g-none">
@@ -205,17 +203,17 @@ import each other.</p>
   <div class="what">
     <h2>android</h2>
     <p class="dim">android</p>
-    <div><span class="badge neutral">kotlin</span> <span class="badge neutral">7 files · 535 lines</span> <span class="badge good">0 finding(s)</span></div>
+    <div><span class="badge neutral">kotlin</span> <span class="badge neutral">8 files · 1105 lines</span> <span class="badge good">0 finding(s)</span></div>
   </div>
 </section>
 
 <div class="callout"><strong>Measurement: no measurement content.</strong> Nothing in this unit produces a quality or accuracy number, so there is nothing to grade. That is a null, not a pass.</div>
 
-<section class="gradecard g-c"><div><div class="letter">C-</div><div class="score">70.0 / 100</div></div><div class="what"><h2>Theory</h2><p class="dim">Whether the code expresses a coherent theory of its problem, judged by a panel of three. A reading, not a measurement — read its evidence rather than this letter.</p></div></section>
+<section class="gradecard g-b"><div><div class="letter">B-</div><div class="score">80.0 / 100</div></div><div class="what"><h2>Theory</h2><p class="dim">Whether the code expresses a coherent theory of its problem, judged by a panel of three. A reading, not a measurement — read its evidence rather than this letter.</p></div></section>
 
 <div class="doclinks"><a class="doclink" href="codemap.html"><div class="k">codemap</div><div class="t">Code Map</div><div class="d">Structure, dependencies, hotspots, and the judgment tabs</div></a><a class="doclink" href="health.html"><div class="k">health</div><div class="t">Health</div><div class="d">Graded findings — 0 in total</div></a><a class="doclink" href="measurement.html"><div class="k">measurement</div><div class="t">Measurement</div><div class="d">Can the numbers this unit reports be believed? Importance-weighted measurement coverage, with the inventory it was computed from.</div></a><a class="doclink" href="theory.html"><div class="k">theory</div><div class="t">Theory</div><div class="d">Does this unit&#x27;s code express a coherent theory of its problem? A panel of three judges, their evidence, and any dimension they read differently.</div></a></div>
 
-<h2>What stands out</h2><ul><li>Health is deliberately ungraded: no code doctor ships for Kotlin, so the score is null rather than a number from a doctor that could not read the language.</li><li>The &#x27;no product logic here&#x27; rule is a build fact, not a convention — Chaquopy&#x27;s srcDir points straight at backend/src.</li><li>Its shutdown path is &#x27;Android reclaims the process&#x27;, which is safe only because store/atomic.py holds.</li></ul><div class="card"><strong>Code map</strong> — <a href="codemap.html">android — Codebase Atlas</a><p class="dim">Tabs: Overview, Inventory, Dependencies, Hotspots</p><p class="faint mono">generated 2026-08-18 · a63cb05f5 · 7 files, 535 LOC</p></div>
+<h2>What stands out</h2><ul><li>Health is static detector density; theory is a sampled three-reader judgment, with all disagreements retained.</li><li>Measurement grades the checked-in evidence audited here. Missing current run artifacts are not a claim that evaluations have never run.</li><li>Coverage tabs omitted by user choice. No tests, live model calls or experiments were run for this report.</li></ul><div class="card"><strong>Code map</strong> — <a href="codemap.html">android — Codebase Atlas</a><p class="dim">Tabs: Overview, Inventory, Dependencies, Hotspots, Critical Flows, Boundaries &amp;amp; Ownership, Invariants &amp;amp; Risks, Glossary</p><p class="faint mono">generated 2026-10-20 · 9d4985eb3 · 6 files, 1069 LOC</p></div>
 
 <h2>Category scores</h2><div class="card"><div class="catrow g-none ungraded" title="not measured by this analysis"><div class="cname">Correctness<small>weight 25% · 0 finding(s)</small></div><div class="bar"></div><div class="cscore">—</div><div class="cgrade">—</div></div>
 <div class="catrow g-none ungraded" title="not measured by this analysis"><div class="cname">Security<small>weight 15% · 0 finding(s)</small></div><div class="bar"></div><div class="cscore">—</div><div class="cgrade">—</div></div>

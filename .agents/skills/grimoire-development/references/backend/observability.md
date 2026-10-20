@@ -1,4 +1,4 @@
-Source: [logs.py](../../../../../backend/src/grimoire/store/logs.py), [incoming-llm-capture.md](../../../../../docs/incoming-llm-capture.md).
+Source: [logs/](../../../../../backend/src/grimoire/store/logs/), [incoming-llm-capture.md](../../../../../docs/incoming-llm-capture.md).
 
 ## Observability: one writer, three views
 

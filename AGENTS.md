@@ -47,6 +47,9 @@ The claims these documents make about this tree are checked by
 - **Put all module imports at the top of the file, never inside a function.**
   Resolve dependency cycles by changing module boundaries; do not hide a cycle
   with a local import. Keep the backend module graph acyclic.
+- **No code may depend on `docs/`.** Runtime code, tests, scripts and builds
+  must not import, read or otherwise require files from any `docs/` directory.
+  Documentation stays downstream of code.
 - **Use the platform's resolvers and portable dependencies.** Backend paths use
   `store.paths`, `prompts.templates_dir()` and `main.dist_dir()`. Keep base
   dependencies Android-installable and pydantic models compatible with v1/v2.

@@ -1,6 +1,6 @@
 # Ledger ownership
 
-Source: [facts.py](../../../../../backend/src/grimoire/store/facts.py), [knowledge.py](../../../../../backend/src/grimoire/store/knowledge.py), [ledger.py](../../../../../backend/src/grimoire/routes/ledger.py).
+Source: [facts.py](../../../../../backend/src/grimoire/store/facts.py), [knowledge.py](../../../../../backend/src/grimoire/store/knowledge.py), [ledger/](../../../../../backend/src/grimoire/routes/ledger/).
 
 - **Grimoire never edits a fact; the user may.** `store/facts.py` is an
   append-with-lifecycle ledger, and the absorb pass's whole vocabulary for a

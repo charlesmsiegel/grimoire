@@ -33,6 +33,6 @@ Stop both server processes using their recorded handles when verification is
 finished. Missing avatars for placeholder cards can produce harmless 404s; real
 provider traffic or a non-scratch library is an isolation failure.
 
-Source owners: [world routes](../../../../backend/src/grimoire/routes/worlds.py),
+Source owners: [world routes/](../../../../backend/src/grimoire/routes/worlds/),
 [inference routes](../../../../backend/src/grimoire/routes/inference.py),
-and [overlay](../../../../backend/src/grimoire/store/overlay.py).
+and [overlay/](../../../../backend/src/grimoire/store/overlay/).

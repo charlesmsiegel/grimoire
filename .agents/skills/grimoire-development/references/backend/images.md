@@ -1,6 +1,6 @@
 # Image storage and maintenance
 
-Source: [assets.py](../../../../../backend/src/grimoire/store/assets.py), [test_image_surfaces.py](../../../../../backend/tests/test_image_surfaces.py).
+Source: [assets/](../../../../../backend/src/grimoire/store/assets/), [test_image_surfaces.py](../../../../../backend/tests/test_image_surfaces.py).
 
 - **Images live in the content-addressed store, never in a record's folder.**
   Every image write goes through the `store.assets` primitives: `put_in` /

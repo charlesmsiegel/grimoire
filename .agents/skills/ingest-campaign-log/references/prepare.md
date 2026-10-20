@@ -10,7 +10,7 @@
 - A target grimoire World id, and a campaign name.
 - Any player character (PC) referenced via `{"kind": "pcs", "id": "..."}` in a scene's
   `characters` field must resolve in the campaign or its World. Current campaigns
-  inherit through the [overlay](../../../../backend/src/grimoire/store/overlay.py);
+  inherit through the [overlay/](../../../../backend/src/grimoire/store/overlay/);
   `resolve_version` in the ingest script uses that union. Add missing PCs through
   the app before ingestion rather than assuming a physical campaign copy exists.
 

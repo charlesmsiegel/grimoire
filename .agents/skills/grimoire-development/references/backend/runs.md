@@ -1,6 +1,6 @@
 # Runtime work
 
-Source: [runs.py](../../../../../backend/src/grimoire/routes/runs.py), [runner.py](../../../../../backend/src/grimoire/runner.py), [test_scene_freeze.py](../../../../../backend/tests/test_scene_freeze.py).
+Source: [runs/](../../../../../backend/src/grimoire/routes/runs/), [runner.py](../../../../../backend/src/grimoire/runner.py), [test_scene_freeze.py](../../../../../backend/tests/test_scene_freeze.py).
 
 ## Detached runs: a turn outlives the request that asked for it
 

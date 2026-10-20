@@ -1,6 +1,6 @@
 # Generation and resolution
 
-Source: [inference.py](../../../../../backend/src/grimoire/inference.py), [common.py](../../../../../backend/src/grimoire/routes/common.py), [routing.py](../../../../../backend/src/grimoire/store/routing.py).
+Source: [inference/](../../../../../backend/src/grimoire/inference/), [common/](../../../../../backend/src/grimoire/routes/common/), [routing.py](../../../../../backend/src/grimoire/store/routing.py).
 
 - **Adding an LLM call site?** Resolve it with
   `require_inference(<task>, cid)` and name the task the call meters under.

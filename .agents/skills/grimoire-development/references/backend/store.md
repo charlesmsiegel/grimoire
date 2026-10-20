@@ -1,10 +1,10 @@
 # Store boundaries and imports
 
-Source: [store-guarantees.md](../../../../../docs/store-guarantees.md), [locks.py](../../../../../backend/src/grimoire/store/locks.py), [test_import_guard.py](../../../../../backend/tests/test_import_guard.py).
+Source: [store-guarantees.md](../../../../../docs/store-guarantees.md), [locks/](../../../../../backend/src/grimoire/store/locks/), [test_import_guard.py](../../../../../backend/tests/test_import_guard.py).
 
 For a compiled-cache or sync change, read the
 [compiled-cache contract](../../../../../docs/store-guarantees.md#the-compiled-cache)
-and the affected hook in [cache_sync](../../../../../backend/src/grimoire/store/cache_sync.py).
+and the affected hook in [cache_sync/](../../../../../backend/src/grimoire/store/cache_sync/).
 Records remain authoritative; cached results cannot supply a decision's read set.
 
 - Several architecture rules are enforced by tests that parse the package's own
