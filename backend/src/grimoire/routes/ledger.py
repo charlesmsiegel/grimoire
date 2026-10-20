@@ -1,6 +1,6 @@
 """Hand edits to the continuity ledger.
 
-`GET /campaigns/{cid}/ledger` (in `campaigns.py`) has always been able to *show*
+`GET /campaigns/{cid}/ledger` (in `campaigns/_ledger.py`) has always been able to *show*
 what a campaign owes; until this module nothing could change any of it by hand.
 The only writer of plot.json, commitments.json, facts.json and relationships.json
 was `absorb/apply.py`, reached through `PUT /chronicle` — so a thread the model

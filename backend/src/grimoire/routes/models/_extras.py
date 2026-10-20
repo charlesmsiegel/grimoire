@@ -3,12 +3,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, PositiveInt, StrictStr
+from pydantic import BaseModel
 
 from ...store import membership
-
 
 # ---- models ----
 

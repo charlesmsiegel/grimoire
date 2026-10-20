@@ -7,7 +7,7 @@
     "attr-defined": 1,
     "union-attr": 3
   },
-  "backend/src/grimoire/routes/campaigns.py": {
+  "backend/src/grimoire/routes/campaigns/_ledger.py": {
     "union-attr": 2
   },
   "backend/src/grimoire/routes/mechanics.py": {

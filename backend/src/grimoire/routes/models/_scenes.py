@@ -3,16 +3,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, PositiveInt, StrictStr
 
-from ...store import membership
-
-
 # ---- models ----
-
 from ._settings import ResponseSettings
+
 
 class PromptText(BaseModel):
     text: StrictStr

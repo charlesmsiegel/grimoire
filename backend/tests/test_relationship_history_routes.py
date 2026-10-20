@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
-from grimoire.routes import campaigns as campaign_routes
+from grimoire.routes.campaigns import _ledger as campaign_ledger
 
 
 @pytest.fixture
@@ -140,7 +140,9 @@ def test_a_hand_edited_row_degrades_field_by_field(client, cid):
 
 
 def test_the_listing_is_capped(client, cid, monkeypatch):
-    monkeypatch.setattr(campaign_routes, "RELATIONSHIP_HISTORY_PAGE", 2)
+    # The facade keeps the readable export; the handler's globals belong to
+    # its domain module after the package split, so patch the actual owner.
+    monkeypatch.setattr(campaign_ledger, "RELATIONSHIP_HISTORY_PAGE", 2)
     store.relationship_history.append(cid, [
         store.relationship_history.row("feeling", "characters:a", "characters:b",
                                        label="", before="", after=str(n))

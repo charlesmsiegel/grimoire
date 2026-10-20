@@ -5,10 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, PositiveInt, StrictStr
-
-from ...store import membership
-
+from pydantic import BaseModel
 
 # ---- models ----
 

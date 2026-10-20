@@ -3,11 +3,9 @@
 
 from __future__ import annotations
 
-import contextlib
 from urllib.parse import quote
 
 from fastapi import (
-    APIRouter,
     Depends,
     File,
     Header,
@@ -15,82 +13,27 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import JSONResponse, Response
 
 from ... import store
 from ...llm import LLMClient
-from ...store import campaign_settings, compiled, overview
-from ...store import paths as library_paths
-from ...store.continuity import doc as continuity_doc
-from ...store.continuity import effective as continuity_effective
-from ...store.inference import settings as inference_settings
 from .. import characters as character_routes
-from .. import ledger as ledger_routes
 from .. import runs
 from ..common import (
-    PC_HISTORY_MISSES,
     _campaign_root_or_404,
-    _content_fields,
-    _display_name_or_400,
-    _dump,
-    _page_of,
-    _page_window,
-    _response_body,
-    _serve_image,
     _serve_image_file,
-    _sheet_failure_status,
     _upload_image_ext,
     _with_descriptions,
-    _write_response,
     computes_only,
     draft_completion,
     get_llm,
     image_draft_prompt,
     image_id_field,
-    image_promote_guards,
-    leaves_campaign_unchanged,
-    pc_history_404,
-    record_art_mutation,
-    require_inference,
-    stamps_campaign_write,
 )
 from ..models import (
-    AdvanceTime,
-    AvatarFocus,
-    CalendarConfig,
-    CampaignClimate,
-    CharacterBirthdate,
-    CharacterCreate,
-    CharacterTags,
-    CopyFromGreeting,
-    DefaultVersion,
-    ForkCampaign,
-    GroupStateSave,
     ImageDescription,
-    ImagePromote,
-    NameBody,
-    NewCampaign,
-    NoticeMark,
-    PCCreate,
-    PCUpdate,
-    PersonaVersionCreate,
-    PersonaVersionUpdate,
-    PickBody,
-    PinRule,
-    RefList,
-    ResponseSettings,
-    ScheduledEventCreate,
-    ScheduledEventEdit,
-    SyncPin,
-    TaglineSave,
-    VersionCreate,
-    VersionUpdate,
-    VoiceAnchorSave,
 )
-from ..overview_log import overview_read
-
-
 from ._router import router
+
 
 # ---- the campaign's cover image (store/covers.py) --------------------------
 # Declared here, in `campaigns`, which `routes/__init__` includes BEFORE

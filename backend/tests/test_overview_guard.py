@@ -28,7 +28,9 @@ import grimoire
 #: spec 05's: its `overview` hook calls `overview.warm.warm_paths` (05-S5),
 #: which stores what a read would and decides nothing.
 _IMPORTERS = {"routes.worlds", "routes.campaigns", "routes.shell", "routes.todo",
-              "routes.streaming", "store.cache_sync"}
+              "routes.streaming", "store.cache_sync", "routes.campaigns._settings"}
+# The campaign-list reader moved to _settings. Its old facade retains the
+# imported name for compatibility; no other campaign leaf may use a projection.
 
 #: Functions that must never reach an overview projection.
 _DECISION_SITES = (
@@ -227,8 +229,16 @@ def test_guard_fails_an_unlisted_importer():
     assert _violations(sources) == ["routes.scenes imports store.overview"]
 
 
-@pytest.mark.parametrize("site", ["routes.todo.get_todo", "routes.shell.get_shell"])
+def test_campaign_package_does_not_grant_its_siblings_overview_access():
+    sources = {**_FIXTURE_BASE, "routes.campaigns._actors":
+               "from ...store import overview\n"}
+    assert _violations(sources) == ["routes.campaigns._actors imports store.overview"]
+
+
+@pytest.mark.parametrize("site", ["routes.todo.get_todo", "routes.shell.get_shell",
+                                  "routes.campaigns.get_campaigns"])
 def test_the_read_routes_do_reach_it(site):
     """The guard can see the real paths, so its silence on the decision sites
     is a finding rather than blindness."""
-    assert _real_graph().reaches_overview(site)
+    graph = _real_graph()
+    assert graph.reaches_overview(graph._resolve(site))

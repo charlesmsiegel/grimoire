@@ -837,7 +837,7 @@ def _describable(seen: dict, base: str, rid: str, vid: str, lookup) -> str | Non
     design, so the entry could never be cleared and would be re-offered
     forever. Shared by this queue's list and count forms, so the count is the
     length of the list by construction -- and by the campaign queue's
-    (`routes/campaigns.py`), with its overlay lookup, so the two scopes apply
+    (`routes/campaigns/_images.py`), with its overlay lookup, so the two scopes apply
     one rule.
 
     `lookup(base, rid)` is the scope's `(name, version ids)` read, and `seen`

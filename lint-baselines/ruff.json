@@ -30,7 +30,7 @@
   "backend/src/grimoire/prompts.py": {
     "A002": 1
   },
-  "backend/src/grimoire/routes/campaigns.py": {
+  "backend/src/grimoire/routes/campaigns/_ledger.py": {
     "RUF003": 1
   },
   "backend/src/grimoire/routes/characters.py": {
