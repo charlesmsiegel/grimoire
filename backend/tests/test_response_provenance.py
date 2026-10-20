@@ -6,6 +6,7 @@ import pytest
 from grimoire import llm, llm_sampling, routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
+from grimoire.store.usage import _ledger as usage_ledger
 from tests.inference_fixtures import endpoint, primary_falling_back
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, ModelessHolder, ScriptedProvider
 from tests.test_character_turns import seed
@@ -233,7 +234,7 @@ def test_ledger_append_failure_still_records_made_by(client, monkeypatch):
     def refuse(row, ts):
         raise OSError("disk full")
 
-    monkeypatch.setattr(store.usage, "_append", refuse)
+    monkeypatch.setattr(usage_ledger, "_append", refuse)
     cid, sid = seed(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[HANDOFF]])
     base = f"/api/campaigns/{cid}/scenes/{sid}"

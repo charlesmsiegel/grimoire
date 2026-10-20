@@ -26,7 +26,9 @@ from grimoire.store import (
 )
 from grimoire.store.appearances import paths as appearances_paths
 from grimoire.store.context import epistemic
+from grimoire.store.context.epistemic import _classification as epistemic_classification
 from grimoire.store.history import budget, model
+from grimoire.store.locks import _runtime as locks_runtime
 from grimoire.store.scenes import identity as scenes_identity
 
 
@@ -444,7 +446,7 @@ def test_an_unreadable_appearance_record_leaves_only_overrides(pier, monkeypatch
         @staticmethod
         def record(_cid):
             raise ValueError("appearances.json will not parse")
-    monkeypatch.setattr(epistemic, "appearances_paths", Unreadable)
+    monkeypatch.setattr(epistemic_classification, "appearances_paths", Unreadable)
     classes = _post_classes(_view(st, win, [item]))
     assert classes[0] == ("known", ("override",))
     assert classes[st.index_of("silver ledger")] == ("unknown", ("no_record",))
@@ -547,7 +549,7 @@ def test_classify_takes_no_campaign_lock_and_writes_nothing(pier, cid, monkeypat
     def guarded(c, *a, **k):
         taken.append(c)
         return Guarded(real(c, *a, **k))
-    monkeypatch.setattr(locks, "campaign_lock", guarded)
+    monkeypatch.setattr(locks_runtime, "campaign_lock", guarded)
     epistemic.classify(epistemic.Perspective.of(cid, st.sid, mara, (mara,),
                                                 identity=st.identity), [item])
     assert taken == [cid]
@@ -698,7 +700,7 @@ def test_with_presence_unreadable_authorship_is_off_too(pier, monkeypatch):
         @staticmethod
         def record(_cid):
             raise ValueError("appearances.json will not parse")
-    monkeypatch.setattr(epistemic, "appearances_paths", Unreadable)
+    monkeypatch.setattr(epistemic_classification, "appearances_paths", Unreadable)
     assert _post_classes(_view(st, mara, [item]))[st.index_of("silver ledger")] == \
         ("unknown", ("no_record",))
 
@@ -753,7 +755,7 @@ def test_an_unexpected_failure_narrows_and_never_raises(pier, monkeypatch):
     [c] = _view(st, None, [item], (mara,)).visible()
     assert c.slices[0].text == item.excerpts[0].text
     monkeypatch.undo()
-    monkeypatch.setattr(epistemic, "_classify_item", boom)
+    monkeypatch.setattr(epistemic_classification, "_classify_item", boom)
     assert _view(st, mara, [item]).visible() == ()
 
 

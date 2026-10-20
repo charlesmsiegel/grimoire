@@ -13,6 +13,7 @@ from grimoire import embeddings
 from grimoire.llm_errors import LLMError
 from grimoire.routes import history_recall
 from grimoire.store import compiled, embed_space, llm_connections, logs, usage, vectors
+from grimoire.store.compiled import _contracts as compiled_contracts
 from grimoire.store.context import semantic as lore
 from grimoire.store.history import model, retrieval, semantic
 from grimoire.store.searchdocs import embedded, live, scene
@@ -358,7 +359,7 @@ def test_missing_vectors_do_not_make_group_coverage_exhausted(cid, space, monkey
 def test_cancel_during_materialized_staging_discards_pending_rows(cid, space, cache, tmp_path, monkeypatch,
                                                                  batch_size):
     docs = documents(cid)
-    monkeypatch.setattr(compiled, "MAX_STAGED_ROWS", batch_size)
+    monkeypatch.setattr(compiled_contracts, "MAX_STAGED_ROWS", batch_size)
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
     kind = embedded.vector_kind(space)
     mark = compiled.Batch.mark_materialized
@@ -425,9 +426,9 @@ def test_cancel_while_history_flush_waits_for_writer_discards_rows(cid, space, c
     docs = documents(cid)
     ready, begin, waiting, finished = (threading.Event() for _ in range(4))
     original_lock = compiled._state.lock
-    monkeypatch.setattr(compiled, "WRITE_LOCK_SECONDS", 2)
+    monkeypatch.setattr(compiled_contracts, "WRITE_LOCK_SECONDS", 2)
     monkeypatch.setattr(compiled._state, "lock", _ObservedWriterLock(
-        original_lock, waiting, compiled.WRITE_LOCK_SECONDS))
+        original_lock, waiting, compiled_contracts.WRITE_LOCK_SECONDS))
     kind = embedded.vector_kind(space)
     flush = compiled.Batch.flush
     def paused_flush(self, *args, **kwargs):

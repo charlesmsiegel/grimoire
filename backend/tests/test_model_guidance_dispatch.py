@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from grimoire import llm, model_guidance, openai_compatible, wire
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from tests.llm_fakes import ScriptedProvider, carrying
 
@@ -51,7 +52,7 @@ async def test_each_dispatch_uses_its_own_model(primary_model, fallback_model):
 
 async def test_same_model_retry_uses_identical_prompt_without_fallback_capture(monkeypatch):
     # Zero backoff keeps the real retry loop fast; no replacement retry logic.
-    monkeypatch.setattr(llm, "_backoff_delay", lambda *args: 0)
+    monkeypatch.setattr(llm_retry, "_backoff_delay", lambda *args: 0)
     primary = ScriptedProvider(chunks=(), error=LLMError("network", "reset"))
     facade = llm.LLMClient(openrouter=primary, retries=1)
     messages = _prepared("glm-5.3")

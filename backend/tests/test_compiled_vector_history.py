@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from grimoire.store import vectors
+from grimoire.store.compiled import _encoding as compiled_encoding
+from grimoire.store.compiled import _runtime as compiled_runtime
 from tests import test_compiled as cache_tests
 
 cache = cache_tests.cache
@@ -54,7 +56,7 @@ def test_optional_vector_context_does_not_change_keys_or_bytes_with_build(cache,
     vectors.save('Realm\x00Saltmarch', 'Mara', [3.0, 4.0])
     vector_path = vectors._path('Realm\x00Saltmarch', 'Mara')
     before = vector_path.read_bytes()
-    monkeypatch.setattr(cache, '_build', lambda: 'c' * 64)
+    monkeypatch.setattr(compiled_runtime, '_build', lambda: 'c' * 64)
     vectors.save('Realm\x00Saltmarch', 'Mara', [3.0, 4.0],
                  source=cache.WrittenInput('body', root / 'Realm.md', b'Realm'))
     assert vectors._path('Realm\x00Saltmarch', 'Mara') == vector_path
@@ -118,7 +120,7 @@ def test_optional_vector_history_failure_preserves_successful_vector(cache, root
     def failed(*args):
         raise MemoryError('optional vector history allocation')
     if failure == 'checksum':
-        monkeypatch.setattr(cache, '_materialized_check', failed)
+        monkeypatch.setattr(compiled_encoding, '_materialized_check', failed)
     elif failure == 'space_hash':
         monkeypatch.setattr(cache, 'space_digest', failed)
     else:

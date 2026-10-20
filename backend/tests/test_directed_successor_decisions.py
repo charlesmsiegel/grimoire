@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from grimoire import decisions, routes, store
 from grimoire.routes import character_turns
+from grimoire.routes.character_turns import _planning as character_turns_planning
 from tests.llm_fakes import FakeLLM
 
 MARA = "characters:mara"
@@ -182,7 +183,7 @@ def test_a_stopped_round_never_runs_a_successor_decision(client, monkeypatch):
     async def unexpected(*args, **kwargs):
         raise AssertionError("Stop must never select a successor")
 
-    monkeypatch.setattr(character_turns, "_select_successor", unexpected)
+    monkeypatch.setattr(character_turns_planning, "_select_successor", unexpected)
     round_ = {"automatic": True, "mode": "directed", "stopped": True}
     watcher = SimpleNamespace(handoff=None, issue=None)
     result = asyncio.run(character_turns._after_saved_contribution(
@@ -270,7 +271,7 @@ def test_the_recovered_reply_can_stop_without_another_decision(client, monkeypat
     async def unexpected(*args, **kwargs):
         raise AssertionError("a cancelled recovery cannot select a successor")
 
-    monkeypatch.setattr(character_turns, "_select_successor", unexpected)
+    monkeypatch.setattr(character_turns_planning, "_select_successor", unexpected)
     after = {"needs_decision": True, "used": [MARA], "actor": MARA,
              "response_id": saved["id"], "content_issue": None}
     settled, choice = asyncio.run(character_turns._settle_recovered_successor(

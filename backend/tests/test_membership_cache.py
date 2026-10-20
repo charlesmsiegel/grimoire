@@ -20,6 +20,7 @@ from grimoire.store import (
     tokens,
     worlds,
 )
+from grimoire.store.overlay import _views as overlay_views
 from tests import test_group_membership_store as native_tests
 
 GROUP = "groups:salt-circle"
@@ -595,7 +596,7 @@ def test_data_directory_switch_during_capture_cannot_mix_stores(tmp_path, monkey
             monkeypatch.setenv("GRIMOIRE_HOME", str(second[0]))
         return real_stamp(path)
 
-    monkeypatch.setattr(overlay, "view", view)
+    monkeypatch.setattr(overlay_views, "view", view)
     monkeypatch.setattr(statcache, "stamp", stamp)
     result = membership.campaign_index(first[1])
     assert result.groups[GROUP].members == ("characters:mara",)

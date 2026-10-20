@@ -29,6 +29,8 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.llm import LLMClient
 from grimoire.main import create_app
+from grimoire.routes.scenes import _review_budget as scenes_review_budget
+from grimoire.routes.scenes import _review_state as scenes_review_state
 from tests import review_runs
 from tests.llm_fakes import decision_reply, from_entries
 
@@ -313,7 +315,7 @@ def test_a_running_review_holds_the_scene_against_a_turn(client, scene, monkeypa
     cannot both hold a scene -- which is what stops an append from moving the
     transcript out from under a ten-minute absorb."""
     cid, sid = scene
-    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    monkeypatch.setattr(scenes_review_budget, "ABANDON_POLL", 0.02)
     held = _Wedged()
     client.app.dependency_overrides[routes.get_llm] = lambda: _facade(held)
 
@@ -463,7 +465,7 @@ def test_cancel_answers_only_once_the_run_it_stopped_has_stopped(client, scene,
     refused with `run_in_flight` by a review it had just discarded.
     """
     cid, sid = scene
-    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    monkeypatch.setattr(scenes_review_budget, "ABANDON_POLL", 0.02)
     held = _Wedged()
     client.app.dependency_overrides[routes.get_llm] = lambda: _facade(held)
 
@@ -498,7 +500,7 @@ def test_a_cancel_over_an_unreadable_record_still_stops_the_work(client, scene,
     thing it is rather than as a crash for a button that half worked.
     """
     cid, sid = scene
-    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    monkeypatch.setattr(scenes_review_budget, "ABANDON_POLL", 0.02)
     held = _Wedged()
     client.app.dependency_overrides[routes.get_llm] = lambda: _facade(held)
     started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
@@ -549,7 +551,7 @@ def _wedged_retry(client, scene, monkeypatch, route="dossiers"):
     """Start a scoped retry and stop with its provider mid-call."""
     cid, sid = scene
     _absorb(client, cid, sid)
-    monkeypatch.setattr(routes.scenes, "ABANDON_POLL", 0.02)
+    monkeypatch.setattr(scenes_review_budget, "ABANDON_POLL", 0.02)
     held = _Wedged()
     client.app.dependency_overrides[routes.get_llm] = lambda: _facade(held)
     started = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{route}")
@@ -759,7 +761,7 @@ def test_a_contended_campaign_is_waited_out_rather_than_costing_the_review(
             return real(c)
         return lock
 
-    monkeypatch.setattr(routes.scenes, "_PERSIST_BACKOFF", 0)
+    monkeypatch.setattr(scenes_review_state, "_PERSIST_BACKOFF", 0)
     written = []
     monkeypatch.setattr(store.locks, "campaign_lock", contended(2))
     routes.scenes._under_review_lock(cid, sid, run, lambda: written.append(1))

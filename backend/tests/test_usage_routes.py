@@ -17,7 +17,9 @@ from grimoire.llm import LLMClient
 from grimoire.main import create_app
 from grimoire.openrouter import OpenRouterClient
 from grimoire.routes import streaming
+from grimoire.routes.scenes import _review_budget as scenes_review_budget
 from grimoire.store import inference_keys
+from grimoire.store.usage import _ledger as usage_ledger
 from tests import draft_runs as drafts
 from tests import inference_fixtures, review_runs, wire_kit
 from tests.llm_fakes import (
@@ -88,7 +90,7 @@ def test_monthly_cost_route_does_not_report_zero_for_a_failed_read(client, monke
     def unreadable(*args, **kwargs):
         raise OSError("ledger unavailable")
         yield  # pragma: no cover - make this a generator like the real reader
-    monkeypatch.setattr(store.usage, "_read_rows", unreadable)
+    monkeypatch.setattr(usage_ledger, "_read_rows", unreadable)
     assert client.get("/api/usage/monthly", params={"month": "2026-01"}).status_code == 503
 
 
@@ -279,7 +281,7 @@ def test_an_absorb_step_the_budget_refuses_files_no_row(client, home, monkeypatc
     client.put("/api/config", json={"absorb_budget": "60"})
 
     clock = [0.0]
-    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: clock[0])
     _use(client.app, ClockEatingFake(
         clock, 0.0,
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}',

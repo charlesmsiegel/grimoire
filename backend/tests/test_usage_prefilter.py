@@ -20,12 +20,15 @@ from datetime import date, timedelta
 import pytest
 
 from grimoire.store import pricing, usage
+from grimoire.store.usage import _clock as usage_clock
+from grimoire.store.usage import _ledger as usage_ledger
+from grimoire.store.usage import _unpriced as usage_unpriced
 
 
 @pytest.fixture
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    monkeypatch.setattr(usage_clock, "_today", lambda: "2026-08-14")
     return tmp_path
 
 
@@ -168,7 +171,7 @@ def _old_rename_trail(campaign, since, until):
 
 
 def _old_scene_usage(campaign, scene, *, since="", limit=usage.SCENE_TURNS):
-    until = usage._today()
+    until = usage_clock._today()
     start = usage._scan_since(since, until)
     clamped = bool(usage._valid_day(since)) and start > usage._valid_day(since)
     trail = _old_rename_trail(campaign, start, until)
@@ -204,7 +207,7 @@ def _old_scene_usage(campaign, scene, *, since="", limit=usage.SCENE_TURNS):
 
 
 def _old_campaign_scenes(campaign, *, since="", order="cost", limit=usage.CAMPAIGN_SCENES):
-    until = usage._today()
+    until = usage_clock._today()
     start = min(usage._valid_day(since) or usage.lifetime_since(), until)
     forward = _old_rename_trail(campaign, start, until)
     rates = usage.Rates.current()
@@ -398,7 +401,7 @@ def test_the_prefiltered_summary_and_calls_agree_with_a_full_parse(home, monkeyp
                     list(usage.calls(120, cid)))
               for cid in (*CAMPAIGNS, "nobody", "sal", "")}
 
-    monkeypatch.setattr(usage, "_read_rows", _reference_rows)
+    monkeypatch.setattr(usage_ledger, "_read_rows", _reference_rows)
     for cid, (summary, calls) in actual.items():
         assert summary == _without_stamp(usage.summary(days=120, campaign=cid)), cid
         assert calls == list(usage.calls(120, cid)), cid
@@ -424,7 +427,7 @@ def test_an_appended_row_reaches_the_unpriced_list_once_the_file_changes(home, m
     _age(path, 60)
     parsed = []
     real = usage._month_unpriced
-    monkeypatch.setattr(usage, "_month_unpriced", lambda p: parsed.append(p) or real(p))
+    monkeypatch.setattr(usage_unpriced, "_month_unpriced", lambda p: parsed.append(p) or real(p))
 
     assert usage.unpriced_models() == [_unpriced("local/glm", 1)]
     assert usage.unpriced_models() == [_unpriced("local/glm", 1)]
@@ -484,9 +487,9 @@ def test_an_unreadable_month_is_not_remembered_as_empty(home, monkeypatch):
     def locked(p):
         raise PermissionError(13, "locked", str(p))
 
-    monkeypatch.setattr(usage, "_month_unpriced", locked)
+    monkeypatch.setattr(usage_unpriced, "_month_unpriced", locked)
     assert usage.unpriced_models() == []
-    monkeypatch.setattr(usage, "_month_unpriced", real)
+    monkeypatch.setattr(usage_unpriced, "_month_unpriced", real)
     assert usage.unpriced_models() == [_unpriced("local/glm", 1)]
 
 

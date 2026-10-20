@@ -14,6 +14,7 @@ import pytest
 from grimoire import routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns, history_recall
+from grimoire.routes.character_turns import _rounds as character_turns_rounds
 from grimoire.store.context import epistemic, layout
 from grimoire.store.history import model, query, retrieval
 from tests.history_fixtures import absorbed, actor, played
@@ -299,7 +300,7 @@ def test_pending_retry_and_regenerate_replay_without_retrieval(client, monkeypat
         # A peek that missed the replay, for a recall still on as far as the
         # driver knows: the gather is wasted, and the snapshot still wins.
         monkeypatch.setattr(history_recall, "enabled", lambda: True)
-        monkeypatch.setattr(character_turns, "_history_replays", lambda *a: False)
+        monkeypatch.setattr(character_turns_rounds, "_history_replays", lambda *a: False)
         async def stale(*a, **k):
             gathers.append(True)
         monkeypatch.setattr(history_recall, "gather_view", stale)
@@ -422,9 +423,9 @@ def test_an_off_round_reads_nothing_past_the_config(cid, monkeypatch):
     """9.1 on the round path: with recall off the driver never peeks at the
     pending response or the transcript, let alone gathers."""
     store.config.write_config(history_recall_depth="0")
-    monkeypatch.setattr(character_turns, "_history_replays",
+    monkeypatch.setattr(character_turns_rounds, "_history_replays",
                         lambda *a: pytest.fail("peeked while off"))
-    monkeypatch.setattr(character_turns, "_round_post", lambda *a: pytest.fail("read while off"))
+    monkeypatch.setattr(character_turns_rounds, "_round_post", lambda *a: pytest.fail("read while off"))
     monkeypatch.setattr(history_recall, "gather_view", lambda *a, **k: pytest.fail("gathered while off"))
     turn = SimpleNamespace(appended=(), continuation=None, history_by_round={},
                            round_record={"id": "r1", "pending_response": "x", "typed_note": True})

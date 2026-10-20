@@ -22,6 +22,7 @@ from grimoire.decisions import Answer, ItemResult
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import scenes as scenes_routes
+from grimoire.routes.scenes import _breaks as scenes_breaks
 from grimoire.store import entities
 
 from .inference_fixtures import (
@@ -610,7 +611,7 @@ def test_a_title_write_that_fails_keeps_the_answer_the_verdicts(client, monkeypa
     def refuse(*_args, **_kwargs):
         raise failure("the title could not be written")
 
-    monkeypatch.setattr(scenes_routes, "_break_title_commit", refuse)
+    monkeypatch.setattr(scenes_breaks, "_break_title_commit", refuse)
     with caplog.at_level(logging.INFO, logger="grimoire.routes.scenes"):
         r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")
     assert r.status_code == 200, r.text
@@ -642,7 +643,7 @@ def test_the_title_path_reads_and_renders_off_the_event_loop(client, monkeypatch
             return real(*args, **kwargs)
         return wrapper
 
-    monkeypatch.setattr(scenes_routes, "_soft_resolved",
+    monkeypatch.setattr(scenes_breaks, "_soft_resolved",
                         spy("resolve", scenes_routes._soft_resolved))
     for name in ("build_title_prompt", "build_item", "explain"):
         monkeypatch.setattr(store.scene_break, name,
@@ -697,7 +698,7 @@ def test_a_title_that_cannot_be_prepared_keeps_the_verdict(client, monkeypatch, 
     def broken(*_args, **_kwargs):
         raise OSError("unreadable")
 
-    target = scenes_routes if seam == "_soft_resolved" else store.scene_break
+    target = scenes_breaks if seam == "_soft_resolved" else store.scene_break
     monkeypatch.setattr(target, seam, broken)
     with caplog.at_level(logging.INFO, logger="grimoire.routes.scenes"):
         r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")

@@ -32,6 +32,7 @@ import pytest
 
 from grimoire import routes
 from grimoire.routes import character_turns, streaming
+from grimoire.routes.streaming import _state as streaming_state
 from grimoire.store import fence, response_protocol, state_fence
 from tests import wire_kit
 from tests.llm_fakes import FakeOpenRouter
@@ -308,7 +309,7 @@ def test_a_turn_heartbeats_only_through_a_quiet_second(client, monkeypatch, gap,
     what #95 is for -- and after that only a second with no frame at all does.
     A zero gap is the old behaviour, which is what proves the test can see
     heartbeats at all."""
-    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", gap)
+    monkeypatch.setattr(streaming_state, "HEARTBEAT_GAP", gap)
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
     cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
@@ -325,7 +326,7 @@ def test_a_turn_heartbeats_only_through_a_quiet_second(client, monkeypatch, gap,
 
 @pytest.mark.parametrize(("gap", "beats"), [(3600.0, 1), (0.0, 4)])
 async def test_an_assigned_actor_heartbeats_the_same_way(monkeypatch, gap, beats):
-    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", gap)
+    monkeypatch.setattr(streaming_state, "HEARTBEAT_GAP", gap)
     frames = [f async for f in character_turns._stream_contribution(
         FakeOpenRouter(_SPARSE), [{"role": "user", "content": "and then?"}],
         wire_kit.resolution(wire_kit.target(model="m")), SimpleNamespace(usage={}),

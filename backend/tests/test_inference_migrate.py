@@ -43,6 +43,8 @@ from grimoire.store import (
 )
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import facts, migrate
+from grimoire.store.inference.migrate import _execution as migrate_execution
+from grimoire.store.inference.migrate import _tracking as migrate_tracking
 from tests import inference_fixtures
 from tests.fixtures.frozen_campaign import sweep as frozen
 from tests.llm_fakes import FakeOpenRouter
@@ -313,7 +315,7 @@ def test_a_legacy_model_edit_during_the_campaigns_lands_in_the_facts_or_is_refus
                                                   **fields)
         real(cid, skipped)
 
-    monkeypatch.setattr(migrate, "_campaign_step", edited_meanwhile)
+    monkeypatch.setattr(migrate_execution, "_campaign_step", edited_meanwhile)
     assert migrate.ensure().state == "done"
     assert inference_keys.is_current(config.read_config())
     conn = llm_connections.read_connection_raw("openrouter")
@@ -339,7 +341,7 @@ def test_a_campaign_is_not_migrated_while_its_connection_can_still_move(home, mo
             llm_connections.update_connection("openrouter", refuse_model_fields=True,
                                               model="vendor/late")
 
-    monkeypatch.setattr(migrate, "_campaign_step", then_edited)
+    monkeypatch.setattr(migrate_execution, "_campaign_step", then_edited)
     # The migration alone: retirement's strip takes the legacy `model` off.
     assert inference_fixtures.migrate_as_c_h().state == "done"
     model = llm_connections.read_connection_raw("openrouter")["model"]
@@ -361,7 +363,7 @@ def test_a_campaign_created_while_the_migration_runs_is_moved_too(home, monkeypa
         made.append(_campaign("Winifred"))         # another tab, mid-run
         return real(run)
 
-    monkeypatch.setattr(migrate, "_switch", created_then_switched)
+    monkeypatch.setattr(migrate_execution, "_switch", created_then_switched)
     assert migrate.ensure().state == "done"
     assert inference_keys.is_current(_meta(made[0]))
     assert migrate.status().state == "done"
@@ -386,7 +388,7 @@ def test_a_fork_landing_after_the_migrations_list_is_born_translated_and_marked(
             forks.append(fork.fork_campaign(source, "Saltmarch Branch")["id"])
         return out
 
-    monkeypatch.setattr(migrate, "_campaign_marks", listed_then_forked)
+    monkeypatch.setattr(migrate_tracking, "_campaign_marks", listed_then_forked)
     assert migrate.ensure().state == "done"
     branch = _meta(forks[0])
     assert inference_keys.is_current(branch)
@@ -867,7 +869,7 @@ def test_an_unexpected_error_leaves_no_running_note(home, monkeypatch):
     def boom(*_a, **_kw):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(migrate, "_providers", boom)
+    monkeypatch.setattr(migrate_execution, "_providers", boom)
     with pytest.raises(RuntimeError):
         migrate.ensure()
 
@@ -898,7 +900,7 @@ def test_an_unreadable_campaign_is_skipped_once_not_on_every_ensure(home, monkey
     assert any(bad in item for item in got.skipped), got
 
     remembered = []
-    monkeypatch.setattr(migrate, "_remember", lambda *a, **kw: remembered.append(kw))
+    monkeypatch.setattr(migrate_tracking, "_remember", lambda *a, **kw: remembered.append(kw))
     before = _digest(home, skip=())
     again = migrate.ensure()
 
@@ -1234,7 +1236,7 @@ def test_an_embedding_connection_unreadable_during_the_switch_fails_the_run(home
 
         return lookup
 
-    monkeypatch.setattr(migrate, "_lookup", flaky_lookup)
+    monkeypatch.setattr(migrate_execution, "_lookup", flaky_lookup)
 
     got = migrate.ensure()
 
@@ -1324,10 +1326,10 @@ def test_a_campaign_whose_connection_is_unreadable_is_skipped_and_retried(home, 
 
     def step_with_a_flaky_read(*args):
         _flaky_read(monkeypatch, "spare", OSError("held by a sync client"))
-        monkeypatch.setattr(migrate, "_campaign_step", real_step)
+        monkeypatch.setattr(migrate_execution, "_campaign_step", real_step)
         return real_step(*args)
 
-    monkeypatch.setattr(migrate, "_campaign_step", step_with_a_flaky_read)
+    monkeypatch.setattr(migrate_execution, "_campaign_step", step_with_a_flaky_read)
 
     # Retirement held off: it would migrate the campaign itself, in its own
     # write, once the read succeeds (slice I) -- this is about step 8.
@@ -1418,12 +1420,12 @@ def test_a_config_md_emptied_before_the_switch_fails_the_run(home, monkeypatch):
         path.write_bytes(b"")
         return out
 
-    monkeypatch.setattr(migrate, "_providers", then_placeholder)
+    monkeypatch.setattr(migrate_execution, "_providers", then_placeholder)
     got = migrate.ensure()
 
     assert got.state == "failed", got
     assert path.read_bytes() == b""
-    monkeypatch.setattr(migrate, "_providers", real)
+    monkeypatch.setattr(migrate_execution, "_providers", real)
     path.write_bytes(whole)
     assert migrate.ensure().state == "done"
 
@@ -1567,7 +1569,7 @@ def test_a_newer_marker_landing_during_the_campaigns_stops_the_marking(home, mon
         config.write_config(**{FORMAT: "3"})
         return real(cid, skipped)
 
-    monkeypatch.setattr(migrate, "_campaign_step", newer_meanwhile)
+    monkeypatch.setattr(migrate_execution, "_campaign_step", newer_meanwhile)
     got = migrate.ensure()
 
     assert got.state == "newer", got
@@ -1585,7 +1587,7 @@ def test_a_newer_marker_seen_by_the_switch_stops_the_run(home, monkeypatch):
         config.write_config(**{FORMAT: "3"})
         return out
 
-    monkeypatch.setattr(migrate, "_providers", newer_meanwhile)
+    monkeypatch.setattr(migrate_execution, "_providers", newer_meanwhile)
     got = migrate.ensure()
 
     assert got.state == "newer", got
@@ -1666,7 +1668,7 @@ def test_queued_startup_pass_reads_as_active_until_it_ends(home):
 
 def test_progress_persistence_is_throttled_but_local_counts_are_live(home, monkeypatch):
     clock = [0.0]
-    monkeypatch.setattr(migrate, "time", type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}), raising=False)
+    monkeypatch.setattr(migrate_execution, "time", type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}), raising=False)
     run = migrate._Run(home, None, "", [])
     with migrate._running_on(home):
         run.archive_progress("safety_backup", 0, None)

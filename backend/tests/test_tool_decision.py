@@ -27,6 +27,7 @@ from grimoire.llm_errors import LLMError
 from grimoire.routes import tool_decision
 from grimoire.routes.tool_decision import SpendGuard, ToolShape, decision_tool
 from grimoire.tool_calls import RunBudget, ToolContext, ToolError
+from grimoire.tool_calls import _runs as tool_runs
 from tests import wire_kit
 from tests.llm_fakes import FakeLLM, FakeToolTurns, decision_reply
 
@@ -289,7 +290,7 @@ def test_a_decide_cut_off_mid_call_is_still_charged(monkeypatch):
                         frozenset({store.routing.route("chat").key}))
     monkeypatch.setattr(store.llm_connections, "cached_row",
                         lambda conn, model: CATALOG.get((conn, model)))
-    monkeypatch.setattr(tool_calls, "MIN_TURN_SECONDS", 0.0)
+    monkeypatch.setattr(tool_runs, "MIN_TURN_SECONDS", 0.0)
     judge = _SlowJudge(3.0, [[decision_reply({"choice": "truth"})]],
                        usage={"prompt_tokens": 100, "completion_tokens": 10})
     spec, why = decision_tool(TASK, _resolved(), judge, cid="saltmarch", spend=SpendGuard(5.0))

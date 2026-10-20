@@ -1,4 +1,5 @@
 """Capture the provider boundary, including fields no consumer recognizes."""
+
 import importlib
 import json
 import pkgutil
@@ -11,6 +12,7 @@ import pytest
 import grimoire
 from grimoire import llm, llm_capture, llm_reasoning, llm_usage, routes, tool_calls, wire
 from grimoire.llm import LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import OpenRouterClient
 from grimoire.store import logs, usage
@@ -204,7 +206,7 @@ def test_stamp_keeps_the_run_key_and_clears_the_rest():
 
 async def test_the_run_id_rides_every_attempt_of_a_call(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
     answers = iter([httpx.Response(429, text='{"error":{"message":"slow down"}}'),
                     httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"}}]}\n')])
     events: list[dict] = []

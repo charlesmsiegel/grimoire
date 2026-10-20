@@ -23,6 +23,8 @@ import pytest
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.routes.config import _providers as config_providers
+from grimoire.routes.config import _settings as config_settings
 from grimoire.store import inference_keys as keys
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
@@ -789,13 +791,13 @@ def test_model_fields_on_a_provider_are_refused_on_format_2_only(client):
 
 def test_a_model_field_write_racing_the_switch_is_refused(client, monkeypatch):
     pid = _spare(client)
-    real = routes.config._check_preset_field
+    real = config_providers._check_preset_field
 
     def switch_meanwhile(*args, **kwargs):
         real(*args, **kwargs)
         _format("2")
 
-    monkeypatch.setattr(routes.config, "_check_preset_field", switch_meanwhile)
+    monkeypatch.setattr(config_providers, "_check_preset_field", switch_meanwhile)
     r = client.put(f"/api/llm-connections/{pid}", json={"model": "vendor/late"})
     assert r.status_code == 400
     assert _raw(pid)["model"] == ""
@@ -820,13 +822,13 @@ def test_a_legacy_config_write_racing_the_switch_is_refused(client, monkeypatch)
     """The format is read inside the `config_lock` hold that writes: the
     switch landing after the route began and before its write is seen."""
     pid = _spare(client)
-    real = routes.config._recursion_depth_ok
+    real = config_settings._recursion_depth_ok
 
     def switch_meanwhile(value):
         _format("2")
         return real(value)
 
-    monkeypatch.setattr(routes.config, "_recursion_depth_ok", switch_meanwhile)
+    monkeypatch.setattr(config_settings, "_recursion_depth_ok", switch_meanwhile)
     r = client.put("/api/config", json={"fallback_connection_id": pid})
     assert (r.status_code, r.json()["detail"]) == (400, "this setting moved to Models")
     assert store.read_config().get("fallback_connection_id", "") == ""

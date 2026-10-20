@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from grimoire import cache_warm
 from grimoire.main import create_app
 from grimoire.store import atomic, cache_sync, compiled, locks
+from grimoire.store.cache_sync import _engine as cache_sync_engine
 from tests import cache_sync_fixtures as fx
 
 cache, upper = fx.cache, fx.upper
@@ -267,7 +268,7 @@ def test_the_network_phase_never_runs_on_a_request_thread_the_loop_or_under_a_lo
             seen.append((threading.current_thread().name, on_loop, locks.campaign_locks_held()))
             return cache_sync.NetworkResult()
 
-    monkeypatch.setattr(cache_sync, "HOOKS", (*cache_sync.HOOKS, Probe()))
+    monkeypatch.setattr(cache_sync_engine, "HOOKS", (*cache_sync.HOOKS, Probe()))
     monkeypatch.setattr(cache_warm, "TICK_S", 0.01)
     clock.advance(10 * cache_warm.WRITE_QUIET_S)
     queue.offer(frozenset({str(path)}))
@@ -314,7 +315,7 @@ def test_shutdown_stops_a_running_batch_at_its_next_check(monkeypatch, tmp_path,
                 time.sleep(0.01)
             return cache_sync.NetworkResult()
 
-    monkeypatch.setattr(cache_sync, "HOOKS", (Slow(),))
+    monkeypatch.setattr(cache_sync_engine, "HOOKS", (Slow(),))
     app = create_app()
     with TestClient(app):
         app.state.cache_warm.offer(frozenset({str(path)}))

@@ -23,8 +23,10 @@ import time
 import pytest
 
 import grimoire.store as store
-from grimoire import decisions, inference, llm, routes
+from grimoire import decisions, inference, routes
 from grimoire.decisions import Item
+from grimoire.inference import _decision_calls as inference_decision_calls
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns, decision_capture
 from grimoire.routes import scenes as scenes_routes
@@ -60,7 +62,7 @@ DECIDE = "decide"
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 @pytest.fixture
@@ -268,7 +270,7 @@ def test_capture_off_builds_nothing_and_files_nothing(fresh, monkeypatch):
     def built(*_a, **_k):
         raise AssertionError("a native body was built with capture off")
 
-    monkeypatch.setattr(inference, "_native_request", built)
+    monkeypatch.setattr(inference_decision_calls, "_native_request", built)
     hooks = []
 
     async def body(s):

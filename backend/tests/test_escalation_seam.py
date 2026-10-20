@@ -19,8 +19,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import decisions, inference, llm
+from grimoire import decisions, inference
 from grimoire.decisions import Answer, Item, ItemResult, Predicate
+from grimoire.llm import _retry as llm_retry
 from grimoire.main import create_app
 from grimoire.routes import common, decision_capture
 from grimoire.store import routing
@@ -37,7 +38,7 @@ ROUTE = "scene_break"
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 @pytest.fixture

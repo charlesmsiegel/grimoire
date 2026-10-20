@@ -9,7 +9,9 @@ from fastapi import HTTPException
 
 from grimoire import content_parts, routes, store
 from grimoire.llm_errors import LLMError
-from grimoire.routes import character_turns, common
+from grimoire.routes import character_turns
+from grimoire.routes.character_turns import _generation as character_turns_generation
+from grimoire.routes.common import _deadlines as common_deadlines
 from grimoire.store import turn_plan
 from tests.llm_fakes import FakeLLM, decision_reply
 
@@ -173,7 +175,7 @@ def test_a_missing_key_skips_without_calling_decide(client, monkeypatch):
             raise HTTPException(409, detail={"kind": "missing_key", "detail": "no key"})
         return real(task, *args, **kwargs)
 
-    monkeypatch.setattr(character_turns, "require_inference", refusing)
+    monkeypatch.setattr(character_turns_generation, "require_inference", refusing)
     fake = _fake(client, ["Mara answers." + _HANDOFF])
     _send(client, base)
     assert fake.calls == 1 and fake.schemas == []
@@ -198,7 +200,7 @@ def test_a_failed_decision_skips_with_its_kind(client, monkeypatch):
 def test_a_spent_deadline_is_refused_unsent_and_never_blamed(client, monkeypatch):
     cid, sid, base = seed(client)
     _intent_on()
-    monkeypatch.setattr(common, "PLAN_CEILING_S", 0.0)
+    monkeypatch.setattr(common_deadlines, "PLAN_CEILING_S", 0.0)
     fake = _fake(client, ["Mara answers." + _HANDOFF])
     noted = []
     monkeypatch.setattr(fake, "note_outcome", lambda *a, **k: noted.append(a), raising=False)
@@ -216,7 +218,7 @@ def test_any_exception_skips_by_class_and_a_retry_does_not_loop(client, monkeypa
     def broken(*_args):
         raise RuntimeError("a builder bug")
 
-    monkeypatch.setattr(character_turns, "_turn_inputs", broken)
+    monkeypatch.setattr(character_turns_generation, "_turn_inputs", broken)
     fake = _fake(client, ["Mara answers." + _HANDOFF])
     _send(client, base)
     assert fake.calls == 1

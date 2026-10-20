@@ -22,6 +22,7 @@ from grimoire.store import (
     world_images,
     worlds,
 )
+from grimoire.store.overlay import _world_lifecycle as overlay_world
 
 from .test_campaign_images_store import _png
 
@@ -487,7 +488,7 @@ def test_world_delete_sweep_uses_only_its_captured_campaign_hold_set(client, own
         return forget(campaign, *args)
 
     monkeypatch.setattr(entities, "delete_entity", delete_with_new_dependent)
-    monkeypatch.setattr(overlay, "_forget_in_campaign", record_scope)
+    monkeypatch.setattr(overlay_world, "_forget_in_campaign", record_scope)
     result = client.delete(f"/api/worlds/{wid}/groups/{eid}")
     assert result.status_code == 200
     assert created and created[0] != cid

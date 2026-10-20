@@ -25,6 +25,7 @@ from grimoire.store import routing
 from grimoire.store.inference import capabilities, migrate, resolve, resolved
 from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference.capabilities import Cap
+from grimoire.store.inference.migrate import _execution as migrate_execution
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
 from . import inference_baseline as baseline
@@ -120,7 +121,7 @@ def test_every_target_mirrors_what_it_was_read_from_after_migration(state, tmp_p
     legacy GLM effort still planned in memory."""
     with baseline.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
-        with mock.patch.object(migrate, "_retire", lambda *_args: None):
+        with mock.patch.object(migrate_execution, "_retire", lambda *_args: None):
             assert baseline.migrate_state(state).state == "done"
         assert not store.read_config()[store.inference_keys.RETIRED_KEY]
         _assert_every_target_mirrors(ctx["cid"])

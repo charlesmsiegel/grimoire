@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 
+from grimoire.store.compiled import _encoding as compiled_encoding
 from tests import test_compiled as cache_tests
 
 cache = cache_tests.cache
@@ -126,7 +127,7 @@ def test_many_decode_is_unlocked_and_root_change_discards_entire_result(cache, r
             with cache.root_change():
                 pass
         return original(key, row)
-    monkeypatch.setattr(cache, '_decode', decode)
+    monkeypatch.setattr(compiled_encoding, '_decode', decode)
     with cache.batch(root) as request:
         result = request.lookup_many(keys)
     assert result.values == dict.fromkeys(keys, cache.Lookup(False))

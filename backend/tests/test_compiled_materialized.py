@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from grimoire.store.compiled import _contracts as compiled_contracts
 from tests import test_compiled as cache_tests
 
 cache = cache_tests.cache
@@ -260,7 +261,7 @@ def test_plain_put_cannot_exceed_metadata_only_staging_row_budget(cache, root, m
 
 def test_plain_put_cannot_exceed_metadata_only_byte_budget(cache, root, monkeypatch):
     kind = _kind(cache, monkeypatch)
-    monkeypatch.setattr(cache, 'MAX_STAGED_BYTES', 1000)
+    monkeypatch.setattr(compiled_contracts, 'MAX_STAGED_BYTES', 1000)
     with cache.batch(root) as request:
         request.mark_materialized(root / 'Realm.md', kind.name, instance={'passage': 3})
         request.put(cache_tests._key(cache, kind), 'x' * 900)
@@ -289,6 +290,6 @@ def test_history_overflow_is_complete_optional_miss(cache, root, monkeypatch, li
     for position in range(5):
         with cache.batch(root) as request:
             request.mark_materialized(path, 'search', instance={'passage': position})
-    monkeypatch.setattr(cache, 'MAX_HISTORY_ROWS' if limit == 'rows' else 'MAX_HISTORY_BYTES', 2, raising=False)
+    monkeypatch.setattr(compiled_contracts, 'MAX_HISTORY_ROWS' if limit == 'rows' else 'MAX_HISTORY_BYTES', 2, raising=False)
     with cache.batch(root) as request:
         assert request.materialized([path]) == {path: ()}

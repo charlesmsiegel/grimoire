@@ -24,11 +24,12 @@ from grimoire import llm, llm_sampling, routes, wire
 from grimoire.store import inference_keys as keys
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import capabilities, legacy_plan, limits, migrate
+from grimoire.store.inference import capabilities, limits, migrate
 from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference import resolve as inf
 from grimoire.store.inference.capabilities import Cap
 from grimoire.store.inference.cascade import Selection
+from grimoire.store.inference.legacy_plan import _mapping as legacy_plan_mapping
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 from tests import wire_kit
 
@@ -425,7 +426,7 @@ def _uncounted_planner(monkeypatch) -> None:
         except store.llm_connections.ConnectionNotFound:
             return None
 
-    monkeypatch.setattr(legacy_plan, "_soft_read", soft)
+    monkeypatch.setattr(legacy_plan_mapping, "_soft_read", soft)
 
 
 def test_a_connection_is_read_once_per_resolve(at_state, monkeypatch):

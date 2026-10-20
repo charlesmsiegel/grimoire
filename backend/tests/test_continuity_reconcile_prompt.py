@@ -29,6 +29,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.continuity import candidates, canon, doc, pending, reconcile
+from grimoire.store.continuity.reconcile import _payloads as reconcile_payloads
 from tests.llm_fakes import decision_reply
 
 MAP = "thread:mara-s-map"
@@ -315,7 +316,7 @@ def test_select_prioritizes_overdue_then_duplicates_and_caps(cid, s0, monkeypatc
     assert set(every[0]) == {"id", "kind", "refs", "signals", "fingerprint"}
     assert every[0]["fingerprint"] == overdue[1]["fingerprint"]
 
-    monkeypatch.setattr(reconcile, "RECONCILE_MAX_CANDIDATES", 2)
+    monkeypatch.setattr(reconcile_payloads, "RECONCILE_MAX_CANDIDATES", 2)
     assert [s["id"] for s in reconcile.select(cid, sweep)] == [overdue[0], strong[0]]
 
 
@@ -394,7 +395,7 @@ def test_known_scenes_are_the_shown_beats_and_chronicle_lines(cid, monkeypatch):
                       (s3, "Winifred opened the door.")):
         chronicle.absorb(cid, {"id": sid, "one_line": line})
     _closure(cid, s1)
-    monkeypatch.setattr(reconcile, "RECONCILE_RECENT_SCENES", 1)
+    monkeypatch.setattr(reconcile_payloads, "RECONCILE_RECENT_SCENES", 1)
     payload = _payload(cid)
 
     assert [c["id"] for c in payload["chronicle"]] == sorted([s1, s3])
@@ -451,7 +452,7 @@ def test_the_recent_window_is_the_last_live_scenes_in_play_order(cid, monkeypatc
         chronicle.absorb(cid, {"id": sid, "one_line": line})
     scenes.delete_scene(cid, s3)
     _closure(cid, s1)
-    monkeypatch.setattr(reconcile, "RECONCILE_RECENT_SCENES", 1)
+    monkeypatch.setattr(reconcile_payloads, "RECONCILE_RECENT_SCENES", 1)
     payload = _payload(cid)
     assert [line["id"] for line in payload["chronicle"]] == [s1, s2]
     assert payload["known_scenes"] == [s1, s2]
@@ -702,10 +703,10 @@ def test_build_payload_names_the_recent_window(cid, monkeypatch):
     s1, s2, s3 = (scenes.create_scene(cid, title)
                   for title in ("Saltmarch docks", "Realm road", "Winifred's house"))
     _closure(cid, s1)
-    monkeypatch.setattr(reconcile, "RECONCILE_RECENT_SCENES", 2)
+    monkeypatch.setattr(reconcile_payloads, "RECONCILE_RECENT_SCENES", 2)
     payload = _payload(cid)
     assert payload["recent"] == [s2, s3]
-    monkeypatch.setattr(reconcile, "RECONCILE_RECENT_SCENES", 0)
+    monkeypatch.setattr(reconcile_payloads, "RECONCILE_RECENT_SCENES", 0)
     assert _payload(cid)["recent"] == []
 
 
@@ -837,7 +838,7 @@ def test_evidence_options_are_the_scenes_the_item_shows(cid, monkeypatch):
     one = _record(cid, "possible_thread_closure", [MAP], {"reason": "stale"})
     two = _record(cid, "possible_thread_closure", [CHART], {"reason": "stale"})
     _cache(cid, one, two)
-    monkeypatch.setattr(reconcile, "RECONCILE_RECENT_SCENES", 0)
+    monkeypatch.setattr(reconcile_payloads, "RECONCILE_RECENT_SCENES", 0)
     payload = _payload(cid)
     by_id = dict(zip((c["id"] for c in payload["candidates"]),
                      reconcile.build_items(payload), strict=True))
@@ -933,7 +934,7 @@ def test_the_union_of_item_scenes_is_todays_known_scenes(cid, monkeypatch):
     pair = _record(cid, "possible_relation", [OATH, MAP], _pair_signals())
     lone = _record(cid, "possible_thread_closure", [CHART], {"reason": "stale"})
     _cache(cid, pair, lone)
-    monkeypatch.setattr(reconcile, "RECONCILE_RECENT_SCENES", 1)
+    monkeypatch.setattr(reconcile_payloads, "RECONCILE_RECENT_SCENES", 1)
     payload = _payload(cid)
     shown = [reconcile.item_scenes(payload, c) for c in payload["candidates"]]
     assert set().union(*shown) == set(payload["known_scenes"]) == {s1, s2, s3, s4}

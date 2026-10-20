@@ -33,12 +33,13 @@ import pytest
 
 import grimoire.store as store
 from grimoire import catalog, decisions, embeddings, routes, tool_calls, wire
-from grimoire import llm as llm_mod
 from grimoire.anthropic import AnthropicClient
 from grimoire.llm import LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.routes import config as config_routes
+from grimoire.routes.config import _probes as config_probes
 from grimoire.store.inference import capabilities, facts, probes, resolve
 from grimoire.store.inference.capabilities import Cap
 from tests import wire_kit
@@ -100,7 +101,7 @@ def _embedder(monkeypatch, handler) -> list[httpx.Request]:
         return handler(request)
 
     fake = embeddings.EmbeddingsClient(httpx.Client(transport=httpx.MockTransport(record)))
-    monkeypatch.setattr(config_routes, "_EMBEDDINGS", fake)
+    monkeypatch.setattr(config_probes, "_EMBEDDINGS", fake)
     return seen
 
 
@@ -681,7 +682,7 @@ def _endpoint(client, name: str, host: str) -> str:
 
 
 def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, monkeypatch):
-    monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
     conn = _endpoint(client, "Mara Endpoint", "primary.example")
     backup = config_routes._probe_target(store.llm_connections.read_connection_raw(
         _endpoint(client, "Winifred Endpoint", "backup.example")), MODEL)
@@ -786,7 +787,7 @@ def test_the_verdicts_are_filed_off_the_event_loop(client, monkeypatch):
     _use(client, fake)
     conn = _connection(client)
     where: list[bool] = []
-    real = config_routes._record_verdicts
+    real = config_probes._record_verdicts
 
     def record(*args):
         try:
@@ -796,7 +797,7 @@ def test_the_verdicts_are_filed_off_the_event_loop(client, monkeypatch):
             where.append(False)
         return real(*args)
 
-    monkeypatch.setattr(config_routes, "_record_verdicts", record)
+    monkeypatch.setattr(config_probes, "_record_verdicts", record)
     run = _run(client, conn, ["generate"])
     assert run["result"]["recorded"] is True
     assert where == [False]
@@ -1205,7 +1206,7 @@ def test_a_probe_that_never_answers_ends_the_run_whatever_the_budget_says(
     -- for good. The probes carry a ceiling of their own, as the health check
     does, and an overrun is a `timeout` that stops the probes after it."""
     store.write_config(llm_call_budget="0")
-    monkeypatch.setattr(config_routes, "MODEL_TEST_CEILING", 0.05)
+    monkeypatch.setattr(config_probes, "MODEL_TEST_CEILING", 0.05)
     _use(client, StallingGateway(where="single"))
     conn = _connection(client)
 

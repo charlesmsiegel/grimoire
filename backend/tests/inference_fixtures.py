@@ -32,6 +32,7 @@ from grimoire.store import config, inference_keys, locks
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import migrate
 from grimoire.store.inference import settings as inference_settings
+from grimoire.store.inference.migrate import _execution as migrate_execution
 from tests.llm_fakes import FakeOpenRouter
 
 #: What a store born under `GRIMOIRE_TEST_BIRTH=upgraded-default` holds besides
@@ -87,7 +88,7 @@ def migrate_as_c_h() -> migrate.Status:
     migrated it -- format 2, the legacy keys and fields left in place, nothing
     retired. For a test about the migration's own product, or about a
     format-2 store retirement has not reached yet."""
-    with mock.patch.object(migrate, "_retire", lambda *_args: None):
+    with mock.patch.object(migrate_execution, "_retire", lambda *_args: None):
         return migrate.ensure()
 
 

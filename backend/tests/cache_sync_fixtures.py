@@ -10,17 +10,19 @@ from __future__ import annotations
 import pytest
 
 from grimoire.store import cache_sync, compiled, maintenance_reports
+from grimoire.store.cache_sync import _signals as cache_sync_signals
+from grimoire.store.compiled import _runtime as compiled_runtime
 
 SENTINEL = "SENTINEL-Seraphine-7f3a"
 
 
 @pytest.fixture
 def cache(monkeypatch):
-    monkeypatch.setattr(compiled, "_state", compiled._State())
-    monkeypatch.setattr(compiled, "_build", lambda: "b" * 64)
+    monkeypatch.setattr(compiled_runtime, "_state", compiled._State())
+    monkeypatch.setattr(compiled_runtime, "_build", lambda: "b" * 64)
     monkeypatch.setattr(maintenance_reports, "device_key", lambda root: "a" * 64)
     monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
-    monkeypatch.setattr(cache_sync, "_warned", set())
+    monkeypatch.setattr(cache_sync_signals, "_warned", set())
     yield compiled
     compiled.close()
 

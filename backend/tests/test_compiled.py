@@ -22,6 +22,11 @@ import pytest
 
 from grimoire import compiled_build
 from grimoire.store import maintenance_reports, proclock
+from grimoire.store.compiled import _fences as compiled_fences
+from grimoire.store.compiled import _ownership as compiled_ownership
+from grimoire.store.compiled import _path_checks as compiled_path_checks
+from grimoire.store.compiled import _runtime as compiled_runtime
+from grimoire.store.compiled import _sqlite_support as compiled_sqlite_support
 
 
 @pytest.fixture(params=["fresh", "settled"])
@@ -40,8 +45,8 @@ def cache(monkeypatch, request):
     module = importlib.import_module("grimoire.store.compiled")
     if request.param == "settled":
         real = time.time_ns
-        monkeypatch.setattr(module, "_wall_ns", lambda: real() + 3_600_000_000_000)
-    monkeypatch.setattr(module, "_state", module._State())
+        monkeypatch.setattr(compiled_fences, "_wall_ns", lambda: real() + 3_600_000_000_000)
+    monkeypatch.setattr(compiled_runtime, "_state", module._State())
     monkeypatch.setattr(maintenance_reports, "device_key", lambda root: "a" * 64)
     monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
     yield module
@@ -229,11 +234,11 @@ def test_interrupted_first_initialisation_is_retried(cache, root, monkeypatch):
     def interrupted(conn):
         raise MemoryError("Realm")
 
-    monkeypatch.setattr(cache, "_initialise", interrupted)
+    monkeypatch.setattr(compiled_ownership, "_initialise", interrupted)
     assert _open(cache, root) is None
     path = _path(cache, root)
     assert path.exists() and path.stat().st_size == 0
-    monkeypatch.setattr(cache, "_initialise", original)
+    monkeypatch.setattr(compiled_ownership, "_initialise", original)
     assert _open(cache, root) is not None
 
 
@@ -276,7 +281,7 @@ def _kind(cache, monkeypatch, *, stable_build=True):
     kind = cache.Kind("search", 1, ("stem",), ("stem", "settings"), True)
     monkeypatch.setitem(cache.KINDS, kind.name, kind)
     if stable_build:
-        monkeypatch.setattr(cache, "_build", lambda: "b" * 64)
+        monkeypatch.setattr(compiled_runtime, "_build", lambda: "b" * 64)
     return kind
 
 
@@ -326,7 +331,7 @@ def test_key_identity_is_canonical_and_complete(cache, monkeypatch):
     monkeypatch.setitem(cache.KINDS, newer.name, newer)
     assert cache.make_key(newer, inputs, params=params) != key
     monkeypatch.setitem(cache.KINDS, kind.name, kind)
-    monkeypatch.setattr(cache, "_build", lambda: "c" * 64)
+    monkeypatch.setattr(compiled_runtime, "_build", lambda: "c" * 64)
     assert cache.make_key(kind, inputs, params=params) != key
 
 
@@ -523,9 +528,9 @@ def test_disabled_cache_creates_no_cache_directory(cache, root, monkeypatch, dis
     if disabled == "kill":
         monkeypatch.setenv("GRIMOIRE_COMPILED_CACHE", "0")
     elif disabled == "sqlite":
-        monkeypatch.setattr(cache, "_sqlite", None)
+        monkeypatch.setattr(compiled_sqlite_support, "_sqlite", None)
     else:
-        monkeypatch.setattr(cache, "_build", lambda: None)
+        monkeypatch.setattr(compiled_runtime, "_build", lambda: None)
     with cache.batch(root) as request:
         assert not request.lookup(key).hit
         request.put(key, "Realm")
@@ -586,7 +591,7 @@ def test_unreadable_cache_and_warning_sink_are_fail_soft(cache, root, monkeypatc
     def unreadable(path):
         raise PermissionError("private path and payload")
 
-    monkeypatch.setattr(cache, "_directory", unreadable)
+    monkeypatch.setattr(compiled_path_checks, "_directory", unreadable)
     warnings = []
     monkeypatch.setattr(cache.logs, "record", lambda *args, **fields: warnings.append((args, fields)))
     for _ in range(3):
@@ -595,7 +600,7 @@ def test_unreadable_cache_and_warning_sink_are_fail_soft(cache, root, monkeypatc
             request.put(key, "Realm")
     assert warnings == [(("warning", "store.compiled", "Compiled cache unavailable"),
                          {"failure_kind": "storage"})]
-    monkeypatch.setattr(cache, "_directory", actual)
+    monkeypatch.setattr(compiled_path_checks, "_directory", actual)
     monkeypatch.setattr(cache.logs, "record", unreadable)
     cache._warn_once("another_failure")
 

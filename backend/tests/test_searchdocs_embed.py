@@ -31,6 +31,7 @@ from grimoire.store import (
     vectors,
     worlds,
 )
+from grimoire.store.compiled import _contracts as compiled_contracts
 from grimoire.store.inference import settings as inference_settings
 from grimoire.store.searchdocs import embedded, live, rolling, slices
 from grimoire.store.searchdocs import hook as searchdocs_hook
@@ -337,7 +338,7 @@ def test_a_shared_ledger_carries_one_row_per_campaign_however_many_scenes(home, 
     """One row per scene on `chronicle.json` would pass 03's history bound in
     a long campaign and hide the file from every hook: a shared file carries
     one campaign row per kind, and a sync of it still reaches every scene."""
-    monkeypatch.setattr(compiled, "MAX_HISTORY_ROWS", 4)
+    monkeypatch.setattr(compiled_contracts, "MAX_HISTORY_ROWS", 4)
     _configure()
     _wid, cid = _campaign()
     sids = [_absorbed(cid, f"Scene {n}", f"Mara's summary number {n}.") for n in range(6)]

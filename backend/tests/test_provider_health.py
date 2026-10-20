@@ -18,6 +18,7 @@ from grimoire import health, routes, wire
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
+from grimoire.routes.config import _probes as config_probes
 from grimoire.store.inference import resolve as inference
 from tests import draft_runs as drafts
 from tests.inference_fixtures import put_settings
@@ -284,7 +285,7 @@ def test_a_check_that_never_answers_becomes_a_verdict_rather_than_a_held_request
     slow local model and an unreasonable thing to ask of a button, so this
     route carries a bound nobody can switch off."""
     store.write_config(llm_call_budget="0")
-    monkeypatch.setattr(routes.config, "HEALTH_CHECK_CEILING", 0.05)
+    monkeypatch.setattr(config_probes, "HEALTH_CHECK_CEILING", 0.05)
     stalled = StallingGateway(where="check")
     client.app.dependency_overrides[routes.get_llm] = lambda: stalled
 

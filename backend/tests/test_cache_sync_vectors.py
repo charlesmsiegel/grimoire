@@ -43,6 +43,7 @@ from grimoire.store import (
     vectors,
     worlds,
 )
+from grimoire.store.cache_sync import _vectors as cache_sync_vectors
 from grimoire.store.context import art, layout, semantic
 from grimoire.store.inference import embed
 from grimoire.store.inference import settings as inference_settings
@@ -64,7 +65,7 @@ def home(tmp_path, monkeypatch, cache):
 def fake(monkeypatch):
     """One fake endpoint behind every producer and the hook."""
     client = FakeEmbeddings()
-    for module in (semantic, art, semsearch, cache_sync):
+    for module in (semantic, art, semsearch, cache_sync_vectors):
         monkeypatch.setattr(module, "_CLIENT", client)
     return client
 
@@ -462,10 +463,12 @@ def test_the_cli_in_a_fresh_process_leaves_vectors_recall_then_hits(home, fake):
     entities.update_entity(worlds.world_root(wid), "lore", eid, body="Edited by an agent.")
     script = ("import sys\n"
               "from grimoire.store import cache_sync, compiled, maintenance_reports\n"
-              "compiled._build = lambda: 'b' * 64\n"         # the fixture's cache identity
+              "from grimoire.store.compiled import _runtime as compiled_runtime\n"
+              "compiled_runtime._build = lambda: 'b' * 64\n"  # the fixture's cache identity
               "maintenance_reports.device_key = lambda root: 'a' * 64\n"
               "from tests.llm_fakes import FakeEmbeddings\n"
-              "cache_sync._CLIENT = FakeEmbeddings()\n"
+              "from grimoire.store.cache_sync import _vectors as cache_sync_vectors\n"
+              "cache_sync_vectors._CLIENT = FakeEmbeddings()\n"
               "from grimoire.cache import main\n"
               f"sys.exit(main(['sync', '--json', {_rel(home, path)!r}]))\n")
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(SRC), str(SRC.parent)]),
@@ -794,7 +797,7 @@ def test_a_reply_that_lands_after_the_root_moved_is_never_saved(home, fake, monk
         monkeypatch.setenv("GRIMOIRE_HOME", str(elsewhere))
         return got
 
-    monkeypatch.setattr(cache_sync, "_embed_chunk", moved_meanwhile)
+    monkeypatch.setattr(cache_sync_vectors, "_embed_chunk", moved_meanwhile)
     report = cache_sync.sync_paths([_rel(home, path)], mode="explicit", root=home)
     assert report.stopped == "root_moved" and not report.ok
     assert report.paths[0].status == "unsynced"
@@ -857,7 +860,7 @@ def test_a_vector_reply_keeps_the_local_source_snapshot_when_the_record_changes(
         return real(*args, **kwargs)
 
     with monkeypatch.context() as during:
-        during.setattr(cache_sync, "_embed_chunk", edited_meanwhile)
+        during.setattr(cache_sync_vectors, "_embed_chunk", edited_meanwhile)
         report = cache_sync.sync_paths([_rel(home, path)], mode="explicit", verify=True)
 
     assert report.ok and report.embedding["sent"] == 1

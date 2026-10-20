@@ -1,3 +1,4 @@
+
 import math
 import struct
 import zlib
@@ -5,6 +6,7 @@ import zlib
 import pytest
 
 from grimoire.store import compiled, vectors
+from grimoire.store.compiled import _runtime as compiled_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -197,14 +199,14 @@ def test_a_nul_text_keys_as_its_nul_free_form():
 def test_compiled_build_changes_preserve_existing_vector_keys_and_bytes(monkeypatch):
     kind = compiled.Kind("search", 1, (), (), True)
     monkeypatch.setitem(compiled.KINDS, kind.name, kind)
-    monkeypatch.setattr(compiled, "_build", lambda: "a" * 64)
+    monkeypatch.setattr(compiled_runtime, "_build", lambda: "a" * 64)
     old = compiled.make_key(kind, [("document", "a" * 64)], params={})
     text = "Mara crossed the Salt\0march at dusk"
     path = vectors._path(SPACE, text)
     assert path.name == "1375582ed7a59d40cac77ce4142344db6fa3acd98385ef8961e06e9dcb82b77d.vec"
     vectors.save(SPACE, text, [1.0, 0.0])
     before = path.read_bytes()
-    monkeypatch.setattr(compiled, "_build", lambda: "b" * 64)
+    monkeypatch.setattr(compiled_runtime, "_build", lambda: "b" * 64)
     new = compiled.make_key(kind, [("document", "a" * 64)], params={})
     assert new != old
     assert vectors._path(SPACE, text) == path and path.read_bytes() == before

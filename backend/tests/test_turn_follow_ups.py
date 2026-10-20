@@ -22,8 +22,9 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from grimoire.routes import runs as runs_routes
-from grimoire.routes import scenes as scenes_routes
 from grimoire.routes import streaming as streaming_routes
+from grimoire.routes.scenes import _followups as scenes_followups
+from grimoire.routes.scenes import _rolling as scenes_rolling
 
 from .llm_fakes import FakeLLM, decision_reply, from_entries
 
@@ -199,7 +200,7 @@ def test_a_failing_follow_up_does_not_fail_its_turn(client, monkeypatch):
     background run and a landed turn."""
     def boom(*a, **k):
         raise RuntimeError("the fold could not even start")
-    monkeypatch.setattr(scenes_routes, "_rolling_once", boom)
+    monkeypatch.setattr(scenes_rolling, "_rolling_once", boom)
     _use(client, _provider())
     cid, sid = _scene(client, posts=9)
     body = _send(client, cid, sid)
@@ -218,7 +219,7 @@ def test_a_follow_up_that_cannot_be_scheduled_does_not_fail_its_turn(client,
     summary that could not even be reserved is not a failed turn."""
     def boom(*a, **k):
         raise RuntimeError("no runner here")
-    monkeypatch.setattr(scenes_routes, "schedule_follow_ups", boom)
+    monkeypatch.setattr(scenes_followups, "schedule_follow_ups", boom)
     _use(client, _provider())
     cid, sid = _scene(client, posts=9)
     assert _send(client, cid, sid).status_code == 200

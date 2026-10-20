@@ -24,6 +24,8 @@ import pytest
 import grimoire.store as store
 from grimoire import llm, llm_sampling, routes, wire
 from grimoire.llm import LLMClient
+from grimoire.llm import _accounting as llm_accounting
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import resolve as inf
@@ -33,7 +35,7 @@ from . import inference_baseline as base
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 @pytest.fixture
@@ -251,7 +253,7 @@ async def test_the_fallback_reaches_no_adapter_capture_or_health_record_but_its_
         return real_sent(target)
 
     monkeypatch.setattr(LLMClient, "_generate", generate_spy)
-    monkeypatch.setattr(llm, "_stamp", stamp_spy)
+    monkeypatch.setattr(llm_accounting, "_stamp", stamp_spy)
     monkeypatch.setattr(llm.llm_sampling, "sent_fields", sent_spy)
 
     # A 400 that names nothing the preset sent: the refusal check runs, and the

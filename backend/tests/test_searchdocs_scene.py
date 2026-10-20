@@ -19,7 +19,6 @@ from grimoire.store import (
     characters,
     chronicle,
     commitments,
-    compiled,
     entities,
     facts,
     plot,
@@ -33,6 +32,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.appearances import transitions
+from grimoire.store.compiled import _runtime as compiled_runtime
 from grimoire.store.continuity import doc as continuity_doc
 from grimoire.store.inference import embed as inference_embed
 from grimoire.store.searchdocs import rolling, scene, slices
@@ -571,7 +571,7 @@ def test_a_missing_location_is_its_id_and_not_degraded(cid):
 def test_the_key_moves_with_build(cid, monkeypatch):
     sid = _played(cid)
     before = doc(cid, sid)
-    monkeypatch.setattr(compiled, "build_fingerprint", lambda: "another-build")
+    monkeypatch.setattr(compiled_runtime, "build_fingerprint", lambda: "another-build")
     after = doc(cid, sid)
     assert after.key != before.key and after.text == before.text
 
@@ -848,7 +848,7 @@ def test_a_campaign_md_that_cannot_be_reached_degrades_instead_of_vanishing(cid,
     monkeypatch.setattr(slices.os, "stat", stat)
     monkeypatch.setattr(slices.Path, "exists",
                         lambda self: False if str(self) == meta else real_exists(self))
-    monkeypatch.setattr(slices.overlay, "wroot_of", unresolved)
+    monkeypatch.setattr(slices.overlay._record_paths, "wroot_of", unresolved)
     slices._POOL.clear()
     d = doc(cid, sid)
     assert "campaign.md" in d.meta["degraded"]
@@ -1044,7 +1044,7 @@ def test_a_world_that_will_not_resolve_degrades_instead_of_raising(cid, monkeypa
 
     def unresolved(*_a, **_k):
         raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "campaign.md will not decode")
-    monkeypatch.setattr(slices.overlay, "wroot_of", unresolved)
+    monkeypatch.setattr(slices.overlay._record_paths, "wroot_of", unresolved)
     slices._POOL.clear()
     d = doc(cid, sid)
     assert "campaign.md" in d.meta["degraded"]

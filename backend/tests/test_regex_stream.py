@@ -15,6 +15,8 @@ import pytest
 
 from grimoire import routes, store
 from grimoire.routes import character_turns, streaming
+from grimoire.routes.character_turns import _planning as character_turns_planning
+from grimoire.routes.streaming import _state as streaming_state
 from grimoire.store.regex import rules, stream
 from tests.inference_fixtures import primary
 from tests.llm_fakes import FailingOpenRouter, FakeLLM
@@ -228,7 +230,7 @@ def test_multi_part_keep_relative_to_part(client, monkeypatch):
     async def next_speaker(cid, sid, client, round_record, used, actor, response_id=""):
         return character_turns._successor_answer(round_record, used, actor, next(planned))
 
-    monkeypatch.setattr(character_turns, "_select_successor", next_speaker)
+    monkeypatch.setattr(character_turns_planning, "_select_successor", next_speaker)
     cid, sid = seed(client, ("Mara", "Winifred"))
     put_rules(client, f"/api/campaigns/{cid}/regex", THINK)
     frames = send(client, cid, sid, [
@@ -274,7 +276,7 @@ def beats(response) -> int:
 
 
 def test_a_held_back_display_frame_does_not_count_as_proof_of_life(client, monkeypatch):
-    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", 3600.0)   # only a first beat is due
+    monkeypatch.setattr(streaming_state, "HEARTBEAT_GAP", 3600.0)   # only a first beat is due
     cid, sid = seed(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([HIDDEN])
     body = {"content": "Hello", "speaker_ref": "characters:mara"}
@@ -290,7 +292,7 @@ def test_a_held_back_display_frame_does_not_count_as_proof_of_life(client, monke
 
 def test_a_held_back_display_frame_does_not_count_as_proof_of_life_legacy(client, monkeypatch):
     monkeypatch.setattr(character_turns, "enabled", lambda: False)
-    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", 3600.0)
+    monkeypatch.setattr(streaming_state, "HEARTBEAT_GAP", 3600.0)
     cid, sid = seed(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([HIDDEN])
     url = f"/api/campaigns/{cid}/scenes/{sid}/chat"
@@ -343,7 +345,7 @@ DENSE = ["<think>abc", "def", "ghi"]
 
 
 def test_a_hidden_stretch_of_text_still_earns_a_heartbeat(client, monkeypatch):
-    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", 3600.0)   # only a first beat is due
+    monkeypatch.setattr(streaming_state, "HEARTBEAT_GAP", 3600.0)   # only a first beat is due
     cid, sid = seed(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([DENSE])
     body = {"content": "Hello", "speaker_ref": "characters:mara"}
@@ -358,7 +360,7 @@ def test_a_hidden_stretch_of_text_still_earns_a_heartbeat(client, monkeypatch):
 
 def test_a_hidden_stretch_of_text_still_earns_a_heartbeat_legacy(client, monkeypatch):
     monkeypatch.setattr(character_turns, "enabled", lambda: False)
-    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", 3600.0)
+    monkeypatch.setattr(streaming_state, "HEARTBEAT_GAP", 3600.0)
     cid, sid = seed(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([DENSE])
     url = f"/api/campaigns/{cid}/scenes/{sid}/chat"

@@ -11,6 +11,8 @@ from grimoire import decisions, routes, store
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns, streaming
+from grimoire.routes.character_turns import _planning as character_turns_planning
+from grimoire.routes.character_turns import _state as character_turns_state
 from tests import wire_kit
 from tests.inference_fixtures import (
     SAME_PROVIDER,
@@ -35,7 +37,7 @@ def _follow_on(monkeypatch, *next_speakers):
         return character_turns._successor_answer(
             round_record, used, actor, steps.pop(0))
 
-    monkeypatch.setattr(character_turns, "_select_successor", choose)
+    monkeypatch.setattr(character_turns_planning, "_select_successor", choose)
 
 
 def seed(client, module=None):
@@ -241,7 +243,7 @@ def test_completed_response_crash_retry_never_replays_it(client, monkeypatch):
             raise RuntimeError("simulated process interruption after response publication")
         return original(*args, **fields)
 
-    monkeypatch.setattr(character_turns, "_round_state", fail_once)
+    monkeypatch.setattr(character_turns_state, "_round_state", fail_once)
     first = FakeLLM([['Saved.\n```handoff\n{"next":"characters:winifred"}\n```']])
     client.app.dependency_overrides[routes.get_llm] = lambda: first
     base = f"/api/campaigns/{cid}/scenes/{sid}"
@@ -929,7 +931,7 @@ def test_a_colliding_roster_raises_an_issue_not_a_500(client, monkeypatch, caplo
     campaign and scene."""
 
     cid, sid = seed(client)
-    monkeypatch.setattr(character_turns, "roster", lambda _cid, _sid: [
+    monkeypatch.setattr(character_turns_state, "roster", lambda _cid, _sid: [
         {"ref": "characters:mara", "name": "Mara"},
         {"ref": "Characters:Mara", "name": "Mara again"}])
     fake = FakeLLM([["must not be sent"]])
@@ -957,7 +959,7 @@ def test_a_roster_past_the_schema_string_budget_raises_an_issue(client, monkeypa
     refs = [f"characters:mara-{i:03d}-".ljust(60, "x") for i in range(254)]
     assert sum(map(len, refs)) > decisions.MAX_ENUM_STRING_CHARS
     cid, sid = seed(client)
-    monkeypatch.setattr(character_turns, "roster", lambda _cid, _sid: [
+    monkeypatch.setattr(character_turns_state, "roster", lambda _cid, _sid: [
         {"ref": ref, "name": f"Mara {i}"} for i, ref in enumerate(refs)])
     fake = FakeLLM([["must not be sent"]])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake

@@ -6,10 +6,11 @@ import pytest
 
 from grimoire.llm_errors import LLMError
 from grimoire.routes import scenes
+from grimoire.routes.scenes import _review_budget as scenes_review_budget
 
 
 async def test_budget_timer_is_not_mistaken_for_an_upstream_timeout(monkeypatch):
-    monkeypatch.setattr(scenes, "_clock", lambda: 0.0)
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: 0.0)
     budget = scenes._Budget(0.01)
     events, noticed = [], []
 
@@ -29,7 +30,7 @@ async def test_budget_timer_is_not_mistaken_for_an_upstream_timeout(monkeypatch)
 
 
 async def test_upstream_timeout_with_time_remaining_keeps_its_reason(monkeypatch):
-    monkeypatch.setattr(scenes, "_clock", lambda: 0.0)
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: 0.0)
     budget = scenes._Budget(1.0)
 
     async def call():
@@ -42,7 +43,7 @@ async def test_upstream_timeout_with_time_remaining_keeps_its_reason(monkeypatch
 
 
 async def test_caller_cancellation_is_not_reported_as_a_budget_timeout(monkeypatch):
-    monkeypatch.setattr(scenes, "_clock", lambda: 0.0)
+    monkeypatch.setattr(scenes_review_budget, "_clock", lambda: 0.0)
     budget = scenes._Budget(1.0)
     entered = asyncio.Event()
     noticed = []

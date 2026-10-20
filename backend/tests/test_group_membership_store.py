@@ -37,6 +37,8 @@ from grimoire.store import (
 )
 from grimoire.store.campaigns import lifecycle as campaigns_lifecycle
 from grimoire.store.campaigns import paths as campaigns_paths
+from grimoire.store.overlay import _identity as overlay_identity
+from grimoire.store.overlay import _world_lifecycle as overlay_world
 
 
 @pytest.fixture
@@ -386,7 +388,7 @@ def test_world_identity_holder_acquires_campaigns_in_sorted_order(case, monkeypa
         requested.append(cid)
         return original(cid)
 
-    monkeypatch.setattr(overlay, "dependent_campaigns", lambda root: cids)
+    monkeypatch.setattr(overlay_world, "dependent_campaigns", lambda root: cids)
     monkeypatch.setattr(locks, "campaign_lock", observed)
     with overlay.world_identity_change(case["world"]) as held:
         assert set(held) == set(cids)
@@ -727,7 +729,7 @@ def test_first_copy_after_actor_birth_rechecks_detached_identity(case, monkeypat
             errors.append(exc)
 
     monkeypatch.setattr(atomic, "write_text", observed)
-    monkeypatch.setattr(overlay, "_require_group_copy", checked)
+    monkeypatch.setattr(overlay_identity, "_require_group_copy", checked)
     birthing = threading.Thread(target=birth, name="actor-birth")
     copying = threading.Thread(target=copy, name="first-copy")
     birthing.start()

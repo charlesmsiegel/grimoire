@@ -61,9 +61,11 @@ import grimoire.store as store
 from grimoire import decisions, inference, llm, llm_sampling, wire
 from grimoire.decisions import Answer, Item, ItemResult, Predicate
 from grimoire.llm import LLMClient
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import character_turns
+from grimoire.routes.character_turns import _prompts as character_turns_prompts
 from grimoire.store.inference import resolve as inf
 
 from . import inference_fixtures as fx
@@ -81,7 +83,7 @@ VOLATILE = frozenset({"ts", "duration_ms", "id", "round_id"})
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 @pytest.fixture
@@ -219,7 +221,7 @@ def _run(monkeypatch, resolved, scenario: str, count: int, cid: str) -> dict:
                         if s["id"] == character_turns.OUTCOME_SECTION_ID],
             "messages": _messages(messages or [])}))
 
-    monkeypatch.setattr(character_turns, "_record_prompt", record)
+    monkeypatch.setattr(character_turns_prompts, "_record_prompt", record)
     monkeypatch.setattr(store.prompt_log, "capturing", lambda: True)
 
     async def capture(messages, outcome, attempt):

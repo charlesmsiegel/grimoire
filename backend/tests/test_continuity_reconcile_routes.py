@@ -30,6 +30,7 @@ from grimoire.routes import continuity as continuity_routes
 from grimoire.routes import runs
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import candidates, canon, doc, reconcile, similarity
+from grimoire.store.continuity.reconcile import _discovery as reconcile_discovery
 
 from . import draft_runs, inference_fixtures, review_runs
 from .llm_fakes import (
@@ -864,7 +865,7 @@ def test_a_follow_on_pass_embeds_within_what_the_run_has_left(client, monkeypatc
     texts = chores(cid, sid)
     double = FakeEmbeddings()
     monkeypatch.setattr(similarity, "_CLIENT", double)
-    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 4)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_WARM_LIMIT", 4)
     budgets: list[object] = []
     real = reconcile.discover
 
@@ -1317,7 +1318,7 @@ def test_a_capped_sweep_says_so_in_its_run_and_log_row(client, monkeypatch):
     _wid, cid, sid = _campaign(client)
     _threads(cid, sid)
     _map(cid, sid)
-    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 1)
+    monkeypatch.setattr(reconcile_discovery, "RECONCILE_MAX_PAIRS", 1)
     _install(client, from_entries([_entry(_reply())]))
 
     run = _settled(client, cid, _refresh(client, cid))

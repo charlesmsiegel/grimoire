@@ -388,9 +388,9 @@ def test_world_info_and_history_are_the_only_shedding_sections():
     World info and Recalled history are the two that may (their order under
     pressure is pinned by `test_frozen_draws_and_legacy_units_shed_separately`
     and the lore-shedding suite)."""
-    root = Path(assemble.__file__).parent
+    root = Path(assemble.__file__).parent.parent
     found = set()
-    for path in sorted(root.glob("*.py")):
+    for path in sorted(root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -399,8 +399,9 @@ def test_world_info_and_history_are_the_only_shedding_sections():
                 if isinstance(node, ast.Dict) and any(
                         isinstance(k, ast.Constant) and k.value == "shed"
                         and isinstance(v, ast.Dict) for k, v in zip(node.keys, node.values, strict=True)):
-                    found.add((path.stem, fn.name))
-    assert found == {("assemble", "_world_info_section"), ("history", "section")}, found
+                    found.add((path.relative_to(root).as_posix(), fn.name))
+    assert found == {("assemble/_lore_render.py", "_world_info_section"),
+                     ("history.py", "section")}, found
     # 11-S3: the history set gives way first, its aside tier (the narrator's
     # withheld items, an NPC's suspicions) before the recalled tier.
     assert packer.DROP_ORDER[:2] == (packer.HISTORY_ASIDE, packer.HISTORY_RECALL)
@@ -487,7 +488,7 @@ def test_the_row_lists_what_was_found_but_not_selected(cid, monkeypatch):
     """Every choice is visible (goal 6): admitted candidates past depth keep
     their signals in the row, the strongest few in merge order with the rest
     counted, and none of it reaches the prompt."""
-    monkeypatch.setattr(assemble, "HISTORY_UNSELECTED_SHOWN", 2)
+    monkeypatch.setattr(assemble._inspection, "HISTORY_UNSELECTED_SHOWN", 2)
     sid = played(cid)
     chosen = item()
     found = evidence(chosen, *(item(sid=f"00{n}--saltmarch") for n in range(2, 6)))

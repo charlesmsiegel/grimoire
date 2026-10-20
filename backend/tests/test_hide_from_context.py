@@ -7,6 +7,7 @@ import pytest
 
 from grimoire import routes, store
 from grimoire.routes import character_turns
+from grimoire.routes.character_turns import _planning as character_turns_planning
 from grimoire.store import campaigns, chronicle, entities
 from grimoire.store.absorb import routing as absorb_routing
 from grimoire.store.context import story
@@ -122,7 +123,7 @@ def test_toggling_one_part_sets_every_part(client, monkeypatch):
     async def next_speaker(cid, sid, client, round_record, used, actor, response_id=""):
         return character_turns._successor_answer(round_record, used, actor, next(planned))
 
-    monkeypatch.setattr(character_turns, "_select_successor", next_speaker)
+    monkeypatch.setattr(character_turns_planning, "_select_successor", next_speaker)
     cid, sid = _two_part_response(client)
     messages = _messages(cid, sid)
     first = next(i for i, m in enumerate(messages) if m["content"] == "Wait.")

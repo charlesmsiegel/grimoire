@@ -24,10 +24,12 @@ import pytest
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.routes.config import _providers as config_providers
 from grimoire.store import config, llm_connections, locks, proclock, sampler_presets
 from grimoire.store import inference_keys as keys
 from grimoire.store.campaigns import lifecycle as campaign_lifecycle
 from grimoire.store.inference import facts, in_use, migrate, settings
+from grimoire.store.locks import _runtime as locks_runtime
 from tests.llm_fakes import FakeCatalog
 
 from . import inference_baseline as base
@@ -139,7 +141,7 @@ def test_a_provider_edit_after_the_switch_is_409(client, monkeypatch):
     never ran: the record a newer build wrote was rewritten (and `_write_raw`
     keeps only the fields this build knows). The hold refuses it."""
     _current(client)
-    _then_newer(monkeypatch, routes.config, "refuse_newer")
+    _then_newer(monkeypatch, config_providers, "refuse_newer")
     before = _settings_files()
     got = client.put("/api/llm-connections/spare", json={"name": "Saltmarch Renamed"})
     assert got.status_code == 409, got.text
@@ -328,7 +330,7 @@ def test_another_process_holding_the_hold_stops_a_facts_write(client, monkeypatc
         stdout=subprocess.PIPE, text=True)
     try:
         assert child.stdout.readline().strip() == "HELD"
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.3)
+        monkeypatch.setattr(locks_runtime, "LOCK_TIMEOUT", 0.3)
         with pytest.raises(locks.StoreBusy):
             facts.set_stated("spare", "vendor/spare", vision="off")
         assert path.read_bytes() == before

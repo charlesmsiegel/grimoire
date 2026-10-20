@@ -20,6 +20,7 @@ from grimoire.store import config, embed_space, llm_connections, routing
 from grimoire.store import inference_keys as keys
 from grimoire.store.inference import cascade, facts
 from grimoire.store.inference import resolve as inference_resolve
+from grimoire.store.inference.resolve import _targeting as resolve_targeting
 from tests.inference_fixtures import legacy_store
 
 
@@ -62,7 +63,7 @@ def test_the_cascade_is_the_reader(monkeypatch):
         return real_view(cfg)
 
     monkeypatch.setattr(cascade, "role_selection", spy)
-    monkeypatch.setattr(inference_resolve, "_embedding_view", view_spy)
+    monkeypatch.setattr(resolve_targeting, "_embedding_view", view_spy)
     assert embed_space.resolve() is not None
     assert calls == [("embedding", {})]
     assert len(views) == 1

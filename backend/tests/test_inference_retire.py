@@ -43,6 +43,7 @@ from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import legacy_plan, migrate, retire
 from grimoire.store.inference import resolve as inference
 from grimoire.store.inference import settings as inference_settings
+from grimoire.store.inference.migrate import _execution as migrate_execution
 from tests import inference_baseline_c as base_c
 from tests import inference_fixtures
 from tests import test_inference_equivalence as equivalence
@@ -408,7 +409,7 @@ def test_a_reused_pre_inference_archive_does_not_stand_in(home, monkeypatch):
     edit since, so retirement takes its own."""
     _legacy_glm()
     with monkeypatch.context() as m:
-        m.setattr(migrate, "_switch", lambda run: (_ for _ in ()).throw(OSError("disk")))
+        m.setattr(migrate_execution, "_switch", lambda run: (_ for _ in ()).throw(OSError("disk")))
         assert migrate.ensure().state == "failed"
     assert len(_archives(backups.SAFETY_PREFIX)) == 1
 
@@ -648,7 +649,7 @@ def test_a_campaign_skipped_by_step_8_is_migrated_before_it_is_retired(home, mon
     """C2: busy when the migration reached it, free by retirement: one write
     migrates it (its pin), deletes its legacy key and stamps both markers."""
     cid = _legacy_glm()
-    monkeypatch.setattr(migrate, "_campaign_step",
+    monkeypatch.setattr(migrate_execution, "_campaign_step",
                         lambda c, skipped: skipped.append(f"campaign {c}: busy"))
     written: list[str] = []
     real = atomic.write_text

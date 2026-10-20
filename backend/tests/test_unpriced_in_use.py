@@ -35,6 +35,7 @@ from grimoire.store import inference_keys as keys
 from grimoire.store import llm_connections, pricing, routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.inference import facts, in_use, resolve, settings
+from grimoire.store.usage import _ledger as usage_ledger
 
 from . import inference_baseline as base
 
@@ -250,6 +251,8 @@ def test_reads_no_ledger(client, monkeypatch):
         raise AssertionError("the chore read the ledger")
 
     monkeypatch.setattr(store.usage, "_read_rows", boom)
+    # Reports reach the defining reader; direct callers use the facade.
+    monkeypatch.setattr(usage_ledger, "_read_rows", boom)
     monkeypatch.setattr(store.usage, "unpriced_models", boom)
     assert _pairs() == [(pid, MODEL)]
 

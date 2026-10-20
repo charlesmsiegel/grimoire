@@ -9,6 +9,7 @@ import pytest
 from grimoire import store
 from grimoire.store import locks, search, statcache, tokens
 from grimoire.store.campaigns import read as campaign_read
+from grimoire.store.compiled import _encoding as compiled_encoding
 from grimoire.store.worlds import read as world_read
 from tests import frozen_copy
 from tests import test_compiled as cache_tests
@@ -320,7 +321,7 @@ def test_successful_count_survives_family_checksum_allocation_failure(cache, roo
     monkeypatch.setenv('GRIMOIRE_HOME', str(root))
     def failed_checksum(*args):
         raise MemoryError('optional family checksum allocation')
-    monkeypatch.setattr(cache, '_check', failed_checksum)
+    monkeypatch.setattr(compiled_encoding, '_check', failed_checksum)
     assert tokens.record_tokens(root / 'Realm.md', 'Mara Seraphine Winifred') == 3
     assert tokens.last_counter() == tokens.ENCODING
     with cache.batch(root) as request:

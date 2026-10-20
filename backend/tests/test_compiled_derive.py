@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from grimoire.store.compiled import _filesystem as compiled_filesystem
+from grimoire.store.compiled import _runtime as compiled_runtime
 from tests import test_compiled as cache_tests
 
 cache = cache_tests.cache
@@ -125,7 +127,7 @@ def test_trusted_source_miss_rekeys_from_actual_bytes(cache, root, monkeypatch):
     path = root / 'Realm.md'
     path.write_bytes(b'Realm')
     now = max(path.stat().st_mtime_ns, path.stat().st_ctime_ns) + cache.PERSIST_WINDOW_NS + 1
-    monkeypatch.setattr(cache, 'filesystem_clock', lambda boundary: cache.FilesystemClock(now, root.stat().st_dev))
+    monkeypatch.setattr(compiled_filesystem, 'filesystem_clock', lambda boundary: cache.FilesystemClock(now, root.stat().st_dev))
     with cache.batch(root) as request:
         request.validate_one(kind, cache.Input('body', path))
     original = cache.Batch.lookup
@@ -202,7 +204,7 @@ def test_declared_path_params_build_and_version_move_written_key(cache, root, mo
         assert request.store_written(newer, [cache.WrittenInput('body', paths[0], b'Realm')],
                                      'Realm', params=PARAMS) != first
     monkeypatch.setitem(cache.KINDS, kind.name, kind)
-    monkeypatch.setattr(cache, '_build', lambda: 'c' * 64)
+    monkeypatch.setattr(compiled_runtime, '_build', lambda: 'c' * 64)
     with cache.batch(root) as request:
         assert request.store_written(kind, [cache.WrittenInput('body', paths[0], b'Realm')],
                                      'Realm', params=PARAMS) != first
@@ -231,7 +233,7 @@ def test_trusted_collection_disappearance_is_required_even_for_absent_role(cache
     path = root / 'Realm.md'
     path.write_bytes(b'Realm')
     now = max(path.stat().st_mtime_ns, path.stat().st_ctime_ns) + cache.PERSIST_WINDOW_NS + 1
-    monkeypatch.setattr(cache, 'filesystem_clock', lambda boundary: cache.FilesystemClock(now, root.stat().st_dev))
+    monkeypatch.setattr(compiled_filesystem, 'filesystem_clock', lambda boundary: cache.FilesystemClock(now, root.stat().st_dev))
     with cache.batch(root) as request:
         request.collection(kind, cache.Collection('body', root))
     original = cache.Batch.lookup

@@ -22,14 +22,16 @@ import grimoire.store as store
 from grimoire import main
 from grimoire.routes import config
 from grimoire.store import compiled, logs, maintenance_reports, paths
+from grimoire.store.compiled import _runtime as compiled_runtime
+from grimoire.store.compiled import _sqlite_support as compiled_sqlite_support
 
 _REAL_DEVICE_KEY = maintenance_reports.device_key
 
 
 @pytest.fixture
 def cache(monkeypatch):
-    monkeypatch.setattr(compiled, "_state", compiled._State())
-    monkeypatch.setattr(compiled, "_build", lambda: "b" * 64)
+    monkeypatch.setattr(compiled_runtime, "_state", compiled._State())
+    monkeypatch.setattr(compiled_runtime, "_build", lambda: "b" * 64)
     monkeypatch.setattr(maintenance_reports, "device_key", lambda root: "a" * 64)
     monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
     kind = compiled.Kind("search", 1, (), (), True)
@@ -128,8 +130,8 @@ def test_idle_closes_handle_and_stale_timer_cannot_close_replacement(cache, key,
         def cancel(self):
             self.cancelled = True
 
-    monkeypatch.setattr(cache, "_clock", lambda: now[0])
-    monkeypatch.setattr(cache, "_timer", Timer)
+    monkeypatch.setattr(compiled_runtime, "_clock", lambda: now[0])
+    monkeypatch.setattr(compiled_runtime, "_timer", Timer)
     session = _put(cache, tmp_path, key)
     assert len(timers) == 1 and timers[0].delay == 30.0
     now[0] = 20.0
@@ -341,7 +343,7 @@ def test_fork_reopens_with_fresh_locks(cache, key, tmp_path, monkeypatch, held):
                 assert request.lookup(key).value == "Realm"
             assert cache._state.devices
             if held in ("append", "size"):
-                cache._sqlite = None
+                compiled_sqlite_support._sqlite = None
                 with cache.batch(tmp_path) as request:
                     assert not request.lookup(key).hit
                 text = "".join(path.read_text(encoding="utf-8")
@@ -477,11 +479,11 @@ def test_timer_start_failure_discards_closed_session_and_can_retry(cache, tmp_pa
             raise RuntimeError('thread creation unavailable')
         def cancel(self):
             pass
-    monkeypatch.setattr(cache, '_timer', FailedTimer)
+    monkeypatch.setattr(compiled_runtime, '_timer', FailedTimer)
     with cache._state.lock:
         assert cache._open_locked(tmp_path) is None
     assert cache._state.session is None
-    monkeypatch.setattr(cache, '_timer', real_timer)
+    monkeypatch.setattr(compiled_runtime, '_timer', real_timer)
     with cache._state.lock:
         session = cache._open_locked(tmp_path)
         assert session is not None
@@ -490,10 +492,10 @@ def test_timer_start_failure_discards_closed_session_and_can_retry(cache, tmp_pa
 
 def test_idle_reschedule_thread_failure_releases_the_session(cache, tmp_path, monkeypatch):
     session = _put(cache, tmp_path, cache.make_key(cache.KINDS['search'], [('document', 'a' * 64)], params={}))
-    monkeypatch.setattr(cache, '_clock', lambda: session.last_used)
+    monkeypatch.setattr(compiled_runtime, '_clock', lambda: session.last_used)
     def failed_timer(*args):
         raise RuntimeError('idle reschedule thread unavailable')
-    monkeypatch.setattr(cache, '_timer', failed_timer)
+    monkeypatch.setattr(compiled_runtime, '_timer', failed_timer)
     cache._idle(session)
     assert cache._state.session is None
 
@@ -526,7 +528,7 @@ def test_a_stray_idle_timer_never_takes_the_current_states_lock(cache, key, tmp_
             self.release()
 
     current.lock = Spy()
-    monkeypatch.setattr(compiled, "_state", current)
+    monkeypatch.setattr(compiled_runtime, "_state", current)
     try:
         compiled._idle(stray)
         assert taken == []
@@ -536,7 +538,7 @@ def test_a_stray_idle_timer_never_takes_the_current_states_lock(cache, key, tmp_
 
 
 def test_build_is_pinned_at_startup_not_at_first_use(monkeypatch, tmp_path):
-    monkeypatch.setattr(compiled, "_state", compiled._State())
+    monkeypatch.setattr(compiled_runtime, "_state", compiled._State())
     monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
     on_disk = ["a" * 64]
     monkeypatch.setattr(compiled.compiled_build, "fingerprint", lambda *a, **k: on_disk[0])
@@ -553,14 +555,14 @@ def test_build_is_pinned_at_startup_not_at_first_use(monkeypatch, tmp_path):
 
 
 def test_fork_child_keeps_the_parent_build(monkeypatch):
-    monkeypatch.setattr(compiled, "_state", compiled._State())
+    monkeypatch.setattr(compiled_runtime, "_state", compiled._State())
     compiled._state.build_checked, compiled._state.build = True, "b" * 64
     compiled._after_fork_child()
     assert (compiled._state.build_checked, compiled._state.build) == (True, "b" * 64)
 
 
 def test_disabled_cache_primes_nothing(monkeypatch):
-    monkeypatch.setattr(compiled, "_state", compiled._State())
+    monkeypatch.setattr(compiled_runtime, "_state", compiled._State())
     monkeypatch.setenv("GRIMOIRE_COMPILED_CACHE", "0")
     monkeypatch.setattr(compiled.compiled_build, "fingerprint", lambda *a, **k: pytest.fail("fingerprinted"))
     compiled.prime_build()
@@ -596,7 +598,7 @@ def test_opening_a_library_without_a_cache_creates_nothing(cache, tmp_path):
 def test_a_missing_build_is_reported_at_first_use_not_at_startup(monkeypatch, tmp_path):
     # A warning is a log row, and a log row would create the store before the
     # first request that needs it.
-    monkeypatch.setattr(compiled, "_state", compiled._State())
+    monkeypatch.setattr(compiled_runtime, "_state", compiled._State())
     monkeypatch.delenv("GRIMOIRE_COMPILED_CACHE", raising=False)
     monkeypatch.setattr(compiled.compiled_build, "fingerprint", lambda *a, **k: None)
     rows = []
