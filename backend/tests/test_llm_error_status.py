@@ -163,15 +163,19 @@ def test_the_guard_catches_the_shape_it_bans():
 def test_the_guard_reads_the_modules_that_catch_llm_failures():
     """An empty glob would leave the parametrized guard below vacuously green,
     passing hardest exactly when it had stopped reading anything."""
-    names = {p.name for p in SRC.glob("*.py")}
-    assert {"campaigns.py", "characters.py", "config.py", "scenes.py",
-            "streaming.py", "worlds.py"} <= names
+    # A domain may be a single module or a package of endpoint modules.
+    names = {p.stem for p in SRC.glob("*.py")}
+    names |= {p.name for p in SRC.iterdir()
+              if p.is_dir() and (p / "__init__.py").is_file()}
+    assert {"campaigns", "characters", "config", "scenes",
+            "streaming", "worlds"} <= names
 
 
-@pytest.mark.parametrize("path", sorted(SRC.glob("*.py")), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", sorted(SRC.rglob("*.py")),
+                         ids=lambda p: str(p.relative_to(SRC)))
 def test_no_route_spells_out_its_own_llm_status(path):
     assert scan(path.read_text(encoding="utf-8")) == [], \
-        f"{path.name} decides its own status instead of calling _llm_http_error()"
+        f"{path.relative_to(SRC)} decides its own status instead of calling _llm_http_error()"
 
 
 # ---- and the wire agrees ----
