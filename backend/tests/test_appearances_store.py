@@ -681,7 +681,7 @@ def test_creating_a_campaign_actor_takes_the_campaign_lock(monkeypatch, tmp_path
     Driven from a second thread, since the lock is reentrant and a same-thread
     acquire would sail straight through the thing being tested."""
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(locks._runtime, "LOCK_TIMEOUT", 0.2)
     held, release = threading.Event(), threading.Event()
 
     def holder():
