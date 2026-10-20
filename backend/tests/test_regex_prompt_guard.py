@@ -67,13 +67,14 @@ MAX_MARKERS = 3
 
 #: Readers that turn posts into prompt text without `transcript_text`.
 PINNED = {
-    "store/context/assemble.py": ("_assemble",),
+    "store/context/assemble/_snapshot.py": ("_assemble",),
     "store/history/query.py": ("prepare",),
-    "routes/character_turns.py": ("_selector_inputs", "_turn_inputs"),
-    "routes/tracker.py": ("_locate", "_context_posts"),
+    "routes/character_turns/_planning.py": ("_selector_inputs",),
+    "routes/character_turns/_generation.py": ("_turn_inputs",),
+    "routes/tracker/_transcript.py": ("_locate", "_context_posts"),
     "routes/passage_characters.py": ("draft_character",),
     # 11-S2: re-matches 09's evidence against the prompt view it recomputes.
-    "store/context/epistemic.py": ("_read_scene",),
+    "store/context/epistemic/_classification.py": ("_read_scene",),
     # 12-S1: an investigation's paged transcript read (spec 4.2 rule 2). Its
     # `read_scene_window` is no `_SCENE_READS` member, so only the pin sees it.
     "store/investigation/readers.py": ("window",),
@@ -107,7 +108,7 @@ SCANNED = ("routes", "store/context", "store/searchdocs", "store/history",
 
 
 def _sources():
-    files = [f for d in SCANNED for f in sorted((PACKAGE / d).glob("*.py"))]
+    files = [f for d in SCANNED for f in sorted((PACKAGE / d).rglob("*.py"))]
     for path in files:
         yield path.relative_to(PACKAGE).as_posix(), path.read_text(encoding="utf-8")
 
@@ -440,6 +441,23 @@ def test_the_guard_catches_a_raw_reader(tmp_path, monkeypatch):
     # another module's `view` (the overlay's) and the display phase do not.
     assert [o.split(":")[1] for o in offences if o.startswith("routes/bad.py:")] == \
         ["3", "20", "24", "27", "10", "5"]
+
+
+def test_the_guard_scans_nested_route_packages(tmp_path, monkeypatch):
+    """Extracting a route cannot hide its prompt reader from the same scan."""
+    nested = tmp_path / "routes" / "scenes"
+    nested.mkdir(parents=True)
+    (nested / "_bad.py").write_text(
+        "def summary(cid, sid):\n"
+        "    scene = store.scenes.read_scene(cid, sid)\n"
+        "    return chronicle.transcript_text(scene['messages'])\n",
+        encoding="utf-8")
+    monkeypatch.setitem(globals(), "PACKAGE", tmp_path)
+    monkeypatch.setitem(globals(), "PINNED", {})
+    monkeypatch.setitem(globals(), "EXPANSION_PINNED", {})
+    monkeypatch.setitem(globals(), "VIEWED_INPUT_PINNED", {})
+    offences, _ = _scan()
+    assert any(row.startswith("routes/scenes/_bad.py:3:") for row in offences)
 
 
 def test_the_guard_catches_an_expansion_rendered_into_a_prompt(tmp_path, monkeypatch):

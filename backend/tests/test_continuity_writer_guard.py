@@ -170,6 +170,15 @@ def _present() -> dict[str, tuple[pathlib.Path, str]]:
         for module in modules:
             if (root / f"{module}.py").is_file():
                 out[f"{package}.{module}"] = (root / f"{module}.py", package)
+            elif (root / module / "__init__.py").is_file():
+                # Scan the whole relocated subsystem, including new siblings;
+                # a facade alone contains none of the discovery implementation.
+                for path in sorted((root / module).rglob("*.py")):
+                    parts = path.relative_to(root).with_suffix("").parts
+                    leaf = ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+                    owner = f"{package}.{leaf}"
+                    parent = owner if path.name == "__init__.py" else owner.rpartition(".")[0]
+                    out[owner] = (path, parent)
     return out
 
 

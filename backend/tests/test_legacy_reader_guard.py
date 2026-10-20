@@ -62,7 +62,10 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire"
 
 #: The modules that may spell, store or read the legacy layout.
 ALLOWED = frozenset({
-    "store/inference/legacy_plan.py",
+    "store/inference/legacy_plan/_contracts.py",
+    "store/inference/legacy_plan/_mapping.py",
+    "store/inference/legacy_plan/_reasoning.py",
+    "store/inference/legacy_plan/_planning.py",
     "store/inference/retire.py",
     "store/inference_retired.py",
     "store/inference_keys.py",
@@ -79,13 +82,15 @@ ALLOWED = frozenset({
 #: `PUT /config` confirms an embedding move before it lands. Neither is play:
 #: what plays is the resolver's answer, through the planner.
 ECHOES: dict[str, dict[str, str]] = {
-    "routes/config.py": {
+    "routes/config/_settings.py": {
         "_public_config": "reports the stored legacy keys back to the legacy "
                           "Settings form (`GET /config`), unchanged by slice I",
         "_EMBEDDING_LEGACY_KEYS": "the legacy embedding keys `PUT /config` may "
                                   "move at format 1, confirmed first",
         "_refuse_unconfirmed_config_reembed": "names the provider a legacy "
                                               "embedding move would re-embed through",
+    },
+    "routes/config/_providers.py": {
         "_check_preset_field": "validates the `sampler_preset` a legacy connection "
                                "editor's write sends (refused at format 2 as a "
                                "model field before it gets here)",
@@ -107,7 +112,11 @@ KEYED_FIELDS = frozenset({"sampler_preset"})
 ROUTING_LEGACY = frozenset({"CONFIG_KEYS", "legacy_key"})
 
 #: The modules that may import the planner.
-IMPORTERS = frozenset({"store/inference/resolve.py", "store/inference/migrate.py",
+IMPORTERS = frozenset({"store/inference/resolve/__init__.py",
+                       "store/inference/resolve/_targeting.py",
+                       "store/inference/migrate/__init__.py",
+                       "store/inference/migrate/_contracts.py",
+                       "store/inference/migrate/_execution.py",
                        "store/inference/retire.py"})
 #: The package roster, which binds every submodule and reads nothing.
 ROSTER = "store/inference/__init__.py"
@@ -217,13 +226,13 @@ def _imports_planner(node: ast.AST) -> bool:
 
 def test_only_resolve_migrate_and_retire_import_the_planner():
     importers = {rel for rel, tree in _modules()
-                 if rel != "store/inference/legacy_plan.py"
+                 if not rel.startswith("store/inference/legacy_plan/")
                  and any(_imports_planner(n) for n in ast.walk(tree))}
     assert importers - {ROSTER} <= IMPORTERS, sorted(importers - IMPORTERS - {ROSTER})
     assert "store/inference/settings.py" not in importers
 
 
-    tree = ast.parse((SRC / "store/inference/resolve.py").read_text(encoding="utf-8"))
+    tree = ast.parse((SRC / "store/inference/resolve/_targeting.py").read_text(encoding="utf-8"))
     named = {n.attr for n in ast.walk(tree)
              if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
              and n.value.id == "legacy_plan"}
@@ -260,4 +269,4 @@ def test_the_guard_flags_a_planted_reader(tmp_path):
     # And an echo is exempt only inside the function it names.
     echoed = ast.parse('def _public_config(cfg):\n    return cfg.get("embeddings_model")\n\n'
                        'def other(cfg):\n    return cfg.get("embeddings_model")\n')
-    assert len(scan("routes/config.py", echoed)) == 1
+    assert len(scan("routes/config/_settings.py", echoed)) == 1

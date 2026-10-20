@@ -453,7 +453,8 @@ def test_store_guarantees_names_the_maintenance_modules():
     for name in ("image_migration", "image_gc", "image_surfaces",
                  "maintenance_reports", "recycle_bin"):
         assert name in section, f"the image store section does not name {name}"
-        assert (SRC / "store" / f"{name}.py").is_file(), f"store/{name}.py is gone"
+        module = SRC / "store" / name
+        assert module.with_suffix(".py").is_file() or (module / "__init__.py").is_file(), name
 
 
 def test_store_guarantees_names_the_collection_locks():
@@ -569,14 +570,19 @@ def test_claude_md_names_every_tracker_route_that_starts_a_run():
     request. A route found here by its call to `schedule*` -- not by a list --
     so a third such route fails until the section names it.
     """
-    tree = ast.parse((SRC / "routes" / "tracker.py").read_text(encoding="utf-8"))
+    trees = [ast.parse(path.read_text(encoding="utf-8"))
+             for path in sorted((SRC / "routes" / "tracker").rglob("*.py"))]
     starters = {"schedule", "schedule_response", "schedule_untracked"}
 
     def starts(fn: ast.FunctionDef) -> bool:
-        return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                   and n.func.id in starters for n in ast.walk(fn))
+        return any(isinstance(n, ast.Call)
+                   and ((isinstance(n.func, ast.Name) and n.func.id in starters)
+                        or (isinstance(n.func, ast.Attribute)
+                            and isinstance(n.func.value, ast.Name)
+                            and n.func.value.id == "_scheduling" and n.func.attr in starters))
+                   for n in ast.walk(fn))
 
-    routes = sorted(fn.name for fn in tree.body
+    routes = sorted(fn.name for tree in trees for fn in tree.body
                     if isinstance(fn, ast.FunctionDef) and _is_route(fn) and starts(fn))
     assert routes, "found no tracker route that schedules an update -- the walk is stale"
     section = _section(_read(CLAUDE), "Detached runs")
@@ -633,7 +639,7 @@ def test_claude_md_costs_names_real_ledger_fields():
         f"CLAUDE.md's Costs section names ledger fields `usage.record` does not "
         f"take: {missing}"
     )
-    source = (SRC / "store" / "usage.py").read_text(encoding="utf-8")
+    source = (SRC / "store" / "usage" / "_folding.py").read_text(encoding="utf-8")
     gone = [c for c in COSTS_BUCKET_COUNTS if f'"{c}"' not in source]
     assert not gone, f"store/usage.py no longer writes these bucket counts: {gone}"
 
@@ -808,7 +814,7 @@ def test_claude_md_names_every_handler_that_starts_a_reconcile_sweep():
     runs" names it. Found by its call to a starter, not by a list, so a third
     trigger fails here until the section names it."""
     found = set()
-    for path in sorted((SRC / "routes").glob("*.py")):
+    for path in sorted((SRC / "routes").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         found |= {fn.name for fn in tree.body
                   if isinstance(fn, ast.FunctionDef) and _is_route(fn) and _starts_reconcile(fn)}

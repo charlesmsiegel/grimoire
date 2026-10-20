@@ -947,7 +947,7 @@ for st in ({"current_state": "Wounded.", "knows": "The ledger is real.", "suspec
           absorb._snapshot_line(st), render("snippets/state_snapshot_line.j2", st=st))
 
 routes_src = "\n".join(p.read_text(encoding="utf-8")
-                       for p in sorted((REPO / "backend/src/grimoire/routes").glob("*.py")))
+                       for p in sorted((REPO / "backend/src/grimoire/routes").rglob("*.py")))
 assert 'prompts.render("scene/director_note.j2")' in routes_src, \
     "the routes package no longer renders the director-note template"
 assert 'prompts.render("scene/regenerate_guidance.j2"' in routes_src, \

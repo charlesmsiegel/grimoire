@@ -191,8 +191,8 @@ def test_the_package_uses_no_v2_pydantic_api():
     # unless we prove the scanner works against real module source. So: take a
     # real file, append one violation, and require that it is caught.
     assert len(files) > 50
-    probe = (SRC / "routes" / "common.py").read_text(encoding="utf-8")
-    assert not scan(probe), "routes/common.py should have no flagged site"
+    probe = (SRC / "routes" / "common" / "_responses.py").read_text(encoding="utf-8")
+    assert not scan(probe), "routes/common/_responses.py should have no flagged site"
     assert scan(probe + "\n_x = _m.model_dump()\n"), \
         "the scanner found nothing in real module source -- it is not wired correctly"
     assert not exempted, f"unexpected exemptions appeared: {exempted}"

@@ -43,9 +43,12 @@ MUTATORS = frozenset({"add", "update", "remove", "restore", "forget_audience",
 
 #: Which module may call which mutator, by path inside the package.
 ALLOWED: dict[str, frozenset[str]] = {
-    "routes/ledger.py": frozenset({"add", "update", "remove"}),
+    "routes/ledger/_knowledge.py": frozenset({"add", "update", "remove"}),
     "store/knowledge.py": MUTATORS,
-    "store/overlay.py": frozenset({"forget_audience"}),
+    "store/overlay/_actors.py": frozenset({"forget_audience"}),
+    "store/overlay/_entities.py": frozenset({"forget_audience"}),
+    "store/overlay/_reclassification.py": frozenset({"forget_audience"}),
+    "store/overlay/_world_lifecycle.py": frozenset({"forget_audience"}),
     "store/reclassify.py": frozenset({"forget_audience"}),
     "store/undo.py": frozenset({"restore"}),
     "store/branch.py": frozenset({"copy_for_branch", "drop_scene"}),
@@ -157,16 +160,27 @@ def test_every_allowlisted_module_exists():
 def test_the_delete_hooks_and_undo_really_call_what_they_are_allowed():
     """The allowlist is not a dead letter: each listed writer uses it."""
     used: dict[str, set[str]] = {}
-    for rel in ("store/overlay.py", "store/undo.py", "store/branch.py"):
+    for rel in (*("store/overlay/" + name + ".py" for name in
+                  ("_actors", "_entities", "_reclassification", "_world_lifecycle")),
+                "store/undo.py", "store/branch.py"):
         tree = ast.parse((PACKAGE / rel).read_text(encoding="utf-8"))
         used[rel] = {name for _l, name, _r in _calls(tree)}
-    assert "forget_audience" in used["store/overlay.py"]
+    for rel, names in used.items():
+        if rel.startswith("store/overlay/"):
+            assert "forget_audience" in names, rel
     assert "restore" in used["store/undo.py"]
     assert {"copy_for_branch", "drop_scene"} <= used["store/branch.py"]
 
 
 def _planted(rel: str, src: str) -> list[str]:
     return _offenders(rel, ast.parse(src))
+
+
+def test_relocated_writer_permission_does_not_cover_sibling_leaves():
+    source = "from ...store import knowledge\ndef go(c, e):\n    knowledge.add(c, e)\n"
+    assert not _planted("routes/ledger/_knowledge.py", source)
+    assert _planted("routes/ledger/_records.py", source)
+    assert _planted("routes/ledger/_unexpected.py", source)
 
 
 def test_a_call_planted_in_absorb_is_caught_in_every_spelling():

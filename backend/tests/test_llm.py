@@ -1,3 +1,4 @@
+from importlib.util import resolve_name
 
 from grimoire.llm import _lifecycle as llm_lifecycle
 from grimoire.llm import _retry as llm_retry
@@ -1082,7 +1083,6 @@ async def test_closing_the_retried_stream_closes_the_provider():
 
 
 import ast  # noqa: E402 - deliberate late import; see the lines above
-from importlib.util import resolve_name  # noqa: E402 - source import analysis
 from pathlib import Path  # noqa: E402 - deliberate late import; see the lines above
 
 import grimoire  # noqa: E402 - deliberate late import; see the lines above

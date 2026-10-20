@@ -53,6 +53,8 @@ ALLOWED: dict[str, frozenset[str]] = {
 PERSIST = ("grimoire.store.continuity.reconcile", "persist_investigation")
 #: Reconcile's other writers, never reachable from an investigation.
 RECONCILE_WRITES = frozenset({"persist_found", "persist_proposals", "_commit"})
+# Both the compatible facade and its sole persistence owner expose the writers.
+PERSIST_MODULES = frozenset({PERSIST[0], PERSIST[0] + "._persistence"})
 
 
 def _scanned() -> list[tuple[str, pathlib.Path, str]]:
@@ -68,7 +70,7 @@ def _scanned() -> list[tuple[str, pathlib.Path, str]]:
 def problems(src: str, package: str, *, may_persist: bool) -> list[str]:
     out = []
     for line, module, name, rendered in _references(ast.parse(src), package):
-        if (module in ALLOWED and name not in ALLOWED[module]) or (module == PERSIST[0] and (name in RECONCILE_WRITES
+        if (module in ALLOWED and name not in ALLOWED[module]) or (module in PERSIST_MODULES and (name in RECONCILE_WRITES
                                        or (name == PERSIST[1] and not may_persist))):
             out.append(f"{line}: {rendered}")
     return out
@@ -130,3 +132,13 @@ def test_the_guard_passes_a_planted_reader():
     assert problems("from .. import facts, events\n"
                     "def go(c):\n    facts.get(c, 'f')\n    events.list_events(c)\n",
                     _INVESTIGATION, may_persist=False) == []
+
+
+def test_a_relocated_persistence_writer_still_requires_the_route():
+    source = ("from ..continuity import reconcile\n"
+              "from ..continuity.reconcile import _persistence\n"
+              "def go(c):\n    _persistence.persist_investigation(c, 'k', {})\n")
+    assert problems(source, _INVESTIGATION, may_persist=False)
+    assert problems(source, _INVESTIGATION, may_persist=True) == []
+    assert problems(source.replace("persist_investigation", "persist_proposals"),
+                    _INVESTIGATION, may_persist=True)
