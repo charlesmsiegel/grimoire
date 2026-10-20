@@ -42,7 +42,7 @@ exists.
 
 - A bare `Path.write_text` in `store/`.
 - A campaign-scoped mutator that neither takes `locks.campaign_lock(cid)` nor
-  gets classified in `store/locks.py`.
+  gets classified in `store/locks/_domain.py`.
 - A second campaign lock held outside `locks.hold_all`.
 - A campaign read of an inheritable record that bypasses `store.overlay`.
 - An import inside a function body, a new cycle in the module graph, or a

@@ -95,7 +95,7 @@ tier's would have to pick one of three columns that may never be added. The
 campaign's money still rides the shell read: `GET /api/shell` answers
 `campaign.money`, the ledger's all-time figure rather than a bounded window
 wearing its name, and the campaign hub's card draws it as three labelled
-columns (`MoneyColumns`). `store/usage.py`'s `lifetime_since` reserves the
+columns (`MoneyColumns`). `store/usage/`'s `lifetime_since` reserves the
 all-history scan for the all-time view and not the play path, so the shell
 reads a maintained aggregate instead — `store/usage_rollup.py`, a byte
 bookmark into each month file, so the read costs what has been played since the
@@ -241,7 +241,7 @@ never spend, and never enters budgets or the accounting columns. An unpriced
 call makes this projection incomplete and must be labelled as such. All other
 money surfaces keep the three sources separate under the rule below.
 
-`store/usage.py` is an append-only ledger of what each LLM call reported, and
+`store/usage/` is an append-only ledger of what each LLM call reported, and
 every rollup over it carries **three** separate money figures. Adding any two
 of them together produces a number that is wrong in a direction nobody can
 recover, so the split is the design rather than an artefact of it:
@@ -346,7 +346,7 @@ A dropped connection used to cancel generation. It no longer does — it drops a
 subscriber. **Thirty-seven handlers** start detached runs, in five classes:
 
 - `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn`,
-  `post_roll_proposal`, and the per-response pair in `character_turns.py`,
+  `post_roll_proposal`, and the per-response pair in `routes/character_turns/_responses.py`,
   `regenerate_response` (reroll one reply) and `extend_response` (Keep
   writing: continue the last reply as a new variant). All eight synchronous
   streaming handlers are detached now; the eighth, `post_opener`, is a `draft`
@@ -535,7 +535,7 @@ itself stays what was written: a rule changes what is *shown* or *sent*.
 
 ## Observability: one writer, three views
 
-`store/logs.py` is the only thing in the app that writes a log line, and
+`store/logs/` is the only thing in the app that writes a log line, and
 `<home>/logs/YYYY-MM.jsonl` is the only file it writes to. `store/errors.py`
 (#156) and `store/metrics.py` (#154) are *readers* over it and over the usage
 ledger — there is no second store, and adding one would mean the same failure
@@ -612,7 +612,7 @@ would answer neither question.
   `test_format2_play.py` is the focused run of the turn path (a chat turn and
   a reroll) at that format.
 - **Model settings moved to a new layout, once, in the background**
-  (`store/inference/migrate.py`, started by `main.start` at startup and after a
+  (`store/inference/migrate/`, started by `main.start` at startup and after a
   data-dir move). Its first protected write waits for a settings safety archive named
   `pre-inference-settings-grimoire-<stamp>.zip` (`backups.SAFETY_PREFIX`), and retention
   leaves it alone: `GET /backups` lists it beside the ordinary series, but
@@ -637,7 +637,7 @@ would answer neither question.
   through retirement even at format 2/done, with settings still editable.
   Until the switch lands the
   new Models settings answer 409 `not_migrated` (play carries on through the
-  planner, in memory -- `store/inference/legacy_plan.py`, the one reader of the
+  planner, in memory -- `store/inference/legacy_plan/`, the one reader of the
   legacy layout, which `test_legacy_reader_guard.py` holds to being the only
   one); a store a newer build switched refuses every
   model-settings write with 409 `newer_format`. Backup, marker, resume, busy
@@ -761,7 +761,7 @@ would answer neither question.
   mistyped fact is not a fact that stopped being true, and retiring it would
   put a correction into the history as though the fiction had changed. So
   `facts.set_text` and `facts.forget` are the user's, reached only from
-  `routes/ledger.py`, and `test_absorb_writer_guard.py` fails if anything
+  `routes/ledger/`, and `test_absorb_writer_guard.py` fails if anything
   under `store/absorb/` calls either. That guard resolves import bindings
   rather than comparing spellings — an alias walked past three earlier
   versions of it.
@@ -802,7 +802,7 @@ would answer neither question.
     request recomposes with it.
   - The switch is off by default and drawn by no Settings control until its
     play gate is ratified. With it off, nothing past the switch is read.
-- **Hand edits to the ledger go through `routes/ledger.py`**, which takes the
+- **Hand edits to the ledger go through `routes/ledger/`**, which takes the
   campaign lock the absorb save already holds across its whole sequence and
   wraps every write in `store.undo.journalled` so it lands in the journal as
   `manual` and can be reversed from the play view's Changes panel. Two of the
@@ -898,7 +898,7 @@ would answer neither question.
   ever pointed at the frozen campaign's `home/`. Collection fails closed
   (a root it cannot parse, a link, a placement whose object has not arrived,
   anything younger than its grace period) and needs the token of a scan.
-  Neither module appears in `store/locks.py`'s domain lists, because the guard
+  Neither module appears in `store/locks/_domain.py`'s domain lists, because the guard
   surveys by `cid` and each takes a root; the migration's campaign writes take
   `campaign_lock` anyway.
   What the store promises is in `docs/store-guarantees.md`; the design is
@@ -921,8 +921,12 @@ would answer neither question.
   `llm.CapRefusalError`, never re-sent uncapped). A caller that records its
   prompt passes `operations.call_chain(...)` as `conn`, so the capture says
   what the call was sent with.
-  `client.stream`/`complete` are spelled only in `inference.py`, and
-  `test_routing_guard.py` fails one anywhere else. What the seam returns
+  The recognized direct `client.stream` calls live in
+  `inference/_generation.py`; direct `client.complete` calls also live in
+  `inference/_decision_calls.py`. `test_routing_guard.py` holds these exact
+  client doors in `GENERATION_DOORS`, including confirmed model probes in
+  `routes/config/_probes.py`. The tool loop calls its owned `self.client` in
+  `inference/_tool_runtime.py`. What the seam returns
   carries the `wire.Chain` the facade is sent as `.chain` (`generate` hands it
   on), and the facade dispatches each of its typed `wire.Target`s through the
   adapter registry (`adapters.py`); read the display facts (`.kind`, `.model`,
@@ -1419,7 +1423,7 @@ would answer neither question.
   that lives only in a client dialog is not the rule: a new settings action
   that can spend adds its refusal at the route.
 - **Adding a module that mutates campaign-scoped state?** Classify it in
-  `store/locks.py`, or `test_lock_domain_guard.py` fails naming your module. The
+  `store/locks/_domain.py`, or `test_lock_domain_guard.py` fails naming your module. The
   campaign lock domain used to be a docstring list, which is how two mutators
   shipped outside it; it is now `DOMAIN_MODULES` (its public `cid`-taking
   mutators all take `locks.campaign_lock(cid)`), `OUTSIDE_DOMAIN` (deliberately
