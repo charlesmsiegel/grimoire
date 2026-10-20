@@ -1,3 +1,6 @@
+
+from grimoire.llm import _lifecycle as llm_lifecycle
+from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
 from grimoire.openrouter import OpenRouterError
 
@@ -340,8 +343,7 @@ class UnyieldingProvider:
 async def test_cleanup_that_ignores_cancellation_cannot_wedge_the_caller(monkeypatch):
     """The timeout has to reach the caller even when closing the sick provider
     doesn't — otherwise the bound is only as good as the provider's manners."""
-    from grimoire import llm as llm_mod
-    monkeypatch.setattr(llm_mod, "_CLOSE_TIMEOUT", 0.05)
+    monkeypatch.setattr(llm_lifecycle, "_CLOSE_TIMEOUT", 0.05)
     provider = UnyieldingProvider()
     client = _timeout_client(provider, 0.05)
 
@@ -386,8 +388,7 @@ async def test_an_abandoned_pull_is_closed_once_it_finally_settles(monkeypatch):
     """Skipping the close of a still-running iterator is required (closing one
     mid-__anext__ raises) — but skipping it forever leaks the connection, so
     the close has to happen when the pull eventually lets go."""
-    from grimoire import llm as llm_mod
-    monkeypatch.setattr(llm_mod, "_CLOSE_TIMEOUT", 0.05)
+    monkeypatch.setattr(llm_lifecycle, "_CLOSE_TIMEOUT", 0.05)
     provider = UncancellableProvider()
     client = _timeout_client(provider, 0.05)
     with pytest.raises(LLMError):
@@ -399,8 +400,7 @@ async def test_an_abandoned_pull_is_closed_once_it_finally_settles(monkeypatch):
 
 
 async def test_a_pull_that_ignores_cancellation_cannot_wedge_the_caller(monkeypatch):
-    from grimoire import llm as llm_mod
-    monkeypatch.setattr(llm_mod, "_CLOSE_TIMEOUT", 0.05)
+    monkeypatch.setattr(llm_lifecycle, "_CLOSE_TIMEOUT", 0.05)
     provider = UncancellableProvider()
     client = _timeout_client(provider, 0.05)
 
@@ -472,7 +472,7 @@ async def test_the_facade_ticks_while_it_waits(monkeypatch):
     """A silent provider still tells the caller the stream is alive (#95).
     Empty strings, then the text: three ticks over a ~0.1s wait at a 0.03s
     interval, and no tick once the answer starts flowing."""
-    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0.03)
+    monkeypatch.setattr(llm_lifecycle, "HEARTBEAT_INTERVAL", 0.03)
     client = _timeout_client(SilentThenAnswers(0.1, "the answer"), 0)  # no idle bound
     chunks = [c async for c in client.stream([], _conn("openrouter"))]
     assert chunks[-1] == "the answer"
@@ -482,7 +482,7 @@ async def test_the_facade_ticks_while_it_waits(monkeypatch):
 async def test_ticking_does_not_extend_the_idle_bound(monkeypatch):
     """The bound counts provider activity, and a tick is not that. A heartbeat
     interval shorter than the timeout must not turn the timeout off."""
-    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0.01)
+    monkeypatch.setattr(llm_lifecycle, "HEARTBEAT_INTERVAL", 0.01)
     client = _timeout_client(StallingProvider(), 0.05)
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], _conn("openrouter"))]
@@ -496,7 +496,7 @@ async def test_a_chatty_silent_provider_cannot_suppress_the_tick(monkeypatch):
     connection stays silent for the whole reasoning phase — the exact case the
     heartbeat exists for. The clock spans pulls and only text resets it, so
     ~0.16s of dense empty frames at a 0.03s interval has to produce ticks."""
-    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0.03)
+    monkeypatch.setattr(llm_lifecycle, "HEARTBEAT_INTERVAL", 0.03)
     client = _timeout_client(ReasoningProvider(8), 0)  # frames every 0.02s
     chunks = [c async for c in client.stream([], _conn("openrouter"))]
     assert chunks[-1] == "the answer"
@@ -506,7 +506,7 @@ async def test_a_chatty_silent_provider_cannot_suppress_the_tick(monkeypatch):
 async def test_text_resets_the_tick_clock(monkeypatch):
     """A stream that is actually producing prose needs no liveness signal —
     the prose is the signal."""
-    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0.05)
+    monkeypatch.setattr(llm_lifecycle, "HEARTBEAT_INTERVAL", 0.05)
     client = _timeout_client(FakeProvider("or"), 0)
     assert [c async for c in client.stream([], _conn("openrouter"))] == ["or"]
 
@@ -515,7 +515,7 @@ async def test_a_provider_heartbeat_is_still_not_a_facade_tick(monkeypatch):
     """The two empties are different signals and only one is on a schedule the
     caller chose. A provider frame resets the bound and stops at the facade; if
     it were forwarded instead, this stream would emit eight of them."""
-    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0)  # ticking off
+    monkeypatch.setattr(llm_lifecycle, "HEARTBEAT_INTERVAL", 0)  # ticking off
     client = _timeout_client(ReasoningProvider(8), 0.05)
     assert [c async for c in client.stream([], _conn("openrouter"))] == ["the answer"]
 
@@ -612,8 +612,7 @@ def _retry_client(provider, retries=2, timeout=0):
 def _instant_backoff(monkeypatch):
     """Keep the schedule's shape (it is asserted on its own below) but stop the
     behavioural tests from actually sleeping through it."""
-    from grimoire import llm as llm_mod
-    monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
 async def test_a_transient_failure_is_retried_and_then_succeeds():
@@ -670,8 +669,7 @@ async def test_a_heartbeat_already_sent_does_not_count_as_text(monkeypatch):
     """The facade's liveness signal reaches the caller as an empty chunk, which
     the routes turn into an SSE comment — framing, carrying no content. A fresh
     attempt after one duplicates nothing, so it must not disable the retry."""
-    from grimoire import llm as llm_mod
-    monkeypatch.setattr(llm_mod, "HEARTBEAT_INTERVAL", 0.01)
+    monkeypatch.setattr(llm_lifecycle, "HEARTBEAT_INTERVAL", 0.01)
     provider = SlowFailingProvider(failures=1, stall=0.05)
     client = _retry_client(provider, retries=1)
     seen = [c async for c in client.stream([], _conn("openrouter"))]
@@ -714,9 +712,8 @@ async def test_a_long_backoff_keeps_reporting_liveness(monkeypatch):
     """Between attempts there is no provider stream for `_guard` to time, so an
     unsliced sleep is a window where nothing crosses the caller's connection at
     all — and a proxy drops a silent SSE stream."""
-    from grimoire import llm as llm_mod
-    monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.2)
-    monkeypatch.setattr(llm_mod, "HEARTBEAT_INTERVAL", 0.02)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.2)
+    monkeypatch.setattr(llm_lifecycle, "HEARTBEAT_INTERVAL", 0.02)
     provider = FlakyProvider(failures=1)
     client = _retry_client(provider, retries=1)
     seen = [c async for c in client.stream([], _conn("openrouter"))]
@@ -726,7 +723,7 @@ async def test_a_long_backoff_keeps_reporting_liveness(monkeypatch):
 
 def test_backoff_grows_exponentially_capped_and_jittered(monkeypatch):
     from grimoire import llm as llm_mod
-    monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.5)  # undo the module's instant-backoff fixture
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.5)  # undo the module's instant-backoff fixture
     for attempt in range(8):
         ceiling = min(llm_mod.RETRY_CAP, llm_mod.RETRY_BASE * (2 ** attempt))
         draws = {llm_mod._backoff_delay(attempt) for _ in range(50)}
@@ -786,8 +783,7 @@ async def test_a_named_window_beats_our_own_backoff(monkeypatch):
 async def test_our_backoff_wins_when_it_is_longer(monkeypatch):
     """`max`, not a replacement: a `Retry-After: 1` late in a sequence must not
     walk the backoff back down below the wait the attempt before it had."""
-    from grimoire import llm as llm_mod
-    monkeypatch.setattr(llm_mod, "RETRY_BASE", 4.0)
+    monkeypatch.setattr(llm_retry, "RETRY_BASE", 4.0)
     slept = _record_sleeps(monkeypatch)
     provider = RateLimited(failures=1, retry_after=0.001)
     client = _retry_client(provider, retries=1)
@@ -1086,6 +1082,7 @@ async def test_closing_the_retried_stream_closes_the_provider():
 
 
 import ast  # noqa: E402 - deliberate late import; see the lines above
+from importlib.util import resolve_name  # noqa: E402 - source import analysis
 from pathlib import Path  # noqa: E402 - deliberate late import; see the lines above
 
 import grimoire  # noqa: E402 - deliberate late import; see the lines above
@@ -1105,19 +1102,27 @@ def _sibling_imports(name: str) -> set[str]:
     spellings of an edge count — `from .llm import x` and `from grimoire.llm
     import x` reach the same module and cycle the same way.
     """
-    src = Path(grimoire.__file__).with_name(f"{name}.py").read_text(encoding="utf-8")
+    root = Path(grimoire.__file__).parent
+    directory = root / name
+    paths = sorted(directory.rglob("*.py")) if directory.is_dir() else [root / f"{name}.py"]
     found: set[str] = set()
-    for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.ImportFrom):
-            if node.level == 1 and node.module:  # from .llm import x
-                found.add(node.module)
-            elif node.level == 1 or (node.level == 0 and node.module == "grimoire"):  # from . import llm
-                found.update(a.name for a in node.names)
-            elif node.level == 0 and (node.module or "").startswith("grimoire."):
-                found.add(node.module.split(".", 1)[1])  # from grimoire.llm import x
-        elif isinstance(node, ast.Import):  # import grimoire.llm
-            found.update(a.name.split(".", 1)[1] for a in node.names
-                         if a.name.startswith("grimoire."))
+    for path in paths:
+        relative = path.relative_to(root).with_suffix("")
+        package = "grimoire." + ".".join(relative.parts[:-1])
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            modules = []
+            if isinstance(node, ast.ImportFrom):
+                owner = (resolve_name("." * node.level + (node.module or ""), package)
+                         if node.level else node.module or "")
+                modules = (["grimoire." + a.name for a in node.names]
+                           if owner == "grimoire" else [owner])
+            elif isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            for module in modules:
+                if module.startswith("grimoire."):
+                    sibling = module.split(".")[1]
+                    if sibling != name:
+                        found.add(sibling)
     return found
 
 
@@ -1158,7 +1163,9 @@ def _reachable_graph() -> dict[str, set[str]]:
         name = queue.pop()
         if name in graph:
             continue
-        graph[name] = {m for m in _sibling_imports(name) if (pkg / f"{m}.py").is_file()}
+        graph[name] = {m for m in _sibling_imports(name)
+                       if (pkg / f"{m}.py").is_file()
+                       or (m in GATEWAY_MODULES and (pkg / m / "__init__.py").is_file())}
         queue.extend(graph[name])
     return graph
 
@@ -1179,9 +1186,10 @@ def test_llm_imports_its_providers_at_module_scope():
     """#239 asked for the deferred imports to go, not just for the cycle to be
     survivable: an acyclic graph is equally happy with them back inside
     __init__, so pin the module body itself."""
-    tree = ast.parse(Path(grimoire.__file__).with_name("llm.py").read_text(encoding="utf-8"))
+    path = Path(grimoire.__file__).parent / "llm" / "_client.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     body_imports = {node.module for node in tree.body
-                    if isinstance(node, ast.ImportFrom) and node.level == 1}
+                    if isinstance(node, ast.ImportFrom) and node.level == 2}
     assert set(PROVIDERS) <= body_imports
 
 

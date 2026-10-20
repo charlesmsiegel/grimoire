@@ -15,6 +15,7 @@ import copy
 import inspect
 import json
 import sys
+from pathlib import Path
 
 import jinja2
 import pytest
@@ -419,8 +420,12 @@ def test_the_leaf_imports_only_the_standard_library():
 
 
 def test_decisions_binds_the_module_not_its_names():
-    tree = ast.parse(inspect.getsource(decisions))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.level == 1:
-            assert node.module is None, ast.dump(node)
-            assert [a.name for a in node.names] == ["schemas"], ast.dump(node)
+    found = 0
+    for path in Path(decisions.__file__).parent.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.level == 2:
+                assert node.module is None, ast.dump(node)
+                assert [a.name for a in node.names] == ["schemas"], ast.dump(node)
+                found += 1
+    assert found, "the package walk must find the schema module bindings"
