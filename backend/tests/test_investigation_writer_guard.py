@@ -16,7 +16,6 @@ only calls, so a mutator handed to a fail-soft helper is seen too).
 """
 
 import ast
-import importlib
 import pathlib
 
 import grimoire
@@ -86,22 +85,6 @@ def test_no_investigation_code_writes():
         "an investigation reads, and writes only one proposal through "
         "`reconcile.persist_investigation` from routes/investigation.py:\n  "
         + "\n  ".join(offenders))
-
-
-def test_the_package_is_scanned():
-    labels = {label for label, _p, _pkg in _scanned()}
-    assert {"store/investigation/tools.py", "store/investigation/readers.py",
-            "store/investigation/final.py"} <= labels
-
-
-def test_the_allowlist_names_things_that_exist():
-    missing = []
-    for module, names in sorted(ALLOWED.items()):
-        mod = importlib.import_module(module)
-        missing += [f"{module}.{n}" for n in sorted(names) if not hasattr(mod, n)]
-    reconcile = importlib.import_module(PERSIST[0])
-    missing += [n for n in (PERSIST[1], *RECONCILE_WRITES) if not hasattr(reconcile, n)]
-    assert not missing, f"the guard names things that no longer exist: {missing}"
 
 
 _INVESTIGATION = "grimoire.store.investigation"

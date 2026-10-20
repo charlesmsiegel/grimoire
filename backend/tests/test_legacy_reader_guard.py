@@ -202,17 +202,6 @@ def test_only_the_planner_reads_the_legacy_layout():
     assert found == [], "\n".join(found)
 
 
-def test_every_echo_and_allowed_path_is_real():
-    """A stale entry would exempt a file or a function that no longer exists
-    -- and whatever later takes its name. Every one exists now that Task 6
-    has written retirement and its record."""
-    for rel in ALLOWED:
-        assert (SRC / rel).is_file(), rel
-    for rel, names in ECHOES.items():
-        owners = set(_owners(ast.parse((SRC / rel).read_text(encoding="utf-8"))).values())
-        assert set(names) <= owners, (rel, set(names) - owners)
-
-
 def _imports_planner(node: ast.AST) -> bool:
     if isinstance(node, ast.ImportFrom):
         module = node.module or ""

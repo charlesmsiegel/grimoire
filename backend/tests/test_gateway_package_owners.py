@@ -22,7 +22,6 @@ from grimoire.store import logs
 ])
 def test_exported_shared_state_has_one_defining_owner(name, owner, binding):
     package = importlib.import_module(f"grimoire.{name}")
-    assert hasattr(package, "__path__"), f"{name} must be an importable package"
     implementation = importlib.import_module(f"grimoire.{name}.{owner}")
     assert getattr(package, binding) is getattr(implementation, binding)
 

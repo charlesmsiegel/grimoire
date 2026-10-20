@@ -12,13 +12,11 @@ from grimoire.store import usage
     ("_unpriced", "_UNPRICED_POOL"),
 ])
 def test_exported_usage_state_has_one_owner(leaf, binding):
-    assert hasattr(usage, "__path__"), "usage must be an importable package"
     owner = importlib.import_module(f"grimoire.store.usage.{leaf}")
     assert getattr(usage, binding) is getattr(owner, binding)
 
 
 def test_ledger_and_report_use_the_same_clock_owner(monkeypatch, tmp_path):
-    assert hasattr(usage, "__path__"), "usage must be an importable package"
     clock = importlib.import_module("grimoire.store.usage._clock")
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     monkeypatch.setattr(clock, "_now", lambda: "2026-08-14T12:00:00Z")

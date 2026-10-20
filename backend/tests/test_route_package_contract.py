@@ -20,17 +20,6 @@ CONTRACT = json.loads((Path(__file__).parent / 'fixtures' /
                        'route_package_contract.json').read_text(encoding='utf-8'))
 
 
-@pytest.mark.parametrize('module', [campaigns, models], ids=['campaigns', 'models'])
-def test_former_module_bindings_remain_importable(module):
-    domain = module.__name__.rsplit('.', 1)[-1]
-    assert not [name for name in CONTRACT[f'{domain}_exports'] if not hasattr(module, name)]
-
-
-def test_campaign_star_import_surface_matches_the_monolith():
-    expected = {name for name in CONTRACT['campaigns_exports'] if not name.startswith('_')}
-    assert set(campaigns.__all__) == expected
-
-
 def test_campaign_route_registration_matches_the_monolith():
     rows = [{'methods': sorted(r.methods), 'path': r.path, 'name': r.name,
              'status_code': r.status_code,

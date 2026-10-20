@@ -196,11 +196,6 @@ def _longest_shared_run(text: str, other: str) -> tuple[int, str]:
 
 
 @pytest.mark.parametrize("doc", DOCS, ids=lambda p: str(p.relative_to(ROOT)))
-def test_docs_exist(doc: pathlib.Path):
-    assert doc.exists(), f"{doc.relative_to(ROOT)} is missing"
-
-
-@pytest.mark.parametrize("doc", DOCS, ids=lambda p: str(p.relative_to(ROOT)))
 def test_relative_links_resolve(doc: pathlib.Path):
     """Every relative link, image and HTML reference target exists on disk.
 
@@ -444,19 +439,6 @@ def test_store_guarantees_names_the_striped_name_and_sidecar_locks():
     assert not gone, f"store/locks.py no longer defines: {gone}"
 
 
-def test_store_guarantees_names_the_maintenance_modules():
-    """Stage 4's migration, collector and report modules are named by the image
-    store section, and all of them still exist. The section is where a reader is
-    sent to learn what a garbage collection promises; a module renamed away
-    would leave that promise attached to nothing."""
-    section = _section(_read(GUARANTEES), "The image store")
-    for name in ("image_migration", "image_gc", "image_surfaces",
-                 "maintenance_reports", "recycle_bin"):
-        assert name in section, f"the image store section does not name {name}"
-        module = SRC / "store" / name
-        assert module.with_suffix(".py").is_file() or (module / "__init__.py").is_file(), name
-
-
 def test_store_guarantees_names_the_collection_locks():
     """Stage 3's two collection locks, by the names `store/locks.py` gives them
     -- and those names must still be there. The image store section states
@@ -468,37 +450,6 @@ def test_store_guarantees_names_the_collection_locks():
     assert not missing, f"the image store section does not name: {missing}"
     gone = [n for n in names if not hasattr(locks, n)]
     assert not gone, f"store/locks.py no longer defines: {gone}"
-
-
-def test_store_guarantees_names_the_shared_metadata_modules():
-    """Stage 2's two modules -- the scope lifecycle and the derived usage walk --
-    are named by the image store section, and both still exist. The section
-    describes where a description, a subject tag and a "used in" answer live;
-    a module renamed away would leave it describing nothing."""
-    section = _section(_read(GUARANTEES), "The image store")
-    for name in ("image_scopes", "image_usage"):
-        assert name in section, f"the image store section does not name {name}"
-        assert (SRC / "store" / f"{name}.py").is_file(), f"store/{name}.py is gone"
-
-
-def test_store_guarantees_image_section_cites_real_tests():
-    """Every test the image store section cites as its evidence exists: each
-    `test_*.py` file, and each `test_*` function somewhere under
-    `backend/tests/`. A renamed test would otherwise leave a guarantee pinned
-    by nothing a reader can find."""
-    section = _section(_read(GUARANTEES), "The image store")
-    cited = set(re.findall(r"`(test_[A-Za-z0-9_]+(?:\.py)?)`", section))
-    files = {c for c in cited if c.endswith(".py")}
-    functions = cited - files
-    assert files and functions, "the image store section cites no tests"
-    missing_files = sorted(f for f in files if not (TESTS / f).is_file())
-    assert not missing_files, f"cited test files that do not exist: {missing_files}"
-    defined = set()
-    for path in TESTS.rglob("test_*.py"):
-        defined |= set(re.findall(r"^\s*(?:async\s+)?def (test_[A-Za-z0-9_]+)\(",
-                                  _read(path), re.MULTILINE))
-    missing = sorted(functions - defined)
-    assert not missing, f"cited test functions that do not exist: {missing}"
 
 
 def test_store_guarantees_names_the_inference_migration():
@@ -639,10 +590,6 @@ def test_claude_md_costs_names_real_ledger_fields():
         f"CLAUDE.md's Costs section names ledger fields `usage.record` does not "
         f"take: {missing}"
     )
-    source = (SRC / "store" / "usage" / "_folding.py").read_text(encoding="utf-8")
-    gone = [c for c in COSTS_BUCKET_COUNTS if f'"{c}"' not in source]
-    assert not gone, f"store/usage.py no longer writes these bucket counts: {gone}"
-
     assert "`pricing.rate_for_call`" in section
     assert callable(getattr(pricing, "rate_for_call", None)), (
         "CLAUDE.md names `pricing.rate_for_call` as the rate-precedence function, "

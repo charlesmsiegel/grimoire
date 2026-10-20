@@ -16,13 +16,11 @@ from grimoire.store import cache_sync, logs
     ("_vectors", "_CLIENT"),
 ])
 def test_exported_warm_state_has_one_owner(leaf, binding):
-    assert hasattr(cache_sync, "__path__"), "cache_sync must be an importable package"
     owner = importlib.import_module(f"grimoire.store.cache_sync.{leaf}")
     assert getattr(cache_sync, binding) is getattr(owner, binding)
 
 
 def test_fixed_hook_tuple_uses_the_exact_owned_instances():
-    assert hasattr(cache_sync, "__path__"), "cache_sync must be an importable package"
     engine = importlib.import_module("grimoire.store.cache_sync._engine")
     files = importlib.import_module("grimoire.store.cache_sync._files")
     others = importlib.import_module("grimoire.store.cache_sync._other_hooks")

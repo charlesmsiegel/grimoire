@@ -11,7 +11,6 @@ from grimoire.store import compiled
 
 
 def test_process_state_replacement_is_visible_through_the_facade(monkeypatch):
-    assert hasattr(compiled, "__path__"), "compiled must be an importable package"
     runtime = importlib.import_module("grimoire.store.compiled._runtime")
     parent = runtime._State(pid=os.getpid() - 1, build_checked=True, build="b" * 64)
     monkeypatch.setattr(runtime, "_state", parent)
@@ -26,7 +25,6 @@ def test_process_state_replacement_is_visible_through_the_facade(monkeypatch):
 
 
 def test_optional_import_flags_are_reads_of_the_defining_owner(monkeypatch):
-    assert hasattr(compiled, "__path__"), "compiled must be an importable package"
     support = importlib.import_module("grimoire.store.compiled._sqlite_support")
     filesystem = importlib.import_module("grimoire.store.compiled._filesystem")
     monkeypatch.setattr(support, "_sqlite", None)

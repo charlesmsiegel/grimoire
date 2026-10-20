@@ -23,6 +23,9 @@ from pathlib import Path
 import pytest
 
 import grimoire
+from grimoire.routes import todo
+from grimoire.store.campaigns import read as campaign_reads
+from grimoire.store.scenes import read as scene_reads
 
 #: Modules allowed to import `store.overview` at all. `store.cache_sync` is
 #: spec 05's: its `overview` hook calls `overview.warm.warm_paths` (05-S5),
@@ -35,15 +38,17 @@ _IMPORTERS = {"routes.worlds", "routes.campaigns", "routes.shell", "routes.todo"
 # imported name for compatibility; no other campaign leaf may use a projection.
 
 #: Functions that must never reach an overview projection.
-_DECISION_SITES = (
-    "store.scenes.read.closed_by",
-    "store.scenes.read.list_scenes",
-    "store.scenes.read.read_scene",
-    "store.campaigns.read.list_campaigns",
-    "store.campaigns.read.read_campaign",
-    "routes.todo.get_todo_items",
-    "routes.todo.put_todo_ignored",
+_DECISION_BINDINGS = (
+    (scene_reads, scene_reads.closed_by),
+    (scene_reads, scene_reads.list_scenes),
+    (scene_reads, scene_reads.read_scene),
+    (campaign_reads, campaign_reads.list_campaigns),
+    (campaign_reads, campaign_reads.read_campaign),
+    (todo, todo.get_todo_items),
+    (todo, todo.put_todo_ignored),
 )
+_DECISION_SITES = tuple(f"{module.__name__.removeprefix('grimoire.')}.{function.__name__}"
+                        for module, function in _DECISION_BINDINGS)
 #: Whole modules that must never reach one (the stores the projections stand
 #: beside, which decisions and writes read).
 _DECISION_MODULES = ("store.continuity.effective", "store.continuity.pending")
@@ -220,11 +225,6 @@ def test_no_decision_site_reaches_an_overview_projection():
 @functools.cache
 def _real_graph() -> _Graph:
     return _Graph(_sources())
-
-
-def test_every_decision_site_named_here_still_exists():
-    graph = _real_graph()
-    assert [s for s in _DECISION_SITES if graph._resolve(s) not in graph.funcs] == []
 
 
 _FIXTURE_BASE = {

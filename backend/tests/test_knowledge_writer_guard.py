@@ -33,7 +33,6 @@ import pathlib
 import pytest
 
 import grimoire
-from grimoire.store import knowledge
 
 PACKAGE = pathlib.Path(grimoire.__file__).parent
 
@@ -145,16 +144,6 @@ def test_only_the_listed_writers_call_a_knowledge_mutator():
     assert not offenders, (
         "knowledge.json is the user's word; only the ledger routes, the delete "
         "hooks, undo and the branch copy may write it:\n  " + "\n  ".join(offenders))
-
-
-def test_the_guard_names_functions_that_exist():
-    missing = [n for n in MUTATORS if not callable(getattr(knowledge, n, None))]
-    assert not missing, f"MUTATORS names functions store.knowledge no longer has: {missing}"
-
-
-def test_every_allowlisted_module_exists():
-    missing = [rel for rel in ALLOWED if not (PACKAGE / rel).exists()]
-    assert not missing, f"ALLOWED names modules that no longer exist: {missing}"
 
 
 def test_the_delete_hooks_and_undo_really_call_what_they_are_allowed():

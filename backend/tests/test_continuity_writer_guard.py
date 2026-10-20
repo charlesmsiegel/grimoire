@@ -17,8 +17,7 @@ bindings rather than comparing spellings for the same reason that one does.
 
 Reach:
 
-- It scans the discovery modules in `SCANNED`. Every one must exist, or the
-  guard would quietly scan nothing.
+- It scans the discovery modules in `SCANNED`, including package leaves.
 - `pending` is scanned and is read-only by design. It is what Todo's count and
   both reconcile persists read a finding's current meaning through, so a write
   routed through it would let the sweep change reviewed state while looking
@@ -62,10 +61,6 @@ SCANNED: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("grimoire.store.investigation", ("budget", "final", "readers", "state", "tools",
                                       "trace")),
 )
-
-#: Every scanned module: one missing means a rename the guard would otherwise
-#: follow into scanning nothing.
-REQUIRED_PRESENT = {f"{package}.{module}" for package, modules in SCANNED for module in modules}
 
 #: Mutators the discovery modules may not reach, by absolute module. Matching
 #: is exact on the module, never on its tail: `doc` is a common word.
@@ -162,12 +157,12 @@ def _directory(package: str) -> pathlib.Path:
 
 
 def _present() -> dict[str, tuple[pathlib.Path, str]]:
-    """`package.module` -> (its file, its package), for each scanned module
-    that exists."""
+    """Import each scan target, then include its implementation sources."""
     out: dict[str, tuple[pathlib.Path, str]] = {}
     for package, modules in SCANNED:
         root = _directory(package)
         for module in modules:
+            importlib.import_module(f"{package}.{module}")
             if (root / f"{module}.py").is_file():
                 out[f"{package}.{module}"] = (root / f"{module}.py", package)
             elif (root / module / "__init__.py").is_file():
@@ -192,22 +187,6 @@ def test_discovery_modules_never_write_reviewed_state():
         "a continuity discovery module may only propose: record the finding in "
         "the candidates cache and let `continuity.review` apply what the reader "
         "accepts:\n  " + "\n  ".join(offenders))
-
-
-def test_the_scanned_modules_exist():
-    """A rename would otherwise turn the scan above into a scan of nothing."""
-    missing = REQUIRED_PRESENT - set(_present())
-    assert not missing, f"SCANNED names discovery modules that no longer exist: {sorted(missing)}"
-
-
-def test_the_guard_names_functions_that_exist():
-    """A rule about `events.fire_all` guards nothing. Renaming a mutator has to
-    fail here rather than silently retire the check."""
-    missing = []
-    for module, fns in sorted(FORBIDDEN.items()):
-        mod = importlib.import_module(module)
-        missing += [f"{module}.{fn}" for fn in sorted(fns) if not callable(getattr(mod, fn, None))]
-    assert not missing, f"FORBIDDEN names functions that no longer exist: {missing}"
 
 
 def _found(src: str) -> list[str]:

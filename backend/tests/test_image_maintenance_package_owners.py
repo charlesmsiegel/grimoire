@@ -15,7 +15,6 @@ import pytest
 ])
 def test_maintenance_bindings_share_one_defining_owner(name, owner, bindings):
     package = importlib.import_module(f"grimoire.store.{name}")
-    assert hasattr(package, "__path__"), f"{name} must be an importable package"
     implementation = importlib.import_module(f"grimoire.store.{name}.{owner}")
     for binding in bindings:
         assert getattr(package, binding) is getattr(implementation, binding)
