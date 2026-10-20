@@ -151,11 +151,11 @@ line-count partitioner as architecture.
   baselines just to conceal a missing interface.
 - [x] Match before/after diagnostics by rule/message/original definition and
   reconcile only relocation keys or earned reductions through the ratchet.
-- [ ] Run all recipes: lint, mypy, templates, ESLint, frontend typecheck/coverage,
+- [x] Run all recipes: lint, mypy, templates, ESLint, frontend typecheck/coverage,
   complete backend coverage and fresh isolated Pydantic-1 suite. Always put this
   worktree's `backend/src` first. Preserve subprocess filesystem access needed
   by the existing Windows harness; distinguish unavailable Make/3.11/APK checks.
-- [ ] Run independent implementation and final spec-versus-diff reviews. Verify
+- [x] Run independent implementation and final spec-versus-diff reviews. Verify
   all production file sizes and record any remaining >1,000-line exception with
   its actual reason. Update handoff/theory/evidence and commit reviewable units.
 
@@ -208,9 +208,15 @@ twelve failures remain failed evidence, despite 94.19% measured coverage.
 Later attempts exposed exactly two published source pointers; the reviewed
 documentation-only amendment above preserves the original schema hashes with
 an exact-literal comparison and four negative controls. All 50 contract cases
-pass on each Pydantic major. Fresh complete gate runs are now executing that
-repaired snapshot. Their final results and the last specification checkpoint
-remain open.
+pass on each Pydantic major. Complete gate runs of that repaired snapshot
+finished successfully: 23,141 passed / 46 skipped on the primary interpreter,
+with 94.19% coverage against the unchanged 93% floor; 23,135 passed / 52 skipped
+on Pydantic 1. Both exited 0. All package contracts and documentation guards
+also passed within both complete collections. The final independent
+specification checkpoint approved the frozen implementation and delivery
+documents after parsing both actual JUnit reports and the coverage XML:
+23,187 matching test identities, no failures or errors, and 94.192016% combined
+coverage. Its record is `build/final-spec-review.md`.
 
 Current results and platform limits are recorded in
 `docs/engineering/backend-package-validation.md`; durable responsibility notes

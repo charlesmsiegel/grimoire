@@ -18,6 +18,10 @@ re-exports, including intentionally exposed private helpers and imported module
 objects. Leaves name actual responsibilities and import other owners as
 modules. Original algorithms, explanatory comments, defaults and resolved
 annotations remain attached to their implementations.
+Source references follow their moved owners; two such pointers also appear in
+published endpoint descriptions. The exact OpenAPI metadata allowance and
+original contract checks are documented in
+[the validation record](backend-package-validation.md).
 
 Mutable dictionaries, pools, registries and clients have one owner. Consumers
 share those objects. The few owner bindings that can be replaced, including
@@ -52,7 +56,7 @@ missing/duplicate entries before mutation, and preserves overlapping matches.
 | `routes/character_turns/` | Planning, prompt preparation, generation, persistence and group-round state are stages of the same reserved turn. | Extend the stage that owns the change; retain captured roster/state, active-round ownership, cancellation and persisted response identity. |
 | `routes/runs/` | A per-app registry owns reservations, event replay, cancellation and exclusion until the producer actually unwinds. Record, execution, maintenance and HTTP adapters sit around it. | Another run class extends the existing registry/subject model. Keep the whole registry together; cancellation does not release exclusion before the worker returns. |
 | `routes/common/` | Shared route dependencies separate clients, inference resolution, deadlines, responses/errors, prompts, drafts, uploads, images and lookups. | Reuse the same dependency function objects. Another deadline belongs to its policy owner, not a copied constant or a second app client. |
-| `routes/streaming/` | One stream driver claims, fences, renders, persists and finalizes a turn using shared per-app token state. Display, persistence and follow-ups are supporting responsibilities. | Preserve partial-versus-complete persistence and the entire abort/finalize closure. A post-turn action must retain the existing lock and revision boundaries. |
+| `routes/streaming/` | One stream driver claims, fences, renders, persists and finalizes a turn using shared in-process per-scene token state. Display, persistence and follow-ups are supporting responsibilities. | Preserve partial-versus-complete persistence and the entire abort/finalize closure. A post-turn action must retain the existing lock and revision boundaries. |
 | `routes/config/` | Settings, storage changes, providers, probes, response shaping and world options are separate request responsibilities. | A new paid settings action needs the existing server-side confirmation model. Probe closure and facade reads share the one embedding client. |
 | `routes/characters/` | Record CRUD, drafts, exchange and gallery/image operations share framing and source selection. | Another gallery surface reuses captured source identity and existing draft cleanup; do not combine upload and record authority. |
 | `routes/ledger/` | User-authored ledger movement, ordinary records and knowledge overrides have different policies and source readers. | A new knowledge edit remains a manual, journalled route action. Only `_knowledge` receives the moved knowledge-writer permission. |

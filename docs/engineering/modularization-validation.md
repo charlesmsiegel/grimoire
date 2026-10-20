@@ -1,5 +1,10 @@
 # Route package conversion evidence
 
+This is the historical first-phase record. The subsequent 35 conversions and
+current gate results are recorded in
+[backend-package-validation.md](backend-package-validation.md); the hotspot
+list below describes the first phase's reference tree, not remaining work.
+
 This records stabilization of the WIP at `e5f3a1d7b`. The behavior reference is
 `d5c4d6777`, where the original `routes/models.py` and `routes/campaigns.py`
 still exist. No private library was used.
