@@ -113,6 +113,7 @@ from __future__ import annotations
 import ast
 import functools
 import pathlib
+import symtable
 import sys
 from collections.abc import Callable, Iterator
 
@@ -191,7 +192,7 @@ _OPERATION_NAMES = (EMBED_SYNC, EMBED_GROUPS)
 CLIENT_MODULE = "grimoire.embeddings"
 #: The only modules that call the client: the operation, and the model test's
 #: probe, which stays on the provider under test (ruling 8).
-CLIENT_DOORS = frozenset({EMBED_MODULE, "grimoire.routes.config"})
+CLIENT_DOORS = frozenset({EMBED_MODULE, "grimoire.routes.config._probes"})
 
 #: At least this many operation calls exist (vacuity insurance): lore recall
 #: 2, library search 2, art 1, continuity 1, history-index 1 and history
@@ -354,6 +355,15 @@ def test_the_walk_finds_the_embed_call_sites():
 WARM_MODULE = "grimoire.store.cache_sync"
 WARM_CONTEXT = "WarmContext"
 WARM_FACTORY = "_context"
+WARM_HOOK_OWNERS = (
+    ("_files", "FILES", "_FilesHook"),
+    ("_other_hooks", "OVERVIEW", "_OverviewHook"),
+    ("_other_hooks", "SEARCHDOCS", "_SearchDocsHook"),
+    ("_vectors", "VECTORS", "_VectorsHook"),
+)
+WARM_MEMBERS = frozenset(f"{WARM_MODULE}.{leaf}" for leaf in (
+    "_signals", "_contracts", "_paths", "_files", "_vectors",
+    "_other_hooks", "_engine", "_scopes"))
 
 #: The role's one reader, as the dict `embed_sync` takes.
 SPACE_SOURCES = frozenset({("grimoire.store.embed_space", "endpoint"),
@@ -368,6 +378,20 @@ _Fn = ast.FunctionDef | ast.AsyncFunctionDef
 #: binding maps a parameter to the argument expression and the context it is
 #: read in, for a call being followed into its callee.
 _Ctx = tuple[str, "_Fn | None", "dict[str, tuple[ast.expr, _Ctx]] | None"]
+
+
+def _module_import_bindings(tree):
+    """Imports in module control flow, excluding function and class scopes."""
+    imported, pending = [], list(tree.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            imported.extend(alias.asname or alias.name.split(".")[0] for alias in node.names)
+        else:
+            pending.extend(ast.iter_child_nodes(node))
+    return imported
 
 
 class Provenance:
@@ -387,6 +411,11 @@ class Provenance:
             self._parents(tree, None)
         self.aliases = {mod: self._aliases(mod, tree, is_pkg)
                         for mod, (tree, is_pkg) in trees.items()}
+        self.exports = {mod: self._exports(tree, self._aliases(
+                            mod, ast.Module(body=[n for n in tree.body
+                                if isinstance(n, (ast.Import, ast.ImportFrom))],
+                                type_ignores=[]), is_pkg)[1])
+                        for mod, (tree, is_pkg) in trees.items() if is_pkg}
         #: Every loaded reference to a package function, and every call by
         #: the id of its `func` / of its first argument.
         self.refs: dict[tuple[str, str], list[tuple[str, ast.AST]]] = {}
@@ -414,6 +443,41 @@ class Provenance:
             self._parents(child, inner)
 
     # -- resolution --
+    @staticmethod
+    def _exports(tree, names):
+        """Only stable module-scope imports may forward a facade reference.
+
+        Conditional imports, duplicate imports and rebound exports fail closed.
+        Locals inside a function do not change a package's import surface.
+        """
+        imported = [alias.asname or alias.name.split(".")[0] for node in tree.body
+                    if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names]
+        all_imports = _module_import_bindings(tree)
+        # Python's binder sees classes and match captures as assignments too;
+        # neither has a Name(Store) node for a hand-written AST walk to find.
+        try:
+            symbols = symtable.symtable(ast.unparse(tree), "<facade>", "exec")
+        except SyntaxError:
+            return {}  # invalid synthetic source cannot prove an export edge
+        rebound = {symbol.get_name() for symbol in symbols.get_symbols() if symbol.is_assigned()}
+        rebound.update(name for node in ast.walk(tree) if isinstance(node, ast.Global)
+                       for name in node.names)
+        return {name: target for name, target in names.items()
+                if imported.count(name) == 1 and all_imports.count(name) == 1
+                and name not in rebound and "*" not in all_imports}
+
+    def _export_target(self, target):
+        seen = set()
+        while target not in self.defs:
+            if target in seen:
+                return None
+            seen.add(target)
+            forwarded = self.exports.get(target[0], {}).get(target[1])
+            if forwarded is None:
+                return target
+            target = forwarded
+        return target
+
     def _aliases(self, mod: str, tree: ast.Module,
                  is_pkg: bool) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
         modules: dict[str, str] = {}
@@ -440,7 +504,8 @@ class Provenance:
         if isinstance(node, ast.Name):
             if (mod, node.id) in self.defs:
                 return mod, node.id
-            return names.get(node.id)
+            target = names.get(node.id)
+            return self._export_target(target) if target is not None else None
         dotted = _dotted(node)
         if dotted is None or "." not in dotted:
             return None
@@ -453,7 +518,7 @@ class Provenance:
                     target = f"{target}.{part}"
                     if target not in self.known:
                         return None
-                return target, parts[-1]
+                return self._export_target((target, parts[-1]))
         return None
 
     # -- the rule --
@@ -483,28 +548,49 @@ class Provenance:
     # -- the warm-up's `ctx.space` (spec 05 section 6.6) --
     def _warm_space(self, expr: ast.Attribute, ctx: _Ctx) -> bool:
         mod, fn, _bound = ctx
-        if (mod != WARM_MODULE or fn is None or expr.attr != "space"
+        if (fn is None or expr.attr != "space"
                 or not isinstance(expr.value, ast.Name) or fn.name != "network"
-                or self._hook_classes().get(id(fn)) is None):
+                or self._hook_classes().get(id(fn), (None, None))[0] != mod):
             return False
         positional = [a.arg for a in (*fn.args.posonlyargs, *fn.args.args)]
         return (len(positional) >= 2 and expr.value.id == positional[1]
                 and self._assigned(fn, expr.value.id) == [] and self._warm_contexts_ok())
 
     @functools.cached_property
-    def _warm_classes(self) -> dict[int, str]:
-        """Each method's id to its class name, in the warm-up module."""
-        tree = self.trees.get(WARM_MODULE, (None, False))[0]
-        out: dict[int, str] = {}
-        for node in ast.walk(tree) if tree is not None else ():
-            if isinstance(node, ast.ClassDef):
-                for item in node.body:
-                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        out[id(item)] = node.name
+    def _warm_layout(self) -> tuple[str, str, frozenset[str]] | None:
+        """One exact production layout or the original monolith test layout."""
+        entry = self.trees.get(WARM_MODULE)
+        if entry is None:
+            return None
+        if not entry[1]:
+            return WARM_MODULE, WARM_MODULE, frozenset({WARM_MODULE})
+        # This is an exact layout proof, not permission for a package prefix.
+        # An added leaf needs review before it can carry a context or replace it.
+        members = {mod for mod in self.trees
+                   if mod == WARM_MODULE or mod.startswith(WARM_MODULE + ".")}
+        if members != WARM_MEMBERS | {WARM_MODULE}:
+            return None
+        return f"{WARM_MODULE}._engine", f"{WARM_MODULE}._contracts", WARM_MEMBERS | {WARM_MODULE}
+
+    @functools.cached_property
+    def _warm_classes(self) -> dict[int, tuple[str, str]]:
+        """Method IDs retain exact defining module/class identities."""
+        if self._warm_layout is None:
+            return {}
+        factory, _context, _members = self._warm_layout
+        owners = ({WARM_MODULE} if factory == WARM_MODULE else
+                  {f"{WARM_MODULE}.{leaf}" for leaf, _instance, _class in WARM_HOOK_OWNERS})
+        out: dict[int, tuple[str, str]] = {}
+        for mod in owners:
+            for node in self.trees[mod][0].body:
+                if isinstance(node, ast.ClassDef):
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            out[id(item)] = mod, node.name
         return out
 
-    def _hook_classes(self) -> dict[int, str]:
-        """The methods of the classes whose instances `HOOKS` names."""
+    def _legacy_hook_classes(self) -> dict[int, tuple[str, str]]:
+        """Keep the original planted monolith's registration proof."""
         tree = self.trees.get(WARM_MODULE, (None, False))[0]
         if tree is None:
             return {}
@@ -519,8 +605,85 @@ class Provenance:
                     named |= {e.id for e in value.elts if isinstance(e, ast.Name)}
                 elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
                     instances[t.id] = value.func.id
-        hooks = {instances[n] for n in named if n in instances}
+        hooks = {(WARM_MODULE, instances[n]) for n in named if n in instances}
         return {k: v for k, v in self._warm_classes.items() if v in hooks}
+
+    def _warm_value(self, mod: str, name: str) -> ast.expr | None:
+        """One direct module assignment, with no import or global rebinding."""
+        tree = self.trees[mod][0]
+        if any(isinstance(n, ast.Global) and name in n.names for n in ast.walk(tree)):
+            return None
+        if any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+               and n.name == name for n in tree.body):
+            return None
+        imported = _module_import_bindings(tree)
+        stores = [n for top in tree.body
+                  if not isinstance(top, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                  for n in ast.walk(top) if isinstance(n, ast.Name)
+                  and isinstance(n.ctx, (ast.Store, ast.Del)) and n.id == name]
+        if name in imported or len(stores) != 1:
+            return None
+        values = []
+        for top in tree.body:
+            targets, value = self._targets(top)
+            if len(targets) == 1 and isinstance(targets[0], ast.Name) and targets[0].id == name:
+                values.append(value)
+        return values[0] if len(values) == 1 else None
+
+    def _warm_reference(self, expr: ast.expr, mod: str) -> tuple[str, str] | None:
+        """Use the existing resolver, accepting only stable imported bindings."""
+        if isinstance(expr, ast.Name) and self._warm_value(mod, expr.id) is not None:
+            return mod, expr.id
+        modules, names = self.aliases[mod]
+        root = (_dotted(expr) or "").split(".")[0]
+        imported = {**modules, **names}
+        if root not in self._exports(self.trees[mod][0], imported):
+            return None
+        return self.resolve(expr, mod)
+
+    def _package_hook_classes(self) -> set[tuple[str, str]]:
+        """Prove the literal ordered tuple and its exact instance/class owners."""
+        factory = f"{WARM_MODULE}._engine"
+        value = self._warm_value(factory, "HOOKS")
+        if not isinstance(value, ast.Tuple) or len(value.elts) != len(WARM_HOOK_OWNERS):
+            return set()
+        hooks = set()
+        for expr, (leaf, instance, class_name) in zip(value.elts, WARM_HOOK_OWNERS, strict=True):
+            mod = f"{WARM_MODULE}.{leaf}"
+            if self._warm_reference(expr, factory) != (mod, instance):
+                return set()
+            made = self._warm_value(mod, instance)
+            if not (isinstance(made, ast.Call) and isinstance(made.func, ast.Name)
+                    and made.func.id == class_name and not made.args and not made.keywords):
+                return set()
+            if not self._warm_class_defined(mod, class_name):
+                return set()
+            hooks.add((mod, class_name))
+        return hooks
+
+    def _warm_class_defined(self, mod: str, name: str) -> bool:
+        tree = self.trees[mod][0]
+        definitions = [n for n in tree.body
+                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                       and n.name == name]
+        if len(definitions) != 1 or not isinstance(definitions[0], ast.ClassDef):
+            return False
+        imports = _module_import_bindings(tree)
+        stores = [n for top in tree.body
+                  if not isinstance(top, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                  for n in ast.walk(top) if isinstance(n, ast.Name)
+                  and isinstance(n.ctx, (ast.Store, ast.Del)) and n.id == name]
+        global_ = any(isinstance(n, ast.Global) and name in n.names for n in ast.walk(tree))
+        return not (name in imports or stores or global_)
+
+    def _hook_classes(self) -> dict[int, tuple[str, str]]:
+        """Only classes reached by the one proved registration tuple may embed."""
+        if self._warm_layout is None:
+            return {}
+        if self._warm_layout[0] == WARM_MODULE:
+            return self._legacy_hook_classes()
+        hooks = self._package_hook_classes()
+        return {key: value for key, value in self._warm_classes.items() if value in hooks}
 
     @functools.cached_property
     def _warm_built(self) -> bool:
@@ -529,6 +692,23 @@ class Provenance:
     def _warm_contexts_ok(self) -> bool:
         return self._warm_built
 
+    def _warm_network_ok(self, call: ast.Call, mod: str, factory: str) -> bool:
+        first = call.args[0] if call.args else None
+        if mod != factory or not isinstance(first, ast.Name) or first.id != "ctx":
+            return False
+        return (factory == WARM_MODULE
+                or self.parent.get(id(call)) is self.defs.get((factory, "_network_phases")))
+
+    def _warm_constructor_ok(self, call: ast.Call, mod: str, factory: str, context: str) -> bool:
+        encl = self.parent.get(id(call))
+        if mod != factory or encl is not self.defs.get((factory, WARM_FACTORY)):
+            return False
+        if (factory != WARM_MODULE
+                and self._warm_reference(call.func, mod) != (context, WARM_CONTEXT)):
+            return False
+        space = next((k.value for k in call.keywords if k.arg == "space"), None)
+        return space is not None and self.ok(space, (mod, encl, None))
+
     def _warm_contexts_check(self) -> bool:
         """Every `WarmContext(...)` is built in `cache_sync._context()`, whose
         `space=` traces to the role; nothing `replace`s a context's space
@@ -536,6 +716,9 @@ class Provenance:
         the one door a context reaches a hook by -- is in the warm-up module,
         handed that module's own `ctx`, so no caller elsewhere can hand a
         hook a stand-in carrying a space of its own."""
+        if self._warm_layout is None:
+            return False
+        factory, context, members = self._warm_layout
         built = 0
         for mod, (tree, _is_pkg) in self.trees.items():
             for node in ast.walk(tree):
@@ -544,21 +727,17 @@ class Provenance:
                 name = node.func.attr if isinstance(node.func, ast.Attribute) else (
                     node.func.id if isinstance(node.func, ast.Name) else None)
                 if name == "replace" and any(
-                        k.arg == "space" or (k.arg is None and mod == WARM_MODULE)
+                        k.arg == "space" or (k.arg is None and mod in members)
                         for k in node.keywords):
                     return False
-                if name == "network" and isinstance(node.func, ast.Attribute):
-                    first = node.args[0] if node.args else None
-                    if (mod != WARM_MODULE or not isinstance(first, ast.Name)
-                            or first.id != "ctx"):
-                        return False
-                if name != WARM_CONTEXT:
-                    continue
-                encl = self.parent.get(id(node))
-                if mod != WARM_MODULE or encl is None or encl.name != WARM_FACTORY:
+                if (name == "network" and isinstance(node.func, ast.Attribute)
+                        and not self._warm_network_ok(node, mod, factory)):
                     return False
-                space = next((k.value for k in node.keywords if k.arg == "space"), None)
-                if space is None or not self.ok(space, (mod, encl, None)):
+                target = self.resolve(node.func, mod)
+                if name != WARM_CONTEXT and target not in {
+                        (context, WARM_CONTEXT), (WARM_MODULE, WARM_CONTEXT)}:
+                    continue
+                if not self._warm_constructor_ok(node, mod, factory, context):
                     return False
                 built += 1
         return built > 0
@@ -1113,7 +1292,7 @@ def _planted_embed_problems(src: str, modname: str = _EMBED_PLANTED_IN) -> list[
       "_CLIENT.embed(t, m, k, u)\n"), "grimoire.store.semsearch"),
     # The client handed around as a value, even from a door.
     ("asyncio.to_thread(_CLIENT.embed, t, m, k, u)\n", "grimoire.store.semsearch"),
-    ("asyncio.to_thread(_EMBEDDINGS.embed, t, m, k, u)\n", "grimoire.routes.config"),
+    ("asyncio.to_thread(_EMBEDDINGS.embed, t, m, k, u)\n", "grimoire.routes.config._probes"),
 ])
 def test_the_embed_guard_flags_planted_cases(src, modname):
     assert _planted_embed_problems(src, modname), src
@@ -1140,7 +1319,7 @@ def test_the_embed_guard_flags_planted_cases(src, modname):
       "store.inference.embed.record_failure(m, exc)\n"), "grimoire.routes.config"),
     # The model test's probe, at its door.
     ("asyncio.to_thread(lambda: _EMBEDDINGS.embed([x], m, k, u, usage=m.usage))\n",
-     "grimoire.routes.config"),
+     "grimoire.routes.config._probes"),
     # The operation's own module: the async form awaits the async client
     # (01h-C4b) with its holder.
     (("async def embed(task, texts, client):\n"
@@ -1716,6 +1895,64 @@ def _planted_generate_problems(src: str, modname: str = _GENERATE_PLANTED_IN) ->
     """`TaskProvenance.problems` over planted source, against the real routes:
     `chat` generates and `scene-break` decides."""
     return TaskProvenance({modname: (ast.parse(src), False)}).problems()
+
+
+@pytest.mark.parametrize("task, rejected", [("chat", False), ("scene-break", True)])
+@pytest.mark.parametrize("facade", [
+    "from ._leaf import forward as forward\n",
+    "from ._leaf import forward as forward\nforward = None\n",
+    "from ._leaf import forward as forward\nfrom foreign import forward\n",
+    "from ._leaf import forward as forward\ndef change():\n global forward\n forward = None\n",
+])
+def test_generate_task_proof_follows_only_stable_facade_exports(task, rejected, facade):
+    leaf = ("from grimoire import inference as operations\n"
+            "def forward(task):\n"
+            " return operations.generate(task, m, client=c, resolved=r)\n")
+    sources = {
+        "grimoire.routes.shared._leaf": (ast.parse(leaf), False),
+        "grimoire.routes.shared": (ast.parse(facade), True),
+        "grimoire.routes.bridge": (ast.parse("from ..shared import forward as forward\n"), True),
+        "grimoire.routes.caller": (ast.parse(
+            f"from .bridge import forward\nforward({task!r})\n"), False),
+    }
+    expected = rejected or facade != "from ._leaf import forward as forward\n"
+    assert bool(TaskProvenance(sources).problems()) == expected
+
+
+@pytest.mark.parametrize("shadow, rejected", [
+    ("", False),
+    ("class endpoint:\n def __new__(cls):\n  return {'space': 'forged'}\n", True),
+    ("if True:\n class endpoint:\n  def __new__(cls):\n   return {'space': 'forged'}\n", True),
+    ("bad = lambda: {'space': 'forged'}\nmatch bad:\n case endpoint:\n  pass\n", True),
+])
+def test_facade_space_import_rebound_by_a_class_or_pattern_is_not_authority(shadow, rejected):
+    sources = {
+        "grimoire.store.space_bridge": (ast.parse(
+            "from ..embed_space import endpoint as endpoint\n" + shadow), True),
+        "grimoire.store.space_caller": (ast.parse(
+            "from . import space_bridge\nfrom .inference import embed\n"
+            "embed.embed_sync('semantic-search', texts, "
+            "space=space_bridge.endpoint(), client=c)\n"), False),
+    }
+    assert bool(Provenance(sources).problems()) == rejected
+
+
+@pytest.mark.parametrize("conditional", [False, True])
+def test_facade_space_import_rebound_by_another_module_scope_import_is_not_authority(conditional):
+    replacement = "from grimoire.store.space_foreign import endpoint\n"
+    if conditional:
+        replacement = "if True:\n " + replacement
+    sources = {
+        "grimoire.store.space_bridge": (ast.parse(
+            "from ..embed_space import endpoint as endpoint\n" + replacement), True),
+        "grimoire.store.space_foreign": (ast.parse(
+            "def endpoint():\n return {'space': 'forged'}\n"), False),
+        "grimoire.store.space_caller": (ast.parse(
+            "from . import space_bridge\nfrom .inference import embed\n"
+            "embed.embed_sync('semantic-search', texts, "
+            "space=space_bridge.endpoint(), client=c)\n"), False),
+    }
+    assert Provenance(sources).problems()
 
 
 @pytest.mark.parametrize("src", [
