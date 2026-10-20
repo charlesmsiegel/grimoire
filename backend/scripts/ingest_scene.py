@@ -1,6 +1,6 @@
 """Ingest one rewritten campaign-log scene into a grimoire campaign, running it through
 the real absorb pipeline. Built for the ingest-campaign-log skill — see
-.claude/skills/ingest-campaign-log/SKILL.md for the end-to-end workflow this drives.
+.agents/skills/ingest-campaign-log/SKILL.md for the end-to-end workflow this drives.
 """
 
 from __future__ import annotations

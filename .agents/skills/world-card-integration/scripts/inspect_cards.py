@@ -6,7 +6,7 @@ and what does the World already say about it?" so the editorial decisions that f
 are made against evidence rather than a guess. It only reads — every write in that
 workflow goes through `grimoire.store`.
 
-    python .claude/skills/world-card-integration/scripts/inspect_cards.py <world-id> \
+    python .agents/skills/world-card-integration/scripts/inspect_cards.py <world-id> \
         --out <scratchpad-dir> [--chars a,b,c]
 
 With no `--chars` it inspects the character directories git reports as untracked, which

@@ -20,7 +20,7 @@ fixture and re-capture.
 ## How to re-capture
 
 The harness is the `verify` skill
-([`.claude/skills/verify/SKILL.md`](../../.claude/skills/verify/SKILL.md)), which
+([`.agents/skills/verify/SKILL.md`](../../.agents/skills/verify/SKILL.md)), which
 exists for exactly this: a grimoire instance with `GRIMOIRE_HOME` pointed at a
 scratch directory and `grimoire.openrouter.API_URL` pointed at a local mock
 replaying `backend/tests/fixtures/llm/campaign_flow.json`.

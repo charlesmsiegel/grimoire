@@ -1494,7 +1494,7 @@ would answer neither question.
 
 ## Skills
 
-[`.claude/skills/`](.claude/skills/) holds task-specific procedures —
+[`.agents/skills/`](.agents/skills/) holds the authoritative task-specific procedures —
 launching an isolated instance for end-to-end verification (`verify`),
 authoring a mechanics module, building a World from a concept, ingesting a
 campaign log, populating world content in bulk, folding a freshly imported
@@ -1502,4 +1502,14 @@ batch of cards into a World by hand. If one covers what you are doing, use
 it; it knows the ports, the mocks and the isolation rules that keep a
 verification run away from the user's real library.
 
-For outside-app library maintenance, use [grimoire-store-editing](.claude/skills/grimoire-store-editing/SKILL.md); [`.agents/skills/`](.agents/skills/) contains discovery pointers to canonical procedures.
+For outside-app library maintenance, use
+[grimoire-store-editing](.agents/skills/grimoire-store-editing/SKILL.md).
+
+[`.claude/skills/`](.claude/skills/) contains generated discovery pointers for
+Claude. Edit skill instructions, metadata, scripts and references only under
+`.agents/skills/`, then run `python scripts/sync_skills.py --write` to update
+the pointers. Commit those generated entries with the authoritative changes
+so a fresh checkout works in both tools. `python scripts/sync_skills.py --check`
+reports drift without writing; `test_skills_guard.py` runs that check for the
+whole inventory. Resolve a skill's supporting files from its authoritative
+directory, even when it was discovered through a Claude pointer.

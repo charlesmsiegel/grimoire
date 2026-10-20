@@ -18,6 +18,8 @@ import io
 import os
 import re
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,8 +30,11 @@ from tests import test_docs_guard as docs_guard
 from tests import test_install_scripts as install_scripts
 
 ROOT = Path(__file__).resolve().parents[2]
-CANONICAL_DIR = ROOT / ".claude" / "skills"
-ADAPTER_DIRS = (ROOT / ".agents" / "skills",)
+CANONICAL_DIR = ROOT / ".agents" / "skills"
+ADAPTER_DIRS = (ROOT / ".claude" / "skills",)
+# The operational vocabulary below belongs to outside-app store maintenance.
+# Discovery and link checks cover every skill; these specialized checks must
+# not impose cache-sync commands and result fields on unrelated procedures.
 ROUTING_SKILLS = ("grimoire-store-editing",)
 ADAPTER_MAX_BODY_LINES = 12
 
@@ -319,26 +324,33 @@ def _write(path, text):
 @pytest.fixture
 def skill_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(docs_guard, "ROOT", tmp_path)
-    canonical_dir = tmp_path / ".claude" / "skills"
-    adapter_dir = tmp_path / ".agents" / "skills"
+    canonical_dir = tmp_path / ".agents" / "skills"
+    adapter_dir = tmp_path / ".claude" / "skills"
     canonical = canonical_dir / "grimoire-store-editing" / "SKILL.md"
     adapter = adapter_dir / "grimoire-store-editing" / "SKILL.md"
     header = "---\nname: grimoire-store-editing\ndescription: Use when editing records outside the app.\n---\n\n"
     _write(tmp_path / "AGENTS.md", "# Privacy\n\nPrivate content stays outside the repository.\n")
     _write(canonical, header + "# Store editing\n\nRead [privacy](../../../AGENTS.md#privacy).\n")
-    _write(adapter, header + "# Store editing\n\nRead [the procedure](../../../.claude/skills/grimoire-store-editing/SKILL.md).\n")
+    _write(adapter, header + "# Store editing\n\nRead [the procedure](../../../.agents/skills/grimoire-store-editing/SKILL.md).\n")
     return canonical_dir, adapter_dir, canonical, adapter
 
 
 def test_required_skill_files_exist():
-    for name in ROUTING_SKILLS:
+    names = [path.name for path in CANONICAL_DIR.iterdir() if path.is_dir()]
+    assert names, "there are no authoritative skills"
+    for name in names:
         assert (CANONICAL_DIR / name / "SKILL.md").is_file(), f"missing canonical skill: {name}"
         for directory in ADAPTER_DIRS:
             assert (directory / name / "SKILL.md").is_file(), f"missing discovery adapter: {name}"
 
 
 def test_repository_skills_obey_the_contract():
-    problems = _diagnose("_pair_problems", CANONICAL_DIR, ADAPTER_DIRS, ROUTING_SKILLS)
+    names = tuple(path.name for path in CANONICAL_DIR.iterdir() if path.is_dir())
+    problems = _diagnose("_pair_problems", CANONICAL_DIR, ADAPTER_DIRS, names)
+    for name in names:
+        path = CANONICAL_DIR / name / "SKILL.md"
+        if path.is_file():
+            problems += _diagnose("_link_problems", path, path.read_text(encoding="utf-8"))
     other_skills = tuple((str(p), p.read_text(encoding="utf-8")) for p in CANONICAL_DIR.glob("*/SKILL.md")
                          if p.parent.name not in ROUTING_SKILLS)
     prose = tuple((str(p), p.read_text(encoding="utf-8")) for p in docs_guard.PROSE)
@@ -347,11 +359,21 @@ def test_repository_skills_obey_the_contract():
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8")
-        problems += _diagnose("_link_problems", path, text)
         problems += _diagnose("_code_problems", text)
         problems += _diagnose("_vocabulary_problems", text)
         problems += _diagnose("_routing_problems", text, prose + other_skills)
     assert not problems, "\n".join(problems)
+
+
+def test_generated_discovery_entries_are_current():
+    """The generator is also the exact-content check, so new skills need no
+    second hand-maintained inventory and short handwritten workflows cannot
+    hide inside otherwise valid discovery entries."""
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "sync_skills.py"), "--check"],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_valid_adapter_pair_passes(skill_tree):
@@ -378,7 +400,7 @@ def test_adapter_defects_are_rejected(skill_tree, defect, want):
         "description": ("records", "recordx"),
         "raw_description": ("outside the app.\n", "outside the app. \n"),
         "name": ("name: grimoire-store-editing", "name: store-editing"),
-        "bad_pointer": ("../../../.claude/", "../../.claude/"),
+        "bad_pointer": ("../../../.agents/", "../../.agents/"),
     }
     if defect in replacements:
         adapter.write_text(text.replace(*replacements[defect]), encoding="utf-8")

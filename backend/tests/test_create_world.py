@@ -334,7 +334,7 @@ def test_cli_round_trip(home, tmp_path, capsys):
 def test_the_skill_example_plan_applies_cleanly(home):
     """The SKILL.md example is the format's documentation, so it is held to
     the CLI: the first ```json block there must apply and pass `check`."""
-    skill = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "create-world" / "SKILL.md"
+    skill = Path(__file__).resolve().parents[2] / ".agents" / "skills" / "create-world" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
     block = text.split("```json\n", 1)[1].split("```", 1)[0]
     plan = json.loads(block)

@@ -1,5 +1,5 @@
 """Author a grimoire World from a JSON plan. Built for the create-world skill —
-see .claude/skills/create-world/SKILL.md for the workflow this drives.
+see .agents/skills/create-world/SKILL.md for the workflow this drives.
 
 Three subcommands:
 

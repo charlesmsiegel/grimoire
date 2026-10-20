@@ -7,7 +7,7 @@ from pathlib import Path
 
 from grimoire.store import atomic
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".claude" / "skills" /
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".agents" / "skills" /
                       "populate-world-content" / "scripts"))
 import populate_world_content as pwc
 

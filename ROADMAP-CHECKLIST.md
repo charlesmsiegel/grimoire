@@ -349,8 +349,8 @@ PR. The other slices' review and final gates remain open even though S1-S6 were 
   review rounds, each finding fixed or answered on its thread.
 
 ### 06: Store-editing skill
-- [x] **06-C1** A canonical skill in `.claude/skills/grimoire-store-editing/`,
-  an `.agents/` adapter, and `test_skills_guard.py`.
+- [x] **06-C1** A canonical skill in `.agents/skills/grimoire-store-editing/`,
+  a generated `.claude/` pointer, and `test_skills_guard.py`.
 - Both slices implemented with all required Codex gates approved; the full
   gate passed after the authorized Windows repairs. [Execution record](docs/superpowers/validation/2026-10-13-roadmap-06-execution.md).
   Landed stays clear until merge.
