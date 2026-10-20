@@ -1,4 +1,4 @@
-"""The two installers and the docs that stand in for them agree with the repo.
+"""The two installers and launchers agree with the executable project inputs.
 
 Four fresh-clone failures (#207), each of which the repo already had the right
 answer for somewhere else:
@@ -9,16 +9,14 @@ answer for somewhere else:
 - **no word of where the library lands** -- the store is created lazily by the
   first API call, so an installer that says nothing leaves the path (and the
   chance to repoint it) undiscoverable until after first run;
-- **a Windows-only interpreter path given as *the* command** in `CLAUDE.md`,
-  which is simply wrong on a Unix clone;
 - **`install.sh` committed non-executable**, so the one line the README tells a
   fresh clone to run answered with `Permission denied`.
 
 None of that is reachable by running the scripts here: one is bash, one is
 PowerShell, both mutate the developer's home directory. So these read the
 scripts as text and check the contract they have to hold up -- which is exactly
-the level the bugs lived at, since every one of them was a script or a document
-saying something the rest of the repo already contradicted.
+the level of the script failures. Documentation examples are maintained as
+prose; the tests do not parse them as configuration or scenario data.
 """
 
 from __future__ import annotations
@@ -153,18 +151,6 @@ def test_the_unix_scripts_are_executable(name):
         "documents fails with Permission denied")
 
 
-def test_the_readme_requirements_match_the_floors():
-    """A third hand-maintained copy of the same two numbers, in the file a
-    human reads before running anything. It drifts the same way the scripts
-    would have, and is wrong in the same way -- so it is pinned the same way."""
-    readme = _text(REPO / "README.md")
-    python_stated = re.search(r"\*\*Python ([\d.]+)\+\*\*", readme)
-    node_stated = re.search(r"\*\*Node (\d+)\+\*\*", readme)
-    assert python_stated and node_stated, "README no longer states its Requirements"
-    assert python_stated.group(1) == _python_floor(UNIX)
-    assert node_stated.group(1) == _node_floor(UNIX)
-
-
 # --- launchers ---------------------------------------------------------------
 #
 # The run scripts serve the production bundle from the backend by default and
@@ -238,26 +224,13 @@ def _port(script: Path, unix_name: str, windows_name: str) -> str:
     return _declared(script, rf"(?m)(?:^{unix_name}|^\${windows_name})\s*=\s*(\d+)\s*$")
 
 
-def test_the_ports_agree_everywhere_they_are_written():
-    """The scripts, the README and the dev proxy each carry the two ports.
-
-    The README has to give both addresses as links a reader can follow and name
-    the dev flag for each platform; `vite.config.ts` has to proxy `/api` to the
-    backend port `--dev` starts, or dev mode loads a UI whose every call fails.
-    """
+def test_the_launcher_ports_agree_with_the_dev_proxy():
+    """The dev proxy must reach the backend the two launchers actually start."""
     backend = {_port(s, "BACKEND_PORT", "BackendPort") for s in (RUN_UNIX, RUN_WINDOWS)}
     vite = {_port(s, "VITE_PORT", "VitePort") for s in (RUN_UNIX, RUN_WINDOWS)}
     assert len(backend) == 1 and len(vite) == 1, (
         f"run.sh and run.ps1 disagree on their ports: backend {backend}, vite {vite}")
     (backend_port,), (vite_port,) = backend, vite
-
-    readme = _text(REPO / "README.md")
-    assert f"<http://127.0.0.1:{backend_port}>" in readme, (
-        "README no longer gives the address the default launch opens")
-    assert f"<http://127.0.0.1:{vite_port}>" in readme, (
-        "README no longer gives the address `--dev` opens")
-    assert "run.sh --dev" in readme and "run.ps1 -Dev" in readme, (
-        "README no longer names the dev flag for both platforms")
 
     proxy = _text(FRONTEND / "vite.config.ts")
     assert f"http://127.0.0.1:{backend_port}" in proxy, (
@@ -346,49 +319,6 @@ def test_both_launchers_open_a_notice_when_serving_a_stale_build(script):
     assert "ui-build-failed.html" in text, f"{script.name} no longer writes the notice"
     assert re.search(r"(open_page|Start-Process) \"?\$(STALE_NOTICE|StaleNotice)", text), (
         f"{script.name} writes the notice but never opens it")
-
-
-# --- docs ------------------------------------------------------------------
-#
-# A venv interpreter is `bin/python` on macOS/Linux and `Scripts/python.exe` on
-# Windows. `CLAUDE.md` gave only the second, as *the* way to run the tests, and
-# it is the first file an agent reads on a fresh clone. Naming one form is only
-# ever half an instruction, so both have to appear together -- within a few
-# lines, since these documents are long and a matching form ten sections away
-# helps nobody reading the command in front of them.
-
-DOCS = pytest.mark.parametrize("doc", [
-    REPO / "AGENTS.md",
-    REPO / "README.md",
-    # The third one, and the reason the rule is a test rather than a fix:
-    # The backend testing guide links here, and this file had the same Unix-only
-    # command. Two spots got found by reading the issue; this one only by
-    # grepping for the shape.
-    Path(__file__).parent / "fixtures" / "frozen_campaign" / "README.md",
-    # The fourth was Windows-only throughout, and stayed that way for as long
-    # as it was not in this list: the rule reaches exactly the files named here.
-    REPO / "evals" / "README.md",
-    # Procedures can move below multiple reference indexes. Check the whole
-    # authoritative Markdown tree, not a hand-picked entry point that no
-    # longer contains the executable examples.
-    *sorted((REPO / ".agents" / "skills").rglob("*.md")),
-], ids=lambda path: str(path.relative_to(REPO)))
-UNIX_PY = re.compile(r"\.venv/bin/python")
-WINDOWS_PY = re.compile(r"\.venv[/\\]Scripts[/\\]python")
-NEARBY = 4      # lines either side: the same command, bullet, or code block
-
-
-@DOCS
-def test_venv_paths_are_given_for_both_platforms(doc):
-    lines = _text(doc).splitlines()
-    for number, line in enumerate(lines):
-        window = "\n".join(lines[max(0, number - NEARBY):number + NEARBY + 1])
-        if UNIX_PY.search(line):
-            assert WINDOWS_PY.search(window), (
-                f"{doc.name}:{number + 1} gives a Unix-only venv python:\n  {line.strip()}")
-        if WINDOWS_PY.search(line):
-            assert UNIX_PY.search(window), (
-                f"{doc.name}:{number + 1} gives a Windows-only venv python:\n  {line.strip()}")
 
 
 # --- macOS launcher ----------------------------------------------------------

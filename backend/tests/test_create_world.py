@@ -331,14 +331,10 @@ def test_cli_round_trip(home, tmp_path, capsys):
     assert create_world.main(["apply", "--plan", str(bad)]) == 1
 
 
-def test_the_skill_example_plan_applies_cleanly(home):
-    """The skill's schema example is the format's documentation, so it is held to
-    the CLI: the first ```json block there must apply and pass `check`."""
-    skill = (Path(__file__).resolve().parents[2] / ".agents" / "skills" / "create-world"
-             / "references" / "plan" / "schema.md")
-    text = skill.read_text(encoding="utf-8")
-    block = text.split("```json\n", 1)[1].split("```", 1)[0]
-    plan = json.loads(block)
+def test_a_complete_plan_with_mechanics_and_climate_applies_cleanly(home):
+    """A complete input is owned by the tests, independent of prose examples."""
+    plan = _plan(module="pool-basic")
+    plan["locations"][0]["fields"]["climate"] = "temperate-coastal"
     assert create_world.validate_plan(plan, None, None) == []
     wid = _apply(plan)["world"]
     assert create_world.check_world(wid)["ok"]

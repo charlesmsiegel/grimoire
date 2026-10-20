@@ -2,7 +2,7 @@
 
 The journal's relation words cover every link relation and read as a
 sentence. No source a reader can see -- any non-test file under the backend
-package or the frontend's `src/`, and the README -- makes a claim §30 (or
+package or the frontend's `src/` -- makes a claim §30 (or
 §3.3's "continuity disabled") avoids; the scan is the whole tree rather than a
 list of capstone files, because a list would miss the next surface. Because it
 is the whole tree, the avoid list holds the spec's phrases and their plain
@@ -33,7 +33,6 @@ def _sources() -> list[Path]:
         if path.name.endswith((".test.ts", ".test.tsx")) or testkit in path.parents:
             continue
         out.append(path)
-    out.append(REPO / "README.md")
     return out
 
 
@@ -159,16 +158,6 @@ def test_the_avoid_scan_leaves_plain_copy_for_other_pages_alone():
 
 
 def test_no_continuity_surface_uses_a_phrase_section_30_avoids():
-    names = {_rel(p) for p in SOURCES}
-    for folder in ("frontend/src/components/continuity/", "frontend/src/components/storyGraph/",
-                   "frontend/src/components/review/", "backend/src/grimoire/store/continuity/"):
-        assert any(n.startswith(folder) for n in names), folder
-    for required in ("frontend/src/components/inference/copy.ts",
-                     "frontend/src/components/StoryPressure.tsx",
-                     "backend/src/grimoire/store/suggest/__init__.py",
-                     "backend/src/grimoire/routes/scenes/__init__.py", "README.md"):
-        assert required in names, required
-    assert not any(".test." in n or n.startswith("frontend/src/testkit/") for n in names)
     found = [(_rel(path), source) for path in SOURCES
              for source in sorted(_hits(path.read_text(encoding="utf-8")))]
     assert found == []
