@@ -44,6 +44,16 @@ dependencies/resolver behavior. No new runtime dependencies are needed.
   route-key sequence before package initialization completes. Preserve the
   APIRoute objects and reject missing, extra or duplicate keys; no per-leaf
   routers or deferred registration registry.
+- A reviewed documentation-only amendment permits exactly two published
+  description pointers to follow their source owners: the ledger GET's
+  `routes/ledger.py` becomes `routes/ledger/_policy.py`, and the message DELETE's
+  `store/locks.py` becomes `store/locks/__init__.py`. All other OpenAPI content
+  remains exact. Keep the original fixture/hashes; require each new literal
+  once with its old literal absent, reverse only those two spellings on a copy,
+  then compare the whole original schema hash. Negative controls must reject
+  an added endpoint, changed parameter, unrelated text within an allowed
+  description and restoration of a stale pointer. This does not permit
+  ignoring description fields or recapturing the expected schema from new code.
 - Re-exporting does not forward assignment into a function's globals. Inventory
   production dynamic access and test patches. Keep real runtime extension
   points working; update tests to patch the defining owner when their purpose
