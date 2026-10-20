@@ -3,7 +3,7 @@
 The vector half of what `openai_compatible.py` does for chat: same wire
 conventions, same `LLMError` taxonomy, same "base_url is caller-supplied and
 the key is optional" posture. Nothing here reads config or touches the store —
-`store/context/semantic.py` owns that, the way `llm.py` owns it for chat.
+`store/context/semantic.py` owns that, the way `llm/` owns it for chat.
 
 Two clients. **`EmbeddingsClient` is synchronous**, and every current caller
 uses it: the world-info activation seam (`store/context/world_state.activate`)

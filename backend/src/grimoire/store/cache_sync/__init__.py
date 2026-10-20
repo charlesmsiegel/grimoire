@@ -24,7 +24,7 @@ already holds -- from its arguments or a live listing -- never by enumeration.
 
 The module takes no campaign lock and writes no record except the write token
 (`revision.bump`, already classified outside the lock domain), which is why it
-has no entry in `store/locks.py`. It is synchronous and does file and network
+has no entry in `store/locks/_domain.py`. It is synchronous and does file and network
 I/O, so it is never called on the event loop; callers reach it through a
 shielded `anyio.to_thread.run_sync`. One batch runs at a time per process (the
 *sync lane*); across processes two batches may compute the same artifact,
@@ -34,7 +34,7 @@ The root is read once (`paths.home()` unless pinned), and everything this
 module builds is built from it. The functions it calls resolve `home()` per
 call, so the batch re-checks `paths.home() == root` between paths, hooks and
 chunks and stops with `root_moved` if it differs; the server also refuses a
-data-dir move while a batch runs (the sync hold, `routes/runs.py`).
+data-dir move while a batch runs (the sync hold, `routes/runs/_registry.py`).
 """
 
 from __future__ import annotations

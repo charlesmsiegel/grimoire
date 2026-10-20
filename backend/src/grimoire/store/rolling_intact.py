@@ -1,7 +1,7 @@
 """Whether a scene's stored rolling summary still describes its transcript.
 
 The test that decides a fold's `prior` and the panel's `stale` used to live in
-`routes/scenes.py`. It lives here so the route and `store/searchdocs` (roadmap
+`routes.scenes`. It lives here so the route and `store/searchdocs` (roadmap
 08, which may carry a running summary into a scene's search document only while
 it is intact) ask one function the same question: a summary over a prefix the
 player has since hidden, cut, edited or put under a new prompt rule describes

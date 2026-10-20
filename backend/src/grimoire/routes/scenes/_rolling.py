@@ -34,7 +34,7 @@ from ._router import router as router
 # In-process only, which is the same scope `streaming._turn_tokens` documents
 # for the same reason: this distinguishes two refreshes racing inside one
 # backend, which is what one player generates. Two *processes* on one scene is
-# the case `store/locks.py` already calls beyond what this app can serialize.
+# the case `store/locks/__init__.py` already calls beyond what this app can serialize.
 #
 # A real lock rather than `_claim_turn`'s bare-dict-under-the-GIL idiom, because
 # this is a check-then-add and that is two bytecodes: `next()` and one assignment
@@ -383,7 +383,7 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     # Off the event loop: this takes the campaign lock, whose acquisition blocks
     # for up to LOCK_TIMEOUT, and this handler is async -- inline it would freeze
     # every unrelated request and open stream on the backend rather than just
-    # this refresh. Same treatment `post_absorb` and `streaming.py` give theirs.
+    # this refresh. Same treatment `post_absorb` and `routes/streaming/_streams.py` give theirs.
     try:
         result = await run_in_threadpool(_rolling_commit, cid, sid, summary, covered,
                                          digest,
@@ -391,7 +391,7 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     except store.scenes.SceneNotFound:
         # The scene was renamed or deleted while the model was answering, which
         # mints a new id and moves the file out from under this write -- the
-        # same race `streaming.py`'s `on_error` already catches, and reachable
+        # same race `routes/streaming/_streams.py`'s `on_error` already catches, and reachable
         # here from the UI because the play loop fires this refresh AFTER
         # releasing the scene lock that holds rename off during a turn.
         #

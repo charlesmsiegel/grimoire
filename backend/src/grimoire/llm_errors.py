@@ -1,7 +1,7 @@
 """The error type every LLM provider raises.
 
-A leaf module on purpose: the providers need it and `llm.py` needs the
-providers, so parking it in `llm.py` made the two import each other (#239).
+A leaf module on purpose: the providers need it and `llm/` needs the
+providers, so parking it in `llm` made the two import each other (#239).
 Nothing here may import from the rest of the package.
 """
 

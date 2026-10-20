@@ -28,7 +28,7 @@ def put_data_dir(update: DataDirUpdate, request: Request):
     # before it: checking and then moving leaves a window for a send to reserve,
     # and that run's setup writes into the old tree while its terminal write
     # resolves against the new one. What remains outside any lock here is
-    # another *process* sharing the store, which `store/locks.py` already places
+    # another *process* sharing the store, which `store/locks/__init__.py` already places
     # outside what this can promise.
     #
     # The inference-settings migration is not a run, so the registry cannot

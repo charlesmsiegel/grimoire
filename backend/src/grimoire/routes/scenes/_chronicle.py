@@ -192,7 +192,7 @@ def _refuse_drifted_edits(cid: str, edits: list, reviewed_edits: list) -> None:
     # taking it, and the lock is machine-local, so a synced store sees none
     # of it. Closing the remaining window means compare-and-swap in each
     # mutator -- what `sheets.write(expected=...)` already does, and what the
-    # other seven would need -- which is the concurrency change `locks.py`
+    # other seven would need -- which is the concurrency change `store/locks/_domain.py`
     # says those modules are waiting on, not something to bolt on here.
     drifted = store.absorb.check_conflicts(cid, reviewed_edits)
     if drifted:

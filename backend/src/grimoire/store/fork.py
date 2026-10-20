@@ -12,7 +12,7 @@ Why this is a copy and nothing cleverer. A campaign directory is the campaign:
 `relationship_history.json`, `timeline.md`, per-NPC `state.md` and dossiers)
 and whatever records have materialized out of the world. Everything it does
 *not* hold it inherits from its world through
-`store/overlay.py`, keyed by the `world` line in `campaign.md` and the bases in
+`store/overlay/`, keyed by the `world` line in `campaign.md` and the bases in
 `sync.md` — both of which the copy carries verbatim, so the fork inherits from
 the same world in the same way and nothing has to be re-resolved. The version
 locks in `appearances.json` travel for the same reason: a fork that re-derived

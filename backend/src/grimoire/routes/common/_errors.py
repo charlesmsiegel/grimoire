@@ -36,7 +36,7 @@ def _fresh_or_409(expected: str | None, current: str | None) -> None:
       device actually lands in. Two of this app's own tabs saving the same
       record in the same instant can still both pass. Closing that needs the
       compare and the write under one lock, and entity writes take no lock
-      today (`store/locks.py`: entities are outside the campaign domain).
+      today (`store/locks/_domain.py`: entities are outside the campaign domain).
     - **As sharp as `statcache`, and no sharper.** `current` comes from a hash
       memoized on `(path, mtime_ns, size)`, so an external write landing with
       the same size inside the filesystem's timestamp granularity is invisible
@@ -64,7 +64,7 @@ def _fresh_or_409(expected: str | None, current: str | None) -> None:
 #:
 #: Streaming routes are deliberately not covered. By the time a provider fails
 #: there, the reply is already a `200 text/event-stream`, so their errors stay
-#: in-band SSE events carrying the same `kind` (`streaming.py`). No status code
+#: in-band SSE events carrying the same `kind` (`routes/streaming/_streams.py`). No status code
 #: can be sent after the headers are gone, and inventing one for the body would
 #: be a second, disagreeing taxonomy.
 _LLM_STATUS = {

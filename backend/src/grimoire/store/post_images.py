@@ -26,7 +26,7 @@ design, and `grimoire.content_parts` for the message shape.
 
 "unknown" sends nothing. An image part sent to a text-only endpoint is a 400,
 not a graceful degradation, so the cost of guessing wrong runs the other way.
-This module never imports the gateway (`llm.py`) -- the store does not (#239)
+This module never imports the gateway (`llm/`) -- the store does not (#239)
 -- so the store-side list of kinds that can carry a part is
 `image_drafts.SUPPORTED_KINDS`, the same list the description drafts use.
 

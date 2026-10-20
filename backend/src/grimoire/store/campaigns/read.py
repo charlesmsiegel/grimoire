@@ -418,7 +418,7 @@ def touch_quietly(cid: str) -> None:
     `touch` republishes the whole meta file from a copy it read a moment
     earlier, so routing these through it would race `rename_campaign` and
     `set_campaign_response` and silently restore the name or response settings
-    the user had just changed. locks.py records that hazard for `touch` and
+    the user had just changed. store/locks/_domain.py records that hazard for `touch` and
     notes it was only reachable from `appearances`; this would have made it
     reachable from everywhere. See `campaign_activity_path`.
 

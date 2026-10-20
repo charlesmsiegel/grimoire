@@ -17,7 +17,7 @@ def _fields(cid: str, location_id: str) -> dict:
     """A location's frontmatter, or {} if it no longer exists.
 
     Deleting a location does not clean the scene histories naming it, so this
-    is reached in ordinary use — `context/assemble.py` already wraps the same
+    is reached in ordinary use — `store/context/assemble/` already wraps the same
     read for the setting block.
     """
     try:

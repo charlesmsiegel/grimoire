@@ -63,7 +63,7 @@ class _Liveness:
 #
 # In-process only, and that is the right scope: it distinguishes two turns
 # racing inside one backend, which is what a player generates. Two *processes*
-# on one scene is the case `store/locks.py` already documents as beyond what
+# on one scene is the case `store/locks/__init__.py` already documents as beyond what
 # this app can serialize. Entries are overwritten per turn and never removed --
 # one small entry per scene ever streamed, which is not worth reaping.
 _turn_tokens: dict[tuple[str, str], int] = {}

@@ -11,7 +11,7 @@ verbatim:
 
 - **Not a key in ``campaign.md``.** That file is read-modify-written *unlocked*
   by ``campaigns.read.touch``, ``rename_campaign`` and ``set_campaign_response``
-  (see ``OUTSIDE_DOMAIN`` in ``locks.py``), so a name recorded there could be
+  (see ``OUTSIDE_DOMAIN`` in ``store/locks/_domain.py``), so a name recorded there could be
   dropped by a concurrent rename. The files' presence on disk is the record.
 - **Under the overlay now**, which this file once said it was not. The world has
   a library of its own (``store.world_images``), so this module is the

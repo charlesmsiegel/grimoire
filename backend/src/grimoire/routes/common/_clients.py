@@ -19,7 +19,7 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
     opens nothing — the pool is created on the first call — so an app that
     never generates pays nothing for holding one.
 
-    The idle bound is passed as a resolver, not a number: llm.py must not import
+    The idle bound is passed as a resolver, not a number: llm/ must not import
     the store (#239), and reading config.md per call is what lets a
     Configuration-page change land without a restart (#243). The retry count
     rides the same seam for the same two reasons. The fallback (#144) does not:

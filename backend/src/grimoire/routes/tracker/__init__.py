@@ -8,7 +8,7 @@ records are read, hand-edited and re-run through the routes at the bottom, and
 the `after_*` hooks are how the transcript routes that edit, cut or swipe keep
 those records consistent with what the transcript now says.
 
-The callers are `routes/scenes.py`, `routes/character_turns.py` and
+The callers are `routes/scenes/`, `routes/character_turns/` and
 `routes/greetings.py`; this module imports none of them, which is what keeps
 the route graph acyclic."""
 

@@ -249,7 +249,7 @@ def list_campaign_undescribed_images(cid: str, count: bool = False):
 def _campaign_record_name_and_versions(cid: str, base: str, rid: str,
                                        v: store.overlay.View | None = None,
                                        ) -> tuple[str, set[str]] | None:
-    """`_record_name_and_versions` (routes/characters.py) through the overlay."""
+    """`_record_name_and_versions` (routes/characters/_gallery_sources.py) through the overlay."""
     try:
         if base == "characters":
             # Off `character.md` and a listing, not the full overlay read --

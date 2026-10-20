@@ -748,7 +748,7 @@ def put_campaign_entity_avatar_focus(cid: str, kind: str, eid: str, body: Avatar
 # `{kind}`-shaped, and this module is included last -- so a literal fifth
 # segment can neither shadow anything nor be shadowed. `kind` is left to the
 # store to judge: unlike the CRUD above, these carry actors as well as flat
-# entities, and which kinds each one accepts is part of what `store/sync.py`
+# entities, and which kinds each one accepts is part of what `store/sync/`
 # documents.
 def _library_move_or_409(fn):
     """Run a store-level move, mapping its refusals onto HTTP.

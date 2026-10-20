@@ -175,7 +175,7 @@ def _sheet_failure_status(exc: Exception) -> int:
     """The status a rejected sheet write answers with: 409 for a CAS conflict,
     400 for everything else the writer refuses.
 
-    Every sheet route in `mechanics.py` and `worlds.py` splits the two this
+    Every sheet route in `mechanics.py` and `routes/worlds/_mechanics.py` splits the two this
     way. The instantiate routes catch the base class in one clause (their
     rollback runs for both), and used to answer 400 for the subclass too --
     an id freshly minted by `create_entity` cannot carry a sheet yet, so the

@@ -40,7 +40,7 @@ def locked_actor_root(cid: str) -> Path:
     """The campaign root, for reading actors that are in the appearance record.
 
     Actors normally inherit from the world, so reading one off a raw campaign
-    root is the mistake `store/overlay.py` exists to prevent (#248). Appeared
+    root is the mistake `store/overlay/` exists to prevent (#248). Appeared
     actors are the documented exception: entering the record goes through
     `_lock`, which copies the picked version and the container meta into the
     campaign tree, and `campaigns.ensure_campaign_slim` keeps a locked actor's

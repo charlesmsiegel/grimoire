@@ -76,7 +76,7 @@ def ensure_actor_writable(cid: str, kind: str, aid: str) -> Path:
     PC routes. Putting it here rather than in each of those eight routes is
     deliberate: an enumerated list of mutators is what left `activity` claiming
     more than it delivered three times over, and the same lesson is already
-    written down for the campaign lock domain in locks.py.
+    written down for the campaign lock domain in store/locks/_domain.py.
 
     The trade is that this runs *before* the caller's write, so an edit that
     then 404s still records activity. That is the acceptable direction: asking

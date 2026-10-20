@@ -5,7 +5,7 @@ purging siblings, and the sync-base bookkeeping that goes with it -- plus
 ``actor_source`` is a read, so ``cast.py`` -- this package's read-only
 queries -- is where it looks like it belongs. It is here because what it
 reads is the `base` this module writes: it is the same comparison ``_lock``
-sets up and ``store/sync.py`` makes, and splitting the two halves of that
+sets up and ``store/sync/`` makes, and splitting the two halves of that
 contract across modules is how they drift. It also needs ``overlay`` and
 ``campaigns.read``, which this module already binds and ``cast.py`` does not.
 
@@ -73,7 +73,7 @@ def actor_source(cid: str, kind: str, actor_id: str) -> str:
     Provenance, not sync state. A *world*-side edit since the lock leaves this
     on "library": the campaign is still holding the library's text as it took
     it, and the fact that the library has moved on is a pending update
-    `store/sync.py` reports (#71 is that axis). The two are separate on purpose
+    `store/sync/` reports (#71 is that axis). The two are separate on purpose
     -- accepting an update advances `base` and copies, so the badge stays
     "library"; rejecting one advances `base` without copying, which is a
     campaign that has deliberately pinned its own text and reads as "override"

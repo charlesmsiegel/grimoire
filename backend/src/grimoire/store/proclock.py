@@ -1,7 +1,7 @@
-"""OS advisory file locks: the cross-process half of ``store/locks.py`` (#234).
+"""OS advisory file locks: the cross-process half of ``store/locks/_runtime.py`` (#234).
 
-``store/locks.py`` owns the *domain* (which campaign, which hierarchy); this
-module owns the *mechanism* and knows nothing about campaigns.
+``store/locks/_domain.py`` declares policy; ``store/locks/_runtime.py`` orders holds;
+this module owns OS exclusion and knows nothing about campaigns.
 
 **Where the lock files live.** Machine-local, per-user, outside the store, and
 outside any directory subject to automatic cleaning. Not inside the store,

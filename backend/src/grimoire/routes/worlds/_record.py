@@ -20,7 +20,7 @@ def get_worlds():
     # exactly as the campaigns list derives its own: nothing about a cover is
     # written into `world.md`, and a store reader that resolved one would put a
     # `covers` import and a per-world `stat` in front of every caller --
-    # `routes/todo.py`'s chore sweep and `routes/shell.py`'s badge included --
+    # `routes/todo/`'s chore sweep and `routes/shell.py`'s badge included --
     # which none of them asked for.
     #
     # Composed by `store.overview.world_rows` (spec 04 section 4.1): each

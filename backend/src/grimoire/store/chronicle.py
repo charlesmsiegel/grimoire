@@ -9,7 +9,7 @@ running timeline. The recap read-forward reads from here.
 Pure file IO. The extraction prompt/parse now lives in the absorb package
 (absorb/prompt.py, absorb/parse.py); the LLM call lives in the route layer — the split
 every LLM-backed store module follows (see absorb/prompt.py,
-suggest.py, dossiers.py).
+store/suggest/, dossiers.py).
 """
 
 from __future__ import annotations

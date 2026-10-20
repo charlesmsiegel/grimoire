@@ -118,7 +118,7 @@ def recorded_base(cid: str, ref: str, base: str, commit: Path):
     the swap unchanged, because it only ever asks "did the copy this base
     describes actually land?" -- and the answer is read off `commit` either way.
 
-    Public because the promoting caller lives in `store/sync.py`: base-hash
+    Public because the promoting caller lives in `store/sync/_promote.py`: base-hash
     discipline is the one part of moving a record that must not be re-derived
     at a second call site, which is the whole argument #52 makes for doing the
     move server-side at all.

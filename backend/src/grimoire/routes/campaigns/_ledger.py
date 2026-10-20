@@ -299,7 +299,7 @@ def get_ledger(cid: str):
     it twice would show the campaign owing it twice, and hand the reader a
     second row whose edit would land on a record the projection no longer
     shows. It stays reachable through its canonical's `aliases`. Edit, quick
-    close and delete already address the canonical (`routes/ledger.py`'s
+    close and delete already address the canonical (`routes/ledger/_policy.py`'s
     `_live_target` and `_refuse_unsafe_delete`), so the row ids served here
     are the ones those writes expect. A continuity-side failure degrades to
     the physical rows (spec §3.9): it costs the merge, never the section.

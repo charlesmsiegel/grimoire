@@ -28,7 +28,7 @@ Who takes it:
   ``delete``, ``set_field``, ``advance``);
 - ``audit.capture_baseline`` / ``audit.apply_delta``;
 - every ``proposals`` state transition, and the routes that wrap a whole
-  derive-and-persist span (``routes/streaming.py`` proposal finalizers) so a proposal
+  derive-and-persist span (``routes/streaming/_streams.py`` proposal finalizers) so a proposal
   cannot be derived from a pack that is swapped away before it lands;
 - every ``rolls`` mutator (``append``, ``find_or_append_by_proposal``,
   ``repoint_scenes``) plus its ``find_by_proposal`` reader — a logged roll

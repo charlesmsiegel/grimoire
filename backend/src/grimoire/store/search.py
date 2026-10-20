@@ -35,7 +35,7 @@ The corpus, by scope:
 
 **A campaign is searched as the files it actually holds, not as what it
 resolves to.** A campaign materializes a record only when it diverges from its
-world, so a record read through `store/overlay.py` is usually the *world's*
+world, so a record read through `store/overlay/` is usually the *world's*
 file — and a store with one world and ten campaigns would then answer every
 query with eleven copies of the same lore. Reading files instead means each
 record is reported exactly once, under whichever scope holds the bytes that

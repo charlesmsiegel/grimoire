@@ -185,7 +185,7 @@ def delete_campaign_pc_version(cid: str, pid: str, vid: str):
 
 
 # ---- campaign PC images (#219) — the campaign-side half of the world routes
-# in `worlds.py`, resolved through the overlay exactly as the character image
+# in `routes/worlds/_pc_images.py`, resolved through the overlay exactly as the character image
 # routes above are: reads take the union, deletes tombstone, promotion copies
 # up first.
 def _campaign_pc_version_or_404(cid: str, pid: str, vid: str):

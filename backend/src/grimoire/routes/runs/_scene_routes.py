@@ -190,7 +190,7 @@ def get_run_stream(cid: str, sid: str, run_id: str, request: Request,
     frame (the heartbeat) carries no event at all -- so a per-event cursor lags
     the server's position and `consumed + 1` replays text already rendered.
     """
-    # 400 rather than FastAPI's 422: `scenes.py:300` already answers a bad
+    # 400 rather than FastAPI's 422: `routes/scenes/_reads.py:get_scene` already answers a bad
     # `limit`/`before` this way, and one shape of bad-parameter error is easier
     # for a client to handle than two.
     if from_ < 0:

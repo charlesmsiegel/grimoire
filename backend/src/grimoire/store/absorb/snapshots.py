@@ -60,7 +60,7 @@ def commitment_snapshot(cid: str) -> str:
 #: resolves, so those lists are self-limiting, but a fact leaves the standing
 #: list only when a later scene explicitly contradicts it -- and most never are.
 #: Nothing else bounds this. The absorb budget is wall-clock (`_Budget` in
-#: routes/scenes.py), not tokens, so an uncapped snapshot would grow by a few
+#: routes/scenes/_review_budget.py), not tokens, so an uncapped snapshot would grow by a few
 #: lines every absorb for the life of the campaign until the extraction call
 #: stopped fitting in the model's context -- at which point every absorb fails
 #: and the only way out is editing facts.json by hand.

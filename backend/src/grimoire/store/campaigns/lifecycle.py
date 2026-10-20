@@ -120,7 +120,7 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
                              "updated": now, "world_copy": "overlay",
                              **({"module": module} if module else {})}, retired=True)
         # copy-on-write: nothing is copied up front; records materialize on divergence
-        # (store/overlay.py) and sync.md tracks bases for materialized records only
+        # (store/overlay/) and sync.md tracks bases for materialized records only
         paths.write_manifest(cid, {})
         calendars.write_calendar(root, cfg)
         campaign_climate.write_default(cid, wanted_climate)
@@ -260,7 +260,7 @@ def ensure_campaign_slim(cid: str) -> None:
             #
             # The consequence, stated rather than discovered: `ensure_campaign_slim`
             # can now raise `CampaignBusy`, and it runs lazily on ordinary read
-            # paths (`routes/common.py`'s lazy slim), so a contended campaign can
+            # paths (`routes/common/_lookups.py`'s lazy slim), so a contended campaign can
             # answer 409 where it previously could not. A retryable 409 in exchange
             # for a campaign that can no longer be left half-migrated.
             # Offers must be retired before the first manifest reservation or

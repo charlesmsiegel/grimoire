@@ -237,7 +237,7 @@ def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request)
     was considered and not done: the client hides these controls entirely while a
     turn is in flight, `rolling` latches them across every other transcript
     write, and the remaining writer is another device on a store shared through a
-    synced folder — which `store/locks.py` already documents as outside what any
+    synced folder — which `store/locks/__init__.py` already documents as outside what any
     lock here can promise. An optional check would be no guarantee at all, and a
     required one would break a plain API caller for a race this route cannot be
     the place to close. Editing a post (`PUT`) accepts exactly the same exposure.

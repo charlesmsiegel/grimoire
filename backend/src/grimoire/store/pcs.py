@@ -1,6 +1,6 @@
 """Player-character containers: one folder per PC, one markdown persona per version.
 
-Mirrors characters.py but with a simpler payload:
+Mirrors store/characters/ but with a simpler payload:
   <root>/pcs/<pid>/pc.md          # frontmatter: name, tags (comma-joined), default_version
   <root>/pcs/<pid>/<vid>.md       # frontmatter: PERSONA_FIELDS ; body: description
   <root>/pcs/<pid>/assets/<vid>/  # optional per-version images (#219)

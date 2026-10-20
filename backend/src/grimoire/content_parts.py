@@ -1,6 +1,6 @@
 """Message content as parts, and the one part type that is grimoire's own (#377).
 
-A leaf module, like `catalog` and `llm_errors`: the gateway (`llm.py`), the
+A leaf module, like `catalog` and `llm_errors`: the gateway (`llm/`), the
 provider adapters and the store all need it, and the gateway may not import
 the store. Nothing here may import from the rest of the package.
 

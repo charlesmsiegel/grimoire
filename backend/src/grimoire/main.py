@@ -446,7 +446,7 @@ def _record_campaign_write(cid: str, stamp: bool, changed: bool, root: Path | No
       priced before the send confirm against a transcript that has already
       grown. The two errors are not symmetric: a stamp for a turn that failed
       misorders a list, a token that failed to move breaks the one promise this
-      value makes. `routes/streaming.py`'s `_persist_reply` bumps again for the
+      value makes. `routes/streaming/_persistence.py`'s `_persist_reply` bumps again for the
       reply itself, minutes later.
     - **A route that mutates a DIFFERENT campaign stamps activity and does not
       move the revision.** `POST /campaigns/{cid}/fork` is something that

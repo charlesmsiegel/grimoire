@@ -48,7 +48,7 @@ a half-lock for one directory would imply a guarantee the world root does not
 make. It also
 means this module is never surveyed by the lock-domain guard (``_takes_cid``
 looks for a parameter named ``cid``, and everything here takes ``wid``), so it
-is deliberately absent from ``locks.py``'s three lists rather than declared in
+is deliberately absent from ``store/locks/_domain.py``'s three lists rather than declared in
 one of them -- a declared module that is never surveyed fails
 ``test_the_declaration_has_no_phantom_modules``.
 
@@ -194,7 +194,7 @@ def undescribed_count(wid: str) -> int:
 def has_undescribed(wid: str) -> bool:
     """Whether ``undescribed`` is non-empty.
 
-    Separate from the count on purpose: ``routes/todo.py``'s ``_CHEAP`` roster
+    Separate from the count on purpose: ``routes/todo/``'s ``_CHEAP`` roster
     exists for chores whose COUNT costs far more than their presence. For one
     flat library the two cost the same -- one directory read, and an object
     read (memoized) per placement with no legacy key -- so this is that list

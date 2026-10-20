@@ -22,7 +22,7 @@ class PinRule(BaseModel):
     ttl_posts: int = 0
 
 
-# ---- hand edits to the continuity ledger (routes/ledger.py) ------------------
+# ---- hand edits to the continuity ledger (routes/ledger/) ------------------
 #
 # Every optional field here is `| None = None` rather than `= ""`, and the
 # distinction is load-bearing rather than stylistic: the store mutators these

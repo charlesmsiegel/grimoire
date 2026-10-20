@@ -22,7 +22,7 @@ passes the very check it was written for. A fresh unique value is a blind
 write with nothing to lose: two concurrent bumps leave one of two tokens on
 disk and *either* is a correct answer, because the only property required is
 "different from what any earlier reader is holding". That is also why this
-module takes no lock (`store/locks.py` classifies it).
+module takes no lock (`store/locks/_domain.py` classifies it).
 
 **A damaged file refuses everything, and is repaired by the next read; an absent
 one only means "never stamped".** The two are told apart because they mean

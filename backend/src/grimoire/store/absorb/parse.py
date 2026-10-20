@@ -3,7 +3,7 @@
 `parse_output` rebuilds a dict of known keys rather than passing the model's
 object through, so the section list below *is* the absorb contract:
 `evals/graders.py` derives the graded contract from `parse_output("{}")` rather
-than restating it, and `materializer.py` reads exactly these keys.
+than restating it, and `store/absorb/materializer/` reads exactly these keys.
 """
 
 from __future__ import annotations
@@ -378,7 +378,7 @@ def parse_output(text: str) -> dict:
         # Listed explicitly because this function rebuilds a dict of known keys
         # rather than passing the model's object through: an unlisted key is
         # dropped on the floor here, and the materialize and apply branches in
-        # materializer.py and apply.py become unreachable no matter how well
+        # store/absorb/materializer/ and apply.py become unreachable no matter how well
         # the prompt performs.
         "weather_edits": _list(obj, "weather_edits",
                                ("location", "condition", "temperature", "wind",
