@@ -27,7 +27,7 @@ alongside this skill and copy its shapes rather than inventing your own.
 ## Privacy
 
 Module content is generic rules data — dice math, stat names, rules text — and is fine to share
-and commit. But per the repo-wide privacy rule (see `CLAUDE.md`), **never embed a real world,
+and commit. But per the repo-wide privacy rule (see `AGENTS.md`), **never embed a real world,
 campaign, or character name** in a worked example while authoring, even a throwaway one. Use
 invented names (the reference packs use generic fantasy/occult placeholders like "Medium",
 "Shifter", "Moonwell Talisman" — reuse that flavor or invent your own, never reuse something from
@@ -67,7 +67,7 @@ backend/.venv/Scripts/python.exe -c "from grimoire.store import modules; print(m
 ```
 
 or `mkdir` the pack yourself and hand-write `module.md`. Either way it lands at
-`<GRIMOIRE_HOME>/modules/<mid>/` — the **user library** (see `store.home()` in `CLAUDE.md` for how
+`<GRIMOIRE_HOME>/modules/<mid>/` — the **user library** (see `store.home()` in `AGENTS.md` for how
 `GRIMOIRE_HOME` resolves). Built-in modules live in-repo at
 `backend/src/grimoire/store/builtin_modules/<mid>/` and are **read-only models** to study, not
 edit in place — never hand-edit a built-in pack; copy its shape into a new user-library module
@@ -294,7 +294,7 @@ editable install / venv of its own — either run this from a checkout that does
 `PYTHONPATH` at the worktree's `backend/src` while invoking the primary checkout's interpreter,
 e.g. (Git Bash) `PYTHONPATH=backend/src /path/to/primary/backend/.venv/Scripts/python.exe -c
 "..."`. Also worth knowing: `load_pack` resolves `<GRIMOIRE_HOME>/modules/` via `store.home()`
-(`CLAUDE.md`), so if you scaffolded into a non-default `GRIMOIRE_HOME` (tests, an alternate
+(`AGENTS.md`), so if you scaffolded into a non-default `GRIMOIRE_HOME` (tests, an alternate
 library) the validation command needs that same env var set to find it.
 
 ### 9. Confirm it's visible in the app

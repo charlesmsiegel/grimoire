@@ -239,7 +239,7 @@ CI gets one new job: assemble a debug APK (and run the ~40-line `android_entry.p
 unit test). The existing pytest and vitest suites remain the correctness gate for both
 platforms, because both platforms run that exact code.
 
-**Rules of the road** (add to `CLAUDE.md` when the app lands):
+**Rules of the road** (add to `AGENTS.md` when the app lands):
 - Backend/frontend changes must not assume a writable repo directory, a desktop
   browser, or `~` outside the store — everything filesystem goes through
   `store.paths` / the env overrides.

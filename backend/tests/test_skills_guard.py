@@ -324,8 +324,8 @@ def skill_tree(tmp_path, monkeypatch):
     canonical = canonical_dir / "grimoire-store-editing" / "SKILL.md"
     adapter = adapter_dir / "grimoire-store-editing" / "SKILL.md"
     header = "---\nname: grimoire-store-editing\ndescription: Use when editing records outside the app.\n---\n\n"
-    _write(tmp_path / "CLAUDE.md", "# Privacy\n\nPrivate content stays outside the repository.\n")
-    _write(canonical, header + "# Store editing\n\nRead [privacy](../../../CLAUDE.md#privacy).\n")
+    _write(tmp_path / "AGENTS.md", "# Privacy\n\nPrivate content stays outside the repository.\n")
+    _write(canonical, header + "# Store editing\n\nRead [privacy](../../../AGENTS.md#privacy).\n")
     _write(adapter, header + "# Store editing\n\nRead [the procedure](../../../.claude/skills/grimoire-store-editing/SKILL.md).\n")
     return canonical_dir, adapter_dir, canonical, adapter
 
@@ -408,8 +408,8 @@ def test_relative_links_and_anchors_pass(skill_tree):
 
 @pytest.mark.parametrize("target,want", [
     ("../../../missing.md", "missing path"),
-    ("../../../CLAUDE.md#missing", "missing anchor"),
-    ("../../../claude.md#privacy", "case"),
+    ("../../../AGENTS.md#missing", "missing anchor"),
+    ("../../../agents.md#privacy", "case"),
     ("#missing", "missing anchor"),
 ])
 def test_link_defects_are_rejected(skill_tree, target, want):
@@ -497,15 +497,15 @@ def test_report_vocabulary_defects_are_rejected(old, new, want):
 
 def test_long_copied_prose_is_rejected_but_fences_are_not():
     copied = "The app and its data live in a markdown/JSON store rooted at `~/.grimoire` by default. The root"
-    other = (("CLAUDE.md", (ROOT / "CLAUDE.md").read_text(encoding="utf-8")),)
-    assert any("CLAUDE.md" in p for p in _diagnose("_routing_problems", copied, other))
+    other = (("AGENTS.md", (ROOT / "AGENTS.md").read_text(encoding="utf-8")),)
+    assert any("AGENTS.md" in p for p in _diagnose("_routing_problems", copied, other))
     assert _diagnose("_routing_problems", "```text\n" + copied + "\n```", other) == []
 
 
 def test_description_participates_in_the_routing_check():
     copied = "The app and its data live in a markdown/JSON store rooted at `~/.grimoire` by default. The root"
     text = "---\nname: grimoire-store-editing\ndescription: " + copied + "\n---\n\nShort body."
-    other = (("CLAUDE.md", (ROOT / "CLAUDE.md").read_text(encoding="utf-8")),)
+    other = (("AGENTS.md", (ROOT / "AGENTS.md").read_text(encoding="utf-8")),)
     assert _diagnose("_routing_problems", text, other)
 
 

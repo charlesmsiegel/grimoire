@@ -14,7 +14,7 @@ Edits through the app's UI or API already receive its write-through handling.
 
 Library content can be discussed with its owner, but must stay out of this
 public checkout, including names and statistics. Follow the project's
-[privacy rules](../../../CLAUDE.md).
+[privacy rules](../../../AGENTS.md).
 The examples below use existing placeholders, never a real library.
 
 ## Find the library
@@ -39,7 +39,7 @@ locates the existing operations. Keep the target campaign idle for the entire
 external batch, including its detached runs, even when using those writers.
 Closing a tab does not end generation; use the app's guarded routes instead
 if quiescence cannot be maintained. See [process exclusion](../../../docs/store-guarantees.md#a-second-process-on-the-same-store)
-and [detached runs](../../../CLAUDE.md#detached-runs-a-turn-outlives-the-request-that-asked-for-it).
+and [detached runs](../../../AGENTS.md#detached-runs-a-turn-outlives-the-request-that-asked-for-it).
 
 Choose embedding policy before entering `cache_sync.collecting`: it syncs on
 both successful and exceptional exit. For no-spend work or a large batch that

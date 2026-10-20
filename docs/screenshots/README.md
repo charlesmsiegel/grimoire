@@ -7,7 +7,7 @@ two places is a safety procedure with one stale copy.
 
 ## Every one of these is fake, and has to be
 
-`CLAUDE.md` forbids a real world, campaign or character name anywhere in this
+`AGENTS.md` forbids a real world, campaign or character name anywhere in this
 repo — and a screenshot of a working install shows a real library by default.
 So these are captured against an **isolated store** seeded with invented
 content, using only placeholder names the codebase already uses (Saltmarch,

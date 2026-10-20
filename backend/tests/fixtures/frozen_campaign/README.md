@@ -30,7 +30,7 @@ most store modules rather than to be realistic:
 
 All names are invented placeholders reusing the ones the codebase already uses
 for fixtures. No real campaign content is in this repository, and none may be
-added here — see CLAUDE.md, "Privacy".
+added here — see AGENTS.md, "Privacy".
 
 ## The two rules
 

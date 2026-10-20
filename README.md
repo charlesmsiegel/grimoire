@@ -402,7 +402,7 @@ npx tsc -b
 Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to run the gate (`make
 check`), what each architecture guard is asking of you, and the privacy rule that
 governs everything committed here. Project conventions and the frontend
-list/detail page pattern are documented in [`CLAUDE.md`](CLAUDE.md); what the
+list/detail page pattern are documented in [`AGENTS.md`](AGENTS.md); what the
 file store promises about atomicity and concurrency is in
 [`docs/store-guarantees.md`](docs/store-guarantees.md); the prompt template
 layout is in [`templates/README.md`](templates/README.md). Coding agents should

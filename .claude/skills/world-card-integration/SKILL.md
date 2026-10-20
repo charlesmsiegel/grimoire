@@ -71,7 +71,7 @@ rewrites whole files and buries your actual edit in the diff.
 
 The store is a git repo with its own history. Resolve its root the way the app does
 rather than assuming `~/.grimoire` — `GRIMOIRE_HOME` or the bootstrap pointer may name
-somewhere else (CLAUDE.md, "the store"):
+somewhere else (AGENTS.md, "the store"):
 
 ```bash
 STORE=$(python -c "import sys; sys.path.insert(0,'backend/src'); from grimoire.store.paths import home; print(home())")

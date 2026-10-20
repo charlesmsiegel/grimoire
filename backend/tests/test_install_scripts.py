@@ -358,10 +358,10 @@ def test_both_launchers_open_a_notice_when_serving_a_stale_build(script):
 # helps nobody reading the command in front of them.
 
 DOCS = pytest.mark.parametrize("doc", [
-    REPO / "CLAUDE.md",
+    REPO / "AGENTS.md",
     REPO / "README.md",
     # The third one, and the reason the rule is a test rather than a fix:
-    # CLAUDE.md's sweep note links here, and this file had the same Unix-only
+    # AGENTS.md's sweep note links here, and this file had the same Unix-only
     # command. Two spots got found by reading the issue; this one only by
     # grepping for the shape.
     Path(__file__).parent / "fixtures" / "frozen_campaign" / "README.md",
@@ -369,7 +369,7 @@ DOCS = pytest.mark.parametrize("doc", [
     # as it was not in this list: the rule reaches exactly the files named here.
     REPO / "evals" / "README.md",
     REPO / ".claude" / "skills" / "grimoire-store-editing" / "SKILL.md",
-], ids=["claude-md", "readme", "frozen-campaign-readme", "evals-readme", "store-editing-skill"])
+], ids=["agents-md", "readme", "frozen-campaign-readme", "evals-readme", "store-editing-skill"])
 UNIX_PY = re.compile(r"\.venv/bin/python")
 WINDOWS_PY = re.compile(r"\.venv[/\\]Scripts[/\\]python")
 NEARBY = 4      # lines either side: the same command, bullet, or code block

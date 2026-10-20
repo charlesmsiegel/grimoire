@@ -26,7 +26,7 @@ call while reading — this skill does not delegate that to another LLM call.
 
 1. **Setup:** If the user hasn't already told you which campaign (e.g. "continue campaign X" or
    "start a new one called Y"), don't assume — ask. List existing campaigns first (each
-   `<grimoire home>/campaigns/*/campaign.md` has `name`/`world` in its frontmatter; CLAUDE.md
+   `<grimoire home>/campaigns/*/campaign.md` has `name`/`world` in its frontmatter; AGENTS.md
    documents how the home directory resolves), then use the **AskUserQuestion** tool to offer:
    continue one of the existing campaigns (call out any already on the target World by name), or
    start a fresh one (you'll need a name). Once that's settled:

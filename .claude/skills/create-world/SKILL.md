@@ -28,7 +28,7 @@ Where this sits among its siblings:
 ## Privacy
 
 A World is the user's private content and lives outside this repo by design
-(`CLAUDE.md`, "Privacy"). So:
+(`AGENTS.md`, "Privacy"). So:
 
 - **The plan file is private content too.** Write it to the session scratchpad, or
   somewhere the user names outside the repo. Never put it in the repo, and never
