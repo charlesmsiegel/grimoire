@@ -420,8 +420,8 @@ def test_a_warning_still_reaches_stderr_now_that_a_handler_exists(home, capsys):
 
 # ---- the size backstop ----
 def test_past_the_cap_only_errors_are_recorded_and_the_cap_says_so(home, monkeypatch):
-    monkeypatch.setattr(logs, "MAX_MONTH_BYTES", 400)
-    monkeypatch.setattr(logs, "_STAT_EVERY", 1)
+    monkeypatch.setattr(logs._rows, "MAX_MONTH_BYTES", 400)
+    monkeypatch.setattr(logs._rows, "_STAT_EVERY", 1)
 
     for i in range(40):
         logs.record("info", "runner", f"tick {i}")
@@ -439,8 +439,8 @@ def test_deleting_a_capped_month_turns_ordinary_logging_back_on(home, monkeypatc
     cap is complaining about. Remembering the cap for the life of the process
     left logging switched off after they had -- until a restart or the month
     rolled over, with nothing on screen to say why."""
-    monkeypatch.setattr(logs, "MAX_MONTH_BYTES", 400)
-    monkeypatch.setattr(logs, "_STAT_EVERY", 1)
+    monkeypatch.setattr(logs._rows, "MAX_MONTH_BYTES", 400)
+    monkeypatch.setattr(logs._rows, "_STAT_EVERY", 1)
     for i in range(40):
         logs.record("info", "runner", f"tick {i}")
     assert logs.record("info", "runner", "dropped") is None
