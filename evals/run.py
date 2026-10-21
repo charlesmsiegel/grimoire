@@ -459,10 +459,8 @@ def run_live(args: argparse.Namespace, selected: tuple,
     return results, configs
 
 
-def _check_live_flags(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """Refuse (argparse's exit 2) a live-only flag without `--live`, a
-    `--repeat` out of range, and a `--record` that could not say which reply
-    becomes the baseline."""
+def _check_live_only(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Refuse a live-only flag without `--live`, and a `--repeat` out of range."""
     if args.record and not args.live:
         ap.error("--record only means anything with --live")
     live_only = [flag for flag, on in (("--provider", bool(args.provider)),
@@ -474,6 +472,10 @@ def _check_live_flags(ap: argparse.ArgumentParser, args: argparse.Namespace) -> 
         ap.error(f"{', '.join(live_only)} only means anything with --live")
     if args.repeat is not None and not 1 <= args.repeat <= runner.MAX_REPEAT:
         ap.error(f"--repeat takes 1 to {runner.MAX_REPEAT}")
+
+
+def _check_escalation(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Refuse `--escalation` off a live chain run, or beside `--record`."""
     if args.escalation and not args.live:
         ap.error("--escalation only means anything with --live or --escalation-sweep")
     if args.escalation and set(args.decide_backend or (runner.CHAIN,)) != {runner.CHAIN}:
@@ -481,6 +483,14 @@ def _check_live_flags(ap: argparse.ArgumentParser, args: argparse.Namespace) -> 
                  "--decide-backend")
     if args.escalation and args.record:
         ap.error("--escalation is a comparison run; it records no baseline")
+
+
+def _check_live_flags(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Refuse (argparse's exit 2) a live-only flag without `--live`, a
+    `--repeat` out of range, and a `--record` that could not say which reply
+    becomes the baseline."""
+    _check_live_only(ap, args)
+    _check_escalation(ap, args)
     if args.record and ((args.repeat or 1) > 1 or len(set(args.decide_backend or ())) > 1):
         ap.error("--record keeps one reply as the baseline; with --repeat over 1 or "
                  "several --decide-backend it is ambiguous which")
@@ -839,8 +849,8 @@ def _other_mode(args: argparse.Namespace):
     return None
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Score grimoire's LLM output against the eval suite.")
+def _add_suite_args(ap: argparse.ArgumentParser) -> None:
+    """The case suite's flags: live or replay, which cases, and how a live run is sent."""
     ap.add_argument("--live", action="store_true",
                     help="make one real LLM call per case, on the model the app routes it to")
     ap.add_argument("--record", action="store_true",
@@ -878,6 +888,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--escalation-sweep", action="store_true",
                     help="for each --case, which items of its native recordings each "
                          "margin threshold would escalate; offline, never a call")
+
+
+def _add_mode_args(ap: argparse.ArgumentParser) -> None:
+    """The other modes' flags: embeddings, floors, play, history, epistemic, investigation."""
     ap.add_argument("--embed", action="store_true",
                     help="rank the embedding corpus (evals/embed/): recall@k and MRR "
                          "against a lexical baseline; replay offline, or --live")
@@ -909,17 +923,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--investigate", choices=INVESTIGATE_MODES, default="",
                     help="roadmap 12's adoption gate for an investigation entry point: "
                          "its incumbent against the investigation, offline unless --live")
-    args = ap.parse_args(argv)
-    args.run_id = str(uuid.uuid4())
-    _check_history_flags(ap, args)
 
-    mode = _other_mode(args)
-    if mode is not None:
-        return mode(ap, args)
 
-    _check_live_flags(ap, args)
-    _unknown_cases(ap, args)
+def _parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description="Score grimoire's LLM output against the eval suite.")
+    _add_suite_args(ap)
+    _add_mode_args(ap)
+    return ap
 
+
+def _run_suite(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """The case suite: the selected cases replayed offline, or sent live, then
+    reported (with a comparison table over several configs) and written."""
     selected = case_mod.CASES
     if args.case:
         selected = tuple(case_mod.BY_ID[c] for c in args.case)
@@ -949,6 +964,21 @@ def main(argv: list[str] | None = None) -> int:
         runfile.write(Path(args.out), doc)
         print(runner.ascii_safe(f"wrote {args.out}"))
     return 0 if all(r.passed for r in results) else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = _parser()
+    args = ap.parse_args(argv)
+    args.run_id = str(uuid.uuid4())
+    _check_history_flags(ap, args)
+
+    mode = _other_mode(args)
+    if mode is not None:
+        return mode(ap, args)
+
+    _check_live_flags(ap, args)
+    _unknown_cases(ap, args)
+    return _run_suite(ap, args)
 
 
 if __name__ == "__main__":
