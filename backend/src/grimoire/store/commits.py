@@ -41,6 +41,7 @@ import hashlib
 import json
 import re
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -79,24 +80,51 @@ def _write(cid: str, tokens: dict, scenes: dict) -> None:
         {"v": SCHEMA, "tokens": tokens, "scenes": scenes}, indent=2) + "\n")
 
 
+def _is_text(value) -> bool:
+    return isinstance(value, str)
+
+
+def _valid_source(value) -> bool:
+    # Looked up at call time, so the owner's definition is the one applied.
+    return group_proposals.valid_identity(value)
+
+
+def _valid_copy_receipt(value) -> bool:
+    return (isinstance(value, dict)
+            and group_proposals.valid_identity(value.get("source"))
+            and group_proposals.valid_identity(value.get("owned")))
+
+
+def _valid_relocating(value) -> bool:
+    return (isinstance(value, dict)
+            and set(value) == {"operation", "kind", "id", "new_kind"}
+            and all(isinstance(field, str) and field for field in value.values()))
+
+
+#: A membership target's optional fields, each with the shape it must have when
+#: present, checked in this order. Every field a later fence or Undo reads as
+#: text must BE text, so a damaged account refuses here rather than raising
+#: mid-operation.
+_TARGET_FIELDS: tuple[tuple[str, Callable[[object], bool]], ...] = (
+    ("kind", _is_text), ("id", _is_text), ("ref", _is_text),
+    ("actor", _is_text), ("token", _is_text),
+    ("retired", lambda value: type(value) is bool),
+    ("suspended", _is_text),
+    ("source", _valid_source),
+    ("copy_receipt", _valid_copy_receipt),
+    ("relocating", _valid_relocating),
+)
+
+
+def _valid_target(position, target) -> bool:
+    return (isinstance(position, str) and position.isascii() and position.isdigit()
+            and isinstance(target, dict)
+            and all(key not in target or check(target[key]) for key, check in _TARGET_FIELDS))
+
+
 def _valid_targets(value) -> bool:
     return isinstance(value, dict) and all(
-        isinstance(position, str) and position.isascii() and position.isdigit()
-        and isinstance(target, dict)
-        # Every field a later fence or Undo reads as text must BE text, so a
-        # damaged account refuses here rather than raising mid-operation.
-        and all(key not in target or isinstance(target[key], str)
-                for key in ("kind", "id", "ref", "actor", "token"))
-        and ("retired" not in target or type(target["retired"]) is bool)
-        and ("suspended" not in target or isinstance(target["suspended"], str))
-        and ("source" not in target or group_proposals.valid_identity(target["source"]))
-        and ("copy_receipt" not in target or (isinstance(target["copy_receipt"], dict)
-             and group_proposals.valid_identity(target["copy_receipt"].get("source"))
-             and group_proposals.valid_identity(target["copy_receipt"].get("owned"))))
-        and ("relocating" not in target or (isinstance(target["relocating"], dict)
-             and set(target["relocating"]) == {"operation", "kind", "id", "new_kind"}
-             and all(isinstance(value, str) and value for value in target["relocating"].values())))
-        for position, target in value.items())
+        _valid_target(position, target) for position, target in value.items())
 
 
 def _valid_membership_progress(progress: dict) -> bool:
@@ -113,20 +141,28 @@ def _valid_membership_progress(progress: dict) -> bool:
             and isinstance(progress.get("cited", {}), dict))
 
 
-def _valid_entry(entry) -> bool:
-    if not isinstance(entry, dict) or type(entry.get("done")) is not bool:
-        return False
+def _valid_field_types(entry: dict) -> bool:
+    """The entry's own optional fields hold the types the ledger writes."""
     for key in ("result", "progress", "membership_targets"):
         if key in entry and not (isinstance(entry[key], dict) or (key == "result" and entry[key] is None)):
             return False
-    for key in ("fingerprint", "sid", "at"):
-        if key in entry and not isinstance(entry[key], str):
-            return False
+    return all(key not in entry or isinstance(entry[key], str) for key in ("fingerprint", "sid", "at"))
+
+
+def _valid_membership(entry: dict) -> bool:
+    """Membership targets, wherever the entry carries them, and the progress
+    views their fence walks. `progress` is already known to be a dict."""
     progress = entry.get("progress", {})
-    if ("membership_targets" in progress and not _valid_targets(progress["membership_targets"])) or (
-            "membership_targets" in entry and not _valid_targets(entry["membership_targets"])):
+    holders = [doc for doc in (progress, entry) if "membership_targets" in doc]
+    if not all(_valid_targets(doc["membership_targets"]) for doc in holders):
         return False
-    if ("membership_targets" in progress or "membership_targets" in entry) and not _valid_membership_progress(progress):
+    return not holders or _valid_membership_progress(progress)
+
+
+def _valid_entry(entry) -> bool:
+    if not isinstance(entry, dict) or type(entry.get("done")) is not bool:
+        return False
+    if not _valid_field_types(entry) or not _valid_membership(entry):
         return False
     claimed = entry.get("claimed")
     return claimed is None or (type(claimed) is int and claimed >= 0)
