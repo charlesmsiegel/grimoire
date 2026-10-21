@@ -62,11 +62,10 @@ superseded by an id that never landed.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .. import prompts
-from . import atomic, fieldtext, locks
+from . import fieldtext, jsondoc, locks
 from .campaigns import paths as campaigns_paths
 
 ACTIVE = "active"
@@ -78,10 +77,7 @@ def _path(cid: str) -> Path:
 
 
 def read(cid: str) -> dict:
-    p = _path(cid)
-    if not p.exists():
-        return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return jsondoc.read(_path(cid))
 
 
 def _read_ledger(cid: str) -> dict:
@@ -101,7 +97,7 @@ def _read_ledger(cid: str) -> dict:
 
 
 def _write(cid: str, data: dict) -> None:
-    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    jsondoc.write(_path(cid), data)
 
 
 def get(cid: str, fid: str) -> dict | None:

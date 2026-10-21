@@ -59,11 +59,10 @@ time, with a review each.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
-from . import alternates, atomic, cascade, commits, config, locks
+from . import alternates, cascade, commits, config, jsondoc, locks
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 from .scenes import paths as scenes_paths
@@ -100,18 +99,11 @@ def read(cid: str) -> dict:
     later request 500ing — and the file itself is untouched on disk for anyone
     who wants to repair it by hand, which is the recovery that exists.
     """
-    p = _path(cid)
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return jsondoc.read_object(_path(cid))
 
 
 def _write(cid: str, rec: dict) -> None:
-    atomic.write_text(_path(cid), json.dumps(rec, indent=2, sort_keys=True) + "\n")
+    jsondoc.write(_path(cid), rec)
 
 
 def _clear(cid: str) -> None:

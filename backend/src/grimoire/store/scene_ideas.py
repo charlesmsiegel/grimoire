@@ -83,11 +83,10 @@ so two unlocked read-modify-writes lose one of them.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from . import _idea_provenance as idea_shapes
-from . import atomic, fieldtext, locks, paths
+from . import fieldtext, jsondoc, locks, paths
 from .campaigns import paths as campaigns_paths
 from .scenes import focus as scenes_focus
 
@@ -115,10 +114,7 @@ def _path(cid: str) -> Path:
 
 
 def read(cid: str) -> dict:
-    p = _path(cid)
-    if not p.exists():
-        return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return jsondoc.read(_path(cid))
 
 
 def _read_ledger(cid: str) -> dict:
@@ -136,7 +132,7 @@ def _read_ledger(cid: str) -> dict:
 
 
 def _write(cid: str, data: dict) -> None:
-    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    jsondoc.write(_path(cid), data)
 
 
 def get(cid: str, lid: str) -> dict | None:

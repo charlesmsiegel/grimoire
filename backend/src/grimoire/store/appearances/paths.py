@@ -10,10 +10,9 @@ cycle.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from .. import atomic, locks
+from .. import jsondoc, locks
 from ..campaigns import paths as campaigns_paths
 
 ACTOR_KINDS = ("characters", "pcs")
@@ -55,10 +54,7 @@ def locked_actor_root(cid: str) -> Path:
 
 
 def record(cid: str) -> dict:
-    p = _path(cid)
-    if not p.exists():
-        return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return jsondoc.read(_path(cid))
 
 
 def observed_indices(cid: str, sid: str, actor_ref: str, history: list[dict]) -> list[int]:
@@ -82,7 +78,7 @@ def observed_indices(cid: str, sid: str, actor_ref: str, history: list[dict]) ->
 
 
 def _write(cid: str, data: dict) -> None:
-    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    jsondoc.write(_path(cid), data)
 
 
 def forget(cid: str, kind: str, actor_id: str) -> None:

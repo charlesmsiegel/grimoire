@@ -28,10 +28,9 @@ why this is here" is itself worth showing, and it is the honest answer.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from . import atomic, locks
+from . import jsondoc, locks
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 
@@ -96,14 +95,7 @@ def read(cid: str) -> dict:
     """Every citation on file. Tolerant of a garbled or hand-edited file for the
     reason `changes.read` is: this backs a display panel, and one bad byte must
     cost the markers rather than the page."""
-    p = _path(cid)
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return jsondoc.read_object(_path(cid))
 
 
 def record(cid: str, rows: dict[str, dict]) -> None:
@@ -122,7 +114,7 @@ def record(cid: str, rows: dict[str, dict]) -> None:
     with locks.campaign_lock(cid):
         data = read(cid)
         data.update(rows)
-        atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+        jsondoc.write(_path(cid), data)
 
 
 def forget(cid: str, keys) -> None:
@@ -149,7 +141,7 @@ def forget(cid: str, keys) -> None:
             return
         for k in keys:
             data.pop(k, None)
-        atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+        jsondoc.write(_path(cid), data)
 
 
 def repoint_records(cid: str, mapping: dict[str, str]) -> None:
@@ -179,7 +171,7 @@ def repoint_records(cid: str, mapping: dict[str, str]) -> None:
         if not moved:
             return
         data.update(moved)
-        atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+        jsondoc.write(_path(cid), data)
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
@@ -208,7 +200,7 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
                 row["scene"] = mapping[row["scene"]]
                 hit = True
         if hit:
-            atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+            jsondoc.write(_path(cid), data)
 
 
 def forget_scene(cid: str, sid: str) -> int:
@@ -231,5 +223,5 @@ def forget_scene(cid: str, sid: str) -> int:
         for k in doomed:
             del data[k]
         if doomed:
-            atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+            jsondoc.write(_path(cid), data)
         return len(doomed)

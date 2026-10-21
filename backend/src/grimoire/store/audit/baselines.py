@@ -14,7 +14,7 @@ import json
 import threading
 from pathlib import Path
 
-from .. import atomic, locks
+from .. import jsondoc, locks
 from ..campaigns import paths as campaigns_paths
 from ..modules import binding as modules_binding
 from ..modules import pack as modules_pack
@@ -35,18 +35,11 @@ def _path(cid: str) -> Path:
 
 
 def read_baselines(cid: str) -> dict:
-    p = _path(cid)
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return jsondoc.read_object(_path(cid))
 
 
 def _write(cid: str, data: dict) -> None:
-    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    jsondoc.write(_path(cid), data)
 
 
 def schema_stamp(mid: str) -> dict:

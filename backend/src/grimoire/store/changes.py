@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import bisect
 import difflib
-import json
 from collections import Counter
 from pathlib import Path
 
-from . import atomic
+from . import jsondoc
 from .campaigns import paths as campaigns_paths
 
 #: The staged-edit kinds whose write-back lands here. Declared beside the log
@@ -243,14 +242,7 @@ def _path(cid: str) -> Path:
 
 
 def read(cid: str) -> dict:
-    p = _path(cid)
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return jsondoc.read_object(_path(cid))
 
 
 def record(cid: str, sid: str, changes: dict[str, list[dict]]) -> None:
@@ -261,7 +253,7 @@ def record(cid: str, sid: str, changes: dict[str, list[dict]]) -> None:
     data = read(cid)
     for ref, fields in changes.items():
         data[ref] = {"scene": sid, "fields": fields}
-    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    jsondoc.write(_path(cid), data)
 
 
 def forget_scene(cid: str, sid: str) -> int:
@@ -279,7 +271,7 @@ def forget_scene(cid: str, sid: str) -> int:
     for ref in doomed:
         del data[ref]
     if doomed:
-        atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+        jsondoc.write(_path(cid), data)
     return len(doomed)
 
 
@@ -300,7 +292,7 @@ def repoint_records(cid: str, mapping: dict[str, str]) -> None:
         return
     for ref in hit:
         data[mapping[ref]] = data.pop(ref)
-    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    jsondoc.write(_path(cid), data)
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
@@ -312,4 +304,4 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
             rec["scene"] = mapping[rec["scene"]]
             hit = True
     if hit:
-        atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+        jsondoc.write(_path(cid), data)
