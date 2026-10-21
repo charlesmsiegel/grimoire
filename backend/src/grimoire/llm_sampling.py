@@ -525,6 +525,60 @@ def _reasoning(c: _Conn, value: str | None, max_tokens: int) -> _Control:
     return _openrouter_reasoning(c, value)
 
 
+def _validated(requested: dict) -> tuple[dict, set[str]]:
+    """`(values, invalid)`: each requested control's value as it is stored,
+    and the names whose stored value failed its check."""
+    values: dict = {}
+    invalid: set[str] = set()
+    for name, value in requested.items():
+        try:
+            values[name] = _check(_BY_NAME[name], value)
+        except ValueError:
+            invalid.add(name)
+    return values, invalid
+
+
+def _reasoning_and_cap(c: _Conn, values: dict, invalid: set[str]) -> tuple[_Control, int, str]:
+    """`(reasoning, max_tokens, capped)`: the reasoning control's decision,
+    and the Anthropic API's `max_tokens` with why it was capped (0 and "" on
+    every other adapter) -- decided together because a thinking budget is
+    sized from that `max_tokens`."""
+    max_tokens, capped = (_anthropic_max_tokens(c, values.get("max_tokens"))
+                          if c.kind == "anthropic" else (0, ""))
+    reasoning = (_Control(UNSUPPORTED, None, WHY_INVALID, "user")
+                 if "reasoning_effort" in invalid
+                 else _reasoning(c, values.get("reasoning_effort"), max_tokens))
+    return reasoning, max_tokens, capped
+
+
+def _thinks(reasoning: _Control) -> bool:
+    """Whether thinking is ON: `disabled` is the reasoning control's field too,
+    and a model that takes sampling takes it with thinking turned off."""
+    wired = (reasoning.fields or {}).get("thinking")
+    return isinstance(wired, dict) and wired.get("type") not in ("disabled", "between_tools")
+
+
+def _send_sampler(c: _Conn, name: str, values: dict, sent: dict, *,
+                  thinking: bool, capped: str) -> _Control:
+    """One valid sampler control's decision, its value written into `sent`
+    (under its wire name) when it is sent. `thinking` is `_thinks`; `capped`
+    is why the Anthropic API's `max_tokens` was capped, if it was."""
+    decided = (_anthropic_sampler(c, name, thinking, "temperature" in sent)
+               if c.kind == "anthropic" else _sampler(c, name, values.get(name)))
+    if name in values and decided.state in _SENT and decided.wire:
+        sent[decided.wire] = values[name]
+        if c.kind == "openai_compatible" and name == "repetition_penalty":
+            # llama.cpp and LM Studio read `repeat_penalty`; vLLM,
+            # TabbyAPI and koboldcpp read `repetition_penalty`. Extended
+            # mode is for lenient servers by definition (they ignore a
+            # field they do not know), so sending both is what makes
+            # the one setting reach all five.
+            sent["repeat_penalty"] = values[name]
+    if name == "max_tokens" and capped:
+        decided = decided._replace(why=capped, source="catalog")
+    return decided
+
+
 def effective(target: wire.Target) -> dict:
     """What `target` is sent from its attached preset, control by control.
 
@@ -546,23 +600,9 @@ def effective(target: wire.Target) -> dict:
     stored = _stored(target)
     c = _context(target)
     requested = {name: stored[name] for name in CONTROLS if name in stored}
-    values: dict = {}
-    invalid: set[str] = set()
-    for name, value in requested.items():
-        try:
-            values[name] = _check(_BY_NAME[name], value)
-        except ValueError:
-            invalid.add(name)
-    max_tokens, capped = (_anthropic_max_tokens(c, values.get("max_tokens"))
-                          if c.kind == "anthropic" else (0, ""))
-    reasoning = (_Control(UNSUPPORTED, None, WHY_INVALID, "user")
-                 if "reasoning_effort" in invalid
-                 else _reasoning(c, values.get("reasoning_effort"), max_tokens))
-    # Whether thinking is ON: `disabled` is the reasoning control's field too,
-    # and a model that takes sampling takes it with thinking turned off.
-    wired = (reasoning.fields or {}).get("thinking")
-    thinking = isinstance(wired, dict) and wired.get("type") not in ("disabled",
-                                                                      "between_tools")
+    values, invalid = _validated(requested)
+    reasoning, max_tokens, capped = _reasoning_and_cap(c, values, invalid)
+    thinking = _thinks(reasoning)
     sent: dict = {}
     controls: dict[str, dict] = {}
     for name in CONTROLS:
@@ -572,19 +612,7 @@ def effective(target: wire.Target) -> dict:
         elif name in invalid:
             decided = _Control(UNSUPPORTED, None, WHY_INVALID, "user")
         else:
-            decided = (_anthropic_sampler(c, name, thinking, "temperature" in sent)
-                       if c.kind == "anthropic" else _sampler(c, name, values.get(name)))
-            if name in values and decided.state in _SENT and decided.wire:
-                sent[decided.wire] = values[name]
-                if c.kind == "openai_compatible" and name == "repetition_penalty":
-                    # llama.cpp and LM Studio read `repeat_penalty`; vLLM,
-                    # TabbyAPI and koboldcpp read `repetition_penalty`. Extended
-                    # mode is for lenient servers by definition (they ignore a
-                    # field they do not know), so sending both is what makes
-                    # the one setting reach all five.
-                    sent["repeat_penalty"] = values[name]
-            if name == "max_tokens" and capped:
-                decided = decided._replace(why=capped, source="catalog")
+            decided = _send_sampler(c, name, values, sent, thinking=thinking, capped=capped)
         if name == "max_tokens" and c.kind == "anthropic":
             # Required by that API: sent even when the preset's own is invalid.
             sent["max_tokens"] = max_tokens
