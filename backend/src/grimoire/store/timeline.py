@@ -45,6 +45,7 @@ from __future__ import annotations
 
 from . import chronicle, fieldtext, locks, plot
 from .scenes import read as scenes_read
+from .viewparts import tolerant
 
 
 def _beats(threads, known: frozenset[str]) -> tuple[dict[str, list[dict]], list[dict]]:
@@ -122,18 +123,12 @@ def build(cid: str) -> dict:
     ever does need a window, it needs to be one the client can see and page,
     not a cap that looks like completeness.
     """
-    def _tolerant(read, empty):
-        try:
-            return read()
-        except Exception:  # noqa: BLE001 — a garbled file empties its part, not the view
-            return empty
-
     with locks.campaign_lock(cid):
         # Frontmatter heads only — `list_scenes` never opens a transcript, which
         # is what makes a whole-campaign sweep affordable at play scale.
-        scenes = _tolerant(lambda: scenes_read.list_scenes(cid), [])
-        chron = _tolerant(lambda: chronicle.read_chronicle(cid), {})
-        threads = _tolerant(lambda: plot.read(cid), {})
+        scenes = tolerant(lambda: scenes_read.list_scenes(cid), [])
+        chron = tolerant(lambda: chronicle.read_chronicle(cid), {})
+        threads = tolerant(lambda: plot.read(cid), {})
     # Unparseable is not the only way these files can be wrong: both are read by
     # a bare `json.loads`, so valid JSON of the wrong shape arrives without
     # raising. Checked where it is used rather than trusted from the read.

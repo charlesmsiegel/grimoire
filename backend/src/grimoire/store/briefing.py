@@ -41,6 +41,7 @@ from . import chronicle, commitments, fieldtext, locks, plot, relationships
 from .appearances import cast as appearances_cast
 from .continuity import effective, involvement
 from .scenes import read as scenes_read
+from .viewparts import tolerant
 
 
 def _focus(present: list[dict], pcless: bool) -> list[dict]:
@@ -143,18 +144,12 @@ def build(cid: str, sid: str) -> dict:
     Never raises on a garbled store file: every section degrades to empty on its
     own, the contract ``plot.render_open`` set and ``get_ledger`` kept.
     """
-    def _tolerant(read, empty):
-        try:
-            return read()
-        except Exception:  # noqa: BLE001 — a garbled file empties its section, not the view
-            return empty
-
     with locks.campaign_lock(cid):
-        present = _tolerant(lambda: appearances_cast.scene_cast(cid, sid), [])
+        present = tolerant(lambda: appearances_cast.scene_cast(cid, sid), [])
         # Reads the frontmatter head only. Tolerant because the scene file can
         # go between the route's `_require_scene` and here; a scene this cannot
         # read is treated as an ordinary one, which is the narrower reading.
-        pcless = _tolerant(lambda: scenes_read.is_pcless(cid, sid), False)
+        pcless = tolerant(lambda: scenes_read.is_pcless(cid, sid), False)
         focus = _focus(present, pcless)
         # `_text`, not the raw name (Codex review). `cast._actor_name` returns
         # whatever the card's `name` holds when that value is TRUTHY -- its
@@ -165,7 +160,7 @@ def build(cid: str, sid: str) -> dict:
         # values cross, so it is where they are made text.
         names = {f"{a['kind']}/{a['id']}": fieldtext.text(a.get("name")) or fieldtext.text(a.get("id"))
                  for a in focus}
-        stage = _tolerant(lambda: involvement.stage_history(cid, set(names)), {})
+        stage = tolerant(lambda: involvement.stage_history(cid, set(names)), {})
         # Two reads per section, both inside the hold: `effective.threads` /
         # `effective.commitments` give the canonical rows -- a record merged
         # away by an alias is not a row of its own, and its canonical answers
@@ -183,21 +178,21 @@ def build(cid: str, sid: str) -> dict:
         # is it lying -- which is also why a failure on the continuity side
         # falls back to the physical rows (`_canonical_or_physical`) rather
         # than to an empty section.
-        threads = _tolerant(lambda: _canonical_or_physical(
+        threads = tolerant(lambda: _canonical_or_physical(
             lambda: effective.threads(cid), lambda: plot.open_threads(cid)), [])
-        thread_scenes = _tolerant(lambda: involvement.group_touched(cid, "thread"), {})
-        owed = _tolerant(lambda: _canonical_or_physical(
+        thread_scenes = tolerant(lambda: involvement.group_touched(cid, "thread"), {})
+        owed = tolerant(lambda: _canonical_or_physical(
             lambda: effective.commitments(cid),
             lambda: commitments.open_commitments(cid)), [])
-        owed_scenes = _tolerant(lambda: involvement.group_touched(cid, "commitment"), {})
+        owed_scenes = tolerant(lambda: involvement.group_touched(cid, "commitment"), {})
         # The whole present cast, not just `focus`: a feeling between two NPCs
         # in the room is exactly the kind of thing a briefing is for, and
         # `context.story._relationship_lines` renders the same block from the
         # same set for the model.
-        lines = _tolerant(lambda: relationships.render_present(
+        lines = tolerant(lambda: relationships.render_present(
             cid, [f"{a['kind']}:{a['id']}" for a in present],
             lambda t: relationships.actor_name(cid, t)), [])
-        last = _tolerant(lambda: _last_time(cid, sid), None)
+        last = tolerant(lambda: _last_time(cid, sid), None)
 
     return {
         "focus": [names[ref] for ref in sorted(names)],

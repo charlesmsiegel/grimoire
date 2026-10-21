@@ -45,6 +45,7 @@ from . import campaigns, dossiers, facts, locks, playstate, relationships, tagli
 from .appearances import cast as appearances_cast
 from .appearances import paths as appearances_paths
 from .scenes import read as scenes_read
+from .viewparts import tolerant
 
 #: Meters run 0–5 in `relationships.set_feeling`; the column draws five pips.
 FEELING_AXES = ("trust", "affection", "tension")
@@ -102,12 +103,6 @@ def build(cid: str, sid: str, kind: str, actor_id: str) -> dict:
     in that scene before calling. That check is what keeps this from becoming a
     way to read any character's campaign state by guessing an id.
     """
-    def _tolerant(read, empty):
-        try:
-            return read()
-        except Exception:  # noqa: BLE001 — a garbled file empties its section, not the view
-            return empty
-
     croot = campaigns.campaign_root(cid)
     aroot = appearances_paths.locked_actor_root(cid)
     ref = f"{kind}:{actor_id}"
@@ -125,28 +120,28 @@ def build(cid: str, sid: str, kind: str, actor_id: str) -> dict:
         # The card read itself IS tolerant: a cast member whose card will not
         # parse still has state, a dossier and facts, and those are what the
         # column is for. She falls back to her id for a name.
-        detail = _tolerant(lambda: appearances_cast.cast_detail(cid, sid, kind, actor_id), {})
+        detail = tolerant(lambda: appearances_cast.cast_detail(cid, sid, kind, actor_id), {})
         name = _text(detail.get("name")) or actor_id
-        record = _tolerant(lambda: appearances_paths.record(cid).get(f"{kind}/{actor_id}", {}), {})
+        record = tolerant(lambda: appearances_paths.record(cid).get(f"{kind}/{actor_id}", {}), {})
         scene_ids = [s for s in record.get("scenes", []) if isinstance(s, str)]
         # Labelled, not left as filenames. A scene id is `004--the-priory-door`,
         # and "Cast · in scene 004--the-priory-door" is the store's business
         # leaking into a sentence about a person. Same projection the standing
         # facts get, and the same one `get_ledger` uses.
-        titles = _tolerant(lambda: {x["id"]: x["title"] for x in scenes_read.list_scenes(cid)}, {})
+        titles = tolerant(lambda: {x["id"]: x["title"] for x in scenes_read.list_scenes(cid)}, {})
         scenes = [{"id": x, "title": titles.get(x, x)} for x in scene_ids]
 
         # Characters keep their play state and dossier beside the campaign's own
         # copy of the card. A PC has a play state too (its current state only,
         # filed under `pcs/`), read by kind so a PC whose id matches an NPC's is
         # never shown that NPC's state.
-        state = _tolerant(lambda: playstate.read_state(aroot, actor_id, kind), None) or {}
-        dossier = _tolerant(lambda: dossiers.read(croot, actor_id), "")
+        state = tolerant(lambda: playstate.read_state(aroot, actor_id, kind), None) or {}
+        dossier = tolerant(lambda: dossiers.read(croot, actor_id), "")
         # Only meaningful for someone who has never been played: once there is a
         # dossier, the tagline is the guess the dossier replaced.
-        tagline = _tolerant(lambda: taglines.read(aroot, actor_id), "")
+        tagline = tolerant(lambda: taglines.read(aroot, actor_id), "")
 
-        feelings = _tolerant(lambda: relationships.read(cid)["feelings"], {})
+        feelings = tolerant(lambda: relationships.read(cid)["feelings"], {})
         toward = []
         for other in present:
             other_ref = f"{other['kind']}:{other['id']}"
@@ -163,7 +158,7 @@ def build(cid: str, sid: str, kind: str, actor_id: str) -> dict:
                 **_pips(f),
             })
 
-        standing_facts = _tolerant(lambda: _standing_facts(cid, name), [])
+        standing_facts = tolerant(lambda: _standing_facts(cid, name), [])
 
     return {
         "kind": kind,
