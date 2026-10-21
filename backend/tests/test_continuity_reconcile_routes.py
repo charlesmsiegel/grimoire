@@ -33,6 +33,7 @@ from grimoire.store.continuity import candidates, canon, doc, reconcile, similar
 from grimoire.store.continuity.reconcile import _discovery as reconcile_discovery
 
 from . import draft_runs, inference_fixtures, review_runs
+from .continuity_fixtures import configure_vectors as configure_embeddings
 from .llm_fakes import (
     Cassette,
     FakeEmbeddings,
@@ -46,7 +47,6 @@ from .review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER
 from .test_absorb_identity import MODES as SHARED_MODES
 from .test_absorb_identity import ROW_ENVELOPE, _dumped, _leaked, _row_texts
 from .test_continuity_reconcile import _chores as chores
-from .test_continuity_reconcile import _configure as configure_embeddings
 
 #: What marks a request as the sweep's: the decide system phrase every
 #: decision carries, and the heading only a reconcile item's context holds

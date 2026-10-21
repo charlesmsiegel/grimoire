@@ -32,10 +32,11 @@ from grimoire.routes import scenes as scenes_routes
 
 from . import inference_baseline as base
 from . import review_runs
+from .cast_seed import seed
 from .llm_fakes import FakeLLM, decision_reply, from_entries
 from .test_absorb_identity import _llm, _one_per_chunk, _seed_ledger, _two_rows
 from .test_absorb_identity import _row as _identity_row
-from .test_character_turns import _chat, seed
+from .test_character_turns import _chat
 from .test_continuity_reconcile_routes import (
     _duplicate,
     _entry,
