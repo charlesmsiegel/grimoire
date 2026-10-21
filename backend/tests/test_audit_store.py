@@ -16,13 +16,7 @@ from grimoire.store import (
     sheets,
     worlds,
 )
-
-
-@pytest.fixture
-def plain_campaign(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Run", wid)
+from tests.campaign_fixtures import plain_campaign as plain_campaign
 
 
 def test_capture_and_read(cid_with_sheet):

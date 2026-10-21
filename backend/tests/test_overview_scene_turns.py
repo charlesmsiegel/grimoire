@@ -14,10 +14,8 @@ import grimoire.store as store
 from grimoire.store import overview, readstats
 from grimoire.store.overview import kinds
 from grimoire.store.overview import read as overview_read
-from tests.overview_support import (
-    clock_forward,
-    overview_client,  # noqa: F401 -- a fixture, `client`
-)
+from tests.overview_support import clock_forward
+from tests.overview_support import overview_client as overview_client
 
 
 @pytest.fixture

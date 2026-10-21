@@ -7,18 +7,11 @@ where the scene goes -- dropped with it, copied by a fork, cut with the scenes
 a retrospective fork takes off.
 """
 
-import pytest
 
-from grimoire.store import authors_notes, campaigns, fork, scenes, worlds
+from grimoire.store import authors_notes, campaigns, fork, scenes
+from tests.campaign_fixtures import saltmarch_cid as saltmarch_cid
 
 NOTE = {"text": "Keep the storm audible in every scene.", "depth": 4, "every": 1}
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Saltmarch", wid)
 
 
 def _file(cid):

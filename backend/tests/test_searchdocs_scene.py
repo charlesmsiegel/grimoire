@@ -29,26 +29,19 @@ from grimoire.store import (
     rolling_summary,
     scenes,
     statcache,
-    worlds,
 )
 from grimoire.store.appearances import transitions
 from grimoire.store.compiled import _runtime as compiled_runtime
 from grimoire.store.continuity import doc as continuity_doc
 from grimoire.store.inference import embed as inference_embed
 from grimoire.store.searchdocs import rolling, scene, slices
+from tests.campaign_fixtures import run_cid as run_cid
 
 
 @pytest.fixture(autouse=True)
 def _trust_fresh_files(monkeypatch):
     """Files these tests write are seconds old; let the memos trust them."""
     monkeypatch.setattr(statcache, "RACY_WINDOW_NS", 0)
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Run", wid)
 
 
 def doc(cid, sid):

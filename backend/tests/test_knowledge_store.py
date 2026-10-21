@@ -29,13 +29,7 @@ from grimoire.store import (
     undo,
     worlds,
 )
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Saltmarch", wid)
+from tests.campaign_fixtures import saltmarch_cid as saltmarch_cid
 
 
 def _hex() -> str:

@@ -8,14 +8,13 @@ These pin each helper on its own; `test_branch_store.py` pins the assembly.
 import json
 import uuid
 
-import pytest
-
 from grimoire import routes, store
-from grimoire.store import campaigns, dice, rolls, worlds
+from grimoire.store import campaigns, dice, rolls
 from grimoire.store.appearances import paths as appearances_paths
 from grimoire.store.audit import baselines
 from grimoire.store.tracker import paths as tracker_paths
 from grimoire.store.tracker import records
+from tests.campaign_fixtures import saltmarch_cid as saltmarch_cid
 from tests.llm_fakes import FakeLLM
 
 
@@ -39,13 +38,6 @@ def _turn(client, cid, sid, content="Hello"):
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                     json={"content": content, "speaker_ref": "characters:mara"})
     assert r.status_code == 200, r.text
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Saltmarch", wid)
 
 
 def _hex():

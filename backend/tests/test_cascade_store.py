@@ -27,17 +27,10 @@ from grimoire.store import (
     provenance,
     rolls,
     scenes,
-    worlds,
 )
 from grimoire.store.scenes import serialize as scenes_serialize
 from grimoire.store.scenes import turns as scenes_turns
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Run", wid)
+from tests.campaign_fixtures import run_cid as run_cid
 
 
 @pytest.fixture

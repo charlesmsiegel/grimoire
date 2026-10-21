@@ -22,11 +22,8 @@ from grimoire.routes import todo
 from grimoire.store import ledger_texts, overview, readstats, statcache
 from grimoire.store.continuity import effective
 from grimoire.store.overview import kinds
-from tests.overview_support import (
-    audited,
-    clock_forward,
-    overview_client,  # noqa: F401 -- a fixture, `client`
-)
+from tests.overview_support import audited, clock_forward
+from tests.overview_support import overview_client as overview_client
 
 
 @pytest.fixture

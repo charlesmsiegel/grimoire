@@ -30,10 +30,10 @@ from grimoire.store import (
     scenes,
     statcache,
     vectors,
-    worlds,
 )
 from grimoire.store.compiled import _contracts as compiled_contracts
 from grimoire.store.searchdocs import embedded, live, rolling, scene, slices
+from tests.campaign_fixtures import run_cid as run_cid
 
 
 @pytest.fixture(autouse=True)
@@ -42,13 +42,6 @@ def _trust_fresh_files(monkeypatch):
     live._MEMO.clear()
     live._RECORDED.clear()
     live._INPUTS.clear()
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Run", wid)
 
 
 def _scene(cid, title, *, absorbed=False):

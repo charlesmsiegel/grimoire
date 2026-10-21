@@ -12,18 +12,12 @@ import json
 
 import pytest
 
-from grimoire.store import campaigns, regex, scenes, worlds
+from grimoire.store import campaigns, regex, scenes
 from grimoire.store.scenes import serialize
 from grimoire.store.searchdocs import expand
+from tests.campaign_fixtures import run_cid as run_cid
 
 THINK = {"name": "Strip ledgers", "pattern": r"<ledger>[\s\S]*?</ledger>", "replacement": ""}
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Run", wid)
 
 
 def _scene(cid, messages, title="Saltmarch"):

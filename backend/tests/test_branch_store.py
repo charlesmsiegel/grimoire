@@ -13,15 +13,9 @@ import uuid
 import pytest
 
 from grimoire import routes, store
-from grimoire.store import branch, campaigns, checks, dice, entities, scene_ids, scenes, worlds
+from grimoire.store import branch, campaigns, checks, dice, entities, scene_ids, scenes
+from tests.campaign_fixtures import saltmarch_cid as saltmarch_cid
 from tests.llm_fakes import FakeLLM
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Saltmarch", wid)
 
 
 def _played(cid, title, posts=2):

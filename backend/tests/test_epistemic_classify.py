@@ -14,7 +14,6 @@ import pytest
 
 from evals.epistemic import synth
 from grimoire.store import (
-    campaigns,
     chronicle,
     knowledge,
     knowledge_scene,
@@ -22,7 +21,6 @@ from grimoire.store import (
     overlay,
     responses,
     scenes,
-    worlds,
 )
 from grimoire.store.appearances import paths as appearances_paths
 from grimoire.store.context import epistemic
@@ -30,14 +28,7 @@ from grimoire.store.context.epistemic import _classification as epistemic_classi
 from grimoire.store.history import budget, model
 from grimoire.store.locks import _runtime as locks_runtime
 from grimoire.store.scenes import identity as scenes_identity
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Saltmarch", wid)
-
+from tests.campaign_fixtures import saltmarch_cid as saltmarch_cid
 
 Stage = synth.Stage
 _hex = synth.hex_id

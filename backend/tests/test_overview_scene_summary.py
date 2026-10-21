@@ -16,12 +16,8 @@ import pytest
 
 import grimoire.store as store
 from grimoire.store import overview, readstats
-from tests.overview_support import (
-    audited,
-    clear_memos,
-    clock_forward,
-    overview_client,  # noqa: F401 -- a fixture, `client`
-)
+from tests.overview_support import audited, clear_memos, clock_forward
+from tests.overview_support import overview_client as overview_client
 
 
 @pytest.fixture

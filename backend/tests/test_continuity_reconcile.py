@@ -34,7 +34,6 @@ from grimoire.store import (
     scenes,
     usage,
     vectors,
-    worlds,
 )
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import (
@@ -49,6 +48,7 @@ from grimoire.store.continuity import (
 from grimoire.store.continuity.reconcile import _discovery as reconcile_discovery
 from grimoire.store.inference import facts
 from grimoire.store.locks import _runtime as locks_runtime
+from tests.campaign_fixtures import run_cid as run_cid
 from tests.inference_fixtures import embedding
 from tests.llm_fakes import FakeEmbeddings
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
@@ -62,13 +62,6 @@ OATH = "commitment:mara-s-oath"
 
 SIGNAL_KEYS = {"title_exact", "slug_equal", "lexical", "cosine", "shared_actors",
                "shared_scenes", "shared_anchors", "via"}
-
-
-@pytest.fixture
-def cid(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("Realm")
-    return campaigns.create_campaign("Run", wid)
 
 
 @pytest.fixture

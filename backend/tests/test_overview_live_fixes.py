@@ -16,11 +16,8 @@ import pytest
 import grimoire.store as store
 from grimoire.routes import todo
 from grimoire.store.modules import binding
-from tests.overview_support import (
-    audited,
-    clock_forward,
-    overview_client,  # noqa: F401 -- a fixture, `client`
-)
+from tests.overview_support import audited, clock_forward
+from tests.overview_support import overview_client as overview_client
 
 
 @pytest.fixture
