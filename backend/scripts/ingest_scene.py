@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -490,6 +491,197 @@ def _unapplied(edits: list[dict], failures: list[dict]) -> list[dict]:
     return pending
 
 
+@dataclass
+class _Attempt:
+    """What one attempt at a scene left, on either path, for `_record_attempt`:
+    what landed, what failed, what is still replayable, and what an unfinished
+    entry has to carry into the next run."""
+
+    sid: str
+    one_line: str
+    applied: list
+    failures: list
+    pending: list
+    parsed: object
+    edits: object
+    timeline_before: object
+
+
+def _replay_pending(cid: str, manifest: dict, key: str, entry: dict, pending: list,
+                    timeline_before: object) -> _Attempt | dict:
+    """Replay an `incomplete` entry's `pending` rows, and only them. Returns
+    the vanished-scene report instead when the scene went under the lock."""
+    sid = entry["sid"]
+    one_line = entry.get("one_line", "")
+    # Carried, not re-derived: a retry that leaves the scene incomplete
+    # again must keep the extraction its timeline was written from, and the
+    # edits whose `before` records what the proposal actually saw.
+    parsed = entry.get("parsed")
+    edits_taken = entry.get("edits")
+    try:
+        applied, failures = retry_edits(cid, sid, pending)
+    except SceneVanished:
+        # Lost the race the check above cannot close: the scene went while
+        # this run was between that check and the lock.
+        return _record_vanished(cid, manifest, key, sid)
+    # The first attempt's applied ids stay on the record: this run did not
+    # re-apply them, and dropping them would report the scene as having
+    # landed only what the retry touched.
+    applied = [a for a in (entry.get("applied") or []) if isinstance(a, str)] + applied
+    # Every prior failure this run did NOT replay stays too, keyed on what
+    # was actually replayed rather than on `kind`. Conflicts were the first
+    # reason for this, then record-creating rows and the `changes` log
+    # joined them, and a `kind == "conflict"` filter silently dropped the
+    # new ones -- so a retry that cleared the last I/O error reported the
+    # scene `done` while a half-created character still stood unreconciled.
+    # The question is not what kind of failure it is; it is whether anything
+    # has since answered for it.
+    replayed = {e.get("id") for e in pending if isinstance(e, dict)}
+    failures = [f for f in (entry.get("failures") or [])
+                if isinstance(f, dict) and f.get("id") not in replayed] + failures
+    return _Attempt(sid, one_line, applied, failures, _unapplied(pending, failures),
+                    parsed, edits_taken, timeline_before)
+
+
+def _scene_for(cid: str, scene: dict, manifest: dict, key: str, entry: dict | None) -> str:
+    """The scene this attempt absorbs into: the one a prior attempt minted, or
+    a new one, recorded `in_progress` before anything else is written.
+
+    build_scene runs at most once per key: an "in_progress" entry means a
+    prior attempt already minted the scene and died before absorb/apply
+    completed, so this retry resumes with that sid instead of creating a
+    duplicate scene. There remains a narrow window — a crash inside
+    apply_scene, or between it and the manifest save below — where a retry
+    re-absorbs an already-applied scene; see SKILL.md for that residual
+    risk. An "incomplete" entry with no usable `pending` (hand-edited, or
+    written before this script recorded it) lands here too: a full re-run
+    is the only thing left, and it is what this path always did."""
+    if entry and entry.get("status") in ("in_progress", "incomplete") and entry.get("sid"):
+        return entry["sid"]
+    sid = build_scene(cid, scene)
+    manifest[key] = {"status": "in_progress", "sid": sid}
+    save_manifest(cid, manifest)
+    return sid
+
+
+async def _extraction(cid: str, sid: str, manifest: dict, key: str, entry: dict | None, *,
+                      client: LLMClient, resolved: UsableInference,
+                      timeline_before: object) -> tuple[dict, list, bool, object]:
+    """`(parsed, edits, resuming, timeline_before)`: the persisted extraction
+    when there is one, otherwise a fresh one, persisted with its pre-image.
+
+    The extraction is PERSISTED and resumed, not re-run. A retry after a
+    failure partway through the sequence would otherwise pair extraction
+    B's chronicle record and edits with extraction A's timeline events --
+    the model is nondeterministic, so B can name events A never had and
+    omit ones already filed, and nothing downstream would ever reconcile
+    the two. Resuming the saved one also means the retry costs no tokens.
+    `materialize` is re-run against the CURRENT store, so a record that
+    moved in between is judged fresh."""
+    stored = (entry or {}).get("parsed")
+    stored_edits = (entry or {}).get("edits")
+    if isinstance(stored, dict):
+        # The EDITS are resumed too, not re-materialized. Re-running
+        # `materialize` against the store as it is now takes each record's
+        # CURRENT value as the proposal's `before` -- so a movement another
+        # save made in between becomes the basis the stale row was written
+        # against instead of the conflict it is, and `apply_edits` waves it
+        # through: an older scene's beat appended after a newer one, or a
+        # commitment reopened after it was fulfilled. The whole point of
+        # `before` is that it records what the reviewer's proposal actually
+        # saw. (I argued the opposite one round ago; that was wrong, and
+        # this is why.)
+        edits = stored_edits if isinstance(stored_edits, list) \
+            else absorb.materialize(cid, sid, stored)
+        return stored, edits, True, timeline_before
+    result = await run_absorb(cid, sid, client, resolved)
+    parsed, edits = result["parsed"], result["edits"]
+    # The timeline's PRE-IMAGE rides with the extraction, recorded in
+    # the same write and for the same reason: a resume has to be able to
+    # tell this scene's append from an identical one filed by the scene
+    # before it, and only a value captured before the append can say so.
+    timeline_before = _timeline_preimage(cid)
+    manifest[key] = {**(manifest.get(key) or {}), "status": "in_progress",
+                     "sid": sid, "parsed": parsed, "edits": edits,
+                     "timeline_before": timeline_before}
+    save_manifest(cid, manifest)
+    return parsed, edits, False, timeline_before
+
+
+async def _absorb_and_apply(cid: str, scene: dict, manifest: dict, key: str,
+                            entry: dict | None, *, client: LLMClient,
+                            resolved: UsableInference,
+                            timeline_before: object) -> _Attempt | dict:
+    """Absorb the scene (or resume its persisted extraction) and apply it.
+    Returns the vanished-scene report instead when the scene went under the
+    lock."""
+    sid = _scene_for(cid, scene, manifest, key, entry)
+    parsed, edits, resuming, timeline_before = await _extraction(
+        cid, sid, manifest, key, entry, client=client, resolved=resolved,
+        timeline_before=timeline_before)
+    one_line = parsed["one_line"]
+
+    def _record_preimage(pre: dict) -> None:
+        """Persist a pre-image re-taken inside the campaign lock, and adopt
+        it here so the entry written at the end of this run carries it."""
+        nonlocal timeline_before
+        timeline_before = pre
+        manifest[key] = {**(manifest.get(key) or {}), "timeline_before": pre}
+        save_manifest(cid, manifest)
+
+    try:
+        applied, failures = apply_scene(
+            cid, sid, parsed, edits, resuming=resuming,
+            timeline_before=timeline_before, record_preimage=_record_preimage)
+    except SceneVanished:
+        return _record_vanished(cid, manifest, key, sid)
+    return _Attempt(sid, one_line, applied, failures, _unapplied(edits, failures),
+                    parsed, edits, timeline_before)
+
+
+def _carried(attempt: _Attempt) -> dict:
+    """What an unfinished entry carries into the next run.
+
+    The extraction rides along on anything not `done`: an `incomplete`
+    entry with nothing replayable falls back to a full re-run, and that
+    fallback must resume this scene's extraction rather than buy a second
+    one that disagrees with what already landed."""
+    carried: dict = {}
+    if isinstance(attempt.parsed, dict):
+        carried["parsed"] = attempt.parsed
+    if isinstance(attempt.edits, list):
+        carried["edits"] = attempt.edits
+    # And so does the pre-image, for the fallback that re-runs the whole
+    # scene: dropping it here would leave that run with nothing but tail
+    # equality again, which is the state this round's finding is about. It
+    # is the value from the attempt that recorded the extraction, never a
+    # fresh reading -- taken now it would already include the append.
+    if attempt.timeline_before is not _NO_PREIMAGE:
+        carried["timeline_before"] = attempt.timeline_before
+    carried["failures"] = attempt.failures
+    if attempt.pending:   # omitted when nothing is replayable, which is what the resume reads
+        carried["pending"] = attempt.pending
+    return carried
+
+
+def _record_attempt(cid: str, manifest: dict, key: str, attempt: _Attempt) -> dict:
+    """Write the attempt's entry and report it.
+
+    A scene whose edits did not all land is NOT done. Marking it done would
+    make the loss permanent: `ingest_one_scene` skips a done key outright, so
+    the only record of the dropped edit would be a line of console output in a
+    batch run. `incomplete` keeps the sid AND the unapplied rows, so a re-run
+    resumes this scene rather than minting a duplicate, and carries both the
+    reasons and the work still owed with it."""
+    status = "done" if not attempt.failures else "incomplete"
+    manifest[key] = {"status": status, "sid": attempt.sid, "one_line": attempt.one_line,
+                     "applied": attempt.applied}
+    if attempt.failures:
+        manifest[key].update(_carried(attempt))
+    save_manifest(cid, manifest)
+    return {"key": key, **manifest[key], "status": status}
+
+
 async def ingest_one_scene(cid: str, scene: dict, client: LLMClient,
                            resolved: UsableInference) -> dict:
     manifest = load_manifest(cid)
@@ -535,137 +727,13 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient,
             # This run does nothing and says so; the exit code is what stops a
             # batch, and the manifest already carries the reasons.
             return {"key": key, **entry, "status": "incomplete"}
-        sid = entry["sid"]
-        one_line = entry.get("one_line", "")
-        # Carried, not re-derived: a retry that leaves the scene incomplete
-        # again must keep the extraction its timeline was written from, and the
-        # edits whose `before` records what the proposal actually saw.
-        parsed = entry.get("parsed")
-        edits_taken = entry.get("edits")
-        try:
-            applied, failures = retry_edits(cid, sid, pending)
-        except SceneVanished:
-            # Lost the race the check above cannot close: the scene went while
-            # this run was between that check and the lock.
-            return _record_vanished(cid, manifest, key, sid)
-        # The first attempt's applied ids stay on the record: this run did not
-        # re-apply them, and dropping them would report the scene as having
-        # landed only what the retry touched.
-        applied = [a for a in (entry.get("applied") or []) if isinstance(a, str)] + applied
-        # Every prior failure this run did NOT replay stays too, keyed on what
-        # was actually replayed rather than on `kind`. Conflicts were the first
-        # reason for this, then record-creating rows and the `changes` log
-        # joined them, and a `kind == "conflict"` filter silently dropped the
-        # new ones -- so a retry that cleared the last I/O error reported the
-        # scene `done` while a half-created character still stood unreconciled.
-        # The question is not what kind of failure it is; it is whether anything
-        # has since answered for it.
-        replayed = {e.get("id") for e in pending if isinstance(e, dict)}
-        failures = [f for f in (entry.get("failures") or [])
-                    if isinstance(f, dict) and f.get("id") not in replayed] + failures
-        pending = _unapplied(pending, failures)
+        attempt = _replay_pending(cid, manifest, key, entry, pending, timeline_before)
     else:
-        # build_scene runs at most once per key: an "in_progress" entry means a
-        # prior attempt already minted the scene and died before absorb/apply
-        # completed, so this retry resumes with that sid instead of creating a
-        # duplicate scene. There remains a narrow window — a crash inside
-        # apply_scene, or between it and the manifest save below — where a retry
-        # re-absorbs an already-applied scene; see SKILL.md for that residual
-        # risk. An "incomplete" entry with no usable `pending` (hand-edited, or
-        # written before this script recorded it) lands here too: a full re-run
-        # is the only thing left, and it is what this path always did.
-        if entry and entry.get("status") in ("in_progress", "incomplete") and entry.get("sid"):
-            sid = entry["sid"]
-        else:
-            sid = build_scene(cid, scene)
-            manifest[key] = {"status": "in_progress", "sid": sid}
-            save_manifest(cid, manifest)
-
-        # The extraction is PERSISTED and resumed, not re-run. A retry after a
-        # failure partway through the sequence would otherwise pair extraction
-        # B's chronicle record and edits with extraction A's timeline events --
-        # the model is nondeterministic, so B can name events A never had and
-        # omit ones already filed, and nothing downstream would ever reconcile
-        # the two. Resuming the saved one also means the retry costs no tokens.
-        # `materialize` is re-run against the CURRENT store, so a record that
-        # moved in between is judged fresh.
-        stored = (entry or {}).get("parsed")
-        stored_edits = (entry or {}).get("edits")
-        resuming = isinstance(stored, dict)
-        if resuming:
-            parsed = stored
-            # The EDITS are resumed too, not re-materialized. Re-running
-            # `materialize` against the store as it is now takes each record's
-            # CURRENT value as the proposal's `before` -- so a movement another
-            # save made in between becomes the basis the stale row was written
-            # against instead of the conflict it is, and `apply_edits` waves it
-            # through: an older scene's beat appended after a newer one, or a
-            # commitment reopened after it was fulfilled. The whole point of
-            # `before` is that it records what the reviewer's proposal actually
-            # saw. (I argued the opposite one round ago; that was wrong, and
-            # this is why.)
-            edits = stored_edits if isinstance(stored_edits, list) \
-                else absorb.materialize(cid, sid, parsed)
-        else:
-            result = await run_absorb(cid, sid, client, resolved)
-            parsed, edits = result["parsed"], result["edits"]
-            # The timeline's PRE-IMAGE rides with the extraction, recorded in
-            # the same write and for the same reason: a resume has to be able to
-            # tell this scene's append from an identical one filed by the scene
-            # before it, and only a value captured before the append can say so.
-            timeline_before = _timeline_preimage(cid)
-            manifest[key] = {**(manifest.get(key) or {}), "status": "in_progress",
-                             "sid": sid, "parsed": parsed, "edits": edits,
-                             "timeline_before": timeline_before}
-            save_manifest(cid, manifest)
-        one_line = parsed["one_line"]
-        edits_taken = edits
-
-        def _record_preimage(pre: dict) -> None:
-            """Persist a pre-image re-taken inside the campaign lock, and adopt
-            it here so the entry written at the end of this run carries it."""
-            nonlocal timeline_before
-            timeline_before = pre
-            manifest[key] = {**(manifest.get(key) or {}), "timeline_before": pre}
-            save_manifest(cid, manifest)
-
-        try:
-            applied, failures = apply_scene(
-                cid, sid, parsed, edits, resuming=resuming,
-                timeline_before=timeline_before, record_preimage=_record_preimage)
-        except SceneVanished:
-            return _record_vanished(cid, manifest, key, sid)
-        pending = _unapplied(edits, failures)
-
-    # A scene whose edits did not all land is NOT done. Marking it done would
-    # make the loss permanent: `ingest_one_scene` skips a done key outright, so
-    # the only record of the dropped edit would be a line of console output in a
-    # batch run. `incomplete` keeps the sid AND the unapplied rows, so a re-run
-    # resumes this scene rather than minting a duplicate, and carries both the
-    # reasons and the work still owed with it.
-    status = "done" if not failures else "incomplete"
-    manifest[key] = {"status": status, "sid": sid, "one_line": one_line, "applied": applied}
-    if failures:
-        # The extraction rides along on anything not `done`: an `incomplete`
-        # entry with nothing replayable falls back to a full re-run, and that
-        # fallback must resume this scene's extraction rather than buy a second
-        # one that disagrees with what already landed.
-        if isinstance(parsed, dict):
-            manifest[key]["parsed"] = parsed
-        if isinstance(edits_taken, list):
-            manifest[key]["edits"] = edits_taken
-        # And so does the pre-image, for the fallback that re-runs the whole
-        # scene: dropping it here would leave that run with nothing but tail
-        # equality again, which is the state this round's finding is about. It
-        # is the value from the attempt that recorded the extraction, never a
-        # fresh reading -- taken now it would already include the append.
-        if timeline_before is not _NO_PREIMAGE:
-            manifest[key]["timeline_before"] = timeline_before
-        manifest[key]["failures"] = failures
-        if pending:   # omitted when nothing is replayable, which is what the resume reads
-            manifest[key]["pending"] = pending
-    save_manifest(cid, manifest)
-    return {"key": key, **manifest[key], "status": status}
+        attempt = await _absorb_and_apply(cid, scene, manifest, key, entry, client=client,
+                                          resolved=resolved, timeline_before=timeline_before)
+    if not isinstance(attempt, _Attempt):   # the scene vanished, and that is recorded
+        return attempt
+    return _record_attempt(cid, manifest, key, attempt)
 
 
 def resolve_key(cid: str, key: str) -> tuple[bool, object]:
