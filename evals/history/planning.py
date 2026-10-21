@@ -446,38 +446,48 @@ def run_validation():
 # --- aggregate, gate and summary -------------------------------------------------
 
 
+def _per_row(rows, key):
+    """`key` summed over `rows`, per row (0 for no rows)."""
+    return sum(r[key] for r in rows) / max(len(rows), 1)
+
+
+def _plan_validity(rows):
+    """Valid plans per planning call, or None when no row made one."""
+    return (sum(r["valid_plans"] for r in rows) / sum(r["plan_calls"] for r in rows)
+            if any(r["plan_calls"] for r in rows) else None)
+
+
+def _arm_row(rows):
+    """One arm's totals over its rows: recall and gain over the targets, the
+    false-trigger rate over the controls, the rest over every row."""
+    targets = [r for r in rows if not r["control"]]
+    controls = [r for r in rows if r["control"]]
+    return {
+        **{k: _per_row(targets, k)
+           for k in ("recall1", "recall3", "recall5", "excerpt_recall", "gain")},
+        "trigger_rate": _per_row(rows, "triggered"),
+        "false_trigger_rate": _per_row(controls, "false_trigger"),
+        "plan_validity": _plan_validity(rows),
+        "drops": sum(r["drops"] for r in rows),
+        "steps_per_turn": _per_row(rows, "steps"),
+        "rows_per_turn": sum(r["planner"]["rows"] + r["check"]["rows"] for r in rows)
+        / max(len(rows), 1),
+        "tokens_per_turn": _per_turn(rows),
+        "wall_ms": _per_row(rows, "wall_ms"),
+        "terminals": dict(Counter(r["terminal"] for r in rows if r["terminal"])),
+        "cheap_retrieval_failed_rate": _per_row(rows, "cheap_retrieval_failed"),
+        # The three columns, each summed on its own and never added
+        # together; a column no case reported stays None, and the arm's
+        # unpriced calls say a reported total is a floor.
+        "money": {column: _column(rows, column)
+                  for column in ("cost_usd", "estimated_usd", "modelled_usd")},
+        "unpriced_calls": sum(r.get("unpriced_calls", 0) for r in rows),
+    }
+
+
 def aggregate(records):
-    out = {}
-    for arm in dict.fromkeys(r["arm"] for r in records):
-        rows = [r for r in records if r["arm"] == arm]
-        targets = [r for r in rows if not r["control"]]
-        controls = [r for r in rows if r["control"]]
-        out[arm] = {
-            **{k: sum(r[k] for r in targets) / max(len(targets), 1)
-               for k in ("recall1", "recall3", "recall5", "excerpt_recall", "gain")},
-            "trigger_rate": sum(r["triggered"] for r in rows) / max(len(rows), 1),
-            "false_trigger_rate": sum(r["false_trigger"] for r in controls)
-            / max(len(controls), 1),
-            "plan_validity": (sum(r["valid_plans"] for r in rows)
-                              / sum(r["plan_calls"] for r in rows)
-                              if any(r["plan_calls"] for r in rows) else None),
-            "drops": sum(r["drops"] for r in rows),
-            "steps_per_turn": sum(r["steps"] for r in rows) / max(len(rows), 1),
-            "rows_per_turn": sum(r["planner"]["rows"] + r["check"]["rows"] for r in rows)
-            / max(len(rows), 1),
-            "tokens_per_turn": _per_turn(rows),
-            "wall_ms": sum(r["wall_ms"] for r in rows) / max(len(rows), 1),
-            "terminals": dict(Counter(r["terminal"] for r in rows if r["terminal"])),
-            "cheap_retrieval_failed_rate": sum(r["cheap_retrieval_failed"] for r in rows)
-            / max(len(rows), 1),
-            # The three columns, each summed on its own and never added
-            # together; a column no case reported stays None, and the arm's
-            # unpriced calls say a reported total is a floor.
-            "money": {column: _column(rows, column)
-                      for column in ("cost_usd", "estimated_usd", "modelled_usd")},
-            "unpriced_calls": sum(r.get("unpriced_calls", 0) for r in rows),
-        }
-    return out
+    return {arm: _arm_row([r for r in records if r["arm"] == arm])
+            for arm in dict.fromkeys(r["arm"] for r in records)}
 
 
 def _column(rows, column):

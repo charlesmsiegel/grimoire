@@ -74,8 +74,9 @@ def test_context_only_rules_read_scene_markers_not_the_shared_fact():
     stats = {"network_ms": 0.0, "semantic_evaluated": 0, "retrieval_ms": 0.0}
 
     def grade(packed, arm="context-only"):
-        return runner._metrics(case, planted, arm, model.Evidence(ceiling=1200),
-                               packed, "", {}, stats, 1.0, [])
+        return runner._metrics(case, planted, arm,
+                               runner.Packed(model.Evidence(ceiling=1200), packed, "", {}),
+                               stats=stats, wall=1.0, rows=[])
 
     leaked = grade("Earlier scenes: amberseal. Tally later.")
     assert not leaked["hard_rules"] and leaked["recall1"] == 0

@@ -15,6 +15,7 @@ import json
 import time
 import uuid
 from collections import Counter
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from unittest.mock import patch
@@ -92,6 +93,18 @@ def _packed(planted, evidence):
     row = next((r for r in rows if r["id"] == "history_recall"), {})
     section = row.get("text", "") if not row.get("dropped") else ""
     return messages, text, section, row
+
+
+@dataclass(frozen=True)
+class Packed:
+    """What one arm retrieved and what reached the prompt: the evidence, the
+    whole packed prompt's text, the history section as packed (empty when it
+    was dropped), and that section's breakdown row."""
+
+    evidence: model.Evidence
+    text: str
+    section: str
+    row: dict
 
 
 def _network(fn, stats):
@@ -175,49 +188,68 @@ async def _arm(case, planted, arm, *, space, live, targets, seen, run_id, stats)
             with usage.meter("chat", campaign=planted.cid, scene=planted.sid, run_id=run_id) as meter:
                 output = await inference.generate("chat", messages, client=llm_client,
                     resolved=targets["chat"], usage=meter.usage, stream=False)
-        return evidence, packed, section, row, output
+        return Packed(evidence, packed, section, row), output
     finally:
         await client.aclose()
         if llm_client is not None:
             await llm_client.aclose()
 
 
-def _metrics(case, planted, arm, evidence, packed, section, row, stats, wall, rows):
+def _graded_items(arm, planted, packed):
+    """The evidence items credited to the arm: those that reached the prompt."""
     # Context-only uses what the real recap/archive actually packed. Gold is
     # credited only if its planted fact text is in that prompt.
-    items = evidence.items
     if arm == "context-only":
         # Credit a gold scene only when its own summary marker reached the
         # prompt (the recap or archive line); the planted fact is shared with
         # the forbidden scenes, so it cannot say which scene supplied it.
-        items = tuple(model.EvidenceItem(model.SceneRef(g.sid, g.identity), "Saltmarch")
-                      for g in planted.gold if g.mark and g.mark in packed)
-    else:
-        details = {r["key"]: r for r in row.get("history", {}).get("items", [])}
-        items = tuple(i for i in items if section and not details.get(i.scene.key, {}).get("shed", False))
+        return tuple(model.EvidenceItem(model.SceneRef(g.sid, g.identity), "Saltmarch")
+                     for g in planted.gold if g.mark and g.mark in packed.text)
+    details = {r["key"]: r for r in packed.row.get("history", {}).get("items", [])}
+    return tuple(i for i in packed.evidence.items
+                 if packed.section and not details.get(i.scene.key, {}).get("shed", False))
+
+
+def _excludes_mara(evidence):
+    """Shape 8: no located item, and the excluded character in no structural
+    relation."""
+    return (all(not i.location for i in evidence.items)
+            and all("characters:mara" not in r.refs for c in evidence.candidates
+                    for s in c.rounds if s.structural for r in s.structural.relations)
+            # The excluded name is not a lexical term either, weighted or plain (4).
+            and all("mara" not in s.lexical.matched for c in evidence.candidates
+                    for s in c.rounds if s.lexical))
+
+
+def _shape_rules(case, arm, evidence, stats):
+    """The hard rules particular to a case's shape."""
+    if case.shape == 8:
+        return _excludes_mara(evidence)
+    if arm == "context-only":
+        return True
+    if case.shape == 9:
+        return (evidence.coverage.verdict == "exhausted" and evidence.coverage.tiers == (1,)
+                and stats.get("first_scene", False))
+    if case.shape == 10:
+        return len({c.scene.key for c in evidence.candidates}) == 2
+    return True
+
+
+def _metrics(case, planted, arm, packed, *, stats, wall, rows):
+    evidence = packed.evidence
+    items = _graded_items(arm, planted, packed)
     recalls = graders.recalls(planted.gold, items)
-    hard = not planted.forbidden.intersection(i.scene.sid for i in items)
     # No forbidden scene's own line may reach the prompt, in any arm: the
     # whole packed context is graded, recap and archive included (12.3).
-    hard = hard and not any(m in packed for m in planted.forbidden_marks)
-    if case.shape == 8:
-        hard = hard and all(not i.location for i in evidence.items)
-        hard = hard and all("characters:mara" not in r.refs for c in evidence.candidates
-                            for s in c.rounds if s.structural for r in s.structural.relations)
-        # The excluded name is not a lexical term either, weighted or plain (4).
-        hard = hard and all("mara" not in s.lexical.matched for c in evidence.candidates
-                            for s in c.rounds if s.lexical)
-    if case.shape == 9 and arm != "context-only":
-        hard = hard and evidence.coverage.verdict == "exhausted" and evidence.coverage.tiers == (1,)
-        hard = hard and stats.get("first_scene", False)
-    if case.shape == 10 and arm != "context-only":
-        hard = hard and len({c.scene.key for c in evidence.candidates}) == 2
-    added = tokens.count_tokens(section) if section else 0
+    hard = (not planted.forbidden.intersection(i.scene.sid for i in items)
+            and not any(m in packed.text for m in planted.forbidden_marks)
+            and _shape_rules(case, arm, evidence, stats))
+    added = tokens.count_tokens(packed.section) if packed.section else 0
     return {"case": case.id, "shape": case.shape, "arm": arm,
             **{f"recall{k}": v for k, v in recalls.items()},
-            "excerpt_recall": graders.excerpt_recall(planted.gold, items, packed),
+            "excerpt_recall": graders.excerpt_recall(planted.gold, items, packed.text),
             "hard_rules": hard, "added_tokens": added, "ceiling": evidence.ceiling,
-            "prompt_tokens": tokens.count_tokens(packed), "wall_ms": wall,
+            "prompt_tokens": tokens.count_tokens(packed.text), "wall_ms": wall,
             "retrieval_ms": stats.get("retrieval_ms", 0.0), "network_ms": stats["network_ms"],
             "file_ms": max(0.0, stats.get("retrieval_ms", 0.0)-stats["network_ms"]),
             "semantic_evaluated": stats["semantic_evaluated"],
@@ -226,51 +258,87 @@ def _metrics(case, planted, arm, evidence, packed, section, row, stats, wall, ro
             "coverage": evidence.detail()["coverage"]}
 
 
+@dataclass(frozen=True)
+class _Settings:
+    """What every arm of one `run_all` shares."""
+
+    long: bool
+    live: bool
+    targets: dict
+    space: dict
+    rates: object
+    run_id: str
+    real_home: object
+
+
+def _plant(case, settings):
+    """The case's corpus in the current isolated home -- refused if that home
+    is the real one -- with its documents' vectors preloaded offline."""
+    if settings.real_home is not None and reports._is_real_home(settings.real_home):
+        raise RuntimeError(reports.ISOLATE_ERROR)
+    planted = synth.build(case, long=settings.long)
+    if not settings.live:
+        # Preload exact current SearchDocument text/space keys with
+        # the recorded deterministic directions, using the real cache.
+        for doc in live_docs.scene_documents(planted.cid).documents:
+            vectors.save(settings.space["space"], doc.doc.text, replay_vector(doc.doc.text))
+    return planted
+
+
+def _money(bucket):
+    """The three money columns, each None when no call was charged to it."""
+    return {"cost_usd": bucket.get("cost_usd") if costs.billed_calls(bucket) else None,
+            "estimated_usd": bucket.get("estimated_usd") if bucket.get("subscription_calls") else None,
+            "modelled_usd": bucket.get("modelled_usd") if bucket.get("modelled_calls") else None}
+
+
+def _run_arm(case, n, arm, settings):
+    """One case under one arm, in its own isolated home: its report result
+    and its metric record."""
+    with isolated():
+        planted = _plant(case, settings)
+        seen, stats = [], {"network_ms": 0.0, "semantic_evaluated": 0}
+        started, day = time.monotonic(), usage._today()
+        error = ""
+        try:
+            packed, output = asyncio.run(_arm(
+                case, planted, arm, space=settings.space, live=settings.live,
+                targets=settings.targets, seen=seen, run_id=settings.run_id, stats=stats))
+        except Exception as exc:  # noqa: BLE001 - one failed case is graded as failed; the matrix still reports
+            error = type(exc).__name__
+            packed, output = Packed(model.Evidence(ceiling=1200), "", "", {}), ""
+        wall = (time.monotonic()-started)*1000
+        rows = reports.harvest(day, settings.run_id, case.id)
+        metric = _metrics(case, planted, arm, packed, stats=stats, wall=wall, rows=rows)
+        metric["offline_transport_requests"] = len(seen)
+        metric["error"] = error
+        bucket = costs.fold(rows, settings.rates)
+        metric["money"] = _money(bucket)
+        checks = [Check("history.hard_rules", metric["hard_rules"], "eligibility/visibility"),
+                  Check("history.ceiling", metric["added_tokens"] <= packed.evidence.ceiling,
+                        "packed history")]
+        if settings.live and planted.gold:
+            checks.append(Check("history.consistency", graders.consistent(output, planted.fact),
+                                planted.fact))
+        result = reports.Result(_report_case(case), arm, checks, output, error=error,
+            error_kind=error, rows=rows, wall_ms=int(wall), bucket=bucket,
+            by_task=costs.by_task(rows, settings.rates), rates=settings.rates,
+            configs=(f"c{n}",),
+            note=f"recall@3={metric['recall3']:.3f}; excerpt={metric['excerpt_recall']:.3f}")
+        return result, metric
+
+
 def run_all(*, long=False, live=False, targets=None, space=None, rates=None, run_id="", real_home=None):
-    run_id = run_id or str(uuid.uuid4())
+    settings = _Settings(long=long, live=live, targets=targets or {},
+                         space=space if live else replay_space(), rates=rates,
+                         run_id=run_id or str(uuid.uuid4()), real_home=real_home)
     results, records = [], []
     arms = (*cases.ARMS, "hybrid+rerank") if live else cases.ARMS
-    targets = targets or {}
-    space = space if live else replay_space()
     for case in cases.CASES:
         for n, arm in enumerate(arms, 1):
-            with isolated():
-                if real_home is not None and reports._is_real_home(real_home):
-                    raise RuntimeError(reports.ISOLATE_ERROR)
-                planted = synth.build(case, long=long)
-                if not live:
-                    # Preload exact current SearchDocument text/space keys with
-                    # the recorded deterministic directions, using the real cache.
-                    for doc in live_docs.scene_documents(planted.cid).documents:
-                        vectors.save(space["space"], doc.doc.text, replay_vector(doc.doc.text))
-                seen, stats = [], {"network_ms": 0.0, "semantic_evaluated": 0}
-                started, day = time.monotonic(), usage._today()
-                error = ""
-                try:
-                    evidence, packed, section, row, output = asyncio.run(_arm(
-                        case, planted, arm, space=space, live=live, targets=targets,
-                        seen=seen, run_id=run_id, stats=stats))
-                except Exception as exc:  # noqa: BLE001 - one failed case is graded as failed; the matrix still reports
-                    error = type(exc).__name__
-                    evidence, packed, section, row, output = model.Evidence(ceiling=1200), "", "", {}, ""
-                wall = (time.monotonic()-started)*1000
-                rows = reports.harvest(day, run_id, case.id)
-                metric = _metrics(case, planted, arm, evidence, packed, section, row, stats, wall, rows)
-                metric["offline_transport_requests"] = len(seen)
-                metric["error"] = error
-                bucket = costs.fold(rows, rates)
-                metric["money"] = {"cost_usd": bucket.get("cost_usd") if costs.billed_calls(bucket) else None,
-                    "estimated_usd": bucket.get("estimated_usd") if bucket.get("subscription_calls") else None,
-                    "modelled_usd": bucket.get("modelled_usd") if bucket.get("modelled_calls") else None}
-                checks = [Check("history.hard_rules", metric["hard_rules"], "eligibility/visibility"),
-                          Check("history.ceiling", metric["added_tokens"] <= evidence.ceiling, "packed history")]
-                if live and planted.gold:
-                    checks.append(Check("history.consistency", graders.consistent(output, planted.fact), planted.fact))
-                results.append(reports.Result(_report_case(case), arm, checks, output, error=error,
-                    error_kind=error, rows=rows, wall_ms=int(wall), bucket=bucket,
-                    by_task=costs.by_task(rows, rates), rates=rates, configs=(f"c{n}",),
-                    note=f"recall@3={metric['recall3']:.3f}; excerpt={metric['excerpt_recall']:.3f}"))
-                records.append(metric)
+            result, metric = _run_arm(case, n, arm, settings)
+            results.append(result)
+            records.append(metric)
     return results, records
 
 
