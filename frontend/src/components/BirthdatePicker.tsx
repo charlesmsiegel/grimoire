@@ -4,6 +4,33 @@ import { dateLabel, dateParts, nativeDate } from "../calendarDates";
 
 const NO_MONTHS: CalendarMonth[] = [];
 
+/** The years a yearless birthday's month list is read from: a reference year
+ *  for the calendar -- the anchor's, for one without a fixed default -- and the
+ *  one after it. */
+async function yearsToOffer(target: CalendarScope): Promise<number[]> {
+  const cfg = await api.getCalendarConfig(target);
+  const provider = cfg.primary.provider;
+  const anchor = Number(cfg.primary.anchor?.native.match(/^-?\d+/)?.[0]);
+  const reference = provider === "hebrew" ? 5784
+    : provider === "gregorian" ? 2024 : (Number.isFinite(anchor) ? anchor : 2024);
+  // Adjacent years offer both ordinary and leap-only months. Day
+  // counts take the larger value so February 29 remains selectable.
+  return [reference, reference + 1];
+}
+
+/** The months every year that answered offers, each once, at its longest. */
+function mergeMonths(results: PromiseSettledResult<{ months: CalendarMonth[] }>[]): CalendarMonth[] {
+  const merged = new Map<string, CalendarMonth>();
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    for (const entry of result.value.months) {
+      const prior = merged.get(entry.key);
+      if (!prior || entry.days > prior.days) merged.set(entry.key, entry);
+    }
+  }
+  return [...merged.values()];
+}
+
 /** A birthday has optional precision. The scene date picker still requires a day. */
 function useBirthdateMonths(scope: CalendarScope, year: string): CalendarMonth[] {
   const monthKey = `${scope.kind}:${scope.id}:${year}`;
@@ -16,29 +43,9 @@ function useBirthdateMonths(scope: CalendarScope, year: string): CalendarMonth[]
     const target = { kind: scope.kind, id: scope.id };
     async function load() {
       try {
-        let years: number[];
-        if (year) {
-          years = [Number(year)];
-        } else {
-          const cfg = await api.getCalendarConfig(target);
-          const provider = cfg.primary.provider;
-          const anchor = Number(cfg.primary.anchor?.native.match(/^-?\d+/)?.[0]);
-          const reference = provider === "hebrew" ? 5784
-            : provider === "gregorian" ? 2024 : (Number.isFinite(anchor) ? anchor : 2024);
-          // Adjacent years offer both ordinary and leap-only months. Day
-          // counts take the larger value so February 29 remains selectable.
-          years = [reference, reference + 1];
-        }
+        const years = year ? [Number(year)] : await yearsToOffer(target);
         const results = await Promise.allSettled(years.map((y) => api.getCalendarMonths(target, y)));
-        const merged = new Map<string, CalendarMonth>();
-        for (const result of results) {
-          if (result.status !== "fulfilled") continue;
-          for (const entry of result.value.months) {
-            const prior = merged.get(entry.key);
-            if (!prior || entry.days > prior.days) merged.set(entry.key, entry);
-          }
-        }
-        if (live) setLoaded({ key: monthKey, months: [...merged.values()] });
+        if (live) setLoaded({ key: monthKey, months: mergeMonths(results) });
       } catch {
         if (live) setLoaded({ key: monthKey, months: [] });
       }
