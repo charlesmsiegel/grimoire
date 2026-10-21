@@ -19,8 +19,9 @@ from .provider_http import ProviderHTTP
 #: for a generation; a reader who pressed "Test connection" is watching a
 #: spinner, and two minutes of one is indistinguishable from a hung app. The
 #: same value and the same reasoning as `openrouter.PROBE_TIMEOUT` — separate
-#: because these two modules deliberately share no code (see the module
-#: docstring), not because the number is a different one.
+#: because these two modules deliberately share no wire code (see the module
+#: docstring; only the HTTP client underneath is `provider_http`'s), not
+#: because the number is a different one.
 PROBE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 
 
