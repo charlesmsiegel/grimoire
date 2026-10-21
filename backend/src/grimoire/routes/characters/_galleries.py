@@ -198,53 +198,75 @@ def list_campaign_gallery(cid: str):
     _campaign_root_or_404(cid)
     croot = store.campaigns.campaign_root(cid)
     ov = store.overlay.view(cid)
-    wroot = ov.wroot
     out = []
     names: dict[tuple[str, str], tuple[str, set[str]] | None] = {}
-    subjects = _gallery_sources._GreetingSubjects(wroot)
+    subjects = _gallery_sources._GreetingSubjects(ov.wroot)
     for base in _gallery_sources.GALLERY_BASES:
-        # Which (record, version) folders exist on EITHER side. The campaign's
-        # own art is the point of this route, and a version the world never had
-        # is only in the campaign's catalog.
-        pairs: set[tuple[str, str]] = set()
-        for root in (croot, wroot):
-            for item in store.image_descriptions.catalog(root, base):
-                pairs.add((item["id"], item["vid"]))
-        for rid, vid in sorted(pairs):
-            key = (base, rid)
-            if key not in names:
-                names[key] = _gallery_sources._overlay_name_and_versions(cid, base, rid, ov)
-            found = names[key]
-            # Same gate as the world sweep: an asset folder whose record -- or
-            # whose version -- is gone serves no bytes, so a tile over it is a
-            # broken image the reader cannot clear.
-            if found is None or (found[1] and vid not in found[1]):
-                continue
-            imgs = store.overlay.list_images(cid, rid, vid, base, v=ov)
-            if not imgs:
-                continue   # every image here was tombstoned campaign-side
-            desc = store.overlay.read_descriptions(cid, rid, vid, base, v=ov)
-            for item in imgs:
-                base_url = _gallery_sources._actor_image_url(f"/api/campaigns/{quote(cid, safe='')}",
-                                            base, rid, vid, item["name"])
-                v = quote(item["v"], safe="")
-                row = {"kind": base, "id": rid, "vid": vid, "name": item["name"],
-                       "ext": item["ext"], "record_name": found[0],
-                       # Key PRESENCE, the distinction the sidecar turns on: an
-                       # image reviewed and left blank is described.
-                       "described": item["name"] in desc,
-                       "description": desc.get(item["name"], ""),
-                       **_gallery_sources._gallery_image_id(item),
-                       "url": f"{base_url}?v={v}",
-                       "thumb": f"{base_url}{thumb_query(v)}",
-                       **_gallery_sources._gallery_art_fields("campaign", cid, base, rid, vid, item,
-                           "campaign" if store.overlay.image_root(cid, rid, vid, item["name"], base, v=ov)
-                           == croot else "inherited")}
-                if base == "greetings":
-                    row["subjects"] = subjects.lookup(rid, item["name"])
-                out.append(row)
+        out.extend(_campaign_base_rows(cid, croot, ov, base, names=names, subjects=subjects))
     out.extend(_campaign_library_rows(cid))
     return out
+
+
+def _campaign_version_pairs(croot, wroot, base: str) -> list[tuple[str, str]]:
+    """Which (record, version) folders exist on EITHER side. The campaign's
+    own art is the point of `list_campaign_gallery`, and a version the world
+    never had is only in the campaign's catalog."""
+    pairs: set[tuple[str, str]] = set()
+    for root in (croot, wroot):
+        for item in store.image_descriptions.catalog(root, base):
+            pairs.add((item["id"], item["vid"]))
+    return sorted(pairs)
+
+
+def _campaign_base_rows(cid: str, croot, ov, base: str, *,
+                        names: dict[tuple[str, str], tuple[str, set[str]] | None],
+                        subjects) -> list[dict]:
+    """One gallery base's rows for `list_campaign_gallery`, every image
+    resolved through the overlay view `ov`. `names` caches each record's
+    name and versions across the request."""
+    out = []
+    for rid, vid in _campaign_version_pairs(croot, ov.wroot, base):
+        key = (base, rid)
+        if key not in names:
+            names[key] = _gallery_sources._overlay_name_and_versions(cid, base, rid, ov)
+        found = names[key]
+        # Same gate as the world sweep: an asset folder whose record -- or
+        # whose version -- is gone serves no bytes, so a tile over it is a
+        # broken image the reader cannot clear.
+        if found is None or (found[1] and vid not in found[1]):
+            continue
+        imgs = store.overlay.list_images(cid, rid, vid, base, v=ov)
+        if not imgs:
+            continue   # every image here was tombstoned campaign-side
+        desc = store.overlay.read_descriptions(cid, rid, vid, base, v=ov)
+        for item in imgs:
+            row = _campaign_gallery_row(cid, croot, ov, (base, rid, vid), item,
+                                        record_name=found[0], desc=desc)
+            if base == "greetings":
+                row["subjects"] = subjects.lookup(rid, item["name"])
+            out.append(row)
+    return out
+
+
+def _campaign_gallery_row(cid: str, croot, ov, folder: tuple[str, str, str], item: dict, *,
+                          record_name: str, desc: dict) -> dict:
+    """One campaign-scoped tile for `item` in the `(base, rid, vid)` folder."""
+    base, rid, vid = folder
+    base_url = _gallery_sources._actor_image_url(f"/api/campaigns/{quote(cid, safe='')}",
+                                base, rid, vid, item["name"])
+    v = quote(item["v"], safe="")
+    return {"kind": base, "id": rid, "vid": vid, "name": item["name"],
+            "ext": item["ext"], "record_name": record_name,
+            # Key PRESENCE, the distinction the sidecar turns on: an
+            # image reviewed and left blank is described.
+            "described": item["name"] in desc,
+            "description": desc.get(item["name"], ""),
+            **_gallery_sources._gallery_image_id(item),
+            "url": f"{base_url}?v={v}",
+            "thumb": f"{base_url}{thumb_query(v)}",
+            **_gallery_sources._gallery_art_fields("campaign", cid, base, rid, vid, item,
+                "campaign" if store.overlay.image_root(cid, rid, vid, item["name"], base, v=ov)
+                == croot else "inherited")}
 
 
 def _campaign_library_rows(cid: str) -> list[dict]:
