@@ -1,33 +1,9 @@
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent,
-         type ReactNode } from "react";
+         type ReactNode, type RefObject } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { APP_ROWS, CAMPAIGN_ROWS, type RailCtx, type RailRow } from "../shell/rail";
-import type { ShellPayload } from "../api/types";
-
-/** The app's navigation, and the half of the shell that never moves.
- *
- *  The rule this component and `PageShell` split between them:
- *
- *      The rail navigates the app. A column indexes the page.
- *
- *  The rail answers *which page of the app am I on* — a question whose answer
- *  is the same on every page, so it is asked once, in chrome that outlives
- *  every route. A page's column answers *which of this page's records am I
- *  reading*, which only that page can ask. A page that builds a second surface
- *  to answer the rail's question has misread the rail; a page that puts its
- *  records in the rail has misread its column.
- *
- *  Two tiers: the app, and the campaign that is open. The second tier is
- *  visible from anywhere, which is the whole point — "what is waiting in my
- *  campaign" is not a question you should have to navigate into the campaign to
- *  ask.
- *
- *  Rows are driven by the tables in `shell/rail.ts` rather than written out
- *  here, and a row whose destination does not exist yet is **not rendered** —
- *  absent from the DOM, not disabled. Most campaign-tier pages are still to be
- *  built, so the rail ships complete in shape and sparse in fact.
- */
+import type { ShellCampaign, ShellPayload } from "../api/types";
 
 function tailOf(row: RailRow, payload: ShellPayload | null) {
   const text = row.tail?.(payload);
@@ -84,6 +60,121 @@ function Tier({ label, aria, rows, ctx, payload, onPick, children }: {
   );
 }
 
+/** Focus into the drawer when it opens, and back where it was when it closes. */
+function useDrawerFocus(drawer: boolean, panel: RefObject<HTMLDivElement | null>) {
+  // Where focus was when the drawer opened, so closing can put it back.
+  const returnTo = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!drawer) return;
+    returnTo.current = document.activeElement as HTMLElement | null;
+    // Focus goes into the drawer, so the first Tab is inside it rather than
+    // behind it.
+    panel.current?.focus();
+    return () => {
+      const back = returnTo.current;
+      returnTo.current = null;
+      // `isConnected` is the whole reason this is a check rather than a call.
+      // The control that opens the drawer is the header's ☰, which only exists
+      // below RAIL_PX — so the one close that is triggered by *widening* has no
+      // opener left to return to. Focusing a detached node sends focus to
+      // <body>, silently losing the reader's place; skipping leaves it where
+      // the newly docked rail can pick it up.
+      if (back?.isConnected) back.focus();
+    };
+  }, [drawer, panel]);
+}
+
+/** Tab containment, as a handler on the dialog rather than a listener on it.
+ *
+ *  `useHotkeys({modal:true})` gives Escape and the suppression of the view's
+ *  own bindings; it does not stop Tab leaving. Without this the reader tabs
+ *  out of an `aria-modal` dialog and through the header and page controls
+ *  visually behind it — the part of modality that is invisible to a mouse and
+ *  total to a keyboard.
+ *
+ *  Not a registry binding, and not an `addEventListener`: `shortcuts/` owns
+ *  the keys the app *answers*, and Tab here is not answered, only kept from
+ *  leaving one element. */
+function containTab(e: ReactKeyboardEvent<HTMLElement>, node: HTMLElement | null) {
+  if (e.key !== "Tab") return;
+  if (!node) return;
+  const stops = node.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
+  if (!stops.length) return;
+  const first = stops[0], last = stops[stops.length - 1];
+  const on = document.activeElement;
+  if (e.shiftKey && (on === first || on === node)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && on === last) { e.preventDefault(); first.focus(); }
+}
+
+/** The second tier: the open campaign's own rows under its name and counts,
+ *  then its open scenes. */
+function CampaignTiers({ camp, ctx, payload, onPick, onScene }: {
+  camp: ShellCampaign; ctx: RailCtx; payload: ShellPayload | null;
+  /** What a row does when picked: close the drawer, or nothing when docked. */
+  onPick: () => void;
+  /** The same for an open scene's link, which takes no handler when docked. */
+  onScene: (() => void) | undefined;
+}) {
+  return <>
+    <Tier label="Open campaign" aria="Open campaign" rows={CAMPAIGN_ROWS} ctx={ctx} payload={payload}
+          onPick={onPick}>
+      <div className="rail-campaign">
+        <div className="rail-campaign-name">{camp.name}</div>
+        {/* Derived, never a literal: every part of this line is computed
+            from the payload, so it cannot agree with the data on the day it
+            was written and drift the moment anything changes. */}
+        <div className="rail-campaign-meta">
+          {[camp.world_name,
+            `${camp.scenes} ${camp.scenes === 1 ? "scene" : "scenes"}`,
+            camp.open.length ? `${camp.open.length} open` : null,
+          ].filter(Boolean).join(" · ")}
+        </div>
+      </div>
+    </Tier>
+
+    {camp.open.length > 0 && (
+      <nav className="rail-tier" aria-label="Open scenes">
+        <div className="rail-eyebrow">{camp.open.length} open</div>
+        {camp.open.map((s) => (
+          <Link key={s.sid} to={`/campaigns/${camp.id}/scenes/${s.sid}`}
+                onClick={onScene}
+                className="rail-row rail-scene">
+            <span className="rail-label">{s.title}</span>
+            {/* `turns` is null in this slice, so no tail — rather than a
+                count derived from something that would be wrong for exactly
+                the oldest scenes. */}
+            {s.turns !== null && <span className="rail-tail" aria-hidden>{s.turns}t</span>}
+          </Link>
+        ))}
+      </nav>
+    )}
+  </>;
+}
+
+/** The app's navigation, and the half of the shell that never moves.
+ *
+ *  The rule this component and `PageShell` split between them:
+ *
+ *      The rail navigates the app. A column indexes the page.
+ *
+ *  The rail answers *which page of the app am I on* — a question whose answer
+ *  is the same on every page, so it is asked once, in chrome that outlives
+ *  every route. A page's column answers *which of this page's records am I
+ *  reading*, which only that page can ask. A page that builds a second surface
+ *  to answer the rail's question has misread the rail; a page that puts its
+ *  records in the rail has misread its column.
+ *
+ *  Two tiers: the app, and the campaign that is open. The second tier is
+ *  visible from anywhere, which is the whole point — "what is waiting in my
+ *  campaign" is not a question you should have to navigate into the campaign to
+ *  ask.
+ *
+ *  Rows are driven by the tables in `shell/rail.ts` rather than written out
+ *  here, and a row whose destination does not exist yet is **not rendered** —
+ *  absent from the DOM, not disabled. Most campaign-tier pages are still to be
+ *  built, so the rail ships complete in shape and sparse in fact.
+ */
 export default function AppRail(
   { payload, status, cid, dataDir, open, onClose, docked, onRetry }: {
     payload: ShellPayload | null;
@@ -107,50 +198,7 @@ export default function AppRail(
   const drawer = !docked && open;
   useHotkeys(drawer ? [{ keys: "escape", run: onClose }] : [], { modal: drawer });
 
-  // Where focus was when the drawer opened, so closing can put it back.
-  const returnTo = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    if (!drawer) return;
-    returnTo.current = document.activeElement as HTMLElement | null;
-    // Focus goes into the drawer, so the first Tab is inside it rather than
-    // behind it.
-    panel.current?.focus();
-    return () => {
-      const back = returnTo.current;
-      returnTo.current = null;
-      // `isConnected` is the whole reason this is a check rather than a call.
-      // The control that opens the drawer is the header's ☰, which only exists
-      // below RAIL_PX — so the one close that is triggered by *widening* has no
-      // opener left to return to. Focusing a detached node sends focus to
-      // <body>, silently losing the reader's place; skipping leaves it where
-      // the newly docked rail can pick it up.
-      if (back?.isConnected) back.focus();
-    };
-  }, [drawer]);
-
-  /** Tab containment, as a handler on the dialog rather than a listener on it.
-   *
-   *  `useHotkeys({modal:true})` gives Escape and the suppression of the view's
-   *  own bindings; it does not stop Tab leaving. Without this the reader tabs
-   *  out of an `aria-modal` dialog and through the header and page controls
-   *  visually behind it — the part of modality that is invisible to a mouse and
-   *  total to a keyboard.
-   *
-   *  Not a registry binding, and not an `addEventListener`: `shortcuts/` owns
-   *  the keys the app *answers*, and Tab here is not answered, only kept from
-   *  leaving one element. */
-  function containTab(e: ReactKeyboardEvent<HTMLElement>) {
-    if (e.key !== "Tab") return;
-    const node = panel.current;
-    if (!node) return;
-    const stops = node.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
-    if (!stops.length) return;
-    const first = stops[0], last = stops[stops.length - 1];
-    const on = document.activeElement;
-    if (e.shiftKey && (on === first || on === node)) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && on === last) { e.preventDefault(); first.focus(); }
-  }
+  useDrawerFocus(drawer, panel);
 
   // Picking a row closes the drawer; so does any other route change, whichever
   // way it happened (palette, back button, a link in the page).
@@ -162,40 +210,9 @@ export default function AppRail(
       <Tier label="Grimoire" aria="Main" rows={APP_ROWS} ctx={ctx} payload={payload}
             onPick={docked ? () => {} : onClose} />
 
-      {camp && (
-        <Tier label="Open campaign" aria="Open campaign" rows={CAMPAIGN_ROWS} ctx={ctx} payload={payload}
-              onPick={docked ? () => {} : onClose}>
-          <div className="rail-campaign">
-            <div className="rail-campaign-name">{camp.name}</div>
-            {/* Derived, never a literal: every part of this line is computed
-                from the payload, so it cannot agree with the data on the day it
-                was written and drift the moment anything changes. */}
-            <div className="rail-campaign-meta">
-              {[camp.world_name,
-                `${camp.scenes} ${camp.scenes === 1 ? "scene" : "scenes"}`,
-                camp.open.length ? `${camp.open.length} open` : null,
-              ].filter(Boolean).join(" · ")}
-            </div>
-          </div>
-        </Tier>
-      )}
-
-      {camp && camp.open.length > 0 && (
-        <nav className="rail-tier" aria-label="Open scenes">
-          <div className="rail-eyebrow">{camp.open.length} open</div>
-          {camp.open.map((s) => (
-            <Link key={s.sid} to={`/campaigns/${camp.id}/scenes/${s.sid}`}
-                  onClick={docked ? undefined : onClose}
-                  className="rail-row rail-scene">
-              <span className="rail-label">{s.title}</span>
-              {/* `turns` is null in this slice, so no tail — rather than a
-                  count derived from something that would be wrong for exactly
-                  the oldest scenes. */}
-              {s.turns !== null && <span className="rail-tail" aria-hidden>{s.turns}t</span>}
-            </Link>
-          ))}
-        </nav>
-      )}
+      {camp && <CampaignTiers camp={camp} ctx={ctx} payload={payload}
+                              onPick={docked ? () => {} : onClose}
+                              onScene={docked ? undefined : onClose} />}
 
       {status === "failed" && (
         <div className="rail-stale">
@@ -222,7 +239,7 @@ export default function AppRail(
           key handler belongs, and the handler is what CONTAINS Tab rather than
           answering it. The element is focusable (tabIndex -1) and named. */}
       <aside className="app-rail drawer" ref={panel} tabIndex={-1}
-             onKeyDown={containTab}
+             onKeyDown={(e) => containTab(e, panel.current)}
              role="dialog" aria-modal="true" aria-label="Navigation">
         {body}
       </aside>
