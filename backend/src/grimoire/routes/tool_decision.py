@@ -300,7 +300,7 @@ def _wall_overrun(_seconds: float) -> LLMError:
 
 def _around(ctx: tool_calls.ToolContext, asking: _Asking | None = None,
             sends: _Sends | None = None) -> operations.Around | None:
-    """Each decide facade call's bound, as a model turn's (`_Loop._turn_seconds`):
+    """Each decide facade call's bound, as a model turn's (`_RunClock.turn_seconds`):
     `min(llm_call_budget, wall left)` (`_wall_left`), either absent when it
     is off. A ceiling overrun is a provider timeout (`_ceiling_overrun`);
     the wall's is the run's (`_wall_overrun`), and a wall already spent
