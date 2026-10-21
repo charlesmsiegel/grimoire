@@ -89,37 +89,7 @@ export async function awaitRunAt(base: string, started: RunHandle,
         "GET", `${base}/${run.id}`, undefined, { fresh: true, signal })).run;
       missed = 0;
     } catch (err) {
-      // A FAILED POLL IS NOT A FAILED RUN. The conditions this feature exists
-      // for -- a backgrounded WebView, a suspended tab resuming into a dead
-      // socket, a dropped localhost fetch -- all show up here, and ending the
-      // wait for one of them reports a failure for a run that is still
-      // generating: the reader gets a banner, the composer unlocks over a
-      // scene the server is still holding, and nothing opens the review when
-      // it does land.
-      //
-      // Three things are not transient and are not retried: an abort (the
-      // caller saying stop), a 404 (the run is gone -- reaped, or never this
-      // scene's -- which is decisive and sends the caller to the store, where
-      // the answer actually lives), and running out of patience. Everything
-      // else is asked again.
-      if (isAbortError(err)) throw err;
-      // Gone is over: a run is reaped only once it has ended.
-      if (err instanceof ApiError && err.status === 404) { onSettled?.(); throw err; }
-      if (++missed <= RUN_POLL_MISSES) continue;
-      // OUT OF PATIENCE IS NOT A TERMINAL STATE EITHER. Nothing here has
-      // observed the run stop; all that is known is that this one URL has not
-      // answered six times running. Reported as a failure, the caller clears
-      // its latch and its Stop goes with it, over a run the server may hold
-      // for as long as an unbounded budget allows.
-      //
-      // So the last word goes to a different question, asked of a different
-      // path: is this scene still running a review at all? A "yes" resets the
-      // patience and the wait goes on; anything else -- including this ask
-      // failing too, which is the network really being gone -- lets the
-      // original failure stand.
-      const still = await restill();
-      if (still?.id !== run.id || still.state !== "running") throw err;
-      missed = 0;
+      missed = await weighPollFailure(err, run, missed, restill, onSettled);
     }
   }
   // Seen to end, landed or not: the only way here. An abort and a wait that
@@ -127,6 +97,51 @@ export async function awaitRunAt(base: string, started: RunHandle,
   // and say nothing -- the run has not settled, only the waiting has.
   onSettled?.();
   if (run.state === "landed") return run;
+  throw runFailure(run);
+}
+
+/** What one failed poll does to `awaitRunAt`'s wait: rethrown when it ends
+ *  the wait, otherwise the new count of consecutive misses -- zero again once
+ *  `restill` has vouched for the run. */
+async function weighPollFailure(err: unknown, run: RunHandle, missed: number,
+                                restill: () => Promise<RunHandle | null>,
+                                onSettled?: () => void): Promise<number> {
+  // A FAILED POLL IS NOT A FAILED RUN. The conditions this feature exists
+  // for -- a backgrounded WebView, a suspended tab resuming into a dead
+  // socket, a dropped localhost fetch -- all show up here, and ending the
+  // wait for one of them reports a failure for a run that is still
+  // generating: the reader gets a banner, the composer unlocks over a
+  // scene the server is still holding, and nothing opens the review when
+  // it does land.
+  //
+  // Three things are not transient and are not retried: an abort (the
+  // caller saying stop), a 404 (the run is gone -- reaped, or never this
+  // scene's -- which is decisive and sends the caller to the store, where
+  // the answer actually lives), and running out of patience. Everything
+  // else is asked again.
+  if (isAbortError(err)) throw err;
+  // Gone is over: a run is reaped only once it has ended.
+  if (err instanceof ApiError && err.status === 404) { onSettled?.(); throw err; }
+  if (missed + 1 <= RUN_POLL_MISSES) return missed + 1;
+  // OUT OF PATIENCE IS NOT A TERMINAL STATE EITHER. Nothing here has
+  // observed the run stop; all that is known is that this one URL has not
+  // answered six times running. Reported as a failure, the caller clears
+  // its latch and its Stop goes with it, over a run the server may hold
+  // for as long as an unbounded budget allows.
+  //
+  // So the last word goes to a different question, asked of a different
+  // path: is this scene still running a review at all? A "yes" resets the
+  // patience and the wait goes on; anything else -- including this ask
+  // failing too, which is the network really being gone -- lets the
+  // original failure stand.
+  const still = await restill();
+  if (still?.id !== run.id || still.state !== "running") throw err;
+  return 0;
+}
+
+/** The error a run seen to end other than `landed` is raised as: the HTTP
+ *  failure the same work raised when these routes answered synchronously. */
+function runFailure(run: RunHandle): RunEndedError {
   const error = run.error ?? undefined;
   const failure = new RunEndedError(error?.status ?? 409,
                                     error?.detail ?? `the run ended ${run.state}`,
@@ -141,7 +156,7 @@ export async function awaitRunAt(base: string, started: RunHandle,
     invalidateConfigCache();
     configChanged();
   }
-  throw failure;
+  return failure;
 }
 
 /** Where a subject's detached runs are addressed.
@@ -246,9 +261,17 @@ export async function draftRun<T>(scope: DraftScope,
                                () => findDraftRun(scope, attempt, opts?.signal)
                                  .catch(() => null),
                                opts?.signal, noteRunSettled);
-  // `landed` is the only way out of `awaitRunAt`, so a result is what this run
-  // is. An empty object rather than a throw for a route that legitimately
-  // produced nothing -- the caller's own type says which fields it expects.
+  return runResult<T>(run);
+}
+
+/** What a landed run produced, as the shape its route promises.
+ *
+ *  `landed` is the only way out of `awaitRunAt`, so a result is what this run
+ *  is. An empty object rather than a throw for a route that legitimately
+ *  produced nothing -- the caller's own type says which fields it expects.
+ *  The one place the wire's `Record<string, unknown>` is asserted to a route's
+ *  shape, so every reader of a run's result trusts the server the same way. */
+export function runResult<T>(run: RunHandle): T {
   return (run.result ?? {}) as T;
 }
 
@@ -259,7 +282,7 @@ export async function followDraft<T>(scope: DraftScope, handle: RunHandle, attem
   const run = await awaitRunAt(draftBase(scope), handle,
                                () => findDraftRun(scope, attempt, signal).catch(() => null),
                                signal, noteRunSettled);
-  return (run.result ?? {}) as T;
+  return runResult<T>(run);
 }
 
 /** How many times a lost streaming draft is picked back up before its failure
@@ -290,46 +313,108 @@ export const STREAM_REATTACH_TRIES = 3;
 export async function streamDraft(cid: string, sid: string, path: string, body: unknown,
                                   onEvent: (e: ChatEvent) => void,
                                   signal?: AbortSignal): Promise<void> {
-  const attempt = newAttemptId();
-  let consumed = -1;
-  const onIndex = (i: number) => { consumed = i; };
+  const reader = new OpenerReader(cid, sid, onEvent, signal);
+  let lost: unknown;
+  try {
+    await streamPost(path, body, reader.watch, signal, reader.attempt, reader.onIndex);
+    if (reader.ended) return;
+    lost = new Error(STREAM_CUT);
+  } catch (err) {
+    if (err instanceof ApiError || isAbortError(err)) throw err;
+    lost = err;
+  }
+  for (let tries = 0; tries < STREAM_REATTACH_TRIES; tries++) {
+    const step = await reader.reattach(lost);
+    if (step === "done") return;
+    if (step !== "retry") lost = step.lost;
+  }
+  throw lost;
+}
+
+/** What a stream that closed before its terminal frame is reported as. */
+const STREAM_CUT = "the opener stream ended before the generation did";
+
+/** One re-attach pass of `streamDraft`: the opener has been read to its end
+ *  (`done`), the pass settled nothing and another may be spent (`retry`), or
+ *  the stream was cut again and this is now the failure to report. */
+type Reattach = "done" | "retry" | { lost: unknown };
+
+/** The state `streamDraft` keeps across its re-attaches, and the steps that
+ *  read and move it. A class rather than closures so each step can be named
+ *  and read on its own; one instance lives for one opener. */
+class OpenerReader {
+  readonly attempt = newAttemptId();
+  consumed = -1;
   // Whether a TERMINAL frame arrived, not whether the read loop ended. A proxy
   // or a WebView can close the response cleanly part-way through -- the reader
   // reports `done` and `streamPost` resolves, with no error to catch -- and a
   // recovery hung off the exception alone would return happily, leaving the
   // reader a half-written opener while the server finishes the rest into a
   // buffer nobody reads.
-  let ended = false;
+  ended = false;
   // Where this scene is addressed NOW, and the name that survives it moving.
   // Both are learned from the leading `run` frame, which arrives before any
   // delta and before anything can fail.
-  let at = sid;
-  let identity = "";
-  const watch = (e: ChatEvent) => {
-    if (e.done ?? e.error) ended = true;
-    if (e.run?.scene_identity) identity = e.run.scene_identity;
-    onEvent(e);
-  };
-  let lost: unknown;
-  try {
-    await streamPost(path, body, watch, signal, attempt, onIndex);
-    if (ended) return;
-    lost = new Error("the opener stream ended before the generation did");
-  } catch (err) {
-    if (err instanceof ApiError || isAbortError(err)) throw err;
-    lost = err;
+  private at: string;
+  private identity = "";
+
+  constructor(private readonly cid: string, sid: string,
+              private readonly onEvent: (e: ChatEvent) => void,
+              private readonly signal: AbortSignal | undefined) {
+    this.at = sid;
   }
-  for (let tries = 0; tries < STREAM_REATTACH_TRIES; tries++) {
-    let run: RunHandle | null;
+
+  readonly onIndex = (i: number) => { this.consumed = i; };
+
+  readonly watch = (e: ChatEvent) => {
+    if (e.done ?? e.error) this.ended = true;
+    if (e.run?.scene_identity) this.identity = e.run.scene_identity;
+    this.onEvent(e);
+  };
+
+  /** Find the run again and read what it buffered since `consumed`. */
+  async reattach(lost: unknown): Promise<Reattach> {
+    const run = await this.lookup();
+    if (run === undefined) return "retry";
+    // The server has never heard of this attempt, so nothing was started and
+    // the original failure is the true one.
+    if (!run) throw lost;
+    // Terminal with nothing left in the buffer: the run finished while we were
+    // away and every frame of it has already been delivered.
+    if (run.state !== "running" && this.consumed + 1 >= run.next_index) return "done";
     try {
-      run = (await sceneRunApi.findRun(cid, at, attempt, signal)).run;
+      await sceneRunApi.attachRun(this.cid, this.at, run.id, this.consumed + 1, this.watch,
+                                  this.signal, this.onIndex);
+      // Cut again, the same way. Another pass, bounded by the loop.
+      return this.ended ? "done" : { lost: new Error(STREAM_CUT) };
+    } catch (err) {
+      // A rename can land in the gap between the lookup above and this attach,
+      // and then it is the ATTACH that 404s -- so re-resolving only when the
+      // lookup came back empty leaves that window open. Same recovery, one
+      // step later; the loop bounds how often it can happen.
+      if (err instanceof ApiError && err.kind === "run_gone" && await this.mayHaveMoved()) {
+        return "retry";
+      }
+      if (err instanceof ApiError || isAbortError(err)) throw err;
+      return { lost: err };
+    }
+  }
+
+  /** This attempt's run, `null` when the server answered that there is none,
+   *  or `undefined` when the lookup itself could not be made. */
+  private async lookup(): Promise<RunHandle | null | undefined> {
+    try {
+      let run = (await sceneRunApi.findRun(this.cid, this.at, this.attempt, this.signal)).run;
       // THE SCENE MAY HAVE BEEN RENAMED. An opener holds no exclusion key --
       // deliberately, so it cannot refuse the `first-post` it exists to feed
       // -- so another tab may rename the scene while it runs, and a rename
       // mints a new `sid`. The run is indexed by the scene's IDENTITY, which
       // survives that, so the old id resolves to no run at all and every
       // re-attach would abandon a generation the server is still buffering.
-      if (!run && await moved()) run = (await sceneRunApi.findRun(cid, at, attempt, signal)).run;
+      if (!run && await this.moved()) {
+        run = (await sceneRunApi.findRun(this.cid, this.at, this.attempt, this.signal)).run;
+      }
+      return run;
     } catch (err) {
       if (isAbortError(err)) throw err;
       // NOT `.catch(() => null)`. A lookup that FAILED has not answered "no
@@ -338,39 +423,21 @@ export async function streamDraft(cid: string, sid: string, path: string, body: 
       // confusion is the single defect this feature's first phase shipped
       // three times. Asked again; if the tries run out, the failure reported
       // is the one that actually interrupted the reader.
-      continue;
-    }
-    // The server has never heard of this attempt, so nothing was started and
-    // the original failure is the true one.
-    if (!run) throw lost;
-    // Terminal with nothing left in the buffer: the run finished while we were
-    // away and every frame of it has already been delivered.
-    if (run.state !== "running" && consumed + 1 >= run.next_index) return;
-    try {
-      await sceneRunApi.attachRun(cid, at, run.id, consumed + 1, watch, signal, onIndex);
-      if (ended) return;
-      // Cut again, the same way. Another pass, bounded by the loop.
-      lost = new Error("the opener stream ended before the generation did");
-    } catch (err) {
-      // A rename can land in the gap between the lookup above and this attach,
-      // and then it is the ATTACH that 404s -- so re-resolving only when the
-      // lookup came back empty leaves that window open. Same recovery, one
-      // step later; the loop bounds how often it can happen.
-      if (err instanceof ApiError && err.kind === "run_gone") {
-        try {
-          if (await moved()) continue;
-        } catch (why) {
-          if (isAbortError(why)) throw why;
-          // Could not ASK whether it moved. That settles nothing either way,
-          // so it must not end the recovery -- spend another attempt on it.
-          continue;
-        }
-      }
-      if (err instanceof ApiError || isAbortError(err)) throw err;
-      lost = err;
+      return undefined;
     }
   }
-  throw lost;
+
+  /** `moved`, with a failure to ask counted as a reason to try again. */
+  private async mayHaveMoved(): Promise<boolean> {
+    try {
+      return await this.moved();
+    } catch (why) {
+      if (isAbortError(why)) throw why;
+      // Could not ASK whether it moved. That settles nothing either way,
+      // so it must not end the recovery -- spend another attempt on it.
+      return true;
+    }
+  }
 
   /** Point `at` at whatever this scene is called now. True if it moved.
    *
@@ -384,20 +451,20 @@ export async function streamDraft(cid: string, sid: string, path: string, body: 
    *  every candidate, a dropped fetch) is a failure to ASK, and this rethrows
    *  so the caller spends another attempt rather than concluding no-move.
    *  Swallowing those into `false` is the same "a failed discovery is not an
-   *  answer of no run" defect this file warns about ten lines up, and I wrote
-   *  it here while quoting the rule there.
+   *  answer of no run" defect `lookup` warns about, and I wrote it here while
+   *  quoting the rule there.
    */
-  async function moved(): Promise<boolean> {
-    if (!identity) return false;
+  private async moved(): Promise<boolean> {
+    if (!this.identity) return false;
     let now: string;
     try {
-      now = (await sceneRunApi.sceneByIdentity(cid, identity, signal)).id;
+      now = (await sceneRunApi.sceneByIdentity(this.cid, this.identity, this.signal)).id;
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return false;
       throw err;
     }
-    if (now === at) return false;
-    at = now;
+    if (now === this.at) return false;
+    this.at = now;
     return true;
   }
 }

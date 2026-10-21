@@ -2,7 +2,7 @@
  *  review and the chronicle save, plus the opener and first post. Spread into
  *  `api` by `client.ts`. */
 import { notifyShell } from "../notify";
-import { READ_RETRIES, RUN_POLL_MS, awaitRun, sceneRunApi, streamDraft } from "../runs";
+import { READ_RETRIES, RUN_POLL_MS, awaitRun, runResult, sceneRunApi, streamDraft } from "../runs";
 import { type ChatEvent, type OpenerContribution, type OpenerSpeaker, type RunHandle,
   isAbortError } from "../stream";
 import { ApiError, request, sleepUnlessAborted } from "../transport";
@@ -272,7 +272,7 @@ export const reviewApi = {
     }
     try {
       const run = await awaitRun(cid, sid, started.run, signal);
-      return (run.result ?? {}) as unknown as { mechanics: Mechanics; edits: StagedEdit[] };
+      return runResult<{ mechanics: Mechanics; edits: StagedEdit[] }>(run);
     } catch (err) {
       // The server folded this retry into the stored review before the run
       // record was reaped, so the phase is on disk even though the run is not.
@@ -293,7 +293,7 @@ export const reviewApi = {
     }
     try {
       const run = await awaitRun(cid, sid, started.run, signal);
-      return (run.result ?? {}) as unknown as { dossiers: Dossiers; edits: StagedEdit[] };
+      return runResult<{ dossiers: Dossiers; edits: StagedEdit[] }>(run);
     } catch (err) {
       const stored = await reapedPhase(cid, sid, started.generation, err);
       // `proposed` is the phase's own list of who it prepared a dossier for --
