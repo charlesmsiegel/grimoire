@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import filecmp
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import (
@@ -158,12 +159,13 @@ def ensure_campaign_slim(cid: str) -> None:
     deleted. The next run tombstoned them, permanently hiding records from a
     campaign that had done nothing but be interrupted mid-migration.
 
-    So the loop below only classifies, and the writes that follow run in the
-    one order whose every prefix is a state this function reads correctly:
-    tombstones, then the manifest, then the copies it named. Interrupted after
-    the tombstones, the next run repeats them (`add_deleted` is a union), and
-    every interruption around the prune leaves a ref carrying the reserved base
-    — a value the loop attributes to nobody and re-derives the same verdict for.
+    So `_classify_manifest` only classifies, and the writes that follow
+    (`_apply_slim_plan`) run in the one order whose every prefix is a state
+    this function reads correctly: tombstones, then the manifest, then the
+    copies it named. Interrupted after the tombstones, the next run repeats
+    them (`add_deleted` is a union), and every interruption around the prune
+    leaves a ref carrying the reserved base — a value the classifier
+    attributes to nobody and re-derives the same verdict for.
     """
     with locks.campaign_lock(cid):
         mp = paths.campaign_meta_path(cid)
@@ -192,110 +194,151 @@ def ensure_campaign_slim(cid: str) -> None:
             if meta.get(PRUNING_KEY):
                 _finish(mp, meta, body, root, wroot)   # decisions all made; only deleting left
                 return
-
-            locked = set(appearances_paths.record(cid))
-            manifest = paths.read_manifest(cid)
-            copied = set(manifest)   # every record the full copy tracked, before the loop prunes it
-            deleted_by_user: list[str] = []   # refs to tombstone: the copy is gone, the world's is not
-            redundant: list[str] = []         # refs whose copy the world still holds, identical
-            for ref, base in sorted(manifest.items()):
-                kind, _, eid = ref.partition("/")
-                # A ref the fork recorded with no hash at all copied nothing, so there
-                # has never been a copy here for the user to have deleted -- both
-                # historical writers stored `<hash of the world's> or ""`, and a plot
-                # map is simply absent from most worlds, so `plotmap: ''` sits in every
-                # campaign forked before its world had one. Reading that as a deletion
-                # tombstones the world's plot map out of the campaign the moment the
-                # world gains one, which is #270's own symptom (Codex review).
-                attributable = bool(base)
-
-                def spent(mine_h: str | None, world_h: str | None) -> bool:
-                    """The copy adds nothing the world does not already hold. A falsy
-                    base counts: it is what the prune below reserves before unlinking,
-                    so a run interrupted mid-prune re-derives the same verdict and
-                    finishes the job (and it is what a materialization reserves, whose
-                    unredeemed copy is the world's own bytes either way)."""
-                    return mine_h is not None and mine_h == world_h and (base == mine_h or not base)
-
-                if ref == "plotmap":
-                    if not (root / "plotmap.json").exists():
-                        if attributable and (wroot / "plotmap.json").exists():
-                            deleted_by_user.append(ref)   # keep the user's deletion deleted
-                        manifest.pop(ref)
-                    elif spent(greetings.plotmap_hash(root), greetings.plotmap_hash(wroot)):
-                        redundant.append(ref)
-                        manifest.pop(ref)
-                    continue
-                if kind in appearances_paths.ACTOR_KINDS:
-                    if ref in locked:
-                        manifest.pop(ref)   # a lock owns its base in appearances.json
-                        continue
-                    dh = characters.dir_hash if kind == "characters" else pcs.dir_hash
-                    mine_h = dh(root, eid)
-                    if mine_h is None:
-                        if attributable and dh(wroot, eid) is not None:
-                            deleted_by_user.append(ref)   # keep the user's deletion deleted
-                        manifest.pop(ref)
-                    elif spent(mine_h, dh(wroot, eid)):
-                        redundant.append(ref)
-                        manifest.pop(ref)
-                    continue
-                if not (root / kind / f"{eid}.md").exists():
-                    if attributable and (wroot / kind / f"{eid}.md").exists():
-                        deleted_by_user.append(ref)   # keep the user's deletion deleted
-                    manifest.pop(ref)
-                elif spent(entities.entity_hash(root, kind, eid), entities.entity_hash(wroot, kind, eid)):
-                    redundant.append(ref)
-                    manifest.pop(ref)
-            # ONE hold across both, not a lock per ref and not a lock per call.
-            # `add_deleted` takes `campaign_lock` itself now (it is a whole-file
-            # rewrite of `deleted.json`), and left to do that per ref this would be
-            # N advisory file-lock acquisitions -- but the reason the hold belongs
-            # HERE is atomicity, not cost: `_tombstone_deleted_copied_assets` opens
-            # by reading `overlay.deleted(cid)` and writes back from it, so with two
-            # separate holds that read sits outside the one covering the loop above,
-            # and the second half can raise `CampaignBusy` after the first has
-            # already committed. The migration's tombstone set lands whole, which it
-            # did not before.
-            #
-            # The consequence, stated rather than discovered: `ensure_campaign_slim`
-            # can now raise `CampaignBusy`, and it runs lazily on ordinary read
-            # paths (`routes/common/_lookups.py`'s lazy slim), so a contended campaign can
-            # answer 409 where it previously could not. A retryable 409 in exchange
-            # for a campaign that can no longer be left half-migrated.
-            # Offers must be retired before the first manifest reservation or
-            # prune, including a resumed reserved-base removal (spec 07).
-            for ref in redundant:
-                kind, _, eid = ref.partition("/")
-                overlay._retire_owned_reviews(cid, kind, eid)
-                journal.retire_membership_targets(cid, kind, eid)
-            with locks.campaign_lock(cid):
-                for ref in deleted_by_user:
-                    overlay.add_deleted(cid, ref)
-                _tombstone_deleted_copied_assets(cid, root, wroot, copied)
-            # Reserve, unlink, drop -- the same two-step `overlay._recorded_base` uses,
-            # run backwards. Dropping the ref outright and then unlinking would leave an
-            # interrupted prune as a copy the manifest does not name, and nothing on
-            # disk tells that apart from a record the campaign owns: ids are
-            # `slugify(name)` and each root uniquifies against itself alone, so a
-            # campaign-local record whose slug the world later reuses with identical
-            # content looks exactly like residue. Deleting it there reads as harmless --
-            # the content is the same -- but the record has silently become inherited,
-            # so the next world edit rewrites it and a world deletion removes it
-            # (Codex review). Reserving instead makes the prune say so itself: a falsy
-            # base is not attributable to any user (see the loop above), and every
-            # interruption point below re-derives the same verdict on the next run.
-            for ref in redundant:
-                manifest[ref] = overlay.RESERVED_BASE
-            paths.write_manifest(cid, manifest)
-            for ref in redundant:
-                overlay.dematerialize(cid, ref)
-            for ref in redundant:
-                manifest.pop(ref, None)
-            paths.write_manifest(cid, manifest)
+            plan = _classify_manifest(cid, root, wroot)
+            _apply_slim_plan(cid, root, wroot, plan)
             _finish(mp, meta, body, root, wroot)
         finally:
             revision.bump(cid)
+
+
+#: `_copy_verdict`'s answers. None (no verdict) keeps the ref and its copy.
+_DROPPED = "dropped"       # no copy here and nothing to attribute: forget the ref
+_DELETED = "deleted"       # the copy is gone, the world's is not: tombstone it
+_REDUNDANT = "redundant"   # the copy adds nothing the world does not hold: prune it
+
+
+@dataclass
+class _SlimPlan:
+    """Everything `ensure_campaign_slim` decided before it writes anything."""
+
+    manifest: dict          # the manifest, every settled ref already dropped
+    copied: set[str]        # every record the full copy tracked, before the loop prunes it
+    deleted_by_user: list[str] = field(default_factory=list)   # refs to tombstone: the copy is gone, the world's is not
+    redundant: list[str] = field(default_factory=list)         # refs whose copy the world still holds, identical
+
+
+def _classify_manifest(cid: str, root: Path, wroot: Path) -> _SlimPlan:
+    """Read every manifest ref's verdict, deleting nothing (#270)."""
+    locked = set(appearances_paths.record(cid))
+    manifest = paths.read_manifest(cid)
+    plan = _SlimPlan(manifest=manifest, copied=set(manifest))
+    for ref, base in sorted(manifest.items()):
+        kind, _, _eid = ref.partition("/")
+        if kind in appearances_paths.ACTOR_KINDS and ref in locked:
+            manifest.pop(ref)   # a lock owns its base in appearances.json
+            continue
+        verdict = _ref_verdict(ref, base, root, wroot)
+        if verdict is None:
+            continue
+        manifest.pop(ref)
+        if verdict == _DELETED:
+            plan.deleted_by_user.append(ref)   # keep the user's deletion deleted
+        elif verdict == _REDUNDANT:
+            plan.redundant.append(ref)
+    return plan
+
+
+def _ref_verdict(ref: str, base: str, root: Path, wroot: Path) -> str | None:
+    """`_copy_verdict` for one unlocked ref, asking the store the way its kind
+    is stored: the plot map as one file, an actor as a whole record directory,
+    anything else as a flat entity file."""
+    kind, _, eid = ref.partition("/")
+    if ref == "plotmap":
+        return _copy_verdict(
+            base, present=(root / "plotmap.json").exists(),
+            world_has=(wroot / "plotmap.json").exists,
+            hashes=lambda: (greetings.plotmap_hash(root), greetings.plotmap_hash(wroot)))
+    if kind in appearances_paths.ACTOR_KINDS:
+        dh = characters.dir_hash if kind == "characters" else pcs.dir_hash
+        mine_h = dh(root, eid)
+        return _copy_verdict(
+            base, present=mine_h is not None,
+            world_has=lambda: dh(wroot, eid) is not None,
+            hashes=lambda: (mine_h, dh(wroot, eid)))
+    return _copy_verdict(
+        base, present=(root / kind / f"{eid}.md").exists(),
+        world_has=(wroot / kind / f"{eid}.md").exists,
+        hashes=lambda: (entities.entity_hash(root, kind, eid), entities.entity_hash(wroot, kind, eid)))
+
+
+def _copy_verdict(base: str, *, present: bool, world_has: Callable[[], bool],
+                  hashes: Callable[[], tuple[str | None, str | None]]) -> str | None:
+    """What the migration does with one copied record, given its recorded base.
+
+    `world_has` and `hashes` are only called when the verdict needs them, so a
+    record that is gone costs no hashing and an unattributable one no world read.
+    """
+    if not present:
+        # A ref the fork recorded with no hash at all copied nothing, so there
+        # has never been a copy here for the user to have deleted -- both
+        # historical writers stored `<hash of the world's> or ""`, and a plot
+        # map is simply absent from most worlds, so `plotmap: ''` sits in every
+        # campaign forked before its world had one. Reading that as a deletion
+        # tombstones the world's plot map out of the campaign the moment the
+        # world gains one, which is #270's own symptom (Codex review).
+        attributable = bool(base)
+        return _DELETED if attributable and world_has() else _DROPPED
+    mine_h, world_h = hashes()
+    # Spent: the copy adds nothing the world does not already hold. A falsy
+    # base counts: it is what the prune reserves before unlinking, so a run
+    # interrupted mid-prune re-derives the same verdict and finishes the job
+    # (and it is what a materialization reserves, whose unredeemed copy is the
+    # world's own bytes either way).
+    if mine_h is not None and mine_h == world_h and (base == mine_h or not base):
+        return _REDUNDANT
+    return None
+
+
+def _apply_slim_plan(cid: str, root: Path, wroot: Path, plan: _SlimPlan) -> None:
+    """Carry out `_classify_manifest`'s decisions: retire, tombstone, reserve,
+    dematerialize, drop -- the order whose every prefix a rerun reads right."""
+    # ONE hold across both, not a lock per ref and not a lock per call.
+    # `add_deleted` takes `campaign_lock` itself now (it is a whole-file
+    # rewrite of `deleted.json`), and left to do that per ref this would be
+    # N advisory file-lock acquisitions -- but the reason the hold belongs
+    # HERE is atomicity, not cost: `_tombstone_deleted_copied_assets` opens
+    # by reading `overlay.deleted(cid)` and writes back from it, so with two
+    # separate holds that read sits outside the one covering the loop above,
+    # and the second half can raise `CampaignBusy` after the first has
+    # already committed. The migration's tombstone set lands whole, which it
+    # did not before.
+    #
+    # The consequence, stated rather than discovered: `ensure_campaign_slim`
+    # can now raise `CampaignBusy`, and it runs lazily on ordinary read
+    # paths (`routes/common/_lookups.py`'s lazy slim), so a contended campaign can
+    # answer 409 where it previously could not. A retryable 409 in exchange
+    # for a campaign that can no longer be left half-migrated.
+    # Offers must be retired before the first manifest reservation or
+    # prune, including a resumed reserved-base removal (spec 07).
+    manifest, redundant = plan.manifest, plan.redundant
+    for ref in redundant:
+        kind, _, eid = ref.partition("/")
+        overlay._retire_owned_reviews(cid, kind, eid)
+        journal.retire_membership_targets(cid, kind, eid)
+    with locks.campaign_lock(cid):
+        for ref in plan.deleted_by_user:
+            overlay.add_deleted(cid, ref)
+        _tombstone_deleted_copied_assets(cid, root, wroot, plan.copied)
+    # Reserve, unlink, drop -- the same two-step `overlay._recorded_base` uses,
+    # run backwards. Dropping the ref outright and then unlinking would leave an
+    # interrupted prune as a copy the manifest does not name, and nothing on
+    # disk tells that apart from a record the campaign owns: ids are
+    # `slugify(name)` and each root uniquifies against itself alone, so a
+    # campaign-local record whose slug the world later reuses with identical
+    # content looks exactly like residue. Deleting it there reads as harmless --
+    # the content is the same -- but the record has silently become inherited,
+    # so the next world edit rewrites it and a world deletion removes it
+    # (Codex review). Reserving instead makes the prune say so itself: a falsy
+    # base is not attributable to any user (see `_copy_verdict`), and every
+    # interruption point below re-derives the same verdict on the next run.
+    for ref in redundant:
+        manifest[ref] = overlay.RESERVED_BASE
+    paths.write_manifest(cid, manifest)
+    for ref in redundant:
+        overlay.dematerialize(cid, ref)
+    for ref in redundant:
+        manifest.pop(ref, None)
+    paths.write_manifest(cid, manifest)
 
 
 def _finish(mp: Path, meta: dict, body: str, root: Path, wroot: Path) -> None:
@@ -436,52 +479,67 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
         # byte-identical means the same image AND the same crop -- a different
         # focus is a different file and stays.
         for p in sorted(base.rglob("*"), key=lambda q: (q.parent.name != image_refs.REFS_DIR, q)):
-            if not p.is_file():
-                continue
-            rel = p.relative_to(root)
-            if "assets" not in rel.parts and p.name != "tagline.md":
-                continue
-            w = wroot / rel
-            if w.exists() and filecmp.cmp(p, w, shallow=False):
-                # A placement is not redundant while a legacy file of its name
-                # sits beside it: that is the file a placement written before
-                # its image arrived kept (`assets._drop_if_placed`), and with
-                # the placement gone it would be the campaign's picture again
-                # -- a stale one. Both stay; redundant data beats lost data.
-                if p.parent.name == image_refs.REFS_DIR and assets.has_legacy(
-                        p.parent.parent, p.stem):
-                    continue
-                # A focus sidecar is not redundant while a divergent campaign
-                # avatar sits beside it: overlay.read_focus treats that avatar
-                # as authoritative and won't fall back to the world focus, so
-                # dropping the sidecar would silently reset the crop to center.
-                # `path_in` sees an avatar held as a placement as well as a
-                # legacy file; an image-less avatar placement (a crop over an
-                # inherited avatar) owns the crop too, and is kept for the same
-                # reason though it holds no image.
-                if p.name == assets.FOCUS_FILE and (
-                        assets.path_in(p.parent, assets.AVATAR) is not None
-                        or image_refs.read(p.parent, assets.AVATAR) is not None):
-                    continue
-                # The same hazard one step broader, for the same reason:
-                # overlay.read_description treats a campaign-side IMAGE as
-                # authoritative and does not fall back to the world's sentence
-                # about it, so a description sidecar is not redundant while any
-                # campaign-side image sits beside it. Broader because focus has
-                # one key (the avatar) and this has one per image -- a single
-                # divergent gallery image is enough to make the whole file
-                # load-bearing, and pruning it would blank descriptions that
-                # only *happen* to read the same as the world's.
-                # `names_in`, so an image held as a placement counts as much
-                # as a legacy file does.
-                if p.name == assets.DESCRIPTIONS_FILE and assets.names_in(p.parent)[0]:
-                    continue
+            if _duplicates_world(p, root, wroot) and not _load_bearing(p):
                 p.unlink()
-        for d in sorted((x for x in base.rglob("*") if x.is_dir()), reverse=True):
-            if not any(d.iterdir()):
-                d.rmdir()
-        if base.exists() and not any(base.iterdir()):
-            base.rmdir()
+        _remove_empty_dirs(base)
+
+
+def _duplicates_world(p: Path, root: Path, wroot: Path) -> bool:
+    """`p` is an asset file or actor sidecar byte-identical to the file at the
+    same relative path in the world."""
+    if not p.is_file():
+        return False
+    rel = p.relative_to(root)
+    if "assets" not in rel.parts and p.name != "tagline.md":
+        return False
+    w = wroot / rel
+    return w.exists() and filecmp.cmp(p, w, shallow=False)
+
+
+def _load_bearing(p: Path) -> bool:
+    """A world duplicate the campaign still needs: without it, a reader would
+    see something other than what it sees now."""
+    # A placement is not redundant while a legacy file of its name
+    # sits beside it: that is the file a placement written before
+    # its image arrived kept (`assets._drop_if_placed`), and with
+    # the placement gone it would be the campaign's picture again
+    # -- a stale one. Both stay; redundant data beats lost data.
+    if p.parent.name == image_refs.REFS_DIR and assets.has_legacy(
+            p.parent.parent, p.stem):
+        return True
+    # A focus sidecar is not redundant while a divergent campaign
+    # avatar sits beside it: overlay.read_focus treats that avatar
+    # as authoritative and won't fall back to the world focus, so
+    # dropping the sidecar would silently reset the crop to center.
+    # `path_in` sees an avatar held as a placement as well as a
+    # legacy file; an image-less avatar placement (a crop over an
+    # inherited avatar) owns the crop too, and is kept for the same
+    # reason though it holds no image.
+    if p.name == assets.FOCUS_FILE and (
+            assets.path_in(p.parent, assets.AVATAR) is not None
+            or image_refs.read(p.parent, assets.AVATAR) is not None):
+        return True
+    # The same hazard one step broader, for the same reason:
+    # overlay.read_description treats a campaign-side IMAGE as
+    # authoritative and does not fall back to the world's sentence
+    # about it, so a description sidecar is not redundant while any
+    # campaign-side image sits beside it. Broader because focus has
+    # one key (the avatar) and this has one per image -- a single
+    # divergent gallery image is enough to make the whole file
+    # load-bearing, and pruning it would blank descriptions that
+    # only *happen* to read the same as the world's.
+    # `names_in`, so an image held as a placement counts as much
+    # as a legacy file does.
+    return p.name == assets.DESCRIPTIONS_FILE and bool(assets.names_in(p.parent)[0])
+
+
+def _remove_empty_dirs(base: Path) -> None:
+    """Remove every directory under `base` the prune left empty, then `base`."""
+    for d in sorted((x for x in base.rglob("*") if x.is_dir()), reverse=True):
+        if not any(d.iterdir()):
+            d.rmdir()
+    if base.exists() and not any(base.iterdir()):
+        base.rmdir()
 
 
 def rename_campaign(cid: str, name: str) -> None:
