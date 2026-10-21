@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 from ..llm_errors import LLMError
 
@@ -79,7 +79,53 @@ async def _aclose(agen) -> None:
         task.cancel()  # asked to stop; deliberately not awaited
 
 
-async def _guard(agen, timeout: float, tick: float | None = None, pending=None) -> AsyncIterator[str]:
+class _Heartbeat:
+    """The caller-liveness clock `_guard` keeps: when the next `""` is due, or
+    None when ticks are off (`tick <= 0`)."""
+
+    def __init__(self, tick: float):
+        self.tick = tick
+        self.due: float | None = None
+        self.reset()
+
+    def reset(self) -> None:
+        """Restart the clock: the caller has just been shown something."""
+        self.due = (time.monotonic() + self.tick) if self.tick > 0 else None
+
+    def fire(self, now: float) -> bool:
+        """Whether a tick is due at `now`, restarting the clock when it is."""
+        if self.due is None or now < self.due:
+            return False
+        self.due = now + self.tick
+        return True
+
+
+async def _pulled(pull: asyncio.Task, deadline: float | None, heartbeat: _Heartbeat,
+                  bound: float) -> bool:
+    """Wait on `pull`: True once it is done, False when the heartbeat comes due
+    first (the caller is owed a `""`), and the `timeout` LLMError when the idle
+    `deadline` passes first. `bound` is `_guard`'s timeout, for the message
+    (not spelled `timeout`, which is what ASYNC109 flags)."""
+    while True:
+        # Whichever clock is nearer sets the sleep; a tick therefore
+        # consumes part of the timeout's budget rather than extending it
+        # -- ticking forever is exactly the "never times out" failure the
+        # bound exists to prevent.
+        due = [t for t in (deadline, heartbeat.due) if t is not None]
+        wait = max(0.0, min(due) - time.monotonic()) if due else None
+        done, _ = await asyncio.wait({pull}, timeout=wait)
+        if done:
+            return True
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
+            raise LLMError(
+                "timeout", f"the model sent nothing for {bound:g}s — giving up")
+        if heartbeat.fire(now):
+            return False
+
+
+async def _guard(agen, timeout: float, tick: float | None = None,
+                 pending=None) -> AsyncGenerator[str, None]:
     """Bound the gap between deltas, whatever the provider underneath.
 
     The wait covers connect + time-to-first-token on the first pull and
@@ -122,45 +168,28 @@ async def _guard(agen, timeout: float, tick: float | None = None, pending=None) 
     # Read at call time, not bound as a default: the constant is the knob tests
     # and any future config path turn, and a default argument would freeze
     # whatever it happened to be at import.
-    tick = HEARTBEAT_INTERVAL if tick is None else tick
+    heartbeat = _Heartbeat(HEARTBEAT_INTERVAL if tick is None else tick)
     it = agen.__aiter__()
     pull: asyncio.Task | None = None
-    next_tick = (time.monotonic() + tick) if tick > 0 else None
     try:
         while True:
             pull = asyncio.ensure_future(it.__anext__())
             # The idle bound restarts here, on each new pull. The tick does not.
             deadline = None if timeout <= 0 else time.monotonic() + timeout
-            while True:
-                # Whichever clock is nearer sets the sleep; a tick therefore
-                # consumes part of the timeout's budget rather than extending it
-                # -- ticking forever is exactly the "never times out" failure the
-                # bound exists to prevent.
-                due = [t for t in (deadline, next_tick) if t is not None]
-                wait = max(0.0, min(due) - time.monotonic()) if due else None
-                done, _ = await asyncio.wait({pull}, timeout=wait)
-                if done:
-                    break
-                now = time.monotonic()
-                if deadline is not None and now >= deadline:
-                    raise LLMError(
-                        "timeout", f"the model sent nothing for {timeout:g}s — giving up")
-                if next_tick is not None and now >= next_tick:
-                    next_tick = now + tick
-                    yield ""  # still waiting on the provider; tell the caller so
+            while not await _pulled(pull, deadline, heartbeat, timeout):
+                yield ""  # still waiting on the provider; tell the caller so
             try:
                 chunk = pull.result()  # re-raises the provider's own LLMError
             except StopAsyncIteration:
                 return
             if chunk or (pending is not None and pending()):
-                next_tick = (time.monotonic() + tick) if tick > 0 else None
+                heartbeat.reset()
                 yield chunk
-            elif next_tick is not None and time.monotonic() >= next_tick:
+            elif heartbeat.fire(time.monotonic()):
                 # A provider frame that carries no text, arriving on a stream so
                 # chatty that the wait above never expires. The pull loop is the
                 # only other place the clock can be read, so an overdue tick has
                 # to fire from here or a busy-but-silent model never produces one.
-                next_tick = time.monotonic() + tick
                 yield ""
     finally:
         # Every exit settles the outstanding pull and closes the provider: on a
