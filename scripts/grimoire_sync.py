@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
@@ -548,7 +549,30 @@ def list_paths(label: str, paths: list[str], limit: int) -> None:
 # ----------------------------------------------------------------------- main
 
 
-def main(argv: list[str] | None = None) -> int:
+@dataclass
+class Sync:
+    """One run's two ends, and what was hashed on each."""
+
+    args: argparse.Namespace
+    adb: Adb
+    local: Path
+    remote: str
+    serial: str
+    pc_files: dict[str, str]
+    phone_files: dict[str, str]
+
+
+@dataclass
+class Outcome:
+    """What the transfers did to the baseline, and what failed."""
+
+    new_base: dict[str, str]
+    new_conflicts: dict[str, list]
+    failures: list[str] = field(default_factory=list)
+    conflict_targets: dict[str, str] = field(default_factory=dict)
+
+
+def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Two-way sync of the grimoire store between this PC and a "
                     "USB-connected phone. Dry run unless --apply is given."
@@ -569,156 +593,180 @@ def main(argv: list[str] | None = None) -> int:
                          "(they are treated as absent, so PC copies win)")
     ap.add_argument("--limit", type=int, default=20,
                     help="how many paths to list per section (default 20)")
-    args = ap.parse_args(argv)
+    return ap
 
+
+def _attach(args: argparse.Namespace) -> Adb | None:
+    """The one attached device's `adb`, or None once the reason is printed."""
     try:
         adb = Adb(find_adb(args.adb), args.serial)
     except AdbError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 2
+        return None
 
     attached = adb.devices()
     if not attached:
         print("error: no device. Check the cable, and that USB debugging is on "
               "and authorized.", file=sys.stderr)
-        return 2
+        return None
     if args.serial is None:
         if len(attached) > 1:
             print(f"error: {len(attached)} devices attached; pass --serial "
                   f"({', '.join(attached)})", file=sys.stderr)
-            return 2
+            return None
         adb.serial = attached[0]
+    return adb
 
+
+def _roots(adb: Adb, args: argparse.Namespace) -> tuple[Path, str] | None:
+    """Both store roots, or None once the reason is printed."""
     local = pc_root(args.pc_home)
     try:
         remote = phone_root(adb, args.app_id, args.phone_home)
     except AdbError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 2
+        return None
 
     print(f"device: {adb.serial}")
     print(f"PC:     {local}")
     print(f"phone:  {remote}")
     if not local.is_dir():
         print(f"error: PC store {local} does not exist", file=sys.stderr)
-        return 2
+        return None
+    return local, remote
 
+
+def _hash_both(adb: Adb, local: Path,
+               remote: str) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    """Each side's file hashes, and the phone paths that could not be read."""
     print("\nhashing both sides ...")
     pc_files = hash_pc(local)
     phone_files, denied = hash_phone(adb, remote)
     print(f"  PC:    {len(pc_files)} files")
     print(f"  phone: {len(phone_files)} files")
+    return pc_files, phone_files, denied
 
-    base, known = load_baseline(adb.serial or "", local, remote)
-    if not base:
-        print("\nno baseline for this device yet -- first sync. Files that differ\n"
-              "on both sides are reported as conflicts rather than guessed at.")
-    serial = adb.serial or "device"
-    plan = plan_sync(pc_files, phone_files, base, known)
 
+def _report(plan: Plan, denied: list[str], limit: int) -> None:
     print()
     describe(plan, denied)
-    list_paths("phone -> PC", plan.to_pc, args.limit)
-    list_paths("PC -> phone", plan.to_phone, args.limit)
+    list_paths("phone -> PC", plan.to_pc, limit)
+    list_paths("PC -> phone", plan.to_phone, limit)
     list_paths("conflicts (phone copy will land beside the PC file)",
-               plan.conflicts, args.limit)
+               plan.conflicts, limit)
     list_paths("conflicts already reported (resolve by hand)",
-               plan.pending, args.limit)
+               plan.pending, limit)
 
-    if not args.apply:
-        print("\nDry run. Nothing was written. Re-run with --apply to copy.")
-        return 0
 
-    if denied and not args.allow_unreadable:
-        # Every unreadable path looks absent, and absent-on-the-phone means
-        # "copy the PC's version over it". That is the one direction this tool
-        # must never take on a guess: the phone is where the unsynced work is.
-        print(
-            f"\nRefusing to write: {len(denied)} path(s) on the phone could not "
-            "be read,\nso they are indistinguishable from files the phone never "
-            "had. Copying now\ncould overwrite them with older PC copies.\n\n"
-            "Open the app on the phone once (it re-runs its permission pass at "
-            "startup),\nthen re-run. --allow-unreadable overrides this, and "
-            "treats them as absent.",
-            file=sys.stderr,
-        )
-        return 3
+def _refuse_unreadable(denied: list[str]) -> int:
+    # Every unreadable path looks absent, and absent-on-the-phone means
+    # "copy the PC's version over it". That is the one direction this tool
+    # must never take on a guess: the phone is where the unsynced work is.
+    print(
+        f"\nRefusing to write: {len(denied)} path(s) on the phone could not "
+        "be read,\nso they are indistinguishable from files the phone never "
+        "had. Copying now\ncould overwrite them with older PC copies.\n\n"
+        "Open the app on the phone once (it re-runs its permission pass at "
+        "startup),\nthen re-run. --allow-unreadable overrides this, and "
+        "treats them as absent.",
+        file=sys.stderr,
+    )
+    return 3
 
-    if not (plan.to_pc or plan.to_phone or plan.conflicts):
-        # No transfers, but the two sides may have agreed since the last
-        # run -- a conflict resolved by hand shows up here and nowhere else.
-        settled, cleared = reconcile(base, known, pc_files, phone_files)
-        if settled != base or cleared != known:
-            save_baseline(serial, local, remote, settled, cleared)
-            print(f'\nbaseline updated at {baseline_path(serial)}')
-        print('\nNothing to copy.')
-        return 0
 
-    if not args.no_snapshot:
-        rev = git_snapshot(local)
+def _settle(sync: Sync, base: dict[str, str], known: dict[str, list]) -> int:
+    """No transfers, but the two sides may have agreed since the last
+    run -- a conflict resolved by hand shows up here and nowhere else."""
+    settled, cleared = reconcile(base, known, sync.pc_files, sync.phone_files)
+    if settled != base or cleared != known:
+        save_baseline(sync.serial, sync.local, sync.remote, settled, cleared)
+        print(f'\nbaseline updated at {baseline_path(sync.serial)}')
+    print('\nNothing to copy.')
+    return 0
+
+
+def _prepare(sync: Sync) -> None:
+    """Snapshot the PC store and stop the app, unless told not to."""
+    if not sync.args.no_snapshot:
+        rev = git_snapshot(sync.local)
         if rev == "clean":
             print("\ngit: PC store already clean, nothing to snapshot")
         elif rev:
             print(f"\ngit: snapshotted PC store at {rev} before writing")
-    if not args.no_stop:
-        adb.shell(f"am force-stop {args.app_id}")
-        print(f"stopped {args.app_id} on the device")
+    if not sync.args.no_stop:
+        sync.adb.shell(f"am force-stop {sync.args.app_id}")
+        print(f"stopped {sync.args.app_id} on the device")
 
+
+def _pull(sync: Sync, plan: Plan, pulls: list[tuple[str, Path]], scratch: Path,
+          outcome: Outcome) -> None:
+    print(f"pulling {len(pulls)} file(s) from the phone ...")
+    try:
+        pull_files(sync.adb, sync.remote, pulls, scratch)
+        for rel in plan.to_pc:
+            outcome.new_base[rel] = sync.phone_files[rel]
+            outcome.new_conflicts.pop(rel, None)
+        for rel in plan.conflicts:
+            # Both originals stay put; record the standoff so the next
+            # run recognises it instead of writing a second copy.
+            outcome.new_conflicts[rel] = [sync.pc_files.get(rel), sync.phone_files.get(rel)]
+            outcome.new_base.pop(rel, None)
+    except AdbError as exc:
+        outcome.failures.append(f"pull: {exc}")
+
+
+def _push(sync: Sync, plan: Plan, pushes: list[tuple[str, Path]], scratch: Path,
+          outcome: Outcome) -> None:
+    print(f"pushing {len(pushes)} file(s) to the phone ...")
+    try:
+        push_files(sync.adb, sync.remote, pushes, scratch)
+        for rel in plan.to_phone:
+            outcome.new_base[rel] = sync.pc_files[rel]
+            outcome.new_conflicts.pop(rel, None)
+    except AdbError as exc:
+        outcome.failures.append(f"push: {exc}")
+
+
+def _transfer(sync: Sync, plan: Plan, base: dict[str, str],
+              known: dict[str, list]) -> Outcome:
+    """Pull, then push, through one scratch directory."""
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    new_base = dict(base)
-    new_conflicts = dict(known)
-    failures: list[str] = []
-
+    outcome = Outcome(dict(base), dict(known))
     scratch = Path(tempfile.mkdtemp(prefix="grimoire-sync-"))
     try:
         # Conflicts are pulls too -- the phone's version, landing under a name
         # that says so -- so they ride along with the phone -> PC transfer.
-        pulls = [(rel, local / rel) for rel in plan.to_pc]
-        conflict_targets = {
-            rel: conflict_name(rel, stamp, serial) for rel in plan.conflicts
+        pulls = [(rel, sync.local / rel) for rel in plan.to_pc]
+        outcome.conflict_targets = {
+            rel: conflict_name(rel, stamp, sync.serial) for rel in plan.conflicts
         }
-        pulls += [(rel, local / conflict_targets[rel]) for rel in plan.conflicts]
-        pushes = [(rel, local / rel) for rel in plan.to_phone]
+        pulls += [(rel, sync.local / outcome.conflict_targets[rel]) for rel in plan.conflicts]
+        pushes = [(rel, sync.local / rel) for rel in plan.to_phone]
 
         if pulls:
-            print(f"pulling {len(pulls)} file(s) from the phone ...")
-            try:
-                pull_files(adb, remote, pulls, scratch)
-                for rel in plan.to_pc:
-                    new_base[rel] = phone_files[rel]
-                    new_conflicts.pop(rel, None)
-                for rel in plan.conflicts:
-                    # Both originals stay put; record the standoff so the next
-                    # run recognises it instead of writing a second copy.
-                    new_conflicts[rel] = [pc_files.get(rel), phone_files.get(rel)]
-                    new_base.pop(rel, None)
-            except AdbError as exc:
-                failures.append(f"pull: {exc}")
-
+            _pull(sync, plan, pulls, scratch, outcome)
         if pushes:
-            print(f"pushing {len(pushes)} file(s) to the phone ...")
-            try:
-                push_files(adb, remote, pushes, scratch)
-                for rel in plan.to_phone:
-                    new_base[rel] = pc_files[rel]
-                    new_conflicts.pop(rel, None)
-            except AdbError as exc:
-                failures.append(f"push: {exc}")
+            _push(sync, plan, pushes, scratch, outcome)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+    return outcome
 
-    for rel, target in ((r, conflict_targets.get(r)) for r in plan.conflicts):
+
+def _finish(sync: Sync, plan: Plan, outcome: Outcome) -> int:
+    """Name the conflict copies, write the baseline, and report."""
+    for rel in plan.conflicts:
+        target = outcome.conflict_targets.get(rel)
         if target:
             print(f"  conflict: {rel} -> {target}")
 
     new_base, new_conflicts = reconcile(
-        new_base, new_conflicts, pc_files, phone_files)
-    save_baseline(serial, local, remote, new_base, new_conflicts)
-    print(f"\nbaseline written to {baseline_path(serial)}")
+        outcome.new_base, outcome.new_conflicts, sync.pc_files, sync.phone_files)
+    save_baseline(sync.serial, sync.local, sync.remote, new_base, new_conflicts)
+    print(f"\nbaseline written to {baseline_path(sync.serial)}")
 
-    if failures:
-        print(f"\n{len(failures)} file(s) failed:", file=sys.stderr)
-        for line in failures[:10]:
+    if outcome.failures:
+        print(f"\n{len(outcome.failures)} file(s) failed:", file=sys.stderr)
+        for line in outcome.failures[:10]:
             print(f"  {line}", file=sys.stderr)
         return 1
     if plan.conflicts:
@@ -726,6 +774,37 @@ def main(argv: list[str] | None = None) -> int:
               "PC originals.\nThe app lists them under Configuration -> store "
               "conflicts.")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    adb = _attach(args)
+    if adb is None:
+        return 2
+    roots = _roots(adb, args)
+    if roots is None:
+        return 2
+    local, remote = roots
+    pc_files, phone_files, denied = _hash_both(adb, local, remote)
+
+    base, known = load_baseline(adb.serial or "", local, remote)
+    if not base:
+        print("\nno baseline for this device yet -- first sync. Files that differ\n"
+              "on both sides are reported as conflicts rather than guessed at.")
+    sync = Sync(args, adb, local, remote, adb.serial or "device", pc_files, phone_files)
+    plan = plan_sync(pc_files, phone_files, base, known)
+    _report(plan, denied, args.limit)
+
+    if not args.apply:
+        print("\nDry run. Nothing was written. Re-run with --apply to copy.")
+        return 0
+    if denied and not args.allow_unreadable:
+        return _refuse_unreadable(denied)
+    if not (plan.to_pc or plan.to_phone or plan.conflicts):
+        return _settle(sync, base, known)
+
+    _prepare(sync)
+    return _finish(sync, plan, _transfer(sync, plan, base, known))
 
 
 if __name__ == "__main__":
