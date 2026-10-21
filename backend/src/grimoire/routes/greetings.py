@@ -233,8 +233,8 @@ def get_world_greetings(wid: str):
 @router.post("/worlds/{wid}/greetings")
 def post_world_greeting(wid: str, body: GreetingCreate):
     gid = store.greetings.create_greeting(_world_root_or_404(wid), body.name, body.character,
-                                          body.version, body.body, body.requires_tags,
-                                          body.predecessor_join, present=body.present,
+                                          body.version, body.body, requires_tags=body.requires_tags,
+                                          predecessor_join=body.predecessor_join, present=body.present,
                                           pcless=body.pcless, location=body.location,
                                           phase=body.phase, sequence=body.sequence,
                                           optional=body.optional)

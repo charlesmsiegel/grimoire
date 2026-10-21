@@ -61,7 +61,8 @@ def create_greeting(cid: str, name: str, character: str, version: str, body: str
     # char_root (not croot_of) is the resolver that finds it there.
     body = cards.bake_char_token(body, greetings.char_name(_actors.char_root(cid, character), character, version))
     gid = greetings.create_greeting(_record_paths.croot_of(cid), name, character, version, body,
-                                    requires_tags, predecessor_join, present=present,
+                                    requires_tags=requires_tags,
+                                    predecessor_join=predecessor_join, present=present,
                                     pcless=pcless, location=location, phase=phase,
                                     sequence=sequence, optional=optional, taken=taken)
     return gid

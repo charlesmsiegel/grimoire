@@ -117,7 +117,7 @@ def char_name(root: Path, character: str, version: str = "") -> str:
         return ""
 
 
-def create_greeting(root: Path, name: str, character: str, version: str, body: str = "",
+def create_greeting(root: Path, name: str, character: str, version: str, body: str = "", *,
                     requires_tags: list[str] | None = None, predecessor_join: str = "all",
                     present: list[str] | None = None, pcless: bool = False,
                     location: str = "", phase: str = "", sequence: int | None = None,
