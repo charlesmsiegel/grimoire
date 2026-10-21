@@ -433,14 +433,6 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     }
   }
 
-  /** Copy the campaign as it stands, then skip in the original.
-   *
-   *  Strictly in that order, and the skip is abandoned if the copy fails — or
-   *  if the campaign moved while the copy was being taken, which is the same
-   *  failure in a weaker form. The reader asked to be able to come back to this
-   *  moment; moving past it on a copy that may not hold it would give them the
-   *  one thing they said they did not want.
-   */
   /** Whether the answer the reader just gave is still an answer to the question
    *  they were shown — asked immediately before anything is written, and the
    *  gate's whole guard against acting on a stale price.
@@ -478,88 +470,20 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     return false;
   }
 
+  /** Copy the campaign as it stands, then skip in the original.
+   *
+   *  Strictly in that order, and the skip is abandoned if the copy fails — or
+   *  if the campaign moved while the copy was being taken, which is the same
+   *  failure in a weaker form. The reader asked to be able to come back to this
+   *  moment; moving past it on a copy that may not hold it would give them the
+   *  one thing they said they did not want.
+   */
   async function checkpointThenAdvance() {
     setError(null);
     setBusy(true);
     try {
       if (!await gateAnswerStillHolds()) return;
-      if (!checkpointed) {
-        const name = forkName.trim();
-        const took = refreshGen.current;
-        // The token goes WITH the copy, not just into its key. The check above
-        // is this panel's, and a client's check cannot bind: a whole request
-        // separates it from the copy, and only the server holds the source's
-        // lock across one. Sent, a campaign written in that gap costs a refusal
-        // instead of a checkpoint of a state nobody asked for — which the skip
-        // would then reject anyway, leaving the copy on the shelf for nothing
-        // (Codex review).
-        const report = await api.forkCampaign(cid, name, undefined, {
-          idempotencyKey:
-            `checkpoint:${gate?.to ?? ""}:${pricedRevision}:${digestFingerprint(gate)}`,
-          expectRevision: pricedRevision,
-        });
-        // The sharpest case for the rule above. A copy of A recorded as B's
-        // means a large skip in B offers "Retry the skip", takes no copy at
-        // all, and advances anyway — the feature failing silently in exactly
-        // the direction it exists to prevent.
-        if (!stillShowing(cid)) return;
-        // A copy is of whatever the campaign was when `copytree` ran. A turn
-        // landing while it ran is on one side of that or the other — the lock
-        // decides, and nothing here can see which way it went. So a copy taken
-        // across a change counts as a copy, not as a checkpoint: the reader is
-        // told it exists and told what it might be missing, and the marker
-        // stays clear so a retry takes a fresh one rather than reusing this.
-        // Assuming the worse of the two costs one `copytree` on a path that is
-        // already a failure; assuming the better one hands back a restore point
-        // quietly missing a turn.
-        const current = refreshGen.current === took;
-        if (current) setCheckpointed(true);
-        // A fork from where the campaign stands cuts nothing, so `forkNotes` is
-        // almost always "". Shown when it is not, on the same footing the shelf
-        // and the campaign page show it — a checkpoint that quietly came up
-        // short is worse than one that says so.
-        const notes = forkNotes(report);
-        // What to CALL it. A replay is answered with the fork the first call
-        // made, and that fork carries its own name — the deterministic key is
-        // built to survive a reload, and a reload takes the name the reader
-        // typed with it, so the very case the key exists for is the one where
-        // the name submitted here is not the fork's. Naming it anyway sends the
-        // reader to the shelf looking for a campaign nobody created (Codex
-        // review). A copy this call took is named by what it was asked for:
-        // `uniquify` suffixes the id, never the name.
-        const label = report.replayed ? await replayedName(report.id) : name;
-        if (!stillShowing(cid)) return;
-        setSaved(`Checkpoint saved: “${label}” is on the campaigns shelf.`
-                 + (current ? "" : " The campaign changed while it was being copied,"
-                                 + " so it may not hold the latest turn and the skip"
-                                 + " was not taken — preview the skip again to"
-                                 + " checkpoint where the campaign stands now.")
-                 + (notes ? ` ${notes}` : ""));
-        // ...and the clock stays where it is. This panel's own rule, three
-        // lines up in the docstring, is that a copy which fails abandons the
-        // skip, because the reader asked to be able to come back to this moment
-        // and moving past it anyway hands them the one thing they said they did
-        // not want. A copy that may not HOLD that moment is the same failure in
-        // a weaker form, and letting it through was an inconsistency rather than
-        // a decision.
-        //
-        // The PRICING goes with it, and that is the part worth spelling out: the
-        // campaign moved, so the token this operation was priced against is one
-        // the server will now refuse. Leaving the question open would let the
-        // reader answer it again, spend a second whole `copytree` under a key
-        // that has not changed either, and only then learn from `/advance` that
-        // the skip was stale all along — two copies to land one checkpoint.
-        // Cleared, the next round re-prices, which is what mints both a current
-        // token for the skip and a different key for the copy. It also means
-        // the key needs no disown counter of its own: a campaign that really
-        // changed produces a new token, and one that did not produces the same
-        // key and is answered with the copy already taken, which is the right
-        // answer there too.
-        if (!current) {
-          forgetPricing();
-          return;
-        }
-      }
+      if (!checkpointed && !await takeCheckpoint()) return;
       await runAdvance(pricedRevision);
     } catch (err: unknown) {
       // The question stays open: the reader can retry, or skip without one.
@@ -567,6 +491,89 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
     } finally {
       setBusy(false);
     }
+  }
+
+  /** The copy half of `checkpointThenAdvance`: fork the campaign under the
+   *  gate's pricing and say what was saved. Resolves whether the skip may
+   *  follow -- false when the reader has moved on, or when the campaign changed
+   *  while it was being copied. */
+  async function takeCheckpoint(): Promise<boolean> {
+    const name = forkName.trim();
+    const took = refreshGen.current;
+    // The token goes WITH the copy, not just into its key. The check above
+    // is this panel's, and a client's check cannot bind: a whole request
+    // separates it from the copy, and only the server holds the source's
+    // lock across one. Sent, a campaign written in that gap costs a refusal
+    // instead of a checkpoint of a state nobody asked for — which the skip
+    // would then reject anyway, leaving the copy on the shelf for nothing
+    // (Codex review).
+    const report = await api.forkCampaign(cid, name, undefined, {
+      idempotencyKey:
+        `checkpoint:${gate?.to ?? ""}:${pricedRevision}:${digestFingerprint(gate)}`,
+      expectRevision: pricedRevision,
+    });
+    // The sharpest case for the rule above. A copy of A recorded as B's
+    // means a large skip in B offers "Retry the skip", takes no copy at
+    // all, and advances anyway — the feature failing silently in exactly
+    // the direction it exists to prevent.
+    if (!stillShowing(cid)) return false;
+    // A copy is of whatever the campaign was when `copytree` ran. A turn
+    // landing while it ran is on one side of that or the other — the lock
+    // decides, and nothing here can see which way it went. So a copy taken
+    // across a change counts as a copy, not as a checkpoint: the reader is
+    // told it exists and told what it might be missing, and the marker
+    // stays clear so a retry takes a fresh one rather than reusing this.
+    // Assuming the worse of the two costs one `copytree` on a path that is
+    // already a failure; assuming the better one hands back a restore point
+    // quietly missing a turn.
+    const current = refreshGen.current === took;
+    if (current) setCheckpointed(true);
+    // A fork from where the campaign stands cuts nothing, so `forkNotes` is
+    // almost always "". Shown when it is not, on the same footing the shelf
+    // and the campaign page show it — a checkpoint that quietly came up
+    // short is worse than one that says so.
+    const notes = forkNotes(report);
+    // What to CALL it. A replay is answered with the fork the first call
+    // made, and that fork carries its own name — the deterministic key is
+    // built to survive a reload, and a reload takes the name the reader
+    // typed with it, so the very case the key exists for is the one where
+    // the name submitted here is not the fork's. Naming it anyway sends the
+    // reader to the shelf looking for a campaign nobody created (Codex
+    // review). A copy this call took is named by what it was asked for:
+    // `uniquify` suffixes the id, never the name.
+    const label = report.replayed ? await replayedName(report.id) : name;
+    if (!stillShowing(cid)) return false;
+    setSaved(`Checkpoint saved: “${label}” is on the campaigns shelf.`
+             + (current ? "" : " The campaign changed while it was being copied,"
+                             + " so it may not hold the latest turn and the skip"
+                             + " was not taken — preview the skip again to"
+                             + " checkpoint where the campaign stands now.")
+             + (notes ? ` ${notes}` : ""));
+    // ...and the clock stays where it is. This panel's own rule, in
+    // `checkpointThenAdvance`'s docstring, is that a copy which fails abandons the
+    // skip, because the reader asked to be able to come back to this moment
+    // and moving past it anyway hands them the one thing they said they did
+    // not want. A copy that may not HOLD that moment is the same failure in
+    // a weaker form, and letting it through was an inconsistency rather than
+    // a decision.
+    //
+    // The PRICING goes with it, and that is the part worth spelling out: the
+    // campaign moved, so the token this operation was priced against is one
+    // the server will now refuse. Leaving the question open would let the
+    // reader answer it again, spend a second whole `copytree` under a key
+    // that has not changed either, and only then learn from `/advance` that
+    // the skip was stale all along — two copies to land one checkpoint.
+    // Cleared, the next round re-prices, which is what mints both a current
+    // token for the skip and a different key for the copy. It also means
+    // the key needs no disown counter of its own: a campaign that really
+    // changed produces a new token, and one that did not produces the same
+    // key and is answered with the copy already taken, which is the right
+    // answer there too.
+    if (!current) {
+      forgetPricing();
+      return false;
+    }
+    return true;
   }
 
   /** Take the skip the gate was asked about, with no copy left behind. */
@@ -612,33 +619,9 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
         ? <div className="field-hint">Now: {clock.friendly || clock.now}</div>
         : <div className="field-hint">No campaign date yet</div>}
 
-      {/* Frozen while a call is in flight. A checkpoint is a `copytree` of a
-          whole campaign and takes real time, and the skip that follows it is
-          the one the question was asked about: editing the duration underneath
-          it would leave the panel showing one span and the clock taking
-          another. Changing the duration otherwise takes the question back. */}
-      <div className="picker">
-        <select aria-label="Advance by" value={mode} disabled={busy}
-                onChange={(e) => setMode(e.target.value as "days" | "date")}>
-          <option value="days">Advance by days</option>
-          <option value="date">Skip to a date</option>
-        </select>
-        {mode === "days"
-          ? <input type="number" aria-label="Days" value={days} disabled={busy}
-                   onChange={(e) => setDays(e.target.value)} />
-          : <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={target}
-                                onChange={setTarget} ariaLabel="Skip to" disabled={busy} />}
-      </div>
-
-      {/* Frozen while the question is open, as well as while a call is in
-          flight. The endpoint requires a reason and the gate's actions do not
-          re-check one, so a reason cleared here and then answered with
-          "Checkpoint, then advance" forks the campaign and *then* earns a 400 —
-          leaving a full copy on the shelf for a skip that never happened. The
-          reason is part of what was confirmed; Cancel is how it is changed. */}
-      <input aria-label="Reason" placeholder="Why time passes…" value={reason}
-             disabled={busy || gate !== null}
-             onChange={(e) => setReason(e.target.value)} />
+      <AdvanceInputs cid={cid} mode={mode} onMode={setMode} days={days} onDays={setDays}
+                     target={target} onTarget={setTarget} reason={reason} onReason={setReason}
+                     busy={busy} gateOpen={gate !== null} />
 
       {/* The question replaces the controls it was asked from, so there is only
           ever one live decision on screen. Changing the skip takes it back. */}
@@ -648,18 +631,8 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
                           onCheckpoint={() => void checkpointThenAdvance()}
                           onSkip={() => void skipWithoutCheckpoint()}
                           onCancel={() => setGate(null)} />
-        : (
-          <div className="picker">
-            <button onClick={() => void preview()} disabled={busy || !ready}>Preview</button>
-            {/* A reason is required by the endpoint, so the button that needs one
-                says so by being disabled rather than by earning a 400. */}
-            <button className="primary" onClick={() => void confirm()}
-                    disabled={busy || !ready || !reason.trim()}
-                    title={reason.trim() ? undefined : "An advance needs a reason"}>
-              Advance time
-            </button>
-          </div>
-        )}
+        : <AdvanceButtons busy={busy} ready={ready} reason={reason}
+                          onPreview={() => void preview()} onConfirm={() => void confirm()} />}
 
       {saved && <div className="field-hint">{saved}</div>}
       {error && <div className="field-hint error">{error}</div>}
@@ -667,6 +640,72 @@ export function ClockPanel({ cid, refreshKey, onAdvanced }: {
       {digest && <AdvanceDigestView digest={digest} outcome={outcome} />}
 
       {clock && clock.log.length > 0 && <ClockLog log={clock.log} />}
+    </div>
+  );
+}
+
+
+/** What the advance is: by how much or to when, and why. */
+function AdvanceInputs(
+  { cid, mode, onMode, days, onDays, target, onTarget, reason, onReason, busy, gateOpen }: {
+    cid: string;
+    mode: "days" | "date"; onMode: (m: "days" | "date") => void;
+    days: string; onDays: (v: string) => void;
+    target: string; onTarget: (v: string) => void;
+    reason: string; onReason: (v: string) => void;
+    busy: boolean;
+    /** The checkpoint question is open. */
+    gateOpen: boolean;
+  },
+) {
+  return <>
+    {/* Frozen while a call is in flight. A checkpoint is a `copytree` of a
+        whole campaign and takes real time, and the skip that follows it is
+        the one the question was asked about: editing the duration underneath
+        it would leave the panel showing one span and the clock taking
+        another. Changing the duration otherwise takes the question back. */}
+    <div className="picker">
+      <select aria-label="Advance by" value={mode} disabled={busy}
+              onChange={(e) => onMode(e.target.value as "days" | "date")}>
+        <option value="days">Advance by days</option>
+        <option value="date">Skip to a date</option>
+      </select>
+      {mode === "days"
+        ? <input type="number" aria-label="Days" value={days} disabled={busy}
+                 onChange={(e) => onDays(e.target.value)} />
+        : <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={target}
+                              onChange={onTarget} ariaLabel="Skip to" disabled={busy} />}
+    </div>
+
+    {/* Frozen while the question is open, as well as while a call is in
+        flight. The endpoint requires a reason and the gate's actions do not
+        re-check one, so a reason cleared here and then answered with
+        "Checkpoint, then advance" forks the campaign and *then* earns a 400 —
+        leaving a full copy on the shelf for a skip that never happened. The
+        reason is part of what was confirmed; Cancel is how it is changed. */}
+    <input aria-label="Reason" placeholder="Why time passes…" value={reason}
+           disabled={busy || gateOpen}
+           onChange={(e) => onReason(e.target.value)} />
+  </>;
+}
+
+/** Preview and Advance, in place of the checkpoint question when none is open. */
+function AdvanceButtons(
+  { busy, ready, reason, onPreview, onConfirm }: {
+    busy: boolean; ready: boolean; reason: string;
+    onPreview: () => void; onConfirm: () => void;
+  },
+) {
+  return (
+    <div className="picker">
+      <button onClick={onPreview} disabled={busy || !ready}>Preview</button>
+      {/* A reason is required by the endpoint, so the button that needs one
+          says so by being disabled rather than by earning a 400. */}
+      <button className="primary" onClick={onConfirm}
+              disabled={busy || !ready || !reason.trim()}
+              title={reason.trim() ? undefined : "An advance needs a reason"}>
+        Advance time
+      </button>
     </div>
   );
 }
