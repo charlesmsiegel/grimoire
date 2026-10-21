@@ -1,23 +1,16 @@
 """`store.post_images`: whether a connection can be sent images, and how many
 (#377) -- plus the settings and the catalog field that answer it."""
 
-import importlib
 import os
 
 import pytest
 from PIL import features
 
-from grimoire import catalog, store, wire
+from grimoire import catalog, wire
 from grimoire.store import config, llm_connections, post_images
 from grimoire.store.inference import resolve
+from tests.home_fixtures import reloaded_home as reloaded_home
 from tests.inference_fixtures import put_settings
-
-
-@pytest.fixture
-def home(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    return tmp_path
 
 
 def _conn(kind="openrouter", vision="", model="m"):

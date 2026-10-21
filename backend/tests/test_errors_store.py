@@ -11,16 +11,7 @@ import pytest
 from grimoire.llm_errors import LLMError
 from grimoire.routes.scenes import Abandoned, BudgetRefused
 from grimoire.store import errors, logs, usage
-
-
-@pytest.fixture
-def home(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    logs.forget_file_sizes()
-    logs.apply_level("info")
-    yield tmp_path
-    logs.forget_file_sizes()
-    logs.apply_level("info")
+from tests.home_fixtures import logs_home as logs_home
 
 
 def _log_rows(home):

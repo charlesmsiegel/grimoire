@@ -18,7 +18,7 @@ from grimoire.store.absorb import routing
 from grimoire.store.regex import view as regex_view
 from grimoire.store.scenes import serialize
 from tests import draft_runs, review_runs
-from tests.inference_fixtures import primary
+from tests.cast_seed import seed_primary as seed_turn
 from tests.llm_fakes import (
     CapturingOpenRouter,
     FakeLLM,
@@ -42,19 +42,6 @@ def sent(fake) -> str:
 
 
 # ---- the turn prompt ---------------------------------------------------------
-
-def seed_turn(client):
-    primary(client)
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid)
-    sid = store.scenes.create_scene(cid, "Mara")
-    response = client.post(f"/api/campaigns/{cid}/characters", json={"name": "Mara"})
-    assert response.status_code == 200, response.text
-    actor = response.json()["character"]
-    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
-    assert response.status_code == 200, response.text
-    return cid, sid
-
 
 def reply(cid, sid, content, connection="openrouter", speaker="Mara"):
     store.scenes.append_reply(cid, sid, [{"speaker": speaker, "content": content,

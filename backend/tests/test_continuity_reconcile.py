@@ -49,7 +49,8 @@ from grimoire.store.continuity.reconcile import _discovery as reconcile_discover
 from grimoire.store.inference import facts
 from grimoire.store.locks import _runtime as locks_runtime
 from tests.campaign_fixtures import run_cid as run_cid
-from tests.inference_fixtures import embedding
+from tests.continuity_fixtures import configure_vectors
+from tests.continuity_fixtures import fake as fake
 from tests.llm_fakes import FakeEmbeddings
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC
@@ -671,20 +672,6 @@ def test_discovery_makes_no_store_write(cid):
 # `embed_space.resolve()`, since it carries the connection's `rev`.
 
 
-@pytest.fixture
-def fake(monkeypatch):
-    double = FakeEmbeddings()
-    monkeypatch.setattr(similarity, "_CLIENT", double)
-    return double
-
-
-def _configure():
-    conn = llm_connections.create_connection("openai_compatible", "Vectors",
-                                             base_url="https://vectors.example/v1",
-                                             api_key="sk-x", model="", post_process="none")
-    embedding(conn, "embed-1")
-
-
 def _vector_space():
     return embed_space.resolve()["space"]
 
@@ -731,7 +718,7 @@ def _window_spy(monkeypatch):
 
 
 def test_sweep_embeds_at_most_the_warm_limit(cid, s0, fake, monkeypatch):
-    _configure()
+    configure_vectors()
     _chores(cid, s0)
     monkeypatch.setattr(reconcile_discovery, "RECONCILE_WARM_LIMIT", 4)
     loads = _load_spy(monkeypatch)
@@ -749,7 +736,7 @@ def test_sweep_embeds_at_most_the_warm_limit(cid, s0, fake, monkeypatch):
 def test_a_sweep_files_its_embeds_under_the_campaign(cid, s0, fake):
     """A sweep's embeds are charged to the campaign it swept, and to no scene:
     a sweep reads the whole campaign (slice D)."""
-    _configure()
+    configure_vectors()
     _chores(cid, s0)
     _embedded(cid)
     assert fake.calls
@@ -765,7 +752,7 @@ def test_a_runs_passes_share_one_embedding_budget(cid, s0, monkeypatch):
     discovery under the same `EmbedBudget` (a follow-on pass, §11.1) embeds
     nothing once the first spent the time, and that is no provider failure:
     what it left uncached rotates in on a later run."""
-    _configure()
+    configure_vectors()
     _chores(cid, s0, n=3)
     monkeypatch.setattr(embeddings, "TIMEOUT", 0.2)
 
@@ -790,7 +777,7 @@ def test_a_runs_passes_share_one_embedding_budget(cid, s0, monkeypatch):
 
 
 def test_incremental_changed_texts_are_required(cid, s0, fake, monkeypatch):
-    _configure()
+    configure_vectors()
     texts = _chores(cid, s0)
     monkeypatch.setattr(reconcile_discovery, "RECONCILE_WARM_LIMIT", 2)
     changed = "thread:saltmarch-errand-9"
@@ -809,7 +796,7 @@ def test_incremental_changed_texts_are_required(cid, s0, fake, monkeypatch):
 
 
 def test_warm_window_rotates_between_runs(cid, s0, monkeypatch):
-    _configure()
+    configure_vectors()
     _chores(cid, s0)
     # A zero vector is never cached (`vectors.save`), so both sweeps see the
     # same ten uncached texts.
@@ -832,7 +819,7 @@ def test_warm_window_rotates_between_runs(cid, s0, monkeypatch):
 
 
 def test_per_chunk_saves_survive_a_later_failure(cid, s0, monkeypatch):
-    _configure()
+    configure_vectors()
     _chores(cid, s0)
     monkeypatch.setattr(embeddings, "BATCH", 2)
     double = FakeEmbeddings(error=embeddings.EmbeddingsError("network", "x"), fail_after=1)
@@ -847,7 +834,7 @@ def test_per_chunk_saves_survive_a_later_failure(cid, s0, monkeypatch):
 
 
 def test_embedding_failure_keeps_lexical_candidates(cid, s0, monkeypatch):
-    _configure()
+    configure_vectors()
     _ledger(cid, s0)
     _recover(cid, s0)
     assert _signals(cid, LEDGER, RECOVER)["tokens"] >= similarity.TOKEN_FLOOR
@@ -868,7 +855,7 @@ def test_embedding_failure_keeps_lexical_candidates(cid, s0, monkeypatch):
 
 
 def test_off_width_vectors_are_forgotten(cid, s0, fake):
-    _configure()
+    configure_vectors()
     texts = _chores(cid, s0, n=4)
     wide = texts["thread:saltmarch-errand-0"]
     vectors.save(_vector_space(), wide, [1.0, 0.0, 0.0])
@@ -880,7 +867,7 @@ def test_off_width_vectors_are_forgotten(cid, s0, fake):
 
 
 def test_cosine_admits_a_pair_with_no_shared_words(cid, s0, fake):
-    _configure()
+    configure_vectors()
     plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Stolen at dawn.", s0)
     plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open", "Lost overboard.", s0)
     chart = "thread:winifred-s-chart"
@@ -913,7 +900,7 @@ def test_a_vectorless_ref_is_not_rescored(cid, s0, fake, monkeypatch):
     """Decision 10: with a space configured, a ref left without a vector (past
     the warm limit here) is scored lexically but not reported rescored, so its
     basis entry stays and it is scored semantically once its vector exists."""
-    _configure()
+    configure_vectors()
     texts = _chores(cid, s0, n=3)
     sweep = _embedded(cid)
     embedded = set(_sent(fake))
@@ -923,7 +910,7 @@ def test_a_vectorless_ref_is_not_rescored(cid, s0, fake, monkeypatch):
 
 
 def test_an_embedding_failure_rescores_no_vectorless_ref(cid, s0, monkeypatch):
-    _configure()
+    configure_vectors()
     _ledger(cid, s0)
     _recover(cid, s0)
     monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(
@@ -935,7 +922,7 @@ def test_an_embedding_failure_rescores_no_vectorless_ref(cid, s0, monkeypatch):
 
 
 def test_an_unexpected_embedding_error_is_a_failure_not_a_raise(cid, s0, monkeypatch):
-    _configure()
+    configure_vectors()
     _ledger(cid, s0)
     _recover(cid, s0)
     monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(error=RuntimeError("boom")))
@@ -966,7 +953,7 @@ def _refused_letter(cid, s0, monkeypatch, *, moved=()):
     """Ten cached-nothing chores plus "Seraphine's letter", whose text the
     provider refuses; a basis current for every ref but the letter and
     `moved`. Returns the chores' texts, the letter's ref and the double."""
-    _configure()
+    configure_vectors()
     texts = _chores(cid, s0)
     plot.set_movement(cid, "seraphine-s-letter", "Seraphine's letter", "open",
                       "Sealed and never sent.", s0)
@@ -1296,7 +1283,7 @@ def test_basis_keeps_old_hashes_for_unscored_refs(cid, s0, monkeypatch):
 
 def test_embedding_failure_keeps_prior_semantic_pairs_and_rescores_next_time(
         cid, s0, fake, monkeypatch):
-    _configure()
+    configure_vectors()
     plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Stolen at dawn.", s0)
     plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open", "Lost overboard.", s0)
     chart = "thread:winifred-s-chart"
@@ -1327,7 +1314,7 @@ def test_embedding_failure_keeps_prior_semantic_pairs_and_rescores_next_time(
 
 
 def test_warm_overflow_refs_are_not_marked_scored(cid, s0, fake, monkeypatch):
-    _configure()
+    configure_vectors()
     texts = _chores(cid, s0, n=5)
     monkeypatch.setattr(reconcile_discovery, "RECONCILE_WARM_LIMIT", 2)
 
@@ -1407,7 +1394,7 @@ def test_a_full_refresh_during_an_outage_keeps_prior_semantic_pairs(
     vector is rescored, its partner (moved, no vector) is not, and the
     semantic pair cannot be rediscovered without both vectors -- so it is
     kept, with its proposal, rather than retracted on half the evidence."""
-    _configure()
+    configure_vectors()
     plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Stolen at dawn.", s0)
     plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open", "Lost overboard.", s0)
     chart = "thread:winifred-s-chart"
@@ -1678,7 +1665,7 @@ def test_a_zero_vector_text_costs_one_resend_per_sweep(cid, s0, monkeypatch):
     changed ref whose text the provider answers with zeros stays required and
     is sent again on the next sweep -- once, within the warm limit -- while the
     other changed ref is embedded, cached and rescored on the first."""
-    _configure()
+    configure_vectors()
     _chores(cid, s0)
     zero, other = "thread:saltmarch-errand-3", "thread:saltmarch-errand-7"
     double = FakeEmbeddings(
@@ -1806,7 +1793,7 @@ def _embedding_conn():
 def test_no_block_keeps_the_sweeps_basis_byte_identical(cid, s0):
     """No options stated: the sweep's space, and every identity hash salted
     with it, are today's strings, restated here rather than asked for."""
-    _configure()
+    configure_vectors()
     _ledger(cid, s0)
     _recover(cid, s0)
     conn = _embedding_conn()
@@ -1820,7 +1807,7 @@ def test_no_block_keeps_the_sweeps_basis_byte_identical(cid, s0):
 
 
 def test_stated_options_salt_the_sweep_with_the_options_space(cid, s0):
-    _configure()
+    configure_vectors()
     _ledger(cid, s0)
     facts.state(_embedding_conn(), "embed-1", embedding=NOMIC_BLOCK)
     assert _sweep(cid).space.endswith("\0embopt1:b61a0b1188d1b0bd3a7cf05b26a81c2a")
@@ -1843,7 +1830,7 @@ def test_an_options_problem_carries_the_old_basis_forward(cid, s0, monkeypatch, 
     """While the role's facts cannot be judged it names no space -- and the
     sweep neither re-salts its basis with none nor persists the option-less
     space: the stored basis, its space included, is carried forward whole."""
-    _configure()
+    configure_vectors()
     _ledger(cid, s0)
     _recover(cid, s0)
     _tithe(cid, s0)

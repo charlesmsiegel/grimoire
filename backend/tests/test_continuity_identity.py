@@ -17,11 +17,12 @@ import pytest
 
 import grimoire.store as store
 from grimoire import decisions, embeddings, inference, prompts
-from grimoire.store import absorb, embed_space, llm_connections, vectors
+from grimoire.store import absorb, embed_space, vectors
 from grimoire.store.absorb import materializer
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import identity, review, similarity
-from tests.inference_fixtures import embedding
+from tests.continuity_fixtures import configure_vectors
+from tests.continuity_fixtures import fake as fake
 from tests.llm_fakes import FakeEmbeddings, decision_reply
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
 
@@ -45,13 +46,6 @@ def s0(cid):
 @pytest.fixture
 def sid(cid, s0):
     return store.scenes.create_scene(cid, "The harbour office")
-
-
-@pytest.fixture
-def fake(monkeypatch):
-    double = FakeEmbeddings()
-    monkeypatch.setattr(similarity, "_CLIENT", double)
-    return double
 
 
 def _seed_ledger(cid, scene, status="open"):
@@ -82,13 +76,6 @@ def _pooled(cid, ref):
 
 def _refs(examined):
     return [s.ref for s, _ in examined.candidates]
-
-
-def _configure():
-    conn = llm_connections.create_connection("openai_compatible", "Vectors",
-                                             base_url="https://vectors.example/v1",
-                                             api_key="sk-x", model="", post_process="none")
-    embedding(conn, "embed-1")
 
 
 def _soon():
@@ -393,7 +380,7 @@ def _seed_paraphrase_fixture(cid, s0, sid, *, cached):
 
 
 def test_semantic_matching_finds_a_wordless_paraphrase(cid, s0, sid, monkeypatch):
-    _configure()
+    configure_vectors()
     proposed = _seed_paraphrase_fixture(cid, s0, sid, cached=True)
     near = [0.9, math.sqrt(1 - 0.81)]
     double = FakeEmbeddings(vector_for=lambda t: near if t == proposed.text else [0.0, 1.0])
@@ -419,7 +406,7 @@ def test_wordless_paraphrase_is_not_a_candidate_without_embeddings(cid, s0, sid,
 
 
 def test_an_uncached_lexically_unrelated_neighbour_is_not_embedded(cid, s0, sid, fake):
-    _configure()
+    configure_vectors()
     proposed = _seed_paraphrase_fixture(cid, s0, sid, cached=False)
     exam = _examine(cid, sid, plot=[PARAPHRASE], deadline=_soon())
     assert fake.calls == [[proposed.text]]
@@ -428,7 +415,7 @@ def test_an_uncached_lexically_unrelated_neighbour_is_not_embedded(cid, s0, sid,
 
 
 def test_a_lexically_near_uncached_neighbour_is_warmed(cid, s0, sid, fake):
-    _configure()
+    configure_vectors()
     _seed_ledger(cid, s0)
     record = _pooled(cid, "thread:find-the-ledger")
     proposed = _proposed("thread", RECOVER_THE_LEDGER, sid)
@@ -438,7 +425,7 @@ def test_a_lexically_near_uncached_neighbour_is_warmed(cid, s0, sid, fake):
 
 
 def test_embedding_failure_keeps_lexical_candidates(cid, s0, sid, monkeypatch):
-    _configure()
+    configure_vectors()
     _seed_ledger(cid, s0)
     monkeypatch.setattr(similarity, "_CLIENT",
                         FakeEmbeddings(error=embeddings.EmbeddingsError("network", "down")))
@@ -455,7 +442,7 @@ def test_embedding_failure_keeps_lexical_candidates(cid, s0, sid, monkeypatch):
 def test_no_same_type_record_means_no_provider_call(cid, s0, sid, fake):
     # An empty plot ledger: nothing a proposed thread could be compared with,
     # so embedding its text would send campaign prose for nothing.
-    _configure()
+    configure_vectors()
     exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER], deadline=_soon())
     assert exam.proposed == 1
     assert exam.rows == []
@@ -465,7 +452,7 @@ def test_no_same_type_record_means_no_provider_call(cid, s0, sid, fake):
 
 def test_only_a_proposal_with_a_same_type_pool_is_embedded(cid, s0, sid, fake):
     # A stored commitment, no stored thread: only the commitment row is embedded.
-    _configure()
+    configure_vectors()
     _seed_deadline(cid, s0)
     exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER], owed=[SERAPHINES_THREAT],
                     deadline=_soon())
@@ -1039,7 +1026,7 @@ COUNT_KEYS = {"proposed", "examined", "candidates", "deterministic", "semantic",
 
 
 def test_counts_are_flat_ints(cid, s0, sid, monkeypatch):
-    _configure()
+    configure_vectors()
     proposed = _seed_paraphrase_fixture(cid, s0, sid, cached=True)
     near = [0.9, math.sqrt(1 - 0.81)]
     monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(

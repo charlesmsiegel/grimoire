@@ -6,19 +6,8 @@ from __future__ import annotations
 import statistics
 from datetime import date, timedelta
 
-import pytest
-
 from grimoire.store import logs, metrics, usage
-
-
-@pytest.fixture
-def home(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    logs.forget_file_sizes()
-    logs.apply_level("info")
-    yield tmp_path
-    logs.forget_file_sizes()
-    logs.apply_level("info")
+from tests.home_fixtures import logs_home as logs_home
 
 
 def _today() -> str:

@@ -15,21 +15,9 @@ from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.routes.character_turns import _persistence as character_turns_persistence
 from grimoire.store.scenes import serialize
+from tests.cast_seed import seed_primary as seed
 from tests.inference_fixtures import primary, put_settings
 from tests.llm_fakes import FakeLLM, FlakyProvider
-
-
-def seed(client):
-    primary(client)
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid)
-    sid = store.scenes.create_scene(cid, "Mara")
-    response = client.post(f"/api/campaigns/{cid}/characters", json={"name": "Mara"})
-    assert response.status_code == 200, response.text
-    actor = response.json()["character"]
-    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
-    assert response.status_code == 200, response.text
-    return cid, sid
 
 
 def send(client, cid, sid, content="Hello"):

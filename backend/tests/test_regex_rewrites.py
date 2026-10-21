@@ -14,7 +14,7 @@ import json
 from grimoire import routes, store
 from grimoire.routes import character_turns
 from grimoire.store.regex import rewrites
-from tests.inference_fixtures import primary
+from tests.cast_seed import seed_primary as seed
 from tests.llm_fakes import FakeLLM
 
 ELLIPSIS = {"name": "Ellipsis", "pattern": r"\.\.\.", "replacement": "…",
@@ -24,19 +24,6 @@ ELLIPSIS = {"name": "Ellipsis", "pattern": r"\.\.\.", "replacement": "…",
 def put_rules(client, cid, *rule_list):
     response = client.put(f"/api/campaigns/{cid}/regex", json={"rules": list(rule_list)})
     assert response.status_code == 200, response.text
-
-
-def seed(client):
-    primary(client)
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid)
-    sid = store.scenes.create_scene(cid, "Mara")
-    response = client.post(f"/api/campaigns/{cid}/characters", json={"name": "Mara"})
-    assert response.status_code == 200, response.text
-    actor = response.json()["character"]
-    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
-    assert response.status_code == 200, response.text
-    return cid, sid
 
 
 def send(client, cid, sid, reply, content="Hello", **body):

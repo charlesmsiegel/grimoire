@@ -19,7 +19,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from evals import cases as case_mod  # noqa: E402
-from evals import runner  # noqa: E402
+from tests.eval_replay import assert_replays  # noqa: E402
 
 Q = ea.AccessQuestion("characters:mara", "Mara", "ev1", "Seraphine took the key.",
                       ("present", "asleep"))
@@ -120,7 +120,4 @@ CASE = next(c for c in case_mod.CASES if c.id == "decide-epistemic-access")
 
 @pytest.mark.parametrize("recording", CASE.recordings, ids=lambda r: r.variant)
 def test_the_unregistered_case_replays(monkeypatch, tmp_path, recording):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    result = runner.replay(CASE, recording)
-    assert not result.error, result.error
-    assert result.passed, "\n".join(f"{c.name}: {c.detail}" for c in result.failures)
+    assert_replays(monkeypatch, tmp_path, CASE, recording)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import io
 import json
 from datetime import date, timedelta
@@ -22,6 +21,7 @@ from grimoire.store import inference_keys
 from grimoire.store.usage import _ledger as usage_ledger
 from tests import draft_runs as drafts
 from tests import inference_fixtures, review_runs, wire_kit
+from tests.home_fixtures import reloaded_home as reloaded_home
 from tests.llm_fakes import (
     FailingOpenRouter,
     FakeOpenRouter,
@@ -48,13 +48,6 @@ def _unfenced_stream(cid, sid, messages, conn, *args, **kw):
 USAGE = {"prompt_tokens": 900, "completion_tokens": 40, "cost_usd": 0.0042,
          "cost_basis": "billed", "model": "realm/opus", "connection": "Main",
          "provider": "openrouter"}
-
-
-@pytest.fixture
-def home(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    return tmp_path
 
 
 @pytest.fixture

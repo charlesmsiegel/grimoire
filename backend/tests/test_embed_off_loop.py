@@ -52,6 +52,7 @@ from grimoire.store import (
 from grimoire.store import inference_keys as keys
 from grimoire.store.context import art, semantic
 from grimoire.store.inference import embed
+from tests.home_fixtures import logs_home as logs_home
 from tests.inference_fixtures import embedding
 from tests.llm_fakes import FakeEmbeddings, FakeLLM
 
@@ -62,16 +63,6 @@ SPACE = {"space": "s", "model": "m", "key": "k", "base_url": "u"}
 
 
 # ---- helpers -----------------------------------------------------------------
-
-@pytest.fixture
-def home(tmp_path, monkeypatch):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    logs.forget_file_sizes()
-    logs.apply_level("info")
-    yield tmp_path
-    logs.forget_file_sizes()
-    logs.apply_level("info")
-
 
 @pytest.fixture
 def space(home) -> dict:

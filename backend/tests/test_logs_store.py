@@ -11,19 +11,7 @@ import tracemalloc
 import pytest
 
 from grimoire.store import config, errors, logs
-
-
-@pytest.fixture
-def home(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    # Module state: the threshold and the per-file byte counters outlive one
-    # test's store, and a count left over from the previous tmp_path would be
-    # charged against a file this one has not written yet.
-    logs.forget_file_sizes()
-    logs.apply_level("info")
-    yield tmp_path
-    logs.forget_file_sizes()
-    logs.apply_level("info")
+from tests.home_fixtures import logs_home as logs_home
 
 
 def _rows(home):

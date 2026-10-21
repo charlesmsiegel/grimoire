@@ -17,9 +17,11 @@ import pytest
 
 import grimoire.store as store
 from grimoire import embeddings
-from grimoire.store import config, embed_space, llm_connections, logs, usage, vectors
+from grimoire.store import config, embed_space, logs, usage, vectors
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import effective, review, similarity
+from tests.continuity_fixtures import configure_vectors
+from tests.continuity_fixtures import fake as fake
 from tests.inference_fixtures import embedding
 from tests.llm_fakes import FakeEmbeddings
 
@@ -343,20 +345,9 @@ def home(monkeypatch, tmp_path):
     return tmp_path
 
 
-@pytest.fixture
-def fake(monkeypatch):
-    double = FakeEmbeddings()
-    monkeypatch.setattr(similarity, "_CLIENT", double)
-    return double
-
-
 def _configure(depth="2"):
     """Embeddings on, as `test_context_semantic.configure` sets them."""
-    conn = llm_connections.create_connection("openai_compatible", "Vectors",
-                                             base_url="https://vectors.example/v1",
-                                             api_key="sk-x", model="", post_process="none")
-    config.write_config(semantic_recall_depth=depth, semantic_recall_threshold="0.4")
-    embedding(conn, "embed-1")
+    configure_vectors(semantic_recall_depth=depth, semantic_recall_threshold="0.4")
 
 
 def _space():

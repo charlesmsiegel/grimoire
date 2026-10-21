@@ -10,7 +10,6 @@ and what a rename carries.
 from __future__ import annotations
 
 import ctypes
-import importlib
 import json
 import sys
 
@@ -18,13 +17,7 @@ import pytest
 
 import grimoire.store as store
 from grimoire.routes import scenes as routes_scenes
-
-
-@pytest.fixture
-def home(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    return tmp_path
+from tests.home_fixtures import reloaded_home as reloaded_home
 
 
 @pytest.fixture
