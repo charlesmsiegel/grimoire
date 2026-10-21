@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import re
 import warnings
+from typing import TypeGuard
 
 # fullmatch, and note the pattern has no anchors: `$` in Python matches before a
 # trailing newline, so `re.match(r"^[A-Za-z0-9._-]+$", "saltmarch\n")` succeeds
@@ -115,10 +116,13 @@ def _covers_year(seasons: list[dict]) -> bool:
     return reach >= 1.0
 
 
-def validate(doc: dict) -> dict:
-    if not isinstance(doc, dict):
-        raise ClimateError("a climate document must be a JSON object")
+def _is_number(x) -> TypeGuard[int | float]:
+    """A JSON number: an int or a float, and not a bool (which is an int)."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
 
+
+def _check_identity(doc: dict) -> str:
+    """The document's id, once it and the climate's name are usable."""
     cid = doc.get("id")
     if not isinstance(cid, str) or not _ID.fullmatch(cid) or not cid.strip("."):
         raise ClimateError(f"climate id must match [A-Za-z0-9._-]+ and not be dots only: {cid!r}")
@@ -128,9 +132,96 @@ def validate(doc: dict) -> dict:
         # `list_climates` dereferences doc["name"]; without this one malformed
         # private file takes the whole merged registry down with a KeyError.
         raise ClimateError(f"climate {cid!r} needs a non-empty name")
+    return cid
 
+
+def _check_season(s, cid: str) -> None:
+    where = _season_where(s, cid)
+    temps, conds = _season_axes(s, where)
+    _check_conditions(conds, temps, where)
+
+
+def _season_where(s, cid: str) -> str:
+    """The prefix a season's errors carry, once its shape, name and edges are
+    known good."""
+    if not isinstance(s, dict):
+        raise ClimateError(f"each season must be a JSON object, got {type(s).__name__}")
+    s_name = s.get("name")
+    if not isinstance(s_name, str) or not s_name.strip():
+        # `current_weather` returns season["name"] to its callers; a season
+        # without one raises KeyError inside prompt assembly.
+        raise ClimateError(f"climate {cid!r}: every season needs a non-empty name")
+    where = f"season {s_name!r}"
+    for edge in ("from", "to"):
+        v = s.get(edge)
+        if not _is_number(v) or not 0 <= v < 1:
+            raise ClimateError(f"{where}: {edge} must be a fraction in [0, 1)")
+    return where
+
+
+def _season_axes(s: dict, where: str) -> tuple[list[dict], list[dict]]:
+    """The season's temperature and condition tables, each of its three axes
+    checked as a drawable weight table."""
+    temps = s.get("temperature") or []
+    conds = s.get("conditions") or []
+    winds = s.get("wind") or []
+    for axis, entries in (("temperature", temps), ("conditions", conds), ("wind", winds)):
+        if not isinstance(entries, list) or not entries:
+            raise ClimateError(f"{where}: {axis} must be a non-empty array")
+        _weights(entries, f"{where} {axis}")
+    return temps, conds
+
+
+def _check_conditions(conds: list[dict], temps: list[dict], where: str) -> None:
+    temp_names = {t["name"] for t in temps}
+    live_temps = {t["name"] for t in temps if t["weight"] > 0}
+
+    for c in conds:
+        _check_requires_temp(c, temp_names, live_temps, where)
+
+    # This also guarantees every positive-weight temperature has an
+    # eligible condition — an unconstrained condition is eligible for all
+    # of them — so no separate per-temperature check is needed. An earlier
+    # draft had one; it was unreachable.
+    if not any(c["weight"] > 0 and "requires_temp" not in c for c in conds):
+        raise ClimateError(
+            f"{where}: needs at least one unconstrained condition with a positive weight")
+
+
+def _check_requires_temp(c: dict, temp_names: set, live_temps: set, where: str) -> None:
+    req = c.get("requires_temp")
+    if req is None:
+        return
+    if not isinstance(req, list) or not req:
+        raise ClimateError(
+            f"{where}: requires_temp on {c['name']!r} must be a non-empty array "
+            "(omit the key entirely for an unconstrained condition)")
+    if not all(isinstance(r, str) for r in req):
+        # Elements as well as the array: a dict element would raise
+        # `TypeError: unhashable` at the set intersection below, which
+        # a direct caller of validate() sees instead of a ClimateError.
+        raise ClimateError(
+            f"{where}: requires_temp on {c['name']!r} must contain only strings")
+    unknown = [r for r in req if r not in temp_names]
+    if unknown:
+        raise ClimateError(
+            f"{where}: requires_temp on {c['name']!r} names no such temperature: {unknown}")
+    if c["weight"] > 0 and not (set(req) & live_temps):
+        raise ClimateError(
+            f"{where}: requires_temp on {c['name']!r} names only zero-weight "
+            "temperatures, so it can never be drawn")
+
+
+def validate(doc: dict) -> dict:
+    if not isinstance(doc, dict):
+        raise ClimateError("a climate document must be a JSON object")
+
+    cid = _check_identity(doc)
+
+    # Checked here rather than in a helper: `_warn`'s stacklevel points the
+    # clamp notice at validate()'s caller, one frame up from here.
     p = doc.get("persistence", 0.5)
-    if not isinstance(p, (int, float)) or isinstance(p, bool) or not _finite(p) or not 0 <= p <= 1:
+    if not _is_number(p) or not _finite(p) or not 0 <= p <= 1:
         raise ClimateError(f"persistence must be a finite number in [0, 1], got {p!r}")
     if p > CLAMP:
         # Accepted range is [0, 1]; effective range is [0, CLAMP]. The author
@@ -142,60 +233,7 @@ def validate(doc: dict) -> dict:
         raise ClimateError("a climate needs at least one season")
 
     for s in seasons:
-        if not isinstance(s, dict):
-            raise ClimateError(f"each season must be a JSON object, got {type(s).__name__}")
-        s_name = s.get("name")
-        if not isinstance(s_name, str) or not s_name.strip():
-            # `current_weather` returns season["name"] to its callers; a season
-            # without one raises KeyError inside prompt assembly.
-            raise ClimateError(f"climate {cid!r}: every season needs a non-empty name")
-        where = f"season {s_name!r}"
-        for edge in ("from", "to"):
-            v = s.get(edge)
-            if not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v < 1:
-                raise ClimateError(f"{where}: {edge} must be a fraction in [0, 1)")
-
-        temps = s.get("temperature") or []
-        conds = s.get("conditions") or []
-        winds = s.get("wind") or []
-        for axis, entries in (("temperature", temps), ("conditions", conds), ("wind", winds)):
-            if not isinstance(entries, list) or not entries:
-                raise ClimateError(f"{where}: {axis} must be a non-empty array")
-            _weights(entries, f"{where} {axis}")
-
-        temp_names = {t["name"] for t in temps}
-        live_temps = {t["name"] for t in temps if t["weight"] > 0}
-
-        for c in conds:
-            req = c.get("requires_temp")
-            if req is None:
-                continue
-            if not isinstance(req, list) or not req:
-                raise ClimateError(
-                    f"{where}: requires_temp on {c['name']!r} must be a non-empty array "
-                    "(omit the key entirely for an unconstrained condition)")
-            if not all(isinstance(r, str) for r in req):
-                # Elements as well as the array: a dict element would raise
-                # `TypeError: unhashable` at the set intersection below, which
-                # a direct caller of validate() sees instead of a ClimateError.
-                raise ClimateError(
-                    f"{where}: requires_temp on {c['name']!r} must contain only strings")
-            unknown = [r for r in req if r not in temp_names]
-            if unknown:
-                raise ClimateError(
-                    f"{where}: requires_temp on {c['name']!r} names no such temperature: {unknown}")
-            if c["weight"] > 0 and not (set(req) & live_temps):
-                raise ClimateError(
-                    f"{where}: requires_temp on {c['name']!r} names only zero-weight "
-                    "temperatures, so it can never be drawn")
-
-        # This also guarantees every positive-weight temperature has an
-        # eligible condition — an unconstrained condition is eligible for all
-        # of them — so no separate per-temperature check is needed. An earlier
-        # draft had one; it was unreachable.
-        if not any(c["weight"] > 0 and "requires_temp" not in c for c in conds):
-            raise ClimateError(
-                f"{where}: needs at least one unconstrained condition with a positive weight")
+        _check_season(s, cid)
 
     if not _covers_year(seasons):
         raise ClimateError("seasons must cover the year without gaps")
