@@ -21,10 +21,8 @@ What is held here:
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import dataclasses
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -453,15 +451,6 @@ async def test_the_facade_takes_no_dict():
         llm.native_body(ITEM, _DICT)
     assert usage == {}
     assert all(not c.calls for c in clients.values())
-
-
-def test_the_facade_reads_no_dict_as_a_chain():
-    """`llm.py` no longer reads a lowered dict as a chain anywhere."""
-    trees = [ast.parse(path.read_text(encoding="utf-8"))
-             for path in Path(llm.__file__).parent.rglob("*.py")]
-    assert not [node for tree in trees for node in ast.walk(tree)
-                if isinstance(node, (ast.Attribute, ast.Name))
-                and getattr(node, "attr", getattr(node, "id", "")) == "from_lowered"]
 
 
 class _Answering:

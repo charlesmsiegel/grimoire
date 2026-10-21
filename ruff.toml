@@ -56,9 +56,9 @@ ignore = ["E501", "E701", "E702", "E731", "E741"]
 #         preference, and this suite's asserts carry explanatory messages that
 #         splitting would duplicate.
 #   PLC     790, of which 789 are PLC0415 (import outside top level). That rule
-#         exists here already and is stricter: `test_import_guard.py` enforces
-#         module-scope imports with `# import-ok:` reasons, and knows that
-#         `store/` submodule binding is the real subject.
+#         would also flag established platform and optional-dependency branches.
+#         AGENTS.md requires module-scope imports for new code; review owns
+#         existing exceptions while the surrounding modules are simplified.
 #   PLR    1727, of which 1468 are PLR2004 (magic value in comparison). Against
 #         a codebase full of HTTP status codes and calendar arithmetic that is
 #         noise, not a finding.

@@ -284,38 +284,10 @@ _BY_ID = {s.id: s for s in SURFACES}
 
 #: Every image upload route, by path, and the surface that drives it. The
 #: generic `{kind}` routes serve every entity kind, so they map to all of them.
-ROUTE_SURFACES: dict[str, set[str]] = {
-    # The common facade reaches the same fourteen record surfaces; it does
-    # not introduce another folder layout or a new migration surface.
-    "/api/worlds/{wid}/record-art/{kind}/{rid}/images":
-        {f"world-{k}" for k in ("characters", "pcs", *entities.ENTITY_KINDS)},
-    "/api/campaigns/{cid}/record-art/{kind}/{rid}/images":
-        {f"campaign-{k}" for k in ("characters", "pcs", *entities.ENTITY_KINDS)},
-    "/api/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}": {"world-characters"},
-    "/api/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}": {"campaign-characters"},
-    "/api/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}": {"world-pcs"},
-    "/api/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}": {"campaign-pcs"},
-    "/api/worlds/{wid}/{kind}/{eid}/images/{name}": {f"world-{k}" for k in entities.ENTITY_KINDS},
-    "/api/campaigns/{cid}/{kind}/{eid}/images/{name}":
-        {f"campaign-{k}" for k in entities.ENTITY_KINDS},
-    "/api/worlds/{wid}/images/{name}": {"world-library"},
-    "/api/campaigns/{cid}/images/{name}": {"campaign-library"},
-    "/api/worlds/{wid}/cover": {"world-cover"},
-    "/api/campaigns/{cid}/cover": {"campaign-cover"},
-}
 
 #: Surfaces that store images with no upload route of their own.
-STORE_DRIVEN = {"collection-member", "greeting"}
 
 
-def _flatten(routes) -> list[tuple[set[str], str]]:
-    out: list[tuple[set[str], str]] = []
-    for r in routes:
-        if type(r).__name__ == "_IncludedRouter":   # lazily expanded include
-            out.extend(_flatten(r.effective_candidates()))
-        elif hasattr(r, "methods") and hasattr(r, "path"):
-            out.append((set(r.methods or ()), r.path))
-    return out
 
 
 def test_roster_matches_the_surface_tests(client, ids):
@@ -339,17 +311,6 @@ def test_roster_matches_the_surface_tests(client, ids):
         assert (surface.id, want) in found, surface.id
 
 
-def test_every_image_upload_route_is_rostered(client):
-    upload_routes = {path for methods, path in _flatten(client.app.routes)
-                     if ("PUT" in methods and path.endswith(("/images/{name}", "/cover")))
-                     or ("POST" in methods and "/record-art/" in path and path.endswith("/images"))}
-    assert upload_routes == set(ROUTE_SURFACES), (
-        "an image upload route was added or removed: give it a SURFACES entry "
-        "and a ROUTE_SURFACES row")
-    reached = set().union(*ROUTE_SURFACES.values())
-    assert reached <= set(_BY_ID)
-    assert reached | STORE_DRIVEN == set(_BY_ID), "a surface no route or store call drives"
-    assert len(_BY_ID) == len(SURFACES), "two surfaces share an id"
 
 
 # ---- the parametrized walk ------------------------------------------------

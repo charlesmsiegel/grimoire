@@ -4,8 +4,8 @@
 `test_world_fork.py` copies one directly; both are only worth anything if the
 world they act on has something in every corner of the layout, and two
 independently-grown seeds would drift until one suite was quietly testing less
-than the other. So the seed lives here, beside `llm_fakes` and
-`guard_markers` -- the tests package's other shared scaffolding.
+than the other. So the seed lives here, beside `llm_fakes` and the tests
+package's other shared scaffolding.
 """
 
 from __future__ import annotations

@@ -50,10 +50,9 @@ Source: [inference/](../../../../../backend/src/grimoire/inference/), [resolve/]
   thunk): the policy's role with its own preset, held to the base route's
   `requires`, and soft -- a refusal is the sentence every candidate is skipped
   with, never a 409. It passes `escalation=` exactly when its task's policy
-  escalates (`test_operation_guard.py`), notes the outcomes in its capture
-  scope (`Scope.note_escalations`, a failed detail cut to its kind), and
-  `test_routing_guard.py` holds the seam's task to a literal whose policy
-  names a role. No task enables it yet. A `llm.PresetRefusalError` ends the chain where it is met,
+  escalates, and notes the outcomes in its capture scope
+  (`Scope.note_escalations`, a failed detail cut to its kind). The seam uses
+  that task's policy role. No task enables it yet. A `llm.PresetRefusalError` ends the chain where it is met,
   as it ends the facade's: the preset is the user's to fix, and a native stage
   that takes no sampling would only hide it. So does the caller's clock
   refusing a call unsent: the refusal comes out as the `BudgetRefused` it is,

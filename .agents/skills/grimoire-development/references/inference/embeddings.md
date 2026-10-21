@@ -115,8 +115,6 @@ Source: [embed.py](../../../../../backend/src/grimoire/store/inference/embed.py)
     and a reply narrower or wider than a requested `dimensions` is
     `missing_key`/`dimensions_mismatch` (never retried; its error row files
     the code), never truncated here.
-  - `test_operation_guard.py` (the embed half) holds the task, the door, and
-    where each call's `space=` comes from -- traced back through the package
-    to `embed_space.endpoint`, so a space built by hand fails it -- and
-    `test_usage_guard.py` holds that every embeddings request passes a meter's
-    holder.
+  - Verify task selection, the resolved vector space and filed usage through
+    the real embedding operation with fake provider responses. Source inspection
+    cannot establish what a request sent or which ledger row it filed.

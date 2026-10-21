@@ -441,15 +441,6 @@ def test_a_pinned_secret_entry_is_still_pinned(monkeypatch, tmp_path):
     assert secs["World info"]["pinned"] is True
 
 
-def test_a_pinned_character_holds_their_voice_blocks(monkeypatch, tmp_path):
-    """A pin is a promise about content, and the voice sections carry
-    per-character content. Without this a reader could pin a character and
-    still watch the packer drop that character's anchor."""
-    assert assemble._VOICE_CAST_SECTIONS == ("voice_anchors", "voice_examples")
-    # voice_policy is LOCK_IN, so it is never dropped and needs no pin
-    assert "voice_policy" not in assemble._VOICE_CAST_SECTIONS
-    # and they are NOT in the general cast set, which a pinned player also holds
-    assert "voice_anchors" not in assemble._CAST_SECTIONS
 
 
 def test_pinning_an_anchorless_npc_does_not_hold_everyone_elses_voice(monkeypatch, tmp_path):

@@ -89,8 +89,6 @@ OK = {"state": "ok", "in_days": None, "friendly": ""}
 # ---- the contract -----------------------------------------------------------
 
 
-def test_driver_kinds_are_pinned():
-    assert drivers.DRIVER_KINDS == ("thread", "commitment", "event", "birthday", "holiday")
 
 
 def test_snapshot_shape_and_matching(monkeypatch, tmp_path):

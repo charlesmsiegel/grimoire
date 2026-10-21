@@ -12,10 +12,8 @@ Neither survives a refactor on its own, so both are held here.
 from __future__ import annotations
 
 import importlib
-import inspect
 import io
 import json
-import re
 from urllib.parse import quote
 
 import pytest
@@ -785,27 +783,6 @@ def test_scenes_and_commitments_are_separate_groups(client, campaign):
         assert by_id["open-scenes"]["group"] == "Scenes"
         assert by_id["owed"]["group"] == "Commitments"
         assert body["groups"][:2] == ["Scenes", "Commitments"]
-
-
-def test_every_group_a_builder_can_emit_is_declared(client):
-    """A heading missing from `GROUP_ORDER` is appended, not dropped -- but it
-    should not be missing, and this is what says so.
-
-    Read off the builders rather than off one library's output: a chore that
-    only fires under conditions this test does not set up would otherwise be
-    the one whose heading nobody declared.
-    """
-    emitted = set()
-    for name in dir(todo):
-        if not name.startswith("_chore_"):
-            continue
-        src = inspect.getsource(getattr(todo, name))
-        for group in re.findall(r'"group":\s*"([^"]+)"', src):
-            emitted.add(group)
-
-    assert emitted, "no chore builder was found -- this test has gone stale"
-    assert emitted <= set(todo.GROUP_ORDER), (
-        f"undeclared heading(s): {sorted(emitted - set(todo.GROUP_ORDER))}")
 
 
 def test_an_ignored_chore_takes_its_heading_with_it(client, campaign):

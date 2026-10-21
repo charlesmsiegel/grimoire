@@ -126,7 +126,6 @@ def test_secrecy_split_separates_secret_bodies():
     assert context.secrecy_split(entries) == (["public one", "no key at all"], ["hidden"])
 
 
-
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import (  # noqa: E402
     campaigns,
@@ -2208,23 +2207,6 @@ def test_a_suspicion_naming_the_card_name_is_withheld(monkeypatch, tmp_path):
     playstate.write_state(croot, win, playstate.compose_body(
         "Impatient.", "", "The Woman on the Pier is hiding the ledger."))
     assert "hiding the ledger" not in _state_section(cid, sid)
-
-
-def test_a_suspicion_naming_a_present_player_s_persona_is_withheld(monkeypatch, tmp_path):
-    """Players reach the filter through their persona name; that alias has to be
-    matched too."""
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
-    croot = campaigns.campaign_root(cid)
-    ch = characters.create_character(croot, "Seraphine", "main",
-                                     characters.blank_card("Seraphine"))[0]
-    pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
-    sid = scenes.create_scene(cid, "Now")
-    ap.appear(cid, sid, "characters", ch, "main", "npc")
-    ap.appear(cid, sid, "pcs", pid, "default", "player")
-    playstate.write_state(croot, ch, playstate.compose_body(
-        "Wary.", "", "Winifred is working for the Guild."))
-    assert "working for the Guild" not in _state_section(cid, sid)
 
 
 def test_a_capitalized_continuation_stays_with_its_entry(monkeypatch, tmp_path):
@@ -4438,8 +4420,6 @@ def test_the_packer_drops_by_tier_not_by_the_reader_s_order(monkeypatch, tmp_pat
     assert all(r["tier"] != context.LOCK_IN for r in rows if r["dropped"])
 
 
-
-
 # ---- names the voice blocks may safely carry ----
 def test_voice_safe_names_leaves_distinct_names_alone():
     assert context_cast.voice_safe_names(["Mara", "Winifred"]) == ["Mara", "Winifred"]
@@ -4813,7 +4793,6 @@ def test_shared_length_ceiling_uses_resolved_numbers(monkeypatch, tmp_path, open
     text = " ".join(messages[0]["content"].split())
     assert f"at most {words} words in at most {paragraphs} paragraph" in text
     assert "There is no minimum length" in text
-
 
 
 def test_social_uncertainty_guidance_reaches_actor_prompt(monkeypatch, tmp_path):

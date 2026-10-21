@@ -16,10 +16,8 @@ Invented names, fake keys and `vendor/model-*` models only.
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import json
-import pathlib
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -30,11 +28,9 @@ import pytest
 from grimoire import (
     content_parts,
     llm,
-    llm_capture,
     llm_reasoning,
     llm_usage,
     routes,
-    tool_calls,
     wire,
 )
 from grimoire.llm import LLMClient
@@ -595,23 +591,3 @@ def test_build_llm_wires_a_late_bound_counter(monkeypatch):
     client = routes.common.build_llm()
     monkeypatch.setattr(tokens, "count_tokens", lambda text: 4242)
     assert client._count_tokens("anything") == 4242
-
-
-def test_usage_imports_no_counter():
-    sources = pathlib.Path(usage.__file__).parent.rglob("*.py")
-    for path in sources:
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.ImportFrom):
-                assert "tokens" not in (node.module or "").split(".")
-                assert "tokens" not in {alias.name for alias in node.names}
-            elif isinstance(node, ast.Import):
-                assert not any("tokens" in alias.name.split(".") for alias in node.names)
-
-
-def test_estimate_keys_are_one_spelling():
-    assert usage.ESTIMATE_KEY == llm_usage.ESTIMATE_KEY == "_estimate"
-    assert usage.ENDED_KEY == llm_usage.ENDED_KEY == "_ended"
-    assert usage.ESTIMATED == llm_usage.ESTIMATED == "tokens_estimated"
-    assert usage.RUN_KEY == llm_capture.RUN_KEY == "_run_id"
-    assert usage.REASONING_KEY == llm_reasoning.KEY
-    assert usage.TOOL_CALLS_KEY == tool_calls.KEY

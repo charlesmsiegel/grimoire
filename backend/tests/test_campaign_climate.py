@@ -1,11 +1,9 @@
 """The owning module for `campaigns/<cid>/climate.json` (#237)."""
 
 import json
-import pathlib
 
 import pytest
 
-import grimoire
 from grimoire.store import campaign_climate, campaigns, climates, worlds
 
 
@@ -96,25 +94,3 @@ def test_writing_an_unknown_climate_is_rejected(monkeypatch, tmp_path):
     with pytest.raises(climates.ClimateError):
         campaign_climate.write_default(cid, "no-such-climate")
     assert campaign_climate.path(cid).read_text(encoding="utf-8") == before
-
-
-def test_only_the_owning_module_names_the_file():
-    """#237: four touchpoints across three layers, no module owning the shape.
-
-    A grep is how a schema change had to be found. This is the same check a
-    reviewer would run by hand, run by the build instead.
-
-    Honest about its reach, like `test_atomic_guard`: this catches the drift
-    that caused the issue — a second module spelling out the filename and the
-    `{"default_climate": ...}` shape for itself. It does *not* prove ownership.
-    A caller can still take `campaign_climate.path(cid)` and read or write it
-    directly without naming the file, which no static check here would see.
-    """
-    package = pathlib.Path(grimoire.__file__).parent
-    owner = package / "store" / "campaign_climate.py"
-    offenders = [str(p.relative_to(package)) for p in sorted(package.rglob("*.py"))
-                 if p != owner and "climate.json" in p.read_text(encoding="utf-8")]
-    assert not offenders, (
-        "the file is named outside its owning module — read and write it "
-        "through store.campaign_climate, and keep the name itself (comments "
-        f"included) there, so a grep for it lands in one file: {offenders}")

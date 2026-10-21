@@ -8,11 +8,9 @@ Its writer overwrites a malformed file rather than refusing it -- the opposite
 of `doc`'s rule, because nothing in this file is a decision a reader made.
 """
 
-import ast
 import importlib
 import json
 import os
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -85,12 +83,6 @@ def test_absent_cache_reads_empty(cid):
     assert candidates.malformed(cid) is False
 
 
-def test_kinds_are_the_four_in_spec_order():
-    assert candidates.KINDS == ("possible_duplicate", "possible_relation",
-                                "possible_thread_closure", "possible_commitment_resolution")
-    assert candidates.PAIR_KINDS == ("possible_duplicate", "possible_relation")
-    assert candidates.LIFECYCLE_KINDS == ("possible_thread_closure",
-                                          "possible_commitment_resolution")
 
 
 def test_unparseable_cache_reads_empty_and_is_overwritable(cid):
@@ -292,24 +284,6 @@ def test_records_projection_carries_ids_sorted(cid):
     assert rows[0] == {"id": "alpha", **_closure()}
 
 
-def test_candidates_is_a_leaf():
-    src = Path(candidates.__file__)
-    tree = ast.parse(src.read_text(encoding="utf-8"))
-    reached = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.level:
-            base = node.module or ""
-            for alias in node.names:
-                reached.add(f"{'.' * node.level}{base}:{alias.name}")
-        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("grimoire"):
-            reached.add(node.module)
-        elif isinstance(node, ast.Import):
-            reached.update(a.name for a in node.names if a.name.startswith("grimoire"))
-    # `ledger_texts` is the stdlib-only text seam every ledger reader asks for
-    # its file (roadmap 04); it imports nothing back.
-    assert reached == {"..:atomic", "..:ledger_texts", "..:locks", "..campaigns:paths"}
-
-
 @pytest.mark.parametrize(("stored", "read"), [
     (2, 2), (1, 1), (3, 3), ("2", 1), (True, 1), (0, 1), (-1, 1), (2.0, 1), (None, 1)])
 def test_the_question_shape_reads_as_stored_else_as_before_the_fold(cid, stored, read):
@@ -329,4 +303,3 @@ def test_a_drop_keeps_the_question_shape_it_read(cid):
     candidates.write(cid, data)
     assert candidates.drop(cid, "a") is not None
     assert json.loads(_file(cid).read_text(encoding="utf-8"))["questions"] == 1
-

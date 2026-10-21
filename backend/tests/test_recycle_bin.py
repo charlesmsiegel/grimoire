@@ -152,12 +152,6 @@ def unix_check(monkeypatch, real_check):
     monkeypatch.setattr(recycle_bin, "_link_probe", recycle_bin._probe_hard_links)
 
 
-def test_the_message_for_a_drive_without_hard_links():
-    assert MESSAGES["no_hard_links"] == (
-        "This library's drive can't make hard links (for example exFAT, FAT, or some "
-        "network and cloud drives), so unused pictures can't be safely moved to the "
-        "recycle bin from it. Move the library to a drive that supports them to "
-        "collect from it.")
 
 
 def test_hard_links_that_work_pass_and_leave_nothing(unix_check, tmp_path):
@@ -347,10 +341,6 @@ def test_an_unreadable_bin_setting_refuses_the_batch(windows, monkeypatch, tmp_p
     assert all(p.exists() for p in paths)
 
 
-def test_the_unreadable_sentence():
-    assert MESSAGES["bin_settings_unreadable"] == (
-        "Windows' Recycle Bin settings for this drive couldn't be read, "
-        "so pictures won't be sent to it.")
 
 
 def test_a_set_policy_still_refuses_beside_an_unreadable_one(windows, tmp_path):

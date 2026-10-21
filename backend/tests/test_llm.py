@@ -1,4 +1,3 @@
-from importlib.util import resolve_name
 
 from grimoire.llm import _lifecycle as llm_lifecycle
 from grimoire.llm import _retry as llm_retry
@@ -253,7 +252,6 @@ async def test_a_failing_check_is_not_retried_or_fallen_back_to_another_provider
         await client.check(carrying(_conn("openrouter", id="or"),
                                     _conn("openai_compatible", id="fb")))
     assert len(op.probed) == 1 and oc.probed == []
-
 
 
 # ---- idle timeout (#243) ----
@@ -1082,137 +1080,6 @@ async def test_closing_the_retried_stream_closes_the_provider():
     assert provider.opened == 1 and provider.closed == 1
 
 
-import ast  # noqa: E402 - deliberate late import; see the lines above
-from pathlib import Path  # noqa: E402 - deliberate late import; see the lines above
-
-import grimoire  # noqa: E402 - deliberate late import; see the lines above
-
-# The LLM gateway: the facade plus the three providers it dispatches to, and the
-# error module they all share.
-GATEWAY_MODULES = ("llm", "llm_errors", "openrouter", "claude_agent", "openai_compatible")
-PROVIDERS = ("claude_agent", "openai_compatible", "openrouter")
-
-
-def _sibling_imports(name: str) -> set[str]:
-    """Names in the grimoire package that `name` imports.
-
-    Deliberately counts function-scope imports too: deferring an import into a
-    function is how an import cycle gets worked around, so a check that ignored
-    them would call the workaround "acyclic" and let the cycle back in. Both
-    spellings of an edge count — `from .llm import x` and `from grimoire.llm
-    import x` reach the same module and cycle the same way.
-    """
-    root = Path(grimoire.__file__).parent
-    directory = root / name
-    paths = sorted(directory.rglob("*.py")) if directory.is_dir() else [root / f"{name}.py"]
-    found: set[str] = set()
-    for path in paths:
-        relative = path.relative_to(root).with_suffix("")
-        package = ".".join(("grimoire", *relative.parts[:-1]))
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            modules = []
-            if isinstance(node, ast.ImportFrom):
-                owner = (resolve_name("." * node.level + (node.module or ""), package)
-                         if node.level else node.module or "")
-                modules = (["grimoire." + a.name for a in node.names]
-                           if owner == "grimoire" else [owner])
-            elif isinstance(node, ast.Import):
-                modules = [alias.name for alias in node.names]
-            for module in modules:
-                if module.startswith("grimoire."):
-                    sibling = module.split(".")[1]
-                    if sibling != name:
-                        found.add(sibling)
-    return found
-
-
-@pytest.mark.parametrize(("name", "source", "expected"), [
-    ("draws", "from . import decisions\n", {"decisions"}),
-    ("llm", "from .. import decisions\n", {"decisions"}),
-    ("llm", "from ..store import compiled\n", {"store"}),
-    ("llm", "from . import _client\n", set()),
-])
-def test_sibling_imports_resolves_top_level_and_package_relative_imports(
-        tmp_path, monkeypatch, name, source, expected):
-    root = tmp_path / "grimoire"
-    root.mkdir()
-    (root / "__init__.py").touch()
-    (root / "decisions").mkdir()
-    (root / "decisions" / "__init__.py").touch()
-    target = root / "draws.py" if name == "draws" else root / "llm" / "__init__.py"
-    target.parent.mkdir(exist_ok=True)
-    target.write_text(source, encoding="utf-8")
-    monkeypatch.setattr(grimoire, "__file__", str(root / "__init__.py"))
-    assert _sibling_imports(name) == expected
-
-
-def _find_cycle(graph: dict[str, set[str]]) -> list[str] | None:
-    done: set[str] = set()
-
-    def walk(node: str, path: list[str]) -> list[str] | None:
-        if node in path:
-            return path[path.index(node):] + [node]
-        if node in done:
-            return None
-        for nxt in sorted(graph.get(node, ())):
-            if cycle := walk(nxt, path + [node]):
-                return cycle
-        done.add(node)
-        return None
-
-    for start in graph:
-        if cycle := walk(start, []):
-            return cycle
-    return None
-
-
-def _reachable_graph() -> dict[str, set[str]]:
-    """Everything the gateway can reach, not just the five gateway modules.
-
-    Restricting the graph to the gateway would miss a cycle routed through a
-    helper (provider → prompts → llm), so this walks outward from the gateway
-    until it runs dry. Subpackages are not followed: `store/` carries its own
-    known file-level cycle, and no gateway module imports it — if one ever
-    does, that edge is simply not traced rather than failing this test for an
-    unrelated reason.
-    """
-    pkg = Path(grimoire.__file__).parent
-    graph: dict[str, set[str]] = {}
-    queue = list(GATEWAY_MODULES)
-    while queue:
-        name = queue.pop()
-        if name in graph:
-            continue
-        graph[name] = {m for m in _sibling_imports(name)
-                       if (pkg / f"{m}.py").is_file()
-                       or (m in GATEWAY_MODULES and (pkg / m / "__init__.py").is_file())}
-        queue.extend(graph[name])
-    return graph
-
-
-def test_llm_gateway_imports_are_acyclic():
-    """Regression for #239: LLMError lives in its own leaf module, so nothing
-    the gateway reaches can import its way back into the gateway."""
-    cycle = _find_cycle(_reachable_graph())
-    assert cycle is None, "import cycle: " + " -> ".join(cycle or [])
-
-
-def test_llm_errors_stays_a_leaf():
-    """The whole fix rests on this module importing nothing from the package."""
-    assert _sibling_imports("llm_errors") == set()
-
-
-def test_llm_imports_its_providers_at_module_scope():
-    """#239 asked for the deferred imports to go, not just for the cycle to be
-    survivable: an acyclic graph is equally happy with them back inside
-    __init__, so pin the module body itself."""
-    path = Path(grimoire.__file__).parent / "llm" / "_client.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    body_imports = {node.module for node in tree.body
-                    if isinstance(node, ast.ImportFrom) and node.level == 2}
-    assert set(PROVIDERS) <= body_imports
-
-
 # --- usage accounting (#152) ---
 class UsageProvider:
     """A provider that reports accounting the way a real one does: into the
@@ -1476,7 +1343,6 @@ async def test_a_400_whose_params_were_all_dropped_still_falls_back():
     assert [c async for c in client.stream([], chain)] == ["from backup"]
 
 
-
 async def test_a_400_that_names_no_sent_param_still_falls_back():
     """A context overflow is a 400 too; a preset being attached must not turn it
     into a preset refusal that skips the fallback and the health verdict."""
@@ -1610,7 +1476,6 @@ async def test_single_raises_a_provider_error_as_stream_does():
     with pytest.raises(LLMError) as exc:
         await client.single([], _conn("openrouter"))
     assert (exc.value.kind, exc.value.detail) == ("bad_response", "attempt 1")
-
 
 
 # ---- `single` offering tools, and the collector across a stamp (01g-S1) ----

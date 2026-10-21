@@ -3,14 +3,11 @@ resolver builds beside the lowered connection dict (slice I, Task 7)."""
 
 from __future__ import annotations
 
-import ast
 import dataclasses
-import inspect
-import sys
 
 import pytest
 
-from grimoire import llm_usage, wire
+from grimoire import wire
 from grimoire.store.inference import resolved
 
 from . import wire_kit
@@ -37,10 +34,6 @@ def test_with_account_never_shares_a_block():
 def test_with_account_refuses_a_field_the_ledger_does_not_file():
     with pytest.raises(TypeError):
         wire_kit.target().with_account(colour="red")
-
-
-def test_the_account_fields_are_the_ledgers():
-    assert tuple(f.name for f in dataclasses.fields(wire.Account)) == llm_usage.ACCOUNT_FIELDS
 
 
 def test_a_chain_stamps_both_targets():
@@ -92,21 +85,6 @@ def test_every_value_is_frozen():
         t.model = "vendor/other"  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
         t.account.role = "primary"  # type: ignore[misc]
-
-
-def test_wire_imports_nothing_from_the_package():
-    """Standard library only (#239): the store builds these and the gateway
-    sends them, so the module may import neither."""
-    tree = ast.parse(inspect.getsource(wire))
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported |= {alias.name.split(".")[0] for alias in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            assert node.level == 0, f"relative import in wire.py: {ast.dump(node)}"
-            imported.add((node.module or "").split(".")[0])
-    assert imported, "the walk found no imports at all"
-    assert imported <= set(sys.stdlib_module_names) | {"__future__"}, imported
 
 
 # ---- 01i: the model's size ----

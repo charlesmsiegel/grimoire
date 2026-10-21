@@ -1214,8 +1214,7 @@ def test_a_structured_primary_is_unchanged(client):
 # ---- native first (spec 01c §3.2, §4.2): the rule, all tasks off ----
 def _native_first(monkeypatch, *kinds: str, task: str = "scene-break") -> None:
     """Plant `task`'s policy at runtime, listing `kinds` in `native_first`.
-    The static rules (`test_task_policy.py`) hold the code table, which lists
-    no task; this is the chain's behaviour under a policy, not a policy."""
+    The test drives the chain under this policy."""
     monkeypatch.setitem(store.routing.TASK_POLICY, task,
                         store.routing.TaskPolicy(native_first=kinds))
 

@@ -95,16 +95,6 @@ def test_gentle_focus_contract_checks_have_counterexamples(monkeypatch, tmp_path
         assert not all(check.ok for check in checks), phrase
 
 
-def test_no_orphan_recordings():
-    """Every file in recordings/ is claimed by a case. Renaming a case without
-    deleting its old files would otherwise leave dead fixtures behind that no
-    longer score anything."""
-    declared = {rec.path(case.id).name
-                for case in (*case_mod.CASES, *case_mod.KIT_CASES) for rec in case.recordings}
-    on_disk = {p.name for p in case_mod.RECORDINGS.iterdir() if p.is_file()}
-    assert on_disk == declared, f"orphaned: {sorted(on_disk - declared)}"
-
-
 def test_every_case_names_a_routed_task():
     """A live run sends each case where the app sends that generation, so each
     case names the task the app meters it under, and a route claims it."""
@@ -590,13 +580,6 @@ def test_live_structured_decide_case_sends_the_schema(monkeypatch, tmp_path):
 DECIDE_CASES = [c for c in case_mod.CASES if c.schema is not None]
 
 
-def test_every_decide_case_is_counted():
-    assert {c.id for c in DECIDE_CASES} == {
-        "decide-scene-break", "decide-voice-drift", "decide-speaker",
-        "decide-continuity-identity", "decide-continuity-reconcile", "decide-rank",
-        "decide-select", "decide-joint", "decide-turn-intent",
-        "decide-turn-plan", "decide-play-tool", "decide-history-rerank",
-        "decide-epistemic-access", "decide-history-sufficiency"}
 
 
 #: 01e's offline cases: each counterexample read through `decisions.parse` as
@@ -946,7 +929,6 @@ def test_native_grading_reads_what_the_endpoint_answered(monkeypatch, tmp_path):
     ctx = runner.prepare(case)
     runner.native_output(ctx, "openrouter", json.dumps(bodies))
     assert ctx["native_results"][1].answers["decision"].reason == "abstained"
-
 
 
 # ---- 01a-S2: metered live runs in an eval scope ----

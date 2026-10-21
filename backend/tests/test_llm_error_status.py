@@ -1,48 +1,18 @@
-"""The LLM error-status taxonomy (#213).
-
-Every non-stream route that catches an `LLMError` used to answer 502, whatever
-had actually gone wrong. The `kind` was in the body all along, so the frontend
-could tell a rate limit from a broken provider — but nothing else could, and a
-status code is the part a proxy, a retry helper and a log reader read without
-knowing this app's vocabulary.
-
-What is asserted here, in three layers, because each catches a different way of
-getting it wrong:
-
-- **The map is total.** `_LLM_STATUS` covers exactly `llm_errors.KINDS`, so a
-  new kind cannot arrive with no status decided for it.
-- **The routes use it.** A static guard over `routes/` proves no handler still
-  spells a status out for itself, which is the mistake that produced this issue
-  and is invisible to any test of the routes that happen to be covered.
-- **The wire agrees.** Real requests against real routes, because a map nothing
-  reaches is just a dict.
-"""
+"""LLM failures preserve their HTTP status, retry advice and error envelope."""
 
 from __future__ import annotations
 
-import ast
 import json
-import pathlib
-import re
 
 import pytest
 
-from grimoire import llm, llm_errors, routes
-from grimoire.llm_errors import KINDS, LLMError
+from grimoire import routes
+from grimoire.llm_errors import LLMError
 from grimoire.routes import common
-from grimoire.store import llm_connections
 from tests import draft_runs as drafts
 from tests.llm_fakes import FailingOpenRouter, FakeCatalog
 
-SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire" / "routes"
-
-
 # ---- the map itself ----
-def test_every_kind_has_a_status():
-    """The guard that keeps the taxonomy total. A kind added to `llm_errors`
-    without a decision here would otherwise reach the fallback silently, which
-    is exactly the blanket 502 this issue removed."""
-    assert set(common._LLM_STATUS) == set(llm_errors.KINDS)
 
 
 #: The taxonomy, written out a second time by hand. Deliberate duplication:
@@ -115,67 +85,6 @@ def test_only_a_rate_limit_carries_a_retry_after():
 
 
 # ---- no route decides for itself ----
-def scan(src: str) -> list[int]:
-    """Line numbers where an `except LLMError` block builds an HTTPException.
-
-    The whole failure this issue names is a call site answering for itself, and
-    ten of them did. Testing only the routes that are easy to reach would leave
-    the hard ones (absorb, scene-break, rolling-summary) free to drift back, so
-    the rule is checked where it is actually written.
-
-    Deliberately narrow: it looks only inside an `except` clause naming
-    `LLMError`, and only for an `HTTPException(...)` constructed there. A
-    handler that calls a helper of its own escapes, as does one that re-raises
-    something built elsewhere. Both are shapes worth reading anyway, and a guard
-    claiming to catch them would be claiming more than it can see.
-    """
-    found = []
-    for node in ast.walk(ast.parse(src)):
-        if not isinstance(node, ast.ExceptHandler) or not _names_llm_error(node.type):
-            continue
-        found += [inner.lineno for inner in ast.walk(node)
-                  if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
-                  and inner.func.id == "HTTPException"]
-    return sorted(found)
-
-
-def _names_llm_error(node: ast.AST | None) -> bool:
-    """Whether an `except` clause catches `LLMError`, alone or in a tuple."""
-    if node is None:
-        return False
-    parts = node.elts if isinstance(node, ast.Tuple) else [node]
-    return any(isinstance(p, ast.Name) and p.id == "LLMError" for p in parts)
-
-
-def test_the_guard_catches_the_shape_it_bans():
-    """A guard that never fires proves nothing. Both forms of the ban, and the
-    two neighbours it must NOT flag."""
-    assert scan("try:\n    pass\nexcept LLMError as exc:\n"
-                "    raise HTTPException(status_code=502, detail={})\n") == [4]
-    assert scan("try:\n    pass\nexcept (OSError, LLMError) as exc:\n"
-                "    raise HTTPException(status_code=502, detail={})\n") == [4]
-    assert scan("try:\n    pass\nexcept LLMError as exc:\n"
-                "    raise _llm_http_error(exc) from exc\n") == []
-    assert scan("try:\n    pass\nexcept ValueError:\n"
-                "    raise HTTPException(status_code=400, detail={})\n") == []
-
-
-def test_the_guard_reads_the_modules_that_catch_llm_failures():
-    """An empty glob would leave the parametrized guard below vacuously green,
-    passing hardest exactly when it had stopped reading anything."""
-    # A domain may be a single module or a package of endpoint modules.
-    names = {p.stem for p in SRC.glob("*.py")}
-    names |= {p.name for p in SRC.iterdir()
-              if p.is_dir() and (p / "__init__.py").is_file()}
-    assert {"campaigns", "characters", "config", "scenes",
-            "streaming", "worlds"} <= names
-
-
-@pytest.mark.parametrize("path", sorted(SRC.rglob("*.py")),
-                         ids=lambda p: str(p.relative_to(SRC)))
-def test_no_route_spells_out_its_own_llm_status(path):
-    assert scan(path.read_text(encoding="utf-8")) == [], \
-        f"{path.relative_to(SRC)} decides its own status instead of calling _llm_http_error()"
 
 
 # ---- and the wire agrees ----
@@ -318,51 +227,3 @@ def test_a_streamed_failure_still_answers_200_with_an_in_band_error(client):
 
 
 # ---- and the browser reads the same taxonomy (#146) ----
-FRONTEND = SRC.parents[3] / "frontend" / "src"
-
-
-def _string_set(source: str, name: str) -> set[str]:
-    """The string literals of a `const NAME = new Set([...])` in a TS file.
-
-    Read as text rather than executed: a python test cannot import TypeScript,
-    and the alternative — trusting the two lists to be kept in step by hand —
-    is what this exists to stop. `test_android_manifest.py` reads XML from here
-    for the same reason: the file has to be opened by *something* in the
-    ordinary gate, or a change to it is checked by nothing at all.
-    """
-    block = re.search(rf"{name} = new Set\(\[(.*?)\]\)", source, re.DOTALL)
-    assert block, f"{name} is no longer a `new Set([...])` — this guard reads it as text"
-    return set(re.findall(r'"([a-z_]+)"', block.group(1)))
-
-
-def test_the_browser_and_the_backend_agree_on_what_a_provider_failure_is():
-    """`errors.ts` decides whether a failure means "the provider's status just
-    changed" (#146), and it decides it by listing the kinds. A kind added to
-    `llm_errors.KINDS` and not here is a failure the status bar would never
-    notice; one listed here and not there is a `kind` from some other route
-    being read as an LLM going down, which is the confusion the list exists to
-    prevent — `PUT /config/data-dir` answers `data_dir`.
-    """
-    front = _string_set((FRONTEND / "api" / "errors.ts").read_text(encoding="utf-8"),
-                        "PROVIDER_KINDS")
-    assert front == set(KINDS)
-
-
-def test_the_browser_and_the_backend_agree_on_which_kinds_have_a_catalog():
-    """Same drift, one layer along (#149): `ProvidersView` decides whether to
-    offer a catalog Refresh button, and a button offered for a kind the route
-    refuses can only ever produce a 400."""
-    source = (FRONTEND / "routes" / "ProvidersView.tsx").read_text(encoding="utf-8")
-    block = re.search(r"LISTABLE: LLMConnectionKind\[\] = \[(.*?)\]", source, re.DOTALL)
-    assert block, "LISTABLE is no longer an array literal — this guard reads it as text"
-    assert set(re.findall(r'"([a-z_]+)"', block.group(1))) == set(llm.LISTABLE_KINDS)
-
-
-def test_the_browser_and_the_backend_agree_on_which_connection_kinds_exist():
-    """`LLMConnectionKind` is the frontend's copy of `llm_connections.KINDS`. A
-    kind the store reads and the type does not name is a connection the
-    editor's kind checks silently treat as none of the known ones."""
-    source = (FRONTEND / "api" / "types.ts").read_text(encoding="utf-8")
-    block = re.search(r"export type LLMConnectionKind = (.*?);", source, re.DOTALL)
-    assert block, "LLMConnectionKind is no longer a union of literals — this guard reads it as text"
-    assert set(re.findall(r'"([a-z_]+)"', block.group(1))) == set(llm_connections.KINDS)

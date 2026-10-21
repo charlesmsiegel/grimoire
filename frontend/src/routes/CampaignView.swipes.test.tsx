@@ -24,7 +24,6 @@ vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api, ApiError, type Message, type ResponseSwipe } from "../api/client";
 import { installCampaignMocks, ONE_SCENE, renderCampaign } from "../testkit/campaignHarness";
 import { TestPointerEvent } from "../testkit/pointer";
-import { bodiesOf, declares, stylesheet } from "../testkit/stylesheet";
 import { fixture } from "../testkit/fixture";
 
 beforeEach(installCampaignMocks);
@@ -545,27 +544,4 @@ test("a trailing reply with no response id keeps the legacy alternates arrows", 
   expect(screen.getByText("1/2")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Previous reply variant" })).toBeNull();
   expect(api.getResponseSwipe).not.toHaveBeenCalled();
-});
-
-// jsdom applies no CSS, so the rule is read off the stylesheet: without it the
-// browser would treat a sideways drag on the post as a pan and never deliver
-// the pointerup the gesture decides on.
-test("the swipe target leaves vertical panning to the browser", () => {
-  const { css } = stylesheet();
-  const bodies = bodiesOf(css, ".msg.swipe-target");
-  expect(bodies.map((b) => declares(b, "touch-action"))).toContain("pan-y pinch-zoom");
-});
-
-// `pan-y` on the post also stops an ANCESTOR from panning sideways for a drag
-// that starts on it, so wide content inside the swipe target has to be its own
-// horizontal scroller -- the touch-action intersection stops at a scroller,
-// which then pans natively (and useSwipe declines a gesture started in one).
-test("wide content in the swipe target scrolls sideways on its own", () => {
-  const { css } = stylesheet();
-  const pre = bodiesOf(css, ".msg.swipe-target .msg-body pre");
-  expect(pre.map((b) => declares(b, "overflow-x"))).toContain("auto");
-  const table = bodiesOf(css, ".msg.swipe-target .msg-body table");
-  expect(table.map((b) => declares(b, "display"))).toContain("block");
-  expect(table.map((b) => declares(b, "max-width"))).toContain("100%");
-  expect(table.map((b) => declares(b, "overflow-x"))).toContain("auto");
 });

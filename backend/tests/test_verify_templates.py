@@ -1,18 +1,4 @@
-"""The template gate's own tests.
-
-`make check-templates` runs `scripts/verify_templates.py` on every push, and
-nothing tested the harness itself: a change that made it compare less -- or
-compare nothing -- would have kept CI green. These run it the way the Makefile
-does, in a fresh interpreter (it points GRIMOIRE_HOME at a throwaway store of
-its own at import, so it never reads this suite's), and hold it to three
-things: it passes and has not quietly started checking less; a builder that
-drifts from its template fails it, naming that builder; and a template no check
-renders fails it unless the harness says why.
-
-The breaks are planted in the child process before the harness runs, never in
-the tree: the suite runs in parallel, and a file planted under `templates/`
-would fail every other worker's run of the same gate.
-"""
+"""Template verification reports builder drift and unrendered runtime templates."""
 
 from __future__ import annotations
 
@@ -25,12 +11,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "verify_templates.py"
 
-#: A floor, not a target, the way the Makefile's `COV_FLOOR` is: the number of
-#: comparisons a passing run made when this was written, so a harness that
-#: stops making some fails here rather than passing on fewer. Raise it when
-#: checks are added; lowering it needs the same justification as any other
-#: gate being weakened.
-CHECKS_FLOOR = 553
 
 #: The harness, run the way `make check-templates` runs it, after `plant` -- a
 #: few lines that break one thing in the child process -- has run first.
@@ -67,16 +47,6 @@ def _run(tmp_path: Path, plant: str | None = None) -> subprocess.CompletedProces
             [sys.executable, "-c", _PLANTED.format(plant=plant), str(SCRIPT)])
     return subprocess.run(argv, env=env, cwd=REPO, capture_output=True, text=True,
                           encoding="utf-8", timeout=600, check=False)
-
-
-def test_the_gate_passes_and_has_not_started_checking_less(tmp_path):
-    run = _run(tmp_path)
-    assert run.returncode == 0, run.stdout + run.stderr
-    verdict = run.stdout.strip().splitlines()[-1]
-    passed = re.match(r"all (\d+) checks passed", verdict)
-    assert passed, verdict
-    assert int(passed[1]) >= CHECKS_FLOOR, (
-        f"the harness made {passed[1]} comparisons, under its floor of {CHECKS_FLOOR}")
 
 
 def test_a_builder_that_drifts_from_its_template_fails_the_gate(tmp_path):

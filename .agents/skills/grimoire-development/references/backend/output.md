@@ -12,7 +12,7 @@ itself stays what was written: a rule changes what is *shown* or *sent*.
   inherited rule is to switch it off and add your own. A stale `off` id (its rule
   deleted upstream) is pruned on write, not refused.
 - **LLM readers of transcript text go through `store.regex.view.view`** (phase
-  `prompt`). `test_regex_prompt_guard.py` fails a reader that never asks for it.
+  `prompt`). Verify the transformed prompt and the untouched stored transcript.
 - **Display runs on the server**, scene reads and `display` stream frames
   (`store/regex/stream.py`) alike, so one Python `re` dialect governs the screen,
   the test pane and the prompt. Markdown, HTML, text and EPUB exports use display

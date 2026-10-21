@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from grimoire.store import image_hash, image_sanitize, thumbs
+from grimoire.store import image_hash, image_sanitize
 from tests.fixtures.images import make_fixtures
 from tests.fixtures.images.make_fixtures import (
     NETSCAPE_LOOP_0,
@@ -68,12 +68,7 @@ def test_id_shape():
     assert not image_hash.is_image_id(b"px1-" + b"a" * 64)
 
 
-def test_orientation_moved_not_changed():
-    # The three names left thumbs; thumbs asks image_hash. (thumbs' own behaviour
-    # is held by tests/test_thumbs.py, which must stay green unchanged.)
-    for gone in ("_UPRIGHT", "_ORIENTS", "_orientation"):
-        assert not hasattr(thumbs, gone)
-    assert {"JPEG", "MPO", "PNG"} == image_hash.ORIENTS
+def test_orientation_matches_browser_format_rules():
     with Image.open(FIX / "jpeg_rot6.jpg") as im:
         assert image_hash.orientation(im) == Image.Transpose.ROTATE_270
     with Image.open(FIX / "webp_exif6.webp") as im:

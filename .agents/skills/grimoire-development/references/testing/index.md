@@ -1,6 +1,8 @@
 # Verification and fixtures
 
 Read the relevant pages before changing this area; leave unrelated branches unloaded.
+The [test-quality rules](../../../../../AGENTS.md#test-behavior-not-repository-structure)
+require functional outcomes and keep source/AST/prose/CSS policing out of the suites.
 
 | When changing… | Read |
 |---|---|

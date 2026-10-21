@@ -1,4 +1,4 @@
-# Decision capture and capability guards
+# Decision capture and capabilities
 
 Source: [decision_capture.py](../../../../../backend/src/grimoire/routes/decision_capture.py), [test_decision_capture.py](../../../../../backend/tests/test_decision_capture.py).
 
@@ -22,8 +22,9 @@ Source: [decision_capture.py](../../../../../backend/src/grimoire/routes/decisio
   the scene's strict identity, or -- the reconcile sweep, filed at campaign
   level with no scene and read through `GET /campaigns/{cid}/prompts` -- on
   the run's own `stillborn`. A failed call is kept as its error kind, status
-  and code, never the provider's text, and `test_decision_capture.py` holds
-  every `decide` call in the package to the helper. The outcome envelope is
+  and code, never the provider's text. Runtime cases in
+  `test_decision_capture.py` check the filed entries and their failure paths.
+  The outcome envelope is
   filed as a zero-token section whose id is
   `routes/decision_capture.OUTCOME_SECTION_ID` (`"decision"`), which the
   prompt viewer draws as "outcome · not sent" rather than as a prompt
@@ -45,12 +46,7 @@ Source: [decision_capture.py](../../../../../backend/src/grimoire/routes/decisio
   one once normalised, or more than 254 refs (with `grimoire`, past a choice's
   255 options) -- into the invalid-handoff issue, so control returns to the
   player rather than the round failing.
-  `test_routing_guard.py` fails a call that names no task, a task no route
-  claims, an `operation=` that differs from its route's, a reference to
-  `require_inference` that is not a call (a task handed through
-  `run_in_threadpool` is a literal the guard cannot see), a direct
-  `inference.resolve` call in `routes/` without a `# routing-ok:` marker (the
-  markers are capped), and a route whose tasks nothing uses. A route names a
+  Resolve every inference call for its registered task and operation. A route names a
   whole connection or model rather than a bare model string, because since
   `llm_connections/` a model name no longer says which provider serves it --
   the same call #144's fallback made. A route that needs a capability declares

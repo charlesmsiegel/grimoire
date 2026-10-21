@@ -745,14 +745,3 @@ def test_player_label_picks_the_first_of_several_players(monkeypatch, tmp_path):
     ap.appear(cid, sid, "pcs", second, svid, "player")
     ap.appear(cid, sid, "pcs", first, fvid, "player")
     assert ap.player_label(cid, sid) == "Adair Finch"
-
-
-def test_unstamped_player_label_matches_the_serializer():
-    """The fallback is spelled in two modules that cannot import each other.
-
-    `appearances.cast` is imported by `scenes.read`, so it cannot reach back for
-    `serialize.ROLE_TO_LABEL` without closing an import cycle. This is what
-    stops the copy from drifting: rename the user label in the serializer and
-    this fails rather than the plate quietly disagreeing with the transcript.
-    """
-    assert scenes.ROLE_TO_LABEL["user"] == ap.cast.UNSTAMPED_PLAYER_LABEL

@@ -302,8 +302,7 @@ def test_stages_copy_and_never_pop(client):
 # ---- native first (spec 01c §4.2): stage shapes ----
 def _native_first(monkeypatch, *kinds: str) -> None:
     """Plant `scene-break`'s policy at runtime, listing `kinds` in
-    `native_first`. The code table lists no task (`test_task_policy.py`);
-    this is how the chain answers a policy, not a policy."""
+    `native_first`, to exercise how the chain answers this policy."""
     monkeypatch.setitem(store.routing.TASK_POLICY, "scene-break",
                         store.routing.TaskPolicy(native_first=kinds))
 

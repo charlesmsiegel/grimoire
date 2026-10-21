@@ -22,15 +22,14 @@ Source: [inference/](../../../../../backend/src/grimoire/inference/), [common/](
   what the call was sent with.
   The recognized direct `client.stream` calls live in
   `inference/_generation.py`; direct `client.complete` calls also live in
-  `inference/_decision_calls.py`. `test_routing_guard.py` holds these exact
-  client doors in `GENERATION_DOORS`, including confirmed model probes in
+  `inference/_decision_calls.py`; confirmed model probes live in
   `routes/config/_probes.py`. The tool loop calls its owned `self.client` in
   `inference/_tool_runtime.py`. What the seam returns
   carries the `wire.Chain` the facade is sent as `.chain` (`generate` hands it
   on), and the facade dispatches each of its typed `wire.Target`s through the
   adapter registry (`adapters.py`); read the display facts (`.kind`, `.model`,
   `.provider_id`) off `resolved.chain.primary`. There is no connection dict:
-  the lowering is deleted, and `test_lowering_retired_guard.py` keeps it so.
+  the lowering is deleted.
   `store/routing.py` maps the task to a route (each one declares its
   `operation`, its `default_role` and what it `requires`), and
   `store/inference/` resolves the route to a role (Primary, Fast, Decision,
@@ -59,7 +58,8 @@ Source: [inference/](../../../../../backend/src/grimoire/inference/), [common/](
   task whose `routing.TaskPolicy` says `fallback="none"` is sent no fallback
   at all, and its route row says so (`resolve.NO_FALLBACK_POLICY`) when its
   role had one; a route's tasks agree on it, because `for_task` hands one
-  sibling's resolution to another (`test_task_policy.py`). A reroll's connection override goes through `override_inference`, and
+  sibling's resolution to another. A reroll's connection override goes through
+  `override_inference`, and
   absorb's secondary phases hand `_soft_inference` a thunk (voice drift and the
   duplicate check hand one to `_soft_resolved`, which keeps the whole
   resolution `decide` takes), so a phase that cannot resolve reports itself

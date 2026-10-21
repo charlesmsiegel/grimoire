@@ -22,8 +22,6 @@ Invented ids and the codebase's placeholder names only.
 
 from __future__ import annotations
 
-import ast
-import inspect
 import os
 import time
 from pathlib import Path
@@ -286,17 +284,6 @@ def test_campaign_meta_hands_out_a_copy(client):
     first = in_use.campaign_meta(cid)
     first["name"] = "Mara"
     assert in_use.campaign_meta(cid)["name"] != "Mara"
-
-
-def test_in_use_imports_no_settings():
-    """`settings` imports `in_use`; the other way would be a cycle."""
-    tree = ast.parse(inspect.getsource(in_use))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            assert node.module != "settings" and not (node.module or "").endswith(".settings")
-            assert "settings" not in {a.name for a in node.names}
-        elif isinstance(node, ast.Import):
-            assert not any(a.name.endswith("settings") for a in node.names)
 
 
 # ---- order, unreadable campaigns, the enumeration (review fixes) ----

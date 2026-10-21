@@ -2,7 +2,7 @@
 
 Instructions for coding agents working in this repository. Read this whole
 file before making changes, especially the privacy section below.
-For code changes, read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the gate and guards,
+For code changes, read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the verification gate,
 then the relevant development skill branch linked below.
 
 **This file is the authority for project conventions.** `CLAUDE.md` points
@@ -20,7 +20,7 @@ Companion documents own the detailed procedures this file points to:
 
 | You need | Read |
 |---|---|
-| how to run the gate, and what the guards want | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| how to run the verification gate | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | what the store promises about atomicity and locks | [`docs/reference/storage.md`](docs/reference/storage.md) |
 | what the app is and how a user runs it | [`README.md`](README.md) |
 | prompt template layout | [`templates/README.md`](templates/README.md) |
@@ -30,6 +30,45 @@ Companion documents own the detailed procedures this file points to:
 Documentation is maintained by review. Tests and tools must not parse
 repository prose as configuration or scenario data. Useful test scenarios
 belong in fixtures owned by the tests.
+
+## Test behavior, not repository structure
+
+**Tests protect functional contracts. Static analysis belongs to the existing
+linters, type checkers and build tools.** Do not create a second static-analysis
+system inside pytest or Vitest, or move removed test guards into another mandatory
+scanner. Architecture and editorial conventions are reviewed as conventions.
+
+- **Do not inspect application source to enforce its implementation.** No AST,
+  regex, substring, `inspect.getsource`, raw-source imports or source-tree walks
+  checking imports, call spellings, lock placement, helper use, file layout,
+  annotations, internal exports or which private module owns an object. Exercise
+  the operation and assert its result, state changes, error or concurrency behavior.
+- **Do not test repository housekeeping or prose.** No required filenames or
+  directory inventories, documentation wording, comment markers, baseline file
+  formatting, or assertions that a fixed number of tests/checks/files exists.
+  Do not add a test that enforces this paragraph.
+- **Do not pin cosmetic implementation choices.** Reading CSS/HTML to assert
+  selectors, declarations, font names or palette literals proves no layout or
+  accessibility behavior. Use a focused browser check for a valuable interaction
+  or geometry regression; leave routine design and copy changes to review.
+- **Avoid redundant or self-evident checks.** Do not restate a constant, constructor
+  assignment, language/framework guarantee or mock's configured return value.
+  A regression test must fail for the defect it claims to prevent. Prefer one
+  clear scenario over repeated checks at every layer; keep distinct boundary and
+  failure cases. Keep compiler regressions in type-check fixtures when runtime
+  assertions add nothing.
+- **Assert meaningful outcomes at stable seams.** Internal helpers can have useful
+  unit tests, but an equivalent refactor should not require rewriting their tests.
+  Interaction counts need a behavioral reason, such as bounded I/O, accounting or
+  lock exclusion; they must not merely freeze the current call sequence.
+
+File assertions are appropriate for **functional inputs and outputs**: generated
+archives, store records, malformed input preservation, packaged runtime data and
+supported on-disk compatibility fixtures. Rendering prompt templates and testing a
+source-transforming tool against test-owned inputs are also functional behavior.
+Keep meaningful wire/data contracts, migrations, privacy isolation, fault injection
+and concurrency regressions. Do not freeze whole OpenAPI hashes, incidental
+docstrings or `dir(module)` snapshots as substitutes for those contracts.
 
 ## Working agreements
 

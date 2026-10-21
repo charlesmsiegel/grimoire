@@ -20,7 +20,7 @@ from fastapi import HTTPException
 
 import grimoire.store as store
 from grimoire import inference as inference_ops
-from grimoire import llm, llm_sampling, routes, wire
+from grimoire import llm_sampling, routes, wire
 from grimoire.store import inference_keys as keys
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
@@ -254,8 +254,6 @@ def test_a_fallback_naming_the_primary_is_no_fallback(at_state):
     assert _second(inf.resolve("tracker-update")).provider_id == "spare"
 
 
-def test_the_route_scopes_are_the_facades():
-    assert inf.ROUTE_SCOPES == llm.ROUTE_SCOPES
 
 
 #: Override bodies the resolver answers. `long_model` is a 400 on the body's
@@ -1293,8 +1291,7 @@ def test_a_decide_resolutions_ceiling_is_its_primary_stage_alone(tmp_path):
 
 # ---- 01d: a task's policy may send no fallback ----
 def _no_fallback(monkeypatch, *route_keys: str) -> None:
-    """Every task of each route set to `fallback="none"` -- a table the
-    policy rules accept (`test_task_policy.violations`)."""
+    """Set every task of each route to `fallback="none"`."""
     for key in route_keys:
         for task in routing.route_by_key(key).tasks:
             monkeypatch.setitem(routing.TASK_POLICY, task, routing.TaskPolicy(fallback="none"))

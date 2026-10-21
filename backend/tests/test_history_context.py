@@ -1,6 +1,5 @@
 """Frozen history is additive, bounded after macros, and inspected separately."""
 
-import ast
 import json
 import shutil
 from dataclasses import replace
@@ -380,31 +379,6 @@ def test_empty_summary_macro_does_not_render_history_header(cid):
     got = row(detail)  # text-less: it only says why nothing was carried
     assert got["text"] == "" and got["history"]["items"] == []
     assert "**Saltmarch**" not in str(messages)
-
-
-def test_world_info_and_history_are_the_only_shedding_sections():
-    """9.3: the packer's shed loop is generic, so a third section growing a
-    `shed` hook would change what gives way first without anyone deciding it.
-    World info and Recalled history are the two that may (their order under
-    pressure is pinned by `test_frozen_draws_and_legacy_units_shed_separately`
-    and the lore-shedding suite)."""
-    root = Path(assemble.__file__).parent.parent
-    found = set()
-    for path in sorted(root.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for fn in ast.walk(tree):
-            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for node in ast.walk(fn):
-                if isinstance(node, ast.Dict) and any(
-                        isinstance(k, ast.Constant) and k.value == "shed"
-                        and isinstance(v, ast.Dict) for k, v in zip(node.keys, node.values, strict=True)):
-                    found.add((path.relative_to(root).as_posix(), fn.name))
-    assert found == {("assemble/_lore_render.py", "_world_info_section"),
-                     ("history.py", "section")}, found
-    # 11-S3: the history set gives way first, its aside tier (the narrator's
-    # withheld items, an NPC's suspicions) before the recalled tier.
-    assert packer.DROP_ORDER[:2] == (packer.HISTORY_ASIDE, packer.HISTORY_RECALL)
 
 
 @pytest.mark.parametrize("opening, closing", [("She typed {{ name", "and then }} laughed."),

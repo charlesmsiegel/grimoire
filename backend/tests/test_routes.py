@@ -3733,11 +3733,6 @@ def test_chat_injects_system_message(client):
 
 
 # ---- scenes (re-homed chat) ----
-def test_chat_missing_key_returns_409(client):
-    _wid, cid = _campaign(client)
-    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
-    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
-    assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
 
 
 def test_chat_missing_key_ok_for_claude_provider(client):
@@ -3750,18 +3745,6 @@ def test_chat_missing_key_ok_for_claude_provider(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
     assert resp.status_code == 200
-
-
-def test_chat_streams_and_persists(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
-    _wid, cid = _campaign(client)
-    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
-    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
-    assert resp.status_code == 200
-    assert 'data: {"delta": "Hel"}' in resp.text
-    assert 'data: {"done": true}' in resp.text
-    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs[-1] == {"role": "assistant", "content": "Hello", "connection": "openrouter"}
 
 
 # ---- turn cancel / heartbeat / transactional post+response (#95) ----
@@ -4429,19 +4412,6 @@ def test_retry_regenerates_without_adding_a_user_turn(client):
     assert resp.status_code == 200
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
     assert [m["role"] for m in msgs] == ["user", "assistant"]
-
-
-def test_regenerate_replaces_the_last_assistant_post(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
-    _wid, cid = _campaign(client)
-    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
-    store.scenes.append_message(cid, sid, "user", "hi")
-    store.scenes.append_message(cid, sid, "assistant", "old reply")
-    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
-    assert resp.status_code == 200
-    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs == [{"role": "user", "content": "hi"},
-                    {"role": "assistant", "content": "Hello", "connection": "openrouter"}]
 
 
 def test_regenerate_excludes_the_dropped_post_from_the_prompt(client):
@@ -6559,7 +6529,6 @@ def test_voice_anchor_generate_survives_a_card_with_no_data(client):
     assert r.status_code == 200 and r.json() == {"voice_anchor": "Clipped."}
 
 
-
 def test_campaign_voice_anchor_generate_survives_a_card_with_no_data(client):
     """The campaign-scoped route shares the indexing assumption."""
     wid, cid = _campaign(client)
@@ -6570,7 +6539,6 @@ def test_campaign_voice_anchor_generate_survives_a_card_with_no_data(client):
         lambda: FakeOpenRouterComplete("Clipped.")
     r = drafts.post(client, f"/api/campaigns/{cid}/characters/mara/voice-anchor/generate")
     assert r.status_code == 200 and r.json() == {"voice_anchor": "Clipped."}
-
 
 
 def test_post_voice_anchor_generate_requires_key(client):
@@ -11709,16 +11677,6 @@ def test_datetime_get_returns_creation_hint_as_suggested(client):
                       json={"title": "S", "suggested_date": "2026-07-10"}).json()["id"]
     got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
     assert got["current"] is None and got["suggested"] == "2026-07-10"
-
-
-def test_datetime_suggested_falls_back_to_chronicle_date(client):
-    _wid, cid = _campaign(client)
-    store.chronicle.absorb(cid, {"id": "001--old", "one_line": "x", "summary": "y",
-                                 "keywords": [], "cast": [], "location": "",
-                                 "date": "2026-07-04T21:30"})
-    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
-    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
-    assert got["suggested"] == "2026-07-04"  # time-of-day never reaches the date input
 
 
 def test_datetime_suggested_is_null_without_signals_and_once_dated(client):

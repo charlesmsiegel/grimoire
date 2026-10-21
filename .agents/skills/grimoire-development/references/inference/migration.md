@@ -29,7 +29,6 @@ Source: [migrate/](../../../../../backend/src/grimoire/store/inference/migrate/)
   Until the switch lands the
   new Models settings answer 409 `not_migrated` (play carries on through the
   planner, in memory -- `store/inference/legacy_plan/`, the one reader of the
-  legacy layout, which `test_legacy_reader_guard.py` holds to being the only
-  one); a store a newer build switched refuses every
+  legacy layout); a store a newer build switched refuses every
   model-settings write with 409 `newer_format`. Backup, marker, resume, busy
   campaigns and older builds are all in `docs/reference/storage.md`.

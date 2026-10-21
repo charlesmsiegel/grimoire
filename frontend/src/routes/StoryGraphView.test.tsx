@@ -11,7 +11,6 @@ import { GROUP_OF, ledgerHref } from "../ledgerPaths";
 import { ShellPayloadProvider } from "../shell/ShellPayloadContext";
 import { activeHotkeys } from "../shortcuts/registry";
 import { graphFixture } from "../testkit/storyGraph";
-import { declares, bodiesOf, stylesheet } from "../testkit/stylesheet";
 import { setInnerWidth } from "../testkit/viewport";
 import StoryGraphView from "./StoryGraphView";
 
@@ -501,22 +500,6 @@ test("a failed read says so and Retry reads again", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await screen.findByTestId("story-graph-drawing");
   expect(api.continuityGraph).toHaveBeenCalledTimes(2);
-});
-
-test("the drawing pane scrolls sideways and the main pane does not", () => {
-  const { css } = stylesheet();
-  const body = bodiesOf(css, ".sg-scroll").join(";");
-  expect(declares(body, "overflow-x")).toBe("auto");
-  expect(declares(body, "min-width")).toBe("0");
-});
-
-test("node boxes are fixed-height and overlays let taps through", () => {
-  const { css } = stylesheet();
-  const node = bodiesOf(css, ".sg-node").join(";");
-  expect(declares(node, "height")).toBe("44px");
-  expect(declares(node, "overflow")).toBe("hidden");
-  expect(declares(bodiesOf(css, ".sg-now").join(";"), "pointer-events")).toBe("none");
-  expect(declares(bodiesOf(css, ".sg-col-head").join(";"), "pointer-events")).toBe("none");
 });
 
 // ---- node detail (Task 13) ----

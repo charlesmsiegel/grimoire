@@ -38,7 +38,6 @@ import type { ChatEvent, RollProposalPayload } from "../api/stream";
 import { configChanged, onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER } from "../components/play/TranscriptPost";
-import { bodiesOf, declares, stylesheet } from "../testkit/stylesheet";
 import {
   campaignInference, DEFAULT_GROUP, here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes,
   renderCampaign, shellModel, shellReady, withPalette,
@@ -1032,7 +1031,7 @@ test("shows Cast & scene setup for an empty scene", async () => {
 
 test("the setup panel sits under the scene's title, between it and the composer", async () => {
   // Above the title at its full height it pushed the composer below the fold
-  // of a new scene. Under it, the stylesheet lets it shrink and scroll.
+  // of a new scene. The reading order keeps setup before the composer.
   vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE);
   vi.mocked(api.getScene).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [] });
   renderCampaign();
@@ -1041,10 +1040,7 @@ test("the setup panel sits under the scene's title, between it and the composer"
   const box = screen.getByRole("textbox");
   expect(head.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(panel.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  const { css } = stylesheet();
-  const sized = bodiesOf(css, ".main > .cast-panel");
-  expect(sized.some((b) => declares(b, "flex") === "0 1 auto" && declares(b, "min-height") === "0"
-    && declares(b, "overflow-y") === "auto")).toBe(true);
+
 });
 
 // #91: an empty scene opened for an adapted greeting carries the greeting on

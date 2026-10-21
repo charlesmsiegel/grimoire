@@ -1,6 +1,5 @@
 """The generated wire contract preserves explicit clears and closes every object."""
 
-import inspect
 import json
 from pathlib import Path
 
@@ -60,8 +59,6 @@ def test_system_prompt_embeds_the_same_model_generated_schema():
 
 def test_prompt_snapshot_arguments_require_names():
     """Textual snapshots must not silently bind to the wrong evidence section."""
-    with pytest.raises(TypeError, match="positional"):
-        inspect.signature(prompt.build_prompt).bind("Mara joined.", {}, "Realm")
     with pytest.raises(TypeError, match="positional"):
         prompt.build_prompt("Mara joined.", {}, "Realm")
     # The named call still renders its evidence in the intended prompt section.

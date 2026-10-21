@@ -75,12 +75,6 @@ def without_new_tasks(observed: dict, cells: tuple[str, ...] = ("tasks",)) -> di
     return out
 
 
-def test_every_state_has_a_recorded_baseline():
-    assert sorted(BASELINE) == sorted(baseline.STATES)
-
-
-
-
 #: The only differences a migrated store may show against the frozen baseline
 #: (slice C, Task 2), each by name:
 #:

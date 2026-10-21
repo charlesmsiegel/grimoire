@@ -1,8 +1,6 @@
 import { fixture } from "../testkit/fixture";
 import type { ShellPayload } from "../api/types";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { APP_ROWS, CAMPAIGN_ROWS, RAIL_PX, SEARCH_CHORD, railless, titleFor } from "./rail";
+import { APP_ROWS, CAMPAIGN_ROWS, SEARCH_CHORD, railless, titleFor } from "./rail";
 import { formatChord } from "../shortcuts/keys";
 
 /** Every pathname the app can actually be standing on.
@@ -341,17 +339,6 @@ test("the wizards are the rail-less pages", () => {
   // would leave "new" remembered as the open campaign.
   expect(railless("/campaigns/newton")).toBe(false);
 });
-
-test("RAIL_PX and the stylesheet agree", () => {
-  // A media query cannot read a TypeScript constant, so the number is written
-  // twice — the same duplication PHONE_PX already has with the 720px rules.
-  // This is what stops the pair drifting silently, which would put the rail and
-  // the layout that makes room for it on different sides of the same viewport.
-  // `process.cwd()` is `frontend/` -- vitest runs from there (see CLAUDE.md).
-  const css = readFileSync(join(process.cwd(), "src", "index.css"), "utf-8");
-  expect(css).toContain(`@media (max-width: ${RAIL_PX}px)`);
-});
-
 
 test("Sheets is offered only where a mechanics module is bound", () => {
   // `sheets` is null when none is. A Sheets row on a campaign with no

@@ -10,7 +10,7 @@ Source: [investigation.py](../../../../../backend/src/grimoire/routes/investigat
   tool is `investigation-decide` on `investigation_decide`. Every loop turn
   files a ledger row under its task with `run_id` and `loop_turn`, so its cost
   lands in the three columns like any call, and a trace's money is those rows
-  folded the same way, never added. The tools only read --
-  `test_investigation_writer_guard.py` -- and what the model names is checked,
+  folded the same way, never added. The tools only read, and what the model
+  names is checked,
   never taken: a proposal cites only scenes the run READ, an answer only
   citations read, and the one write is `reconcile.persist_investigation`.

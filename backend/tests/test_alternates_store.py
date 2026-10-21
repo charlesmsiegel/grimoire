@@ -57,6 +57,9 @@ def test_a_scene_that_was_never_rerolled_has_no_alternates(monkeypatch, tmp_path
     sid = _scene_with_reply(cid)
     assert alternates.state(cid, sid) == {"active": None, "runs": []}
     assert not scenes_paths._alts_path(cid, sid).exists()
+    scene_refs.repoint(cid, {"001--gone": "001--elsewhere"})
+    assert not scenes_paths._alts_path(cid, "001--gone").exists()
+    assert not scenes_paths._alts_path(cid, "001--elsewhere").exists()
 
 
 def test_regenerate_archives_the_outgoing_run_instead_of_destroying_it(monkeypatch, tmp_path):
@@ -963,11 +966,6 @@ def test_renaming_a_scene_carries_its_alternates(monkeypatch, tmp_path):
     assert new_sid != sid
     assert not scenes_paths._alts_path(cid, sid).exists()
     assert len(alternates.state(cid, new_sid)["runs"]) == 2
-
-
-def test_repoint_leaves_a_scene_without_alternates_alone(monkeypatch, tmp_path):
-    cid = _campaign(monkeypatch, tmp_path)
-    scene_refs.repoint(cid, {"001--gone": "001--elsewhere"})   # must not raise or create
 
 
 def test_repoint_does_not_overwrite_an_occupied_sidecar(monkeypatch, tmp_path):
