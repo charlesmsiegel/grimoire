@@ -109,7 +109,7 @@ def _settle_unwritten(cid: str, sid: str, identity: str, key: str, reason: str) 
     store.revision.bump(cid)
 
 
-def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict,
+def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict, *,
             changed: list, digest: str, model: str, flag_later: bool = False,
             seen_seq: int = 0, gen: int | None = None, stale_base: bool = False,
             touched: list | None = None, base: _fences.Base | None = None) -> bool:

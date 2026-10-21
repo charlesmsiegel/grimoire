@@ -887,13 +887,15 @@ def test_an_obsolete_run_neither_prepares_nor_lands(client):
     before = store.tracker.records.read_snapshot(cid, ident, key)["snapshot"]
     stale = {"characters:mara": {"present": True, "fields": {
         "pose": {"value": "from the first run", "aware": "present"}}}}
-    assert not tracker_routes._commit(cid, ident, sid, key, stale, [], "d", "m", gen=first[1])
+    assert not tracker_routes._commit(cid, ident, sid, key, stale, changed=[], digest="d",
+                                      model="m", gen=first[1])
     assert _index(cid, sid)[key]["status"] == "pending"
     assert store.tracker.records.read_snapshot(cid, ident, key)["snapshot"] == before
     # Nothing is live, so the edit is allowed; it moves the generation again.
     _edit(client, cid, sid, key, {"characters:mara": {"clothing": {"value": "red coat"}}})
     assert tracker_routes._prepare(cid, ident, sid, key, second[1]) is None
-    assert not tracker_routes._commit(cid, ident, sid, key, stale, [], "d", "m", gen=second[1])
+    assert not tracker_routes._commit(cid, ident, sid, key, stale, changed=[], digest="d",
+                                      model="m", gen=second[1])
     tracker_routes._fail(cid, ident, sid, key, "the model said no", second[1])
     entry = _index(cid, sid)[key]
     assert entry["status"] == "ok" and "error" not in entry
