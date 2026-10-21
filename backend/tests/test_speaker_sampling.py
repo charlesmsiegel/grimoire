@@ -12,7 +12,7 @@ from grimoire.decisions import NONE_KEY, Answer, Decision, ItemResult
 from grimoire.routes import character_turns
 from grimoire.store import response_protocol as rp
 from grimoire.store import turn_plan
-from tests.cast_seed import seed_scene as seed
+from tests.cast_seed import seed_scene
 from tests.llm_fakes import FakeLLM
 
 MARA, WINI = "characters:mara", "characters:winifred"
@@ -172,7 +172,7 @@ def _reply(client, text):
 
 
 def test_off_stores_no_pick_and_takes_the_answer(client, monkeypatch):
-    cid, sid, base = seed(client)
+    cid, sid, base = seed_scene(client)
     store.write_config(decide_speaker_sampling="off")   # on by default since 02-S6
     _decided(monkeypatch, _native(MARA, SPREAD))
     _reply(client, "Winifred answers.")
@@ -183,7 +183,7 @@ def test_off_stores_no_pick_and_takes_the_answer(client, monkeypatch):
 
 
 def test_on_draws_the_speaker_and_stores_the_record_with_it(client, monkeypatch):
-    cid, sid, base = seed(client)
+    cid, sid, base = seed_scene(client)
     store.write_config(decide_speaker_sampling="on")
     _decided(monkeypatch, _native(MARA, SPREAD))
     monkeypatch.setattr(draws, "_seed_source", lambda: 11)
@@ -199,7 +199,7 @@ def test_on_draws_the_speaker_and_stores_the_record_with_it(client, monkeypatch)
 
 
 def test_a_typed_note_naming_winifred_narrows_the_draw(client, monkeypatch):
-    cid, sid, base = seed(client)
+    cid, sid, base = seed_scene(client)
     store.write_config(decide_speaker_sampling="on")
     _decided(monkeypatch, _native(MARA, SPREAD))
     _reply(client, "Winifred answers.")
@@ -211,7 +211,7 @@ def test_a_typed_note_naming_winifred_narrows_the_draw(client, monkeypatch):
 
 
 def test_a_handed_back_pick_is_decided_and_never_asked_again(client, monkeypatch):
-    cid, sid, base = seed(client)
+    cid, sid, base = seed_scene(client)
     store.write_config(decide_speaker_sampling="on")
     asked = _decided(monkeypatch, ItemResult(
         {rp.SELECTOR_QUESTION: Answer(None, "abstained")}, backend="native"))
@@ -227,7 +227,7 @@ def test_a_handed_back_pick_is_decided_and_never_asked_again(client, monkeypatch
 
 
 def test_a_draw_defect_leaves_the_answer_standing(client, monkeypatch):
-    cid, sid, base = seed(client)
+    cid, sid, base = seed_scene(client)
     store.write_config(decide_speaker_sampling="on")
     _decided(monkeypatch, _native(WINI, SPREAD))
 
