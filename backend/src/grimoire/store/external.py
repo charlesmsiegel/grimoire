@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -133,75 +134,101 @@ def scan() -> dict:
     root that merely does not exist yet is clean, and truthfully so.
     """
     base = paths.home()
-    prune = _pruned(base)
     conflicts: list[dict] = []
-    truncated = False
-    seen = 0
-    stack: list[tuple[Path, int]] = [(base, 0)]
+    for seen, (entry, tool, kind) in enumerate(_walk(base, _pruned(base)), start=1):
+        if seen > MAX_ENTRIES:
+            return _result(conflicts, True)
+        if tool is None:
+            continue
+        conflict = _conflict(base, entry, tool, kind)
+        if conflict is None:
+            continue
+        conflicts.append(conflict)
+        if len(conflicts) >= MAX_RESULTS:
+            return _result(conflicts, True)
+    return _result(conflicts, False)
 
+
+def _walk(base: Path, prune: frozenset[Path]) -> Iterator[tuple[os.DirEntry, str | None, str | None]]:
+    """Every entry the scan examines, in walk order, as ``(entry, tool, kind)``.
+
+    ``tool`` is the conflict rule the name matches, or None for an entry that
+    is not reported; ``kind`` is ``"file"``, ``"directory"`` or None for one
+    the walk neither reports nor descends (`_kind`). An ordinary directory is
+    descended. A conflicted DIRECTORY is reported and not descended. Dropbox
+    renames whole folders too ("Realm (Winifred's conflicted copy …)"), which
+    is a shadow world the app resolves nothing inside of -- and everything
+    under it is a copy of a record already reported from the live tree, so
+    walking in would bury the one line that matters under a hundred that do
+    not.
+    """
+    stack: list[tuple[Path, int]] = [(base, 0)]
     while stack:
         directory, depth = stack.pop()
-        try:
-            with os.scandir(directory) as it:
-                entries = sorted(it, key=lambda e: e.name)
-        except FileNotFoundError:
-            continue  # a store not created yet holds no conflicts; nor does a
-                      # directory that vanished mid-walk
-        except OSError:
-            if depth == 0:
-                raise  # the root itself: nothing was looked at, so "clean" would be a lie
-            continue
         # Deepest-last so `stack.pop()` walks siblings in name order.
         subdirs: list[tuple[Path, int]] = []
-        for entry in entries:
-            seen += 1
-            if seen > MAX_ENTRIES:
-                return _result(conflicts, True)
-            try:
-                # `follow_symlinks=False` throughout: a symlinked directory
-                # reads as "not a directory" and is never descended, which is
-                # what keeps a link pointing back up the tree from looping the
-                # walk forever. A store on a synced volume is exactly where
-                # somebody has symlinked one library into another.
-                is_dir = entry.is_dir(follow_symlinks=False)
-            except OSError:
-                continue
-            if is_dir and (entry.name.startswith(".")
-                           or (depth == 0 and entry.name in SKIP_AT_ROOT)
-                           or _norm(Path(entry.path)) in prune):
-                continue  # sync metadata (.stversions, .dropbox.cache), our own
-                          # derived data, and wherever backups are configured to go
-            tool = _tool(entry.name)
-            if tool is None:
-                if is_dir:
-                    subdirs.append((Path(entry.path), depth + 1))
-                continue
-            # A conflicted DIRECTORY is reported and not descended. Dropbox
-            # renames whole folders too ("Realm (Winifred's conflicted copy …)"),
-            # which is a shadow world the app resolves nothing inside of -- and
-            # everything under it is a copy of a record already reported from
-            # the live tree, so walking in would bury the one line that matters
-            # under a hundred that do not.
-            try:
-                st = entry.stat(follow_symlinks=False)
-            except OSError:
-                continue  # vanished mid-walk; an entry we cannot stat is not a report
-            conflicts.append({
-                "path": Path(entry.path).relative_to(base).as_posix(),
-                "name": entry.name,
-                "tool": tool,
-                "kind": "directory" if is_dir else "file",
-                # Meaningless for a directory, and summing the tree to make it
-                # mean something would be a second walk of the thing we just
-                # decided not to walk.
-                "size": None if is_dir else st.st_size,
-                "modified": _stamp(st.st_mtime),
-            })
-            if len(conflicts) >= MAX_RESULTS:
-                return _result(conflicts, True)
+        for entry in _listing(directory, depth):
+            kind = _kind(entry, depth, prune)
+            tool = _tool(entry.name) if kind is not None else None
+            if tool is None and kind == "directory":
+                subdirs.append((Path(entry.path), depth + 1))
+            yield entry, tool, kind
         stack.extend(reversed(subdirs))
 
-    return _result(conflicts, truncated)
+
+def _listing(directory: Path, depth: int) -> list[os.DirEntry]:
+    """A directory's entries in name order, or none for one that is gone or,
+    below the root, unreadable."""
+    try:
+        with os.scandir(directory) as it:
+            return sorted(it, key=lambda e: e.name)
+    except FileNotFoundError:
+        return []  # a store not created yet holds no conflicts; nor does a
+                   # directory that vanished mid-walk
+    except OSError:
+        if depth == 0:
+            raise  # the root itself: nothing was looked at, so "clean" would be a lie
+        return []
+
+
+def _kind(entry: os.DirEntry, depth: int, prune: frozenset[Path]) -> str | None:
+    """``"file"`` or ``"directory"``, or None for an entry the walk skips."""
+    try:
+        # `follow_symlinks=False` throughout: a symlinked directory
+        # reads as "not a directory" and is never descended, which is
+        # what keeps a link pointing back up the tree from looping the
+        # walk forever. A store on a synced volume is exactly where
+        # somebody has symlinked one library into another.
+        is_dir = entry.is_dir(follow_symlinks=False)
+    except OSError:
+        return None
+    if not is_dir:
+        return "file"
+    if (entry.name.startswith(".") or (depth == 0 and entry.name in SKIP_AT_ROOT)
+            or _norm(Path(entry.path)) in prune):
+        return None  # sync metadata (.stversions, .dropbox.cache), our own
+                     # derived data, and wherever backups are configured to go
+    return "directory"
+
+
+def _conflict(base: Path, entry: os.DirEntry, tool: str, kind: str | None) -> dict | None:
+    """One report row, or None for an entry that vanished mid-walk."""
+    try:
+        st = entry.stat(follow_symlinks=False)
+    except OSError:
+        return None  # vanished mid-walk; an entry we cannot stat is not a report
+    is_dir = kind == "directory"
+    return {
+        "path": Path(entry.path).relative_to(base).as_posix(),
+        "name": entry.name,
+        "tool": tool,
+        "kind": "directory" if is_dir else "file",
+        # Meaningless for a directory, and summing the tree to make it
+        # mean something would be a second walk of the thing we just
+        # decided not to walk.
+        "size": None if is_dir else st.st_size,
+        "modified": _stamp(st.st_mtime),
+    }
 
 
 def _result(conflicts: list[dict], truncated: bool) -> dict:
