@@ -450,57 +450,75 @@ def mass_on_intended(pick: dict, intended_ref: str) -> float:
     return 1.0 if pick.get("selected") == intended_ref else 0.0
 
 
-def run_checks(run: PlayRun) -> list[Check]:
-    """The per-run checks: the turn checks every contribution keeps, and the
-    feature's own (§5.7, §6.6)."""
-    checks: list[Check] = []
-    if run.error:
-        return [Check("play.turn", False, run.error)]
-    intended = (None if run.fixture.intended is None else
-                run.refs.get(run.fixture.intended, run.fixture.intended))
-    # Turn checks: the reply was written, spoke for nobody else, and handed
-    # off validly.
+def _turn_checks(run: PlayRun) -> list[Check]:
+    """Turn checks: the reply was written, spoke for nobody else, and handed
+    off validly."""
     empty = [r["actor"] for r in run.replies if not r["text"].strip()]
     authority = [r["actor"] for r in run.replies
                  if r["issue"] == "response attempted to speak for another actor"]
     handoff = [r["actor"] for r in run.replies
                if r["issue"] in ("missing or invalid handoff", "ineligible or repeated speaker")]
-    checks += [Check("turn.nonempty", not empty, f"empty reply from {empty}"),
-               Check("turn.authority", not authority, f"spoke for another actor: {authority}"),
-               Check("turn.handoff", not handoff, f"invalid handoff from {handoff}")]
-    # Legality and no sampled abstention (§4.3 hard criteria 1, 2).
-    illegal = [p["selected"] for p in run.picks
-               if p.get("selected") is not None
-               and (p["selected"] not in p.get("offered", ()) or p["selected"] == decisions.NONE_KEY)]
-    checks.append(Check("gate.legal", not illegal, f"drew {illegal}, not offered"))
+    return [Check("turn.nonempty", not empty, f"empty reply from {empty}"),
+            Check("turn.authority", not authority, f"spoke for another actor: {authority}"),
+            Check("turn.handoff", not handoff, f"invalid handoff from {handoff}")]
+
+
+def _illegal_picks(run: PlayRun) -> list:
+    return [p["selected"] for p in run.picks
+            if p.get("selected") is not None
+            and (p["selected"] not in p.get("offered", ()) or p["selected"] == decisions.NONE_KEY)]
+
+
+def _bad_tools(run: PlayRun) -> list[dict]:
+    """The decide tool's selections (§8.6) outside the options the model
+    offered, or over an offer outside the shape's two to six."""
+    tools = [r["tool"] for r in run.replies if r.get("tool")]
+    return [t for t in tools if t.get("selected") is not None
+            and (t["selected"] not in (t.get("options") or ())
+                 or not 2 <= len(t.get("options") or ()) <= 6)]
+
+
+def _legality_checks(run: PlayRun) -> list[Check]:
+    """Legality and no sampled abstention (§4.3 hard criteria 1, 2), for the
+    speaker picks, the tool's selections and the stances."""
+    illegal = _illegal_picks(run)
     sampled_none = [p for p in run.picks if p.get("basis") == "sampled" and p.get("answer") is None]
     stances = [r["intent"] for r in run.replies if r.get("intent")]
     sampled_none += [i for i in stances
                      if (i.get("draw") or {}).get("basis") == "sampled" and i.get("stance") is None]
     bad_stance = [i.get("stance") for i in stances
                   if i.get("stance") is not None and i["stance"] not in turn_plan.STANCES]
-    # The decide tool's selections (§8.6): within the options the model
-    # offered, and those within the shape's two to six.
-    tools = [r["tool"] for r in run.replies if r.get("tool")]
-    bad_tool = [t for t in tools if t.get("selected") is not None
-                and (t["selected"] not in (t.get("options") or ())
-                     or not 2 <= len(t.get("options") or ()) <= 6)]
-    checks.append(Check("gate.legal_tool", not bad_tool,
-                        f"{len(bad_tool)} tool selection(s) outside the options offered"))
-    checks += [Check("gate.no_sampled_abstention", not sampled_none,
-                     f"{len(sampled_none)} draw(s) over an answer of None"),
-               Check("gate.legal_stance", not bad_stance, f"stances {bad_stance}")]
-    # Hand-back preserved: a fixture whose intended answer is null.
+    bad_tool = _bad_tools(run)
+    return [Check("gate.legal", not illegal, f"drew {illegal}, not offered"),
+            Check("gate.legal_tool", not bad_tool,
+                  f"{len(bad_tool)} tool selection(s) outside the options offered"),
+            Check("gate.no_sampled_abstention", not sampled_none,
+                  f"{len(sampled_none)} draw(s) over an answer of None"),
+            Check("gate.legal_stance", not bad_stance, f"stances {bad_stance}")]
+
+
+def _speaker_checks(run: PlayRun) -> list[Check]:
+    """Hand-back preserved on a fixture whose intended answer is null; the
+    mass on the intended speaker, reported, on one that names a speaker."""
     if run.fixture.intended is None:
-        checks.append(Check("speaker.hand_back", not run.speakers,
-                            f"a hand-back fixture was answered by {run.speakers}"))
-    elif intended != ANY and run.picks:
+        return [Check("speaker.hand_back", not run.speakers,
+                      f"a hand-back fixture was answered by {run.speakers}")]
+    intended = run.refs.get(run.fixture.intended, run.fixture.intended)
+    if intended != ANY and run.picks:
         mass = mass_on_intended(run.picks[0], intended)
-        checks.append(Check("speaker.mass_on_intended", True, f"n/a: {mass:.3f}"))
+        return [Check("speaker.mass_on_intended", True, f"n/a: {mass:.3f}")]
+    return []
+
+
+def run_checks(run: PlayRun) -> list[Check]:
+    """The per-run checks: the turn checks every contribution keeps, and the
+    feature's own (§5.7, §6.6)."""
+    if run.error:
+        return [Check("play.turn", False, run.error)]
     # The leak check, on every reply.
     leaked = {r["actor"]: leaks(r["text"]) for r in run.replies if leaks(r["text"])}
-    checks.append(Check("intent.leak", not leaked, f"the block's wording in {leaked}"))
-    return checks
+    return [*_turn_checks(run), *_legality_checks(run), *_speaker_checks(run),
+            Check("intent.leak", not leaked, f"the block's wording in {leaked}")]
 
 
 @dataclass(frozen=True)
@@ -514,32 +532,46 @@ def feature_rows(run: PlayRun) -> list[dict]:
     return [row for row in run.rows if row.get("task") in tasks]
 
 
+def _criteria(graded: Sequence[Graded]) -> list[Check]:
+    """Each per-run `gate.` check, held across every run."""
+    every = [c for g in graded for c in g.checks if c.name.startswith("gate.")]
+    out: list[Check] = []
+    for name in sorted({c.name for c in every}):
+        bad = [c.detail for c in every if c.name == name and not c.ok]
+        out.append(Check(name, not bad, "; ".join(bad[:3])))
+    return out
+
+
+def _regressed(off: list[Graded], on: list[Graded]) -> list[str]:
+    """The turn checks that pass on every "off" run and fail on every "on" one."""
+    names = sorted({c.name for g in off + on for c in g.checks if c.name.startswith("turn.")})
+    return [name for name in names
+            if (off and all(_ok(g, name) for g in off))
+            and (on and all(not _ok(g, name) for g in on))]
+
+
+def _turn_regressions(graded: Sequence[Graded]) -> list[str]:
+    """Consistent turn-check regression, per fixture and per "on"
+    configuration: each against the "off" runs of that fixture, so one
+    configuration that always regresses is never masked by another that
+    passes."""
+    regressions = []
+    for fx in sorted({g.run.fixture.id for g in graded}):
+        off = [g for g in graded if g.run.fixture.id == fx and not g.run.config.on]
+        for conf in sorted({g.run.config.id for g in graded if g.run.config.on}):
+            on = [g for g in graded if g.run.fixture.id == fx and g.run.config.id == conf]
+            regressions += [f"{fx} [{conf}]: {name}" for name in _regressed(off, on)]
+    return regressions
+
+
 def gate(graded: Sequence[Graded]) -> list[Check]:
     """The hard criteria across runs (§4.3): legality and no sampled
     abstention on every run; no turn check that passes on every repeat with
     the feature off and fails on every repeat with it on; off files no row
     under the feature's task; on is really on (never skipped, and its task
     filed rows -- for the speaker draw, a pick on every round that picked)."""
-    out: list[Check] = []
-    every = [c for g in graded for c in g.checks if c.name.startswith("gate.")]
-    for name in sorted({c.name for c in every}):
-        bad = [c.detail for c in every if c.name == name and not c.ok]
-        out.append(Check(name, not bad, "; ".join(bad[:3])))
-    # Consistent turn-check regression, per fixture and per "on"
-    # configuration: each against the "off" runs of that fixture, so one
-    # configuration that always regresses is never masked by another that
-    # passes.
-    regressions = []
-    for fx in sorted({g.run.fixture.id for g in graded}):
-        off = [g for g in graded if g.run.fixture.id == fx and not g.run.config.on]
-        for conf in sorted({g.run.config.id for g in graded if g.run.config.on}):
-            on = [g for g in graded if g.run.fixture.id == fx and g.run.config.id == conf]
-            for name in sorted({c.name for g in off + on for c in g.checks
-                                if c.name.startswith("turn.")}):
-                passes_off = off and all(_ok(g, name) for g in off)
-                fails_on = on and all(not _ok(g, name) for g in on)
-                if passes_off and fails_on:
-                    regressions.append(f"{fx} [{conf}]: {name}")
+    out = _criteria(graded)
+    regressions = _turn_regressions(graded)
     out.append(Check("gate.no_turn_regression", not regressions, "; ".join(regressions)))
     # A failed run measures nothing: the gate never passes over one, off or on.
     failed = sorted({f"{g.run.config.id} {g.run.fixture.id} #{g.run.repeat + 1}: "
@@ -617,6 +649,54 @@ def latency(run: PlayRun) -> tuple[int | None, int | None]:
             _summed_ms(run.rows, ("chat", "continuation")))
 
 
+def _latency_line(runs: list[PlayRun]) -> str:
+    pres = [ms for ms in (latency(r)[0] for r in runs) if ms is not None]
+    return "  added pre-generation ms: " + (
+        f"median {statistics.median(pres):.0f}, max {max(pres)} over {len(pres)} run(s)"
+        if pres else "n/a (no run timed)")
+
+
+def _tool_lines(runs: list[PlayRun]) -> list[str]:
+    """The decide tool's call and decline rates, when it was offered at all."""
+    tools = [x["tool"] for r in runs for x in r.replies if x.get("tool")]
+    offered = [t for t in tools if t.get("offered")]
+    if not offered:
+        return []
+    called = sum(1 for t in offered if t.get("called"))
+    declined = sum(1 for t in offered if t.get("declined") == "after_text")
+    return [(f"  tool calls: {called}/{len(offered)} offered; declined after "
+             f"text: {declined}/{len(offered)}")]
+
+
+def _picks_line(runs: list[PlayRun]) -> str:
+    """Departures, addressed overrides and the mean mass on the intended speaker."""
+    picks = [p for r in runs for p in r.picks]
+    departures = sum(1 for p in picks if p.get("selected") != p.get("answer"))
+    overrides = sum(1 for p in picks if (p.get("eligibility") or {}).get("only")
+                    and p.get("answer") not in (p["eligibility"]["only"] or ()))
+    masses = [mass_on_intended(r.picks[0], r.refs.get(r.fixture.intended, ""))
+              for r in runs if r.picks and r.fixture.intended not in (None, ANY)]
+    return (f"  departures: {departures}/{len(picks)}; addressed overrides: "
+            f"{overrides}/{len(picks)}; mean mass on intended: " + (
+                f"{statistics.mean(masses):.3f} over {len(masses)} addressed pick(s)"
+                if masses else "n/a (no addressed pick)"))
+
+
+def _config_summary(conf_id: str, runs: list[PlayRun]) -> list[str]:
+    """One configuration's reported lines."""
+    conf = runs[0].config
+    stances = {i.get("stance") for r in runs for i in
+               (x.get("intent") for x in r.replies) if i and i.get("stance")}
+    open_speakers = {s for r in runs if r.fixture.intended == ANY for s in r.speakers[:1]}
+    axes = " ".join(f"{k}={v}" for k, v in conf.axes().items())
+    return [f"{conf_id} {axes}",
+            _latency_line(runs),
+            f"  stance diversity: {sorted(stances)}",
+            f"  open-fixture spread: {len(open_speakers)} distinct opener(s)",
+            *_tool_lines(runs),
+            _picks_line(runs)]
+
+
 def summary(graded: Sequence[Graded]) -> list[str]:
     """Per configuration: added latency (median and maximum), stance
     diversity, speaker spread on open fixtures, departures and addressed
@@ -628,36 +708,7 @@ def summary(graded: Sequence[Graded]) -> list[str]:
     otherwise print as though it had been measured and found wanting."""
     lines = []
     for conf_id in sorted({g.run.config.id for g in graded}, key=lambda c: int(c[1:])):
-        runs = [g.run for g in graded if g.run.config.id == conf_id]
-        conf = runs[0].config
-        pres = [ms for ms in (latency(r)[0] for r in runs) if ms is not None]
-        stances = {i.get("stance") for r in runs for i in
-                   (x.get("intent") for x in r.replies) if i and i.get("stance")}
-        open_speakers = {s for r in runs if r.fixture.intended == ANY for s in r.speakers[:1]}
-        picks = [p for r in runs for p in r.picks]
-        departures = sum(1 for p in picks if p.get("selected") != p.get("answer"))
-        overrides = sum(1 for p in picks if (p.get("eligibility") or {}).get("only")
-                        and p.get("answer") not in (p["eligibility"]["only"] or ()))
-        masses = [mass_on_intended(r.picks[0], r.refs.get(r.fixture.intended, ""))
-                  for r in runs if r.picks and r.fixture.intended not in (None, ANY)]
-        axes = " ".join(f"{k}={v}" for k, v in conf.axes().items())
-        lines.append(f"{conf_id} {axes}")
-        lines.append("  added pre-generation ms: " + (
-            f"median {statistics.median(pres):.0f}, max {max(pres)} over {len(pres)} run(s)"
-            if pres else "n/a (no run timed)"))
-        lines.append(f"  stance diversity: {sorted(stances)}")
-        lines.append(f"  open-fixture spread: {len(open_speakers)} distinct opener(s)")
-        tools = [x["tool"] for r in runs for x in r.replies if x.get("tool")]
-        offered = [t for t in tools if t.get("offered")]
-        called = sum(1 for t in offered if t.get("called"))
-        declined = sum(1 for t in offered if t.get("declined") == "after_text")
-        if offered:
-            lines.append(f"  tool calls: {called}/{len(offered)} offered; declined after "
-                         f"text: {declined}/{len(offered)}")
-        lines.append(f"  departures: {departures}/{len(picks)}; addressed overrides: "
-                     f"{overrides}/{len(picks)}; mean mass on intended: " + (
-                         f"{statistics.mean(masses):.3f} over {len(masses)} addressed pick(s)"
-                         if masses else "n/a (no addressed pick)"))
+        lines += _config_summary(conf_id, [g.run for g in graded if g.run.config.id == conf_id])
     return lines
 
 
