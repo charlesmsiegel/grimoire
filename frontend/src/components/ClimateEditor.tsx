@@ -4,42 +4,17 @@ import { errorText } from "../api/errors";
 import { api, type Climate, type ClimateEntry, type ClimateSeason, type ClimateSummary } from "../api/client";
 import { Field } from "./Field";
 import { useCreationRequest } from "./useCreationRequest";
+import {
+  AXES, BLANK, addEntry, addSeason, patchEntry, patchSeason, pct, perBandShares, referrerNotice,
+  removeEntry, removeSeason, renameTemperature, share, type ClimateAxis,
+} from "./climateForm";
 
-const BLANK_SEASON: ClimateSeason = {
-  name: "all year", from: 0, to: 0,
-  temperature: [{ name: "mild", weight: 1 }],
-  conditions: [{ name: "clear", weight: 1 }],
-  wind: [{ name: "calm", weight: 1 }],
-};
-const BLANK: Climate = { id: "", name: "", persistence: 0.5, seasons: [BLANK_SEASON] };
+/** Where a record came from: a shipped preset, the reader's own copy, or both
+ *  (a custom copy shadowing a preset). */
+type ClimateFlags = { builtin: boolean; custom: boolean };
 
-const AXES = [
-  { key: "temperature" as const, label: "Temperature" },
-  { key: "conditions" as const, label: "Conditions" },
-  { key: "wind" as const, label: "Wind" },
-];
-
-/** Percent of the year, for display. Seasons are stored as fractions so a
- *  preset drops into a calendar of any length; showing raw 0.92 helps nobody. */
-function pct(fraction: number) {
-  return `${Math.round(fraction * 1000) / 10}%`;
-}
-
-/** An entry's share of its table, as a percentage.
- *
- *  Weights are relative, so `×1` and `×4` alone do not tell an author they
- *  configured 20% and 80% — the number they actually care about. Zero-weight
- *  rows are excluded from the total, matching how the draw skips them. */
-function share(entries: ClimateEntry[], entry: ClimateEntry) {
-  const total = entries.reduce((sum, e) => sum + (e.weight > 0 ? e.weight : 0), 0);
-  if (!total || entry.weight <= 0) return null;
-  return `${Math.round((entry.weight / total) * 1000) / 10}%`;
-}
-
-/** The conditions a given temperature band can actually draw. */
-function eligible(conditions: ClimateEntry[], temp: string) {
-  return conditions.filter((c) => !c.requires_temp || c.requires_temp.includes(temp));
-}
+/** One form edit: a function from the current draft to the next. */
+type FormEdit = (next: (form: Climate) => Climate) => void;
 
 export function ClimateEditor() {
   const [params, setParams] = useSearchParams();
@@ -48,7 +23,7 @@ export function ClimateEditor() {
   const [climates, setClimates] = useState<ClimateSummary[]>([]);
   const [id, setId] = useState<string | null>(null); // null = new
   const [form, setForm] = useState<Climate>(BLANK);
-  const [flags, setFlags] = useState({ builtin: false, custom: false });
+  const [flags, setFlags] = useState<ClimateFlags>({ builtin: false, custom: false });
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [error, setError] = useState<string | null>(null);
   const { busy: saving, begin: beginSave, retire: retireSave } = useCreationRequest(
@@ -56,7 +31,7 @@ export function ClimateEditor() {
 
   const reload = useCallback(
     () => api.listClimates().then((r) => setClimates(r.climates)), []);
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { void reload(); }, [reload]);
 
   function resetForm() {
     setId(null);
@@ -127,7 +102,7 @@ export function ClimateEditor() {
   async function revertOrDelete() {
     if (!id || !flags.custom) return;
     const reverting = flags.builtin;
-    let message = reverting
+    const question = reverting
       ? `Discard your changes to '${form.name}' and go back to the shipped preset?`
       : `Delete climate '${form.name}'?`;
     // Both paths change the sky, so both disclose. Deleting a custom-only
@@ -148,20 +123,7 @@ export function ClimateEditor() {
         + `Not ${reverting ? "reverting" : "deleting"} — try again.`);
       return;
     }
-    const campaigns = refs.campaigns ?? [];
-    const locations = refs.locations ?? [];
-    if (campaigns.length) {
-      message += `\n\nIt is the default climate for: ${campaigns.map((c) => c.name).join(", ")}.`
-        + " Every location there that doesn't name its own climate"
-        + (reverting ? " changes with it." : " falls back.");
-    }
-    if (locations.length) {
-      message += `\n\n${locations.length} location(s) name it directly: `
-        + `${locations.slice(0, 5).map((l) => l.name).join(", ")}`
-        + `${locations.length > 5 ? ", …" : ""}.`;
-    }
-    if (!campaigns.length && !locations.length) message += " Nothing is using it.";
-    const ok = window.confirm(message);
+    const ok = window.confirm(question + referrerNotice(refs, reverting));
     if (!ok) return;
     const got = await api.deleteClimate(id);
     await reload();
@@ -169,90 +131,26 @@ export function ClimateEditor() {
     else { resetForm(); setParams({}); }
   }
 
-  function patchSeason(n: number, patch: Partial<ClimateSeason>) {
-    setForm({ ...form, seasons: form.seasons.map((s, i) => (i === n ? { ...s, ...patch } : s)) });
+  /** Back to the saved record. */
+  function cancelEdit(saved: string) {
+    // Reload only after the write settles, never the old bytes ahead of it.
+    if (saving) return;
+    retireSave(); void select(saved).catch((err: unknown) => setError(errorText(err)));
   }
 
-  function patchEntry(n: number, axis: typeof AXES[number]["key"], e: number, patch: Partial<ClimateEntry>) {
-    patchSeason(n, {
-      [axis]: form.seasons[n][axis].map((x, i) => {
-        if (i !== e) return x;
-        const next = { ...x, ...patch };
-        // The validator rejects an empty requires_temp and wants the key
-        // omitted for an unconstrained condition, so clearing the field has to
-        // delete the property — otherwise Save fails and the constraint can
-        // never be removed.
-        if (Array.isArray(next.requires_temp) && next.requires_temp.length === 0) {
-          delete next.requires_temp;
-        }
-        return next;
-      }),
-    });
-  }
-
-  /** Rename a temperature and rewrite every condition that requires it.
-   *
-   *  One state update, not two. Renaming and patching separately would each
-   *  read the same captured `form`, so the second would overwrite the first
-   *  and the rename would appear to do nothing.
-   *
-   *  Without the rewrite a plain rename leaves `requires_temp` pointing at a
-   *  name that no longer exists, the next save is rejected as a dangling
-   *  requirement, and the author has to hunt down each dependent condition. */
-  function renameTemperature(n: number, e: number, from: string, to: string) {
-    setForm({
-      ...form,
-      seasons: form.seasons.map((s, i) => (i !== n ? s : {
-        ...s,
-        temperature: s.temperature.map((x, j) => (j === e ? { ...x, name: to } : x)),
-        conditions: s.conditions.map((c) => (
-          c.requires_temp?.includes(from)
-            ? { ...c, requires_temp: c.requires_temp.map((r) => (r === from ? to : r)) }
-            : c)),
-      })),
-    });
-  }
-
-  function addEntry(n: number, axis: typeof AXES[number]["key"]) {
-    patchSeason(n, { [axis]: [...form.seasons[n][axis], { name: "", weight: 1 }] });
-  }
-
-  function removeEntry(n: number, axis: typeof AXES[number]["key"], e: number) {
-    const season = form.seasons[n];
-    if (axis !== "temperature") {
-      patchSeason(n, { [axis]: season[axis].filter((_, i) => i !== e) });
-      return;
+  function editorBody() {
+    if (!selected && !creating) {
+      return <div className="editor-empty">Choose a climate to read, or create one.</div>;
     }
-    // Removing a temperature drops it from every condition that required it,
-    // in the same update. Left behind, the reference is a dangling requirement
-    // the backend rejects, so the remove button could not complete a normal
-    // deletion without the author hunting down each dependent condition. A
-    // condition left requiring nothing becomes unconstrained — the validator
-    // wants the key absent rather than an empty array.
-    const gone = season.temperature[e]?.name;
-    setForm({
-      ...form,
-      seasons: form.seasons.map((s, i) => (i !== n ? s : {
-        ...s,
-        temperature: s.temperature.filter((_, j) => j !== e),
-        conditions: s.conditions.map((c) => {
-          if (!c.requires_temp?.includes(gone)) return c;
-          const kept = c.requires_temp.filter((r) => r !== gone);
-          const next = { ...c };
-          if (kept.length) next.requires_temp = kept;
-          else delete next.requires_temp;
-          return next;
-        }),
-      })),
-    });
-  }
-
-  function addSeason() {
-    setForm({ ...form, seasons: [...form.seasons, { ...BLANK_SEASON, name: "new season" }] });
-  }
-
-  function removeSeason(n: number) {
-    setForm({ ...form, seasons: form.seasons.filter((_, i) => i !== n) });
+    if (selected && !id) return error ? null : <p className="field-hint">Loading climate...</p>;
+    if (mode === "view" && id) {
+      return <ClimateDetail form={form} flags={flags} onEdit={() => setMode("edit")}
+                            onRevertOrDelete={() => void revertOrDelete()} />;
+    }
+    return <ClimateForm form={form} id={id} saving={saving}
+                        edit={(next) => setForm(next(form))}
+                        onSave={() => void save()}
+                        onCancel={id ? () => cancelEdit(id) : null} />;
   }
 
   return (
@@ -270,163 +168,217 @@ export function ClimateEditor() {
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
-        {!selected && !creating ? <div className="editor-empty">Choose a climate to read, or create one.</div>
-          : selected && !id ? error ? null : <p className="field-hint">Loading climate...</p>
-          : mode === "view" && id ? (
-          <div className="detail-view">
-            <div className="detail-main">
-              <h3>{form.name}</h3>
-              <div className="detail-rendered">
-                {form.seasons.map((s, n) => (
-                  <div key={n} className="side-section">
-                    <h4>{s.name} — {s.from === s.to ? "the whole year" : `${pct(s.from)} to ${pct(s.to)}`}</h4>
-                    {AXES.map((axis) => (
-                      <div key={axis.key} className="chips">
-                        <span className="field-hint">{axis.label}:</span>
-                        {s[axis.key].map((e, i) => (
-                          <span key={i} className={"chip" + (e.weight > 0 ? " on" : "")}>
-                            {e.name} ×{e.weight}
-                            {share(s[axis.key], e) ? ` · ${share(s[axis.key], e)}` : ""}
-                            {e.requires_temp?.length ? ` (${e.requires_temp.join(", ")} only)` : ""}
-                          </span>
-                        ))}
-                      </div>
-                    ))}
-                    {s.conditions.some((c) => c.requires_temp?.length) && (
-                      <div className="field-hint">
-                        {/* A constraint changes the eligible total, so a
-                            condition's headline share is not what it draws at
-                            in any particular band. */}
-                        Per band: {s.temperature.filter((tp) => tp.weight > 0).map((tp) => (
-                          `${tp.name} — ` + eligible(s.conditions, tp.name)
-                            .filter((c) => c.weight > 0)
-                            .map((c) => `${c.name} ${share(eligible(s.conditions, tp.name), c)}`)
-                            .join(", ")
-                        )).join("; ")}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+        {editorBody()}
+      </div>
+    </div>
+  );
+}
+
+/** One season, read-only: its span of the year and each axis's table. */
+function SeasonView({ s }: { s: ClimateSeason }) {
+  return <>
+    <h4>{s.name} — {s.from === s.to ? "the whole year" : `${pct(s.from)} to ${pct(s.to)}`}</h4>
+    {AXES.map((axis) => (
+      <div key={axis.key} className="chips">
+        <span className="field-hint">{axis.label}:</span>
+        {s[axis.key].map((e, i) => (
+          <span key={i} className={"chip" + (e.weight > 0 ? " on" : "")}>
+            {e.name} ×{e.weight}
+            {share(s[axis.key], e) ? ` · ${share(s[axis.key], e)}` : ""}
+            {e.requires_temp?.length ? ` (${e.requires_temp.join(", ")} only)` : ""}
+          </span>
+        ))}
+      </div>
+    ))}
+    {s.conditions.some((c) => c.requires_temp?.length) && (
+      <div className="field-hint">
+        {/* A constraint changes the eligible total, so a
+            condition's headline share is not what it draws at
+            in any particular band. */}
+        Per band: {perBandShares(s)}
+      </div>
+    )}
+  </>;
+}
+
+/** The sidebar's Source section: where the record came from, and the undo
+ *  that removes the reader's copy. */
+function ClimateSource({ flags, onRevertOrDelete }: { flags: ClimateFlags; onRevertOrDelete: () => void }) {
+  return (
+    <div className="side-section">
+      <h4>Source</h4>
+      <div className="chips">
+        {flags.builtin && <span className="chip on">shipped preset</span>}
+        {flags.custom && <span className="chip on">your copy</span>}
+      </div>
+      {flags.builtin && !flags.custom && (
+        <div className="field-hint">
+          Editing this makes your own copy — the original is never changed.
+        </div>
+      )}
+      {flags.custom && (
+        <div className="form-actions">
+          <button className="subtle" onClick={onRevertOrDelete}>
+            {/* Both flags means a custom copy shadows a preset, so the
+                undo is a revert; custom alone means the id disappears. */}
+            {flags.builtin ? "Revert to preset" : "Delete"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A saved climate, read-only, with Edit at the top of its sidebar. */
+function ClimateDetail(
+  { form, flags, onEdit, onRevertOrDelete }: {
+    form: Climate;
+    flags: ClimateFlags;
+    onEdit: () => void;
+    onRevertOrDelete: () => void;
+  },
+) {
+  return (
+    <div className="detail-view">
+      <div className="detail-main">
+        <h3>{form.name}</h3>
+        <div className="detail-rendered">
+          {form.seasons.map((s, n) => (
+            <div key={n} className="side-section">
+              <SeasonView s={s} />
             </div>
-            <aside className="detail-sidebar">
-              <div className="form-actions">
-                <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
-              </div>
-              <div className="side-section">
-                <h4>Persistence</h4>
-                <span className="chip on">{form.persistence}</span>
-                <div className="field-hint">
-                  How alike two neighbouring times of day are. 0 makes every block
-                  independent; 0.9 gives long settled runs.
-                </div>
-              </div>
-              <div className="side-section">
-                <h4>Source</h4>
-                <div className="chips">
-                  {flags.builtin && <span className="chip on">shipped preset</span>}
-                  {flags.custom && <span className="chip on">your copy</span>}
-                </div>
-                {flags.builtin && !flags.custom && (
-                  <div className="field-hint">
-                    Editing this makes your own copy — the original is never changed.
-                  </div>
-                )}
-                {flags.custom && (
-                  <div className="form-actions">
-                    <button className="subtle" onClick={revertOrDelete}>
-                      {/* Both flags means a custom copy shadows a preset, so the
-                          undo is a revert; custom alone means the id disappears. */}
-                      {flags.builtin ? "Revert to preset" : "Delete"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </aside>
+          ))}
+        </div>
+      </div>
+      <aside className="detail-sidebar">
+        <div className="form-actions">
+          <button className="subtle" onClick={onEdit}>Edit</button>
+        </div>
+        <div className="side-section">
+          <h4>Persistence</h4>
+          <span className="chip on">{form.persistence}</span>
+          <div className="field-hint">
+            How alike two neighbouring times of day are. 0 makes every block
+            independent; 0.9 gives long settled runs.
           </div>
-        ) : (
-          <div className="form">
-            {!id && (
-              <Field label="Id" hint="Letters, digits, dots, dashes and underscores.">
-                <input value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} />
-              </Field>
-            )}
-            <Field label="Name">
-              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            </Field>
-            <Field label="Persistence"
-                   hint="0 to 1. How alike two neighbouring times of day are — the lag-1 correlation between blocks.">
-              <input type="number" min={0} max={1} step={0.05} value={form.persistence}
-                     onChange={(e) => setForm({ ...form, persistence: Number(e.target.value) })} />
-            </Field>
+        </div>
+        <ClimateSource flags={flags} onRevertOrDelete={onRevertOrDelete} />
+      </aside>
+    </div>
+  );
+}
 
-            {form.seasons.map((s, n) => (
-              <div key={n} className="side-section">
-                <h4>Season {n + 1}</h4>
-                <Field label="Season name">
-                  <input value={s.name} onChange={(e) => patchSeason(n, { name: e.target.value })} />
-                </Field>
-                <Field label="From"
-                       hint="Fraction of the year, 0 to 1 — not a date, so the climate fits any calendar. Equal from and to means the whole year.">
-                  <input type="number" min={0} max={0.999} step={0.01} value={s.from}
-                         onChange={(e) => patchSeason(n, { from: Number(e.target.value) })} />
-                </Field>
-                <Field label="To" hint="Wraps the year end when it is less than From.">
-                  <input type="number" min={0} max={0.999} step={0.01} value={s.to}
-                         onChange={(e) => patchSeason(n, { to: Number(e.target.value) })} />
-                </Field>
+/** One row of an axis's table: name, weight, (for conditions) the
+ *  temperatures it requires, and its remove button. */
+function EntryFields(
+  { n, axis, e, i, edit }: {
+    n: number;
+    axis: ClimateAxis;
+    e: ClimateEntry;
+    i: number;
+    edit: FormEdit;
+  },
+) {
+  return (
+    <div className="climate-entry">
+      <input aria-label={`${axis.label} name ${i + 1}`} value={e.name}
+             onChange={(ev) => {
+               if (axis.key === "temperature" && e.name) {
+                 edit((f) => renameTemperature(f, n, i, e.name, ev.target.value));
+               } else {
+                 edit((f) => patchEntry(f, n, axis.key, i, { name: ev.target.value }));
+               }
+             }} />
+      <input aria-label={`${axis.label} weight ${i + 1}`} type="number" min={0} step={1}
+             value={e.weight}
+             onChange={(ev) => edit((f) => patchEntry(f, n, axis.key, i, { weight: Number(ev.target.value) }))} />
+      {axis.key === "conditions" && (
+        <input aria-label={`${axis.label} requires ${i + 1}`}
+               placeholder="only when (comma-separated)"
+               value={(e.requires_temp ?? []).join(", ")}
+               onChange={(ev) => edit((f) => patchEntry(f, n, axis.key, i, {
+                 requires_temp: ev.target.value.split(",").map((t) => t.trim()).filter(Boolean),
+               }))} />
+      )}
+      <button className="chip" aria-label={`Remove ${axis.label.toLowerCase()} ${e.name || i + 1} from season ${n + 1}`} onClick={() => edit((f) => removeEntry(f, n, axis.key, i))}>✕</button>
+    </div>
+  );
+}
 
-                {AXES.map((axis) => (
-                  <div key={axis.key} className="side-section">
-                    <h4>{axis.label}</h4>
-                    <div className="climate-entry-head" aria-hidden="true"><span>Name</span><span>Weight</span>
-                      {axis.key === "conditions" && <span>Only when</span>}
-                    </div>
-                    {s[axis.key].map((e, i) => (
-                      <div key={i} className="climate-entry">
-                        <input aria-label={`${axis.label} name ${i + 1}`} value={e.name}
-                               onChange={(ev) => {
-                                 if (axis.key === "temperature" && e.name) {
-                                   renameTemperature(n, i, e.name, ev.target.value);
-                                 } else {
-                                   patchEntry(n, axis.key, i, { name: ev.target.value });
-                                 }
-                               }} />
-                        <input aria-label={`${axis.label} weight ${i + 1}`} type="number" min={0} step={1}
-                               value={e.weight}
-                               onChange={(ev) => patchEntry(n, axis.key, i, { weight: Number(ev.target.value) })} />
-                        {axis.key === "conditions" && (
-                          <input aria-label={`${axis.label} requires ${i + 1}`}
-                                 placeholder="only when (comma-separated)"
-                                 value={(e.requires_temp ?? []).join(", ")}
-                                 onChange={(ev) => patchEntry(n, axis.key, i, {
-                                   requires_temp: ev.target.value.split(",").map((t) => t.trim()).filter(Boolean),
-                                 })} />
-                        )}
-                        <button className="chip" aria-label={`Remove ${axis.label.toLowerCase()} ${e.name || i + 1} from season ${n + 1}`} onClick={() => removeEntry(n, axis.key, i)}>✕</button>
-                      </div>
-                    ))}
-                    <button className="chip" onClick={() => addEntry(n, axis.key)}>+ add</button>
-                  </div>
-                ))}
-                {form.seasons.length > 1 && (
-                  <button className="chip" onClick={() => removeSeason(n)}>Remove season</button>
-                )}
-              </div>
-            ))}
-            <button className="chip" onClick={addSeason}>+ add season</button>
+/** One season of the form: its name, its span of the year, and its tables. */
+function SeasonFields({ form, s, n, edit }: { form: Climate; s: ClimateSeason; n: number; edit: FormEdit }) {
+  return (
+    <div className="side-section">
+      <h4>Season {n + 1}</h4>
+      <Field label="Season name">
+        <input value={s.name} onChange={(e) => edit((f) => patchSeason(f, n, { name: e.target.value }))} />
+      </Field>
+      <Field label="From"
+             hint="Fraction of the year, 0 to 1 — not a date, so the climate fits any calendar. Equal from and to means the whole year.">
+        <input type="number" min={0} max={0.999} step={0.01} value={s.from}
+               onChange={(e) => edit((f) => patchSeason(f, n, { from: Number(e.target.value) }))} />
+      </Field>
+      <Field label="To" hint="Wraps the year end when it is less than From.">
+        <input type="number" min={0} max={0.999} step={0.01} value={s.to}
+               onChange={(e) => edit((f) => patchSeason(f, n, { to: Number(e.target.value) }))} />
+      </Field>
 
-            <div className="form-actions">
-              <button className="primary" onClick={save} disabled={saving}>Save</button>
-              {id ? <button className="subtle" disabled={saving} onClick={() => {
-                // Reload only after the write settles, never the old bytes ahead of it.
-                if (saving) return;
-                retireSave(); void select(id).catch((err: unknown) => setError(errorText(err)));
-              }}>Cancel</button>
-                  : <Link className="subtle" to="?">Cancel</Link>}
-            </div>
+      {AXES.map((axis) => (
+        <div key={axis.key} className="side-section">
+          <h4>{axis.label}</h4>
+          <div className="climate-entry-head" aria-hidden="true"><span>Name</span><span>Weight</span>
+            {axis.key === "conditions" && <span>Only when</span>}
           </div>
-        )}
+          {s[axis.key].map((e, i) => (
+            <EntryFields key={i} n={n} axis={axis} e={e} i={i} edit={edit} />
+          ))}
+          <button className="chip" onClick={() => edit((f) => addEntry(f, n, axis.key))}>+ add</button>
+        </div>
+      ))}
+      {form.seasons.length > 1 && (
+        <button className="chip" onClick={() => edit((f) => removeSeason(f, n))}>Remove season</button>
+      )}
+    </div>
+  );
+}
+
+/** The form: a new climate (with its id) or an existing one being edited.
+ *  `onCancel` is null for a new climate, whose Cancel is a link to the root. */
+function ClimateForm(
+  { form, id, saving, edit, onSave, onCancel }: {
+    form: Climate;
+    id: string | null;
+    saving: boolean;
+    edit: FormEdit;
+    onSave: () => void;
+    onCancel: (() => void) | null;
+  },
+) {
+  return (
+    <div className="form">
+      {!id && (
+        <Field label="Id" hint="Letters, digits, dots, dashes and underscores.">
+          <input value={form.id} onChange={(e) => edit((f) => ({ ...f, id: e.target.value }))} />
+        </Field>
+      )}
+      <Field label="Name">
+        <input value={form.name} onChange={(e) => edit((f) => ({ ...f, name: e.target.value }))} />
+      </Field>
+      <Field label="Persistence"
+             hint="0 to 1. How alike two neighbouring times of day are — the lag-1 correlation between blocks.">
+        <input type="number" min={0} max={1} step={0.05} value={form.persistence}
+               onChange={(e) => edit((f) => ({ ...f, persistence: Number(e.target.value) }))} />
+      </Field>
+
+      {form.seasons.map((s, n) => (
+        <SeasonFields key={n} form={form} s={s} n={n} edit={edit} />
+      ))}
+      <button className="chip" onClick={() => edit(addSeason)}>+ add season</button>
+
+      <div className="form-actions">
+        <button className="primary" onClick={onSave} disabled={saving}>Save</button>
+        {onCancel ? <button className="subtle" disabled={saving} onClick={onCancel}>Cancel</button>
+            : <Link className="subtle" to="?">Cancel</Link>}
       </div>
     </div>
   );
