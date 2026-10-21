@@ -8,34 +8,33 @@ from __future__ import annotations
 
 import os
 import struct
-from types import ModuleType
-from typing import ClassVar
+from typing import Any, ClassVar
 
-_ctypes: ModuleType | None
-try:
-    import ctypes as _ctypes_available
-except (ImportError, OSError):
-    _ctypes = None
-else:
-    _ctypes = _ctypes_available
+from . import _optional_import
+
+# Missing libffi/ctypes opts out of Windows change times; it must not prevent
+# importing the store on an embedded Python distribution. The module or None,
+# typed Any because the structures below subclass its classes, and mypy
+# accepts a dynamic base only from an Any value.
+_ctypes: Any = _optional_import.optional_module("ctypes", globals())
 
 
 if _ctypes is not None:
-    class _BasicInfo(_ctypes_available.Structure):
-        _fields_: ClassVar = [('creation', _ctypes_available.c_int64), ('access', _ctypes_available.c_int64),
-                    ('write', _ctypes_available.c_int64), ('change', _ctypes_available.c_int64), ('attributes', _ctypes_available.c_uint32)]
+    class _BasicInfo(_ctypes.Structure):
+        _fields_: ClassVar = [('creation', _ctypes.c_int64), ('access', _ctypes.c_int64),
+                    ('write', _ctypes.c_int64), ('change', _ctypes.c_int64), ('attributes', _ctypes.c_uint32)]
 
 
-    class _StatByName(_ctypes_available.Structure):
+    class _StatByName(_ctypes.Structure):
         __slots__ = ()
         # FILE_STAT_BASIC_INFORMATION: same ABI used by CPython's Windows
         # stat fast path. One result includes ChangeTime and 128-bit identity.
-        _fields_: ClassVar = [('file_id', _ctypes_available.c_uint64),
-            *[(name, _ctypes_available.c_int64) for name in
+        _fields_: ClassVar = [('file_id', _ctypes.c_uint64),
+            *[(name, _ctypes.c_int64) for name in
               ('creation', 'access', 'write', 'change', 'allocation', 'size')],
-            *[(name, _ctypes_available.c_uint32) for name in
+            *[(name, _ctypes.c_uint32) for name in
               ('attributes', 'reparse', 'links', 'device_type', 'characteristics', 'reserved')],
-            ('volume', _ctypes_available.c_uint64), ('identity', _ctypes_available.c_ubyte * 16)]
+            ('volume', _ctypes.c_uint64), ('identity', _ctypes.c_ubyte * 16)]
 
 
 def _api():

@@ -9,18 +9,12 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-from .. import file_stats
+from .. import _optional_import, file_stats
 from . import _contracts, _fences, _path_checks, _runtime, _sqlite_support
 
 # ctypes is optional on packaged hosts; unavailable platform helpers cost
 # persisted-source hits, while exact-byte hashing remains usable.
-_ctypes: ModuleType | None
-try:
-    import ctypes as _ctypes_available
-except (ImportError, OSError):
-    _ctypes = None
-else:
-    _ctypes = _ctypes_available
+_ctypes: ModuleType | None = _optional_import.optional_module("ctypes", globals())
 _WINDOWS_CLOCK = sys.platform == "win32"
 _kernel32 = None
 if _WINDOWS_CLOCK and _ctypes is not None:

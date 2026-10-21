@@ -53,19 +53,13 @@ import sys
 import types
 from pathlib import Path
 
-from . import atomic, locks
+from . import _optional_import, atomic, locks
 from .paths import now_iso
 from .scenes import paths as scenes_paths
 
 # The Windows metadata probe is optional on embedded Python distributions.
 # Missing libffi/ctypes must not prevent importing the authoritative store.
-ctypes: types.ModuleType | None
-try:
-    import ctypes as _ctypes_available
-except (ImportError, OSError):
-    ctypes = None
-else:
-    ctypes = _ctypes_available
+ctypes: types.ModuleType | None = _optional_import.optional_module("ctypes", globals())
 
 SCHEMA = 1
 """Stamped into every record. A file without it was written by something else."""
