@@ -170,20 +170,8 @@ def _suppresses(current: pending.Current | None, fp: str, kind: str, refs: list[
         return False
 
 
-@router.get("/campaigns/{cid}/continuity")
-def get_continuity(cid: str):
-    _campaign_or_404(cid)
-    with store.locks.best_effort_campaign_lock(cid):
-        data = doc.read(cid)
-        ledgers = effective.Ledgers.load(cid)
-        live = effective.live_canon(cid, ledgers)
-        diagnostics = effective.diagnostics(cid, ledgers)
-        kept = effective.links(cid, ledgers)
-        malformed = doc.malformed(cid)
-        # Built only when there is a dismissal to judge, and from the ledgers
-        # already loaded: a read with none costs what it always did.
-        current = (pending.Current.load(cid, ledgers=ledgers)
-                   if data["suppressions"] else None)
+def _alias_rows(cid: str, data: dict, ledgers, live: dict, diagnostics: dict) -> list[dict]:
+    """`get_continuity`'s stored aliases, each beside the canonical it resolves to."""
     dangling = {d["ref"]: d["reason"] for d in diagnostics["dangling_aliases"]}
     aliases = []
     for ref in sorted(k for k in data["aliases"] if isinstance(k, str)):
@@ -198,12 +186,11 @@ def get_continuity(cid: str):
             "note": _text(meta.get("note")),
             "dangling": ref in dangling, "reason": dangling.get(ref, ""),
         })
-    # Every title this read hands a review surface is `reader_name`'s (§12.8,
-    # §30): a record that is gone, untitled, or in a ledger that will not read
-    # is named by its kind in words, never by its ref -- only the server can
-    # tell an untitled record from a missing one.
-    links = [{**link, "a_title": review.reader_name(cid, link["a"], ledgers),
-              "b_title": review.reader_name(cid, link["b"], ledgers)} for link in kept]
+    return aliases
+
+
+def _raw_link_rows(cid: str, data: dict, ledgers, diagnostics: dict) -> list[dict]:
+    """`get_continuity`'s stored links as written, each with its state."""
     states = {d["id"]: ("broken", d["reason"]) for d in diagnostics["broken_links"]}
     states.update({d["id"]: ("hidden", d["reason"]) for d in diagnostics["hidden_links"]})
     raw_links = []
@@ -219,6 +206,12 @@ def get_continuity(cid: str):
                           if row["a"] else "",
                           "b_title": review.reader_name(cid, row["b"], ledgers)
                           if row["b"] else ""})
+    return raw_links
+
+
+def _suppression_rows(cid: str, data: dict, ledgers,
+                      current: pending.Current | None) -> list[dict]:
+    """`get_continuity`'s stored dismissals, each judged live against `current`."""
     suppressions = []
     for fp in sorted(k for k in data["suppressions"] if isinstance(k, str)):
         meta = data["suppressions"][fp]
@@ -231,8 +224,34 @@ def get_continuity(cid: str):
             "decision": _text(meta.get("decision")), "created": _text(meta.get("created")),
             "live": _suppresses(current, fp, kind, refs),
             "titles": [review.reader_name(cid, ref, ledgers) for ref in refs]})
-    return {"aliases": aliases, "links": links, "raw_links": raw_links,
-            "suppressions": suppressions, "diagnostics": diagnostics,
+    return suppressions
+
+
+@router.get("/campaigns/{cid}/continuity")
+def get_continuity(cid: str):
+    _campaign_or_404(cid)
+    with store.locks.best_effort_campaign_lock(cid):
+        data = doc.read(cid)
+        ledgers = effective.Ledgers.load(cid)
+        live = effective.live_canon(cid, ledgers)
+        diagnostics = effective.diagnostics(cid, ledgers)
+        kept = effective.links(cid, ledgers)
+        malformed = doc.malformed(cid)
+        # Built only when there is a dismissal to judge, and from the ledgers
+        # already loaded: a read with none costs what it always did.
+        current = (pending.Current.load(cid, ledgers=ledgers)
+                   if data["suppressions"] else None)
+    aliases = _alias_rows(cid, data, ledgers, live, diagnostics)
+    # Every title this read hands a review surface is `reader_name`'s (§12.8,
+    # §30): a record that is gone, untitled, or in a ledger that will not read
+    # is named by its kind in words, never by its ref -- only the server can
+    # tell an untitled record from a missing one.
+    links = [{**link, "a_title": review.reader_name(cid, link["a"], ledgers),
+              "b_title": review.reader_name(cid, link["b"], ledgers)} for link in kept]
+    return {"aliases": aliases, "links": links,
+            "raw_links": _raw_link_rows(cid, data, ledgers, diagnostics),
+            "suppressions": _suppression_rows(cid, data, ledgers, current),
+            "diagnostics": diagnostics,
             "malformed": malformed, "unreadable": diagnostics["unreadable"],
             "matching": drivers.matching()}
 
