@@ -44,7 +44,7 @@ async def _flush_on_abort(hook, watcher) -> None:
 
 
 def _fence_stream(cid: str, sid: str, messages: list[dict], resolved,
-                  client: LLMClient, finalize, on_error=None, on_abort=None,
+                  client: LLMClient, *, finalize, on_error=None, on_abort=None,
                   task: str = "chat", outcome: _state.StreamOutcome | None = None,
                   post: int | None = None, after_turn=None):
     """Stream one persisted turn while watching for a ```roll fence.
@@ -575,8 +575,8 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], resolved, client: LLM
                 return []
             return finalize(watcher)
 
-    return _fence_stream(cid, sid, messages, resolved, client, finalize, on_error, on_abort,
-                         task=task, outcome=box, post=post, after_turn=after_turn)
+    return _fence_stream(cid, sid, messages, resolved, client, finalize=finalize,
+                         on_error=on_error, on_abort=on_abort, task=task, outcome=box, post=post, after_turn=after_turn)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
@@ -664,6 +664,6 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     # cleanly. Persisting here would be worse than losing the text — narration
     # committed outside `commit_narration` is narration a supersede can no
     # longer displace.
-    return _fence_stream(cid, sid, messages, resolved, client, finalize,
+    return _fence_stream(cid, sid, messages, resolved, client, finalize=finalize,
                          task="continuation", outcome=box, post=post,
                          after_turn=after_turn)

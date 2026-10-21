@@ -429,45 +429,61 @@ def _make_proposal(cid: str, sid: str, watcher) -> dict:
     actors = store.checks.available_checks(cid, sid)
     available = {a["ref"]: a["checks"] for a in actors}
 
-    actor_raw = fields.get("actor")
-    actor, actor_label = None, actor_raw
-    if actor_raw:
-        for a in actors:
-            if a["ref"] == actor_raw:
-                actor, actor_label = a["ref"], a["label"]
-                break
-        if actor is None:
-            for a in actors:
-                if a["label"].lower() == str(actor_raw).strip().lower():
-                    actor, actor_label = a["ref"], a["label"]
-                    break
+    actor, actor_label = _resolve_proposal_actor(actors, fields.get("actor"))
     if actor is None:
         problems = [*problems, "actor could not be resolved"]
 
-    mid = store.modules.resolve(cid)
-    check_labels: dict[str, str] = {}
-    if mid is not None:
-        pack = store.modules.load_pack(mid)
-        cd = pack["checks"] if isinstance(pack["checks"], dict) else {}
-        check_labels = {k: (v.get("label", k) if isinstance(v, dict) else k)
-                        for k, v in cd.items() if k != "_defaults"}
-
+    check_labels = _module_check_labels(cid)
     check = fields.get("check")
-    if check is not None:
-        if check not in check_labels:
-            problems = [*problems, "unknown check id"]
-        elif actor is not None and check not in dict(available.get(actor, [])):
-            problems = [*problems, "check unavailable to this actor"]
-    elif fields:
-        # fields is non-empty (e.g. valid JSON with an actor but no `check`
-        # key) yet carries no check id — parse_roll_body's own tolerant path
-        # already flags this same case (see fence.py); a wholly unparseable
-        # body (fields == {}) is left alone here since "roll request was
-        # unparseable" already covers it and a second problem would be noise.
-        problems = [*problems, "roll request had no check id"]
+    problems = [*problems, *_check_problems(fields, check_labels, available, actor)]
 
     return {"check": check, "check_label": check_labels.get(check, check),
             "actor": actor, "actor_label": actor_label,
             "difficulty": fields.get("difficulty"), "modifier": fields.get("modifier", 0),
             "reason": fields.get("reason", ""), "available": available,
             "problems": problems}
+
+
+def _resolve_proposal_actor(actors: list[dict], actor_raw) -> tuple:
+    """`(ref, label)` of the actor a fence names: an exact kind:id first, then
+    a case-insensitive label. Unresolved, `(None, actor_raw)`."""
+    if not actor_raw:
+        return None, actor_raw
+    for a in actors:
+        if a["ref"] == actor_raw:
+            return a["ref"], a["label"]
+    for a in actors:
+        if a["label"].lower() == str(actor_raw).strip().lower():
+            return a["ref"], a["label"]
+    return None, actor_raw
+
+
+def _module_check_labels(cid: str) -> dict[str, str]:
+    """Check id -> label for the campaign's bound module; empty with none."""
+    mid = store.modules.resolve(cid)
+    if mid is None:
+        return {}
+    pack = store.modules.load_pack(mid)
+    cd = pack["checks"] if isinstance(pack["checks"], dict) else {}
+    return {k: (v.get("label", k) if isinstance(v, dict) else k)
+            for k, v in cd.items() if k != "_defaults"}
+
+
+def _check_problems(fields: dict, check_labels: dict[str, str], available: dict,
+                    actor: str | None) -> list[str]:
+    """What is wrong with the fence's check id, if anything."""
+    check = fields.get("check")
+    if check is not None:
+        if check not in check_labels:
+            return ["unknown check id"]
+        if actor is not None and check not in dict(available.get(actor, [])):
+            return ["check unavailable to this actor"]
+        return []
+    if fields:
+        # fields is non-empty (e.g. valid JSON with an actor but no `check`
+        # key) yet carries no check id — parse_roll_body's own tolerant path
+        # already flags this same case (see fence.py); a wholly unparseable
+        # body (fields == {}) is left alone here since "roll request was
+        # unparseable" already covers it and a second problem would be noise.
+        return ["roll request had no check id"]
+    return []

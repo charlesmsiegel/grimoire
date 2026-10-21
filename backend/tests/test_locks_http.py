@@ -132,7 +132,8 @@ def test_a_busy_finalize_emits_an_error_frame_and_persists_nothing(
         persisted.append(("on_error",))
 
     resp = streaming._fence_stream("run", "0001-x", [], wire_kit.resolution(wire_kit.target(model="")), _Client(),
-                                   lazy_finalize if lazy else finalize, on_error)
+                                   finalize=lazy_finalize if lazy else finalize,
+                                   on_error=on_error)
 
     async def drain():
         return [chunk async for chunk in resp.body_iterator]
