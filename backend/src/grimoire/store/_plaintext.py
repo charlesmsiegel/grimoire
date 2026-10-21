@@ -254,6 +254,53 @@ def _resolve_name(explicit: str, title: str, filename: str, lines: list[str]) ->
     return explicit or title or fallback or _clip(first)
 
 
+class _Split:
+    """`parse`'s running state: which field lines go to, the guessed title, and
+    whether a name label or any text has been seen yet."""
+
+    def __init__(self) -> None:
+        self.parts: dict[str, list[str]] = {key: [] for key in FIELDS}
+        self.current = "description"
+        self.title = ""
+        self.name_seen = False
+        # Whether any field holds text yet. Rejoining every field per heading to
+        # ask that again was quadratic in a source of many headings (#136).
+        self.content_seen = False
+
+    @property
+    def name_free(self) -> bool:
+        # A name label counts once, and never inside example dialogue (#136).
+        return not self.name_seen and self.current != "mes_example"
+
+    def add(self, line: str) -> None:
+        """Append `line` to the current field, noting whether it carries text."""
+        self.parts[self.current].append(line)
+        self.content_seen = self.content_seen or bool(line.strip())
+
+    def open_field(self, field: str, value: str, colon: str) -> None:
+        """A known label starts `field`; a value after its colon is its first line."""
+        self.current = field
+        self.name_seen = self.name_seen or field == "name"
+        # Two labelled sections in one field must not run together.
+        if self.parts[field] and self.parts[field][-1].strip():
+            self.parts[field].append("")
+        if colon and value:
+            self.add(value)
+            if field == "name":
+                self.current = "description"
+
+    def prose(self, line: str, heading: re.Match[str] | None) -> None:
+        """An unlabelled line. An unknown heading returns to description and may
+        title the document; a name takes only its first line of text."""
+        if heading:
+            self.current = "description"
+            if not self.title and not self.content_seen:
+                self.title = _clip(heading[1].strip())
+        self.add(line)
+        if self.current == "name" and line.strip():
+            self.current = "description"
+
+
 def parse(text: str, filename: str = "") -> dict:
     """Split headings, not sentences; retain unlabelled input for review.
 
@@ -265,47 +312,22 @@ def parse(text: str, filename: str = "") -> dict:
     source = text.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
     lines = source.split("\n")
     literal_lines = _literal_lines(source)
-    parts: dict[str, list[str]] = {key: [] for key in FIELDS}
-    current = "description"
-    title = ""
-    name_seen = False
-    # Whether any field holds text yet. Rejoining every field per heading to
-    # ask that again was quadratic in a source of many headings (#136).
-    content_seen = False
+    split = _Split()
     for index, line in enumerate(lines):
-        stripped = line.strip()
         if index in literal_lines:
-            parts[current].append(line)
-            content_seen = content_seen or bool(stripped)
+            split.add(line)
             continue
+        stripped = line.strip()
         heading = _HEADING.fullmatch(stripped)
-        # A name label counts once, and never inside example dialogue (#136).
-        field, value, colon = _label_of(line, stripped, heading,
-                                        name_free=not name_seen and current != "mes_example")
+        field, value, colon = _label_of(line, stripped, heading, name_free=split.name_free)
         if field:
-            current = field
-            name_seen = name_seen or field == "name"
-            # Two labelled sections in one field must not run together.
-            if parts[current] and parts[current][-1].strip():
-                parts[current].append("")
-            if colon and value:
-                parts[current].append(value)
-                content_seen = content_seen or bool(value.strip())
-                if current == "name":
-                    current = "description"
-            continue
-        if heading:
-            current = "description"
-            if not title and not content_seen:
-                title = _clip(heading[1].strip())
-        parts[current].append(line)
-        content_seen = content_seen or bool(stripped)
-        if current == "name" and stripped:
-            current = "description"
+            split.open_field(field, value, colon)
+        else:
+            split.prose(line, heading)
     # Blank edge lines are separators, but horizontal whitespace can carry
     # Markdown meaning (indented code, hard breaks). Keep it in prose fields.
-    data = {key: "\n".join(value).strip("\n") for key, value in parts.items()}
-    data["name"] = _resolve_name(data["name"].strip(), title, filename, lines)
+    data = {key: "\n".join(value).strip("\n") for key, value in split.parts.items()}
+    data["name"] = _resolve_name(data["name"].strip(), split.title, filename, lines)
     return cards.to_v3(data)
 
 
