@@ -8,7 +8,6 @@ from grimoire.store import (
     assets,
     campaign_images,
     characters,
-    entities,
     image_descriptions,
     image_refs,
     image_store,
@@ -18,7 +17,15 @@ from grimoire.store import (
     world_images,
 )
 from grimoire.store.record_art import write
-from tests.record_art_fixtures import KINDS, art_url, image_url, png, setup_records, upload
+from tests.record_art_fixtures import (
+    KINDS,
+    art_url,
+    delete_world_record,
+    image_url,
+    png,
+    setup_records,
+    upload,
+)
 
 
 @pytest.fixture
@@ -33,6 +40,22 @@ def _url(records, scope, kind):
 
 def _source(client, records, scope, kind):
     return client.get(art_url(records, scope, kind)).json()["images"][0]["placement"]
+
+
+def _collect_once_prepared(monkeypatch):
+    """Collect the source's image object (blob and object file) the moment the
+    reuse has prepared it -- a legacy object the store garbage-collected
+    between preparation and the claim, which the reuse must re-establish."""
+    prepare = write._prepare_source
+
+    def collected(*args):
+        result = prepare(*args)
+        obj = image_store.read_fresh(result.image_id)
+        image_store.blob_path(obj.blob_sha256, obj.ext).unlink()
+        image_store.object_path(obj.id).unlink()
+        return result
+
+    monkeypatch.setattr(write, "_prepare_source", collected)
 
 
 @pytest.mark.parametrize("scope", ("world", "campaign"))
@@ -225,16 +248,7 @@ def test_reuse_reestablishes_prepared_legacy_object_collected_before_claim(clien
     d.mkdir(parents=True, exist_ok=True)
     (d / "avatar.png").write_bytes(png(1))
     source = _source(client, records, "world", "locations")
-    prepare = write._prepare_source
-
-    def collected(*args):
-        result = prepare(*args)
-        obj = image_store.read_fresh(result.image_id)
-        image_store.blob_path(obj.blob_sha256, obj.ext).unlink()
-        image_store.object_path(obj.id).unlink()
-        return result
-
-    monkeypatch.setattr(write, "_prepare_source", collected)
+    _collect_once_prepared(monkeypatch)
     response = client.post(_url(records, "world", "characters"), json={"source": source, "intent": "gallery"})
     assert response.status_code == 200, response.text
     obj = image_store.read_fresh(response.json()["created"]["image_id"])
@@ -292,14 +306,8 @@ def test_reuse_rechecks_destination_after_legacy_object_restoration(client, reco
     if version_only:
         original = module.require_version(records["wroot"], records["records"][kind], "default")
         original.with_name("veiled" + original.suffix).write_bytes(original.read_bytes())
-    prepare, ingest = write._prepare_source, image_store.ingest
-
-    def collected(*args):
-        result = prepare(*args)
-        obj = image_store.read_fresh(result.image_id)
-        image_store.blob_path(obj.blob_sha256, obj.ext).unlink()
-        image_store.object_path(obj.id).unlink()
-        return result
+    ingest = image_store.ingest
+    _collect_once_prepared(monkeypatch)
 
     ingestions = []
 
@@ -307,18 +315,9 @@ def test_reuse_rechecks_destination_after_legacy_object_restoration(client, reco
         obj = ingest(data, ext)
         ingestions.append(obj.id)
         if len(ingestions) == 2:
-            root, rid = records["wroot"], records["records"][kind]
-            if version_only:
-                module.delete_version(root, rid, "default")
-            elif kind == "characters":
-                characters.delete_character(root, rid)
-            elif kind == "pcs":
-                pcs.delete_pc(root, rid)
-            else:
-                entities.delete_entity(root, kind, rid)
+            delete_world_record(records, kind, version_only=version_only)
         return obj
 
-    monkeypatch.setattr(write, "_prepare_source", collected)
     monkeypatch.setattr(image_store, "ingest", restore_after_deletion)
     response = client.post(_url(records, scope, kind), json={"source": source, "intent": "gallery"})
     assert len(ingestions) == 2
@@ -342,14 +341,8 @@ def test_reuse_rechecks_source_after_legacy_restoration(client, records, monkeyp
     if version_only:
         original = module.require_version(records["wroot"], records["records"][kind], "default")
         original.with_name("veiled" + original.suffix).write_bytes(original.read_bytes())
-    prepare, ingest = write._prepare_source, image_store.ingest
-
-    def collected(*args):
-        result = prepare(*args)
-        obj = image_store.read_fresh(result.image_id)
-        image_store.blob_path(obj.blob_sha256, obj.ext).unlink()
-        image_store.object_path(obj.id).unlink()
-        return result
+    ingest = image_store.ingest
+    _collect_once_prepared(monkeypatch)
 
     ingestions = []
 
@@ -357,18 +350,9 @@ def test_reuse_rechecks_source_after_legacy_restoration(client, records, monkeyp
         obj = ingest(data, ext)
         ingestions.append(obj.id)
         if len(ingestions) == 2:
-            root, rid = records["wroot"], records["records"][kind]
-            if version_only:
-                module.delete_version(root, rid, "default")
-            elif kind == "characters":
-                characters.delete_character(root, rid)
-            elif kind == "pcs":
-                pcs.delete_pc(root, rid)
-            else:
-                entities.delete_entity(root, kind, rid)
+            delete_world_record(records, kind, version_only=version_only)
         return obj
 
-    monkeypatch.setattr(write, "_prepare_source", collected)
     monkeypatch.setattr(image_store, "ingest", restore_after_source_deletion)
     response = client.post(_url(records, scope, destination_kind), json={"source": source, "intent": "gallery"})
     assert len(ingestions) == 2
@@ -382,14 +366,8 @@ def test_reuse_rechecks_source_token_and_visibility_after_restoration(client, re
     d.mkdir(parents=True, exist_ok=True)
     (d / "avatar.png").write_bytes(png(2))
     source = _source(client, records, scope, "locations")
-    prepare, ingest = write._prepare_source, image_store.ingest
-
-    def collected(*args):
-        result = prepare(*args)
-        obj = image_store.read_fresh(result.image_id)
-        image_store.blob_path(obj.blob_sha256, obj.ext).unlink()
-        image_store.object_path(obj.id).unlink()
-        return result
+    ingest = image_store.ingest
+    _collect_once_prepared(monkeypatch)
 
     ingestions = []
 
@@ -403,7 +381,6 @@ def test_reuse_rechecks_source_token_and_visibility_after_restoration(client, re
                 overlay.delete_image(records["campaign"], records["records"]["locations"], "default", "avatar", "locations")
         return obj
 
-    monkeypatch.setattr(write, "_prepare_source", collected)
     monkeypatch.setattr(image_store, "ingest", restore_after_source_change)
     response = client.post(_url(records, scope, "characters"), json={"source": source, "intent": "gallery"})
     assert len(ingestions) == 2

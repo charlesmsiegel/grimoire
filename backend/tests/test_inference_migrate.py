@@ -554,21 +554,7 @@ def test_a_busy_campaign_is_skipped_and_finished_next_time(home):
     busy = _campaign("Saltmarch")
     free = _campaign("Winifred")
     campaigns.set_campaign_routing(busy, {"route_scene": "openrouter"})
-    held, release = threading.Event(), threading.Event()
-
-    def holder():
-        with locks.campaign_lock(busy):
-            held.set()
-            release.wait(WAIT)
-
-    t = threading.Thread(target=holder)
-    t.start()
-    try:
-        assert held.wait(WAIT)
-        got = migrate.ensure()
-    finally:
-        release.set()
-        t.join(WAIT)
+    got = inference_fixtures.ensure_while_held(busy, WAIT)
 
     assert inference_keys.is_current(config.read_config())
     assert FORMAT not in _meta(busy)

@@ -40,6 +40,39 @@ def _user_prompt(llm: FakeLLM, n: int) -> str:
     return llm.requests[n]["messages"][1]["content"]
 
 
+class _HoldsFirstCall(FakeLLM):
+    """`FakeLLM` whose FIRST call, once it has its answer, sets `started` and
+    waits for `release`. Only the first: holding every call would deadlock a
+    test whose second request has to return in order to release the first.
+    Chains through the shared implementation so `calls` counts what it should.
+    """
+
+    def __init__(self, turns, started: asyncio.Event, release: asyncio.Event):
+        super().__init__(turns)
+        self.started, self.release = started, release
+
+    async def complete(self, messages, conn, usage=None, *, schema=None):
+        text = await super().complete(messages, conn)
+        if self.calls == 1:
+            self.started.set()
+            await self.release.wait()
+        return text
+
+
+async def _ten_post_scene(ac) -> tuple[str, str, str]:
+    """(cid, sid, url) over an async client: a keyed scene holding ten user
+    posts, and its rolling-summary route."""
+    wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
+    cid = (await ac.post("/api/campaigns",
+                         json={"name": "Run", "world": wid})).json()["id"]
+    sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
+                         json={"title": "Saltmarch"})).json()["id"]
+    await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
+    for n in range(10):
+        store.scenes.append_message(cid, sid, "user", f"Post {n}.")
+    return cid, sid, f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+
+
 pytestmark = pytest.mark.unfaked_llm
 
 
@@ -669,33 +702,12 @@ async def test_a_second_turn_does_not_start_a_second_provider_call(monkeypatch, 
     started = asyncio.Event()
     release = asyncio.Event()
 
-    class SlowLLM(FakeLLM):
-        """Blocks the FIRST call only. Blocking both would deadlock the test —
-        the second request would never return to release the first. Chains
-        through the shared implementation so `calls` counts what it should."""
-
-        async def complete(self, messages, conn, usage=None, *, schema=None):
-            text = await super().complete(messages, conn)
-            if self.calls == 1:
-                started.set()
-                await release.wait()
-            return text
-
-    llm = SlowLLM([["A summary."]])
+    llm = _HoldsFirstCall([["A summary."]], started, release)
     app.dependency_overrides[routes.get_llm] = lambda: llm
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
-        wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
-        cid = (await ac.post("/api/campaigns",
-                             json={"name": "Run", "world": wid})).json()["id"]
-        sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
-                             json={"title": "Saltmarch"})).json()["id"]
-        await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
-        for n in range(10):
-            store.scenes.append_message(cid, sid, "user", f"Post {n}.")
-
-        url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+        cid, sid, url = await _ten_post_scene(ac)
         first = asyncio.create_task(ac.post(url))
         await asyncio.wait_for(started.wait(), timeout=5)
         # A turn lands while the first refresh is still waiting on the model...
@@ -722,16 +734,7 @@ async def test_the_claim_is_released_so_the_next_refresh_can_run(monkeypatch, tm
         [["ignored"]], error=LLMError("bad_response", "the model exploded"))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
-        wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
-        cid = (await ac.post("/api/campaigns",
-                             json={"name": "Run", "world": wid})).json()["id"]
-        sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
-                             json={"title": "Saltmarch"})).json()["id"]
-        await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
-        for n in range(10):
-            store.scenes.append_message(cid, sid, "user", f"Post {n}.")
-
-        url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+        _cid, _sid, url = await _ten_post_scene(ac)
         assert (await ac.post(url)).status_code == 502      # claim taken, then failed
 
         ok = _summarizer("A summary after the failure.")
@@ -807,32 +810,12 @@ async def test_a_forced_refresh_waits_out_the_fold_already_in_flight(monkeypatch
     started = asyncio.Event()
     release = asyncio.Event()
 
-    class SlowLLM(FakeLLM):
-        """Blocks the FIRST call only — the forced request must be able to
-        return in order to release it."""
-
-        async def complete(self, messages, conn, usage=None, *, schema=None):
-            text = await super().complete(messages, conn)
-            if self.calls == 1:
-                started.set()
-                await release.wait()
-            return text
-
-    llm = SlowLLM([["The automatic fold's summary."]])
+    llm = _HoldsFirstCall([["The automatic fold's summary."]], started, release)
     app.dependency_overrides[routes.get_llm] = lambda: llm
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
-        wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
-        cid = (await ac.post("/api/campaigns",
-                             json={"name": "Run", "world": wid})).json()["id"]
-        sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
-                             json={"title": "Saltmarch"})).json()["id"]
-        await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
-        for n in range(10):
-            store.scenes.append_message(cid, sid, "user", f"Post {n}.")
-
-        url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+        _cid, _sid, url = await _ten_post_scene(ac)
         automatic = asyncio.create_task(ac.post(url))
         await asyncio.wait_for(started.wait(), timeout=5)
 
@@ -863,15 +846,7 @@ async def test_a_forced_refresh_that_waits_too_long_says_so(monkeypatch, tmp_pat
     started = asyncio.Event()
     release = asyncio.Event()
 
-    class SlowLLM(FakeLLM):
-        async def complete(self, messages, conn, usage=None, *, schema=None):
-            text = await super().complete(messages, conn)
-            if self.calls == 1:
-                started.set()
-                await release.wait()
-            return text
-
-    llm = SlowLLM([["Never lands in time."]])
+    llm = _HoldsFirstCall([["Never lands in time."]], started, release)
     app.dependency_overrides[routes.get_llm] = lambda: llm
     # The ceiling is wall-clock and its own number -- NOT `llm_timeout`, which is
     # an idle bound that resets on every provider frame -- so this is what a test
@@ -880,16 +855,7 @@ async def test_a_forced_refresh_that_waits_too_long_says_so(monkeypatch, tmp_pat
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
-        wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
-        cid = (await ac.post("/api/campaigns",
-                             json={"name": "Run", "world": wid})).json()["id"]
-        sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
-                             json={"title": "Saltmarch"})).json()["id"]
-        await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
-        for n in range(10):
-            store.scenes.append_message(cid, sid, "user", f"Post {n}.")
-
-        url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+        _cid, _sid, url = await _ten_post_scene(ac)
         automatic = asyncio.create_task(ac.post(url))
         await asyncio.wait_for(started.wait(), timeout=5)
 

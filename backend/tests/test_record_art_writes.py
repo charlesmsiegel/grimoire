@@ -8,7 +8,6 @@ import pytest
 from grimoire.store import (
     assets,
     characters,
-    entities,
     image_descriptions,
     image_refs,
     image_store,
@@ -17,7 +16,14 @@ from grimoire.store import (
     record_art,
 )
 from grimoire.store.record_art import write
-from tests.record_art_fixtures import KINDS, art_url, png, setup_records, upload
+from tests.record_art_fixtures import (
+    KINDS,
+    art_url,
+    delete_world_record,
+    png,
+    setup_records,
+    upload,
+)
 
 
 @pytest.fixture
@@ -206,14 +212,8 @@ def test_append_rechecks_world_record_deleted_during_ingestion(client, records, 
             # A world record can disappear while its campaign upload holds the
             # campaign lock. Exercise the underlying deletion in this worker;
             # a nested HTTP request tests lock timeouts instead of publication.
-            root, rid = records["wroot"], records["records"][kind]
-            if kind == "characters":
-                characters.delete_character(root, rid)
-            elif kind == "pcs":
-                pcs.delete_pc(root, rid)
-            else:
-                entities.delete_entity(root, kind, rid)
-            deleted.append(rid)
+            delete_world_record(records, kind)
+            deleted.append(records["records"][kind])
         return obj
 
     monkeypatch.setattr(image_store, "ingest", remove_destination)

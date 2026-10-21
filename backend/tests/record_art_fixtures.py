@@ -4,7 +4,7 @@ import io
 
 from PIL import Image
 
-from grimoire.store import campaigns, entities, worlds
+from grimoire.store import campaigns, characters, entities, pcs, worlds
 
 KINDS = ("characters", "pcs", *entities.ENTITY_KINDS)
 
@@ -45,3 +45,17 @@ def upload(client, ids: dict, scope: str, kind: str, name: str, seed: int = 0):
                           files={"file": ("image.png", png(seed), "image/png")})
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def delete_world_record(ids: dict, kind: str, *, version_only: bool = False) -> None:
+    """Delete the world's `kind` record through the store -- or, with
+    `version_only`, just its "default" version (an actor kind holding another)."""
+    root, rid = ids["wroot"], ids["records"][kind]
+    if version_only:
+        (characters if kind == "characters" else pcs).delete_version(root, rid, "default")
+    elif kind == "characters":
+        characters.delete_character(root, rid)
+    elif kind == "pcs":
+        pcs.delete_pc(root, rid)
+    else:
+        entities.delete_entity(root, kind, rid)

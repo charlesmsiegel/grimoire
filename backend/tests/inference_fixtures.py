@@ -18,6 +18,7 @@ suite.
 from __future__ import annotations
 
 import importlib
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
@@ -90,6 +91,27 @@ def migrate_as_c_h() -> migrate.Status:
     format-2 store retirement has not reached yet."""
     with mock.patch.object(migrate_execution, "_retire", lambda *_args: None):
         return migrate.ensure()
+
+
+def ensure_while_held(cid: str, wait: float = 10.0) -> migrate.Status:
+    """`migrate.ensure()` while another thread holds `cid`'s campaign lock --
+    a campaign busy mid-turn as the migration reaches it. The holder lets go
+    once ensure returns (or raises), and is joined before this does."""
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with locks.campaign_lock(cid):
+            held.set()
+            release.wait(wait)
+
+    t = threading.Thread(target=holder)
+    t.start()
+    try:
+        assert held.wait(wait)
+        return migrate.ensure()
+    finally:
+        release.set()
+        t.join(wait)
 
 
 @pytest.fixture

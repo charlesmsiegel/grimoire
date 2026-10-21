@@ -769,21 +769,7 @@ def test_an_unreadable_connection_holds_the_scopes_that_name_it(home, damage):
 def test_a_busy_campaign_is_retired_on_the_next_run(home):
     cid = _legacy_glm()
     _c_era()
-    held, release = threading.Event(), threading.Event()
-
-    def holder():
-        with locks.campaign_lock(cid):
-            held.set()
-            release.wait(WAIT)
-
-    t = threading.Thread(target=holder)
-    t.start()
-    try:
-        assert held.wait(WAIT)
-        got = migrate.ensure()
-    finally:
-        release.set()
-        t.join(WAIT)
+    got = inference_fixtures.ensure_while_held(cid, WAIT)
     assert got.state == "done"
     assert not _retired(_meta(cid))
     assert "campaign saltmarch: not retired yet" in got.retirement["left"]
@@ -1005,21 +991,7 @@ def test_the_strip_keeps_every_other_key_and_the_catalog(home):
 
 def test_fields_are_stripped_only_after_every_campaign_is_retired(home):
     cid = _legacy_glm()
-    held, release = threading.Event(), threading.Event()
-
-    def holder():
-        with locks.campaign_lock(cid):
-            held.set()
-            release.wait(WAIT)
-
-    t = threading.Thread(target=holder)
-    t.start()
-    try:
-        assert held.wait(WAIT)
-        got = migrate.ensure()
-    finally:
-        release.set()
-        t.join(WAIT)
+    got = inference_fixtures.ensure_while_held(cid, WAIT)
     assert not _retired(_meta(cid))
     assert _conn_meta("glm")["reasoning_effort"] == "high"
     assert "fields" not in retired.read() or "glm" not in retired.read()["fields"]

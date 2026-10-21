@@ -11,6 +11,8 @@ import os
 import re
 import tempfile
 import types
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -560,7 +562,19 @@ def _reject_mark(monkeypatch):
     patch(store_pkg)
 
 
-def test_no_listing_hands_back_an_id_its_own_lookups_refuse(monkeypatch, tmp_path):
+@dataclass(frozen=True)
+class _Planted:
+    """The library `_plant_unusable` builds: what the listings below enumerate."""
+    wroot: Path
+    cid: str
+    ch: str
+    vid: str
+    pc: str
+
+
+def _plant_unusable(monkeypatch, tmp_path) -> _Planted:
+    """A library with one of everything, and a `MARK`-named artifact planted
+    beside the real ones at every level a listing enumerates."""
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
     wroot = worlds.world_root(wid)
@@ -586,35 +600,42 @@ def test_no_listing_hands_back_an_id_its_own_lookups_refuse(monkeypatch, tmp_pat
     (tmp_path / "campaigns" / MARK / "campaign.md").write_text(
         "---\nname: N\nworld: realm\n---\n", encoding="utf-8")
     (wroot / "lore" / f"{MARK}.md").write_text("---\nname: N\n---\n", encoding="utf-8")
+    return _Planted(wroot, cid, ch, vid, pc)
 
+
+# Every enumeration over the planted library, by label: what each hands back.
+_LISTINGS = {
+    "worlds": lambda p: [w["id"] for w in worlds.list_worlds()],
+    "campaigns": lambda p: [c["id"] for c in campaigns.list_campaigns()],
+    "characters": lambda p: [c["id"] for c in characters.list_characters(p.wroot)],
+    "character versions": lambda p: [v["id"] for c in characters.list_characters(p.wroot)
+                                     for v in c["versions"]],
+    "character detail versions": lambda p: [v["id"] for v in
+                                            characters.read_character(p.wroot, p.ch)["versions"]],
+    "character refs": lambda p: characters.character_refs(p.wroot),
+    "pcs": lambda p: [x["id"] for x in pcs.list_pcs(p.wroot)],
+    "pc versions": lambda p: [v["id"] for v in pcs.read_pc(p.wroot, p.pc)["versions"]],
+    "pc refs": lambda p: pcs.pc_refs(p.wroot),
+    "entities": lambda p: [e["id"] for e in entities.list_entities(p.wroot, "lore")],
+    "entity refs": lambda p: [e for _k, e in entities.all_refs(p.wroot)],
+    "greetings": lambda p: [g["id"] for g in greetings.list_greetings(p.wroot)],
+    "scenes": lambda p: [s["id"] for s in scenes.list_scenes(p.cid)],
+    "styles": lambda p: [s["id"] for s in styles.list_styles()],
+    "response presets": lambda p: [x["id"] for x in response_presets.list_presets()],
+    "images": lambda p: [i["name"] for i in assets.list_images(p.wroot, p.ch, p.vid)],
+    "llm connections": lambda p: [c.get("id") for c in llm_connections.list_connections()],
+    "sheet refs": lambda p: [e for _k, e in sheets.list_refs(p.cid)],
+}
+
+
+def test_no_listing_hands_back_an_id_its_own_lookups_refuse(monkeypatch, tmp_path):
+    planted = _plant_unusable(monkeypatch, tmp_path)
     _reject_mark(monkeypatch)
 
-    listings = {
-        "worlds": lambda: [w["id"] for w in worlds.list_worlds()],
-        "campaigns": lambda: [c["id"] for c in campaigns.list_campaigns()],
-        "characters": lambda: [c["id"] for c in characters.list_characters(wroot)],
-        "character versions": lambda: [v["id"] for c in characters.list_characters(wroot)
-                                       for v in c["versions"]],
-        "character detail versions": lambda: [v["id"] for v in
-                                              characters.read_character(wroot, ch)["versions"]],
-        "character refs": lambda: characters.character_refs(wroot),
-        "pcs": lambda: [p["id"] for p in pcs.list_pcs(wroot)],
-        "pc versions": lambda: [v["id"] for v in pcs.read_pc(wroot, pc)["versions"]],
-        "pc refs": lambda: pcs.pc_refs(wroot),
-        "entities": lambda: [e["id"] for e in entities.list_entities(wroot, "lore")],
-        "entity refs": lambda: [e for _k, e in entities.all_refs(wroot)],
-        "greetings": lambda: [g["id"] for g in greetings.list_greetings(wroot)],
-        "scenes": lambda: [s["id"] for s in scenes.list_scenes(cid)],
-        "styles": lambda: [s["id"] for s in styles.list_styles()],
-        "response presets": lambda: [p["id"] for p in response_presets.list_presets()],
-        "images": lambda: [i["name"] for i in assets.list_images(wroot, ch, vid)],
-        "llm connections": lambda: [c.get("id") for c in llm_connections.list_connections()],
-        "sheet refs": lambda: [e for _k, e in sheets.list_refs(cid)],
-    }
     leaked = {}
-    for label, fn in listings.items():
+    for label, listing in _LISTINGS.items():
         try:
-            got = fn()
+            got = listing(planted)
         except Exception as exc:  # noqa: BLE001 - the test's subject: report which listing raised, don't crash
             leaked[label] = f"{type(exc).__name__}: {exc}"
             continue

@@ -247,6 +247,24 @@ def _tailed() -> model_guidance.PreparedMessages:
                                lambda target: "instruct", CONN)
 
 
+_OUTSIDE = {**SCHEMA, "properties": {"title": {"type": "string", "maxLength": 5}}}
+
+# Each refused request, as a builder of its (schema, messages): built per test,
+# so no two tests share a message list or a prepared-messages object.
+_REFUSALS = {
+    "outside": lambda: (_OUTSIDE, _carrying(_OUTSIDE)),
+    "absent": lambda: (SCHEMA, [{"role": "user", "content": "Reply with JSON."}]),
+    # Not `schemas.render`'s spelling.
+    "tojson": lambda: (SCHEMA, [{"role": "system", "content": json.dumps(SCHEMA, indent=2)}]),
+    "assistant": lambda: (SCHEMA, [*_carrying(SCHEMA), {"role": "assistant", "content": "{"}]),
+    "tails": lambda: (SCHEMA, _tailed()),
+    "only-in-an-assistant-turn": lambda: (SCHEMA, [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": schemas.render(SCHEMA)},
+        {"role": "user", "content": "again"}]),
+}
+
+
 @pytest.mark.parametrize(("case", "match"), [
     ("outside", "bound"),
     ("absent", "does not carry"),
@@ -257,23 +275,7 @@ def _tailed() -> model_guidance.PreparedMessages:
 ])
 @pytest.mark.parametrize("stream", [True, False])
 def test_each_refusal_raises_before_any_client_call(case, match, stream):
-    schema, messages = SCHEMA, _carrying(SCHEMA)
-    if case == "outside":
-        schema = {**SCHEMA, "properties": {"title": {"type": "string", "maxLength": 5}}}
-        messages = _carrying(schema)
-    elif case == "absent":
-        messages = [{"role": "user", "content": "Reply with JSON."}]
-    elif case == "tojson":
-        shown = json.dumps(SCHEMA, indent=2)       # not `schemas.render`'s spelling
-        messages = [{"role": "system", "content": shown}]
-    elif case == "assistant":
-        messages = [*messages, {"role": "assistant", "content": "{"}]
-    elif case == "tails":
-        messages = _tailed()
-    elif case == "only-in-an-assistant-turn":
-        messages = [{"role": "user", "content": "go"},
-                    {"role": "assistant", "content": schemas.render(SCHEMA)},
-                    {"role": "user", "content": "again"}]
+    schema, messages = _REFUSALS[case]()
     fake = FakeLLM([["never sent"]])
     holder: dict = {}
     with pytest.raises(ValueError, match=match):
