@@ -1,0 +1,261 @@
+{
+  "schema": "measurement-evidence/1",
+  "subject": "grimoire",
+  "commit": "0e9e7f4be",
+  "coverage_score": null,
+  "coverage_state": "not_assessed",
+  "reason": "The installed measurement rubric cannot represent instrumented metrics whose run results were not audited. Assigning zero would assert unmeasured content; a baseline-only grade would overstate whole-unit coverage.",
+  "scope": "Checked-in source, synthetic fixtures and the stored embedding ranking only; no live provider, private-library, device or new eval experiment.",
+  "counts": {
+    "embedding_queries": 30,
+    "embedding_documents": 100,
+    "parser_records": 132,
+    "continuity_pairs": 39,
+    "history_cases": 10,
+    "investigation_cases": 7
+  },
+  "recorded_embedding_scores": {
+    "recall@1": 0.0,
+    "recall@3": 0.0,
+    "recall@5": 0.0,
+    "recall@10": 0.06666666666666667,
+    "MRR": 0.008888888888888889
+  },
+  "n": 30,
+  "rows": [
+    {
+      "name": "recorded_embedding_baseline_rankings",
+      "importance": 1,
+      "importance_reason": "Provides an informational, reproducible synthetic ranking baseline; it does not select a live embedding provider.",
+      "n": 30,
+      "n_total": 30,
+      "formula": "mean recall@k (k=1,3,5,10); reciprocal rank limited to the stored depth-10 ranking",
+      "consumer": "evals/embed/metrics.py:81 renders the per-shape comparison",
+      "evidence": [
+        "evals/embed/metrics.py:56",
+        "evals/recordings/embed/bow-1-none.json:1",
+        "evals/embed/corpus.json:1"
+      ],
+      "audit_state": "stored_artifact_analysed",
+      "limit": "The checked-in ranking answers every labelled query using known document ids. Recall and MRR were recomputed from this stored artifact without executing a provider or generating new rankings."
+    },
+    {
+      "name": "live_embedding_quality",
+      "importance": 2,
+      "importance_reason": "Informs embedding-model and input-option choices.",
+      "n": null,
+      "n_total": 30,
+      "formula": "paired recall@k and MRR on the labelled corpus",
+      "consumer": "evals/embed/harness.py:91",
+      "evidence": [
+        "evals/embed/harness.py:13"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "The stored bag-of-words ranking is a harness baseline. No live-model ranking was included; its quality remains unaudited."
+    },
+    {
+      "name": "parser_compatibility_outcomes",
+      "importance": 3,
+      "importance_reason": "The offline decide gate guards migration of recorded reply shapes.",
+      "n": null,
+      "n_total": 132,
+      "formula": "intended outcomes preserved per conversion",
+      "consumer": "evals/run.py:133",
+      "evidence": [
+        "evals/gate.py:234"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "The labelled gate records are present. This overview did not rerun the gate or treat the presence of its fixtures as an observed current aggregate."
+    },
+    {
+      "name": "continuity_lexical_admission",
+      "importance": 2,
+      "importance_reason": "Informs token and character candidate floors.",
+      "n": null,
+      "n_total": 39,
+      "formula": "positive admission recall; admitted-pair precision; crowd top-k retention",
+      "consumer": "evals/run.py:96",
+      "evidence": [
+        "evals/continuity_floors/metrics.py:147",
+        "backend/tests/test_continuity_floors_evals.py:63"
+      ],
+      "audit_state": "asserted_reference_aggregates",
+      "limit": "The checked-in behavioral test asserts alone recall 4/28 and precision 4/9, and shared-cast recall 21/28 and precision 21/31. These are source reference expectations, not a new execution result."
+    },
+    {
+      "name": "continuity_semantic_admission",
+      "importance": 2,
+      "importance_reason": "Informs semantic candidate-floor tuning.",
+      "n": null,
+      "n_total": 39,
+      "formula": "admission precision/recall with cosine enabled",
+      "consumer": "evals/continuity_floors/metrics.py:10",
+      "evidence": [
+        "evals/continuity_floors/metrics.py:10"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "The lexical corpus explicitly leaves cosine absent. Semantic-floor quality requires model observations that were outside this audit."
+    },
+    {
+      "name": "packed_history_retrieval",
+      "importance": 2,
+      "importance_reason": "Compares retrieval signals on the evidence actually packed into the prompt.",
+      "n": null,
+      "n_total": 10,
+      "formula": "scene recall@1/3/5 and excerpt recall",
+      "consumer": "evals/history/runner.py:3",
+      "evidence": [
+        "evals/history/graders.py:11",
+        "evals/history/graders.py:5"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "No aggregate run result was included in the checked-in evidence selected for this audit. Instrumentation and synthetic fixtures exist; this is not a claim that the metric has never run. History macro recall includes an empty-gold closed-branch control as 1; this denominator must be distinguished from positive-evidence retrieval recall."
+    },
+    {
+      "name": "history_planning_adoption",
+      "importance": 3,
+      "importance_reason": "Changing the automatic planning default requires a recall gain and an explicit cost bound.",
+      "n": null,
+      "n_total": null,
+      "formula": "paired recall@3 improvement; false triggers; per-planned-turn money",
+      "consumer": "evals/history/planning.py:521",
+      "evidence": [
+        "evals/history/planning.py:521"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "The source gate refuses an absent cost bound and unpriced planning calls. No live adoption table or agreed cost bound was included."
+    },
+    {
+      "name": "epistemic_prompt_leakage",
+      "importance": 2,
+      "importance_reason": "Informs whether planted secrets cross a reader-specific prompt boundary.",
+      "n": null,
+      "n_total": null,
+      "formula": "forbidden token exposure and allowed-token recall",
+      "consumer": "evals/epistemic/runner.py:43",
+      "evidence": [
+        "evals/epistemic/runner.py:43"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "No aggregate run result was included in the checked-in evidence selected for this audit. Instrumentation and synthetic fixtures exist; this is not a claim that the metric has never run."
+    },
+    {
+      "name": "epistemic_live_reply_leakage",
+      "importance": 3,
+      "importance_reason": "The live gate requires clean exposed replies and successful judge coverage.",
+      "n": null,
+      "n_total": null,
+      "formula": "token leakage plus closed-decision judge over exposed replies",
+      "consumer": "evals/epistemic/live.py:230",
+      "evidence": [
+        "evals/epistemic/live.py:206"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "No exposed live replies or calibrated judge outcomes were included. The source distinguishes unjudged/failed judgments from clean ones; it does not establish the judge\u2019s agreement with human truth."
+    },
+    {
+      "name": "investigation_correctness_and_leakage",
+      "importance": 3,
+      "importance_reason": "Adopting the investigation arm requires a live margin, paired sign test and non-worsening leakage.",
+      "n": null,
+      "n_total": 7,
+      "formula": "correctness difference; sign test; text and selection leakage",
+      "consumer": "evals/investigation/runner.py:19",
+      "evidence": [
+        "evals/investigation/graders.py:29",
+        "evals/investigation/graders.py:57"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "The source explicitly says canned offline tools prove the loop and graders rather than model quality. No live comparison table was selected."
+    },
+    {
+      "name": "optional_prose_style_compliance",
+      "importance": 1,
+      "importance_reason": "Provides informational checks for an optional prescriptive prose style.",
+      "n": null,
+      "n_total": null,
+      "formula": "sentence/paragraph variation and lexical construction checks",
+      "consumer": "evals/slop.py:392",
+      "evidence": [
+        "evals/slop.py:16"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "These detectors express optional style-rule compliance using declared structural heuristics. Human writing quality is a different construct; missing human labels are not a defect in the rule-compliance instrument."
+    },
+    {
+      "name": "eval_cost_latency_and_token_completeness",
+      "importance": 2,
+      "importance_reason": "Informs cost and latency tradeoffs between configurations.",
+      "n": null,
+      "n_total": null,
+      "formula": "per-case wall time and separate billed/equivalent/modelled costs",
+      "consumer": "evals/runfile.py:99",
+      "evidence": [
+        "evals/runner.py:117",
+        "evals/history/planning.py:497"
+      ],
+      "audit_state": "result_not_audited",
+      "limit": "No saved run aggregates were selected. A confirmed accounting exception remains: history planning drops missing token components before dividing by all turns, so its displayed tokens/turn can be an unmarked lower bound."
+    },
+    {
+      "name": "synthetic_compiled_cache_benchmarks",
+      "unit": "scripts",
+      "audit_state": "result_not_audited",
+      "evidence": [
+        "backend/scripts/benchmark_compiled.py:1",
+        "backend/scripts/bench_overview.py:1",
+        "backend/scripts/bench_overview.py:27"
+      ],
+      "limit": "Synthetic endpoint timings and counters support cache-adoption decisions. No benchmark output or speed claim was audited, and no benchmark was executed."
+    },
+    {
+      "name": "synthetic_membership_cost_gate",
+      "unit": "scripts",
+      "audit_state": "result_not_audited",
+      "evidence": [
+        "backend/scripts/benchmark_membership.py:1"
+      ],
+      "limit": "The instrument compares capture/derive/index costs on throwaway synthetic inputs. Saved results and the adoption decision were not audited."
+    },
+    {
+      "name": "backend_session_performance_budget",
+      "unit": "scripts",
+      "audit_state": "result_not_audited",
+      "evidence": [
+        "scripts/profile_report.py:29",
+        "scripts/profile_report.py:212"
+      ],
+      "limit": "The instrument compares compatible session profiles using a five-run median, plus manifest and skip checks. Its current performance conclusions were not audited."
+    },
+    {
+      "name": "backend_phase_timing",
+      "unit": "backend-tests",
+      "audit_state": "result_not_audited",
+      "evidence": [
+        "backend/tests/phase_profile.py:1",
+        "backend/tests/phase_profile.py:251",
+        "backend/tests/phase_profile.py:384"
+      ],
+      "limit": "Opt-in pytest phase, fixture, wall-time and operation measurements exist. Current profile outputs were not audited; instrumentation presence is not a validated performance result."
+    }
+  ],
+  "findings": [
+    {
+      "id": "planning-token-completeness",
+      "severity": "medium",
+      "title": "History-planning tokens per turn can hide partial reporting",
+      "detail": "A turn with unknown planner counts and known check counts yields a numeric tokens/turn value: _per_turn removes None components then divides by every row. The summary prints that value without a count-completeness marker. No model experiment was needed to establish this statement order.",
+      "evidence": [
+        "evals/history/planning.py:497",
+        "evals/history/planning.py:560"
+      ],
+      "blast_radius": "Token comparisons used while reviewing planning overhead"
+    }
+  ],
+  "not_audited": [
+    "Live providers, live run files and private libraries were excluded at the user\u2019s request.",
+    "No new experiment or evaluation suite was run. The recorded embedding baseline was analysed as stored data.",
+    "This is an ungraded inventory of the selected measurement evidence, not a test pass rate, runtime-correctness score or claim that instrumentation is absent.",
+    "Operational telemetry and performance profiles without selected run artifacts were not evaluated for production distributions."
+  ]
+}

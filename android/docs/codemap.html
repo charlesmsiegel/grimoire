@@ -190,8 +190,8 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">android — Codebase Atlas</h1>
-  <p class="doc-sub">Source-backed architecture, static analysis and explicit evidence limits.</p>
-  <div class="doc-meta">generated 2026-10-20 · 9d4985eb3 · 6 files, 1069 LOC</div>
+  <p class="doc-sub">Source maps, behavioral boundaries and review priorities</p>
+  <div class="doc-meta">generated 2026-10-21 · 0e9e7f4be · tracked source; existing coverage</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -210,7 +210,7 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
   font-size:10.5px;padding-right:2px}
 .co-nav .co-sep{color:var(--text-faint,#5f7191);opacity:.6}
 @media(max-width:720px){.co-nav{padding-left:16px;padding-right:16px}}
-</style><nav class="co-nav" aria-label="code overview"><div class="co-row"><a href="../../docs/codemap.html">⌂ Overall Code Map</a><span class="co-sep">/</span><span class="co-here">android</span></div><div class="co-row"><span class="co-lbl">android</span><a href="summary.html">Summary</a><a href="#" aria-current="page">Code Map</a><a href="health.html">Health</a><a href="measurement.html">Measurement</a><a href="theory.html">Theory</a></div><div class="co-row"><span class="co-lbl">Other packages · Code Map</span><a href="../../backend/src/grimoire/store/docs/codemap.html">grimoire-store</a><a href="../../backend/src/grimoire/routes/docs/codemap.html">grimoire-api</a><a href="../../backend/src/grimoire/docs/codemap.html">grimoire-llm</a><a href="../../backend/tests/docs/codemap.html">backend-tests</a><a href="../../frontend/docs/codemap.html">frontend</a><a href="../../evals/docs/codemap.html">evals</a><a href="../../scripts/docs/codemap.html">scripts</a></div></nav><!-- /code-overview:nav -->
+</style><nav class="co-nav" aria-label="code overview"><div class="co-row"><a href="../../docs/codemap.html">⌂ Overall Code Map</a><span class="co-sep">/</span><span class="co-here">android</span></div><div class="co-row"><span class="co-lbl">android</span><a href="summary.html">Summary</a><a href="#" aria-current="page">Code Map</a><a href="health.html">Health</a><a href="measurement.html">Measurement</a><a href="theory.html">Theory</a></div><div class="co-row"><span class="co-lbl">Other packages · Code Map</span><a href="../../backend/src/grimoire/store/docs/codemap.html">grimoire-store</a><a href="../../backend/src/grimoire/routes/docs/codemap.html">grimoire-api</a><a href="../../backend/src/grimoire/docs/codemap.html">grimoire-providers-prompts</a><a href="../../backend/tests/docs/codemap.html">backend-tests</a><a href="../../frontend/docs/codemap.html">frontend</a><a href="../../evals/docs/codemap.html">evals</a><a href="../../scripts/docs/codemap.html">scripts</a><a href="../../backend/src/grimoire/decisions/docs/codemap.html">grimoire-decisions</a><a href="../../backend/src/grimoire/inference/docs/codemap.html">grimoire-inference</a><a href="../../backend/src/grimoire/llm/docs/codemap.html">grimoire-llm</a><a href="../../backend/src/grimoire/tool_calls/docs/codemap.html">grimoire-tool-calls</a></div></nav><!-- /code-overview:nav -->
 <!--DOC_NAV-->
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
@@ -222,41 +222,14 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-<div class="card hero"><h2>One product, a different process host</h2><p>The Android APK hosts the working-tree Python backend and freshly built React frontend. Kotlin supplies activity/service lifetime, WebView integration and notifications; it does not own campaign rules. The process-wide Python server binds loopback, and the activity opens the same shared application over HTTP. <code>android/app/build.gradle.kts:9</code>, <code>android/app/build.gradle.kts:95</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt:28</code>.</p></div>
-<div class="callout warn"><strong>The dependency graph misses the main bridge.</strong> Its Kotlin summary has zero recognized first-party imports because these same-package classes refer to each other without imports. It also cannot recover the dynamic Chaquopy module/callback edge. The manual map below expresses the observed lifecycle coupling; empty graph cycles do not establish decoupling. <code>android/app/src/main/java/app/grimoire/MainActivity.kt:80</code>, <code>android/app/src/main/java/app/grimoire/ServerService.kt:33</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:138</code>.</div>
-<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
-flowchart TD
- G["Gradle shared sources and assets"] --> R["ServerRuntime and AssetExtractor"]
- A["MainActivity and WebView"] --> S["ServerService"]
- S --> R
- R --> P["android_entry Python"]
- P --> B["Shared FastAPI app"]
- B --> K["RunCallback bridge"]
- K --> S
- S --> N["RunNotifier"]
- N --> A
- A --> B
-</pre></div></div>
-<h3>Entry points and reading order</h3><ol>
-<li><code>android/app/build.gradle.kts:60</code>: runtime dependency compatibility, shared Python source and asset staging.</li>
-<li><code>android/app/src/main/AndroidManifest.xml:33</code>: exported activity, deep link and private dataSync service.</li>
-<li><code>android/app/src/main/java/app/grimoire/MainActivity.kt:72</code>: overlap server/WebView startup, platform file integration and intent handling.</li>
-<li><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:85</code>: one process-wide startup latch, extracted assets and callback publication.</li>
-<li><code>android/app/src/main/python/android_entry.py:197</code>: set environment, bind before imports, install run sinks and serve one app.</li>
-<li><code>android/app/src/main/java/app/grimoire/ServerService.kt:27</code> and <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:85</code>: promotion and terminal notification are different jobs.</li>
-<li><code>backend/tests/test_android_entry.py:200</code>: Python socket/startup-order checks; these do not test Kotlin device lifecycle.</li>
-</ol>
-<h3>Limits of this view</h3><p>Inventory excludes Gradle Kotlin DSL, manifest/resource XML and binary assets from its source totals, even though they determine packaging and permissions. This review read the Gradle/manifest/network contracts directly. Python entry is the top ranked source hotspot; build and manifest changes are listed as unranked churn. <code>android/app/build.gradle.kts:113</code>, <code>android/app/src/main/AndroidManifest.xml:14</code>, <code>android/app/src/main/res/xml/network_security_config.xml:11</code>.</p><p class="dim">Android health is ungraded because no Kotlin specialist is installed. Coverage tabs are omitted; the zero in-root test share does not mean Android behavior has no tests, since socket tests live under backend/tests. No APK build, emulator, device or current performance/quality result is claimed. The startup budget in the README is a target to measure, not an observed result. <code>backend/tests/test_android_entry.py:1</code>, <code>android/README.md:72</code>.</p>
-
-<p class="dim">The citation checker does not recognize the .kts extension; the Gradle citations were additionally checked for file existence, line bounds and current content with a standard-library verifier.</p>
-
+<h2>android</h2><p>Android hosts the same React application and Python backend inside one process. Kotlin owns WebView and service lifetime; Python binds a local server and resolves the user-selected library under app storage.</p><p>Server startup and run registries are process-local. Saved records survive process reclamation, but unfinished runs are not durable jobs. No Kotlin specialist or device build was run for this report.</p><h3>Reading order</h3><ol><li><code>android/app/src/main/java/app/grimoire/MainActivity.kt:30</code> — Start at the WebView host.</li><li><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:51</code> — Read process-wide server ownership.</li><li><code>android/app/src/main/java/app/grimoire/ServerService.kt:1</code> — Follow foreground-service lifetime.</li><li><code>android/app/src/main/java/app/grimoire/RunNotifier.kt:1</code> — Inspect completion notification and scene identity.</li><li><code>android/app/src/main/python/android_entry.py:1</code> — See port binding before expensive imports.</li></ol><p class="dim">The inventory excludes generated docs. This is a tracked-source audit at 0e9e7f4be. Existing coverage is line coverage from the recorded artifacts, not a fresh test result or a claim about model quality.</p><div class="callout warn"><strong>Coverage observations unavailable for this scope.</strong> The selected artifact instruments production code elsewhere. No matching file observations were found here, so the Coverage tab is omitted; that is not a claim that this unit has no tests or has measured zero-percent coverage.</div>
 </section>
 <section class="panel" id="inventory" role="tabpanel">
 
 
 <div class="kpis">
   <div class="kpi accent"><div class="n">6</div><div class="l">source files</div></div>
-  <div class="kpi"><div class="n">1,069</div><div class="l">lines of code</div></div>
+  <div class="kpi"><div class="n">956</div><div class="l">lines of code</div></div>
   <div class="kpi"><div class="n">2</div><div class="l">languages</div></div>
   <div class="kpi warn"><div class="n">0%</div><div class="l">test code share</div></div>
 </div>
@@ -264,15 +237,15 @@ flowchart TD
 <h2>Languages</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
-<tbody><tr><td>Kotlin</td><td class='num'>719</td><td class='num'>4</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>67.3%</td></tr>
-<tr><td>Python</td><td class='num'>223</td><td class='num'>1</td><td><div class="bar "><i style="width:31.0%"></i></div></td><td class='num'>20.9%</td></tr>
-<tr><td>Markdown</td><td class='num'>127</td><td class='num'>1</td><td><div class="bar "><i style="width:17.7%"></i></div></td><td class='num'>11.9%</td></tr></tbody></table></div>
+<tbody><tr><td>Kotlin</td><td class='num'>719</td><td class='num'>4</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>75.2%</td></tr>
+<tr><td>Python</td><td class='num'>223</td><td class='num'>1</td><td><div class="bar "><i style="width:31.0%"></i></div></td><td class='num'>23.3%</td></tr>
+<tr><td>Markdown</td><td class='num'>14</td><td class='num'>1</td><td><div class="bar "><i style="width:1.9%"></i></div></td><td class='num'>1.5%</td></tr></tbody></table></div>
 <p class="dim">Coverage: 26 file(s) in unrecognized languages are not counted above (.png (10), .xml (7), .kts (3), (no ext) (2), .properties (2)).</p>
 
 <h2>Top-level directories</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
-<tbody><tr><td><code>android/</code></td><td class='num'>1,069</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>android/</code></td><td class='num'>956</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr></tbody></table></div>
 
 <div class="grid cols-2">
 <div>
@@ -340,7 +313,7 @@ flowchart TD
 
 <h2>Runtime resources</h2>
 <p class="dim">Files loaded rather than imported — templates, prompts, schemas, embedded data — and the
-code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 13 computed path(s) and 0 file(s) hit the reporting cap.</p>
+code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 11 computed path(s) and 0 file(s) hit the reporting cap.</p>
 
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Asset</th><th class="num">Loaders</th><th>Loaded at</th></tr></thead>
@@ -353,7 +326,7 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">27</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi accent"><div class="n">29</div><div class="l">commits (24 months ago)</div></div>
   <div class="kpi"><div class="n">5</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">android_entry.py</div><div class="l">top hotspot</div></div>
 </div>
@@ -366,7 +339,7 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 <script type="application/json">{"items":[{"name":"android/app/src/main/python/android_entry.py","value":223,"metric":10,"meta":"23 branches \u00b7 2 authors"},{"name":"android/app/src/main/java/app/grimoire/MainActivity.kt","value":250,"metric":6,"meta":"11 branches \u00b7 1 authors"},{"name":"android/app/src/main/java/app/grimoire/RunNotifier.kt","value":167,"metric":4,"meta":"12 branches \u00b7 1 authors"},{"name":"android/app/src/main/java/app/grimoire/ServerRuntime.kt","value":204,"metric":4,"meta":"11 branches \u00b7 1 authors"},{"name":"android/app/src/main/java/app/grimoire/ServerService.kt","value":98,"metric":3,"meta":"5 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":10}</script>
 
 <h2>Hotspot ranking</h2>
-<p class="dim">Score = commits × (branch points + 1). Tests excluded. 27 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: android/README.md (8), android/app/build.gradle.kts (8), android/app/src/main/AndroidManifest.xml (5).</p>
+<p class="dim">Score = commits × (branch points + 1). Tests excluded. 27 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: android/README.md (9), android/app/build.gradle.kts (9), android/app/src/main/AndroidManifest.xml (5).</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
 <tbody><tr><td><code>android/app/src/main/python/android_entry.py</code></td><td class='num'>10</td><td class='num'>23</td><td class='num'>223</td><td class='num'>2</td><td class='num' data-sort='240'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
@@ -380,111 +353,31 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 </section>
 <section class="panel" id="flows" role="tabpanel">
 
-<h2>Startup and run lifetime</h2><h3>Report a bound port before importing the app</h3>
-<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
-sequenceDiagram
- participant A as MainActivity
- participant S as ServerService
- participant R as ServerRuntime
- participant P as Python entry
- participant B as Shared backend
- A->>S: startService
- A->>R: ensureStarted
- R->>R: Latch startup and create thread
- R->>R: Extract shared assets if update stamp changed
- R->>P: start_server with HOME and asset paths
- P->>P: Bind recorded port or fallback listener
- P-->>R: onPort after listen
- R-->>A: Ready callback on UI thread
- A->>P: WebView request waits in listen backlog
- P->>B: Import module-level app
- P->>B: Install run sinks
- P->>B: uvicorn on existing socket
- B-->>A: Shared frontend
- alt startup fails after port report
- P->>P: Close listener in finally
- R-->>A: Publish failure text
- end
-</pre></div></div>
-<p>The ready callback means the socket is listening, not that application imports finished. A later failure closes the listener explicitly, and the Python tests verify that ordering without a device. The runtime latch currently permits no in-process retry after bootstrap failure. <code>android/app/src/main/python/android_entry.py:219</code>, <code>android/app/src/main/python/android_entry.py:254</code>, <code>backend/tests/test_android_entry.py:200</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:85</code>.</p>
-<h3>Keep work alive, then make its outcome addressable</h3>
-<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
-sequenceDiagram
- participant B as Backend run registry
- participant C as RunCallback
- participant S as ServerService
- participant N as RunNotifier
- participant A as MainActivity
- B->>C: Live count crosses zero
- C->>S: onRunsChanged
- alt live work exists
- S->>N: Build ongoing notification
- S->>S: startForeground
- else no work remains
- S->>S: stopForeground
- end
- B->>C: Notifiable run terminal
- C->>N: State, class and stable scene identity
- alt cancelled or app visible or permission denied
- N->>N: Skip completion notification
- else background completion
- N->>A: PendingIntent with encoded identity URI
- A->>A: onCreate or onNewIntent
- A->>B: Shared SPA resolves current scene by identity
- end
-</pre></div></div>
-<p>Service callbacks are installed before server startup can produce a run. Completion permission and foreground promotion failures are degraded behavior, not exceptions allowed to cancel backend siblings. That does not guarantee an unpromoted process survives reclamation. URI components are encoded at both native handoffs. <code>android/app/src/main/java/app/grimoire/ServerService.kt:27</code>, <code>android/app/src/main/java/app/grimoire/ServerService.kt:80</code>, <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:95</code>, <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:155</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt:172</code>.</p>
-
+<h2>Startup</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+Activity-&gt;&gt;Runtime: ensureStarted
+Runtime-&gt;&gt;Python: bootstrap on server thread
+Python-&gt;&gt;Socket: bind and listen
+Python--&gt;&gt;Runtime: publish port
+Runtime--&gt;&gt;WebView: local origin
+Python-&gt;&gt;Backend: run server</pre></div></div><h2>Background run</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+Backend-&gt;&gt;Callback: live count crosses zero
+Callback-&gt;&gt;Service: promote while work is active
+Backend-&gt;&gt;Notifier: terminal turn with scene identity
+Notifier--&gt;&gt;Activity: tap resolves current scene</pre></div></div><h3>Seams to review</h3><p>Server startup and run registries are process-local. Saved records survive process reclamation, but unfinished runs are not durable jobs. No Kotlin specialist or device build was run for this report.</p><p><code>android/app/src/main/java/app/grimoire/MainActivity.kt:30</code> · <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:51</code> · <code>android/app/src/main/java/app/grimoire/ServerService.kt:1</code></p>
 </section>
 <section class="panel" id="boundaries" role="tabpanel">
 
-<h2>Platform concerns surround shared product code</h2><div class="tbl-wrap"><table><thead><tr><th>Concern</th><th>Owner</th><th>Assessment</th></tr></thead><tbody>
-<tr><td>Product code and prompt assets</td><td><code>android/app/build.gradle.kts:95</code>, <code>android/app/build.gradle.kts:143</code></td><td><span class="badge good">shared sources</span> No native campaign implementation.</td></tr>
-<tr><td>Server thread, startup outcome, asset extraction</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:51</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:191</code></td><td><span class="badge good">process owner</span> Assets are extracted for filesystem-based loaders.</td></tr>
-<tr><td>Socket, Python environment, backend sinks</td><td><code>android/app/src/main/python/android_entry.py:197</code></td><td><span class="badge good">startup boundary</span> HOME keeps the shared bootstrap pointer editable.</td></tr>
-<tr><td>Process protection during work</td><td><code>android/app/src/main/java/app/grimoire/ServerService.kt:27</code></td><td><span class="badge warn">platform refusal possible</span> Promotion failure is logged and swallowed.</td></tr>
-<tr><td>Page history, chooser and download integration</td><td><code>android/app/src/main/java/app/grimoire/MainActivity.kt:115</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt:239</code></td><td><span class="badge good">activity owner</span> Backend rules remain HTTP operations.</td></tr>
-<tr><td>Notification intent and permission</td><td><code>android/app/src/main/java/app/grimoire/RunNotifier.kt:85</code>, <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:145</code></td><td><span class="badge good">separate from work</span> No notification does not mean no persisted result.</td></tr>
-</tbody></table></div>
-<h3>Storage ownership</h3><p>APK assets become an internal web directory rebuilt on package update. Library HOME is the external app directory when available, with an internal fallback; persistent port and USB sentinels are device metadata beside the library rather than campaign records. <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:131</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:194</code>, <code>android/app/src/main/python/android_entry.py:52</code>. The Python startup performs a best-effort permission walk and broadens file mode bits for USB access; the assumption is Android app-directory isolation, not POSIX permissions as the privacy boundary. <code>android/app/src/main/python/android_entry.py:26</code>, <code>android/app/src/main/python/android_entry.py:74</code>.</p>
-<div class="callout warn"><strong>Loopback host is wider than the app origin.</strong> WebView navigation accepts localhost or 127.0.0.1 without comparing scheme or the bound port. The comment describes an origin boundary, but the implementation describes a host boundary. No additional origin isolation should be inferred. <code>android/app/src/main/java/app/grimoire/MainActivity.kt:221</code>.</div>
-<p>Android network-security XML restricts Java/WebView cleartext to loopback; it explicitly does not govern Python httpx sockets. A LAN provider configured in Python therefore has different transport policy from an external WebView link. <code>android/app/src/main/res/xml/network_security_config.xml:2</code>.</p>
-<p class="dim">No cycles were detected by the textual graph, but same-package Kotlin calls and the Chaquopy callback path are missing edges. Their cross-language ownership is shown manually in Overview and Critical Flows, not established by graph sparsity.</p>
-
+<h2>Ownership</h2><p>Kotlin owns Android lifecycle and notifications. Python owns server startup. The shared backend and frontend retain product behavior, persistence and user interaction.</p><p><code>android/app/src/main/java/app/grimoire/MainActivity.kt:30</code> · <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:51</code> · <code>android/app/src/main/java/app/grimoire/ServerService.kt:1</code> · <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:1</code> · <code>android/app/src/main/python/android_entry.py:1</code></p><h3>Interpreting the dependency graph</h3><p>The graph includes facade re-exports, type/test references and textual runtime-load candidates. A strongly connected component is a review lead, not proof of a runtime import failure. Package facades can form return edges to their implementation owners; do not delete public aliases just to flatten the graph. Load paths assembled entirely at runtime are invisible.</p>
 </section>
 <section class="panel" id="invariants" role="tabpanel">
 
-<h2>The process is the recovery boundary</h2><div class="tbl-wrap"><table><thead><tr><th>Invariant</th><th>Enforcement</th><th>Limit</th></tr></thead><tbody>
-<tr><td>One server starts per process.</td><td><span class="badge good">synchronized latch</span> <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:85</code></td><td>No retry transition after startup failure.</td></tr>
-<tr><td>The reported port belongs to a listening socket.</td><td><span class="badge good">bind before callback</span> <code>android/app/src/main/python/android_entry.py:221</code></td><td>Imports and app readiness follow later; explicit finally closes on failure.</td></tr>
-<tr><td>Origin normally survives relaunch.</td><td><span class="badge warn">best effort</span> <code>android/app/src/main/python/android_entry.py:163</code></td><td>A busy port or failed port-file write can change origin and strand its browser storage.</td></tr>
-<tr><td>Notification taps survive scene rename.</td><td><span class="badge good">stable identity</span> <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:155</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt:154</code></td><td>The shared SPA resolves the identity; deletion can still leave no target.</td></tr>
-<tr><td>Work survives while the phone is locked.</td><td><span class="badge warn">conditional</span> <code>android/app/src/main/java/app/grimoire/ServerService.kt:66</code></td><td>Foreground promotion can fail and does not turn process memory into durable jobs.</td></tr>
-<tr><td>Navigation stays on the exact app origin.</td><td><span class="badge warn">host only</span> <code>android/app/src/main/java/app/grimoire/MainActivity.kt:228</code></td><td>No scheme/port equality check.</td></tr>
-</tbody></table></div>
-<h3>Failure and concurrency</h3><p>The synchronized runtime publishes one startup result; volatile fields bridge foreground/service state across threads. Port listeners marshal UI changes themselves. Backend-to-Kotlin callbacks and notification/promotion operations log failures and continue, keeping platform UI errors away from backend task groups. <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:54</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:93</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:152</code>, <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:126</code>.</p>
-<h3>Review priorities</h3><div class="callout warn"><strong>1. Do not read “lossless” as active-run durability.</strong> The runtime uses that word for process reclaim, but its service exists precisely because reclaim loses in-memory generation. A refused promotion is logged; the adjacent assurance that the reply still reaches disk is conditional on the process remaining alive. <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:49</code>, <code>android/app/src/main/java/app/grimoire/ServerService.kt:13</code>, <code>android/app/src/main/java/app/grimoire/ServerService.kt:80</code>.</div>
-<ol start="2"><li><strong>Failed startup is terminal until process restart.</strong> started remains latched even after bootstrap publishes failure; another ensureStarted returns immediately. This is an explicit missing transition if adding a Retry action. <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:85</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:176</code>.</li>
-<li><strong>SDK upgrades require layout/lifecycle work.</strong> targetSdk is held at 34 for edge-to-edge insets, and pure-Python dependency compatibility is separately pinned. Treat build/manifest files as load-bearing despite their omission from source ranking. <code>android/app/build.gradle.kts:22</code>, <code>android/app/build.gradle.kts:71</code>.</li>
-<li><strong>Host-only navigation does not isolate the bound server origin.</strong> A link to another loopback port stays in the WebView; source alone establishes the mismatch, not an exploit or device test. <code>android/app/src/main/java/app/grimoire/MainActivity.kt:228</code>.</li></ol>
-<p class="dim">Health remains ungraded without Kotlin analysis. Python tests cover socket/startup ordering, not full Android service/permission behavior; no APK or device verification ran here. <code>backend/tests/test_android_entry.py:1</code>.</p>
-
-<h3>Reconciliation of earlier findings</h3><p class="dim">No earlier Boundaries or Invariants fragment was recovered for this package. There was therefore no prior risk/cycle checklist to carry forward; the process, startup, navigation and graph-coverage limits above come from the current source.</p>
-
+<h2>Contract and its limit</h2><p>The preferred port normally preserves WebView origin across launches. A busy port or failed port-record write can change that origin. Notifications carry rename-stable scene identity.</p><p><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:51</code> · <code>android/app/src/main/java/app/grimoire/ServerService.kt:1</code> · <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:1</code></p><h3>Review priority</h3><div class="callout warn">Server startup and run registries are process-local. Saved records survive process reclamation, but unfinished runs are not durable jobs. No Kotlin specialist or device build was run for this report.</div><h3>Analysis limits</h3><p>The automated LLM detector recognizes SDK-shaped calls and can miss this application’s wrappers and direct HTTP transports. An omitted LLM Ops tab does not mean this code makes no model calls. Textual dependency/load edges and checker findings need semantic review before fixes.</p><p class="dim">Health stays ungraded: no Kotlin specialist is available. Python glue was examined by the repository-wide Python doctor; that does not grant Kotlin coverage.</p><h3>Concrete unresolved cases</h3><div class="card"><h4>Navigation checks loopback host, not exact origin</h4><p>MainActivity accepts localhost or 127.0.0.1 without comparing the serving scheme and port. A busy preferred port or failed record write can also change the WebView origin across launches. No exploit or device experiment was performed.</p><p><code>android/app/src/main/java/app/grimoire/MainActivity.kt:228</code> · <code>android/app/src/main/python/android_entry.py:176</code> · <code>android/app/src/main/python/android_entry.py:181</code></p></div><div class="card"><h4>Startup failure has no in-process retry transition</h4><p>The port callback reports a listening socket before backend imports establish readiness. Python closes the socket on failure, while Kotlin retains the started latch: another ensureStarted returns until the process restarts.</p><p><code>android/app/src/main/python/android_entry.py:221</code> · <code>android/app/src/main/python/android_entry.py:254</code> · <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:85</code> · <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:178</code></p></div><h3>Reconciliation with the previous atlas</h3><p>Prior detector totals and old file coordinates were replaced by fresh analysis. Concrete unresolved cases above remain open. Earlier assurances based on source-shape tests are withdrawn: those tests were removed in the suite cleanup at 0e9e7f4be and never established runtime exclusion, atomicity or provider correctness.</p><h3>Process survival remains conditional</h3><p>Foreground promotion and notification callbacks can fail; they do not turn process-local runs into durable jobs. Gradle, manifests and target-SDK decisions remain load-bearing even where the source inventory does not classify their extension. This audit built no APK and exercised no device lifecycle.</p><p><code>android/app/src/main/java/app/grimoire/ServerService.kt:66</code> · <code>android/app/build.gradle.kts:30</code> · <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:49</code></p>
 </section>
 <section class="panel" id="glossary" role="tabpanel">
 
-<h2>Native names describe lifetimes</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Code</th><th>Meaning</th></tr></thead><tbody>
-<tr><td>Runtime</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:49</code></td><td>Process-wide Python/server owner; distinct from activity and service instances.</td></tr>
-<tr><td>Ready port</td><td><code>android/app/src/main/python/android_entry.py:219</code></td><td><span class="badge warn">not app readiness</span> Bound/listening socket before heavy imports.</td></tr>
-<tr><td>Foreground</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:67</code>, <code>android/app/src/main/java/app/grimoire/ServerService.kt:66</code></td><td><span class="badge warn">two meanings</span> Activity visibility suppresses completion notices; foreground service promotion protects process lifetime.</td></tr>
-<tr><td>Scene identity</td><td><code>android/app/src/main/java/app/grimoire/RunNotifier.kt:79</code></td><td>Stable target carried by notification; filename/slug may already have changed.</td></tr>
-<tr><td>HOME</td><td><code>android/app/src/main/python/android_entry.py:21</code></td><td>Device app-home boundary, not a permanent GRIMOIRE_HOME override; the storage pointer can still select another library.</td></tr>
-<tr><td>Source build stamp</td><td><code>android/app/build.gradle.kts:125</code></td><td>Shared source identity generated at build time; the packaged runtime adds its own Python/dependency identity.</td></tr>
-</tbody></table></div>
-
+<h2>Domain to code</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Meaning</th></tr></thead><tbody><tr><td>runtime</td><td>process-wide embedded server</td></tr><tr><td>origin</td><td>loopback scheme, host and port; persistence is best effort</td></tr><tr><td>foreground service</td><td>Android lifetime protection during active work</td></tr><tr><td>scene identity</td><td>rename-stable notification target</td></tr></tbody></table></div><p><code>android/app/src/main/java/app/grimoire/MainActivity.kt:30</code></p>
 </section><!--DOC_BODY--></main>
-<footer class="doc">Automated tabs use installed code-visualization analyzers. Judgment tabs cite sampled source reading. Coverage omitted by user choice; custom model wrappers and dynamic resource loads have stated detection gaps.</footer>
+<footer class="doc"></footer>
 <script>
 (function(){
   const btns=[...document.querySelectorAll('nav.tabs button')];

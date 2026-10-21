@@ -1,0 +1,157 @@
+{
+  "schema": "code-overview/1",
+  "generated": "2026-10-21",
+  "packages": [
+    {
+      "name": "grimoire-store",
+      "roots": [
+        "backend/src/grimoire/store"
+      ],
+      "docs": "backend/src/grimoire/store/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "grimoire-api",
+      "roots": [
+        "backend/src/grimoire/routes",
+        "backend/src/grimoire/main.py",
+        "backend/src/grimoire/__init__.py",
+        "backend/src/grimoire/runner.py",
+        "backend/src/grimoire/cache_warm.py"
+      ],
+      "docs": "backend/src/grimoire/routes/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "grimoire-providers-prompts",
+      "roots": [
+        "backend/src/grimoire/adapters.py",
+        "backend/src/grimoire/anthropic.py",
+        "backend/src/grimoire/catalog.py",
+        "backend/src/grimoire/claude_agent.py",
+        "backend/src/grimoire/content_parts.py",
+        "backend/src/grimoire/deadline.py",
+        "backend/src/grimoire/draws.py",
+        "backend/src/grimoire/embeddings.py",
+        "backend/src/grimoire/health.py",
+        "backend/src/grimoire/llm_capture.py",
+        "backend/src/grimoire/llm_errors.py",
+        "backend/src/grimoire/llm_reasoning.py",
+        "backend/src/grimoire/llm_sampling.py",
+        "backend/src/grimoire/llm_usage.py",
+        "backend/src/grimoire/model_guidance.py",
+        "backend/src/grimoire/model_schema.py",
+        "backend/src/grimoire/openai_compatible.py",
+        "backend/src/grimoire/openrouter.py",
+        "backend/src/grimoire/prompts.py",
+        "backend/src/grimoire/schemas.py",
+        "backend/src/grimoire/template_paths.py",
+        "backend/src/grimoire/wire.py",
+        "templates"
+      ],
+      "docs": "backend/src/grimoire/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "backend-tests",
+      "roots": [
+        "backend/tests"
+      ],
+      "docs": "backend/tests/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "frontend",
+      "roots": [
+        "frontend"
+      ],
+      "docs": "frontend/docs",
+      "language": "typescript",
+      "doctor": "typescript-code-doctor"
+    },
+    {
+      "name": "evals",
+      "roots": [
+        "evals"
+      ],
+      "docs": "evals/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "scripts",
+      "roots": [
+        "scripts",
+        "backend/scripts",
+        ".agents/skills/populate-world-content/scripts",
+        ".agents/skills/world-card-integration/scripts",
+        "backend/src/grimoire/cache.py",
+        "backend/src/grimoire/compiled_build.py",
+        "backend/src/grimoire/where.py"
+      ],
+      "docs": "scripts/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "android",
+      "roots": [
+        "android"
+      ],
+      "docs": "android/docs",
+      "language": "kotlin",
+      "doctor": ""
+    },
+    {
+      "name": "grimoire-decisions",
+      "roots": [
+        "backend/src/grimoire/decisions"
+      ],
+      "docs": "backend/src/grimoire/decisions/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "grimoire-inference",
+      "roots": [
+        "backend/src/grimoire/inference"
+      ],
+      "docs": "backend/src/grimoire/inference/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "grimoire-llm",
+      "roots": [
+        "backend/src/grimoire/llm"
+      ],
+      "docs": "backend/src/grimoire/llm/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    },
+    {
+      "name": "grimoire-tool-calls",
+      "roots": [
+        "backend/src/grimoire/tool_calls"
+      ],
+      "docs": "backend/src/grimoire/tool_calls/docs",
+      "language": "python",
+      "doctor": "python-code-doctor"
+    }
+  ],
+  "notes": [
+    "Existing package scopes recovered from Git history; four module-to-package moves now receive separate reports by user request.",
+    "The former grimoire-llm unit is named grimoire-providers-prompts; grimoire-llm now identifies the llm package.",
+    "Android stays one Kotlin/Python packaging unit with ungraded health; no Kotlin specialist is installed.",
+    "Scripts include shell and PowerShell with incomplete semantic coverage; installed skill helper roots are architectural context, excluded from root-doctor health analysis.",
+    "Reports use repository source and synthetic fixtures only; live providers and private libraries are not accessed.",
+    "Scripts health is ungraded as a whole because Python analysis does not establish shell/PowerShell or installed-helper coverage. Root health excludes ungraded units and uses the completed-category intersection across Python and TypeScript.",
+    "Repository and eval measurement grades are omitted: the installed rubric cannot encode result-not-audited without a false zero or pass. Evidence remains in docs/measurement-audit.json; a separate stored-baseline report is not rolled into coverage.",
+    "Scripts and backend-tests contain performance instruments whose results were not audited. Their measurement pages/grades are omitted, with explicit evidence states in docs/measurement-audit.json.",
+    "Incomplete doctor categories were rerun with 900-second and 8192-MiB limits, plus a 16384-MiB import-analysis attempt. Terminal analyses use independently reviewed, result-preserving import-search pruning and ordered TypeScript file batches. Final root health categories: complexity, correctness, design, duplication, hygiene, security, tests."
+  ]
+}

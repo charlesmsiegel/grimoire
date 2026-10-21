@@ -190,8 +190,8 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">scripts — Codebase Atlas</h1>
-  <p class="doc-sub">Source-backed architecture, static analysis and explicit evidence limits.</p>
-  <div class="doc-meta">generated 2026-10-20 · 9d4985eb3 · 28 files, 9452 LOC</div>
+  <p class="doc-sub">Source maps, behavioral boundaries and review priorities</p>
+  <div class="doc-meta">generated 2026-10-21 · 0e9e7f4be · tracked source; existing coverage</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -210,7 +210,7 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
   font-size:10.5px;padding-right:2px}
 .co-nav .co-sep{color:var(--text-faint,#5f7191);opacity:.6}
 @media(max-width:720px){.co-nav{padding-left:16px;padding-right:16px}}
-</style><nav class="co-nav" aria-label="code overview"><div class="co-row"><a href="../../docs/codemap.html">⌂ Overall Code Map</a><span class="co-sep">/</span><span class="co-here">scripts</span></div><div class="co-row"><span class="co-lbl">scripts</span><a href="summary.html">Summary</a><a href="#" aria-current="page">Code Map</a><a href="health.html">Health</a><a href="measurement.html">Measurement</a><a href="theory.html">Theory</a></div><div class="co-row"><span class="co-lbl">Other packages · Code Map</span><a href="../../backend/src/grimoire/store/docs/codemap.html">grimoire-store</a><a href="../../backend/src/grimoire/routes/docs/codemap.html">grimoire-api</a><a href="../../backend/src/grimoire/docs/codemap.html">grimoire-llm</a><a href="../../backend/tests/docs/codemap.html">backend-tests</a><a href="../../frontend/docs/codemap.html">frontend</a><a href="../../evals/docs/codemap.html">evals</a><a href="../../android/docs/codemap.html">android</a></div></nav><!-- /code-overview:nav -->
+</style><nav class="co-nav" aria-label="code overview"><div class="co-row"><a href="../../docs/codemap.html">⌂ Overall Code Map</a><span class="co-sep">/</span><span class="co-here">scripts</span></div><div class="co-row"><span class="co-lbl">scripts</span><a href="summary.html">Summary</a><a href="#" aria-current="page">Code Map</a><a href="health.html">Health</a><a href="theory.html">Theory</a></div><div class="co-row"><span class="co-lbl">Other packages · Code Map</span><a href="../../backend/src/grimoire/store/docs/codemap.html">grimoire-store</a><a href="../../backend/src/grimoire/routes/docs/codemap.html">grimoire-api</a><a href="../../backend/src/grimoire/docs/codemap.html">grimoire-providers-prompts</a><a href="../../backend/tests/docs/codemap.html">backend-tests</a><a href="../../frontend/docs/codemap.html">frontend</a><a href="../../evals/docs/codemap.html">evals</a><a href="../../android/docs/codemap.html">android</a><a href="../../backend/src/grimoire/decisions/docs/codemap.html">grimoire-decisions</a><a href="../../backend/src/grimoire/inference/docs/codemap.html">grimoire-inference</a><a href="../../backend/src/grimoire/llm/docs/codemap.html">grimoire-llm</a><a href="../../backend/src/grimoire/tool_calls/docs/codemap.html">grimoire-tool-calls</a></div></nav><!-- /code-overview:nav -->
 <!--DOC_NAV-->
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
@@ -219,36 +219,18 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <button role="tab" data-tab="flows" aria-selected="false" aria-controls="flows">Critical Flows</button>
 <button role="tab" data-tab="boundaries" aria-selected="false" aria-controls="boundaries">Boundaries &amp; Ownership</button>
 <button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button>
-<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
+<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button>
+<button role="tab" data-tab="coverage" aria-selected="false" aria-controls="coverage">Coverage</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-<div class="card hero"><h2>A toolbox around production contracts</h2><p>Operator scripts import the same store and inference seams as the app, while contributor scripts verify contracts, lint debt and build inputs. This mapped package intentionally combines several command lifecycles rather than one service. Its best abstractions are pure hash planning, version-pinned finding counters, synthetic empty-target data and derived-cache warm-up. <code>scripts/grimoire_sync.py:1</code> <code>scripts/ratchet.py:1</code> <code>backend/scripts/synth_library.py:1</code> <code>backend/src/grimoire/cache.py:1</code></p></div>
-<div class="tbl-wrap"><table><thead><tr><th>Entry</th><th>Purpose</th></tr></thead><tbody><tr><td><code>scripts/ratchet.py:332</code></td><td>Compare checker findings with committed per-file/per-rule debt.</td></tr><tr><td><code>scripts/verify_templates.py:1</code></td><td>Build a throwaway library and compare production prompt wiring with an independent gather mirror.</td></tr><tr><td><code>scripts/grimoire_sync.py:551</code></td><td>Plan USB sync; opt-in transfer and conflict copies.</td></tr><tr><td><code>backend/scripts/create_world.py:1</code></td><td>Validate and apply a named-record plan through store constructors.</td></tr><tr><td><code>backend/scripts/ingest_scene.py:1</code></td><td>Run rewritten transcript scenes through actual absorb/inference routing.</td></tr><tr><td><code>backend/src/grimoire/cache.py:48</code></td><td>Warm derived state after direct edits, with dry-run/verification modes.</td></tr></tbody></table></div>
-<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
-flowchart TD
- O["Operator commands"] --> S["Public store writers"]
- O --> I["Inference operation seam"]
- S --> L["Editable library"]
- D["Contributor checks"] --> P["Production builders"]
- D --> T["Pinned tool collectors"]
- T --> B["Committed baselines"]
- U["USB sync"] --> H["Pure hash plan"]
- H --> X["ADB transfer or conflict copy"]
-</pre></div></div>
-<h3>Read in this order</h3><ol><li><code>scripts/grimoire_sync.py:365</code>: inspect the pure sync decision table before transfer plumbing.</li><li><code>scripts/grimoire_sync.py:606</code>: trace when hashes are captured relative to stopping the phone and copying bytes.</li><li><code>scripts/ratchet.py:300</code>: understand why both more findings and stale larger baselines fail.</li><li><code>scripts/ratchet.py:357</code>: baseline regeneration normally permits only downward changes.</li><li><code>scripts/verify_templates.py:1</code>: the largest and hottest script checks wiring/data agreement, not prompt quality.</li><li><code>backend/scripts/create_world.py:20</code>: omission means preserve, not delete.</li><li><code>backend/src/grimoire/cache.py:1</code>: missing warm-up costs latency, not authoritative correctness.</li></ol>
-<div class="callout warn"><strong>Primary operational seam:</strong> USB sync plans from hashes before force-stopping the phone and later copies against that old plan. An edit between those steps can invalidate the overwrite decision; the PC is not serialized either. <code>scripts/grimoire_sync.py:606</code> <code>scripts/grimoire_sync.py:663</code> <code>scripts/grimoire_sync.py:683</code></div>
-<h3>Analyzer and measurement limits</h3><p>The fresh inventory recognizes Python and shell here but excludes four PowerShell files. The Windows launcher was therefore read manually; sparse automated support must not be read as small platform risk. The hottest file is the template verifier, followed by scene ingestion and world creation; that is a review-attention ranking, not a defect count. <code>scripts/windows/run.ps1:1</code> <code>scripts/verify_templates.py:1</code> <code>backend/scripts/ingest_scene.py:1</code> <code>backend/scripts/create_world.py:1</code></p>
-<p>Template verification compares builder wiring and input data; synthetic library profiles support repeatable performance work. Neither is evidence of current live model quality or private-library performance. No checker, benchmark, importer, library writer or provider ran for this overview; coverage was skipped by user choice. <code>scripts/verify_templates.py:3</code> <code>backend/scripts/synth_library.py:7</code></p>
-
-<p>The graph resolves all 91 detected first-party Python imports, but draws only three intra-scope import edges while 194 leave for production modules. Loaded templates/build resources create additional groups; sparse imports do not imply app independence. No file or grouped cycle was detected in this scope. The LLM scanner's no-usage result misses custom operations: ingestion explicitly resolves absorb through the application seam. Textual resources are incomplete and 13 patterns were truncated. <code>backend/scripts/ingest_scene.py:19</code> <code>backend/scripts/ingest_scene.py:46</code> <code>scripts/verify_templates.py:25</code></p>
-
+<h2>scripts</h2><p>Operator tools install, launch, inspect and maintain the application; development tools compare checker findings and performance evidence. They share operational responsibility rather than one domain algorithm.</p><p>This unit includes Python, shell and PowerShell. Python detectors and language-agnostic checks do not establish shell or PowerShell correctness; installed skill helpers are architecture context, outside root-doctor semantic coverage.</p><h3>Reading order</h3><ol><li><code>scripts/ratchet.py:1</code> — Read the per-file and per-rule debt model.</li><li><code>scripts/ratchet.py:43</code> — Distinguish a failed checker from clean output.</li><li><code>scripts/profile_report.py:149</code> — See matching test manifests before a timing comparison.</li><li><code>backend/src/grimoire/where.py:1</code> — Follow the authoritative library resolver.</li><li><code>backend/src/grimoire/compiled_build.py:1</code> — Inspect an operator entry into derived storage.</li></ol><p class="dim">The inventory excludes generated docs. This is a tracked-source audit at 0e9e7f4be. Existing coverage is line coverage from the recorded artifacts, not a fresh test result or a claim about model quality.</p><p class="dim">The selected backend coverage artifact measures only three source files in this mixed operator unit; the other scripts have no matching observations. The displayed percentage is over those measured files, not the whole scripts unit.</p>
 </section>
 <section class="panel" id="inventory" role="tabpanel">
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">28</div><div class="l">source files</div></div>
-  <div class="kpi"><div class="n">9,452</div><div class="l">lines of code</div></div>
+  <div class="kpi accent"><div class="n">26</div><div class="l">source files</div></div>
+  <div class="kpi"><div class="n">8,721</div><div class="l">lines of code</div></div>
   <div class="kpi"><div class="n">2</div><div class="l">languages</div></div>
   <div class="kpi warn"><div class="n">0%</div><div class="l">test code share</div></div>
 </div>
@@ -256,16 +238,16 @@ flowchart TD
 <h2>Languages</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
-<tbody><tr><td>Python</td><td class='num'>9,033</td><td class='num'>23</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>95.6%</td></tr>
-<tr><td>Shell</td><td class='num'>419</td><td class='num'>5</td><td><div class="bar "><i style="width:4.6%"></i></div></td><td class='num'>4.4%</td></tr></tbody></table></div>
+<tbody><tr><td>Python</td><td class='num'>8,302</td><td class='num'>21</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>95.2%</td></tr>
+<tr><td>Shell</td><td class='num'>419</td><td class='num'>5</td><td><div class="bar "><i style="width:5.0%"></i></div></td><td class='num'>4.8%</td></tr></tbody></table></div>
 <p class="dim">Coverage: 4 file(s) in unrecognized languages are not counted above (.ps1 (4)).</p>
 
 <h2>Top-level directories</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
-<tbody><tr><td><code>scripts/</code></td><td class='num'>5,295</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>backend/</code></td><td class='num'>3,304</td><td><div class="bar "><i style="width:62.4%"></i></div></td></tr>
-<tr><td><code>.agents/</code></td><td class='num'>853</td><td><div class="bar "><i style="width:16.1%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>scripts/</code></td><td class='num'>4,552</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/</code></td><td class='num'>3,316</td><td><div class="bar "><i style="width:72.8%"></i></div></td></tr>
+<tr><td><code>.agents/</code></td><td class='num'>853</td><td><div class="bar "><i style="width:18.7%"></i></div></td></tr></tbody></table></div>
 
 <div class="grid cols-2">
 <div>
@@ -277,11 +259,9 @@ flowchart TD
 <tr><td><code>backend/scripts/ingest_scene.py</code></td><td class='num'>695</td><td><div class="bar "><i style="width:28.9%"></i></div></td><td class='num'>107</td></tr>
 <tr><td><code>.agents/skills/populate-world-content/scripts/populate_world_content.py</code></td><td class='num'>687</td><td><div class="bar "><i style="width:28.6%"></i></div></td><td class='num'>164</td></tr>
 <tr><td><code>scripts/grimoire_sync.py</code></td><td class='num'>620</td><td><div class="bar "><i style="width:25.8%"></i></div></td><td class='num'>127</td></tr>
-<tr><td><code>scripts/validate_partition.py</code></td><td class='num'>394</td><td><div class="bar "><i style="width:16.4%"></i></div></td><td class='num'>144</td></tr>
-<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>372</td><td><div class="bar "><i style="width:15.5%"></i></div></td><td class='num'>58</td></tr>
+<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>381</td><td><div class="bar "><i style="width:15.8%"></i></div></td><td class='num'>58</td></tr>
 <tr><td><code>scripts/ratchet.py</code></td><td class='num'>365</td><td><div class="bar "><i style="width:15.2%"></i></div></td><td class='num'>50</td></tr>
 <tr><td><code>backend/scripts/benchmark_compiled.py</code></td><td class='num'>352</td><td><div class="bar "><i style="width:14.6%"></i></div></td><td class='num'>64</td></tr>
-<tr><td><code>scripts/roadmap_slices.py</code></td><td class='num'>349</td><td><div class="bar "><i style="width:14.5%"></i></div></td><td class='num'>112</td></tr>
 <tr><td><code>backend/scripts/synth_library.py</code></td><td class='num'>319</td><td><div class="bar "><i style="width:13.3%"></i></div></td><td class='num'>48</td></tr>
 <tr><td><code>scripts/profile_report.py</code></td><td class='num'>318</td><td><div class="bar "><i style="width:13.2%"></i></div></td><td class='num'>72</td></tr>
 <tr><td><code>scripts/coverage_arcs.py</code></td><td class='num'>248</td><td><div class="bar "><i style="width:10.3%"></i></div></td><td class='num'>68</td></tr>
@@ -289,9 +269,11 @@ flowchart TD
 <tr><td><code>.agents/skills/world-card-integration/scripts/inspect_cards.py</code></td><td class='num'>166</td><td><div class="bar "><i style="width:6.9%"></i></div></td><td class='num'>33</td></tr>
 <tr><td><code>backend/scripts/benchmark_membership.py</code></td><td class='num'>135</td><td><div class="bar "><i style="width:5.6%"></i></div></td><td class='num'>13</td></tr>
 <tr><td><code>backend/src/grimoire/cache.py</code></td><td class='num'>124</td><td><div class="bar "><i style="width:5.2%"></i></div></td><td class='num'>35</td></tr>
-<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>121</td><td><div class="bar "><i style="width:5.0%"></i></div></td><td class='num'>29</td></tr>
+<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>124</td><td><div class="bar "><i style="width:5.2%"></i></div></td><td class='num'>29</td></tr>
 <tr><td><code>scripts/sync_skills.py</code></td><td class='num'>104</td><td><div class="bar "><i style="width:4.3%"></i></div></td><td class='num'>30</td></tr>
-<tr><td><code>backend/scripts/redownload_chub.py</code></td><td class='num'>94</td><td><div class="bar "><i style="width:3.9%"></i></div></td><td class='num'>22</td></tr></tbody></table></div>
+<tr><td><code>backend/scripts/redownload_chub.py</code></td><td class='num'>94</td><td><div class="bar "><i style="width:3.9%"></i></div></td><td class='num'>22</td></tr>
+<tr><td><code>backend/src/grimoire/where.py</code></td><td class='num'>89</td><td><div class="bar "><i style="width:3.7%"></i></div></td><td class='num'>8</td></tr>
+<tr><td><code>scripts/unix/macos-launcher.sh</code></td><td class='num'>69</td><td><div class="bar "><i style="width:2.9%"></i></div></td><td class='num'>2</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Most branch-heavy files</h2>
@@ -301,23 +283,23 @@ flowchart TD
 <tbody><tr><td><code>scripts/verify_templates.py</code></td><td class='num'>362</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>2,404</td><td class='num'>12</td></tr>
 <tr><td><code>backend/scripts/create_world.py</code></td><td class='num'>308</td><td><div class="bar warn"><i style="width:85.1%"></i></div></td><td class='num'>983</td><td class='num'>12</td></tr>
 <tr><td><code>.agents/skills/populate-world-content/scripts/populate_world_content.py</code></td><td class='num'>164</td><td><div class="bar warn"><i style="width:45.3%"></i></div></td><td class='num'>687</td><td class='num'>11</td></tr>
-<tr><td><code>scripts/validate_partition.py</code></td><td class='num'>144</td><td><div class="bar warn"><i style="width:39.8%"></i></div></td><td class='num'>394</td><td class='num'>9</td></tr>
 <tr><td><code>scripts/grimoire_sync.py</code></td><td class='num'>127</td><td><div class="bar warn"><i style="width:35.1%"></i></div></td><td class='num'>620</td><td class='num'>6</td></tr>
-<tr><td><code>scripts/roadmap_slices.py</code></td><td class='num'>112</td><td><div class="bar warn"><i style="width:30.9%"></i></div></td><td class='num'>349</td><td class='num'>7</td></tr>
 <tr><td><code>backend/scripts/ingest_scene.py</code></td><td class='num'>107</td><td><div class="bar warn"><i style="width:29.6%"></i></div></td><td class='num'>695</td><td class='num'>9</td></tr>
 <tr><td><code>scripts/profile_report.py</code></td><td class='num'>72</td><td><div class="bar warn"><i style="width:19.9%"></i></div></td><td class='num'>318</td><td class='num'>9</td></tr>
 <tr><td><code>scripts/coverage_arcs.py</code></td><td class='num'>68</td><td><div class="bar warn"><i style="width:18.8%"></i></div></td><td class='num'>248</td><td class='num'>7</td></tr>
 <tr><td><code>backend/scripts/benchmark_compiled.py</code></td><td class='num'>64</td><td><div class="bar warn"><i style="width:17.7%"></i></div></td><td class='num'>352</td><td class='num'>8</td></tr>
-<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>58</td><td><div class="bar warn"><i style="width:16.0%"></i></div></td><td class='num'>372</td><td class='num'>9</td></tr>
+<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>58</td><td><div class="bar warn"><i style="width:16.0%"></i></div></td><td class='num'>381</td><td class='num'>9</td></tr>
 <tr><td><code>scripts/ratchet.py</code></td><td class='num'>50</td><td><div class="bar warn"><i style="width:13.8%"></i></div></td><td class='num'>365</td><td class='num'>8</td></tr>
 <tr><td><code>backend/scripts/synth_library.py</code></td><td class='num'>48</td><td><div class="bar warn"><i style="width:13.3%"></i></div></td><td class='num'>319</td><td class='num'>8</td></tr>
 <tr><td><code>scripts/unix/run.sh</code></td><td class='num'>39</td><td><div class="bar warn"><i style="width:10.8%"></i></div></td><td class='num'>205</td><td class='num'>2</td></tr>
 <tr><td><code>backend/src/grimoire/cache.py</code></td><td class='num'>35</td><td><div class="bar warn"><i style="width:9.7%"></i></div></td><td class='num'>124</td><td class='num'>9</td></tr>
 <tr><td><code>.agents/skills/world-card-integration/scripts/inspect_cards.py</code></td><td class='num'>33</td><td><div class="bar warn"><i style="width:9.1%"></i></div></td><td class='num'>166</td><td class='num'>4</td></tr>
 <tr><td><code>scripts/sync_skills.py</code></td><td class='num'>30</td><td><div class="bar warn"><i style="width:8.3%"></i></div></td><td class='num'>104</td><td class='num'>4</td></tr>
-<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>29</td><td><div class="bar warn"><i style="width:8.0%"></i></div></td><td class='num'>121</td><td class='num'>9</td></tr>
+<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>29</td><td><div class="bar warn"><i style="width:8.0%"></i></div></td><td class='num'>124</td><td class='num'>9</td></tr>
 <tr><td><code>backend/scripts/redownload_chub.py</code></td><td class='num'>22</td><td><div class="bar warn"><i style="width:6.1%"></i></div></td><td class='num'>94</td><td class='num'>6</td></tr>
-<tr><td><code>backend/scripts/benchmark_membership.py</code></td><td class='num'>13</td><td><div class="bar warn"><i style="width:3.6%"></i></div></td><td class='num'>135</td><td class='num'>9</td></tr></tbody></table></div>
+<tr><td><code>backend/scripts/benchmark_membership.py</code></td><td class='num'>13</td><td><div class="bar warn"><i style="width:3.6%"></i></div></td><td class='num'>135</td><td class='num'>9</td></tr>
+<tr><td><code>scripts/unix/android-bootstrap.sh</code></td><td class='num'>9</td><td><div class="bar warn"><i style="width:2.5%"></i></div></td><td class='num'>62</td><td class='num'>2</td></tr>
+<tr><td><code>scripts/unix/install.sh</code></td><td class='num'>9</td><td><div class="bar warn"><i style="width:2.5%"></i></div></td><td class='num'>59</td><td class='num'>0</td></tr></tbody></table></div>
 </div>
 </div>
 
@@ -327,18 +309,18 @@ flowchart TD
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">43</div><div class="l">modules</div></div>
+  <div class="kpi accent"><div class="n">7</div><div class="l">modules</div></div>
   <div class="kpi"><div class="n">3</div><div class="l">file-level imports</div></div>
-  <div class="kpi"><div class="n">148</div><div class="l">runtime loads</div></div>
+  <div class="kpi"><div class="n">147</div><div class="l">runtime loads</div></div>
   <div class="kpi good"><div class="n">0</div><div class="l">cycles</div></div>
-  <div class="kpi"><div class="n">6</div><div class="l">top-level arms</div></div>
+  <div class="kpi"><div class="n">4</div><div class="l">top-level arms</div></div>
 </div>
-<p class="dim">Scoped to <code>.agents/skills/populate-world-content/scripts/</code>, <code>.agents/skills/world-card-integration/scripts/</code>, <code>backend/scripts/</code>, <code>backend/src/grimoire/cache.py/</code>, <code>backend/src/grimoire/compiled_build.py/</code>, <code>backend/src/grimoire/where.py/</code>, <code>scripts/</code>: 194 import(s) and load(s) reach 108 file(s) outside those roots. They resolved, and are not drawn.</p>
+<p class="dim">Scoped to <code>.agents/skills/populate-world-content/scripts/</code>, <code>.agents/skills/world-card-integration/scripts/</code>, <code>backend/scripts/</code>, <code>backend/src/grimoire/cache.py/</code>, <code>backend/src/grimoire/compiled_build.py/</code>, <code>backend/src/grimoire/where.py/</code>, <code>scripts/</code>: 181 import(s) and load(s) reach 108 file(s) outside those roots. They resolved, and are not drawn.</p>
 <div class="callout good"><b>No module-level dependency cycles detected.</b> The import graph is a DAG at this grouping level.</div>
 <h2>Module dependency graph</h2>
 <p class="dim">Node area = lines of code · solid arrows = imports, dashed = runtime loads (a rendered template, a prompt read off disk) · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
 <div class="viz" data-render="forcegraph" style="height:620px"></div>
-<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"(root)","size":830,"fanIn":1,"fanOut":0,"meta":"(repo root) \u00b7 1 files"},{"id":".agents/skills/populate-world-content","label":"populate-world-content","group":".agents","size":687,"fanIn":0,"fanOut":0,"meta":".agents/skills/populate-world-content \u00b7 1 files"},{"id":".agents/skills/world-card-integration","label":"world-card-integration","group":".agents","size":166,"fanIn":0,"fanOut":0,"meta":".agents/skills/world-card-integration \u00b7 1 files"},{"id":"backend","label":"backend","group":"backend","size":88,"fanIn":1,"fanOut":0,"meta":"backend \u00b7 1 files"},{"id":"backend/scripts","label":"scripts","group":"backend","size":2970,"fanIn":0,"fanOut":1,"meta":"backend/scripts \u00b7 8 files"},{"id":"backend/src/grimoire","label":"grimoire","group":"backend","size":334,"fanIn":1,"fanOut":0,"meta":"backend/src/grimoire \u00b7 3 files"},{"id":"frontend/public","label":"public","group":"frontend","size":0,"fanIn":1,"fanOut":0,"meta":"frontend/public \u00b7 1 files"},{"id":"scripts","label":"scripts","group":"scripts","size":4876,"fanIn":0,"fanOut":37,"meta":"scripts \u00b7 10 files"},{"id":"scripts/unix","label":"unix","group":"scripts","size":419,"fanIn":0,"fanOut":0,"meta":"scripts/unix \u00b7 5 files"},{"id":"templates/absorb","label":"absorb","group":"templates","size":91,"fanIn":1,"fanOut":0,"meta":"templates/absorb \u00b7 2 files"},{"id":"templates/audit","label":"audit","group":"templates","size":10,"fanIn":1,"fanOut":0,"meta":"templates/audit \u00b7 2 files"},{"id":"templates/capsule","label":"capsule","group":"templates","size":14,"fanIn":1,"fanOut":0,"meta":"templates/capsule \u00b7 2 files"},{"id":"templates/character_from_passage","label":"character_from_passage","group":"templates","size":8,"fanIn":1,"fanOut":0,"meta":"templates/character_from_passage \u00b7 2 files"},{"id":"templates/continuity_identity","label":"continuity_identity","group":"templates","size":83,"fanIn":1,"fanOut":0,"meta":"templates/continuity_identity \u00b7 4 files"},{"id":"templates/continuity_reconcile","label":"continuity_reconcile","group":"templates","size":130,"fanIn":1,"fanOut":0,"meta":"templates/continuity_reconcile \u00b7 8 files"},{"id":"templates/decide","label":"decide","group":"templates","size":89,"fanIn":1,"fanOut":0,"meta":"templates/decide \u00b7 2 files"},{"id":"templates/dossier","label":"dossier","group":"templates","size":7,"fanIn":1,"fanOut":0,"meta":"templates/dossier \u00b7 2 files"},{"id":"templates/epistemic_access","label":"epistemic_access","group":"templates","size":32,"fanIn":1,"fanOut":0,"meta":"templates/epistemic_access \u00b7 3 files"},{"id":"templates/history_check","label":"history_check","group":"templates","size":21,"fanIn":1,"fanOut":0,"meta":"templates/history_check \u00b7 2 files"},{"id":"templates/history_plan","label":"history_plan","group":"templates","size":75,"fanIn":1,"fanOut":0,"meta":"templates/history_plan \u00b7 2 files"},{"id":"templates/history_rerank","label":"history_rerank","group":"templates","size":28,"fanIn":1,"fanOut":0,"meta":"templates/history_rerank \u00b7 5 files"},{"id":"templates/image_description","label":"image_description","group":"templates","size":7,"fanIn":1,"fanOut":0,"meta":"templates/image_description \u00b7 2 files"},{"id":"templates/investigation/continuity","label":"continuity","group":"templates","size":17,"fanIn":1,"fanOut":0,"meta":"templates/investigation/continuity \u00b7 2 files"},{"id":"templates/investigation/question","label":"question","group":"templates","size":15,"fanIn":1,"fanOut":0,"meta":"templates/investigation/question \u00b7 2 files"},{"id":"templates/plaintext_import","label":"plaintext_import","group":"templates","size":12,"fanIn":1,"fanOut":0,"meta":"templates/plaintext_import \u00b7 2 files"},{"id":"templates/rolling_summary","label":"rolling_summary","group":"templates","size":38,"fanIn":1,"fanOut":0,"meta":"templates/rolling_summary \u00b7 2 files"},{"id":"templates/scenario","label":"scenario","group":"templates","size":31,"fanIn":1,"fanOut":0,"meta":"templates/scenario \u00b7 2 files"},{"id":"templates/scene","label":"scene","group":"templates","size":346,"fanIn":1,"fanOut":0,"meta":"templates/scene \u00b7 20 files"},{"id":"templates/scene/model_guidance","label":"model_guidance","group":"templates","size":3,"fanIn":1,"fanOut":0,"meta":"templates/scene/model_guidance \u00b7 1 files"},{"id":"templates/scene/sections","label":"sections","group":"templates","size":518,"fanIn":1,"fanOut":0,"meta":"templates/scene/sections \u00b7 39 files"},{"id":"templates/scene_break","label":"scene_break","group":"templates","size":36,"fanIn":1,"fanOut":0,"meta":"templates/scene_break \u00b7 3 files"},{"id":"templates/scene_break_title","label":"scene_break_title","group":"templates","size":25,"fanIn":1,"fanOut":0,"meta":"templates/scene_break_title \u00b7 2 files"},{"id":"templates/scene_intent","label":"scene_intent","group":"templates","size":23,"fanIn":1,"fanOut":0,"meta":"templates/scene_intent \u00b7 2 files"},{"id":"templates/scene_suggestions","label":"scene_suggestions","group":"templates","size":151,"fanIn":1,"fanOut":0,"meta":"templates/scene_suggestions \u00b7 2 files"},{"id":"templates/snippets","label":"snippets","group":"templates","size":28,"fanIn":1,"fanOut":0,"meta":"templates/snippets \u00b7 5 files"},{"id":"templates/snippets/commitment_line","label":"commitment_line","group":"templates","size":11,"fanIn":1,"fanOut":0,"meta":"templates/snippets/commitment_line \u00b7 2 files"},{"id":"templates/snippets/plot_thread_line","label":"plot_thread_line","group":"templates","size":15,"fanIn":1,"fanOut":0,"meta":"templates/snippets/plot_thread_line \u00b7 2 files"},{"id":"templates/tagline","label":"tagline","group":"templates","size":5,"fanIn":1,"fanOut":0,"meta":"templates/tagline \u00b7 2 files"},{"id":"templates/tools","label":"tools","group":"templates","size":19,"fanIn":1,"fanOut":0,"meta":"templates/tools \u00b7 1 files"},{"id":"templates/tracker","label":"tracker","group":"templates","size":52,"fanIn":1,"fanOut":0,"meta":"templates/tracker \u00b7 2 files"},{"id":"templates/turn_plan","label":"turn_plan","group":"templates","size":81,"fanIn":1,"fanOut":0,"meta":"templates/turn_plan \u00b7 8 files"},{"id":"templates/voice_anchor","label":"voice_anchor","group":"templates","size":17,"fanIn":1,"fanOut":0,"meta":"templates/voice_anchor \u00b7 2 files"},{"id":"templates/voice_drift","label":"voice_drift","group":"templates","size":50,"fanIn":1,"fanOut":0,"meta":"templates/voice_drift \u00b7 4 files"}],"links":[{"source":"backend/scripts","target":"backend/src/grimoire","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"scripts","target":"","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"backend","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"frontend/public","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/absorb","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/audit","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/capsule","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/character_from_passage","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/continuity_identity","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/continuity_reconcile","weight":8,"imports":0,"loads":8,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/decide","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/dossier","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/epistemic_access","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/history_check","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/history_plan","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/history_rerank","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/image_description","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/investigation/continuity","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/investigation/question","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/plaintext_import","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/rolling_summary","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scenario","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene","weight":20,"imports":0,"loads":20,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene/model_guidance","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene/sections","weight":39,"imports":0,"loads":39,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene_break","weight":3,"imports":0,"loads":3,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene_break_title","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene_intent","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/scene_suggestions","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/snippets","weight":5,"imports":0,"loads":5,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/snippets/commitment_line","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/snippets/plot_thread_line","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/tagline","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/tools","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/tracker","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/turn_plan","weight":8,"imports":0,"loads":8,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/voice_anchor","weight":2,"imports":0,"loads":2,"kind":"resource","cycle":false},{"source":"scripts","target":"templates/voice_drift","weight":4,"imports":0,"loads":4,"kind":"resource","cycle":false}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span><span><i class=\"sw\" style=\"background:var(--text-faint)\"><\/i>dashed edges = runtime load<\/span>"}</script>
+<script type="application/json">{"nodes":[{"id":"backend","label":"backend","group":"backend","size":90,"fanIn":1,"fanOut":0,"meta":"backend \u00b7 1 files"},{"id":"backend/scripts","label":"scripts","group":"backend","size":2979,"fanIn":0,"fanOut":1,"meta":"backend/scripts \u00b7 8 files"},{"id":"backend/src/grimoire","label":"grimoire","group":"backend","size":337,"fanIn":1,"fanOut":0,"meta":"backend/src/grimoire \u00b7 3 files"},{"id":"frontend/public","label":"public","group":"frontend","size":0,"fanIn":1,"fanOut":0,"meta":"frontend/public \u00b7 1 files"},{"id":"scripts","label":"scripts","group":"scripts","size":4133,"fanIn":0,"fanOut":3,"meta":"scripts \u00b7 8 files"},{"id":"scripts/unix","label":"unix","group":"scripts","size":419,"fanIn":0,"fanOut":0,"meta":"scripts/unix \u00b7 5 files"},{"id":"templates","label":"templates","group":"templates","size":2088,"fanIn":1,"fanOut":0,"meta":"templates \u00b7 145 files"}],"links":[{"source":"backend/scripts","target":"backend/src/grimoire","weight":1,"imports":1,"loads":0,"kind":"import","cycle":false},{"source":"scripts","target":"backend","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"frontend/public","weight":1,"imports":0,"loads":1,"kind":"resource","cycle":false},{"source":"scripts","target":"templates","weight":145,"imports":0,"loads":145,"kind":"resource","cycle":false}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span><span><i class=\"sw\" style=\"background:var(--text-faint)\"><\/i>dashed edges = runtime load<\/span>"}</script>
 
 <div class="grid cols-2">
 <div>
@@ -350,17 +332,17 @@ flowchart TD
 <tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>frontend/public/grimoire-512.png</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>backend/pyproject.toml</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>ROADMAP-CHECKLIST.md</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>templates/scene/sections/prose_style.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>templates/character_from_passage/user.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>templates/image_description/user.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/today.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/off_scene_cast_active.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/response_selector_grimoire.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>templates/turn_plan/tension_question.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>templates/scene/sections/offscreen_scene.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>templates/scene/sections/available_art.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>templates/dossier/system.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>templates/scene/sections/model_guidance.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>templates/scene/sections/commitments.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>templates/scene/sections/current_setting.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+<tr><td><code>templates/scene/sections/prose_style.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/audit/system.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/rolling_summary/user.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/response_selector_follow_on_question.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/voice_anchors.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/scene/sections/tracker_state.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>templates/character_from_passage/user.j2</code></td><td class='num'>1</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Highest fan-out (most dependencies)</h2>
@@ -373,7 +355,6 @@ flowchart TD
 <tr><td><code>backend/scripts/compiled_build.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>scripts/gen_android_icon.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>scripts/ratchet.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>scripts/roadmap_slices.py</code></td><td class='num'>1</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>backend/scripts/benchmark_membership.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>backend/scripts/create_world.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>backend/scripts/ingest_scene.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
@@ -381,18 +362,18 @@ flowchart TD
 <tr><td><code>backend/scripts/synth_library.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>2</td></tr>
 <tr><td><code>backend/src/grimoire/cache.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>1</td></tr>
-<tr><td><code>backend/src/grimoire/where.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+<tr><td><code>backend/src/grimoire/where.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>scripts/backup_images.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
 </div>
 </div>
 
 <h2>Runtime resources</h2>
 <p class="dim">Files loaded rather than imported — templates, prompts, schemas, embedded data — and the
-code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 13 computed path(s) and 0 file(s) hit the reporting cap.</p>
+code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 11 computed path(s) and 0 file(s) hit the reporting cap.</p>
 
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Asset</th><th class="num">Loaders</th><th>Loaded at</th></tr></thead>
-<tbody><tr><td><code>ROADMAP-CHECKLIST.md</code></td><td class='num'>1</td><td><code>scripts/roadmap_slices.py:45</code></td></tr>
-<tr><td><code>backend/pyproject.toml</code></td><td class='num'>1</td><td><code>scripts/ratchet.py:75</code></td></tr>
+<tbody><tr><td><code>backend/pyproject.toml</code></td><td class='num'>1</td><td><code>scripts/ratchet.py:75</code></td></tr>
 <tr><td><code>frontend/public/grimoire-512.png</code></td><td class='num'>1</td><td><code>scripts/gen_android_icon.py:19</code></td></tr>
 <tr><td><code>templates/absorb/system.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:896</code></td></tr>
 <tr><td><code>templates/absorb/user.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:907</code></td></tr>
@@ -415,7 +396,8 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 <tr><td><code>templates/continuity_reconcile/question.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1247</code></td></tr>
 <tr><td><code>templates/continuity_reconcile/scene_option.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1274</code></td></tr>
 <tr><td><code>templates/decide/system.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1497</code></td></tr>
-<tr><td><code>templates/decide/user.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1503</code></td></tr></tbody></table></div>
+<tr><td><code>templates/decide/user.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:1503</code></td></tr>
+<tr><td><code>templates/dossier/system.j2</code></td><td class='num'>1</td><td><code>scripts/verify_templates.py:219</code></td></tr></tbody></table></div>
 
 
 
@@ -424,8 +406,8 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">226</div><div class="l">commits (24 months ago)</div></div>
-  <div class="kpi"><div class="n">28</div><div class="l">files touched</div></div>
+  <div class="kpi accent"><div class="n">227</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi"><div class="n">26</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">verify_templates.py</div><div class="l">top hotspot</div></div>
 </div>
 <div class="callout"><b>How to read this:</b> files that are both <i>complex</i> and <i>frequently changed</i> are where defects concentrate — complexity makes mistakes likely, churn gives them opportunities. Prioritize refactoring and review attention here, not on complex-but-stable code.</div>
@@ -434,145 +416,93 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 <h2>Churn × size map</h2>
 <p class="dim">Area = lines of code · color = commit count since 24 months ago · hover for details.</p>
 <div class="viz" data-render="treemap" style="height:540px"></div>
-<script type="application/json">{"items":[{"name":"scripts/verify_templates.py","value":2404,"metric":80,"meta":"362 branches \u00b7 2 authors"},{"name":"backend/scripts/ingest_scene.py","value":695,"metric":33,"meta":"107 branches \u00b7 2 authors"},{"name":"backend/scripts/create_world.py","value":983,"metric":8,"meta":"308 branches \u00b7 2 authors"},{"name":"scripts/validate_partition.py","value":394,"metric":10,"meta":"144 branches \u00b7 1 authors"},{"name":"scripts/roadmap_slices.py","value":349,"metric":6,"meta":"112 branches \u00b7 2 authors"},{"name":"scripts/grimoire_sync.py","value":620,"metric":4,"meta":"127 branches \u00b7 2 authors"},{"name":"scripts/profile_report.py","value":318,"metric":6,"meta":"72 branches \u00b7 1 authors"},{"name":"scripts/unix/run.sh","value":205,"metric":9,"meta":"39 branches \u00b7 2 authors"},{"name":"scripts/coverage_arcs.py","value":248,"metric":5,"meta":"68 branches \u00b7 1 authors"},{"name":"scripts/ratchet.py","value":365,"metric":5,"meta":"50 branches \u00b7 1 authors"},{"name":".agents/skills/populate-world-content/scripts/populate_world_content.py","value":687,"metric":1,"meta":"164 branches \u00b7 1 authors"},{"name":"backend/scripts/synth_library.py","value":319,"metric":3,"meta":"48 branches \u00b7 1 authors"},{"name":"backend/scripts/benchmark_compiled.py","value":352,"metric":1,"meta":"64 branches \u00b7 1 authors"},{"name":"scripts/sync_skills.py","value":104,"metric":2,"meta":"30 branches \u00b7 1 authors"},{"name":"scripts/unix/install.sh","value":59,"metric":6,"meta":"9 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/compiled_build.py","value":121,"metric":2,"meta":"29 branches \u00b7 1 authors"},{"name":"backend/scripts/bench_overview.py","value":372,"metric":1,"meta":"58 branches \u00b7 1 authors"},{"name":"backend/scripts/redownload_chub.py","value":94,"metric":2,"meta":"22 branches \u00b7 1 authors"},{"name":"scripts/unix/shutdown.sh","value":24,"metric":4,"meta":"8 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/cache.py","value":124,"metric":1,"meta":"35 branches \u00b7 1 authors"},{"name":".agents/skills/world-card-integration/scripts/inspect_cards.py","value":166,"metric":1,"meta":"33 branches \u00b7 1 authors"},{"name":"scripts/unix/android-bootstrap.sh","value":62,"metric":2,"meta":"9 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/where.py","value":89,"metric":2,"meta":"8 branches \u00b7 1 authors"},{"name":"backend/scripts/benchmark_membership.py","value":135,"metric":1,"meta":"13 branches \u00b7 1 authors"},{"name":"scripts/gen_android_icon.py","value":61,"metric":1,"meta":"6 branches \u00b7 1 authors"},{"name":"scripts/backup_images.py","value":13,"metric":1,"meta":"2 branches \u00b7 1 authors"},{"name":"scripts/unix/macos-launcher.sh","value":69,"metric":1,"meta":"2 branches \u00b7 1 authors"},{"name":"backend/scripts/compiled_build.py","value":20,"metric":1,"meta":"1 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":80}</script>
+<script type="application/json">{"items":[{"name":"scripts/verify_templates.py","value":2404,"metric":81,"meta":"362 branches \u00b7 2 authors"},{"name":"backend/scripts/ingest_scene.py","value":695,"metric":33,"meta":"107 branches \u00b7 2 authors"},{"name":"backend/scripts/create_world.py","value":983,"metric":8,"meta":"308 branches \u00b7 2 authors"},{"name":"scripts/grimoire_sync.py","value":620,"metric":4,"meta":"127 branches \u00b7 2 authors"},{"name":"scripts/profile_report.py","value":318,"metric":6,"meta":"72 branches \u00b7 1 authors"},{"name":"scripts/unix/run.sh","value":205,"metric":9,"meta":"39 branches \u00b7 2 authors"},{"name":"scripts/coverage_arcs.py","value":248,"metric":5,"meta":"68 branches \u00b7 1 authors"},{"name":"scripts/ratchet.py","value":365,"metric":5,"meta":"50 branches \u00b7 1 authors"},{"name":".agents/skills/populate-world-content/scripts/populate_world_content.py","value":687,"metric":1,"meta":"164 branches \u00b7 1 authors"},{"name":"backend/scripts/synth_library.py","value":319,"metric":3,"meta":"48 branches \u00b7 1 authors"},{"name":"backend/scripts/bench_overview.py","value":381,"metric":2,"meta":"58 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/compiled_build.py","value":124,"metric":3,"meta":"29 branches \u00b7 1 authors"},{"name":"backend/scripts/benchmark_compiled.py","value":352,"metric":1,"meta":"64 branches \u00b7 1 authors"},{"name":"scripts/unix/install.sh","value":59,"metric":6,"meta":"9 branches \u00b7 2 authors"},{"name":"backend/scripts/redownload_chub.py","value":94,"metric":2,"meta":"22 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/cache.py","value":124,"metric":1,"meta":"35 branches \u00b7 1 authors"},{"name":"scripts/unix/shutdown.sh","value":24,"metric":4,"meta":"8 branches \u00b7 2 authors"},{"name":".agents/skills/world-card-integration/scripts/inspect_cards.py","value":166,"metric":1,"meta":"33 branches \u00b7 1 authors"},{"name":"scripts/sync_skills.py","value":104,"metric":1,"meta":"30 branches \u00b7 1 authors"},{"name":"scripts/unix/android-bootstrap.sh","value":62,"metric":2,"meta":"9 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/where.py","value":89,"metric":2,"meta":"8 branches \u00b7 1 authors"},{"name":"backend/scripts/benchmark_membership.py","value":135,"metric":1,"meta":"13 branches \u00b7 1 authors"},{"name":"scripts/gen_android_icon.py","value":61,"metric":1,"meta":"6 branches \u00b7 1 authors"},{"name":"scripts/backup_images.py","value":13,"metric":1,"meta":"2 branches \u00b7 1 authors"},{"name":"scripts/unix/macos-launcher.sh","value":69,"metric":1,"meta":"2 branches \u00b7 1 authors"},{"name":"backend/scripts/compiled_build.py","value":20,"metric":1,"meta":"1 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":81}</script>
 
 <h2>Hotspot ranking</h2>
 <p class="dim">Score = commits × (branch points + 1). Tests excluded. 4 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: scripts/windows/run.ps1 (10), scripts/windows/install.ps1 (7), scripts/windows/shutdown.ps1 (4).</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
-<tbody><tr><td><code>scripts/verify_templates.py</code></td><td class='num'>80</td><td class='num'>362</td><td class='num'>2,404</td><td class='num'>2</td><td class='num' data-sort='29040'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>backend/scripts/ingest_scene.py</code></td><td class='num'>33</td><td class='num'>107</td><td class='num'>695</td><td class='num'>2</td><td class='num' data-sort='3564'><div class="bar bad"><i style="width:12.3%"></i></div></td></tr>
-<tr><td><code>backend/scripts/create_world.py</code></td><td class='num'>8</td><td class='num'>308</td><td class='num'>983</td><td class='num'>2</td><td class='num' data-sort='2472'><div class="bar bad"><i style="width:8.5%"></i></div></td></tr>
-<tr><td><code>scripts/validate_partition.py</code></td><td class='num'>10</td><td class='num'>144</td><td class='num'>394</td><td class='num'>1</td><td class='num' data-sort='1450'><div class="bar bad"><i style="width:5.0%"></i></div></td></tr>
-<tr><td><code>scripts/roadmap_slices.py</code></td><td class='num'>6</td><td class='num'>112</td><td class='num'>349</td><td class='num'>2</td><td class='num' data-sort='678'><div class="bar bad"><i style="width:2.3%"></i></div></td></tr>
-<tr><td><code>scripts/grimoire_sync.py</code></td><td class='num'>4</td><td class='num'>127</td><td class='num'>620</td><td class='num'>2</td><td class='num' data-sort='512'><div class="bar bad"><i style="width:1.8%"></i></div></td></tr>
+<tbody><tr><td><code>scripts/verify_templates.py</code></td><td class='num'>81</td><td class='num'>362</td><td class='num'>2,404</td><td class='num'>2</td><td class='num' data-sort='29403'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/scripts/ingest_scene.py</code></td><td class='num'>33</td><td class='num'>107</td><td class='num'>695</td><td class='num'>2</td><td class='num' data-sort='3564'><div class="bar bad"><i style="width:12.1%"></i></div></td></tr>
+<tr><td><code>backend/scripts/create_world.py</code></td><td class='num'>8</td><td class='num'>308</td><td class='num'>983</td><td class='num'>2</td><td class='num' data-sort='2472'><div class="bar bad"><i style="width:8.4%"></i></div></td></tr>
+<tr><td><code>scripts/grimoire_sync.py</code></td><td class='num'>4</td><td class='num'>127</td><td class='num'>620</td><td class='num'>2</td><td class='num' data-sort='512'><div class="bar bad"><i style="width:1.7%"></i></div></td></tr>
 <tr><td><code>scripts/profile_report.py</code></td><td class='num'>6</td><td class='num'>72</td><td class='num'>318</td><td class='num'>1</td><td class='num' data-sort='438'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>scripts/unix/run.sh</code></td><td class='num'>9</td><td class='num'>39</td><td class='num'>205</td><td class='num'>2</td><td class='num' data-sort='360'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>scripts/coverage_arcs.py</code></td><td class='num'>5</td><td class='num'>68</td><td class='num'>248</td><td class='num'>1</td><td class='num' data-sort='345'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>scripts/ratchet.py</code></td><td class='num'>5</td><td class='num'>50</td><td class='num'>365</td><td class='num'>1</td><td class='num' data-sort='255'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>.agents/skills/populate-world-content/scripts/populate_world_content.py</code></td><td class='num'>1</td><td class='num'>164</td><td class='num'>687</td><td class='num'>1</td><td class='num' data-sort='165'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>backend/scripts/synth_library.py</code></td><td class='num'>3</td><td class='num'>48</td><td class='num'>319</td><td class='num'>1</td><td class='num' data-sort='147'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>2</td><td class='num'>58</td><td class='num'>381</td><td class='num'>1</td><td class='num' data-sort='118'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>3</td><td class='num'>29</td><td class='num'>124</td><td class='num'>1</td><td class='num' data-sort='90'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>backend/scripts/benchmark_compiled.py</code></td><td class='num'>1</td><td class='num'>64</td><td class='num'>352</td><td class='num'>1</td><td class='num' data-sort='65'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
-<tr><td><code>scripts/sync_skills.py</code></td><td class='num'>2</td><td class='num'>30</td><td class='num'>104</td><td class='num'>1</td><td class='num' data-sort='62'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>scripts/unix/install.sh</code></td><td class='num'>6</td><td class='num'>9</td><td class='num'>59</td><td class='num'>2</td><td class='num' data-sort='60'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>2</td><td class='num'>29</td><td class='num'>121</td><td class='num'>1</td><td class='num' data-sort='60'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
-<tr><td><code>backend/scripts/bench_overview.py</code></td><td class='num'>1</td><td class='num'>58</td><td class='num'>372</td><td class='num'>1</td><td class='num' data-sort='59'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>backend/scripts/redownload_chub.py</code></td><td class='num'>2</td><td class='num'>22</td><td class='num'>94</td><td class='num'>1</td><td class='num' data-sort='46'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
-<tr><td><code>scripts/unix/shutdown.sh</code></td><td class='num'>4</td><td class='num'>8</td><td class='num'>24</td><td class='num'>2</td><td class='num' data-sort='36'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>backend/src/grimoire/cache.py</code></td><td class='num'>1</td><td class='num'>35</td><td class='num'>124</td><td class='num'>1</td><td class='num' data-sort='36'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/unix/shutdown.sh</code></td><td class='num'>4</td><td class='num'>8</td><td class='num'>24</td><td class='num'>2</td><td class='num' data-sort='36'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>.agents/skills/world-card-integration/scripts/inspect_cards.py</code></td><td class='num'>1</td><td class='num'>33</td><td class='num'>166</td><td class='num'>1</td><td class='num' data-sort='34'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/sync_skills.py</code></td><td class='num'>1</td><td class='num'>30</td><td class='num'>104</td><td class='num'>1</td><td class='num' data-sort='31'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>scripts/unix/android-bootstrap.sh</code></td><td class='num'>2</td><td class='num'>9</td><td class='num'>62</td><td class='num'>1</td><td class='num' data-sort='20'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>backend/src/grimoire/where.py</code></td><td class='num'>2</td><td class='num'>8</td><td class='num'>89</td><td class='num'>1</td><td class='num' data-sort='18'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>backend/scripts/benchmark_membership.py</code></td><td class='num'>1</td><td class='num'>13</td><td class='num'>135</td><td class='num'>1</td><td class='num' data-sort='14'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
-<tr><td><code>scripts/gen_android_icon.py</code></td><td class='num'>1</td><td class='num'>6</td><td class='num'>61</td><td class='num'>1</td><td class='num' data-sort='7'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
+<tr><td><code>scripts/gen_android_icon.py</code></td><td class='num'>1</td><td class='num'>6</td><td class='num'>61</td><td class='num'>1</td><td class='num' data-sort='7'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/backup_images.py</code></td><td class='num'>1</td><td class='num'>2</td><td class='num'>13</td><td class='num'>1</td><td class='num' data-sort='3'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>scripts/unix/macos-launcher.sh</code></td><td class='num'>1</td><td class='num'>2</td><td class='num'>69</td><td class='num'>1</td><td class='num' data-sort='3'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
 
 
 
 </section>
 <section class="panel" id="flows" role="tabpanel">
 
-<h2>Make plans reviewable before applying effects</h2>
-<h3>1. USB file reconciliation</h3><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
-sequenceDiagram
- participant C as CLI
- participant H as Hash readers
- participant P as Pure planner
- participant A as ADB
- participant L as PC library
- participant B as Baseline
- C->>H: Resolve and hash PC plus phone
- H-->>C: Path hashes and unreadable paths
- C->>B: Read common hashes and conflicts
- C->>P: Hashes plus baseline
- P-->>C: Copy lists and conflicts
- alt Dry run
- C-->>C: Describe without writes
- else Apply
- alt Unreadable phone and no override
- C-->>C: Refuse transfer
- else Readable
- C->>L: Optional Git snapshot
- C->>A: Force-stop phone by default
- C->>A: Pull and push old plan
- A-->>L: Files and conflict siblings
- C->>B: Record planned hashes and failures
- end
- end
-</pre></div></div>
-<ul><li>Absence always copies, so deleting on one side resurrects the file; conflicts preserve originals and pull a sibling copy. <code>scripts/grimoire_sync.py:24</code> <code>scripts/grimoire_sync.py:384</code></li><li>Hashing precedes the stop, and successful transfers record the earlier hashes without a post-transfer rehash. Concurrent writers can therefore invalidate both overwrite safety and baseline accuracy. <code>scripts/grimoire_sync.py:606</code> <code>scripts/grimoire_sync.py:663</code> <code>scripts/grimoire_sync.py:683</code> <code>scripts/grimoire_sync.py:714</code></li><li>The pure planner is tested without ADB; those tests establish decisions on supplied hashes, not device transport/concurrency behavior. <code>backend/tests/test_grimoire_sync.py:1</code></li></ul>
-<h3>2. Lint ratchet</h3><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
-sequenceDiagram
- participant C as Check or update
- participant T as Pinned collector
- participant B as Baseline
- participant D as Counter comparison
- C->>T: Require exact tool version
- T-->>C: Findings or ToolError
- C->>B: Read prior counts
- C->>D: Compare file and rule pairs
- alt Check
- D-->>C: Fail on growth or unrecorded improvement
- else Update
- alt Counts grow without explicit override
- C-->>C: Refuse baseline write
- else Counts do not grow
- C->>B: Write canonical LF JSON
- end
- end
-</pre></div></div>
-<ul><li>Tool failure must not become an empty findings set. Collector errors and JSON failures are explicit. <code>scripts/ratchet.py:43</code> <code>scripts/ratchet.py:108</code> <code>scripts/ratchet.py:120</code></li><li>Counts ignore line numbers so inserting a line does not invent a new finding, but a rule is still independent of other rules in that file. <code>scripts/ratchet.py:18</code> <code>backend/tests/test_ratchet_guard.py:85</code></li><li>Regeneration is not an unrestricted way to turn failures green: increases require an explicit accept-regressions action. <code>scripts/ratchet.py:357</code></li></ul>
-<h3>3. Direct edit followed by cache warm-up</h3><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
-sequenceDiagram
- participant O as Operator
- participant S as Store writer
- participant F as Authoritative files
- participant C as cache sync CLI
- participant D as Derived projections
- O->>S: Validated plan or edit
- S->>F: Publish records
- O->>C: Named paths or scope
- C->>C: Resolve and report active root
- alt Dry run
- C-->>O: Classification and plan
- else Apply
- C->>D: Rebuild previously hot representations
- C-->>O: Per-path status and incomplete markers
- end
-</pre></div></div>
-<p>Omitting warm-up leaves the next reader to rebuild; it is not an alternate write API. Missing paths and truncated/unsynced work are reported rather than blanket success. <code>backend/src/grimoire/cache.py:3</code> <code>backend/src/grimoire/cache.py:16</code> <code>backend/src/grimoire/cache.py:21</code> <code>backend/src/grimoire/cache.py:106</code></p>
-
+<h2>Static-analysis gate</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+Gate-&gt;&gt;Tool: run pinned checker
+alt checker failed
+Tool--&gt;&gt;Gate: ToolError
+else valid findings
+Gate-&gt;&gt;Baseline: compare counts by file and rule
+Gate--&gt;&gt;Caller: pass or actionable difference
+end</pre></div></div><h2>Timing comparison</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+Caller-&gt;&gt;Profile: load two captured runs
+Profile-&gt;&gt;Profile: compare test manifests and settings
+Profile--&gt;&gt;Caller: observed deltas and comparability limits</pre></div></div><h3>Seams to review</h3><p>This unit includes Python, shell and PowerShell. Python detectors and language-agnostic checks do not establish shell or PowerShell correctness; installed skill helpers are architecture context, outside root-doctor semantic coverage.</p><p><code>scripts/ratchet.py:1</code> · <code>scripts/ratchet.py:43</code> · <code>scripts/profile_report.py:149</code></p>
 </section>
 <section class="panel" id="boundaries" role="tabpanel">
 
-<h2>Shared rules, several effect lifetimes</h2><div class="tbl-wrap"><table><thead><tr><th>Concern</th><th>Owner</th><th>Assessment</th></tr></thead><tbody><tr><td>Sync overwrite decision</td><td><code>scripts/grimoire_sync.py:365</code></td><td><span class="badge good">pure planner</span></td></tr><tr><td>File transport and baseline publication</td><td><code>scripts/grimoire_sync.py:464</code> <code>scripts/grimoire_sync.py:484</code> <code>scripts/grimoire_sync.py:714</code></td><td><span class="badge warn">several fallible phases</span></td></tr><tr><td>Checker output and debt policy</td><td><code>scripts/ratchet.py:120</code> <code>scripts/ratchet.py:300</code></td><td><span class="badge good">collect versus compare</span></td></tr><tr><td>Desktop startup and stale bundles</td><td><code>scripts/unix/run.sh:39</code> <code>scripts/windows/run.ps1:60</code></td><td><span class="badge warn">mirrored platform implementations</span></td></tr><tr><td>World plan/domain validation</td><td><code>backend/scripts/create_world.py:1</code></td><td><span class="badge good">delegates IDs and writes</span></td></tr><tr><td>Absorb connection selection</td><td><code>backend/scripts/ingest_scene.py:46</code></td><td><span class="badge good">same inference seam as app</span></td></tr><tr><td>Template/build data contract</td><td><code>scripts/verify_templates.py:3</code></td><td><span class="badge warn">independent gather mirror</span></td></tr></tbody></table></div>
-<h3>Authoritative versus generated data</h3><p>World-plan apply uses public store constructors; IDs are allocated there and omitted keys retain their current values. Population also delegates entity creation while recording touched files and stage outcomes. These entrypoints write the real selected library when executed, unlike synthetic generators and the template verifier. <code>backend/scripts/create_world.py:6</code> <code>backend/scripts/create_world.py:20</code> <code>.agents/skills/populate-world-content/scripts/populate_world_content.py:73</code> <code>backend/scripts/synth_library.py:1</code> <code>scripts/verify_templates.py:25</code></p>
-<p>Sync intentionally reaches below record APIs: a file is an opaque blob and a common hash is the agreement boundary. That extends to unseen record kinds, but bypasses campaign locks and record-level validation, so it needs quiescent endpoint state. <code>scripts/grimoire_sync.py:3</code> <code>scripts/grimoire_sync.py:365</code> <code>scripts/grimoire_sync.py:663</code></p>
-<div class="callout warn">Startup semantics differ by platform: Bash refuses an occupied production port, while PowerShell stops processes owning configured listening ports. A Windows listener that is unrelated to Grimoire can therefore be terminated by ordinary startup. This is a concrete ownership distinction beyond shared input-list tests. <code>scripts/unix/run.sh:84</code> <code>scripts/windows/run.ps1:50</code></div>
-<p>The historical partition helper is intentionally less portable than app CLIs: it hardcodes one design document and checkout-relative source location. Treat it as a project-specific maintenance aid, not a generic package splitter. <code>scripts/validate_partition.py:16</code> <code>scripts/validate_partition.py:20</code></p>
-
-<p>No file or grouped import cycle was detected in this scoped toolbox. Most dependencies intentionally leave it for production store/build code; graph sparsity reflects package selection, not duplicate independent implementations. PowerShell semantics remain outside automated support. <code>backend/scripts/create_world.py:35</code> <code>backend/scripts/ingest_scene.py:19</code> <code>backend/src/grimoire/cache.py:36</code></p>
-
+<h2>Ownership</h2><p>Python tools own normalized evidence and CLI behavior. Shell and PowerShell launchers own platform setup; their duplicated orchestration needs review across platforms.</p><p><code>scripts/ratchet.py:1</code> · <code>scripts/ratchet.py:43</code> · <code>scripts/profile_report.py:149</code> · <code>backend/src/grimoire/where.py:1</code> · <code>backend/src/grimoire/compiled_build.py:1</code></p><h3>Interpreting the dependency graph</h3><p>The graph includes facade re-exports, type/test references and textual runtime-load candidates. A strongly connected component is a review lead, not proof of a runtime import failure. Package facades can form return edges to their implementation owners; do not delete public aliases just to flatten the graph. Load paths assembled entirely at runtime are invisible.</p>
 </section>
 <section class="panel" id="invariants" role="tabpanel">
 
-<h2>Tooling must not hide new debt or overwrite unobserved work</h2>
-<div class="tbl-wrap"><table><thead><tr><th>Invariant</th><th>Enforcement</th><th>Status</th></tr></thead><tbody><tr><td>Checker failure cannot mean zero findings</td><td><code>scripts/ratchet.py:43</code> <code>scripts/ratchet.py:120</code></td><td><span class="badge good">ToolError boundary</span></td></tr><tr><td>New debt and stale excessive baselines both fail</td><td><code>scripts/ratchet.py:300</code> <code>scripts/ratchet.py:332</code></td><td><span class="badge good">two-direction check</span></td></tr><tr><td>Baseline updates cannot silently allow growth</td><td><code>scripts/ratchet.py:357</code></td><td><span class="badge good">downward by default</span></td></tr><tr><td>Synthetic generation starts in a plain empty directory</td><td><code>backend/scripts/synth_library.py:55</code></td><td><span class="badge good">lstat and emptiness checks</span></td></tr><tr><td>Unreadable phone data is not absence without an override</td><td><code>scripts/grimoire_sync.py:632</code></td><td><span class="badge good">default refusal</span></td></tr><tr><td>Sync writes are based on a quiescent snapshot</td><td><code>scripts/grimoire_sync.py:606</code> <code>scripts/grimoire_sync.py:663</code></td><td><span class="badge warn">hashes precede stop</span></td></tr><tr><td>Population target actually exists</td><td><code>.agents/skills/populate-world-content/scripts/populate_world_content.py:701</code></td><td><span class="badge good">prewrite world check</span></td></tr></tbody></table></div>
-<h3>Failure handling and concurrency</h3><p>Sync preserves conflicting originals and collects transfer failures, but effects can land before the command returns a nonzero status. Baselines are updated from pre-transfer hash dictionaries. The planner tests do not simulate edits racing the capture or transport; their input is already a fixed set of hashes. <code>scripts/grimoire_sync.py:683</code> <code>scripts/grimoire_sync.py:714</code> <code>backend/tests/test_grimoire_sync.py:1</code></p>
-<p>Domain writers supply their own locking semantics, while USB transport writes files directly. A before-sync Git snapshot is recovery material, not exclusion against an app or external editor writing concurrently. <code>scripts/grimoire_sync.py:657</code> <code>scripts/grimoire_sync.py:464</code> <code>scripts/grimoire_sync.py:484</code></p>
-<h3>Risk ranking</h3><div class="callout bad"><strong>1. Stale sync plan can overwrite an intervening edit.</strong> If a phone target is unchanged during hashing but edited before force-stop, an already-planned PC push still replaces it. PC-side edits can likewise race a pull, and successful-transfer baselines retain the earlier hashes. No device experiment was run. <code>scripts/grimoire_sync.py:606</code> <code>scripts/grimoire_sync.py:663</code> <code>scripts/grimoire_sync.py:683</code></div>
-<div class="callout warn"><strong>2. Windows startup owns ports more broadly than recorded processes.</strong> An unrelated listener on a configured port is stopped by owner PID, whereas Bash refuses the collision. <code>scripts/windows/run.ps1:50</code> <code>scripts/unix/run.sh:84</code></div>
-<div class="callout warn"><strong>3. Template agreement is not semantic prompt quality.</strong> The independent gather mirror checks wiring/bytes while allowing prompt text edits; it can pass when an instruction is poor. Eval counterexamples and live evidence answer different questions. <code>scripts/verify_templates.py:3</code> <code>evals/cases.py:22</code></div>
-<p><strong>4. Drift cost concentrates in large mutable harnesses.</strong> Fresh hotspots put template verification first, then scene ingestion and world creation. Read their reuse boundaries before extending a mirrored contract. PowerShell semantic analysis is absent from the automated inventory; it was sampled manually. <code>scripts/verify_templates.py:1</code> <code>backend/scripts/ingest_scene.py:37</code> <code>backend/scripts/create_world.py:6</code></p>
-
-<details><summary>Reconciliation with the prior atlas</summary><div class="body"><p>The recovered prior scripts atlas contained no Boundaries or Invariants fragments. There were no previous risk/invariant/cycle claims in those tabs to carry forward; the fresh findings above were developed from current source and analyzer summaries.</p></div></details>
-
+<h2>Contract and its limit</h2><p>A checker failure cannot be interpreted as zero findings. Baseline keys use file and rule, so moving a line does not manufacture a new defect.</p><p><code>scripts/ratchet.py:43</code> · <code>scripts/profile_report.py:149</code> · <code>backend/src/grimoire/where.py:1</code></p><h3>Review priority</h3><div class="callout warn">This unit includes Python, shell and PowerShell. Python detectors and language-agnostic checks do not establish shell or PowerShell correctness; installed skill helpers are architecture context, outside root-doctor semantic coverage.</div><h3>Analysis limits</h3><p>The automated LLM detector recognizes SDK-shaped calls and can miss this application’s wrappers and direct HTTP transports. An omitted LLM Ops tab does not mean this code makes no model calls. Textual dependency/load edges and checker findings need semantic review before fixes.</p><h3>Concrete unresolved cases</h3><div class="card"><h4>Sync plans can become stale before transfer</h4><p>Both endpoints are hashed and the plan fixed before the phone app is stopped. An intervening phone edit can be overwritten by a planned push; PC edits can race a pull. Successful-transfer baselines use the earlier hashes. A Git snapshot is recovery material, not exclusion.</p><p><code>scripts/grimoire_sync.py:606</code> · <code>scripts/grimoire_sync.py:617</code> · <code>scripts/grimoire_sync.py:663</code> · <code>scripts/grimoire_sync.py:683</code> · <code>scripts/grimoire_sync.py:714</code></p></div><div class="card"><h4>Windows launcher claims any configured-port listener</h4><p>The PowerShell launcher stops every listener owner on its configured ports; the Bash production launcher refuses a collision. An unrelated listener is a concrete operational ownership case when changing startup behavior.</p><p><code>scripts/windows/run.ps1:50</code> · <code>scripts/windows/run.ps1:53</code> · <code>scripts/windows/run.ps1:56</code> · <code>scripts/unix/run.sh:85</code></p></div><h3>Reconciliation with the previous atlas</h3><p>Prior detector totals and old file coordinates were replaced by fresh analysis. Concrete unresolved cases above remain open. Earlier assurances based on source-shape tests are withdrawn: those tests were removed in the suite cleanup at 0e9e7f4be and never established runtime exclusion, atomicity or provider correctness.</p><h3>Recovery and semantic quality remain separate</h3><p>Sync may return a failure after transfers already landed. A recovery snapshot does not make its plan concurrent-safe. Template agreement checks wiring and rendered bytes, while scenario graders and model evidence answer semantic quality. The template harness remains a concentrated review target.</p><p><code>scripts/grimoire_sync.py:683</code> · <code>scripts/verify_templates.py:1</code> · <code>evals/cases.py:1</code></p>
 </section>
 <section class="panel" id="glossary" role="tabpanel">
 
-<h2>Several commands use the same word for different operations</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Code name</th><th>Meaning</th></tr></thead><tbody><tr><td>USB synchronization</td><td>plan_sync / reconcile</td><td>Opaque file/hash decisions with no deletion propagation. <code>scripts/grimoire_sync.py:365</code> <code>scripts/grimoire_sync.py:333</code></td></tr><tr><td>Derived-state warm-up</td><td>cache sync</td><td><span class="badge warn">different sync</span> Rebuilds hot projections after authoritative edits; not replication. <code>backend/src/grimoire/cache.py:1</code></td></tr><tr><td>Last agreed bytes</td><td>sync baseline</td><td>Common file hashes, distinct from lint baselines and model baselines. <code>scripts/grimoire_sync.py:17</code></td></tr><tr><td>Accepted existing debt</td><td>Findings baseline</td><td>Counts by file/rule against an exact checker version; a lower actual count still requires recording the improvement. <code>scripts/ratchet.py:10</code> <code>scripts/ratchet.py:38</code></td></tr><tr><td>Patch input</td><td>World plan</td><td>Named records/refs; omission preserves, explicit values update, absent records do not get deleted. <code>backend/scripts/create_world.py:6</code> <code>backend/scripts/create_world.py:20</code></td></tr><tr><td>Template verification</td><td>gather mirror / Report</td><td>Independent input-data assembly compared to builder output, not a frozen instruction snapshot or quality score. <code>scripts/verify_templates.py:3</code> <code>scripts/verify_templates.py:66</code></td></tr><tr><td>Synthetic library</td><td>Shape / generate_library</td><td>Deterministic placeholder data on an empty target; a marker proves provenance, not permission to overwrite. <code>backend/scripts/synth_library.py:1</code></td></tr></tbody></table></div>
+<h2>Domain to code</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Meaning</th></tr></thead><tbody><tr><td>ratchet</td><td>counts that may decrease but cannot silently increase</td></tr><tr><td>baseline</td><td>per-file/rule accepted debt</td></tr><tr><td>profile</td><td>per-node phase observations</td></tr><tr><td>resolver</td><td>authoritative runtime location</td></tr></tbody></table></div><p><code>scripts/ratchet.py:1</code></p>
+</section>
+<section class="panel" id="coverage" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi good"><div class="n">94%</div><div class="l">line coverage (measured files)</div></div>
+  <div class="kpi"><div class="n">3</div><div class="l">files measured</div></div>
+  <div class="kpi warn"><div class="n">23</div><div class="l">source files not measured</div></div>
+</div>
+<div class="callout"><b>Source:</b> <code>C:\Users\charl\github\grimoire\backend\coverage.xml</code> (cobertura). This tab renders an existing artifact — it did not run the tests. Coverage says which lines executed under test, not that their behavior was asserted; pair it with the Invariants tab before trusting a green file.</div>
+
+<h2>Uncovered complexity map</h2>
+<p class="dim">Area = lines of code · color = % uncovered · the large, hot blocks are the untested complexity.</p>
+<div class="viz" data-render="treemap" style="height:520px"></div>
+<script type="application/json">{"items":[{"name":"backend/src/grimoire/cache.py","value":124,"metric":7.3,"meta":"93% covered \u00b7 35 branches"},{"name":"backend/src/grimoire/compiled_build.py","value":124,"metric":6.6,"meta":"93% covered \u00b7 29 branches"},{"name":"backend/src/grimoire/where.py","value":89,"metric":0.0,"meta":"100% covered \u00b7 8 branches"}],"valueLabel":"LOC","metricLabel":"% uncovered","metricMax":100}</script>
+<h2>Highest-risk files — complex and untested</h2>
+<p class="dim">Risk = branch points × uncovered share. Tests excluded from the ranking.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Coverage</th><th class="num">Lines</th><th class="num">Branches</th><th class="num">Untested complexity</th></tr></thead>
+<tbody><tr><td><code>backend/src/grimoire/cache.py</code></td><td class='num'>93%</td><td class='num'>76/82</td><td class='num'>35</td><td class='num' data-sort='2.6'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/compiled_build.py</code></td><td class='num'>93%</td><td class='num'>71/76</td><td class='num'>29</td><td class='num' data-sort='1.9'><div class="bar bad"><i style="width:73.1%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/where.py</code></td><td class='num'>100%</td><td class='num'>25/25</td><td class='num'>8</td><td class='num' data-sort='0.0'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
+<details><summary>23 source file(s) absent from the coverage report</summary><div class='body'><p class='dim'>Never imported by any test, excluded from the run, or added after the artifact was generated — 0% is the safe assumption.</p><ul><li><code>scripts/verify_templates.py</code> <span class='dim'>(362 branches, 2404 LOC)</span></li><li><code>backend/scripts/create_world.py</code> <span class='dim'>(308 branches, 983 LOC)</span></li><li><code>.agents/skills/populate-world-content/scripts/populate_world_content.py</code> <span class='dim'>(164 branches, 687 LOC)</span></li><li><code>scripts/grimoire_sync.py</code> <span class='dim'>(127 branches, 620 LOC)</span></li><li><code>backend/scripts/ingest_scene.py</code> <span class='dim'>(107 branches, 695 LOC)</span></li><li><code>scripts/profile_report.py</code> <span class='dim'>(72 branches, 318 LOC)</span></li><li><code>scripts/coverage_arcs.py</code> <span class='dim'>(68 branches, 248 LOC)</span></li><li><code>backend/scripts/benchmark_compiled.py</code> <span class='dim'>(64 branches, 352 LOC)</span></li><li><code>backend/scripts/bench_overview.py</code> <span class='dim'>(58 branches, 381 LOC)</span></li><li><code>scripts/ratchet.py</code> <span class='dim'>(50 branches, 365 LOC)</span></li></ul></div></details>
+
 
 </section><!--DOC_BODY--></main>
-<footer class="doc">Automated tabs use installed code-visualization analyzers. Judgment tabs cite sampled source reading. Coverage omitted by user choice; custom model wrappers and dynamic resource loads have stated detection gaps.</footer>
+<footer class="doc"></footer>
 <script>
 (function(){
   const btns=[...document.querySelectorAll('nav.tabs button')];
