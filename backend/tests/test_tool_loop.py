@@ -438,12 +438,13 @@ def test_a_wall_spent_before_a_tool_starts_never_awaits_it():
         await asyncio.Event().wait()
 
     loop = _bare_loop(execute=wedged)
-    loop.wall, loop.t0 = 1.0, loop.t0 - 2         # the wall ran out a second ago
-    spec = loop.toolset.get("read")
+    clock = loop.state.clock
+    clock.wall, clock.t0 = 1.0, clock.t0 - 2      # the wall ran out a second ago
+    spec = loop.state.options.toolset.get("read")
     call = tool_calls.ToolCall("call_1", "read", {}, "{}")
 
     async def go():
-        return await asyncio.wait_for(loop._run_tool(call, spec), 2)
+        return await asyncio.wait_for(loop.tools.run_tool(call, spec), 2)
     output, ok = asyncio.run(go())
     assert (output.text, ok, started) == (tool_calls.TIMED_OUT, False, [])
 
@@ -544,14 +545,14 @@ def test_a_reused_provider_id_is_renamed_per_occurrence_on_the_switch():
     history whose ids are distinct, each result paired with its own call."""
     loop = _bare_loop(resolved=_resolved(wire.Chain(PRIMARY, SPARE)))
     for n in (1, 2):
-        loop.appended += [
+        loop.transcript.appended += [
             {"role": "assistant", "content": "",
              "tool_calls": [{"id": "call_0", "name": "read", "arguments": {}}]},
             {"role": "tool", "tool_call_id": "call_0", "name": "read",
              "content": f"page {n}", "is_error": False}]
     loop._note_switch(SPARE)
-    ids = [c["id"] for m in loop.appended for c in m.get("tool_calls", ())]
-    results = [(m["tool_call_id"], m["content"]) for m in loop.appended
+    ids = [c["id"] for m in loop.transcript.appended for c in m.get("tool_calls", ())]
+    results = [(m["tool_call_id"], m["content"]) for m in loop.transcript.appended
                if m["role"] == "tool"]
     assert len(set(ids)) == 2 and all(i.startswith("gc_run01234_") for i in ids)
     assert results == [(ids[0], "page 1"), (ids[1], "page 2")]
@@ -562,8 +563,8 @@ def test_a_degrade_sibling_is_not_a_switch():
     loop = inference._Loop("chat", PROMPT, inference.LoopOptions(
         toolset=_toolset(), execute=None, client=None, resolved=resolved, budget=RunBudget(),
         run_id=RUN))
-    assert not loop._switched_to(replace(PRIMARY, degrade=True))
-    assert loop._switched_to(SPARE)
+    assert not loop.targets.switched_to(replace(PRIMARY, degrade=True))
+    assert loop.targets.switched_to(SPARE)
 
 
 def test_required_is_sent_as_auto_beside_thinking():
