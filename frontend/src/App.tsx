@@ -1,6 +1,5 @@
-import { GalleryStateProvider } from "./components/art/galleryState";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { api, type ProviderHealth } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_MODE } from "./theme/themes";
@@ -20,48 +19,10 @@ import { RAIL_PX, railless } from "./shell/rail";
 import { useOpenCampaign } from "./shell/useOpenCampaign";
 import { useShellPayload } from "./shell/useShellPayload";
 import { ShellPayloadProvider } from "./shell/ShellPayloadContext";
-import CampaignsView from "./routes/CampaignsView";
-import CampaignWizard from "./routes/CampaignWizard";
-import OpenScene from "./routes/OpenScene";
-import CampaignView from "./routes/CampaignView";
-import CampaignHub from "./routes/CampaignHub";
-import CampaignSettingsView from "./routes/CampaignSettingsView";
-import ScenesView from "./routes/ScenesView";
-import TodoView from "./routes/TodoView";
-import CostsView from "./routes/CostsView";
-import GlobalCostsView from "./routes/GlobalCostsView";
-import LedgerView from "./routes/LedgerView";
-import SheetsView from "./routes/SheetsView";
-import StoryGraphView from "./routes/StoryGraphView";
-import TimelineView from "./routes/TimelineView";
-import LibraryView from "./routes/LibraryView";
-import SearchView from "./routes/SearchView";
-import WorldsView from "./routes/WorldsView";
-import WorldView from "./routes/WorldView";
-import CharacterPage from "./routes/CharacterPage";
-import PCPage from "./routes/PCPage";
-import { characterHref } from "./components/character/shared";
-import ModulesView from "./routes/ModulesView";
-import StyleGuidesView from "./routes/StyleGuidesView";
-import CalendarsView from "./routes/CalendarsView";
-import ClimatesView from "./routes/ClimatesView";
-import ProvidersView from "./routes/ProvidersView";
-import ModelsView from "./routes/ModelsView";
-import PresetsView from "./routes/PresetsView";
-import { RoutePageRedirect } from "./routes/ModelsRedirect";
-import ConfigView from "./routes/ConfigView";
-import StatsView from "./routes/StatsView";
-
-function ScopedTodoView() {
-  const { cid = "" } = useParams();
-  return <TodoView key={cid} cid={cid} />;
-}
-
-function ScopedStatsView() {
-  const { cid = "" } = useParams();
-  return <StatsView key={cid} cid={cid} />;
-}
-import SetupWizard from "./routes/SetupWizard";
+import AppRoutes from "./AppRoutes";
+// Re-exported: the redirect lived here before the route table moved out, and
+// `CharacterPage.test.tsx` mounts it by this path.
+export { LegacyCharacterRedirect } from "./AppRoutes";
 
 /** The shell's own body: header, palette, routes. Split out from `App` only so
  *  the ⌘K hotkey can live *under* `PaletteProvider` — a hook cannot read a
@@ -89,83 +50,17 @@ const Shell = memo(function Shell(
    *  mode the app can get stuck in. */
   const rerunSetup = new URLSearchParams(location.search).get("again") === "1";
   usePaletteHotkey();
+  useSearchHotkey();
   const { focus } = useFocus();
-  const navigate = useNavigate();
-  // The design's Search shortcut, expressible since `chordOf` stopped folding
-  // shift into a chord that already has a modifier in it.
-  //
-  // `global`, like the palette's, because Search is the other thing that has
-  // to be reachable from anywhere -- an overlay must not be able to strand
-  // you. NOT `whileTyping`: the palette earns that by being the thing you
-  // reach for mid-sentence without losing the draft, and a chord that
-  // navigated away from a half-written post would lose it.
-  useHotkeys([{
-    keys: SEARCH_CHORD, label: "Search everything", group: "ANYWHERE",
-    global: true, run: () => void navigate("/search"),
-  }]);
-
-  // Which campaign the rail's second tier is about. A hint the payload
-  // validates -- what actually renders comes from `payload.campaign`, never
-  // from storage, so a rename cannot leave a stale name in the chrome.
-  const { cid, reconcile } = useOpenCampaign(dataDir);
-  const shell = useShellPayload(dataDir, cid, reconcile);
-  /** The campaign the chrome is actually about.
-   *
-   *  `cid` is what the browser remembers and what the read ASKS with; this is
-   *  what came back. They differ in exactly one case, and it is the one the
-   *  rail was previously blank for: a browser that has never opened a campaign
-   *  asks with nothing, and `GET /api/shell` answers with the most recently
-   *  played one. Every consumer of "which campaign" wants that answer rather
-   *  than the empty question - the rail's rows build their hrefs from it (a
-   *  row whose `to()` is null is not rendered at all, so the tier would draw
-   *  its heading and nothing under it), and the Todo page must scope to the
-   *  same campaign the rail's badge counted.
-   *
-   *  Deliberately not fed back into `useOpenCampaign`: nothing is written to
-   *  storage, so opening a campaign explicitly still wins, and the default
-   *  keeps tracking what was last played instead of freezing on whichever
-   *  campaign it happened to pick first. */
-  const openCid = shell.payload?.campaign?.id ?? cid;
-  /** The same read, for the pages that draw its numbers (the hub, the scenes
-   *  list). They used to issue their own copy of it beside this one and hold
-   *  the page until it answered; `ShellPayloadContext` says why that was the
-   *  slowest thing on either page. `cid` rides along because a status is only
-   *  a statement about the campaign it asked about. */
-  const shellValue = useMemo(
-    () => ({ status: shell.status, payload: shell.payload, retry: shell.retry, cid }),
-    [shell.status, shell.payload, shell.retry, cid]);
-
-  // `innerWidth` rather than `matchMedia`, and event-driven rather than polled
-  // -- the same reading `PageShell` takes for its own breakpoint, and the one
-  // the CSS gets. The two breakpoints stay distinct: RAIL_PX is where the rail
-  // and a page's column can no longer share a row, PHONE_PX is where a column
-  // and main cannot.
-  const [docked, setDocked] = useState(() => window.innerWidth > RAIL_PX);
-  const [railOpen, setRailOpen] = useState(false);
-  useEffect(() => {
-    const onResize = () => setDocked(window.innerWidth > RAIL_PX);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  // Widening past the breakpoint docks the rail, so the drawer must not be left
-  // "open" underneath it -- and leaving focus mode must not restore one either.
-  useEffect(() => { if (docked) setRailOpen(false); }, [docked]);
-  const closeRail = useCallback(() => setRailOpen(false), []);
+  const { shell, openCid, shellValue } = useShellChrome(dataDir);
+  const { docked, railOpen, openRail, closeRail } = useRailDrawer();
 
   // The two wizards are one centred question at a time; `PlainShell`'s
   // docstring calls a navigation surface beside them an answer of "nothing,
   // finish this first". On a first run the rail would otherwise offer
   // Campaigns, Library and Configuration before setup has been answered.
   const noRail = railless(location.pathname) || focus;
-
-  /** Bumped when another tab moves the store, and the routed page's key. The
-   *  page open here was read from the library that just stopped being served,
-   *  and its handlers would write into the new one under the old one's ids --
-   *  so it is remounted rather than left to notice, which it has no way to
-   *  do. The chrome around it is not: the rail and the header refresh through
-   *  their own signals and keep their scroll and drawer state. */
-  const [storeGen, setStoreGen] = useState(0);
-  useEffect(() => onStoreMovedElsewhere(() => setStoreGen((n) => n + 1)), []);
+  const storeGen = useStoreGeneration();
 
   return (
     <>
@@ -180,7 +75,7 @@ const Shell = memo(function Shell(
       {focus ? <FocusRestore />
              : <AppHeader model={model} connection={connection} ready={ready}
                           health={health} railDrawer={!docked} campaign={shell.payload?.campaign}
-                          onOpenRail={() => setRailOpen(true)} />}
+                          onOpenRail={openRail} />}
       <AppPaletteSource payload={shell.payload} />
       <CommandPalette />
       {/* `?`, and the sheet that lists whatever is bound where you are
@@ -222,186 +117,99 @@ const Shell = memo(function Shell(
           only below `PHONE_PX`, where the rail has already become a drawer. */}
       {!noRail && (
         <PhoneTabs payload={shell.payload} cid={openCid}
-                   onOpenRail={() => setRailOpen(true)} />
+                   onOpenRail={openRail} />
       )}
     </>
   );
 });
 
-/** The routes, apart from the chrome around them.
+/** The design's Search shortcut, expressible since `chordOf` stopped folding
+ *  shift into a chord that already has a modifier in it.
  *
- *  Memoized for the reason `Shell` is, one level down. Shell owns the rail's
- *  shell read, so every re-read -- each notification, each arrival at a
- *  campaign page -- re-renders it at least once for the request and once for
- *  the answer, and each of those used to rebuild every route element and
- *  re-render whichever page was open, the play view included, to draw nothing
- *  new. The props here are what the route table actually takes from the
- *  chrome; the pages that draw the shell's numbers read them from
- *  `ShellPayloadContext`, which reaches them through this boundary on its own. */
-const AppRoutes = memo(function AppRoutes(
-  { inSetup, rerunSetup, ready, dataDir, onLeftSetup }: {
-    inSetup: boolean; rerunSetup: boolean; ready: boolean; dataDir: string;
-    onLeftSetup: (dir: string) => void;
-  },
-) {
-  const location = useLocation();
-  return (
-    <GalleryStateProvider><Routes>
-      {/* A fresh install lands on the wizard instead of an empty campaigns
-          list. Only `/` is redirected: every other route stays reachable, so
-          a deep link is never hijacked. The two guards are exact opposites
-          of one `inSetup`, which is what keeps them from bouncing a redirect
-          back and forth. Gating `/welcome` too is what stops a reload
-          part-way through the wizard — after a world exists, so the server no
-          longer calls it a first run — from restarting at step one and
-          creating a second world. */}
-      <Route path="/" element={inSetup ? <Navigate to="/welcome" replace /> : <CampaignsView />} />
-      {/* `?again=1` is the explicit re-entry signal Configuration's own
-          First-run setup row links with. Without one this route is a
-          redirect the moment setup is done, so nothing could offer the
-          wizard again -- and the four things it walks (storage, model, look,
-          world) are exactly what somebody moving to a new machine wants to
-          be walked through a second time. It has to be explicit rather than
-          inferred: `inSetup` answers "has this library been set up", and
-          re-running is a decision, not a state. */}
-      <Route path="/welcome" element={
-        inSetup || rerunSetup
-          ? <SetupWizard onDone={(dir) => onLeftSetup(dir ?? dataDir)} />
-          : <Navigate to="/" replace />} />
-      <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
-      {/* Where a completion-notification tap lands; see `OpenScene`. */}
-      <Route path="/open" element={<OpenScene />} />
-      {/* Keyed so a campaign→campaign move remounts. The palette made that
-          transition reachable: it stays on this route and only changes the
-          param, so React reuses the component, and CampaignView's [cid]
-          effect refetches without synchronously dropping the scene list,
-          transcript or activeId. Until those land -- or forever, if they
-          fail -- it would show campaign A's scene while its handlers carry
-          B's cid, and scene ids repeat across campaigns. The key is the
-          campaign segment alone and NOT the whole pathname: this route
-          matches deeper now (#87, below), and keying on the full path would
-          remount on every scene jump -- exactly what the nested child exists
-          to prevent. */}
-      {/* The play view answers to two paths — with and without a scene
-          (#87) — and they have to resolve to the SAME element instance.
-          Sibling routes would remount CampaignView on
-          /campaigns/A/scenes/s1 → /campaigns/B but not on
-          A/scenes/s1 → B/scenes/s2, so the stale-response guards the view is
-          built around (cidRef, the window token) would hold in one direction
-          and be bypassed in the other. Nesting keeps one instance for every
-          combination. The child renders nothing — CampaignView has no
-          <Outlet /> — and exists only to put `:sid` in the matched path,
-          where useMatch can read it. */}
-      {/* The campaign's front door, and it is not the transcript. Opening a
-          campaign used to resume whichever scene was played last, which is
-          the complaint the hub answers -- so play now lives one segment
-          deeper and the reader arrives somewhere that says what is waiting. */}
-      <Route path="/campaigns/:cid" element={<CampaignHub />} />
-      <Route path="/campaigns/:cid/settings" element={<CampaignSettingsView />} />
-      {/* The list is the route; play is one scene inside it. They are
-          separate elements rather than one component branching on `:sid`,
-          because a list read top to bottom and a transcript being written
-          into are not the same page wearing two states. */}
-      <Route path="/campaigns/:cid/scenes" element={<ScenesView ready={ready} />} />
-      <Route path="/campaigns/:cid/scenes/:sid" element={
-        <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
-                      ready={ready} />} />
-      {/* The review's own address. Same element, because a review is a mode
-          of this page and not a second copy of it -- `useSceneReview` adopts
-          whatever the scene is holding whichever of the two URLs you arrive
-          on. What the separate path buys is that the rail's Wrap-up row can
-          light, and that "the thing that is waiting" is something a reader
-          can bookmark or be sent a link to. The `key` is deliberately the
-          campaign and nothing more, exactly as above: moving between the
-          transcript and its wrap-up must not remount the page and discard
-          the review being judged. */}
-      <Route path="/campaigns/:cid/scenes/:sid/wrap-up" element={
-        <CampaignView key={location.pathname.split("/").slice(0, 3).join("/")}
-                      ready={ready} />} />
-      {/* A campaign's character used to live here, outside the world copy
-          that holds its other seven record kinds. It moved so the two shapes
-          are one shape; this keeps a link somebody already holds working,
-          and is a redirect rather than a second live route so there is still
-          exactly one address per screen. */}
-      <Route path="/campaigns/:cid/characters/:eid" element={<LegacyCharacterRedirect />} />
-      {/* The ledger is a room, not a drawer over the transcript (4e): it is a
-          table read top to bottom, and the supersession chains it exists to
-          show do not fit in a panel wedged above the scene. The splat is
-          its sections, rows and continuity findings (`ledgerPaths.ts`). */}
-      <Route path="/campaigns/:cid/ledger/*" element={<LedgerView />} />
-      <Route path="/campaigns/:cid/costs" element={<CostsView />} />
-      {/* The timeline is the ledger's other half and a room for the same
-          reason (#198): the ledger says what is still open, this says what
-          happened, and a play history read end to end is not a drawer over
-          the scene it is a history of. */}
-      <Route path="/campaigns/:cid/timeline" element={<TimelineView />} />
-      {/* Sheet coverage across the cast (#201). A room for the ledger's
-          reason: the play view's mechanics panel binds the module in six
-          lines, but "who among forty characters has a sheet" is a list read
-          top to bottom, and a drawer over the transcript is not where a list
-          like that goes. */}
-      <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
-      {/* The story graph (capstone §19) is a room for the same reason: it is
-          a projection read across the whole campaign -- every scene, thread,
-          commitment and dated moment at once -- not a drawer over one scene.
-          Not keyed on `cid`: a campaign switch keeps the page mounted, and the
-          page drops the superseded read itself. */}
-      <Route path="/campaigns/:cid/graph" element={<StoryGraphView />} />
-      <Route path="/todo" element={<TodoView cid={null} />} />
-      <Route path="/campaigns/:cid/todo" element={<ScopedTodoView />} />
-      <Route path="/costs" element={<GlobalCostsView />} />
-      <Route path="/library" element={<LibraryView />} />
-      {/* Search keeps its query in the URL, so a result page is a link and
-          the back button returns to it after following a hit. */}
-      <Route path="/search" element={<SearchView />} />
-      <Route path="/worlds" element={<WorldsView />} />
-      {/* A character owns a screen rather than a third of one — see
-          `CharacterPage`. Both scopes, because a campaign's copy of a
-          character is a different record from the world's. Declared before
-          the splats for a reader; the matcher ranks static segments above a
-          splat on its own. */}
-      <Route path="/worlds/:wid/characters/:eid" element={<CharacterPage />} />
-      <Route path="/campaigns/:cid/world/characters/:eid" element={<CharacterPage campaign />} />
-      <Route path="/worlds/:wid/pcs/:pid" element={<PCPage />} />
-      <Route path="/campaigns/:cid/world/pcs/:pid" element={<PCPage campaign />} />
-      {/* One splat per shape, so every section and record of a world is the
-          same route object and React keeps ONE `WorldView` across all of
-          them. Sibling routes per section would remount the page on every
-          column click and re-read the world and its cover each time. */}
-      <Route path="/worlds/:wid/*" element={<WorldView />} />
-      <Route path="/campaigns/:cid/world/*" element={<WorldView campaign />} />
-      <Route path="/modules" element={<ModulesView />} />
-      <Route path="/styles" element={<StyleGuidesView />} />
-      <Route path="/calendars" element={<CalendarsView />} />
-      <Route path="/climates" element={<ClimatesView />} />
-      <Route path="/providers" element={<ProvidersView />} />
-      {/* Before `:id`, so `new` is never read as a provider. */}
-      <Route path="/providers/new" element={<ProvidersView />} />
-      <Route path="/providers/:id" element={<ProvidersView />} />
-      {/* A splat: a model id carries its own slashes (`vendor/model`). */}
-      <Route path="/providers/:id/models/*" element={<ProvidersView />} />
-      <Route path="/connections" element={<Navigate to="/providers" replace />} />
-      {/* Settings → Inference: the roles' summary, and the one form that
-          edits every role and task. The old per-role and per-route pages
-          are addresses older links carry. */}
-      <Route path="/models" element={<ModelsView />} />
-      <Route path="/models/edit" element={<ModelsView edit />} />
-      <Route path="/models/role/:role" element={<Navigate to="/models" replace />} />
-      <Route path="/models/route/:key" element={<RoutePageRedirect />} />
-      <Route path="/presets" element={<PresetsView />} />
-      <Route path="/presets/new" element={<PresetsView />} />
-      <Route path="/presets/import" element={<PresetsView />} />
-      <Route path="/presets/:id" element={<PresetsView />} />
-      <Route path="/config" element={<ConfigView />} />
-      {/* A room, not a tab inside Configuration (#154 asked for a "tab").
-          Config is a page of settings; this is a page of readings, and the
-          only thing on it that can be changed -- the log's own level -- is
-          saved through Configuration like every other setting. */}
-      <Route path="/stats" element={<StatsView />} />
-      <Route path="/campaigns/:cid/stats" element={<ScopedStatsView />} />
-    </Routes></GalleryStateProvider>
-  );
-});
+ *  `global`, like the palette's, because Search is the other thing that has
+ *  to be reachable from anywhere -- an overlay must not be able to strand
+ *  you. NOT `whileTyping`: the palette earns that by being the thing you
+ *  reach for mid-sentence without losing the draft, and a chord that
+ *  navigated away from a half-written post would lose it. */
+function useSearchHotkey(): void {
+  const navigate = useNavigate();
+  useHotkeys([{
+    keys: SEARCH_CHORD, label: "Search everything", group: "ANYWHERE",
+    global: true, run: () => void navigate("/search"),
+  }]);
+}
+
+/** The shell read the chrome draws from, and the two answers derived from it:
+ *  which campaign the chrome is about, and the context value the pages that
+ *  draw its numbers read. */
+function useShellChrome(dataDir: string) {
+  // Which campaign the rail's second tier is about. A hint the payload
+  // validates -- what actually renders comes from `payload.campaign`, never
+  // from storage, so a rename cannot leave a stale name in the chrome.
+  const { cid, reconcile } = useOpenCampaign(dataDir);
+  const shell = useShellPayload(dataDir, cid, reconcile);
+  /** The campaign the chrome is actually about.
+   *
+   *  `cid` is what the browser remembers and what the read ASKS with; this is
+   *  what came back. They differ in exactly one case, and it is the one the
+   *  rail was previously blank for: a browser that has never opened a campaign
+   *  asks with nothing, and `GET /api/shell` answers with the most recently
+   *  played one. Every consumer of "which campaign" wants that answer rather
+   *  than the empty question - the rail's rows build their hrefs from it (a
+   *  row whose `to()` is null is not rendered at all, so the tier would draw
+   *  its heading and nothing under it), and the Todo page must scope to the
+   *  same campaign the rail's badge counted.
+   *
+   *  Deliberately not fed back into `useOpenCampaign`: nothing is written to
+   *  storage, so opening a campaign explicitly still wins, and the default
+   *  keeps tracking what was last played instead of freezing on whichever
+   *  campaign it happened to pick first. */
+  const openCid = shell.payload?.campaign?.id ?? cid;
+  /** The same read, for the pages that draw its numbers (the hub, the scenes
+   *  list). They used to issue their own copy of it beside this one and hold
+   *  the page until it answered; `ShellPayloadContext` says why that was the
+   *  slowest thing on either page. `cid` rides along because a status is only
+   *  a statement about the campaign it asked about. */
+  const shellValue = useMemo(
+    () => ({ status: shell.status, payload: shell.payload, retry: shell.retry, cid }),
+    [shell.status, shell.payload, shell.retry, cid]);
+  return { shell, openCid, shellValue };
+}
+
+/** Whether the rail is docked beside the page or is a drawer, and the
+ *  drawer's open state. */
+function useRailDrawer() {
+  // `innerWidth` rather than `matchMedia`, and event-driven rather than polled
+  // -- the same reading `PageShell` takes for its own breakpoint, and the one
+  // the CSS gets. The two breakpoints stay distinct: RAIL_PX is where the rail
+  // and a page's column can no longer share a row, PHONE_PX is where a column
+  // and main cannot.
+  const [docked, setDocked] = useState(() => window.innerWidth > RAIL_PX);
+  const [railOpen, setRailOpen] = useState(false);
+  useEffect(() => {
+    const onResize = () => setDocked(window.innerWidth > RAIL_PX);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // Widening past the breakpoint docks the rail, so the drawer must not be left
+  // "open" underneath it -- and leaving focus mode must not restore one either.
+  useEffect(() => { if (docked) setRailOpen(false); }, [docked]);
+  const openRail = useCallback(() => setRailOpen(true), []);
+  const closeRail = useCallback(() => setRailOpen(false), []);
+  return { docked, railOpen, openRail, closeRail };
+}
+
+/** Bumped when another tab moves the store, and the routed page's key. The
+ *  page open here was read from the library that just stopped being served,
+ *  and its handlers would write into the new one under the old one's ids --
+ *  so it is remounted rather than left to notice, which it has no way to
+ *  do. The chrome around it is not: the rail and the header refresh through
+ *  their own signals and keep their scroll and drawer state. */
+function useStoreGeneration(): number {
+  const [storeGen, setStoreGen] = useState(0);
+  useEffect(() => onStoreMovedElsewhere(() => setStoreGen((n) => n + 1)), []);
+  return storeGen;
+}
 
 /** The fields of a provider verdict the header draws. `at` is left out on
  *  purpose: the server restamps it on every real turn, so comparing it would
@@ -413,23 +221,6 @@ function sameHealth(a: ProviderHealth | null, b: ProviderHealth | null): boolean
   // take the whole tree down over a status dot.
   if (!a || !b) return a === b;
   return a.state === b.state && a.kind === b.kind && a.detail === b.detail;
-}
-
-/** The address a campaign's character page used to have.
- *
- *  Carries the version and whatever `location.state` the link was followed
- *  with — `CharacterPage`'s own back link passes `{ reveal }` so a campaign
- *  grid does not swallow an unseated character, and a redirect that dropped it
- *  would make them read as deleted. */
-export function LegacyCharacterRedirect() {
-  const { cid = "", eid = "" } = useParams();
-  const location = useLocation();
-  const v = new URLSearchParams(location.search).get("v") ?? "";
-  // Through the helper, not a template string: it is the only thing allowed to
-  // know where a character's page lives, and it encodes segments the way the
-  // rest of the app does.
-  return <Navigate replace state={location.state as unknown}
-                   to={characterHref({ kind: "campaign", id: cid }, eid, v || undefined)} />;
 }
 
 export default function App() {
