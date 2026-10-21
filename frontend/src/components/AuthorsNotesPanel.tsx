@@ -24,6 +24,49 @@ function nextLine(n: AuthorsNotesNext["notes"][number]): string {
     : `${who}: applies next turn`;
 }
 
+/** A typed number, or `fallback` when the field holds none. */
+function number(value: string, fallback: number) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+/** One level's note: its text, where it goes, how often, and Save. */
+function NoteFields({ draft, onDraft, loaded, busy, onSave }: {
+  draft: AuthorsNote; onDraft: (next: AuthorsNote) => void;
+  /** The notes are on hand; until then the form and Save are disabled. */
+  loaded: boolean;
+  busy: boolean; onSave: () => void;
+}) {
+  return <>
+    <textarea aria-label="Author's note" maxLength={2000} rows={3}
+              value={draft.text} disabled={!loaded}
+              onChange={(e) => onDraft({ ...draft, text: e.target.value })} />
+    <label>
+      Depth{" "}
+      <input type="number" aria-label="Depth" min={0} max={50} value={draft.depth}
+             onChange={(e) => onDraft({ ...draft,
+                                        depth: number(e.target.value, draft.depth) })} />
+    </label>
+    <label>
+      Every{" "}
+      <input type="number" aria-label="Every N turns" min={1} max={50}
+             value={draft.every}
+             onChange={(e) => onDraft({ ...draft,
+                                        every: number(e.target.value, draft.every) })} />
+      {" "}turns
+    </label>
+    <div className="field-hint">
+      Depth is posts from the end; 0 = after the last post. In a scene with no player
+      posts (an offscreen scene), any depth above 0 puts the note at the start of the
+      history, the first thing trimmed. Empty text clears the note.
+    </div>
+    <div className="form-actions">
+      <button type="button" disabled={busy || !loaded}
+              onClick={onSave}>Save</button>
+    </div>
+  </>;
+}
+
 /** The scene inspector's Author's notes section (play controls V): a standing
  *  instruction at three levels -- the campaign, this scene, and a character in
  *  it -- each inserted into the history `depth` posts from the end on every
@@ -92,11 +135,6 @@ export function AuthorsNotesPanel({ cid, sid, cast, next, onSaved }: {
     }
   }
 
-  const number = (value: string, fallback: number) => {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isNaN(parsed) ? fallback : parsed;
-  };
-
   return (
     <div className="authors-notes">
       {next && next.notes.length > 0 && (
@@ -129,34 +167,8 @@ export function AuthorsNotesPanel({ cid, sid, cast, next, onSaved }: {
             </select>
           ))}
         {(tab !== "character" || npcs.length > 0) && (
-          <>
-            <textarea aria-label="Author's note" maxLength={2000} rows={3}
-                      value={draft.text} disabled={!notes}
-                      onChange={(e) => setDraft({ ...draft, text: e.target.value })} />
-            <label>
-              Depth{" "}
-              <input type="number" aria-label="Depth" min={0} max={50} value={draft.depth}
-                     onChange={(e) => setDraft({ ...draft,
-                                                 depth: number(e.target.value, draft.depth) })} />
-            </label>
-            <label>
-              Every{" "}
-              <input type="number" aria-label="Every N turns" min={1} max={50}
-                     value={draft.every}
-                     onChange={(e) => setDraft({ ...draft,
-                                                 every: number(e.target.value, draft.every) })} />
-              {" "}turns
-            </label>
-            <div className="field-hint">
-              Depth is posts from the end; 0 = after the last post. In a scene with no player
-              posts (an offscreen scene), any depth above 0 puts the note at the start of the
-              history, the first thing trimmed. Empty text clears the note.
-            </div>
-            <div className="form-actions">
-              <button type="button" disabled={busy || !notes}
-                      onClick={() => { void save(); }}>Save</button>
-            </div>
-          </>
+          <NoteFields draft={draft} onDraft={setDraft} loaded={!!notes} busy={busy}
+                      onSave={() => { void save(); }} />
         )}
         {error && <div className="banner">{error}</div>}
       </div>
