@@ -15,6 +15,7 @@ from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.routes.character_turns import _generation as character_turns_generation
 from grimoire.store import response_protocol
+from tests.cast_seed import seed_scene as seed
 from tests.llm_fakes import FakeLLM, FakeToolTurns, ToolTurn, decision_reply
 
 MARA = "characters:mara"
@@ -23,17 +24,6 @@ ASK = {"question": "Does Mara tell Seraphine the truth about the ledger?",
        "options": [{"id": "truth", "description": "she tells the truth"},
                    {"id": "lie", "description": "she lies"}],
        "allow_none": False}
-
-
-def seed(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid)
-    sid = store.scenes.create_scene(cid, "Mara")
-    for name in ("Mara", "Winifred"):
-        actor = client.post(f"/api/campaigns/{cid}/characters", json={"name": name}).json()
-        client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor["character"]})
-    return cid, sid, f"/api/campaigns/{cid}/scenes/{sid}"
 
 
 def _install(client, fake):

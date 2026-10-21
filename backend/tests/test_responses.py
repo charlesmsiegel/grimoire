@@ -13,8 +13,8 @@ from grimoire.store.campaigns import paths as campaign_paths
 from grimoire.store.response_protocol import ResponseWatcher, validate_handoff
 from grimoire.store.scenes import paths as scene_paths
 from grimoire.store.scenes import serialize, write
+from tests.cast_seed import seed
 from tests.llm_fakes import FakeLLM
-from tests.test_character_turns import seed
 
 
 def test_decision_owned_prose_needs_no_generated_handoff():

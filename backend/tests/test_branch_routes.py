@@ -13,21 +13,8 @@ import pytest
 
 import grimoire.store as store
 from grimoire import routes
+from tests.cast_seed import seed
 from tests.llm_fakes import FakeLLM
-
-
-def seed(client, module=None):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid, module=module)
-    sid = store.scenes.create_scene(cid, "Mara")
-    for name in ("Mara", "Winifred"):
-        response = client.post(f"/api/campaigns/{cid}/characters", json={"name": name})
-        assert response.status_code == 200, response.text
-        actor = response.json()["character"]
-        response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
-        assert response.status_code == 200, response.text
-    return cid, sid
 
 
 def _turn(client, cid, sid, content):

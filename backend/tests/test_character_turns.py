@@ -14,6 +14,7 @@ from grimoire.routes import character_turns, streaming
 from grimoire.routes.character_turns import _planning as character_turns_planning
 from grimoire.routes.character_turns import _state as character_turns_state
 from tests import wire_kit
+from tests.cast_seed import seed
 from tests.inference_fixtures import (
     SAME_PROVIDER,
     SPARE,
@@ -38,20 +39,6 @@ def _follow_on(monkeypatch, *next_speakers):
             round_record, used, actor, steps.pop(0))
 
     monkeypatch.setattr(character_turns_planning, "_select_successor", choose)
-
-
-def seed(client, module=None):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid, module=module)
-    sid = store.scenes.create_scene(cid, "Mara")
-    for name in ("Mara", "Winifred"):
-        response = client.post(f"/api/campaigns/{cid}/characters", json={"name": name})
-        assert response.status_code == 200, response.text
-        actor = response.json()["character"]
-        response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
-        assert response.status_code == 200, response.text
-    return cid, sid
 
 
 def test_round_rejects_repeated_actor(client, monkeypatch):

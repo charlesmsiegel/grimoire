@@ -12,8 +12,8 @@ from grimoire.store import campaigns, chronicle, entities
 from grimoire.store.absorb import routing as absorb_routing
 from grimoire.store.context import story
 from grimoire.store.scenes import serialize
+from tests.cast_seed import seed
 from tests.llm_fakes import FakeLLM
-from tests.test_character_turns import seed
 from tests.test_group_play_turns import MARA, WINIFRED, group, reply, speakers, use
 from tests.test_response_controls_routes import _answer
 from tests.test_responses import _fold, _summary, _two_turns_with_a_reroll

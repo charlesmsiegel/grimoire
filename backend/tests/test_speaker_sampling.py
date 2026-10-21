@@ -12,6 +12,7 @@ from grimoire.decisions import NONE_KEY, Answer, Decision, ItemResult
 from grimoire.routes import character_turns
 from grimoire.store import response_protocol as rp
 from grimoire.store import turn_plan
+from tests.cast_seed import seed_scene as seed
 from tests.llm_fakes import FakeLLM
 
 MARA, WINI = "characters:mara", "characters:winifred"
@@ -146,17 +147,6 @@ def test_a_stance_with_no_report_is_the_answer():
 
 
 # --- the route --------------------------------------------------------------------
-
-
-def seed(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid)
-    sid = store.scenes.create_scene(cid, "Mara")
-    for name in ("Mara", "Winifred"):
-        actor = client.post(f"/api/campaigns/{cid}/characters", json={"name": name}).json()
-        client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor["character"]})
-    return cid, sid, f"/api/campaigns/{cid}/scenes/{sid}"
 
 
 def _round(cid, sid):

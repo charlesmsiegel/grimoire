@@ -7,9 +7,9 @@ from grimoire import llm, llm_sampling, routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.store.usage import _ledger as usage_ledger
+from tests.cast_seed import seed
 from tests.inference_fixtures import endpoint, primary_falling_back
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, ModelessHolder, ScriptedProvider
-from tests.test_character_turns import seed
 
 HANDOFF = 'Hi.\n```handoff\n{"next":null}\n```'
 

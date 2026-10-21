@@ -16,25 +16,12 @@ from grimoire.routes.character_turns import _planning as character_turns_plannin
 from grimoire.store import group_play
 from grimoire.store.appearances import paths as appearance_paths
 from tests import wire_kit
+from tests.cast_seed import seed_scene as seed
 from tests.llm_fakes import FakeLLM, decision_reply
 
 MARA = "characters:mara"
 WINIFRED = "characters:winifred"
 SELECTOR = "Choose at most one initial speaker"
-
-
-def seed(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid)
-    sid = store.scenes.create_scene(cid, "Mara")
-    for name in ("Mara", "Winifred"):
-        response = client.post(f"/api/campaigns/{cid}/characters", json={"name": name})
-        assert response.status_code == 200, response.text
-        actor = response.json()["character"]
-        response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
-        assert response.status_code == 200, response.text
-    return cid, sid, f"/api/campaigns/{cid}/scenes/{sid}"
 
 
 def group(client, base, **settings):

@@ -4,8 +4,8 @@ import pytest
 from grimoire import routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.store.appearances import paths
+from tests.cast_seed import seed
 from tests.llm_fakes import FakeLLM, decision_reply
-from tests.test_character_turns import seed
 
 
 def _answer(client, base, text="Original."):

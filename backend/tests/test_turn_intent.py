@@ -13,24 +13,11 @@ from grimoire.routes import character_turns
 from grimoire.routes.character_turns import _generation as character_turns_generation
 from grimoire.routes.common import _deadlines as common_deadlines
 from grimoire.store import turn_plan
+from tests.cast_seed import seed_scene as seed
 from tests.llm_fakes import FakeLLM, decision_reply
 
 MARA = "characters:mara"
 _HANDOFF = '\n```handoff\n{"next":null}\n```'
-
-
-def seed(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid)
-    sid = store.scenes.create_scene(cid, "Mara")
-    for name in ("Mara", "Winifred"):
-        response = client.post(f"/api/campaigns/{cid}/characters", json={"name": name})
-        assert response.status_code == 200, response.text
-        actor = response.json()["character"]
-        response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
-        assert response.status_code == 200, response.text
-    return cid, sid, f"/api/campaigns/{cid}/scenes/{sid}"
 
 
 def _fake(client, *turns):

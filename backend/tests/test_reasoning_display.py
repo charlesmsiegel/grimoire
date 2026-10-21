@@ -11,8 +11,8 @@ from grimoire.llm import LLMClient
 from grimoire.llm import _retry as llm_retry
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.store.inference import resolve
+from tests.cast_seed import seed
 from tests.inference_fixtures import primary
-from tests.test_character_turns import seed
 
 CONN = wire.Target(provider_id="", kind="openai_compatible", model="glm-5.3",
                    requested_model="glm-5.3", base_url="https://example.test/v1")

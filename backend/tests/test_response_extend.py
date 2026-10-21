@@ -11,9 +11,9 @@ from grimoire.routes import character_turns
 from grimoire.routes import runs as runs_mod
 from grimoire.routes.character_turns import _prompts as character_turns_prompts
 from grimoire.store import response_protocol
+from tests.cast_seed import seed
 from tests.inference_fixtures import put_settings
 from tests.llm_fakes import FakeLLM, ScriptedProvider
-from tests.test_character_turns import seed
 from tests.test_response_controls_routes import _answer
 from tests.test_runs_routes import _events
 

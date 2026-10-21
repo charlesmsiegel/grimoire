@@ -3,22 +3,9 @@
 from urllib.parse import quote
 
 import grimoire.store as store
+from tests.cast_seed import seed
 
 NOTE = {"text": "Keep the storm audible in every scene.", "depth": 4, "every": 1}
-
-
-def seed(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid)
-    sid = store.scenes.create_scene(cid, "Mara")
-    for name in ("Mara", "Winifred"):
-        response = client.post(f"/api/campaigns/{cid}/characters", json={"name": name})
-        assert response.status_code == 200, response.text
-        actor = response.json()["character"]
-        response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
-        assert response.status_code == 200, response.text
-    return cid, sid
 
 
 def test_put_validates_ranges(client):

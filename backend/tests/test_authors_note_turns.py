@@ -23,6 +23,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.scenes import serialize as scenes_serialize
+from tests.cast_seed import seed
 from tests.llm_fakes import FakeLLM
 
 TEXT = "Keep the storm audible in every scene."
@@ -49,20 +50,6 @@ def _note_at(msgs, content=NOTE_MSG):
 
 def _has_note(msgs):
     return any(isinstance(m["content"], str) and "[Author's note" in m["content"] for m in msgs)
-
-
-def seed(client, module=None):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-    wid = store.worlds.create_world("Realm")
-    cid = store.campaigns.create_campaign("Saltmarch", wid, module=module)
-    sid = store.scenes.create_scene(cid, "Mara")
-    for name in ("Mara", "Winifred"):
-        response = client.post(f"/api/campaigns/{cid}/characters", json={"name": name})
-        assert response.status_code == 200, response.text
-        actor = response.json()["character"]
-        response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
-        assert response.status_code == 200, response.text
-    return cid, sid
 
 
 def _joined(request):
