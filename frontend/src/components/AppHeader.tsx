@@ -31,6 +31,68 @@ function verdict(connection: string, ready: boolean, health: ProviderHealth | nu
   return { tone: "ok", words: `${connection}, not checked yet` };
 }
 
+/** What the ⌘K pill says you are looking at.
+ *
+ *  A page that publishes context wins over the route table: the router knows
+ *  the cid but not the campaign's name, and only the page can answer that.
+ *  Everything else is named centrally rather than by twenty publish hooks —
+ *  the table's last entry matches everything, so no route reaches the pill
+ *  nameless.
+ *  The shared shell read can name report/settings pages that publish no
+ *  scene context. Its remembered campaign must match this route before the
+ *  name is used, so navigation never labels a new campaign with an old one. */
+function useWhere(campaign: ShellCampaign | null | undefined): string {
+  const { pathname } = useLocation();
+  const campaignRoute = useMatch("/campaigns/:cid/*");
+  const { context } = useShellStatus();
+  if (context) return context.scene ? `${context.campaign} / ${context.scene}` : context.campaign;
+  const pageTitle = titleFor(pathname);
+  return campaign && campaignRoute?.params.cid === campaign.id
+    ? `${campaign.name} / ${pageTitle}` : pageTitle;
+}
+
+/** The scene pill: what this scene has cost, and how full the last prompt
+ *  left the context budget. Two facts about the scene in front of you, which
+ *  is the only screen either is true of.
+ *
+ *  Either half can be absent and the pill still draws: a scene nobody has
+ *  generated in has no spend, and one sent before a budget was set has no
+ *  percentage. Both absent and there is no pill -- rather than an empty one,
+ *  or a `$0.00` for a scene that was never generated in. */
+function ScenePill({ sceneSpend, usage }: { sceneSpend: string | null; usage: number | null }) {
+  if (sceneSpend === null && usage === null) return null;
+  return (
+    <span className="scene-pill"
+          title={[sceneSpend && `This scene has cost ${sceneSpend}`,
+                  usage !== null && "How full the last prompt left the context budget"]
+                 .filter(Boolean).join(" · ")}>
+      {sceneSpend !== null && <span className="scene-pill-spend">{sceneSpend}</span>}
+      {sceneSpend !== null && usage !== null && " · "}
+      {usage !== null && `CTX ${Math.round(usage)}%`}
+    </span>
+  );
+}
+
+/** The look, flipped between dark and light.
+ *
+ *  Persisted on click, through the hook Configuration's picker and the
+ *  first-run wizard's share. A look that only lasted the session would read as
+ *  the app forgetting; a look this control wrote into a deferred draft could
+ *  be overwritten by an unrelated Save elsewhere. */
+function ThemeToggle() {
+  const theme = useThemeSetting();
+  const { name: themeName } = useTheme();
+  const nextTheme = themeName === "dark" ? "light" : "dark";
+  return <>
+    <button type="button" className="header-theme" disabled={theme.busy}
+            onClick={() => { void theme.pick(nextTheme); }}
+            aria-label={`Switch to ${nextTheme} theme`}>
+      {theme.mode.toUpperCase()}
+    </button>
+    {theme.error && <span role="alert" className="header-theme-error">{theme.error}</span>}
+  </>;
+}
+
 /** The 52px strip across the top.
  *
  *  Left: the mark and the wordmark, both home, and — below `RAIL_PX` — the
@@ -55,11 +117,7 @@ export default function AppHeader(
 ) {
   const { setOpen } = usePalette();
   const { setFocus } = useFocus();
-  const theme = useThemeSetting();
-  const { name: themeName } = useTheme();
-  const nextTheme = themeName === "dark" ? "light" : "dark";
   const { pathname } = useLocation();
-  const campaignRoute = useMatch("/campaigns/:cid/*");
   const { context, usage, sceneSpend, sceneModel, sceneReady } = useShellStatus();
   // The open campaign's scene model wins over the global one: with per-task
   // routing (#142) the active connection is not necessarily what writes this
@@ -69,21 +127,7 @@ export default function AppHeader(
   // keyless connection 409s every send; a green dot beside that is the chrome
   // reporting on a connection this page is not using.
   const live = sceneReady ?? ready;
-
-  // A page that publishes context wins over the route table: the router knows
-  // the cid but not the campaign's name, and only the page can answer that.
-  // Everything else is named centrally rather than by twenty publish hooks —
-  // the table's last entry matches everything, so no route reaches the pill
-  // nameless.
-  // The shared shell read can name report/settings pages that publish no
-  // scene context. Its remembered campaign must match this route before the
-  // name is used, so navigation never labels a new campaign with an old one.
-  const pageTitle = titleFor(pathname);
-  const fallback = campaign && campaignRoute?.params.cid === campaign.id
-    ? `${campaign.name} / ${pageTitle}` : pageTitle;
-  const where = context
-    ? (context.scene ? `${context.campaign} / ${context.scene}` : context.campaign)
-    : fallback;
+  const where = useWhere(campaign);
   // The context budget belongs to a scene, so it is shown beside one and
   // nowhere else. A percentage on a page with no scene is a claim about a
   // prompt you are not composing — the argument `ShellStatus` already makes
@@ -119,24 +163,7 @@ export default function AppHeader(
 
       <span className="header-spacer" />
 
-      {/* The scene pill: what this scene has cost, and how full the last
-          prompt left the context budget. Two facts about the scene in front of
-          you, which is the only screen either is true of.
-
-          Either half can be absent and the pill still draws: a scene nobody
-          has generated in has no spend, and one sent before a budget was set
-          has no percentage. Both absent and there is no pill -- rather than an
-          empty one, or a `$0.00` for a scene that was never generated in. */}
-      {inScene && (sceneSpend !== null || usage !== null) && (
-        <span className="scene-pill"
-              title={[sceneSpend && `This scene has cost ${sceneSpend}`,
-                      usage !== null && "How full the last prompt left the context budget"]
-                     .filter(Boolean).join(" · ")}>
-          {sceneSpend !== null && <span className="scene-pill-spend">{sceneSpend}</span>}
-          {sceneSpend !== null && usage !== null && " · "}
-          {usage !== null && `CTX ${Math.round(usage)}%`}
-        </span>
-      )}
+      {inScene && <ScenePill sceneSpend={sceneSpend} usage={usage} />}
 
       <div className="header-status">
         {shown && <span className="header-model">{shown.toUpperCase()}</span>}
@@ -151,22 +178,13 @@ export default function AppHeader(
         </span>
       </div>
 
+      <ThemeToggle />
+
       {/* The way out of the chrome, and it lives in the chrome: on a phone
           this strip plus the scene bar plus the scene head is most of a
           screenful, and a transcript is the one thing in the app that is worth
           the whole viewport. Its counterpart -- the pill that brings the bars
           back -- is `FocusRestore`, which the shell renders in its place. */}
-      {/* Persisted on click, through the hook Configuration's picker and the
-          first-run wizard's share. A look that only lasted the session would
-          read as the app forgetting; a look this control wrote into a deferred
-          draft could be overwritten by an unrelated Save elsewhere. */}
-      <button type="button" className="header-theme" disabled={theme.busy}
-              onClick={() => { void theme.pick(nextTheme); }}
-              aria-label={`Switch to ${nextTheme} theme`}>
-        {theme.mode.toUpperCase()}
-      </button>
-      {theme.error && <span role="alert" className="header-theme-error">{theme.error}</span>}
-
       <button type="button" className="header-focus" onClick={() => setFocus(true)}
               title="Hide the toolbars and read the scene" aria-label="Enter focus mode">
         {/* Two spellings of one control, swapped by a media query rather than by
