@@ -73,10 +73,10 @@ def _resolved(chain: wire.Chain | wire.Target = PRIMARY, **caps: str):
 def _run(fake, *, toolset=None, execute=None, budget=None, resolved=None, **kw):
     toolset = toolset or _toolset()
     return asyncio.run(inference.run_tools(
-        "chat", kw.pop("messages", PROMPT), toolset=toolset,
-        execute=execute or tool_calls.registered(toolset), client=fake,
-        resolved=resolved or _resolved(), budget=budget or RunBudget(), run_id=RUN,
-        campaign="saltmarch", **kw))
+        "chat", kw.pop("messages", PROMPT), inference.LoopOptions(
+            toolset=toolset, execute=execute or tool_calls.registered(toolset), client=fake,
+            resolved=resolved or _resolved(), budget=budget or RunBudget(), run_id=RUN,
+            campaign="saltmarch", **kw)))
 
 
 # ---- the happy path ----
@@ -168,8 +168,9 @@ def test_refused_before_anything_is_sent(change):
     args = {"toolset": _toolset(), "run_id": RUN, "messages": PROMPT, **change}
     with pytest.raises(ValueError):
         asyncio.run(inference.run_tools(
-            "chat", args.pop("messages"), execute=tool_calls.registered(_toolset()),
-            client=fake, resolved=_resolved(), budget=RunBudget(), **args))
+            "chat", args.pop("messages"), inference.LoopOptions(
+                execute=tool_calls.registered(_toolset()), client=fake, resolved=_resolved(),
+                budget=RunBudget(), **args)))
     assert fake.calls == 0
     assert list(store.usage.calls(days=1)) == []
 
@@ -209,10 +210,10 @@ def test_an_optional_route_runs_on_unknown_and_refuses_a_known_no():
 
 def test_a_resolution_of_another_task_is_refused():
     with pytest.raises(ValueError):
-        asyncio.run(inference.run_tools(
-            "chat", PROMPT, toolset=_toolset(), execute=tool_calls.registered(_toolset()),
+        asyncio.run(inference.run_tools("chat", PROMPT, inference.LoopOptions(
+            toolset=_toolset(), execute=tool_calls.registered(_toolset()),
             client=FakeToolTurns(("ok", [])), resolved=wire_kit.resolution(PRIMARY, "tagline"),
-            budget=RunBudget(), run_id=RUN))
+            budget=RunBudget(), run_id=RUN)))
 
 
 def test_a_loop_does_not_start_inside_another():
@@ -220,10 +221,10 @@ def test_a_loop_does_not_start_inside_another():
 
     async def execute(call, ctx):
         try:
-            await inference.run_tools(
-                "chat", PROMPT, toolset=_toolset(), execute=tool_calls.registered(_toolset()),
+            await inference.run_tools("chat", PROMPT, inference.LoopOptions(
+                toolset=_toolset(), execute=tool_calls.registered(_toolset()),
                 client=FakeToolTurns(("ok", [])), resolved=_resolved(), budget=RunBudget(),
-                run_id="inner")
+                run_id="inner"))
         except ValueError as exc:
             inner_error.append(str(exc))
         return ToolOutput(text="ok")
@@ -470,10 +471,10 @@ def test_an_unreadable_answer_after_the_wall_gets_no_repair_turn(monkeypatch):
                          ('{"keeper": "Mara"}', []))
 
     async def go():
-        return [e async for e in inference.stream_tools(
-            "chat", PROMPT, toolset=_toolset(), execute=tool_calls.registered(_toolset()),
+        return [e async for e in inference.stream_tools("chat", PROMPT, inference.LoopOptions(
+            toolset=_toolset(), execute=tool_calls.registered(_toolset()),
             client=fake, resolved=_resolved(), budget=RunBudget(wall_seconds=1.0),
-            run_id=RUN, final_schema=ANSWER)]
+            run_id=RUN, final_schema=ANSWER))]
     result = asyncio.run(go())[-1].result
     assert fake.calls == 1
     assert result.status == "failed" and result.error.code == "final_unreadable"
@@ -516,13 +517,9 @@ def test_a_zero_decision_cap_stops_the_run_on_decisions():
 
 
 def _bare_loop(*, budget=None, execute=None, resolved=None):
-    return inference._Loop("chat", PROMPT, toolset=_toolset(), execute=execute, client=None,
-                           resolved=resolved or _resolved(), budget=budget or RunBudget(),
-                           run_id=RUN,
-                           attribution={"campaign": "saltmarch", "scene": "", "post": None,
-                                        "round_id": "", "response_id": ""},
-                           scene_identity="", cancelled=None, final_schema=None,
-                           tool_choice="auto", capture=None)
+    return inference._Loop("chat", PROMPT, inference.LoopOptions(
+        toolset=_toolset(), execute=execute, client=None, resolved=resolved or _resolved(),
+        budget=budget or RunBudget(), run_id=RUN, campaign="saltmarch"))
 
 
 # ---- fallback across a loop (spec 3.11) ----
@@ -562,12 +559,9 @@ def test_a_reused_provider_id_is_renamed_per_occurrence_on_the_switch():
 
 def test_a_degrade_sibling_is_not_a_switch():
     resolved = _resolved(wire.Chain(PRIMARY, SPARE))
-    loop = inference._Loop("chat", PROMPT, toolset=_toolset(), execute=None, client=None,
-                           resolved=resolved, budget=RunBudget(), run_id=RUN,
-                           attribution={"campaign": "", "scene": "", "post": None,
-                                        "round_id": "", "response_id": ""},
-                           scene_identity="", cancelled=None, final_schema=None,
-                           tool_choice="auto", capture=None)
+    loop = inference._Loop("chat", PROMPT, inference.LoopOptions(
+        toolset=_toolset(), execute=None, client=None, resolved=resolved, budget=RunBudget(),
+        run_id=RUN))
     assert not loop._switched_to(replace(PRIMARY, degrade=True))
     assert loop._switched_to(SPARE)
 
@@ -624,9 +618,9 @@ def test_a_three_turn_run_over_a_frozen_copy(monkeypatch, tmp_path):
     toolset = Toolset((ToolSpec("campaign", "The campaign.", NONE, campaign),
                        ToolSpec("scenes", "Its scenes.", NONE, scenes)))
     fake = FakeToolTurns(("", [("campaign", {})]), ("", [("scenes", {})]), ("Done.", []))
-    result = asyncio.run(inference.run_tools(
-        "chat", PROMPT, toolset=toolset, execute=tool_calls.registered(toolset), client=fake,
-        resolved=_resolved(), budget=RunBudget(), run_id=RUN, campaign=cid))
+    result = asyncio.run(inference.run_tools("chat", PROMPT, inference.LoopOptions(
+        toolset=toolset, execute=tool_calls.registered(toolset), client=fake,
+        resolved=_resolved(), budget=RunBudget(), run_id=RUN, campaign=cid)))
     assert result.status == "completed"
     assert [(e.kind, e.name) for e in result.trace if e.kind == "tool"] == [
         ("tool", "campaign"), ("tool", "scenes")]

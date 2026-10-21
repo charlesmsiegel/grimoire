@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
-from .. import decisions, wire
+from .. import decisions, llm_reasoning, tool_calls, wire
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store.inference.resolved import ResolvedInference
@@ -157,3 +157,58 @@ Backend = Callable[[tuple[decisions.Item, ...], _Call], Awaitable[_Answered]]
 #: message), the outcome `{finish, calls: [{name, arguments}], text_chars}`,
 #: and the target that answered (`llm.ATTEMPTED`).
 TurnCapture = Callable[[list[dict], dict, wire.Target], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class LoopOptions:
+    """Everything a tool run is handed besides its task and prompt
+    (`run_tools`, `stream_tools`): what the caller supplies, the run's
+    attribution, and how its turns are read. One value, built at the call
+    site and handed through the entry points to the run whole."""
+
+    #: The tools offered, and the executor that runs them
+    #: (`tool_calls.registered` is the default): the loop never executes a
+    #: tool itself.
+    toolset: tool_calls.Toolset
+    execute: tool_calls.Execute
+    client: LLMClient
+    #: The call site's resolution of the task, on a route that requires tools
+    #: or lists them as optional.
+    resolved: ResolvedInference
+    budget: tool_calls.RunBudget
+    #: Normally the detached run's `Run.id`: the loop never mints a run id.
+    run_id: str
+    #: Attribution every turn's meter files (01g-C3), with the caller's round
+    #: and reply ids; `scene_identity` is the tools' (`ToolContext`).
+    campaign: str = ""
+    scene: str = ""
+    scene_identity: str = ""
+    post: int | None = None
+    round_id: str = ""
+    response_id: str = ""
+    #: Polled before each send and each execution; True ends the run as
+    #: `asyncio.CancelledError`.
+    cancelled: Callable[[], bool] | None = None
+    #: The answer is read and checked against it, with one finalize turn for
+    #: one that does not conform.
+    final_schema: dict | None = None
+    tool_choice: Literal["auto", "required"] = "auto"
+    capture: TurnCapture | None = None
+    #: 01g-C6: visible text is final -- a turn that showed text and ended in
+    #: tool calls ends the run with them declined.
+    decline_after_text: bool = False
+    #: A caller's display reasoning buffer, ridden in each turn's holder.
+    reasoning: llm_reasoning.Buffer | None = None
+    #: A fresh predicate per turn (02 §8.2): does this delta show the
+    #: reader anything? None reads every non-empty delta as visible.
+    visibility: Callable[[], Callable[[str], bool]] | None = None
+    #: The caller's list each turn's usage holder is appended to as its
+    #: meter opens (02 §8.5): the facade stamps the holder in place, so
+    #: the caller reads which attempt is serving while the turn streams.
+    holders: list[dict] | None = None
+
+    def attribution(self) -> dict:
+        """The keyword arguments every turn's meter is opened with besides
+        the task, the run id and the turn (`store.usage.meter`)."""
+        return {"campaign": self.campaign, "scene": self.scene, "post": self.post,
+                "round_id": self.round_id, "response_id": self.response_id}

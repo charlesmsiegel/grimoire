@@ -23,13 +23,12 @@ from .. import (
     tool_calls,
     wire,
 )
-from ..llm import LLMClient
 from ..llm import _lifecycle as llm_lifecycle
 from ..llm_errors import LLMError
 from ..store.inference import probes
-from ..store.inference.resolved import ResolvedInference
 from ..tool_calls import _runs as tool_runs
 from . import _contracts, _pricing, _requests, _tool_policy
+from ._contracts import LoopOptions
 from ._contracts import TurnCapture as TurnCapture
 from ._pricing import Price as Price
 
@@ -88,38 +87,33 @@ class _Turn:
 class _Loop:
     """One run's state; `events` runs it (spec 3.7)."""
 
-    def __init__(self, task: str, messages: list[dict], *, toolset: tool_calls.Toolset,
-                 execute: tool_calls.Execute, client: LLMClient,
-                 resolved: ResolvedInference, budget: tool_calls.RunBudget, run_id: str,
-                 attribution: dict, scene_identity: str,
-                 cancelled: Callable[[], bool] | None, final_schema: dict | None,
-                 tool_choice: str, capture: TurnCapture | None,
+    def __init__(self, task: str, messages: list[dict], options: LoopOptions, *,
                  prices: dict[tuple[str, str], Price | None] | None = None,
-                 streaming: bool = False, decline_after_text: bool = False,
-                 reasoning: llm_reasoning.Buffer | None = None,
-                 visibility: Callable[[], Callable[[str], bool]] | None = None,
-                 holders: list[dict] | None = None):
+                 streaming: bool = False):
         prices = prices or {}
         #: The caller's list each turn's usage holder is appended to as its
         #: meter opens (02 §8.5): the facade stamps the holder in place, so
         #: the caller reads which attempt is serving while the turn streams.
-        self.holders = holders
+        self.holders = options.holders
         #: 01g-C6: each turn through `client.stream`, the caller's display
         #: reasoning buffer in each turn's holder, and visible text final.
-        self.streaming, self.decline_after_text = streaming, decline_after_text
-        self.reasoning = reasoning
+        self.streaming, self.decline_after_text = streaming, options.decline_after_text
+        self.reasoning = options.reasoning
         self.shown = False
         #: A fresh predicate per turn (02 §8.2): does this delta show the
         #: reader anything? None reads every non-empty delta as visible.
-        self.visibility = visibility
+        self.visibility = options.visibility
         self.visible = False
         self._sees: Callable[[str], bool] | None = None
-        self.task, self.base, self.toolset, self.execute = task, messages, toolset, execute
-        self.client, self.resolved, self.budget, self.run_id = client, resolved, budget, run_id
-        self.attribution, self.scene_identity = attribution, scene_identity
-        self.cancelled, self.final_schema, self.capture = cancelled, final_schema, capture
-        self.choice = tool_choice
-        self.defs = toolset.definitions()
+        self.task, self.base = task, messages
+        self.toolset, self.execute = options.toolset, options.execute
+        self.client, self.resolved = options.client, options.resolved
+        self.budget, self.run_id = options.budget, options.run_id
+        self.attribution, self.scene_identity = options.attribution(), options.scene_identity
+        self.cancelled, self.final_schema = options.cancelled, options.final_schema
+        self.capture = options.capture
+        self.choice = options.tool_choice
+        self.defs = options.toolset.definitions()
         self.appended: list[dict] = []
         self.rows: list[dict] = []
         self.trace: list[tool_calls.TraceEntry] = []

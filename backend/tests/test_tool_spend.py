@@ -50,9 +50,9 @@ def _resolved(chain, preset: str = ""):
 
 
 def _run(fake, resolved, budget):
-    return asyncio.run(inference.run_tools(
-        "chat", PROMPT, toolset=TOOLS, execute=tool_calls.registered(TOOLS), client=fake,
-        resolved=resolved, budget=budget, run_id=RUN))
+    return asyncio.run(inference.run_tools("chat", PROMPT, inference.LoopOptions(
+        toolset=TOOLS, execute=tool_calls.registered(TOOLS), client=fake,
+        resolved=resolved, budget=budget, run_id=RUN)))
 
 
 # ---- the price ----

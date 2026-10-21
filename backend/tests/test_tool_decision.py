@@ -245,10 +245,10 @@ def test_in_a_loop_each_decision_counts_and_the_cap_stops_the_run(monkeypatch):
     toolset = tool_calls.Toolset((spec,))
     model = FakeToolTurns(("", [("decide", ARGS), ("decide", ARGS)]), ("She told it.", []))
     result = asyncio.run(inference.run_tools(
-        "chat", [{"role": "user", "content": "Play Mara."}], toolset=toolset,
-        execute=tool_calls.registered(toolset), client=model,
-        resolved=wire_kit.resolution(TARGET), budget=RunBudget(max_decisions=1),
-        run_id="run-9", campaign="saltmarch"))
+        "chat", [{"role": "user", "content": "Play Mara."}], inference.LoopOptions(
+            toolset=toolset, execute=tool_calls.registered(toolset), client=model,
+            resolved=wire_kit.resolution(TARGET), budget=RunBudget(max_decisions=1),
+            run_id="run-9", campaign="saltmarch")))
     assert judge.calls == 1
     first, second = model.requests[1]["messages"][-3:-1]
     assert json.loads(first["content"]) == {"answer": "truth", "status": "answered"}
@@ -306,11 +306,11 @@ def test_a_decide_cut_off_mid_call_is_still_charged(monkeypatch):
     toolset = tool_calls.Toolset((spec,))
     model = FakeToolTurns(("", [("decide", ARGS)]), ("She told it.", []))
     asyncio.run(inference.run_tools(
-        "chat", [{"role": "user", "content": "Play Mara."}], toolset=toolset,
-        execute=tool_calls.registered(toolset), client=model,
-        resolved=wire_kit.resolution(TARGET),
-        budget=RunBudget(wall_seconds=1.0, spend_ceiling_usd=5.0),
-        run_id="run-9", campaign="saltmarch"))
+        "chat", [{"role": "user", "content": "Play Mara."}], inference.LoopOptions(
+            toolset=toolset, execute=tool_calls.registered(toolset), client=model,
+            resolved=wire_kit.resolution(TARGET),
+            budget=RunBudget(wall_seconds=1.0, spend_ceiling_usd=5.0),
+            run_id="run-9", campaign="saltmarch")))
     assert judge.started is not None
     assert len(charges) == 1 and charges[0] > 0
 
@@ -372,11 +372,11 @@ def test_an_unpriceable_tool_under_a_ceiling_says_so_and_takes_no_decision(monke
     toolset = tool_calls.Toolset((spec,))
     model = FakeToolTurns(("", [("decide", ARGS)]), ("She told it.", []))
     result = asyncio.run(inference.run_tools(
-        "chat", [{"role": "user", "content": "Play Mara."}], toolset=toolset,
-        execute=tool_calls.registered(toolset), client=model,
-        resolved=wire_kit.resolution(TARGET),
-        budget=RunBudget(spend_ceiling_usd=100.0, max_decisions=1),
-        run_id="run-9", campaign="saltmarch"))
+        "chat", [{"role": "user", "content": "Play Mara."}], inference.LoopOptions(
+            toolset=toolset, execute=tool_calls.registered(toolset), client=model,
+            resolved=wire_kit.resolution(TARGET),
+            budget=RunBudget(spend_ceiling_usd=100.0, max_decisions=1),
+            run_id="run-9", campaign="saltmarch")))
     assert judge.calls == 0
     assert result.status == "completed" and result.limit == ""
     tool_msgs = [m for m in result.messages if m.get("role") == "tool"]
@@ -414,10 +414,10 @@ def test_the_loops_trace_holds_a_decide_entry(monkeypatch):
     toolset = tool_calls.Toolset((spec,))
     model = FakeToolTurns(("", [("decide", ARGS)]), ("She told it.", []))
     result = asyncio.run(inference.run_tools(
-        "chat", [{"role": "user", "content": "Play Mara."}], toolset=toolset,
-        execute=tool_calls.registered(toolset), client=model,
-        resolved=wire_kit.resolution(TARGET), budget=RunBudget(),
-        run_id="run-9", campaign="saltmarch"))
+        "chat", [{"role": "user", "content": "Play Mara."}], inference.LoopOptions(
+            toolset=toolset, execute=tool_calls.registered(toolset), client=model,
+            resolved=wire_kit.resolution(TARGET), budget=RunBudget(),
+            run_id="run-9", campaign="saltmarch")))
     (entry,) = [e for e in result.trace if e.kind == "decide"]
     assert (entry.turn, entry.name, entry.note, entry.ok) == (1, "truth", "answered", True)
 
@@ -430,10 +430,10 @@ def _looped(judge, budget, **kw):
     model = FakeToolTurns(("", [("decide", ARGS)]), ("She told it.", []))
     started = time.monotonic()
     result = asyncio.run(inference.run_tools(
-        "chat", [{"role": "user", "content": "Play Mara."}], toolset=toolset,
-        execute=tool_calls.registered(toolset), client=model,
-        resolved=wire_kit.resolution(TARGET), budget=budget,
-        run_id="run-9", campaign="saltmarch"))
+        "chat", [{"role": "user", "content": "Play Mara."}], inference.LoopOptions(
+            toolset=toolset, execute=tool_calls.registered(toolset), client=model,
+            resolved=wire_kit.resolution(TARGET), budget=budget,
+            run_id="run-9", campaign="saltmarch")))
     return result, time.monotonic() - started
 
 

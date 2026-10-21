@@ -136,6 +136,9 @@ from ._contracts import (
     Escalator as Escalator,
 )
 from ._contracts import (
+    LoopOptions as LoopOptions,
+)
+from ._contracts import (
     Outcome as Outcome,
 )
 from ._contracts import (
@@ -462,6 +465,7 @@ __all__ = [
     'LLMClient',
     'LLMError',
     'Literal',
+    'LoopOptions',
     'NamedTuple',
     'Outcome',
     'Price',

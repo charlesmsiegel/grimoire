@@ -54,9 +54,10 @@ def _home(monkeypatch, tmp_path):
 def _events(fake, **kw) -> list[tool_calls.LoopEvent]:
     async def go():
         return [event async for event in inference.stream_tools(
-            "chat", PROMPT, toolset=TOOLS, execute=tool_calls.registered(TOOLS),
-            client=fake, resolved=wire_kit.resolution(TARGET),
-            budget=kw.pop("budget", RunBudget()), run_id=RUN, **kw)]
+            "chat", PROMPT, inference.LoopOptions(
+                toolset=TOOLS, execute=tool_calls.registered(TOOLS),
+                client=fake, resolved=wire_kit.resolution(TARGET),
+                budget=kw.pop("budget", RunBudget()), run_id=RUN, **kw))]
     return asyncio.run(go())
 
 
@@ -93,9 +94,10 @@ def test_text_deltas_are_what_generate_streams():
     async def looped():
         fake = FakeToolTurns(ToolTurn(deltas=deltas))
         return [d async for d in tool_calls.text_deltas(inference.stream_tools(
-            "chat", PROMPT, toolset=TOOLS, execute=tool_calls.registered(TOOLS),
-            client=fake, resolved=wire_kit.resolution(TARGET), budget=RunBudget(),
-            run_id=RUN))]
+            "chat", PROMPT, inference.LoopOptions(
+                toolset=TOOLS, execute=tool_calls.registered(TOOLS),
+                client=fake, resolved=wire_kit.resolution(TARGET), budget=RunBudget(),
+                run_id=RUN)))]
 
     async def generated():
         return [d async for d in inference.generate(
@@ -110,10 +112,10 @@ def test_text_deltas_hands_on_the_result():
 
     async def go():
         fake = FakeToolTurns(("Mara.", []))
-        events = inference.stream_tools(
-            "chat", PROMPT, toolset=TOOLS, execute=tool_calls.registered(TOOLS),
+        events = inference.stream_tools("chat", PROMPT, inference.LoopOptions(
+            toolset=TOOLS, execute=tool_calls.registered(TOOLS),
             client=fake, resolved=wire_kit.resolution(TARGET), budget=RunBudget(),
-            run_id=RUN)
+            run_id=RUN))
         return [d async for d in tool_calls.text_deltas(events, seen.append)]
 
     assert asyncio.run(go()) == ["Mara."]
@@ -187,21 +189,20 @@ def test_text_the_caller_hides_does_not_lift_the_turn_bound(monkeypatch):
 
 def test_entry_checks_are_raised_before_an_iterator_is_returned():
     with pytest.raises(ValueError):
-        inference.stream_tools("chat", PROMPT, toolset=TOOLS,
-                               execute=tool_calls.registered(TOOLS),
-                               client=FakeToolTurns(("ok", [])),
-                               resolved=wire_kit.resolution(TARGET), budget=RunBudget(),
-                               run_id="")
+        inference.stream_tools("chat", PROMPT, inference.LoopOptions(
+            toolset=TOOLS, execute=tool_calls.registered(TOOLS),
+            client=FakeToolTurns(("ok", [])), resolved=wire_kit.resolution(TARGET),
+            budget=RunBudget(), run_id=""))
 
 
 def test_closing_the_stream_stops_the_run():
     fake = FakeToolTurns(ToolTurn("", (("slow", {}),)), ("done", []))
 
     async def go():
-        events = inference.stream_tools(
-            "chat", PROMPT, toolset=TOOLS, execute=tool_calls.registered(TOOLS),
+        events = inference.stream_tools("chat", PROMPT, inference.LoopOptions(
+            toolset=TOOLS, execute=tool_calls.registered(TOOLS),
             client=fake, resolved=wire_kit.resolution(TARGET), budget=RunBudget(),
-            run_id=RUN)
+            run_id=RUN))
         async for event in events:
             if event.kind == "tool_start":
                 break

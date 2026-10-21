@@ -172,10 +172,10 @@ async def _loop(task: str, messages: list[dict], *, resolved: ResolvedInference,
     its task and its resolution (`test_operation_guard`)."""
     if task == "investigation-continuity":
         return await operations.run_tools("investigation-continuity", messages,
-                                          resolved=resolved, **options)
+                                          operations.LoopOptions(resolved=resolved, **options))
     if task == "investigation-question":
         return await operations.run_tools("investigation-question", messages,
-                                          resolved=resolved, **options)
+                                          operations.LoopOptions(resolved=resolved, **options))
     raise ValueError(f"not an investigation task: {task!r}")
 
 

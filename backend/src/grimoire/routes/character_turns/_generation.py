@@ -396,11 +396,11 @@ async def _opened(tool, task, messages, client, resolved, run):
         # A fresh contribution is `chat` and a reroll `regenerate` (§8.4),
         # each named as the literal the operation guard reads.
         if task == "regenerate":
-            tool.events = operations.stream_tools("regenerate", messages, resolved=resolved,
-                                                  **options)
+            tool.events = operations.stream_tools("regenerate", messages, operations.LoopOptions(
+                resolved=resolved, **options))
         elif task == "chat":
-            tool.events = operations.stream_tools("chat", messages, resolved=resolved,
-                                                  **options)
+            tool.events = operations.stream_tools("chat", messages, operations.LoopOptions(
+                resolved=resolved, **options))
         else:
             raise ValueError(f"{task!r} is never offered the decide tool")
     except Exception as exc:  # noqa: BLE001 - an optional step never fails a turn (§3.3)
