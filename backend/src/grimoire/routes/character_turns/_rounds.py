@@ -178,7 +178,7 @@ async def _frames(
         actor, turn.round_record = await _planning._first_actor(cid, sid, client, round_record)
         while True:
             round_frames = _round_frames(
-                claim, client, resolved, turn, actor, outcome,
+                claim, client, resolved, turn, actor, outcome=outcome,
                 app=app, embed_client=embed_client, history_enabled=history_enabled
             )
             async with aclosing(round_frames) as frames:
@@ -585,7 +585,7 @@ async def _contribution_frames(claim, client, resolved, turn, actor, *, outcome,
         yield frame
 
 
-async def _round_frames(claim, client, resolved, turn, actor, outcome, *,
+async def _round_frames(claim, client, resolved, turn, actor, *, outcome,
                         app=None, embed_client=None, history_enabled=False):
     """One round's contributions, from `actor` until nobody is next. Every
     write lands on `turn`, which is what `_frames` rescues from on failure."""
