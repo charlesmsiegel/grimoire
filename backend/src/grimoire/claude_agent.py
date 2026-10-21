@@ -272,6 +272,65 @@ def _note_deferred(message: object, usage: dict | None) -> bool:
     return True
 
 
+def _require_sdk() -> None:
+    """Raise what a missing or broken SDK means, before anything is sent."""
+    if query is not None:
+        return
+    if isinstance(_SDK_IMPORT_ERROR, ImportError):
+        raise ClaudeAgentError(
+            "missing_dependency",
+            "claude-agent-sdk is not installed — pip install 'grimoire[claude]'",
+        ) from _SDK_IMPORT_ERROR
+    raise _sdk_failure()            # installed but broken: same type/message, same place
+
+
+def _query_options(system: str, model: str, tools: tuple[dict, ...] | None,
+                   tool_choice: str | None) -> object:
+    """One query's options: a plain single-turn call with no tools allowed, or,
+    when tools are offered, `_tool_options`."""
+    if tools is None:
+        return ClaudeAgentOptions(system_prompt=system or None, model=model,
+                                  allowed_tools=[], max_turns=1)
+    return _tool_options(system, model, tools, tool_choice)
+
+
+def _absorb(message: object, usage: dict | None, tools: tuple[dict, ...] | None) -> bool:
+    """One message's bookkeeping into `usage` -- its accounting, its deferred
+    call when tools were offered, its thinking -- and whether it carried a
+    deferred call."""
+    _capture_usage(message, usage)
+    called = tools is not None and _note_deferred(message, usage)
+    for block in getattr(message, "content", []) or []:
+        llm_reasoning.feed(usage, getattr(block, "thinking", None))
+    return called
+
+
+def _texts(message: object) -> list[str]:
+    """The reply text an assistant message carries; nothing for any other."""
+    if not isinstance(message, AssistantMessage):
+        return []
+    return [block.text for block in message.content if isinstance(block, TextBlock)]
+
+
+def _sdk_error(exc: Exception) -> ClaudeAgentError:
+    """A failure inside the SDK run, as this provider's error: no CLI is a
+    missing dependency, a failed CLI process a bad response, anything else
+    the network."""
+    if isinstance(exc, CLINotFoundError):
+        return ClaudeAgentError("missing_dependency", str(exc))
+    if isinstance(exc, ProcessError):
+        return ClaudeAgentError("bad_response", str(exc))
+    return ClaudeAgentError("network", str(exc))
+
+
+def _finish_calls(usage: dict | None, called: bool) -> None:
+    """Close the holder's tool-call collector, when it has one, on how the
+    run ended: with a deferred call or without."""
+    found = usage.get(tool_calls.KEY) if usage is not None else None
+    if isinstance(found, tool_calls.Collector):
+        found.finish("tool_calls" if called else "stop")
+
+
 #: What `probe` sends. Short on both sides on purpose: the reply is discarded
 #: at its first word, and a prompt long enough to be interesting would be a
 #: prompt long enough to be worth caching, billing and reading.
@@ -291,17 +350,9 @@ class ClaudeAgentClient:
         and comes back as the `ResultMessage`'s deferred call, noted on the
         holder's `tool_calls.Collector`, so a turn on this kind makes at most
         one call. Absent, the call is the call it always was."""
-        if query is None:
-            if isinstance(_SDK_IMPORT_ERROR, ImportError):
-                raise ClaudeAgentError(
-                    "missing_dependency",
-                    "claude-agent-sdk is not installed — pip install 'grimoire[claude]'",
-                ) from _SDK_IMPORT_ERROR
-            raise _sdk_failure()            # installed but broken: same type/message, same place
+        _require_sdk()
         system, turns = _split_system(messages)
-        options = (ClaudeAgentOptions(system_prompt=system or None, model=model,
-                                      allowed_tools=[], max_turns=1)
-                   if tools is None else _tool_options(system, model, tools, tool_choice))
+        options = _query_options(system, model, tools, tool_choice)
         called = False
         try:
             async for message in query(prompt=_flatten(turns), options=options):
@@ -310,29 +361,18 @@ class ClaudeAgentClient:
                 # messages that carry no text (thinking, tool, result), and a
                 # model can spend minutes on those before its first word (#243).
                 yield ""
-                _capture_usage(message, usage)
-                if tools is not None:
-                    called = _note_deferred(message, usage) or called
-                for block in getattr(message, "content", []) or []:
-                    llm_reasoning.feed(usage, getattr(block, "thinking", None))
+                called = _absorb(message, usage, tools) or called
                 if llm_reasoning.pending(usage):
                     yield ""
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            yield block.text
-        except CLINotFoundError as exc:
-            raise ClaudeAgentError("missing_dependency", str(exc)) from exc
-        except ProcessError as exc:
-            raise ClaudeAgentError("bad_response", str(exc)) from exc
+                for text in _texts(message):
+                    yield text
         # so a future SDK-raised ClaudeAgentError isn't re-tagged as "network" below
         except ClaudeAgentError:
             raise
         except Exception as exc:
-            raise ClaudeAgentError("network", str(exc)) from exc
-        found = usage.get(tool_calls.KEY) if usage is not None else None
-        if tools is not None and isinstance(found, tool_calls.Collector):
-            found.finish("tool_calls" if called else "stop")
+            raise _sdk_error(exc) from exc
+        if tools is not None:
+            _finish_calls(usage, called)
 
     async def probe(self, model: str) -> None:
         """Ask whether this path can generate. Returns on yes, raises on no.
