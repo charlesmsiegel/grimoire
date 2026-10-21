@@ -37,11 +37,8 @@ unpriced call otherwise -- never `$0`.
 from __future__ import annotations
 
 import json
-import os
-import ssl
 from collections.abc import AsyncIterator
 
-import certifi
 import httpx
 
 from . import (
@@ -54,6 +51,7 @@ from . import (
     tool_calls,
 )
 from .llm_errors import LLMError, retry_after_seconds
+from .provider_http import ProviderHTTP
 
 #: Where a connection with no `base_url` of its own is sent. The `anthropic`
 #: provider preset (`store.inference.providers`) names the same host; this
@@ -284,24 +282,7 @@ def _opened(joined: str, turns: list[dict]) -> tuple[str, list[dict]]:
     return joined, turns
 
 
-class AnthropicClient:
-    def __init__(self, http: httpx.AsyncClient | None = None):
-        self._http = http
-        self._owns = http is None
-
-    def _verify(self) -> ssl.SSLContext:
-        # A stale $SSL_CERT_FILE crashes TLS setup; see `openrouter._verify`.
-        cert = os.environ.get("SSL_CERT_FILE")
-        cafile = cert if cert and os.path.exists(cert) else certifi.where()
-        return ssl.create_default_context(cafile=cafile)
-
-    def _client(self) -> httpx.AsyncClient:
-        if self._http is None:
-            self._http = httpx.AsyncClient(
-                timeout=httpx.Timeout(120.0, connect=30.0), verify=self._verify()
-            )
-        return self._http
-
+class AnthropicClient(ProviderHTTP):
     def _headers(self, key: str) -> dict[str, str]:
         return {"x-api-key": key, "anthropic-version": API_VERSION}
 
@@ -443,12 +424,6 @@ class AnthropicClient:
         and authenticated -- a revoked key is a 401 here, as it would be on
         the next turn (#146). Returns on yes, raises on no."""
         await self._get(_root(base_url) + "/v1/models", key, {"limit": "1"})
-
-    async def aclose(self) -> None:
-        # Reset, not just close -- see `openrouter.aclose`.
-        if self._owns and self._http is not None:
-            await self._http.aclose()
-            self._http = None
 
 
 # ---- reading the stream ----

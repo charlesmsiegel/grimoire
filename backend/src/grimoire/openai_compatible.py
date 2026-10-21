@@ -7,15 +7,13 @@ docs/superpowers/specs/2026-07-18-llm-connections-design.md.
 from __future__ import annotations
 
 import json
-import os
-import ssl
 from collections.abc import AsyncIterator, Mapping
 
-import certifi
 import httpx
 
 from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage, tool_calls
 from .llm_errors import LLMError, retry_after_seconds
+from .provider_http import ProviderHTTP
 
 #: Bound for the health probe (#146). The client's own 120s default is sized
 #: for a generation; a reader who pressed "Test connection" is watching a
@@ -331,57 +329,21 @@ def _decision_usage(body: object, usage: dict | None) -> None:
             usage[field] = count
 
 
-class OpenAICompatibleClient:
-    def __init__(self, http: httpx.AsyncClient | None = None):
-        self._http = http
-        self._owns = http is None
-
-    def _verify(self) -> ssl.SSLContext:
-        cert = os.environ.get("SSL_CERT_FILE")
-        cafile = cert if cert and os.path.exists(cert) else certifi.where()
-        return ssl.create_default_context(cafile=cafile)
-
-    def _client(self) -> httpx.AsyncClient:
-        if self._http is None:
-            self._http = httpx.AsyncClient(
-                timeout=httpx.Timeout(120.0, connect=30.0), verify=self._verify()
-            )
-        return self._http
-
+class OpenAICompatibleClient(ProviderHTTP):
     def _headers(self, key: str) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if key:
             headers["Authorization"] = f"Bearer {key}"
         return headers
 
-    async def stream(self, messages, model: str, key: str, base_url: str,
-                      strict: bool = False, usage: dict | None = None,
-                      reasoning_effort: str = "",
-                      sampling: dict | None = None,
-                      schema: dict | None = None,
-                      tools: tuple[dict, ...] | None = None,
-                      tool_choice: str | None = None) -> AsyncIterator[str]:
-        """`usage` is filled in place when the endpoint volunteers an accounting
-        block — see `llm_usage`.
-
-        Nothing is *asked* for, and that asymmetry with `openrouter` is
-        deliberate (#152). The OpenAI spec's way to request one is
-        `stream_options: {"include_usage": true}`, and `base_url` here points at
-        whatever the user configured: llama.cpp, vLLM, LM Studio, a vendor's
-        own gateway. A strict endpoint rejects a request field it does not know
-        with a 400 — this module already carries `_strict_messages` because one
-        such endpoint refused a message ordering — and trading "generation
-        works" for "generation is counted" is the wrong way round. Endpoints
-        that report usage unprompted (many do) are recorded; the rest land in
-        the ledger as unpriced calls, which `store.usage` counts rather than
-        hides."""
-        if not base_url:
-            raise OpenAICompatibleError("missing_key", "No base URL configured")
+    def _payload(self, messages, model: str, *, strict: bool, reasoning_effort: str,
+                 sampling: dict | None, schema: dict | None,
+                 tools: tuple[dict, ...] | None, tool_choice: str | None) -> dict:
+        """The chat-completions body `stream` sends."""
         # A neutral tool history (01g) in this wire's shapes first, so the
         # strict folding sees `tool` messages and calls as the endpoint will.
         lowered = tool_calls.openai_messages(messages)
         payload_messages = _strict_messages(lowered) if strict else lowered
-        url = base_url.rstrip("/") + "/chat/completions"
         # The preset's parameters first, so the request's own fields always
         # win (see `openrouter._payload`); `llm_sampling.split` has already
         # dropped whatever this endpoint is not declared to take.
@@ -403,6 +365,35 @@ class OpenAICompatibleClient:
             payload["tools"] = tool_calls.openai_tools(tools)
             if tool_choice is not None:
                 payload["tool_choice"] = tool_choice
+        return payload
+
+    async def stream(self, messages, model: str, key: str, base_url: str, *,
+                     strict: bool = False, usage: dict | None = None,
+                     reasoning_effort: str = "",
+                     sampling: dict | None = None,
+                     schema: dict | None = None,
+                     tools: tuple[dict, ...] | None = None,
+                     tool_choice: str | None = None) -> AsyncIterator[str]:
+        """`usage` is filled in place when the endpoint volunteers an accounting
+        block — see `llm_usage`.
+
+        Nothing is *asked* for, and that asymmetry with `openrouter` is
+        deliberate (#152). The OpenAI spec's way to request one is
+        `stream_options: {"include_usage": true}`, and `base_url` here points at
+        whatever the user configured: llama.cpp, vLLM, LM Studio, a vendor's
+        own gateway. A strict endpoint rejects a request field it does not know
+        with a 400 — this module already carries `_strict_messages` because one
+        such endpoint refused a message ordering — and trading "generation
+        works" for "generation is counted" is the wrong way round. Endpoints
+        that report usage unprompted (many do) are recorded; the rest land in
+        the ledger as unpriced calls, which `store.usage` counts rather than
+        hides."""
+        if not base_url:
+            raise OpenAICompatibleError("missing_key", "No base URL configured")
+        payload = self._payload(messages, model, strict=strict,
+                                reasoning_effort=reasoning_effort, sampling=sampling,
+                                schema=schema, tools=tools, tool_choice=tool_choice)
+        url = base_url.rstrip("/") + "/chat/completions"
         try:
             http = self._client()
             async with http.stream(
@@ -464,7 +455,8 @@ class OpenAICompatibleClient:
     async def complete(self, messages, model: str, key: str, base_url: str,
                        strict: bool = False, usage: dict | None = None) -> str:
         return "".join([chunk async for chunk
-                        in self.stream(messages, model, key, base_url, strict, usage)])
+                        in self.stream(messages, model, key, base_url,
+                                       strict=strict, usage=usage)])
 
     async def decide(self, item: decisions.Item, model: str, key: str, base_url: str, *,
                      usage: dict | None = None,
@@ -573,11 +565,3 @@ class OpenAICompatibleClient:
         used as a catalog.
         """
         await self.list_models(base_url, key, bound=PROBE_TIMEOUT)
-
-    async def aclose(self) -> None:
-        # Reset, not just close: `_client()` is lazy, so leaving the closed
-        # client in place would hand it back to the next caller (and every
-        # request through it raises). `EmbeddingsClient.close` does the same.
-        if self._owns and self._http is not None:
-            await self._http.aclose()
-            self._http = None
