@@ -294,10 +294,7 @@ def override_inference(body, task: str = "", cid: str = "", *,
     does not double up. A task whose code policy is `fallback="none"`
     (`routing.TaskPolicy`) carries none, overridden or not.
     """
-    conn_id = ((getattr(body, "provider", None) or "").strip()
-               or (getattr(body, "connection_id", None) or "").strip()) if body else ""
-    model = (getattr(body, "model", None) or "").strip() if body else ""
-    preset = (getattr(body, "preset", None) or "").strip() if body else ""
+    conn_id, model, preset = _override_fields(body)
     if len(model) > store.alternates.MAX_MODEL_CHARS:
         raise HTTPException(
             status_code=400,
@@ -326,6 +323,35 @@ def override_inference(body, task: str = "", cid: str = "", *,
             status_code=400,
             detail="That preset no longer exists — pick another, "
                    "or reroll with the route's.")
+    _refuse_override_target(resolved, primary, conn_id=conn_id, model=model)
+    # Then what the call needs, on the attempt that would serve it: an override
+    # onto a model known unable to do the job is refused like the standing one.
+    _refuse_incapable(resolved)
+    served = _narrowed(resolved)
+    return served, not _same_route(resolved, served, preset)
+
+
+def _body_field(body, name: str) -> str:
+    """One override field off the request body, stripped; "" when absent."""
+    return (getattr(body, name, None) or "").strip()
+
+
+def _override_fields(body) -> tuple[str, str, str]:
+    """The body's `(connection id, model, preset)` for `override_inference`,
+    each "" when not sent (or with no body at all). `provider` wins over
+    `connection_id` when both are sent."""
+    if not body:
+        return "", "", ""
+    conn_id = _body_field(body, "provider") or _body_field(body, "connection_id")
+    return conn_id, _body_field(body, "model"), _body_field(body, "preset")
+
+
+def _refuse_override_target(resolved: ResolvedInference, primary: wire.Target | None, *,
+                            conn_id: str, model: str) -> None:
+    """`override_inference`'s refusals of the connection an override lands on,
+    in its order: the seam's own when no connection was named, else a gone
+    connection, a provider alone with no standing model to keep, and a named
+    connection that cannot send."""
     if not conn_id:
         # The seam's refusals, on the copy that serves. A model alone drives
         # the STANDING provider, so this is the standing route's own refusal:
@@ -333,7 +359,8 @@ def override_inference(body, task: str = "", cid: str = "", *,
         # describe the standing choice -- a routed connection that cannot
         # send says so here too.
         _refuse_unusable(resolved)
-    elif primary is None:
+        return
+    if primary is None:
         # Written for the banner it lands in, not for a log. `errorText`
         # renders `detail` verbatim, and the reader's next move is the one
         # worth naming: the connection they picked is gone (deleted in
@@ -342,28 +369,28 @@ def override_inference(body, task: str = "", cid: str = "", *,
             status_code=400,
             detail="That connection no longer exists — pick another, "
                    "or reroll on the campaign's.")
-    elif not resolved.legacy and not model and not _has_standing_model(resolved, primary):
+    if not resolved.legacy and not model and not _has_standing_model(resolved, primary):
         # A provider alone keeps the standing model, and there is none to keep.
         # The body's fault, so before the connection's own refusals. (A
         # format-1 store's provider alone runs its own model, spec 5.6.)
         raise HTTPException(
             status_code=400,
             detail="Name a model for this provider — there is no standing model to keep.")
-    else:
-        problem = inference.target_problem(primary)
-        if problem is not None:
-            # NAMED, unlike `require_inference`'s copy of this. There the
-            # connection is the one the whole app is using and needs no
-            # introduction; here it is one the reader picked for a single
-            # reroll, and the bare "OpenRouter key not set" reads as though
-            # the connection they have been playing on has broken.
-            raise HTTPException(
-                status_code=409,
-                detail={"detail": f"{primary.provider_name}: {problem}", "kind": "missing_key"})
-    # Then what the call needs, on the attempt that would serve it: an override
-    # onto a model known unable to do the job is refused like the standing one.
-    _refuse_incapable(resolved)
-    served = _narrowed(resolved)
+    problem = inference.target_problem(primary)
+    if problem is not None:
+        # NAMED, unlike `require_inference`'s copy of this. There the
+        # connection is the one the whole app is using and needs no
+        # introduction; here it is one the reader picked for a single
+        # reroll, and the bare "OpenRouter key not set" reads as though
+        # the connection they have been playing on has broken.
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": f"{primary.provider_name}: {problem}", "kind": "missing_key"})
+
+
+def _same_route(resolved: ResolvedInference, served: UsableInference, preset: str) -> bool:
+    """Whether the override serves where the call would have gone anyway --
+    `override_inference`'s `routed`, negated."""
     standing = resolved.standing
     # Same provider means the same connection, so the standing model's
     # effective value is read on its kind with only the model swapped back.
@@ -377,7 +404,7 @@ def override_inference(body, task: str = "", cid: str = "", *,
         # naming the preset the route already runs (or "none" against a route
         # that runs none) is no override.
         same = served.attempts[0].preset_id == (resolved.standing_preset or "")
-    return served, not same
+    return same
 
 
 def _has_standing_model(resolved: ResolvedInference, primary: wire.Target) -> bool:
