@@ -49,7 +49,7 @@ def _reserve(client, cid, sid, attempt="a1", cls="turn"):
     ident = store.scenes.scene_identity(cid, sid)
     run, _ = client.app.state.runs.start_or_existing(
         _subject(cid, sid), cls, "chat", attempt, ident,
-        {"campaign": "Saltmarch", "scene": "Mara"})
+        labels={"campaign": "Saltmarch", "scene": "Mara"})
     return run
 
 

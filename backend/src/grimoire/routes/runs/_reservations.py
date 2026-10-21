@@ -134,7 +134,7 @@ def reserve_background(app, cid: str, sid: str, kind: str) -> _record.Run | None
     labels = {"campaign": _subjects._campaign_label(cid), "scene": _subjects._scene_label(cid, sid)}
     try:
         run, _ = app.state.runs.start_or_existing(
-            ("scene", cid, identity), "background", kind, None, identity, labels)
+            ("scene", cid, identity), "background", kind, None, identity, labels=labels)
     except (_contracts.RunInFlightError, _contracts.StoreMovingError):
         # Neither is reachable for a keyless class today, and both are caught
         # rather than asserted away: this is fire-and-forget, so a reservation
@@ -172,7 +172,7 @@ def reserve_campaign_background(app, cid: str, kind: str,
     try:
         return app.state.runs.start_or_existing(
             subject, "background", kind, attempt_id, None,
-            {**_subjects._subject_labels(subject), **(labels or {})}, single_live=True,
+            labels={**_subjects._subject_labels(subject), **(labels or {})}, single_live=True,
             single_match=match)
     except _contracts.StoreMovingError:
         return None
@@ -244,7 +244,7 @@ def _reserve(app, cid: str, sid: str, cls: _contracts.RunClass, kind: str,
         # serialized on it) and it is reentrant, so this costs nothing.
         with store.locks.campaign_lock(cid):
             run, fresh = app.state.runs.start_or_existing(
-                subject, cls, kind, attempt_id, identity, labels,
+                subject, cls, kind, attempt_id, identity, labels=labels,
                 adopt_terminal=adopt_terminal,
                 # The subject a Stop would have built for this scene BEFORE
                 # `ensure_identity` above minted one. Only different when the
@@ -298,7 +298,7 @@ def reserve_draft(app, subject: _contracts.Subject, kind: str,
     try:
         return app.state.runs.start_or_existing(
             subject, "draft", kind, attempt_id or uuid.uuid4().hex, None,
-            _subjects._subject_labels(subject))
+            labels=_subjects._subject_labels(subject))
     except _contracts.StoreMovingError as exc:
         # The same refusal `_reserve` gives, for the same reason: the draft's
         # result is held on the run rather than written anywhere, but the work

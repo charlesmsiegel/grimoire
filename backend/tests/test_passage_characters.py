@@ -72,7 +72,7 @@ def test_save_is_refused_while_the_scene_is_generating(client):
     identity = scenes.scene_identity(cid, sid)
     run, _ = client.app.state.runs.start_or_existing(
         ("scene", cid, identity), "turn", "chat", "held", identity,
-        {"campaign": "Saltmarch", "scene": "Arrival"})
+        labels={"campaign": "Saltmarch", "scene": "Arrival"})
     try:
         reply = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/character", json=body)
         assert reply.status_code == 409

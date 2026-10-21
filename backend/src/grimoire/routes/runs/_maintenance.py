@@ -77,7 +77,7 @@ def run_maintenance(app, kind: str, attempt_id: str | None,
     try:
         run, fresh = app.state.runs.start_or_existing(
             _subjects.GLOBAL_SUBJECT, "maintenance", kind, attempt_id or uuid.uuid4().hex,
-            None, _subjects._subject_labels(_subjects.GLOBAL_SUBJECT))
+            None, labels=_subjects._subject_labels(_subjects.GLOBAL_SUBJECT))
     except _contracts.RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={
             "kind": "run_in_flight", "run_id": exc.run_id,
@@ -184,7 +184,7 @@ def reserve_cache_sync(app, attempt_id: str | None) -> tuple[_record.Run, bool]:
         return app.state.runs.start_or_existing(
             _subjects.GLOBAL_SUBJECT, "background", _contracts.CACHE_SYNC_KIND,
             f"{_contracts.CACHE_SYNC_KIND}:{attempt_id or uuid.uuid4().hex}",
-            None, _subjects._subject_labels(_subjects.GLOBAL_SUBJECT), refuse_live=True)
+            None, labels=_subjects._subject_labels(_subjects.GLOBAL_SUBJECT), refuse_live=True)
     except _contracts.RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={
             "kind": "sync_in_flight", "run_id": exc.run_id,

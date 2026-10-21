@@ -74,7 +74,7 @@ def held_scene(client):
     identity = store.scenes.scene_identity(cid, sid)
     run, _ = client.app.state.runs.start_or_existing(
         ("scene", cid, identity), "turn", "chat", "a1", identity,
-        {"campaign": "Saltmarch", "scene": "Mara"})
+        labels={"campaign": "Saltmarch", "scene": "Mara"})
     return cid, sid, run
 
 

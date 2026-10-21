@@ -410,7 +410,7 @@ def test_a_live_turn_does_not_refuse_an_opener(client, campaign):
     identity = store.scenes.scene_identity(cid, sid)
     client.app.state.runs.start_or_existing(
         ("scene", cid, identity), "turn", "chat", "held", identity,
-        {"campaign": "Saltmarch", "scene": "S"})
+        labels={"campaign": "Saltmarch", "scene": "S"})
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["The quay."])
 
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/opener", json={"prompt": "begin"})

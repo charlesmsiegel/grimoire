@@ -254,9 +254,9 @@ def test_a_run_outlives_its_request_and_keeps_its_own_set(home):
 
     def start_run():
         atomic.write_text(world / "request.md", "request")
-        parent, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+        parent, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
         child, _ = app.state.runs.start_or_existing(("campaign", "saltmarch"), "background",
-                                                    "follow-up", "a2", "", LABELS)
+                                                    "follow-up", "a2", "", labels=LABELS)
         runs.update(parent=parent, child=child)
 
         async def follow_up():
@@ -293,7 +293,7 @@ def test_a_maintenance_thread_run_hands_its_own_writes_over(home):
     world = home / "worlds" / "realm"
     with TestClient(app):
         app.state.cache_warm = rec
-        run, _ = app.state.runs.start_or_existing(("global",), "maintenance", "image-gc", "a1", "", {})
+        run, _ = app.state.runs.start_or_existing(("global",), "maintenance", "image-gc", "a1", "", labels={})
 
         def work(r):
             atomic.write_text(world / "report.md", "report")

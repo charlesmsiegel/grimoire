@@ -42,11 +42,11 @@ def test_background_and_draft_declare_no_key():
 
 def test_second_turn_on_a_busy_scene_is_refused():
     r = runs.RunRegistry()
-    first, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    first, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert started
     assert r.live_for_key(runs.exclusion_key(SCENE, "turn")) is first
     with pytest.raises(runs.RunInFlightError) as exc:
-        r.start_or_existing(SCENE, "turn", "chat", "a2", "ident", LABELS)
+        r.start_or_existing(SCENE, "turn", "chat", "a2", "ident", labels=LABELS)
     assert exc.value.run_id == first.id
 
 
@@ -54,17 +54,17 @@ def test_a_turn_in_another_campaign_is_not_refused():
     """The same `sid` in two campaigns must not collide -- a phone user with two
     campaigns open hits this on their first turn in each."""
     r = runs.RunRegistry()
-    r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
-    twin, started = r.start_or_existing(TWIN, "turn", "chat", "a2", "ident", LABELS)
+    r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
+    twin, started = r.start_or_existing(TWIN, "turn", "chat", "a2", "ident", labels=LABELS)
     assert started and twin is not None
 
 
 def test_a_terminal_run_releases_the_exclusion_key():
     r = runs.RunRegistry()
-    first, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    first, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     first.finish("landed")
     assert r.live_for_key(runs.exclusion_key(SCENE, "turn")) is None
-    second, started = r.start_or_existing(SCENE, "turn", "chat", "a2", "ident", LABELS)
+    second, started = r.start_or_existing(SCENE, "turn", "chat", "a2", "ident", labels=LABELS)
     assert started and second is not first
 
 
@@ -72,40 +72,40 @@ def test_drafts_overlap_on_one_subject_and_both_stay_discoverable():
     """The bug a most-recent pointer would ship: the second start hides the
     first, which then has no discovery path at all."""
     r = runs.RunRegistry()
-    a, _ = r.start_or_existing(WORLD, "draft", "image-description", "a1", None, LABELS)
-    b, _ = r.start_or_existing(WORLD, "draft", "image-description", "a2", None, LABELS)
+    a, _ = r.start_or_existing(WORLD, "draft", "image-description", "a1", None, labels=LABELS)
+    b, _ = r.start_or_existing(WORLD, "draft", "image-description", "a2", None, labels=LABELS)
     assert {run.id for run in r.for_subject(WORLD)} == {a.id, b.id}
 
 
 def test_repeated_attempt_id_returns_the_existing_run_even_when_terminal():
     r = runs.RunRegistry()
-    first, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    first, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert started
     first.finish("landed")
-    again, started_again = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    again, started_again = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert again is first and not started_again
 
 
 def test_an_attempt_id_is_scoped_to_its_subject():
     """Attempt ids come from clients; two scenes can pick the same one."""
     r = runs.RunRegistry()
-    a, _ = r.start_or_existing(SCENE, "turn", "chat", "same", "ident", LABELS)
-    b, started = r.start_or_existing(OTHER, "turn", "chat", "same", "ident", LABELS)
+    a, _ = r.start_or_existing(SCENE, "turn", "chat", "same", "ident", labels=LABELS)
+    b, started = r.start_or_existing(OTHER, "turn", "chat", "same", "ident", labels=LABELS)
     assert started and b is not a
 
 
 def test_get_refuses_a_run_id_from_another_subject():
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert r.get(run.id, SCENE) is run
     assert r.get(run.id, OTHER) is None
 
 
 def test_reap_drops_terminal_runs_past_the_window_and_keeps_live_ones():
     r = runs.RunRegistry()
-    done, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    done, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     done.finish("landed", at=1000.0, monotonic_at=1000.0)
-    live, _ = r.start_or_existing(OTHER, "turn", "chat", "a2", "ident", LABELS)
+    live, _ = r.start_or_existing(OTHER, "turn", "chat", "a2", "ident", labels=LABELS)
     assert r.reap(now=1000.0 + runs.REAP_SECONDS + 1) == 1
     assert r.get(done.id, SCENE) is None
     assert r.get(live.id, OTHER) is live
@@ -116,19 +116,19 @@ def test_reaping_clears_every_index_not_just_the_run_table():
     attempt id adopt a corpse, and one left in `_by_key` would wedge the scene
     permanently -- neither is visible through `get`."""
     r = runs.RunRegistry()
-    done, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    done, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     done.finish("landed", at=1000.0, monotonic_at=1000.0)
     assert r.reap(now=1000.0 + runs.REAP_SECONDS + 1) == 1
 
     assert r.for_subject(SCENE) == []
     assert r.live_for_key(runs.exclusion_key(SCENE, "turn")) is None
-    fresh, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    fresh, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert started and fresh is not done
 
 
 def test_a_live_run_is_never_reaped_however_old():
     r = runs.RunRegistry()
-    live, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    live, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert r.reap(now=1e12) == 0
     assert r.get(live.id, SCENE) is live
 
@@ -137,7 +137,7 @@ def test_a_live_run_is_never_reaped_however_old():
 
 def test_append_frame_returns_absolute_indexes_from_zero():
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert run.append_frame(_sse("Wind off the ")) == 0
     assert run.append_frame(_sse("water.")) == 1
 
@@ -149,7 +149,7 @@ def test_the_buffer_holds_heartbeats_verbatim_and_they_occupy_an_index():
     later index, so a client resuming at `consumed + 1` replays text it already
     rendered."""
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     run.append_frame(_sse("Wind off the "))
     beat = run.append_frame(": heartbeat\n\n")
     run.append_frame(_sse("water."))
@@ -163,7 +163,7 @@ def test_frames_since_is_inclusive_so_a_resume_reproduces_the_text_once():
     """`since=N` yields frame N itself, so a client that consumed through N asks
     for N+1. Getting it backwards duplicates a delta mid-reply."""
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     run.append_frame(_sse("Wind off the "))
     run.append_frame(": heartbeat\n\n")
     run.append_frame(_sse("water."))
@@ -178,7 +178,7 @@ def test_frames_since_is_inclusive_so_a_resume_reproduces_the_text_once():
 
 def test_frames_since_past_the_end_is_empty_rather_than_an_error():
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     run.append_frame(_sse("only"))
     assert run.frames_since(99) == []
 
@@ -187,7 +187,7 @@ def test_frames_since_past_the_end_is_empty_rather_than_an_error():
 
 def test_a_new_run_carries_its_labels_and_identity():
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-x", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-x", labels=LABELS)
     assert run.labels == LABELS
     assert run.scene_identity == "ident-x"
     assert run.subject == SCENE and run.cls == "turn" and run.kind == "chat"
@@ -196,7 +196,7 @@ def test_a_new_run_carries_its_labels_and_identity():
 
 def test_finish_records_the_state_and_the_clock():
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     run.finish("failed", at=1234.0)
     assert run.state == "failed" and run.ended_at == 1234.0
 
@@ -207,7 +207,7 @@ def test_a_published_run_always_has_both_handshake_events():
     that is observable without its events leaves that caller waiting on
     something nothing will ever make."""
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert run.ready is not None and run.terminal is not None
     assert not run.ready.is_set() and not run.terminal.is_set()
 
@@ -223,7 +223,7 @@ def test_the_event_factory_is_injectable_for_the_portal():
         return runs._PlainEvent()
 
     r = runs.RunRegistry(event_factory=factory)
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert len(made) == 2                       # ready and terminal
     assert run.ready is not None and run.terminal is not None
 
@@ -235,7 +235,7 @@ def test_expiry_survives_a_wall_clock_jump():
     to provide -- or, on a backward correction, keep every run's frames far
     longer than intended."""
     r = runs.RunRegistry()
-    fresh, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    fresh, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     # Finished a moment ago by the monotonic clock, but stamped as if the wall
     # clock had since jumped an hour forward.
     fresh.finish("landed", at=1000.0, monotonic_at=r._now())
@@ -248,7 +248,7 @@ def test_get_refuses_a_recycled_sid_when_the_identity_moved():
     same `sid`, so the subject alone says the replacement owns the dead scene's
     run -- and the stream and cancel routes all resolve through here."""
     r = runs.RunRegistry()
-    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", LABELS)
+    run, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", labels=LABELS)
     assert r.get(run.id, SCENE, identity="ident-old") is run
     assert r.get(run.id, SCENE, identity="ident-new") is None
     # No identity asked for: unchanged behaviour, for subjects that have none.
@@ -257,7 +257,7 @@ def test_get_refuses_a_recycled_sid_when_the_identity_moved():
 
 def test_for_subject_filters_by_identity_too():
     r = runs.RunRegistry()
-    old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", LABELS)
+    old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", labels=LABELS)
     assert r.for_subject(SCENE, identity="ident-new") == []
     assert r.for_subject(SCENE, identity="ident-old") == [old]
 
@@ -267,10 +267,10 @@ def test_attempt_adoption_also_checks_the_scene_identity():
     its `sid` recycled would otherwise adopt the dead scene's run through the
     attempt path -- which `get` and `for_subject` already refuse."""
     r = runs.RunRegistry()
-    old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", LABELS)
+    old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", labels=LABELS)
     old.finish("landed")
 
-    fresh, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-new", LABELS)
+    fresh, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-new", labels=LABELS)
     assert started and fresh is not old
 
 
@@ -291,7 +291,7 @@ def test_events_are_not_built_while_the_registry_lock_is_held():
         return runs._PlainEvent()
 
     r.set_event_factory(factory)
-    r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", LABELS)
+    r.start_or_existing(SCENE, "turn", "chat", "a1", "ident", labels=LABELS)
     assert all(held), "an event was constructed while the registry lock was held"
 
 
@@ -301,14 +301,14 @@ def test_reaping_an_old_run_keeps_a_newer_attempt_mapping():
     replacement -- a retry would then start the work again instead of adopting
     it, which is the duplicate send this index exists to prevent."""
     r = runs.RunRegistry()
-    old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", LABELS)
+    old, _ = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-old", labels=LABELS)
     old.finish("landed", at=1000.0, monotonic_at=1000.0)
-    new, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-new", LABELS)
+    new, started = r.start_or_existing(SCENE, "turn", "chat", "a1", "ident-new", labels=LABELS)
     assert started
 
     assert r.reap(now=1000.0 + runs.REAP_SECONDS + 1) == 1
     adopted, started_again = r.start_or_existing(SCENE, "turn", "chat", "a1",
-                                                 "ident-new", LABELS)
+                                                 "ident-new", labels=LABELS)
     assert adopted is new and not started_again
 
 
@@ -355,7 +355,7 @@ def test_a_stop_cannot_slip_between_the_lookup_and_the_reservation():
         "can land in the gap and never see it")
 
     lock.acquisitions = 0
-    run, fresh = reg.start_or_existing(subject, "turn", "chat", "a-1", "i1", {})
+    run, fresh = reg.start_or_existing(subject, "turn", "chat", "a-1", "i1", labels={})
     assert lock.acquisitions == 1, (
         "the record is consumed outside the acquisition that publishes the "
         "run, so a Stop can land in the gap and be dropped")
@@ -368,7 +368,7 @@ def test_a_stop_after_the_reservation_finds_the_run_itself():
     for a later attempt with the same id to pick up."""
     reg = runs.RunRegistry()
     subject = ("scene", "saltmarch", "001--mara")
-    run, _ = reg.start_or_existing(subject, "turn", "chat", "a-1", "i1", {})
+    run, _ = reg.start_or_existing(subject, "turn", "chat", "a-1", "i1", labels={})
 
     found = reg.cancel_or_precancel(subject, "a-1", "i1")
 
@@ -395,7 +395,7 @@ def test_the_live_callback_fires_at_reservation_not_when_the_runner_starts():
     seen: list[int] = []
     reg.set_live_sink(seen.append)
 
-    reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", LABELS)
+    reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", labels=LABELS)
 
     assert seen == [1], f"promotion did not fire at reservation: {seen}"
 
@@ -407,7 +407,7 @@ def test_the_live_callback_fires_on_a_release_that_never_started():
     reg = runs.RunRegistry()
     seen: list[int] = []
     reg.set_live_sink(seen.append)
-    run, _ = reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", LABELS)
+    run, _ = reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", labels=LABELS)
 
     reg.retire(run.id)                  # what the pre-start release path does
 
@@ -421,8 +421,8 @@ def test_the_callback_only_speaks_at_the_crossings():
     reg = runs.RunRegistry()
     seen: list[int] = []
     reg.set_live_sink(seen.append)
-    a, _ = reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", LABELS)
-    b, _ = reg.start_or_existing(OTHER, "turn", "chat", "a2", "i2", LABELS)
+    a, _ = reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", labels=LABELS)
+    b, _ = reg.start_or_existing(OTHER, "turn", "chat", "a2", "i2", labels=LABELS)
 
     reg.retire(a.id)
     reg.retire(b.id)
@@ -441,7 +441,7 @@ def test_a_failing_callback_does_not_reach_the_run():
 
     reg.set_live_sink(refuse)
 
-    run, fresh = reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", LABELS)
+    run, fresh = reg.start_or_existing(SCENE, "turn", "chat", "a1", "i1", labels=LABELS)
 
     assert fresh and run.state == "running"
     reg.retire(run.id)                  # and the other direction too
@@ -510,7 +510,7 @@ def test_an_ordinary_pair_of_transitions_still_both_arrive():
     seen: list[int] = []
     reg.set_live_sink(seen.append)
 
-    run, _ = reg.start_or_existing(("scene", "c", "i"), "turn", "chat", "a1", "i", {})
+    run, _ = reg.start_or_existing(("scene", "c", "i"), "turn", "chat", "a1", "i", labels={})
     reg.retire(run.id)
 
     assert seen == [1, 0]
@@ -524,7 +524,7 @@ RECONCILE = "continuity-reconcile"
 
 def _single(r, attempt_id=None, subject=CAMPAIGN, kind=RECONCILE):
     return r.start_or_existing(subject, "background", kind, attempt_id, None,
-                               LABELS, single_live=True)
+                               labels=LABELS, single_live=True)
 
 
 def test_single_live_returns_the_running_run():
@@ -583,7 +583,7 @@ def test_single_live_ignores_other_kinds_terminal_forgotten_and_cancelling_runs(
 
     # And without the keyword nothing is adopted at all.
     plain, fresh = r.start_or_existing(CAMPAIGN, "background", RECONCILE, None,
-                                       None, LABELS)
+                                       None, labels=LABELS)
     assert fresh and plain is not after_forget
 
 

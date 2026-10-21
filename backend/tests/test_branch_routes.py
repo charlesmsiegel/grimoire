@@ -204,7 +204,7 @@ def test_absorbing_waits_for_every_member_of_the_group(client):
     ident = store.scenes.scene_identity(cid, b)
     client.app.state.runs.start_or_existing(
         ("scene", cid, ident), "turn", "chat", "a1", ident,
-        {"campaign": "Saltmarch", "scene": "Mara (branch)"})
+        labels={"campaign": "Saltmarch", "scene": "Mara (branch)"})
     base = f"/api/campaigns/{cid}/scenes/{sid}"
     r = client.put(f"{base}/chronicle", json={
         "one_line": "x", "summary": "y", "keywords": [], "timeline_events": [], "edits": [],

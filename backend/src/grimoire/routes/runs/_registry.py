@@ -149,7 +149,7 @@ class RunRegistry:
         self._event_factory = factory
 
     def start_or_existing(self, subject: _contracts.Subject, cls: _contracts.RunClass, kind: str,
-                          attempt_id: str | None, scene_identity: str | None,
+                          attempt_id: str | None, scene_identity: str | None, *,
                           labels: dict, adopt_terminal: bool = True,
                           also_precancelled: _contracts.Subject | None = None,
                           review_generation: str | None = None,

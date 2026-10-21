@@ -32,7 +32,7 @@ def held_scene(client):
     identity = store.scenes.scene_identity(cid, sid)
     run, _ = client.app.state.runs.start_or_existing(
         ("scene", cid, identity), "turn", "chat", "a1", identity,
-        {"campaign": "Saltmarch", "scene": "Mara"})
+        labels={"campaign": "Saltmarch", "scene": "Mara"})
     return cid, sid, run
 
 
@@ -221,7 +221,7 @@ def test_a_replay_walk_cannot_be_stepped_while_a_turn_holds_the_scene(client):
     identity = store.scenes.scene_identity(cid, sid)
     client.app.state.runs.start_or_existing(
         ("scene", cid, identity), "turn", "chat", "a1", identity,
-        {"campaign": "Saltmarch", "scene": "Mara"})
+        labels={"campaign": "Saltmarch", "scene": "Mara"})
 
     base = f"/api/campaigns/{cid}/scenes/{sid}/replay"
     for path in (f"{base}/accept", f"{base}/cancel"):
@@ -262,7 +262,7 @@ def test_a_manual_check_is_refused_while_a_turn_holds_the_scene(client):
     identity = store.scenes.scene_identity(cid, sid)
     client.app.state.runs.start_or_existing(
         ("scene", cid, identity), "turn", "chat", "a1", identity,
-        {"campaign": "Saltmarch", "scene": "Mara"})
+        labels={"campaign": "Saltmarch", "scene": "Mara"})
 
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/check", json=body)
 
@@ -333,7 +333,7 @@ def test_the_rollback_retires_the_marker_before_it_removes_the_post(monkeypatch,
     sid = store.scenes.create_scene(cid, "Mara")
     identity = store.scenes.scene_identity(cid, sid)
     run = client.app.state.runs.start_or_existing(
-        ("scene", cid, identity), "turn", "chat", "a1", identity, {})[0]
+        ("scene", cid, identity), "turn", "chat", "a1", identity, labels={})[0]
 
     scenes_mod._take_the_post_back(cid, sid, None, "Mara waits.", run)
 
@@ -366,7 +366,7 @@ def test_a_send_cannot_reserve_while_the_storage_root_is_moving(client, tmp_path
     def racing_set(path):
         try:
             registry.start_or_existing(("scene", cid, identity), "turn", "chat",
-                                       "a-race", identity, {})
+                                       "a-race", identity, labels={})
             attempted.append("reserved")
         except runs_mod.StoreMovingError:
             attempted.append("refused")
@@ -399,7 +399,7 @@ def test_the_refusal_lifts_once_the_move_is_done(client, tmp_path):
     client.put("/api/config/data-dir", json={"data_dir": str(bad)})
 
     run, fresh = client.app.state.runs.start_or_existing(
-        ("scene", cid, identity), "turn", "chat", "a1", identity, {})
+        ("scene", cid, identity), "turn", "chat", "a1", identity, labels={})
 
     assert fresh and run.state == "running"
 
@@ -420,11 +420,11 @@ def test_two_overlapping_store_moves_both_keep_the_store_frozen(client, tmp_path
         # Still frozen, because the outer one has not.
         with pytest.raises(runs_mod.StoreMovingError):
             registry.start_or_existing(("scene", "c", "i"), "turn", "chat",
-                                       "a1", "i", {})
+                                       "a1", "i", labels={})
 
     # And free once the last one leaves.
     run, fresh = registry.start_or_existing(("scene", "c", "i"), "turn", "chat",
-                                            "a2", "i", {})
+                                            "a2", "i", labels={})
     assert fresh and run.state == "running"
 
 

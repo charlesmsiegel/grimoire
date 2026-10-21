@@ -215,7 +215,7 @@ def test_restore_refused_while_busy(client):
     identity = store.scenes.scene_identity(cid, sid)
     client.app.state.runs.start_or_existing(
         ("scene", cid, identity), "turn", "chat", "a1", identity,
-        {"campaign": "Saltmarch", "scene": "Mara"})
+        labels={"campaign": "Saltmarch", "scene": "Mara"})
 
     r = edit(client, cid, sid, 1, "She paused... then spoke.", restore=True)
     assert r.status_code == 409

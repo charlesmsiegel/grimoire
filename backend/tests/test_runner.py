@@ -65,7 +65,7 @@ def test_the_registry_exists_without_a_lifespan(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     app = create_app()
     assert app.state.runs is not None
-    run, started = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, started = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     assert started and run.ready is not None
 
 
@@ -74,7 +74,7 @@ def test_start_without_a_portal_says_so_instead_of_attribute_erroring(monkeypatc
     its author into main.py."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     app = create_app()
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
 
     async def work():
         pass
@@ -94,7 +94,7 @@ def test_start_works_from_a_synchronous_handler_thread(app_with_lifespan):
         done.set()
 
     def from_worker_thread():
-        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
         runner.start(app, run, work)
 
     threading.Thread(target=from_worker_thread).start()
@@ -113,8 +113,8 @@ def test_one_runner_raising_does_not_cancel_its_siblings(app_with_lifespan):
     async def fine():
         await anyio.sleep(0.05)
 
-    bad, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
-    good, _ = app.state.runs.start_or_existing(OTHER, "turn", "chat", "a2", "i", LABELS)
+    bad, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
+    good, _ = app.state.runs.start_or_existing(OTHER, "turn", "chat", "a2", "i", labels=LABELS)
     runner.start(app, bad, boom)
     runner.start(app, good, fine)
 
@@ -134,7 +134,7 @@ def test_a_failed_run_records_why(app_with_lifespan):
     async def boom():
         raise RuntimeError("one bad turn")
 
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     runner.start(app, run, boom)
     _wait_terminal(app, run.id)
     assert run.state == "failed"
@@ -148,7 +148,7 @@ def test_both_handshake_events_are_set_once_a_run_is_terminal(app_with_lifespan)
     async def work():
         await anyio.lowlevel.checkpoint()
 
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     runner.start(app, run, work)
     _wait_terminal(app, run.id)
     assert run.ready.is_set() and run.terminal.is_set()
@@ -162,7 +162,7 @@ def test_cancel_stops_a_live_run_and_it_ends_cancelled(app_with_lifespan):
         started.set()
         await anyio.sleep(30)
 
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     runner.start(app, run, slow)
     assert started.wait(timeout=5)
 
@@ -190,7 +190,7 @@ def test_terminal_is_set_only_after_the_abort_hook_finishes(app_with_lifespan):
             # before the hook ran.
             seen["terminal_already_set"] = run.terminal.is_set()
 
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     runner.start(app, run, slow)
     assert started.wait(timeout=5)
     runner.cancel(app, run)
@@ -208,7 +208,7 @@ def test_release_before_start_marks_the_run_terminal_and_sets_both_events(app_wi
     discovery or cancel landing in that window finds a real run and would
     otherwise wait forever on events no task will set."""
     app = app_with_lifespan
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
 
     runner.release_before_start(app, run, state="failed",
                                 error={"kind": "check_error", "detail": "no"})
@@ -224,11 +224,11 @@ def test_an_early_error_is_replayable_by_the_same_attempt(app_with_lifespan):
     early error was never buffered it streams NOTHING -- an empty terminal
     stream where the first caller got a specific, actionable error."""
     app = app_with_lifespan
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     runner.release_before_start(app, run, state="failed",
                                 error={"kind": "check_error", "detail": "no"})
 
-    again, started = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    again, started = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     assert again is run and not started
     assert again.frames, "the early error left nothing to replay"
     assert "check_error" in "".join(f["raw"] for f in again.frames)
@@ -244,7 +244,7 @@ def test_shutdown_cancels_live_runs_and_they_flush(app_with_lifespan_factory):
             flushed.append("partial")
 
     with app_with_lifespan_factory() as app:
-        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
         runner.start(app, run, slow)
         # Let the task actually reach its sleep, or shutdown may cancel a task
         # that never entered the `try` and the flush would not be the thing
@@ -255,7 +255,7 @@ def test_shutdown_cancels_live_runs_and_they_flush(app_with_lifespan_factory):
 
 def test_reap_drops_a_stale_terminal_run(app_with_lifespan):
     app = app_with_lifespan
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     # Relative to NOW, never an absolute constant: `time.monotonic()` counts
     # from boot, so on a freshly-started CI runner it can be under
     # REAP_SECONDS -- making the cutoff negative and `0.0` NEWER than it. Green
@@ -280,7 +280,7 @@ def test_the_reaper_loop_itself_drops_a_stale_run(monkeypatch, tmp_path,
     """
     monkeypatch.setattr(runner, "REAP_INTERVAL_SECONDS", 0.05)
     with app_with_lifespan_factory() as app:
-        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+        run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
         # A REALISTIC stamp -- what `finish()` would really have written. `0.0`
         # is below both a wall-clock and a monotonic cutoff, so it gets reaped
         # either way and the test proves nothing; that is how the first version
@@ -292,7 +292,7 @@ def test_the_reaper_loop_itself_drops_a_stale_run(monkeypatch, tmp_path,
         # half the test passes against a sweep that reaps everything it sees --
         # which is what mixing a wall clock into a monotonic comparison does,
         # in the opposite direction from the original bug.
-        recent, _ = app.state.runs.start_or_existing(OTHER, "turn", "chat", "a2", "i", LABELS)
+        recent, _ = app.state.runs.start_or_existing(OTHER, "turn", "chat", "a2", "i", labels=LABELS)
         recent.finish("landed")
 
         deadline = time.monotonic() + 5
@@ -315,7 +315,7 @@ def test_the_factorys_terminal_outcome_is_applied(app_with_lifespan):
     async def handled_failure():
         return {"state": "failed", "error": {"kind": "llm_error", "detail": "upstream"}}
 
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     runner.start(app, run, handled_failure)
     _wait_terminal(app, run.id)
 
@@ -330,7 +330,7 @@ def test_a_factory_returning_nothing_still_lands(app_with_lifespan):
     async def quiet():
         return None
 
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     runner.start(app, run, quiet)
     _wait_terminal(app, run.id)
     assert run.state == "landed"
@@ -346,7 +346,7 @@ def test_cancel_immediately_after_start_still_stops_the_run(app_with_lifespan):
     async def slow():
         await anyio.sleep(30)
 
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     runner.start(app, run, slow)
     runner.cancel(app, run)          # no wait: race the scope install on purpose
     _wait_terminal(app, run.id)
@@ -377,7 +377,7 @@ def test_a_cancel_before_the_run_is_even_scheduled_is_not_lost(app_with_lifespan
         ran.set()
         await anyio.sleep(30)
 
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     runner.cancel(app, run)
     runner.start(app, run, should_never_run)
 
@@ -395,7 +395,7 @@ def test_setup_is_undone_when_a_stop_lands_before_the_producer_starts(app_with_l
     with the transcript permanently one reply short.
     """
     app = app_with_lifespan
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a1", "i", labels=LABELS)
     entered = []
     undone = []
 
@@ -425,7 +425,7 @@ def test_a_cancel_after_the_producer_started_leaves_teardown_to_the_producer(
     so a test built on one passes whatever the condition says.
     """
     app = app_with_lifespan
-    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a2", "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "turn", "chat", "a2", "i", labels=LABELS)
     undone = []
     own_teardown = []
     started = threading.Event()
@@ -470,7 +470,7 @@ def test_the_terminal_sink_is_told_what_kind_of_work_landed(app_with_lifespan):
 
     for cls, kind in (("turn", "chat"), ("review", "absorb")):
         run, _ = app.state.runs.start_or_existing(
-            SCENE, cls, kind, None, "identity-1", LABELS)
+            SCENE, cls, kind, None, "identity-1", labels=LABELS)
         runner.start(app, run, done)
         _wait_terminal(app, run.id)
 
@@ -501,7 +501,7 @@ def test_a_draft_is_retired_without_being_announced(app_with_lifespan):
         return None
 
     run, _ = app.state.runs.start_or_existing(
-        ("world", "realm"), "draft", "tagline", "a1", None, LABELS)
+        ("world", "realm"), "draft", "tagline", "a1", None, labels=LABELS)
     runner.start(app, run, done)
     _wait_terminal(app, run.id)
 
@@ -523,6 +523,6 @@ def test_a_failing_terminal_sink_does_not_fail_the_run(app_with_lifespan):
     async def done():
         return None
 
-    run, _ = app.state.runs.start_or_existing(SCENE, "review", "absorb", None, "i", LABELS)
+    run, _ = app.state.runs.start_or_existing(SCENE, "review", "absorb", None, "i", labels=LABELS)
     runner.start(app, run, done)
     assert _wait_terminal(app, run.id).state == "landed"
