@@ -7,6 +7,66 @@ import { SceneDateField } from "./SceneDateField";
 import { SceneSettingField } from "./SceneSettingField";
 import { SuggestedCast } from "./SuggestedCast";
 
+/** The picker that adds a character or PC to the scene, and in which role. A
+ *  PC-less campaign casts everyone as an NPC, so it offers neither choice. */
+function AddToScene({ cid, sid, pcless, chars, pcs, onAdded, onError }: {
+  cid: string;
+  sid: string;
+  pcless: boolean | undefined;
+  chars: CharacterSummary[];
+  pcs: PCSummary[];
+  /** Re-reads the cast once an actor is added. */
+  onAdded: () => Promise<unknown>;
+  onError: (err: unknown) => void;
+}) {
+  const [kind, setKind] = useState<"characters" | "pcs">("characters");
+  const [actorId, setActorId] = useState("");
+  const [role, setRole] = useState<"player" | "npc">("npc");
+
+  const options = kind === "characters" ? chars : pcs;
+
+  async function add() {
+    if (!actorId) return;
+    onError(null);
+    try {
+      await api.addToCast(cid, sid, {
+        kind, id: actorId,
+        role: pcless ? "npc" : kind === "pcs" ? "player" : role,
+      });
+      setActorId("");
+      await onAdded();
+    } catch (err: unknown) {
+      onError(err);
+    }
+  }
+
+  return (
+    <div>
+      <div className="role">Add to scene</div>
+      <div className="picker">
+        {!pcless && (
+          <select aria-label="Actor kind" value={kind}
+                  onChange={(e) => { setKind(e.target.value as "characters" | "pcs"); setActorId(""); }}>
+            <option value="characters">Character</option>
+            <option value="pcs">PC</option>
+          </select>
+        )}
+        <select aria-label="Actor" value={actorId} onChange={(e) => setActorId(e.target.value)}>
+          <option value="">— pick —</option>
+          {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+        {kind === "characters" && !pcless && (
+          <select aria-label="Role" value={role} onChange={(e) => setRole(e.target.value as "player" | "npc")}>
+            <option value="npc">npc</option>
+            <option value="player">player</option>
+          </select>
+        )}
+        <button className="primary" onClick={() => { void add(); }} disabled={!actorId}>Add</button>
+      </div>
+    </div>
+  );
+}
+
 /** Set an empty scene up: where and when it happens, who is in it, and an
  *  opener to start it with.
  *
@@ -69,10 +129,6 @@ export function CastPanel({
   // (#210). `ErrorNote` renders the plain detail for every other kind.
   const [error, setError] = useState<unknown>(null);
 
-  const [kind, setKind] = useState<"characters" | "pcs">("characters");
-  const [actorId, setActorId] = useState("");
-  const [role, setRole] = useState<"player" | "npc">("npc");
-
   const reloadCast = useCallback(() => api.getCast(cid, sid).then(setCast), [cid, sid]);
 
   useEffect(() => {
@@ -86,24 +142,8 @@ export function CastPanel({
     api.listCampaignPCs(cid).then(setPCs);
   }, [cid]);
 
-  const options = kind === "characters" ? chars : pcs;
   const nameOf = useCallback(
     (id: string) => chars.find((c) => c.id === id)?.name ?? id, [chars]);
-
-  async function add() {
-    if (!actorId) return;
-    setError(null);
-    try {
-      await api.addToCast(cid, sid, {
-        kind, id: actorId,
-        role: pcless ? "npc" : kind === "pcs" ? "player" : role,
-      });
-      setActorId("");
-      await reloadCast();
-    } catch (err: unknown) {
-      setError(err);
-    }
-  }
 
   return (
     <details className="cast-panel" open={open || opening}
@@ -119,29 +159,8 @@ export function CastPanel({
 
         <SceneCastList cid={cid} cast={cast} roster={roster} />
 
-        <div>
-          <div className="role">Add to scene</div>
-          <div className="picker">
-            {!pcless && (
-              <select aria-label="Actor kind" value={kind}
-                      onChange={(e) => { setKind(e.target.value as "characters" | "pcs"); setActorId(""); }}>
-                <option value="characters">Character</option>
-                <option value="pcs">PC</option>
-              </select>
-            )}
-            <select aria-label="Actor" value={actorId} onChange={(e) => setActorId(e.target.value)}>
-              <option value="">— pick —</option>
-              {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-            </select>
-            {kind === "characters" && !pcless && (
-              <select aria-label="Role" value={role} onChange={(e) => setRole(e.target.value as "player" | "npc")}>
-                <option value="npc">npc</option>
-                <option value="player">player</option>
-              </select>
-            )}
-            <button className="primary" onClick={add} disabled={!actorId}>Add</button>
-          </div>
-        </div>
+        <AddToScene cid={cid} sid={sid} pcless={pcless} chars={chars} pcs={pcs}
+                    onAdded={reloadCast} onError={setError} />
 
         {/* Directly under the picker it is an alternative to. It takes the
             cast rather than a refresh key: that list is the scan's only moving
