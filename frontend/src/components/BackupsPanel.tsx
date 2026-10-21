@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, api, type BackupEntry } from "../api/client";
+import { ApiError, api, type BackupEntry, type BackupRun } from "../api/client";
 
 /** Bytes as something a person can weigh a disk against. Binary units, because
  *  that is what a file manager will show for the same archive. */
@@ -12,6 +12,50 @@ export function formatSize(bytes: number): string {
     unit += 1;
   }
   return `${unit === 0 ? n : n.toFixed(1)} ${units[unit]}`;
+}
+
+type Message = { kind: "ok" | "warn" | "err"; text: string };
+
+/** A failed call as the panel reports it: the server's sentence, or `fallback`. */
+function failure(e: unknown, fallback: string): Message {
+  return { kind: "err", text: e instanceof ApiError ? e.detail : fallback };
+}
+
+/** What a full backup run reports.
+ *
+ *  The archive landed either way, so this is never an error state — but a
+ *  retention failure that only showed up as a growing folder would be the
+ *  kind of silence this whole block exists to break. */
+function fullBackupMessage(run: BackupRun): Message {
+  if (run.retention_error) {
+    return { kind: "warn", text: `Backed up to ${run.created}. ${run.retention_error}` };
+  }
+  return {
+    kind: "ok",
+    text: run.swept.length
+      ? `Backed up to ${run.created} — ${run.swept.length} older ${
+          run.swept.length === 1 ? "archive" : "archives"} removed`
+      : `Backed up to ${run.created}`,
+  };
+}
+
+/** One archive: its name, when, and how big. */
+function BackupRow({ b, showScope }: { b: BackupEntry; showScope: boolean }) {
+  return (
+    <li className="backup-row">
+      <span className="backup-name">{b.name}</span>
+      <span className="backup-meta">
+        {new Date(b.created).toLocaleString()} · {formatSize(b.size)}
+      </span>
+      {/* A line of its own under the name it qualifies, in the row's
+          own small type: inline, in the page's body face, it wrapped a
+          word a line beside the filename and pushed the date past the
+          list's edge. */}
+      {showScope && b.scope === "settings" && (
+        <span className="backup-scope">Model settings safety archive (partial)</span>
+      )}
+    </li>
+  );
 }
 
 /** The restore points that exist, and a way to make one now (#32).
@@ -31,7 +75,7 @@ export function BackupsPanel({ dir }: { dir: string }) {
   const [rows, setRows] = useState<BackupEntry[] | null>(null);
   const [imageRows, setImageRows] = useState<BackupEntry[] | null>(null);
   const [busy, setBusy] = useState<"full" | "images" | null>(null);
-  const [msg, setMsg] = useState<{ kind: "ok" | "warn" | "err"; text: string } | null>(null);
+  const [msg, setMsg] = useState<Message | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -44,14 +88,11 @@ export function BackupsPanel({ dir }: { dir: string }) {
       // look" are opposite answers to the only question this block is asked.
       setRows(null);
       setImageRows(null);
-      setMsg({
-        kind: "err",
-        text: e instanceof ApiError ? e.detail : "Could not read the backups folder",
-      });
+      setMsg(failure(e, "Could not read the backups folder"));
     }
   }, []);
 
-  useEffect(() => { load(); }, [load, dir]);
+  useEffect(() => { void load(); }, [load, dir]);
 
   async function backUpNow() {
     if (busy) return;
@@ -62,23 +103,9 @@ export function BackupsPanel({ dir }: { dir: string }) {
       setWhere(run.dir);
       setRows(run.backups);
       setImageRows(run.image_backups);
-      // The archive landed either way, so this is never an error state — but a
-      // retention failure that only showed up as a growing folder would be the
-      // kind of silence this whole block exists to break.
-      setMsg(run.retention_error
-        ? { kind: "warn", text: `Backed up to ${run.created}. ${run.retention_error}` }
-        : {
-            kind: "ok",
-            text: run.swept.length
-              ? `Backed up to ${run.created} — ${run.swept.length} older ${
-                  run.swept.length === 1 ? "archive" : "archives"} removed`
-              : `Backed up to ${run.created}`,
-          });
+      setMsg(fullBackupMessage(run));
     } catch (e) {
-      setMsg({
-        kind: "err",
-        text: e instanceof ApiError ? e.detail : "Could not write a backup",
-      });
+      setMsg(failure(e, "Could not write a backup"));
     } finally {
       setBusy(null);
     }
@@ -99,10 +126,7 @@ export function BackupsPanel({ dir }: { dir: string }) {
         ? { kind: "ok", text: `Images backed up to ${run.created}` }
         : { kind: "warn", text: `Images backed up to ${run.created}. ${run.listing_error}` });
     } catch (e) {
-      setMsg({
-        kind: "err",
-        text: e instanceof ApiError ? e.detail : "Could not back up images",
-      });
+      setMsg(failure(e, "Could not back up images"));
     } finally {
       setBusy(null);
     }
@@ -118,7 +142,7 @@ export function BackupsPanel({ dir }: { dir: string }) {
         Archives are written to <code>{where}</code>.
       </p>
       <div className="backup-actions">
-        <button className="btn-accent" onClick={backUpNow} disabled={busy !== null}>
+        <button className="btn-accent" onClick={() => { void backUpNow(); }} disabled={busy !== null}>
           {busy === "full" ? "Backing up…" : "Back up now"}
         </button>
         <button className="btn-outline" onClick={() => { void backUpImages(); }}
@@ -137,21 +161,7 @@ export function BackupsPanel({ dir }: { dir: string }) {
       )}
       {rows !== null && rows.length > 0 && (
         <ul className="backup-list">
-          {rows.map((b) => (
-            <li key={b.name} className="backup-row">
-              <span className="backup-name">{b.name}</span>
-              <span className="backup-meta">
-                {new Date(b.created).toLocaleString()} · {formatSize(b.size)}
-              </span>
-              {/* A line of its own under the name it qualifies, in the row's
-                  own small type: inline, in the page's body face, it wrapped a
-                  word a line beside the filename and pushed the date past the
-                  list's edge. */}
-              {b.scope === "settings" && (
-                <span className="backup-scope">Model settings safety archive (partial)</span>
-              )}
-            </li>
-          ))}
+          {rows.map((b) => <BackupRow key={b.name} b={b} showScope />)}
         </ul>
       )}
       <p className="field-hint">
@@ -162,14 +172,7 @@ export function BackupsPanel({ dir }: { dir: string }) {
       </p>
       {imageRows !== null && imageRows.length > 0 && (
         <ul className="backup-list" aria-label="Image backups">
-          {imageRows.map((b) => (
-            <li key={b.name} className="backup-row">
-              <span className="backup-name">{b.name}</span>
-              <span className="backup-meta">
-                {new Date(b.created).toLocaleString()} · {formatSize(b.size)}
-              </span>
-            </li>
-          ))}
+          {imageRows.map((b) => <BackupRow key={b.name} b={b} showScope={false} />)}
         </ul>
       )}
       <p className="field-hint">
