@@ -167,7 +167,7 @@ footer.doc a{color:var(--text-dim)}
   <div class="doc-label">CODE OVERVIEW</div>
   <h1 class="doc-title">grimoire-tool-calls — Overview</h1>
   <p class="doc-sub">Summary of the grimoire-tool-calls package: what it is, how healthy it is, and where to read next.</p>
-  <div class="doc-meta">generated 2026-10-21 · 0e9e7f4be · grade A-</div>
+  <div class="doc-meta">generated 2026-10-21 · fc29cc4b0 · grade A</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -196,8 +196,8 @@ footer.doc a{color:var(--text-dim)}
 
 <section class="gradecard g-a">
   <div>
-    <div class="letter">A-</div>
-    <div class="score">90.5 / 100</div>
+    <div class="letter">A</div>
+    <div class="score">93.2 / 100</div>
   </div>
   <div class="what">
     <h2>grimoire-tool-calls</h2>
@@ -214,19 +214,19 @@ footer.doc a{color:var(--text-dim)}
 
 <div class="card"><strong>Code map</strong> — <a href="codemap.html">grimoire-tool-calls — Codebase Atlas</a><p class="dim">Tabs: Overview, Inventory, Dependencies, Hotspots, Critical Flows, Boundaries &amp;amp; Ownership, Invariants &amp;amp; Risks, Glossary, Coverage</p><p class="faint mono">generated 2026-10-21 · 0e9e7f4be · tracked source; existing coverage</p></div>
 
-<h2>Category scores</h2><div class="card"><div class="catrow g-none ungraded" title="not measured by this analysis"><div class="cname">Correctness<small>weight 25% · 0 finding(s)</small></div><div class="bar"></div><div class="cscore">—</div><div class="cgrade">—</div></div>
+<h2>Category scores</h2><div class="card"><div class="catrow g-a" title="0 finding(s) · 0.00 weighted per KLOC · scores 50 at 6"><div class="cname">Correctness<small>weight 25% · 0 finding(s)</small></div><div class="bar"><i style="width:100.0%"></i></div><div class="cscore">100.0</div><div class="cgrade">A+</div></div>
 <div class="catrow g-a" title="0 finding(s) · 0.00 weighted per KLOC · scores 50 at 2"><div class="cname">Security<small>weight 15% · 0 finding(s)</small></div><div class="bar"><i style="width:100.0%"></i></div><div class="cscore">100.0</div><div class="cgrade">A+</div></div>
 <div class="catrow g-a" title="0 finding(s) · 0.00 weighted per KLOC · scores 50 at 8"><div class="cname">Tests &amp; Safety Net<small>weight 15% · 0 finding(s)</small></div><div class="bar"><i style="width:100.0%"></i></div><div class="cscore">100.0</div><div class="cgrade">A+</div></div>
 <div class="catrow g-d" title="5 finding(s) · 7.05 weighted per KLOC · scores 50 at 12"><div class="cname">Complexity<small>weight 15% · 5 finding(s)</small></div><div class="bar"><i style="width:66.6%"></i></div><div class="cscore">66.6</div><div class="cgrade">D</div></div>
-<div class="catrow g-none ungraded" title="not measured by this analysis"><div class="cname">Design &amp; Structure<small>weight 12% · 1 finding(s)</small></div><div class="bar"></div><div class="cscore">—</div><div class="cgrade">—</div></div>
-<div class="catrow g-none ungraded" title="not measured by this analysis"><div class="cname">Duplication &amp; Dead Code<small>weight 10% · 0 finding(s)</small></div><div class="bar"></div><div class="cscore">—</div><div class="cgrade">—</div></div>
+<div class="catrow g-b" title="1 finding(s) · 2.35 weighted per KLOC · scores 50 at 10"><div class="cname">Design &amp; Structure<small>weight 12% · 1 finding(s)</small></div><div class="bar"><i style="width:85.0%"></i></div><div class="cscore">85.0</div><div class="cgrade">B</div></div>
+<div class="catrow g-a" title="0 finding(s) · 0.00 weighted per KLOC · scores 50 at 10"><div class="cname">Duplication &amp; Dead Code<small>weight 10% · 0 finding(s)</small></div><div class="bar"><i style="width:100.0%"></i></div><div class="cscore">100.0</div><div class="cgrade">A+</div></div>
 <div class="catrow g-a" title="0 finding(s) · 0.00 weighted per KLOC · scores 50 at 25"><div class="cname">Dependencies &amp; Hygiene<small>weight 8% · 0 finding(s)</small></div><div class="bar"><i style="width:100.0%"></i></div><div class="cscore">100.0</div><div class="cgrade">A+</div></div></div>
 
 
 
 <h2>Worst findings</h2><div class="tbl-wrap"><table><thead><tr><th>Severity</th><th>Type</th><th>Category</th><th>Location</th><th>Finding</th></tr></thead><tbody><tr><td class="sev-medium">🟡 medium</td><td><code class="ftype">data_clump</code></td><td class="cat">Design &amp; Structure</td><td><code class="floc">backend\src\grimoire\tool_calls\_messages.py:33</code></td><td>Parameters [&#x27;kind&#x27;, &#x27;model&#x27;, &#x27;provider_id&#x27;] appear together in 3 functions: _messages.py:33 _same_source(), _messages.py:38 provenanced(), _messages.py:163 begin()<br><span class="faint">→ Group them into a dataclass (e.g. a single typed object) and pass that instead of the loose parameters.</span></td></tr><tr><td class="sev-medium">🟡 medium</td><td><code class="ftype">cyclomatic_complexity</code></td><td class="cat">Complexity</td><td><code class="floc">backend\src\grimoire\tool_calls\_messages.py:75</code></td><td>cyclomatic complexity 11 (threshold 10), cognitive complexity 24 (threshold 15)<br><span class="faint">→ Extract methods or simplify conditionals; Reduce nesting and boolean operations</span></td></tr><tr><td class="sev-medium">🟡 medium</td><td><code class="ftype">cyclomatic_complexity</code></td><td class="cat">Complexity</td><td><code class="floc">backend\src\grimoire\tool_calls\_runs.py:87</code></td><td>cyclomatic complexity 16 (threshold 10), cognitive complexity 19 (threshold 15)<br><span class="faint">→ Extract methods or simplify conditionals; Reduce nesting and boolean operations</span></td></tr><tr><td class="sev-low">🟢 low</td><td><code class="ftype">cyclomatic_complexity</code></td><td class="cat">Complexity</td><td><code class="floc">backend\src\grimoire\tool_calls\_definitions.py:256</code></td><td>cyclomatic complexity 14 (threshold 10), cognitive complexity 19 (threshold 15)<br><span class="faint">→ Extract methods or simplify conditionals; Reduce nesting and boolean operations</span></td></tr><tr><td class="sev-low">🟢 low</td><td><code class="ftype">cyclomatic_complexity</code></td><td class="cat">Complexity</td><td><code class="floc">backend\src\grimoire\tool_calls\_messages.py:347</code></td><td>cyclomatic complexity 11 (threshold 10)<br><span class="faint">→ Extract methods or simplify conditionals</span></td></tr><tr><td class="sev-low">🟢 low</td><td><code class="ftype">cognitive_complexity</code></td><td class="cat">Complexity</td><td><code class="floc">backend\src\grimoire\tool_calls\_runs.py:202</code></td><td>cognitive complexity 17 (threshold 15)<br><span class="faint">→ Reduce nesting and boolean operations</span></td></tr></tbody></table></div>
 
-<h2>Caveats</h2><div class="callout warn">Ungraded: Correctness, Design &amp; Structure, Duplication &amp; Dead Code. Nothing measured those, so the grade covers less than the full rubric.</div><div class="callout bad">Detectors that did not complete: <strong>python-code-doctor</strong>: <code>dead_code</code>, <code>global_state</code>, <code>local_imports</code>. Their categories were dropped, so this score is partial: the missing ones could have moved it either way.</div><div class="callout">3757 finding(s) about code outside this unit are not counted here.</div>
+<h2>Caveats</h2><div class="callout">3968 finding(s) about code outside this unit are not counted here.</div>
 </main>
 <footer class="doc">Generated by code-overview. The grade comes from health.html; the structure comes from codemap.html. Both are linked above.</footer>
 <script>
