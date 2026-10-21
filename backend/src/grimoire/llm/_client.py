@@ -21,20 +21,22 @@ from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 from ..openrouter import OpenRouterClient
 from . import _accounting, _retry, _routes
+from ._post_images import _PostImages
 from ._routes import _Route as _Route
 
 
 class LLMClient:
     """Dispatches each call to the resolved connection's kind."""
 
-    def __init__(self, openrouter=None, claude=None, openai_compatible=None, timeout=None,
+    def __init__(self, *, openrouter=None, claude=None, openai_compatible=None, timeout=None,
                  retries=None, observer=None, capture=None,
                  images=None, load_image=None, anthropic=None, count_tokens=None):
+        # Every argument by keyword: there are eleven, all optional, and a
+        # positional caller would be one reordering away from a silent swap.
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
         self._openai_compatible = (openai_compatible if openai_compatible is not None
                                     else OpenAICompatibleClient())
-        # Last in the signature so no positional caller shifts.
         self._anthropic = anthropic if anthropic is not None else AnthropicClient()
         #: One adapter per kind (`adapters`), around the clients above, which
         #: stay attributes: they are the test seams.
@@ -64,11 +66,9 @@ class LLMClient:
         # Post images (#377), the same contract once more: `images(attempt)` is
         # how many a prompt for that attempt may carry right now (0 = none) and
         # `load_image(campaign, part)` turns one reference into a data URI.
-        # Both are store lookups, so both arrive as callables.
-        self._images = images
-        self._load_image = load_image
-        # Once more, and last in the signature so no positional caller shifts:
-        # `count_tokens(text)` counts what a provider did not report (spec
+        # Both are store lookups, so both arrive as callables (`_PostImages`).
+        self._post_images = _PostImages(images, load_image)
+        # Once more: `count_tokens(text)` counts what a provider did not report (spec
         # 9.1). It is the store's tokenizer, so it arrives as a callable. None
         # counts nothing -- a hand-built client files exactly what it did.
         self._count_tokens = count_tokens
@@ -207,7 +207,7 @@ class LLMClient:
         is one bounded decode. The provider stream is closed in `finally`, so a
         caller's close or a timeout still reaches httpx exactly as `_guard` and
         `_resilient` intend."""
-        lowered, sent = await asyncio.to_thread(self._lower, messages, route, campaign)
+        lowered, sent = await asyncio.to_thread(self._post_images.lower, messages, route, campaign)
         if usage is not None:
             usage["images"] = sent
         # What was sent, not what was asked: text lowering drops carriers (M10).
@@ -222,33 +222,12 @@ class LLMClient:
             if aclose is not None:
                 await aclose()
 
-    def _lower(self, messages: list[dict], route: _Route,
-               campaign: str) -> tuple[list[dict], int]:
-        keep = 0 if route.target.degrade else self._image_budget(route)
-        if keep <= 0:
-            return content_parts.as_text(messages), 0
-        return content_parts.as_images(messages, keep, lambda part: self._load(campaign, part))
-
-    def _image_budget(self, route: _Route) -> int:
-        """How many images `route` may be sent now. Never more than 0 for a kind
-        whose client cannot carry a part, and 0 when the resolver is missing or
-        raises: a broken lookup must not fail a turn the text would serve. The
-        resolver is handed the attempt's target, less the degrade marker."""
-        if self._images is None or route.target.kind in _routes.TEXT_ONLY_KINDS:
-            return 0
+    def _sink(self):
+        """This call's capture sink, or None when capture is off -- or when
+        resolving it raised: failed diagnostic setup must not stop the call."""
         try:
-            return max(0, int(self._images(route.sent())))
-        except Exception as exc:  # noqa: BLE001 - see the docstring
-            _routes.log.warning("could not resolve whether %r reads images: %s", _routes._label(route.target), exc)
-            return 0
-
-    def _load(self, campaign: str, part: dict) -> str | None:
-        if self._load_image is None:
-            return None
-        try:
-            return self._load_image(campaign, part)
-        except Exception as exc:  # noqa: BLE001 - one picture is never worth a turn
-            _routes.log.warning("could not load a post image to send: %s", exc)
+            return self._capture() if self._capture is not None else None
+        except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop generation
             return None
 
     def stream(self, messages: list[dict], chain: wire.Chain | wire.Target,
@@ -302,10 +281,7 @@ class LLMClient:
         if tools is not None or tool_choice is not None:
             tool_calls.check(tools, tool_choice)
         offered = _routes._offer(tools, tool_choice)
-        try:
-            sink = self._capture() if self._capture is not None else None
-        except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop generation
-            sink = None
+        sink = self._sink()
         if schema is None:
             # No envelope goes out, so no target says it did (01f 3.4).
             chain = _routes._unflagged(chain)
@@ -363,10 +339,7 @@ class LLMClient:
         """
         if tools is not None or tool_choice is not None:
             tool_calls.check(tools, tool_choice)
-        try:
-            sink = self._capture() if self._capture is not None else None
-        except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop the call
-            sink = None
+        sink = self._sink()
         # Never a schema, so never a flag (01f 3.4).
         sent = _routes._unflagged(_routes._target_of(target))
         assert isinstance(sent, wire.Target)
@@ -408,10 +381,7 @@ class LLMClient:
         gap = decisions.native_gap(item)
         if gap:
             raise LLMError("bad_response", gap, code="native_unrepresentable")
-        try:
-            sink = self._capture() if self._capture is not None else None
-        except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop the call
-            sink = None
+        sink = self._sink()
         if usage is None and sink is not None:
             usage = {}  # the adapter receives its recorder through the holder
         call_id = uuid.uuid4().hex if sink is not None else ""
