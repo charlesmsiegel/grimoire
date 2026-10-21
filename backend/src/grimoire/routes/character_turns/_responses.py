@@ -237,7 +237,8 @@ async def _reroll_frames(app, claim, rid, client, resolved, record, messages, ou
     if extend is None:
         tool, tool_record = await _generation._contribution_tool(
             cid, sid, client, {"id": record["round_id"] or "", "post": record.get("post")},
-            record["actor_ref"], rid, task, messages, resolved, run)
+            record["actor_ref"], response_id=rid, task=task, messages=messages,
+            resolved=resolved, run=run)
     meter = _generation._LoopMeter(task, tool.holders) if tool is not None else store.usage.meter(
         task,
         campaign=cid,

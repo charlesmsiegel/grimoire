@@ -162,7 +162,7 @@ async def _pre_generation(cid, sid, client, turn, actor):
             response_id)
 
 
-async def _contribution_tool(cid, sid, client, round_record, actor, response_id, task,
+async def _contribution_tool(cid, sid, client, round_record, actor, *, response_id, task,
                              messages, resolved, run):
     """`(tool, record)` for a contribution the decide tool may be offered to
     (§8.4): the opened loop, or None; and the variant's record of it, or

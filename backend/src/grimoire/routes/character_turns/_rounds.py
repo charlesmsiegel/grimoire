@@ -27,8 +27,8 @@ def start(
     request,
     client,
     resolved,
-    run,
     *,
+    run,
     post=None,
     note="",
     turn=None,
@@ -379,6 +379,186 @@ async def _after_saved_contribution(cid, sid, client, round_record, watcher, use
         return _planning._successor_answer(round_record, used, actor, None)
     return result
 
+
+async def _speaker_left(cid, sid, turn, actor):
+    """Whether `actor` has left the scene since it was chosen: the round then
+    completes with that issue and nobody after it is asked."""
+    current = await run_in_threadpool(_state.roster, cid, sid)
+    if actor in [r["ref"] for r in current] + ["grimoire"]:
+        return False
+    await run_in_threadpool(
+        _state._round_state,
+        cid,
+        sid,
+        turn.round_record,
+        status="complete",
+        issue="speaker left the scene",
+    )
+    turn.ending = None
+    return True
+
+
+def _fresh_contribution(turn):
+    """A fresh contribution, the only one besides a reroll that may be
+    offered the decide tool (§8.4): not a retry, a roll resume or a roll
+    continuation."""
+    return (not turn.round_record.get("pending_response") and not turn.appended
+            and not turn.continuation)
+
+
+async def _compose_contribution(claim, client, resolved, turn, actor, *,
+                                app=None, embed_client=None, history_enabled=False):
+    """Compose `actor`'s contribution and return its messages: the turn
+    decision, the step's history and its Decision stage, then `_prepare`,
+    which lands the record in flight on `turn` with a fresh watcher."""
+    cid, sid, run = claim.cid, claim.sid, claim.run
+    # The turn decision (roadmap 02 §6.3), asked before the contribution
+    # is composed and never by a resume, a roll continuation, the
+    # narrator or a turn the player directed. Off, nothing is read past
+    # the switch, minted or asked, and `_prepare` is called as before.
+    plan, response_id = await _generation._pre_generation(cid, sid, client, turn, actor)
+    if run.cancel_requested:
+        # Stop during the decision: a cancel normally cancels the run's
+        # scope and the decision with it, but one that only set the flag
+        # (before the scope was installed) must not go on to compose and
+        # send a paid generation.
+        raise anyio.get_cancelled_exc_class()()
+    history = await _round_history(
+        app, cid, sid, client, embed_client, resolved, turn, actor,
+        enabled=history_enabled, run=run)
+    history, epistemic_record, response_id = await _refine_step(
+        cid, sid, client, turn, actor, history, response_id, run=run)
+    turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
+        _prompts._prepare, claim, turn.round_record, actor, resolved, turn.appended,
+        plan=plan, response_id=response_id, history_view=history,
+        epistemic=epistemic_record)
+    turn.appended = ()
+    turn.watcher = store.response_protocol.ResponseWatcher(
+        perception=actor != "grimoire",
+        require_handoff=not _planning._decision_successor(turn.round_record))
+    return messages
+
+
+async def _generate_contribution(claim, client, resolved, turn, actor, messages, *, fresh):
+    """Announce the composed contribution and stream it, metered, with the
+    decide tool when `fresh` and offered. Once the call is done, `turn` holds
+    the connection that served it and what made it, and no meter."""
+    cid, sid, run = claim.cid, claim.sid, claim.run
+    record = turn.record
+    yield streaming._sse(
+        {
+            "response_start": {
+                "id": record["id"],
+                "speaker": record["speaker"],
+                "actor_ref": actor,
+            }
+        }
+    )
+    # Whatever turn opened the round, a contribution is filed -- and
+    # generated -- as `chat`, or as `continuation` when it finishes a roll:
+    # one route, so the round's one resolution serves both (`for_task`).
+    task = "continuation" if turn.continuation else "chat"
+    on_task = operations.for_task(resolved, task)
+    tool = None
+    if fresh:
+        tool, turn.tool_record = await _generation._contribution_tool(
+            cid, sid, client, turn.round_record, actor, response_id=record["id"],
+            task=task, messages=messages, resolved=on_task, run=run)
+    turn.meter = _generation._LoopMeter(task, tool.holders) if tool is not None else store.usage.meter(
+        task,
+        campaign=cid,
+        scene=sid,
+        post=turn.round_record["post"],
+        round_id=turn.round_record["id"],
+        response_id=record["id"],
+    )
+    async for frame in _generation._stream_contribution(
+            client, messages, on_task, turn.meter, turn.watcher, run, cid, task=task,
+            tool=tool):
+        yield frame
+    # Read before the meter is dropped: the facade stamps the attempt
+    # that ran on `meter.usage`, which a fallback makes someone other
+    # than the resolution's primary.
+    turn.served = streaming._served(turn.meter, streaming._asked(resolved))
+    turn.meter.done()
+    turn.made_by = _persistence._made_by(
+        turn.meter, turn.meter.task, turn.composed, turn.round_record.get("typed_note", ""),
+        settings=turn.composed_settings,
+    )
+    turn.meter = None
+
+
+async def _conclude_contribution(claim, turn, actor, outcome, status, *, paused):
+    """File the streamed contribution: `paused` on the roll its fence
+    proposed, or saved as `status`. A pause or an empty response writes the
+    run's last frames and marks `turn.terminal`."""
+    cid, sid = claim.cid, claim.sid
+    if paused:
+        # The chain waits on the roll: `auto_remaining` stays on the
+        # paused round, and its resume carries on from it.
+        proposal = await run_in_threadpool(_pause, claim, turn, actor, outcome)
+        turn.terminal = True
+        yield streaming._sse({"proposal": {**proposal["payload"], "id": proposal["id"]}})
+        outcome.land()
+        yield streaming._sse({"done": True})
+        return
+    at = await run_in_threadpool(_persistence._save, claim, turn, status)
+    outcome.persisted(at)
+    if turn.watcher.issue == "empty response":
+        await run_in_threadpool(
+            _state._round_state, cid, sid, turn.round_record, status="incomplete")
+        turn.terminal = True
+        outcome.fail("empty_response", "The model returned no response prose.")
+        yield streaming._sse(
+            {
+                "error": {
+                    "kind": "empty_response",
+                    "detail": "The model returned no response prose.",
+                }
+            }
+        )
+
+
+async def _hand_on(claim, client, turn, actor, status):
+    """Close the saved contribution and choose who follows it: the round's
+    `ending` (whose `next` is the successor, or None) and its record move on,
+    and nothing is left in flight."""
+    cid, sid, run = claim.cid, claim.sid, claim.run
+    record, watcher = turn.record, turn.watcher
+    used = [*turn.round_record["used"], actor]
+    # Persistence is complete before metadata may authorize a successor.
+    # The end frame goes out first, so a Stop or a sit-out the player
+    # gives on seeing it is what the successor choice reads.
+    yield streaming._sse({"response_end": {"id": record["id"], "status": status}})
+    after = await _after_saved_contribution(
+        cid, sid, client, turn.round_record, watcher, used, actor,
+        record["id"], run.cancel_requested)
+    # The contribution's own issue (it spoke for another actor) stops a
+    # chain as surely as a bad handoff does -- a handoff-shaped one only
+    # where the handoff is read (`_ending_issue`).
+    turn.ending = {**after, "status": status,
+                   "issue": _planning._ending_issue(turn.round_record, after["issue"], watcher.issue)}
+    next_actor, issue = after["next"], after["issue"]
+    turn.round_record = await run_in_threadpool(
+        _state._round_state,
+        cid,
+        sid,
+        turn.round_record,
+        used=used,
+        pending_response=None,
+        actor_ref=next_actor,
+        plan=after["plan"],
+        status="pending" if next_actor else "complete",
+        issue=issue,
+        continuation=None,
+        completed_response=record["id"],
+        control_issue=issue,
+    )
+    turn.record = None
+    turn.watcher = None
+    turn.continuation = None
+
+
 async def _round_frames(claim, client, resolved, turn, actor, outcome, *,
                         app=None, embed_client=None, history_enabled=False):
     """One round's contributions, from `actor` until nobody is next. Every
@@ -388,17 +568,7 @@ async def _round_frames(claim, client, resolved, turn, actor, outcome, *,
     while actor and not run.cancel_requested:
         await anyio.lowlevel.checkpoint()
         turn.served = streaming._asked(resolved)
-        current = await run_in_threadpool(_state.roster, cid, sid)
-        if actor not in [r["ref"] for r in current] + ["grimoire"]:
-            await run_in_threadpool(
-                _state._round_state,
-                cid,
-                sid,
-                turn.round_record,
-                status="complete",
-                issue="speaker left the scene",
-            )
-            turn.ending = None
+        if await _speaker_left(cid, sid, turn, actor):
             break
         recovered = await run_in_threadpool(_recover_completed, claim, turn.round_record)
         if recovered is not None:
@@ -409,137 +579,23 @@ async def _round_frames(claim, client, resolved, turn, actor, outcome, *,
             continue
         turn.made_by = None
         turn.tool_record = None
-        # A fresh contribution, the only one besides a reroll that may be
-        # offered the decide tool (§8.4): not a retry, a roll resume or a
-        # roll continuation.
-        fresh = (not turn.round_record.get("pending_response") and not turn.appended
-                 and not turn.continuation)
-        # The turn decision (roadmap 02 §6.3), asked before the contribution
-        # is composed and never by a resume, a roll continuation, the
-        # narrator or a turn the player directed. Off, nothing is read past
-        # the switch, minted or asked, and `_prepare` is called as before.
-        plan, response_id = await _generation._pre_generation(cid, sid, client, turn, actor)
-        if run.cancel_requested:
-            # Stop during the decision: a cancel normally cancels the run's
-            # scope and the decision with it, but one that only set the flag
-            # (before the scope was installed) must not go on to compose and
-            # send a paid generation.
-            raise anyio.get_cancelled_exc_class()()
-        history = await _round_history(
-            app, cid, sid, client, embed_client, resolved, turn, actor,
-            enabled=history_enabled, run=run)
-        history, epistemic_record, response_id = await _refine_step(
-            cid, sid, client, turn, actor, history, response_id, run=run)
-        turn.record, messages, turn.composed, turn.composed_settings = await run_in_threadpool(
-            _prompts._prepare, claim, turn.round_record, actor, resolved, turn.appended,
-            plan=plan, response_id=response_id, history_view=history,
-            epistemic=epistemic_record)
-        record = turn.record
-        turn.appended = ()
-        turn.watcher = watcher = store.response_protocol.ResponseWatcher(
-            perception=actor != "grimoire",
-            require_handoff=not _planning._decision_successor(turn.round_record))
-        yield streaming._sse(
-            {
-                "response_start": {
-                    "id": record["id"],
-                    "speaker": record["speaker"],
-                    "actor_ref": actor,
-                }
-            }
-        )
-        # Whatever turn opened the round, a contribution is filed -- and
-        # generated -- as `chat`, or as `continuation` when it finishes a roll:
-        # one route, so the round's one resolution serves both (`for_task`).
-        task = "continuation" if turn.continuation else "chat"
-        on_task = operations.for_task(resolved, task)
-        tool = None
-        if fresh:
-            tool, turn.tool_record = await _generation._contribution_tool(
-                cid, sid, client, turn.round_record, actor, record["id"], task, messages,
-                on_task, run)
-        turn.meter = _generation._LoopMeter(task, tool.holders) if tool is not None else store.usage.meter(
-            task,
-            campaign=cid,
-            scene=sid,
-            post=turn.round_record["post"],
-            round_id=turn.round_record["id"],
-            response_id=record["id"],
-        )
-        async for frame in _generation._stream_contribution(
-                client, messages, on_task, turn.meter, watcher, run, cid, task=task,
-                tool=tool):
+        fresh = _fresh_contribution(turn)
+        messages = await _compose_contribution(
+            claim, client, resolved, turn, actor,
+            app=app, embed_client=embed_client, history_enabled=history_enabled)
+        async for frame in _generate_contribution(
+                claim, client, resolved, turn, actor, messages, fresh=fresh):
             yield frame
-        # Read before the meter is dropped: the facade stamps the attempt
-        # that ran on `meter.usage`, which a fallback makes someone other
-        # than the resolution's primary.
-        turn.served = streaming._served(turn.meter, streaming._asked(resolved))
-        turn.meter.done()
-        turn.made_by = _persistence._made_by(
-            turn.meter, turn.meter.task, turn.composed, turn.round_record.get("typed_note", ""),
-            settings=turn.composed_settings,
-        )
-        turn.meter = None
-        paused = watcher.roll.complete or watcher.roll.truncated
+        paused = turn.watcher.roll.complete or turn.watcher.roll.truncated
         status = "incomplete" if paused or run.cancel_requested else "complete"
-        if paused:
-            # The chain waits on the roll: `auto_remaining` stays on the
-            # paused round, and its resume carries on from it.
-            proposal = await run_in_threadpool(_pause, claim, turn, actor, outcome)
-            turn.terminal = True
-            yield streaming._sse({"proposal": {**proposal["payload"], "id": proposal["id"]}})
-            outcome.land()
-            yield streaming._sse({"done": True})
+        async for frame in _conclude_contribution(
+                claim, turn, actor, outcome, status, paused=paused):
+            yield frame
+        if turn.terminal:
             return
-        at = await run_in_threadpool(_persistence._save, claim, turn, status)
-        outcome.persisted(at)
-        if watcher.issue == "empty response":
-            await run_in_threadpool(
-                _state._round_state, cid, sid, turn.round_record, status="incomplete")
-            turn.terminal = True
-            outcome.fail("empty_response", "The model returned no response prose.")
-            yield streaming._sse(
-                {
-                    "error": {
-                        "kind": "empty_response",
-                        "detail": "The model returned no response prose.",
-                    }
-                }
-            )
-            return
-        used = [*turn.round_record["used"], actor]
-        # Persistence is complete before metadata may authorize a successor.
-        # The end frame goes out first, so a Stop or a sit-out the player
-        # gives on seeing it is what the successor choice reads.
-        yield streaming._sse({"response_end": {"id": record["id"], "status": status}})
-        after = await _after_saved_contribution(
-            cid, sid, client, turn.round_record, watcher, used, actor,
-            record["id"], run.cancel_requested)
-        # The contribution's own issue (it spoke for another actor) stops a
-        # chain as surely as a bad handoff does -- a handoff-shaped one only
-        # where the handoff is read (`_ending_issue`).
-        turn.ending = {**after, "status": status,
-                       "issue": _planning._ending_issue(turn.round_record, after["issue"], watcher.issue)}
-        next_actor, issue = after["next"], after["issue"]
-        turn.round_record = await run_in_threadpool(
-            _state._round_state,
-            cid,
-            sid,
-            turn.round_record,
-            used=used,
-            pending_response=None,
-            actor_ref=next_actor,
-            plan=after["plan"],
-            status="pending" if next_actor else "complete",
-            issue=issue,
-            continuation=None,
-            completed_response=record["id"],
-            control_issue=issue,
-        )
-        actor = next_actor
-        turn.record = None
-        turn.watcher = None
-        turn.continuation = None
+        async for frame in _hand_on(claim, client, turn, actor, status):
+            yield frame
+        actor = turn.ending["next"]
     if run.cancel_requested:
         turn.round_record = await run_in_threadpool(_planning._stop, cid, sid, turn.round_record)
 
@@ -599,12 +655,12 @@ def resume_roll(
     pid,
     request,
     client,
+    *,
     resolved,
     run,
     round_record,
     resolution,
     after_turn=None,
-    *,
     appended_block=None,
 ):
     round_record = store.responses.update_round(cid, sid, round_record["id"], continuation=pid)
@@ -615,7 +671,7 @@ def resume_roll(
         request,
         client,
         resolved,
-        run,
+        run=run,
         round_record=round_record,
         appended=(("Roll resolution", "system", block),),
         continuation=pid,
@@ -649,7 +705,7 @@ def retry(cid, sid, request, client, resolved, run, after_turn=None, *, embed_cl
         request,
         client,
         resolved,
-        run,
+        run=run,
         round_record=round_record,
         after_turn=after_turn,
         continuation=round_record.get("continuation"),

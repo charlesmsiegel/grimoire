@@ -321,8 +321,8 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
     # the lock in this request thread can deadlock.
     if round_record is not None:
         return character_turns.resume_roll(
-            cid, sid, pid, request, client, resolved, run, round_record, resolution,
-            after_turn=_follow_up_hook(request.app, cid, sid, client),
+            cid, sid, pid, request, client, resolved=resolved, run=run,
+            round_record=round_record, resolution=resolution, after_turn=_follow_up_hook(request.app, cid, sid, client),
             appended_block=block)
     outcome = StreamOutcome()
     # DETACHED like every other scene turn. The plan singles this producer out:

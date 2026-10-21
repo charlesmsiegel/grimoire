@@ -414,7 +414,7 @@ def _start_round(cid: str, sid: str, turn: ChatTurn, request: Request,
     a failed turn's does. A director note stays, for `note_text`'s reasons."""
     try:
         return character_turns.start(
-            cid,sid,request,client,resolved,run,post=posted_at,
+            cid,sid,request,client,resolved,run=run,post=posted_at,
             note=(content or prompts.render("scene/director_note.j2")) if ephemeral else "",
             turn=_turn_override(turn),automatic=not ephemeral,
             actor_ref=turn.speaker_ref,after_turn=_followups._follow_up_hook(request.app,cid,sid,client),

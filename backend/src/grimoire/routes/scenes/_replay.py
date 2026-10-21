@@ -173,7 +173,7 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
                             detail={"detail": "this replay has no model turn left to run",
                                     "kind": "replay_done"})
     if character_turns.enabled():
-        return character_turns.start(cid,sid,request,client,resolved,run,
+        return character_turns.start(cid,sid,request,client,resolved,run=run,
             actor_ref=character_turns.replay_actor(cid,sid),automatic=False,
             note=prompts.render("scene/director_note.j2"))
     primary = resolved.chain.primary
