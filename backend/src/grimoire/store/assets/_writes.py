@@ -183,30 +183,12 @@ def _copy_slot(src: Path, dst: Path, name: str, ref: image_refs.Ref | None,
     source file to copy (None when a resolving placement makes it redundant).
     Caller holds `_image_lock(dst, name)`."""
     held = image_refs.read(dst, name)
-    held_image = held is not None and held.image is not None
     held_files = _placements._snapshot_siblings(dst, name, False)
-    if held_image or held_files:
-        if not overwrite:
-            return     # the destination's own image wins
-        if ref is not None and ref.image is None and legacy is None:
-            # An occurrence override carries a crop and no image, so over an
-            # image it replaces the crop alone.
-            image_refs.write(dst, name, held.image if held is not None else None,
-                             focus=ref.focus)
-            return
-    # Without `overwrite`, any placement `dst` still holds here is image-less:
-    # an override whose crop is kept under the image copied into it.
-    if held is not None and not overwrite:
-        focus = held.focus
-    else:
-        focus = ref.focus if ref is not None else None
+    if _settled_over_image(dst, name, held, held_files, ref=ref, legacy=legacy, overwrite=overwrite):
+        return
+    focus = _copied_focus(held, ref, overwrite=overwrite)
     if legacy is not None:
-        target = dst / legacy.name
-        atomic.write_bytes(target, legacy.read_bytes())
-        if overwrite:
-            # Replaced, not merged: another extension left behind would
-            # outrank the copy by mtime.
-            _placements._drop_snapshotted([s for s in held_files if s[0] != target])
+        _copy_legacy_file(dst, legacy, held_files, overwrite=overwrite)
     if ref is not None and ref.image is not None:
         image_refs.write(dst, name, ref.image, focus=focus)
         if overwrite and legacy is None:
@@ -215,6 +197,51 @@ def _copy_slot(src: Path, dst: Path, name: str, ref: image_refs.Ref | None,
         # The copied slot is a legacy file: `dst`'s placement keeps only the
         # crop (or goes, with none), so it can never shadow the file.
         image_refs.write(dst, name, None, focus=focus)
+
+
+def _settled_over_image(dst: Path, name: str, held: image_refs.Ref | None,
+                        held_files: list[tuple[Path, int, int]], *, ref: image_refs.Ref | None,
+                        legacy: Path | None, overwrite: bool) -> bool:
+    """Whether `dst` already holding a picture settles this slot of `_copy_slot`.
+
+    True when nothing more is to be copied: without `overwrite` the
+    destination's image stands, and with it an image-less source placement
+    has just replaced the crop alone. Caller holds `_image_lock(dst, name)`.
+    """
+    held_image = held is not None and held.image is not None
+    if not (held_image or held_files):
+        return False
+    if not overwrite:
+        return True     # the destination's own image wins
+    if ref is not None and ref.image is None and legacy is None:
+        # An occurrence override carries a crop and no image, so over an
+        # image it replaces the crop alone.
+        image_refs.write(dst, name, held.image if held is not None else None,
+                         focus=ref.focus)
+        return True
+    return False
+
+
+def _copied_focus(held: image_refs.Ref | None, ref: image_refs.Ref | None, *,
+                  overwrite: bool) -> int | None:
+    """The crop a copied slot is written with."""
+    # Without `overwrite`, any placement `dst` still holds here is image-less:
+    # an override whose crop is kept under the image copied into it.
+    if held is not None and not overwrite:
+        return held.focus
+    return ref.focus if ref is not None else None
+
+
+def _copy_legacy_file(dst: Path, legacy: Path, held_files: list[tuple[Path, int, int]], *,
+                      overwrite: bool) -> None:
+    """Copy a legacy source file into `dst` under its own name, through
+    `atomic`. Caller holds the slot's `_image_lock` in `dst`."""
+    target = dst / legacy.name
+    atomic.write_bytes(target, legacy.read_bytes())
+    if overwrite:
+        # Replaced, not merged: another extension left behind would
+        # outrank the copy by mtime.
+        _placements._drop_snapshotted([s for s in held_files if s[0] != target])
 
 
 def write_focus(root: Path, cid: str, vid: str, focus: int, base: str = "characters") -> None:
