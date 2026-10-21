@@ -26,6 +26,7 @@ from grimoire.store import (
 )
 from grimoire.store.context import art, assemble, layout, story
 from tests.llm_fakes import FakeEmbeddings
+from tests.spies import record_calls
 
 
 @pytest.fixture
@@ -757,18 +758,6 @@ def _art_png() -> bytes:
 
 # ---- one picture is offered once -----------------------------------------
 
-def _counted(monkeypatch, module, name):
-    calls = []
-    real = getattr(module, name)
-
-    def counted(*a, **kw):
-        calls.append(a)
-        return real(*a, **kw)
-
-    monkeypatch.setattr(module, name, counted)
-    return calls
-
-
 def _share_the_characters_picture(world):
     """The campaign library also holds the character's picture (the same
     bytes, so one image object and, by R4, one description)."""
@@ -832,12 +821,12 @@ def test_candidates_scan_each_record_once(world, sid, monkeypatch):
     cast = [{"kind": "characters", "id": char, "role": "npc"}]
     with monkeypatch.context() as m:
         # What the sweeps themselves cost, with nothing on top of them.
-        expected = _counted(m, image_refs, "scan")
+        expected = record_calls(m, image_refs, "scan")
         overlay.read_descriptions(camp, char, vid, base="characters")
         overlay.read_descriptions(camp, world["loc"], "default", base="locations")
         campaign_images.read_descriptions(camp)
     assert expected          # the guard is meaningless against a count of nothing
-    scans = _counted(monkeypatch, image_refs, "scan")
+    scans = record_calls(monkeypatch, image_refs, "scan")
     assert art.candidates(camp, cast, world["loc"], [])
     assert len(scans) == len(expected)
 

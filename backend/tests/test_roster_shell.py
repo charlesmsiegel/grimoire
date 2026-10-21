@@ -31,6 +31,7 @@ from grimoire.store import (
 )
 from grimoire.store.sheets import tally
 from grimoire.store.sheets.paths import FILE_KINDS
+from tests.spies import record_calls
 
 
 def _unaddress(root, aid):
@@ -192,22 +193,10 @@ def test_the_pc_roster_is_list_pcs_cut_to_three_fields(monkeypatch, tmp_path):
     assert "mara" not in {r["id"] for r in roster}              # tombstoned campaign-side
 
 
-def _record(monkeypatch, owner, name):
-    calls = []
-    real = getattr(owner, name)
-
-    def recording(*a, **kw):
-        calls.append(a)
-        return real(*a, **kw)
-
-    monkeypatch.setattr(owner, name, recording)
-    return calls
-
-
 def test_the_pc_roster_scans_no_image(monkeypatch, tmp_path):
     cid, _ = _library(monkeypatch, tmp_path)
-    listed = _record(monkeypatch, assets, "list_images")
-    focused = _record(monkeypatch, assets, "read_focus")
+    listed = record_calls(monkeypatch, assets, "list_images")
+    focused = record_calls(monkeypatch, assets, "read_focus")
     assert overlay.pc_roster(cid)
     assert (len(listed), len(focused)) == (0, 0)
 
@@ -260,18 +249,6 @@ def shell_client(user_pack_path):
         yield c, cid
 
 
-def _count_calls(monkeypatch, owner, name):
-    calls = []
-    real = getattr(owner, name)
-
-    def counting(*a, **kw):
-        calls.append(a)
-        return real(*a, **kw)
-
-    monkeypatch.setattr(owner, name, counting)
-    return calls
-
-
 def test_the_shell_builds_no_full_listing_and_tallies_sheets_once(shell_client, monkeypatch):
     """`/api/shell` runs on every navigation and reads no full roster rows.
 
@@ -279,9 +256,9 @@ def test_the_shell_builds_no_full_listing_and_tallies_sheets_once(shell_client, 
     obtaining it would sweep all campaigns on every navigation.
     """
     client, cid = shell_client
-    full_chars = _count_calls(monkeypatch, store.overlay, "list_characters")
-    full_pcs = _count_calls(monkeypatch, store.overlay, "list_pcs")
-    tallies = _count_calls(monkeypatch, store.sheets, "coverage")
+    full_chars = record_calls(monkeypatch, store.overlay, "list_characters")
+    full_pcs = record_calls(monkeypatch, store.overlay, "list_pcs")
+    tallies = record_calls(monkeypatch, store.sheets, "coverage")
 
     body = client.get("/api/shell", params={"campaign": cid}).json()
 
@@ -297,7 +274,7 @@ def test_the_fallback_campaign_shares_the_context_too(shell_client, monkeypatch)
     """With no id remembered the rail answers for the most recent campaign,
     and that path must tally once as well."""
     client, _cid = shell_client
-    tallies = _count_calls(monkeypatch, store.sheets, "coverage")
+    tallies = record_calls(monkeypatch, store.sheets, "coverage")
     body = client.get("/api/shell").json()
     assert body["campaign"]["sheets"] == {"sheeted": 1, "total": 4}
     assert len(tallies) == 1
@@ -331,7 +308,7 @@ def test_badge_count_refuses_a_context_for_another_campaign(shell_client):
 
 def test_todo_gaps_build_no_full_listing(shell_client, monkeypatch):
     client, cid = shell_client
-    full_chars = _count_calls(monkeypatch, store.overlay, "list_characters")
+    full_chars = record_calls(monkeypatch, store.overlay, "list_characters")
     body = client.get("/api/todo", params={"campaign": cid}).json()
     assert full_chars == []
     anchors = client.get("/api/todo/anchors/items", params={"campaign": cid}).json()

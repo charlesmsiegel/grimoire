@@ -33,9 +33,9 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.campaigns import read as campaigns_read
-from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.locks import _runtime as lock_runtime
 from grimoire.store.overlay import _world_lifecycle as overlay_world
+from tests.campaign_fixtures import stamp_full_copy
 
 
 @pytest.fixture(autouse=True)
@@ -842,16 +842,6 @@ def test_materialize_pc_writes_every_version_before_the_meta_file(monkeypatch, t
     assert seen["versions"] == ["default.md", "veteran.md"]
 
 
-def _stamp_full(cid: str) -> None:
-    """Mark a campaign pre-overlay full-copy — the state `ensure_campaign_slim`
-    migrates from, and the one where sync.md means the full copy's inventory
-    rather than the set of materialized records."""
-    mp = campaigns.campaign_meta_path(cid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    meta["world_copy"] = "full"
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
-
-
 def test_materialize_entity_reserves_the_base_before_the_copy_before_the_migration(monkeypatch, tmp_path):
     """On a campaign slim has not reached, neither ordering is safe: a ref with
     no copy is a record the pending migration tombstones, and a copy with no ref
@@ -859,7 +849,7 @@ def test_materialize_entity_reserves_the_base_before_the_copy_before_the_migrati
     base is reserved before the copy and recorded after it (#270)."""
     _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
     _thin(cid, "lore", eid)
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     seen = _at_commit(monkeypatch, cid, campaigns.campaign_root(cid) / "lore" / f"{eid}.md")
     overlay.materialize_entity(cid, "lore", eid)
     assert seen["manifest"][f"lore/{eid}"] == overlay.RESERVED_BASE     # named, not yet described
@@ -868,7 +858,7 @@ def test_materialize_entity_reserves_the_base_before_the_copy_before_the_migrati
 
 def test_materialize_actor_reserves_the_base_before_the_meta_before_the_migration(monkeypatch, tmp_path):
     wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     d = campaigns.campaign_root(cid) / "characters" / aid
     seen = _at_commit(monkeypatch, cid, d / "character.md")
     overlay.materialize_actor(cid, "characters", aid)
@@ -882,7 +872,7 @@ def test_an_exception_after_the_copy_lands_redeems_the_reservation(monkeypatch, 
     — the same reasoning that keeps the base past the migration."""
     _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
     _thin(cid, "lore", eid)
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     croot = campaigns.campaign_root(cid)
     _fail_after_writing(monkeypatch, croot / "lore" / f"{eid}.md")
     with pytest.raises(KeyboardInterrupt):
@@ -898,7 +888,7 @@ def test_a_reservation_with_no_copy_is_dropped_not_tombstoned(monkeypatch, tmp_p
     _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
     _thin(cid, "lore", eid)
     campaigns.write_manifest(cid, {f"lore/{eid}": overlay.RESERVED_BASE})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -917,7 +907,7 @@ def test_a_reservation_with_a_copy_survives_as_something_sync_still_sees(monkeyp
     croot = campaigns.campaign_root(cid)
     overlay.materialize_entity(cid, "lore", eid)
     campaigns.write_manifest(cid, {f"lore/{eid}": overlay.RESERVED_BASE})   # …killed before redeeming
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     entities.update_entity(wroot, "lore", eid, body="world v2")             # world moves meanwhile
 
     campaigns.ensure_campaign_slim(cid)

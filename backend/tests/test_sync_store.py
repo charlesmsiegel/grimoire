@@ -14,7 +14,7 @@ from grimoire.store import (
     sync,
     worlds,
 )
-from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from tests.campaign_fixtures import stamp_full_copy
 
 
 def home(monkeypatch, tmp_path):
@@ -346,14 +346,6 @@ def test_new_kind_flows_live_and_syncs_updates(monkeypatch, tmp_path):
     assert pend[0]["world"]["body"].strip() == "v2"
 
 
-def _stamp_full(cid: str) -> None:
-    """Mark a campaign pre-overlay full-copy — see campaigns.read.slim_pending."""
-    mp = campaigns.campaign_meta_path(cid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    meta["world_copy"] = "full"
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
-
-
 def test_accept_migrates_the_campaign_before_it_accepts(monkeypatch, tmp_path):
     """#270. Accept drops a copy and its manifest ref, and to a campaign the
     slim migration has not reached a ref whose copy is gone is a record the
@@ -363,7 +355,7 @@ def test_accept_migrates_the_campaign_before_it_accepts(monkeypatch, tmp_path):
     wid, cid = _setup(monkeypatch, tmp_path)
     overlay.materialize_entity(cid, "locations", "seraphine")
     entities.update_entity(worlds.world_root(wid), "locations", "seraphine", body="v2")
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
 
@@ -382,7 +374,7 @@ def test_accept_on_an_unmigrated_campaign_whose_world_is_gone_does_nothing(monke
     croot = campaigns.campaign_root(cid)
     overlay.materialize_entity(cid, "locations", "seraphine")
     before = campaigns.read_manifest(cid)
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     shutil.rmtree(worlds.world_root(wid))
 
     sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])

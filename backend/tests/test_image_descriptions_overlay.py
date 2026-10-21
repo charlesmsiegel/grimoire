@@ -18,6 +18,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.campaigns import lifecycle
+from tests.spies import record_calls
 
 
 @pytest.fixture
@@ -339,18 +340,6 @@ def test_promote_does_not_carry_object_text(pair):
     assert overlay.read_description(camp, cid, vid, "avatar") == "The world's quay."
 
 
-def _counted(monkeypatch, module, name):
-    calls = []
-    real = getattr(module, name)
-
-    def counted(*a, **kw):
-        calls.append(a)
-        return real(*a, **kw)
-
-    monkeypatch.setattr(module, name, counted)
-    return calls
-
-
 def test_shadowed_rows_read_the_shared_description(pair, monkeypatch):
     """A shadowed world copy carries the world's text -- here, the shared
     object's -- read off the world listing's own ids: no placement is scanned
@@ -361,9 +350,9 @@ def test_shadowed_rows_read_the_shared_description(pair, monkeypatch):
     with monkeypatch.context() as m:
         m.setattr(image_descriptions, "read_all", lambda *a, **kw: {})
         m.setattr(image_descriptions, "read_in", lambda *a, **kw: {})
-        baseline = _counted(m, image_refs, "scan")
+        baseline = record_calls(m, image_refs, "scan")
         overlay.shadowed_images(camp, cid, vid)
-    scans = _counted(monkeypatch, image_refs, "scan")
+    scans = record_calls(monkeypatch, image_refs, "scan")
     rows = overlay.shadowed_images(camp, cid, vid)
     assert [(r["name"], r.get("description")) for r in rows] == [
         ("gallery_1", "The world's quay.")]
@@ -378,9 +367,9 @@ def test_read_descriptions_scans_only_what_the_listing_scans(pair, monkeypatch):
     image_descriptions.set_description(overlay.croot_of(camp), cid, vid, "gallery_3", "Mine.")
 
     with monkeypatch.context() as m:
-        listing = _counted(m, image_refs, "scan")
+        listing = record_calls(m, image_refs, "scan")
         overlay.list_images(camp, cid, vid)
-    scans = _counted(monkeypatch, image_refs, "scan")
+    scans = record_calls(monkeypatch, image_refs, "scan")
     got = overlay.read_descriptions(camp, cid, vid)
     assert got == {"gallery_1": "The world's quay.", "gallery_3": "Mine."}
     assert len(scans) == len(listing)

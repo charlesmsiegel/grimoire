@@ -37,6 +37,18 @@ def _seed(cache, root, monkeypatch):
     return key
 
 
+def _pause_intent_writes(cache, monkeypatch, entered, release):
+    """Hold every delete-intent write at its start: `entered` is set as one
+    begins, and it goes on to write once `release` is set."""
+    original = cache.atomic.write_text
+    def paused(path, text, *args, **kwargs):
+        if path.parent.name == 'delete-intents':
+            entered.set()
+            assert release.wait(5)
+        return original(path, text, *args, **kwargs)
+    monkeypatch.setattr(cache.atomic, 'write_text', paused)
+
+
 def test_delete_purges_in_place_and_preserves_second_connection(cache, root, monkeypatch):
     key = _seed(cache, root, monkeypatch)
     session = _open(cache, root)
@@ -420,13 +432,7 @@ def test_owner_identity_is_visible_before_cached_device(cache, root, monkeypatch
 
 def test_fork_hook_waits_for_unregistered_intent_descriptor(cache, root, monkeypatch):
     acquired, release, forked = threading.Event(), threading.Event(), threading.Event()
-    original = cache.atomic.write_text
-    def paused(path, text, *args, **kwargs):
-        if path.parent.name == 'delete-intents':
-            acquired.set()
-            assert release.wait(5)
-        return original(path, text, *args, **kwargs)
-    monkeypatch.setattr(cache.atomic, 'write_text', paused)
+    _pause_intent_writes(cache, monkeypatch, acquired, release)
     preparer = threading.Thread(target=lambda: cache.prepare_delete(root))
     def fork_hook():
         cache._before_fork()
@@ -801,14 +807,8 @@ def test_read_side_retirement_never_waits_for_preparing_intent(cache, root, monk
     elif disabled == 'build':
         monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
     preparing, release, completed = threading.Event(), threading.Event(), threading.Event()
-    original = cache.atomic.write_text
     failures = []
-    def paused(path, text, *args, **kwargs):
-        if path.parent.name == 'delete-intents':
-            preparing.set()
-            assert release.wait(5)
-        return original(path, text, *args, **kwargs)
-    monkeypatch.setattr(cache.atomic, 'write_text', paused)
+    _pause_intent_writes(cache, monkeypatch, preparing, release)
     def producer():
         try:
             assert cache.prepare_delete(root) is not None
@@ -1046,14 +1046,8 @@ def test_delete_completion_never_waits_for_another_preparation(cache, root, monk
     elif mode == 'build':
         monkeypatch.setattr(compiled_runtime, '_build', lambda: None)
     preparing, release, completed = threading.Event(), threading.Event(), threading.Event()
-    original = cache.atomic.write_text
     failures, second = [], []
-    def paused(path, text, *args, **kwargs):
-        if path.parent.name == 'delete-intents':
-            preparing.set()
-            assert release.wait(5)
-        return original(path, text, *args, **kwargs)
-    monkeypatch.setattr(cache.atomic, 'write_text', paused)
+    _pause_intent_writes(cache, monkeypatch, preparing, release)
     def producer():
         try:
             second.append(cache.prepare_delete(root))

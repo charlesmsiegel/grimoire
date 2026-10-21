@@ -20,6 +20,7 @@ import json
 import pytest
 
 import grimoire.store as store
+from tests.spies import campaign_lock_watch
 
 pytestmark = pytest.mark.unfaked_llm
 
@@ -355,12 +356,7 @@ def test_the_whole_view_is_read_under_one_campaign_lock(client, monkeypatch):
     print a scene marked absorbed whose beat has not landed yet."""
     cid = _campaign(client)
     held = {}
-
-    def _watch(name, real):
-        def wrapper(*a, **kw):
-            held[name] = store.locks.campaign_lock(cid)._is_owned()
-            return real(*a, **kw)
-        return wrapper
+    _watch = campaign_lock_watch(cid, held)
 
     # `store.scenes.read`, not the `store.scenes` facade: this module binds the
     # submodule, which is the import form the guard requires and the only name

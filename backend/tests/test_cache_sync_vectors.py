@@ -117,6 +117,18 @@ def _rel(home, path):
     return path.relative_to(home).as_posix()
 
 
+def _amended_pacts(home, wid, cid):
+    """Three lore entries, each recalled and then amended: the relative paths
+    of three files whose recall vectors a sync has to re-embed."""
+    paths = []
+    for n in range(3):
+        eid, path = _lore(home, wid, name=f"Pact {n}", body=f"Clause {n}.")
+        _recall(wid, cid, eid)
+        entities.update_entity(worlds.world_root(wid), "lore", eid, body=f"Clause {n}, amended.")
+        paths.append(_rel(home, path))
+    return paths
+
+
 def _png(rgb: bytes) -> bytes:
     """A 1x1 PNG of one colour: distinct pixels, so a distinct image object."""
 
@@ -360,12 +372,7 @@ def test_two_producers_rows_on_one_path_stay_apart(home, fake):
 def test_a_connection_wide_failure_stops_the_rest(home, fake, monkeypatch):
     _configure()
     wid, cid = _realm()
-    paths = []
-    for n in range(3):
-        eid, path = _lore(home, wid, name=f"Pact {n}", body=f"Clause {n}.")
-        _recall(wid, cid, eid)
-        entities.update_entity(worlds.world_root(wid), "lore", eid, body=f"Clause {n}, amended.")
-        paths.append(_rel(home, path))
+    paths = _amended_pacts(home, wid, cid)
     monkeypatch.setattr(embeddings, "BATCH", 1)
     fake.error, fake.fail_after = embeddings.EmbeddingsError("auth", "no"), len(fake.calls)
     before = len(fake.calls)
@@ -553,12 +560,7 @@ def test_the_art_catalog_names_the_image_object(home):
 def test_a_stop_inside_the_network_phase_leaves_unsent_paths_unsynced(home, fake, monkeypatch):
     _configure()
     wid, cid = _realm()
-    paths = []
-    for n in range(3):
-        eid, path = _lore(home, wid, name=f"Pact {n}", body=f"Clause {n}.")
-        _recall(wid, cid, eid)
-        entities.update_entity(worlds.world_root(wid), "lore", eid, body=f"Clause {n}, amended.")
-        paths.append(_rel(home, path))
+    paths = _amended_pacts(home, wid, cid)
     monkeypatch.setattr(embeddings, "BATCH", 1)
     sent_before = len(fake.calls)
     report = cache_sync.sync_paths(paths, mode="explicit",
@@ -571,12 +573,7 @@ def test_a_stop_inside_the_network_phase_leaves_unsent_paths_unsynced(home, fake
 def test_a_connection_wide_failure_names_its_kind_on_every_unsent_path(home, fake, monkeypatch):
     _configure()
     wid, cid = _realm()
-    paths = []
-    for n in range(3):
-        eid, path = _lore(home, wid, name=f"Pact {n}", body=f"Clause {n}.")
-        _recall(wid, cid, eid)
-        entities.update_entity(worlds.world_root(wid), "lore", eid, body=f"Clause {n}, amended.")
-        paths.append(_rel(home, path))
+    paths = _amended_pacts(home, wid, cid)
     monkeypatch.setattr(embeddings, "BATCH", 1)
     fake.error, fake.fail_after = embeddings.EmbeddingsError("auth", "no"), len(fake.calls)
     report = cache_sync.sync_paths(paths, mode="explicit")

@@ -13,6 +13,7 @@ import pytest
 
 import grimoire.store as store
 from grimoire.store.continuity import doc, effective
+from tests.spies import campaign_lock_watch
 
 pytestmark = pytest.mark.unfaked_llm
 
@@ -536,12 +537,7 @@ def test_every_section_is_read_under_one_campaign_lock(client, monkeypatch):
     store.commitments.set_movement(cid, "x", "A promise", "promise", "open",
                                    "", "Sworn.", "s1")
     held = {}
-
-    def _watch(name, real):
-        def wrapper(*a, **kw):
-            held[name] = store.locks.campaign_lock(cid)._is_owned()
-            return real(*a, **kw)
-        return wrapper
+    _watch = campaign_lock_watch(cid, held)
 
     monkeypatch.setattr(store.chronicle, "read_chronicle",
                         _watch("chronicle", store.chronicle.read_chronicle))

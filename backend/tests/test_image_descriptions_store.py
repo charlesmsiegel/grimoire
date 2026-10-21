@@ -16,6 +16,7 @@ from grimoire.store import (
     world_images,
     worlds,
 )
+from tests.spies import record_calls
 
 
 def _chars(tmp_path, images=("avatar", "gallery_1")):
@@ -846,18 +847,6 @@ def test_an_also_clear_key_that_cannot_be_cleared_fails_the_save(tmp_path, monke
     assert image_descriptions.read_raw(visible)["avatar"] == "Old"
 
 
-def _count(monkeypatch, module, name):
-    calls = []
-    real = getattr(module, name)
-
-    def counted(*a, **kw):
-        calls.append(a)
-        return real(*a, **kw)
-
-    monkeypatch.setattr(module, name, counted)
-    return calls
-
-
 def test_reading_a_character_resolves_and_scans_nothing_extra_for_descriptions(
         tmp_path, monkeypatch):
     """`read_character` builds its version's image listing anyway; the
@@ -876,8 +865,8 @@ def test_reading_a_character_resolves_and_scans_nothing_extra_for_descriptions(
 
     def costs(read):
         with monkeypatch.context() as m:
-            resolves = _count(m, image_refs, "resolve_ref")
-            scans = _count(m, image_refs, "scan")
+            resolves = record_calls(m, image_refs, "resolve_ref")
+            scans = record_calls(m, image_refs, "scan")
             got = read()
         return len(resolves), len(scans), got
 

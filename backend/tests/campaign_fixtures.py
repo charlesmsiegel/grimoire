@@ -1,5 +1,6 @@
 """A bare campaign over a throwaway store, shared by the store suites that need
-nothing more under them.
+nothing more under them -- and `stamp_full_copy`, which turns one back into
+the pre-overlay layout.
 
 Each is a world "Realm" holding one campaign, created through the store under
 this test's own `GRIMOIRE_HOME` (function-scoped, like the monkeypatch that
@@ -14,6 +15,7 @@ name never collides with the tests' `cid` argument.
 import pytest
 
 from grimoire.store import campaigns, worlds
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
 def _bare_campaign(monkeypatch, tmp_path, name: str) -> str:
@@ -38,3 +40,14 @@ def run_cid(monkeypatch, tmp_path):
 def saltmarch_cid(monkeypatch, tmp_path):
     """`cid`: campaign "Saltmarch" in world "Realm"."""
     return _bare_campaign(monkeypatch, tmp_path, "Saltmarch")
+
+
+def stamp_full_copy(cid: str) -> None:
+    """Mark a campaign pre-overlay full-copy -- the state
+    `ensure_campaign_slim` migrates from (see campaigns.read.slim_pending), and
+    the one where sync.md means the full copy's inventory rather than the set
+    of materialized records."""
+    mp = campaigns.campaign_meta_path(cid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    meta["world_copy"] = "full"
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")

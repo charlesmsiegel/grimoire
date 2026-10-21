@@ -21,20 +21,13 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.campaigns import lifecycle
-from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from grimoire.store.frontmatter import parse_frontmatter
 from grimoire.store.weather import settings
+from tests.campaign_fixtures import stamp_full_copy
 
 
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-
-
-def _stamp_full(cid: str) -> None:
-    """Mark a campaign as pre-overlay full-copy, the state ensure_campaign_slim migrates from."""
-    mp = campaigns.campaign_meta_path(cid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    meta["world_copy"] = "full"
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
 def test_create_campaign_is_thin(monkeypatch, tmp_path):
@@ -205,7 +198,7 @@ def _fat_campaign(monkeypatch, tmp_path):
     campaigns.write_manifest(cid, manifest)
     entities.update_entity(croot, "lore", diverged, body="campaign text")
     (croot / "lore" / f"{removed}.md").unlink()
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     return wroot, cid, same, diverged, removed, aid, vid
 
 
@@ -255,7 +248,7 @@ def test_slim_prunes_duplicate_greeting_asset(monkeypatch, tmp_path):
     assets.put_image(croot, g, "default", "art_1", b"artbytes", "png", base="greetings")
     manifest = {f"greetings/{g}": entities.entity_hash(wroot, "greetings", g)}
     campaigns.write_manifest(cid, manifest)
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -280,7 +273,7 @@ def test_slim_keeps_focus_when_campaign_avatar_diverges(monkeypatch, tmp_path):
     assets.put_image(croot, aid, vid, "avatar", b"campaignavatar", "png")   # divergent
     assets.write_focus(croot, aid, vid, 80)                                 # same bytes as world
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -315,7 +308,7 @@ def test_slim_keeps_diverged_asset_stored_under_another_extension(monkeypatch, t
     # the campaign's own avatar: same logical name, different format
     assets.put_image(croot, aid, vid, "avatar", b"campaignavatar", "jpg")
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -352,7 +345,7 @@ def test_slimming_prunes_identical_refs_keeps_divergent(monkeypatch, tmp_path):
     assets.write_focus(croot, cropped, vid, 20)                               # same image, other crop
     campaigns.write_manifest(cid, {f"characters/{a}": characters.dir_hash(wroot, a)
                                    for a in (same, other, cropped)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -397,7 +390,7 @@ def test_slimming_keeps_an_identical_placement_beside_a_divergent_legacy_file(
     world_ref = assets.version_dir(wroot, aid, vid) / "image-refs" / "avatar.json"
     assert (cdir / "image-refs" / "avatar.json").read_bytes() == world_ref.read_bytes()
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -420,7 +413,7 @@ def test_slimming_prunes_a_focus_sidecar_beside_a_pruned_avatar_placement(monkey
     croot = campaigns.campaign_root(cid)
     _fat_actor(wroot, croot, aid)
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -441,7 +434,7 @@ def test_slimming_keeps_a_focus_sidecar_beside_a_divergent_avatar_placement(monk
     # a legacy sidecar (written by an older build), identical to the world's
     (assets.version_dir(croot, aid, vid) / "focus.json").write_text('{"focus": 70}', encoding="utf-8")
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -466,7 +459,7 @@ def test_slimming_tombstone_by_names_with_refs(monkeypatch, tmp_path):
     # keep another copy held but divergent, so it must not read as deleted
     assets.put_image(croot, aid, vid, "gallery_2", b"campaign-own", "png")
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -496,7 +489,7 @@ def _crop_over_inherited_avatar(monkeypatch, tmp_path):
     assert image_refs.read(cdir, "avatar") == image_refs.Ref("avatar", None, 30)
     assert (cdir / "focus.json").read_text(encoding="utf-8") == '{"focus": 70}'
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     return aid, vid, wroot, croot, cid
 
 
@@ -545,7 +538,7 @@ def test_slim_tombstones_user_deleted_copied_asset(monkeypatch, tmp_path):
     for p in (croot / "characters" / aid / "assets" / vid).glob("avatar.*"):
         p.unlink()                                                            # user deletes it
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -564,7 +557,7 @@ def test_slim_keeps_inherited_world_asset_live(monkeypatch, tmp_path):
     aid, vid = characters.create_character(wroot, "Hero")
     assets.put_image(wroot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nx", "png")
     cid = campaigns.create_campaign("C", wid)   # thin: never copied this actor
-    _stamp_full(cid)                            # but stamped legacy full-copy
+    stamp_full_copy(cid)                            # but stamped legacy full-copy
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -595,7 +588,7 @@ def test_slim_tombstones_user_deleted_plotmap(monkeypatch, tmp_path):
         (wroot / "plotmap.json").read_text(encoding="utf-8"), encoding="utf-8")
     campaigns.write_manifest(cid, {"plotmap": greetings.plotmap_hash(wroot)})
     (croot / "plotmap.json").unlink()   # user deleted their campaign-side copy
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -617,7 +610,7 @@ def test_slim_tombstones_user_deleted_actor(monkeypatch, tmp_path):
     ref = f"characters/{aid}"
     campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
     shutil.rmtree(croot / "characters" / aid)   # user deleted their campaign-side copy
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -646,7 +639,7 @@ def test_slim_keeps_locked_actor_card_and_drops_ref(monkeypatch, tmp_path):
     # appear() already drops the manifest ref via its modern _lock helper;
     # restore it to look like a legacy campaign whose old sync entry lingered
     campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -668,7 +661,7 @@ def test_slim_keeps_diverged_actor_and_ref(monkeypatch, tmp_path):
     ref = f"characters/{aid}"
     campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
     characters.update_version(croot, aid, vid, characters.blank_card("Hero (edited)"))
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -751,7 +744,7 @@ def _fatter_campaign(monkeypatch, tmp_path):
     appearances.appear(cid, "s1", "characters", lid, lvid, "npc")   # locks, drops its ref
     characters.update_version(croot, dvid, dver, characters.blank_card("Mara (edited)"))
     mine = entities.create_entity(croot, "lore", "Winifred", "Campaign only.")
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     return dict(cid=cid, same=same, diverged=diverged, removed=removed, aid=aid,
                 g=g, pid=pid, lid=lid, mine=mine, dvid=dvid, dver=dver)
 
@@ -854,7 +847,7 @@ def test_slim_keeps_an_untracked_copy_that_differs_from_the_world(monkeypatch, t
     shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
     characters.update_version(croot, aid, ver, characters.blank_card("Mara (edited)"))
     campaigns.write_manifest(cid, {})            # …and nothing names either of them
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -933,7 +926,7 @@ def test_slim_keeps_images_of_a_version_the_fork_never_copied(monkeypatch, tmp_p
     croot = campaigns.campaign_root(cid)
     shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)   # the fork
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     characters.create_version(wroot, aid, "grim", characters.blank_card("Mara"))   # …after it
     assets.put_image(wroot, aid, "grim", "avatar", b"\x89PNG\r\n\x1a\ngrim", "png")
 
@@ -959,7 +952,7 @@ def test_slim_keeps_the_images_of_a_record_materialized_before_it_ran(monkeypatc
     aid, vid = characters.create_character(wroot, "Mara")
     assets.put_image(wroot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nm", "png")
     cid = campaigns.create_campaign("C", wid)
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     overlay.update_entity(cid, "locations", eid, body="Campaign tides.")   # ordinary edit
     campaigns.write_manifest(cid, {**campaigns.read_manifest(cid),
                                    f"characters/{aid}": overlay.RESERVED_BASE})   # …and a reservation
@@ -986,7 +979,7 @@ def test_slim_still_tombstones_an_image_the_user_deleted_from_a_forked_copy(monk
     shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)   # the fork
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
     assets.delete_image(croot, aid, vid, "avatar")                            # the user
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -1007,7 +1000,7 @@ def test_slim_does_not_tombstone_a_ref_the_fork_recorded_no_hash_for(monkeypatch
     aid, vid = characters.create_character(wroot, "Hero")
     cid = campaigns.create_campaign("C", wid)
     campaigns.write_manifest(cid, {"plotmap": ""})   # forked before the world had one
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     g = greetings.create_greeting(wroot, "Gala", aid, vid, body="Hi.")
     greetings.set_edges(wroot, g, leads_to=["next"], excludes=[])   # …and now it has
 
@@ -1065,7 +1058,7 @@ def test_slim_keeps_an_untracked_copy_the_world_also_holds(monkeypatch, tmp_path
     croot = campaigns.campaign_root(cid)
     mine = entities.create_entity(croot, "lore", "Winifred", "Keeper of the marsh.")
     campaigns.write_manifest(cid, {})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
     # the world independently grows the same slug, with the same text
     entities.create_entity(wroot, "lore", "Winifred", "Keeper of the marsh.")
     assert entities.entity_hash(croot, "lore", mine) == entities.entity_hash(wroot, "lore", mine)
@@ -1088,7 +1081,7 @@ def test_slim_keeps_a_campaign_local_record(monkeypatch, tmp_path):
     croot = campaigns.campaign_root(cid)
     mine = entities.create_entity(croot, "lore", "Winifred", "Campaign only.")
     campaigns.write_manifest(cid, {})
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 
@@ -1112,7 +1105,7 @@ def test_slim_keeps_a_locked_actors_card(monkeypatch, tmp_path):
     campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
     appearances.appear(cid, "s1", "characters", aid, vid, "npc")   # drops the ref, keeps the card
     assert f"characters/{aid}" not in campaigns.read_manifest(cid)
-    _stamp_full(cid)
+    stamp_full_copy(cid)
 
     campaigns.ensure_campaign_slim(cid)
 

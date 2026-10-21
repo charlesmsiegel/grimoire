@@ -18,6 +18,7 @@ import grimoire.store as store
 from grimoire.routes.campaigns import LEDGER_RECENT
 from grimoire.store.continuity import doc as continuity_doc
 from grimoire.store.continuity import effective
+from tests.spies import campaign_lock_watch
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC, _plugin, _primary
 
 pytestmark = pytest.mark.unfaked_llm
@@ -268,12 +269,7 @@ def test_the_three_sections_are_read_under_one_campaign_lock(client, monkeypatch
     store.commitments.set_movement(cid, "x", "A promise", "promise", "open",
                                    "", "Sworn.", "s1")
     held = {}
-
-    def _watch(name, real):
-        def wrapper(*a, **kw):
-            held[name] = store.locks.campaign_lock(cid)._is_owned()
-            return real(*a, **kw)
-        return wrapper
+    _watch = campaign_lock_watch(cid, held)
 
     monkeypatch.setattr(store.scenes, "list_scenes",
                         _watch("scenes", store.scenes.list_scenes))
@@ -440,12 +436,7 @@ def test_both_halves_of_the_ledger_are_read_under_the_one_lock(client, monkeypat
     standing, or with neither — the contradiction this view must never print."""
     cid = _campaign(client)
     held = {}
-
-    def _watch(name, real):
-        def wrapper(*a, **kw):
-            held[name] = store.locks.campaign_lock(cid)._is_owned()
-            return real(*a, **kw)
-        return wrapper
+    _watch = campaign_lock_watch(cid, held)
 
     monkeypatch.setattr(store.facts, "active", _watch("active", store.facts.active))
     monkeypatch.setattr(store.facts, "retired", _watch("retired", store.facts.retired))
