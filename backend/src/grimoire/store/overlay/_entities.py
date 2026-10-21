@@ -221,8 +221,8 @@ def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = ""
         return (_record_paths._flat_path(wroot, kind, eid).exists() or _record_paths._record_dir(wroot, kind, eid).is_dir()
                 or _record_paths.flat_ref(kind, eid) in gone)
 
-    eid = entities.create_entity(_record_paths.croot_of(cid), kind, name, body, keys, owners,
-                                 sd_prompt=sd_prompt, taken=taken, fields=fields,
+    eid = entities.create_entity(_record_paths.croot_of(cid), kind, name, body, keys=keys,
+                                 owners=owners, sd_prompt=sd_prompt, taken=taken, fields=fields,
                                  secrecy=secrecy)
     # Campaign-scoped entity work is work on the campaign, but it writes only
     # overlay records -- neither campaign.md nor any scene -- so the derived

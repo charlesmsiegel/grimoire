@@ -115,7 +115,7 @@ def _entity_create(root, kind: str, body: EntityCreate):
     _check_fields(kind, body.fields)
     _check_secrecy(body.secrecy)
     try:
-        return {"id": store.entities.create_entity(root, kind, body.name, body.body, body.keys, body.owners,
+        return {"id": store.entities.create_entity(root, kind, body.name, body.body, keys=body.keys, owners=body.owners,
                                                     fields=body.fields, secrecy=body.secrecy)}
     except store.entities.UnknownKind as exc:
         raise HTTPException(status_code=404, detail="unknown kind") from exc

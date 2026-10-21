@@ -125,7 +125,7 @@ def post_world_instantiate(wid: str, kind: str, mid: str, content_id: str):
         raise HTTPException(status_code=404, detail="content not found") from exc
     try:
         eid = store.entities.create_entity(root, kind, content["name"], content["body"],
-                                           content.get("keys", ""), "",
+                                           keys=content.get("keys", ""), owners="",
                                            fields=_content_fields(kind, content))
     except store.entities.UnknownKind as exc:
         raise HTTPException(status_code=404, detail="unknown kind") from exc

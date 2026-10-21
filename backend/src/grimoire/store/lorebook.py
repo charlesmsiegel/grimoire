@@ -385,7 +385,7 @@ def commit(root: Path, entries: list[dict]) -> list[dict]:
         fields = ({"st_extensions": json.dumps(ext, sort_keys=True), **adopt(ext).fields}
                   if ext else None)
         eid = entities.create_entity(root, category, e.get("name", "Imported entry"),
-                                     e.get("body", ""), ",".join(e.get("keys", [])),
+                                     e.get("body", ""), keys=",".join(e.get("keys", [])),
                                      fields=fields)
         created.append({"kind": category, "id": eid})
     return created

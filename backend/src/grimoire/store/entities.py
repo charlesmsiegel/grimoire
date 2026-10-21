@@ -200,9 +200,9 @@ def read_entity_rev(root: Path, kind: str, eid: str) -> dict:
     return {**record, "rev": content_hash(text)}
 
 
-def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = "", owners: str = "",
-                  sd_prompt: str = "", taken=None, fields: dict[str, str] | None = None,
-                  secrecy: str = "") -> str:
+def create_entity(root: Path, kind: str, name: str, body: str = "", *, keys: str = "",
+                  owners: str = "", sd_prompt: str = "", taken=None,
+                  fields: dict[str, str] | None = None, secrecy: str = "") -> str:
     _check_kind(kind)
     d = _kind_dir(root, kind)
     d.mkdir(parents=True, exist_ok=True)
@@ -276,7 +276,7 @@ def updated_text(text: str, *, name: str | None = None, body: str | None = None,
 
 
 def update_entity(
-    root: Path, kind: str, eid: str, name: str | None = None,
+    root: Path, kind: str, eid: str, *, name: str | None = None,
     body: str | None = None, keys: str | None = None, owners: str | None = None,
     sd_prompt: str | None = None, fields: dict[str, str] | None = None,
     secrecy: str | None = None,
