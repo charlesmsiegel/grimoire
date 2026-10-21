@@ -292,41 +292,58 @@ def run(target, *, client=None, real_home=None, rates=None, run_id: str = "",
     return [*results, *judges], records
 
 
+def _offline_lines(offline_records: list[dict]) -> list[str]:
+    """The offline suite's prompt leaks, and its other failed checks if any."""
+    leaked = [r for r in offline_records if r["leaks"]]
+    failed = [r for r in offline_records if not offline.passed(r)]
+    lines = [(f"prompt leaks (offline suite): {len(leaked)} of "
+              f"{len(offline_records)} reader prompts")]
+    if len(failed) != len(leaked):
+        lines.append(f"offline checks failed (missing or misplaced needles): "
+                     f"{len(failed) - len(leaked)} of {len(offline_records)}")
+    return lines
+
+
+def _judged_line(exposed: list[dict]) -> str:
+    judged = [r for r in exposed if r["judge"] in ("clean", "leak")]
+    return (f"judged: {len(judged)} of {len(exposed)} exposed replies"
+            + (f" ({len(exposed) - len(judged)} failed or unjudged)"
+               if len(judged) != len(exposed) else ""))
+
+
+def _live_lines(records: list[dict]) -> list[str]:
+    """The live replies' lines: answered, prompt and reply leaks (each leak
+    named), judged, harness faults, and recall last."""
+    answered = [r for r in records if r["answered"]]
+    exposed = [r for r in answered if r["exposed"]]
+    leaked = [r for r in exposed if r["leaks"] or r["judge"] == "leak"]
+    lines = [f"answered: {len(answered)} of {len(records)} replies",
+             (f"prompt leaks (live prompts): "
+              f"{sum(not r['prompt_clean'] for r in records)} of {len(records)}"),
+             f"reply leaks: {len(leaked)} of {len(exposed)} exposed replies"
+             + "".join(f"\n  {r['case']}/{r['check']} #{r['repeat'] + 1}: "
+                       f"{', '.join(sorted({*r['leaks'], *r['judged']}))}"
+                       for r in leaked)]
+    if exposed:
+        lines.append(_judged_line(exposed))
+    stray = [r for r in answered if r["contamination"]]
+    if stray:
+        lines.append(f"harness faults: {len(stray)} of {len(answered)} replies held a "
+                     "token their prompt never did")
+    scored = [r["recall"] for r in answered if r["recall"] is not None]
+    lines.append("recall (not a leakage measure): "
+                 + (f"{sum(scored) / len(scored):.2f} over {len(scored)} replies"
+                    if scored else "nothing to recall"))
+    return lines
+
+
 def summary(records: list[dict], offline_records: list[dict] | None = None) -> str:
     """The leakage lines, each with its n, apart from recall."""
     lines = []
     if offline_records is not None:
-        leaked = [r for r in offline_records if r["leaks"]]
-        failed = [r for r in offline_records if not offline.passed(r)]
-        lines.append(f"prompt leaks (offline suite): {len(leaked)} of "
-                     f"{len(offline_records)} reader prompts")
-        if len(failed) != len(leaked):
-            lines.append(f"offline checks failed (missing or misplaced needles): "
-                         f"{len(failed) - len(leaked)} of {len(offline_records)}")
+        lines += _offline_lines(offline_records)
     if records:
-        answered = [r for r in records if r["answered"]]
-        exposed = [r for r in answered if r["exposed"]]
-        leaked = [r for r in exposed if r["leaks"] or r["judge"] == "leak"]
-        lines.append(f"answered: {len(answered)} of {len(records)} replies")
-        lines.append(f"prompt leaks (live prompts): "
-                     f"{sum(not r['prompt_clean'] for r in records)} of {len(records)}")
-        lines.append(f"reply leaks: {len(leaked)} of {len(exposed)} exposed replies"
-                     + "".join(f"\n  {r['case']}/{r['check']} #{r['repeat'] + 1}: "
-                               f"{', '.join(sorted({*r['leaks'], *r['judged']}))}"
-                               for r in leaked))
-        if exposed:
-            judged = [r for r in exposed if r["judge"] in ("clean", "leak")]
-            lines.append(f"judged: {len(judged)} of {len(exposed)} exposed replies"
-                         + (f" ({len(exposed) - len(judged)} failed or unjudged)"
-                            if len(judged) != len(exposed) else ""))
-        stray = [r for r in answered if r["contamination"]]
-        if stray:
-            lines.append(f"harness faults: {len(stray)} of {len(answered)} replies held a "
-                         "token their prompt never did")
-        scored = [r["recall"] for r in answered if r["recall"] is not None]
-        lines.append("recall (not a leakage measure): "
-                     + (f"{sum(scored) / len(scored):.2f} over {len(scored)} replies"
-                        if scored else "nothing to recall"))
+        lines += _live_lines(records)
     return "\n".join(lines)
 
 

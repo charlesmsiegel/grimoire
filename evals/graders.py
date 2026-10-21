@@ -660,21 +660,10 @@ def grade_scene_suggestions(text: str, snapshot: dict, controls, provider) -> li
     raw = suggest.raw_suggestions(text)
     entries = [e for e in raw or [] if suggest.is_card(e)]
     if not entries:
-        return [Check("suggest.json", False,
-                      "no suggestion list recoverable from the reply" if raw is None
-                      else "the reply decoded to no suggestions" if not raw
-                      else "every suggestion lacks a title or a premise")]
+        return [_no_cards(raw)]
     claims = [suggest.claim(e, snapshot, controls) for e in entries]
     kinds = {d["ref"]: d["kind"] for d in snapshot.get("driver_index", [])}
     anchors = {a["ref"] for a in snapshot.get("anchors", [])}
-    claimed = [{d["ref"] for d in c["drivers"]}
-               | ({c["time_anchor"]["ref"]} if c["time_anchor"] else set()) for c in claims]
-    uncovered = [r for r in controls.focus if not any(r in refs for refs in claimed)]
-    holders = _focus_holders(controls.focus, claimed)
-    titles = [str(e.get("title", "")).strip().casefold() for e in entries]
-    clones = _premise_clones(entries)
-    served = [frozenset(d["ref"] for d in c["drivers"] if d["action"] != "anchor")
-              for c in claims]
     unknown = _raw_driver_misses(entries, kinds)
     invented = _raw_anchor_misses(entries, anchors)
     bad_dates, checked = _date_misses(entries, claims, snapshot, controls, provider)
@@ -683,21 +672,52 @@ def grade_scene_suggestions(text: str, snapshot: dict, controls, provider) -> li
         Check("suggest.known_refs", not unknown, f"unknown drivers or actions: {unknown}"),
         Check("suggest.anchor_known", not invented,
               f"time anchors outside the anchor options: {invented}"),
-        Check("suggest.focus_coverage", not uncovered,
-              f"focus drivers no suggestion claims: {uncovered}"),
-        Check("suggest.focus_spread",
-              len(controls.focus) - len(uncovered) < 2 or len(entries) < 2 or len(holders) >= 2,
-              f"every focus driver is claimed by suggestion {holders} alone"),
-        Check("suggest.distinct",
-              len(entries) >= 2 and len(set(titles)) == len(titles) and len(set(served)) > 1
-              and not clones,
-              f"{len(entries)} suggestions, titles {titles}, "
-              f"claims {[sorted(s) for s in served]}, one premise reworded: {clones}"),
+        *_focus_checks(controls.focus, claims, len(entries)),
+        _distinct(entries, claims),
         Check("suggest.date_consistent", not bad_dates, f"dates: {bad_dates}"),
     ]
     if controls.anchor and controls.relation == "on":
         out.append(_on_derived(checked, snapshot, controls, provider))
     return out
+
+
+def _no_cards(raw) -> Check:
+    """The failed `suggest.json` of a reply that leaves no card: nothing
+    recoverable, nothing decoded, or no entry with a title and a premise."""
+    return Check("suggest.json", False,
+                 "no suggestion list recoverable from the reply" if raw is None
+                 else "the reply decoded to no suggestions" if not raw
+                 else "every suggestion lacks a title or a premise")
+
+
+def _focus_checks(focus, claims: list[dict], cards: int) -> list[Check]:
+    """`focus_coverage` and `focus_spread` over the refs each card claims, its
+    time anchor included."""
+    claimed = [{d["ref"] for d in c["drivers"]}
+               | ({c["time_anchor"]["ref"]} if c["time_anchor"] else set()) for c in claims]
+    uncovered = [r for r in focus if not any(r in refs for refs in claimed)]
+    holders = _focus_holders(focus, claimed)
+    return [
+        Check("suggest.focus_coverage", not uncovered,
+              f"focus drivers no suggestion claims: {uncovered}"),
+        Check("suggest.focus_spread",
+              len(focus) - len(uncovered) < 2 or cards < 2 or len(holders) >= 2,
+              f"every focus driver is claimed by suggestion {holders} alone"),
+    ]
+
+
+def _distinct(entries: list[dict], claims: list[dict]) -> Check:
+    """`distinct`: two or more cards, no title twice, not every card serving
+    the same drivers, and no premise one other reworded."""
+    titles = [str(e.get("title", "")).strip().casefold() for e in entries]
+    clones = _premise_clones(entries)
+    served = [frozenset(d["ref"] for d in c["drivers"] if d["action"] != "anchor")
+              for c in claims]
+    return Check("suggest.distinct",
+                 len(entries) >= 2 and len(set(titles)) == len(titles) and len(set(served)) > 1
+                 and not clones,
+                 f"{len(entries)} suggestions, titles {titles}, "
+                 f"claims {[sorted(s) for s in served]}, one premise reworded: {clones}")
 
 
 # ------------------------------------------------------------------ decisions
