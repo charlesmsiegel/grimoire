@@ -312,12 +312,7 @@ def catalog_with_slots(root: Path, gid: str) -> dict[str, tuple[dict, Target]]:
     world's (C6): a member of another world's collection has no target, so
     its tags stay in the greeting's sidecar, as any cross-world picture's do.
     """
-    out: dict[str, tuple[dict, Target]] = {}
-    rows = assets.list_images(root, gid, "default", base="greetings")
-    if rows:    # `list_images` answering at all proves `gid` safe
-        own = assets.version_dir(root, gid, "default", base="greetings")
-        out = {image["name"]: ({}, ("slot", (own, image["name"]), image.get("image_id")))
-               for image in rows}
+    out = _own_art(root, gid)
     try:
         sig = statcache.signature(root / "greetings" / f"{gid}.md") if safe_id(gid) else None
         refs = statcache.memo("greeting_image_refs", sig, lambda: _references(root, gid),
@@ -327,19 +322,42 @@ def catalog_with_slots(root: Path, gid: str) -> dict[str, tuple[dict, Target]]:
     same_world: dict[str, bool] = {}
     for url in refs:
         for source, listed in _collection_members(url):
-            key = image_key(root, gid, source)
-            if source.startswith("/api/worlds/"):
-                if not key.startswith("/"):
-                    continue    # this greeting's own art, listed above
-                target = listed if listed is not None else local_target(root, source)
-                if target is None:
-                    continue
-                if target[0] == "object" and not _same_world(root, source, same_world):
-                    target = None
-                out[key] = ({"url": key}, target)
-            elif urlsplit(source).scheme in ("http", "https") and urlsplit(source).netloc:
-                out[key] = ({"url": key}, None)
+            found = _referenced_entry(root, gid, source, listed, same_world)
+            if found is not None:
+                out[found[0]] = found[1]
     return out
+
+
+def _own_art(root: Path, gid: str) -> dict[str, tuple[dict, Target]]:
+    """The greeting's own stored art, keyed by name, each with its slot."""
+    rows = assets.list_images(root, gid, "default", base="greetings")
+    if not rows:
+        return {}
+    # `list_images` answering at all proves `gid` safe
+    own = assets.version_dir(root, gid, "default", base="greetings")
+    return {image["name"]: ({}, ("slot", (own, image["name"]), image.get("image_id")))
+            for image in rows}
+
+
+def _referenced_entry(root: Path, gid: str, source: str, listed: Target,
+                      same_world: dict[str, bool]) -> tuple[str, tuple[dict, Target]] | None:
+    """The `(key, (entry, target))` one referenced picture adds to the catalog,
+    or None for one it leaves out: the greeting's own art (listed already), a
+    local reference that serves nothing, or a URL that is neither local nor
+    web."""
+    key = image_key(root, gid, source)
+    if source.startswith("/api/worlds/"):
+        if not key.startswith("/"):
+            return None    # this greeting's own art, listed above
+        target = listed if listed is not None else local_target(root, source)
+        if target is None:
+            return None
+        if target[0] == "object" and not _same_world(root, source, same_world):
+            target = None
+        return key, ({"url": key}, target)
+    if urlsplit(source).scheme in ("http", "https") and urlsplit(source).netloc:
+        return key, ({"url": key}, None)
+    return None
 
 
 def _same_world(root: Path, url: str, seen: dict[str, bool]) -> bool:
