@@ -9,9 +9,8 @@ import pytest
 
 from grimoire import wire
 from grimoire.store import config, llm_connections, post_images
-from grimoire.store.inference import capabilities, facts, probes, providers, resolve
+from grimoire.store.inference import capabilities, facts, providers, resolve
 from grimoire.store.inference.capabilities import Cap
-from tests.ts_unions import TYPES, ts_union
 
 P = providers.PRESETS
 
@@ -558,13 +557,3 @@ def test_anthropic_prefill_follows_the_model():
     assert older.value == "unknown"
     stated = _resolve("anthropic", model="claude-haiku-4-5-20251001", prefill=True)
     assert stated["prefill"].value == "yes"
-
-
-# ---- the frontend's copy ----
-def test_the_frontend_mirrors_the_capability_vocabulary():
-    """`api/types.ts` spells these three by hand; nothing held them before
-    `tools` (01g-S1) was the change that would have let them drift."""
-    src = TYPES.read_text(encoding="utf-8")
-    assert set(ts_union(src, "CapabilityName")) == set(capabilities.NAMES)
-    assert set(ts_union(src, "CapabilityNeed")) == set(capabilities.NEEDS)
-    assert set(ts_union(src, "TestableCapability")) == set(probes.PROBES)

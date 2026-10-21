@@ -1,7 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { PostActions, type PostAction } from "./PostActions";
 import { postActions, type TranscriptActions } from "./TranscriptPost";
-import { bodiesOf, declares, stylesheet } from "../../testkit/stylesheet";
 
 function actions(over: Partial<Record<"edit" | "cut", Partial<PostAction>>> = {}) {
   const edit = vi.fn();
@@ -126,26 +125,4 @@ test("an inactive scene's post offers only the read-only rule test", () => {
                               m: { role: "assistant", content: "Salt first." } })
     .map((a) => a.name);
   expect(names).toEqual(["Test rules on message 3"]);
-});
-
-// ---- the stylesheet's half: jsdom applies no CSS ----
-
-const { css, atMedia } = stylesheet();
-
-test("a post's actions are out of its flow, so a post is as tall as its text", () => {
-  // The gutter's icons used to be a column in the flow, invisible until
-  // hovered, which set every post's height to theirs -- some 130px.
-  expect(bodiesOf(css, ".post-actions").map((b) => declares(b, "position"))).toContain("absolute");
-  expect(bodiesOf(css, ".msg-gutter").every((b) => declares(b, "display") === null)).toBe(true);
-});
-
-test("where nothing hovers, the actions are one 44px ⋯ and a menu of 44px rows", () => {
-  const touch = atMedia("(hover: none)");
-  expect(bodiesOf(touch, ".post-more").some((b) => declares(b, "width") === "44px"
-    && declares(b, "height") === "44px")).toBe(true);
-  expect(bodiesOf(touch, ".post-action").some((b) => declares(b, "min-height") === "44px"))
-    .toBe(true);
-  expect(bodiesOf(touch, ".post-actions-list").map((b) => declares(b, "display"))).toContain("none");
-  expect(bodiesOf(touch, ".swipe-nav button").some((b) => declares(b, "min-width") === "44px"))
-    .toBe(true);
 });

@@ -16,7 +16,6 @@ from grimoire import anthropic as anthropic_mod
 from grimoire import schemas, tool_calls
 from grimoire.openai_compatible import _strict_messages
 from grimoire.tool_calls import Collector, ToolCall, Toolset, ToolSpec
-from tests.test_llm import _sibling_imports
 
 PING = {"name": "ping", "description": "Says the caller is here.",
         "parameters": {"type": "object", "properties": {}, "required": [],
@@ -52,10 +51,6 @@ def test_parameters_are_held_to_the_portable_subset():
     loose = {**PING, "parameters": {"type": "object", "properties": {}}}
     with pytest.raises(schemas.SchemaError):
         tool_calls.check((loose,), "auto")
-
-
-def test_the_module_imports_only_the_standard_library_and_schemas():
-    assert _sibling_imports("tool_calls") == {"schemas"}
 
 
 # ---- the lowering ----
@@ -212,11 +207,6 @@ def test_a_toolset_offers_its_definitions_in_order():
 def test_a_toolset_refuses(build):
     with pytest.raises(ValueError):
         build()
-
-
-def test_the_spec_constants():
-    assert (tool_calls.MAX_TOOLS, tool_calls.MAX_DESCRIPTION, tool_calls.MAX_RESULT_CHARS,
-            tool_calls.TOOL_TIMEOUT_S) == (32, 1024, 8000, 10.0)
 
 
 # ---- conforms ----

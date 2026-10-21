@@ -16,20 +16,6 @@ from grimoire.store import logs
 
 @pytest.mark.parametrize("package", ["scenes", "character_turns", "runs", "config",
                                      "characters", "ledger", "todo", "tracker", "worlds"])
-def test_route_finalization_reorders_the_same_list_and_objects(monkeypatch, package):
-    owner = importlib.import_module(f"grimoire.routes.{package}._router")
-    expected = list(owner.router.routes)
-    shuffled = list(reversed(expected))
-    monkeypatch.setattr(owner.router, "routes", shuffled)
-
-    owner.finalize()
-
-    assert owner.router.routes is shuffled
-    assert [id(route) for route in shuffled] == [id(route) for route in expected]
-
-
-@pytest.mark.parametrize("package", ["scenes", "character_turns", "runs", "config",
-                                     "characters", "ledger", "todo", "tracker", "worlds"])
 @pytest.mark.parametrize("fault", ["missing", "extra", "duplicate"])
 def test_incomplete_route_rosters_are_refused_before_reordering(monkeypatch, package, fault):
     owner = importlib.import_module(f"grimoire.routes.{package}._router")

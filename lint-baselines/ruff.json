@@ -363,10 +363,6 @@
   "backend/tests/test_appearances_store.py": {
     "RUF059": 6
   },
-  "backend/tests/test_atomic_guard.py": {
-    "B007": 1,
-    "C901": 1
-  },
   "backend/tests/test_backups_routes.py": {
     "ASYNC110": 1
   },
@@ -421,11 +417,6 @@
   "backend/tests/test_fetch_store.py": {
     "RUF043": 1
   },
-  "backend/tests/test_import_guard.py": {
-    "B023": 1,
-    "C901": 2,
-    "N815": 1
-  },
   "backend/tests/test_ingest_scene.py": {
     "RUF059": 1
   },
@@ -435,7 +426,6 @@
   "backend/tests/test_llm.py": {
     "A002": 1,
     "PERF401": 3,
-    "RUF005": 2,
     "RUF012": 1
   },
   "backend/tests/test_llm_fakes.py": {
@@ -443,20 +433,6 @@
   },
   "backend/tests/test_localize_store.py": {
     "UP031": 1
-  },
-  "backend/tests/test_lock_domain_guard.py": {
-    "B008": 6,
-    "B023": 2,
-    "C417": 1,
-    "C901": 7,
-    "ISC004": 45,
-    "RUF012": 1,
-    "RUF059": 2,
-    "SIM103": 1,
-    "SIM108": 1
-  },
-  "backend/tests/test_lock_order_guard.py": {
-    "ISC004": 34
   },
   "backend/tests/test_locks_http.py": {
     "RUF005": 1
@@ -480,13 +456,6 @@
     "RUF013": 2,
     "RUF059": 18
   },
-  "backend/tests/test_overlay_guard.py": {
-    "B023": 1,
-    "B905": 1,
-    "C901": 2,
-    "ISC004": 21,
-    "SIM102": 1
-  },
   "backend/tests/test_path_guard_store.py": {
     "PERF401": 1,
     "RUF015": 2
@@ -507,12 +476,6 @@
     "PLW1510": 8,
     "RUF059": 35
   },
-  "backend/tests/test_proposals_store.py": {
-    "PERF401": 1
-  },
-  "backend/tests/test_pydantic_guard.py": {
-    "PERF401": 1
-  },
   "backend/tests/test_response_presets.py": {
     "RUF015": 1,
     "RUF059": 1
@@ -522,9 +485,6 @@
   },
   "backend/tests/test_rolls_store.py": {
     "C401": 1
-  },
-  "backend/tests/test_route_order.py": {
-    "B905": 2
   },
   "backend/tests/test_routes.py": {
     "B023": 2,

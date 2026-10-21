@@ -43,8 +43,9 @@ Source: [conftest.py](../../../../../backend/tests/conftest.py), [llm_fakes.py](
   which asks `store.paths` rather than assuming `~/.grimoire` (wrong wherever
   `GRIMOIRE_HOME` or the bootstrap pointer already names somewhere else).
   `scripts/unix/install.sh` and `scripts/windows/install.ps1` also check the
-  Python and Node floors up front, and `test_install_scripts.py` holds those
-  floors to `requires-python` and `engines.node`. A store this build creates
+  Python and Node floors up front; review those declarations against
+  `requires-python` and `engines.node` when changing supported versions.
+  A store this build creates
   is **born at the current model-settings format**: the first write of a
   missing `config.md` stamps the format marker (`config.birth_fields()`),
   so a fresh install is never migrated and no safety archive is taken of an

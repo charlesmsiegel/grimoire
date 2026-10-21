@@ -1,8 +1,6 @@
 """Confidence routing of absorb proposals (#110) and the speaker authority that
 weights it (#112)."""
 
-import ast
-import pathlib
 
 import pytest
 
@@ -435,22 +433,6 @@ def test_narrated_weather_rows_share_one_citation(monkeypatch, tmp_path):
     assert {e["field"] for e in edits} == {"condition", "wind"}
     assert {(e["review"]["authority"], e["review"]["band"]) for e in edits} == \
         {(routing.NARRATION, "high")}
-
-
-def test_apply_never_sees_the_review_block(monkeypatch, tmp_path):
-    """The invariant the whole design rests on: routing is display and default
-    checkbox state, never permission. Asserted against the module graph rather
-    than by reading, because the failure is silent — an `apply` that started
-    consulting a band would let a model's self-report gate a write."""
-    src = pathlib.Path(absorb.apply.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    imported = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
-    names = {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) for a in n.names}
-    assert "routing" not in (imported | names)
-    # The key by its literal spelling, not the bare word: `apply.py` says
-    # "reviewer" throughout, and a substring check on that would pass or fail on
-    # its prose rather than on what it reads off an edit.
-    assert '"review"' not in src and "'review'" not in src
 
 
 def test_a_review_block_is_not_permission_to_write(monkeypatch, tmp_path):

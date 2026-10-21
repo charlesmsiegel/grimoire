@@ -33,10 +33,6 @@ CELLS = ("tasks", "c.lowered")
 NEW_TASKS = equivalence.NEW_TASKS
 
 
-def test_every_state_has_a_recorded_baseline():
-    assert sorted(BASELINE) == sorted(baseline.STATES)
-
-
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
 def test_resolution_matches_the_baseline(state, tmp_path):
     """Before any migration, played in memory through the planner, every state
@@ -102,4 +98,3 @@ def test_each_baseline_state_resolves_identically_after_retirement(state, tmp_pa
                 == equivalence.without_allowed_differences(equivalence.stripped_expectation(
                     equivalence.retired_expectation(
                         equivalence.migrated_expectation(BASELINE[state]), state))))
-

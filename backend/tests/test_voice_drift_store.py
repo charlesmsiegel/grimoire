@@ -1,12 +1,8 @@
-import ast
-import inspect
 import json
-import textwrap
 
 import pytest
 
-from grimoire import decisions, inference, prompts, store
-from grimoire.routes import scenes
+from grimoire import decisions, inference, prompts
 from grimoire.store import characters, voice_drift, worlds
 
 
@@ -442,54 +438,12 @@ def test_a_native_note_over_the_cap_still_fails():
     ) == "unreadable verdict from the voice judge"
 
 
-def _route_source():
-    # With `_voice_item`, the helper the route hands to a worker thread so the
-    # item renders off the loop, and the roster and label checks that pick who
-    # it judges: what those helpers call, the route calls. The label check must
-    # keep using the serializer's own rules when it moves out of the roster.
-    return ast.parse("\n".join(textwrap.dedent(inspect.getsource(fn))
-                               for fn in (scenes._stage_voice_drift, scenes._voice_item,
-                                          scenes._judgeable_npcs, scenes._transcript_label)))
-
-
-def _route_reasons() -> set[str]:
-    """Every reason string `_stage_voice_drift` appends to `failed` as a
-    literal or an f-string over `store` alone, evaluated."""
-
-    found = set()
-    for node in ast.walk(_route_source()):
-        if not isinstance(node, ast.Dict):
-            continue
-        for key, value in zip(node.keys, node.values, strict=True):
-            if not (isinstance(key, ast.Constant) and key.value == "reason"):
-                continue
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                found.add(value.value)
-            elif isinstance(value, ast.JoinedStr) and {
-                    n.id for n in ast.walk(value) if isinstance(n, ast.Name)} <= {"store"}:
-                found.add(eval(compile(ast.Expression(value), "<route>", "eval"),
-                               {"store": store}))
-    return found
-
-
-def _route_calls() -> set[str]:
-    """The dotted names `_stage_voice_drift` calls."""
-    return {ast.unparse(node.func) for node in ast.walk(_route_source())
-            if isinstance(node, ast.Call)}
-
-
-def test_check_failure_reasons_match_the_route():
-    """The three per-finding failures `_stage_voice_drift` reports are
-    `check_failure`'s: the route calls it rather than keeping the checks
-    inline, so no reason string of its own survives there -- same order, same
-    checks, same words, in one place."""
+def test_check_failure_reports_invalid_findings():
+    """Invalid structured findings report the reason the reader can act on."""
     unreadable = "unreadable verdict from the voice judge"
     no_note = "drift reported with no corrective"
     too_long = (f"the voice judge returned a corrective over {voice_drift.MAX_NOTE} "
                 f"characters, too long to put in front of every following turn")
-    assert "store.voice_drift.check_failure" in _route_calls()
-    assert not {unreadable, no_note, too_long} & _route_reasons()
-
     long_note = "She hedged. " * 100
     assert len(long_note.strip()) > voice_drift.MAX_NOTE
     cases = [
@@ -509,21 +463,6 @@ def test_check_failure_reasons_match_the_route():
 
 
 # ---- the gathering the absorb phase does per NPC, as store helpers ----
-
-def test_the_route_gathers_each_npc_through_the_store_helpers():
-    """`_stage_voice_drift` builds what it sends from the same helpers the
-    eval case does (`evals/cases.py`), so the two cannot drift apart: the
-    locked name, the item over the effective anchor and the correction still
-    in force (`judge_item`, through `live_correction`), and the answer mapped
-    back by `finding_of`. None of that gathering is restated inline."""
-    calls = _route_calls()
-    assert {"store.voice_drift.locked_name", "store.voice_drift.read_record",
-            "store.voice_drift.judge_item", "store.voice_drift.explain",
-            "store.voice_drift.finding_of", "store.scenes.label_preserved",
-            "store.scenes.confusable", "operations.decide"} <= calls
-    assert not {"store.voice_drift.build_item", "store.voice_drift.live_correction",
-                "store.voice_drift.fingerprint_matches", "store.voice_anchors.effective",
-                "store.characters.read_card", "client.complete"} & calls
 
 
 def test_live_correction_keeps_only_a_note_still_in_force():

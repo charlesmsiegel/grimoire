@@ -253,7 +253,3 @@ def test_max_is_a_glm_only_effort(row):
         ls.UNSUPPORTED, ls.WHY_MAX, "adapter")
     assert ls.reasoning_wire(eff) == {}
     assert ls.report(conn)["dropped"] == [{"param": "reasoning_effort", "reason": ls.WHY_MAX}]
-
-
-def test_the_glm_levels_are_named_without_the_connection():
-    assert ls.WHY_GLM == "this GLM model takes low, high or max"

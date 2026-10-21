@@ -10,12 +10,8 @@ package.
 
 from __future__ import annotations
 
-import ast
 import copy
-import inspect
 import json
-import sys
-from pathlib import Path
 
 import jinja2
 import pytest
@@ -273,15 +269,6 @@ def test_the_property_budget():
     schemas.check(_obj(**props))
 
 
-def test_the_budgets_are_the_ones_decisions_uses():
-    """One copy: `decisions` re-exports the leaf's constants."""
-    for name in ("MAX_ENUM_VALUES", "MAX_ENUM_STRING_CHARS", "ENUM_STRING_CHARS_ABOVE",
-                 "MAX_SCHEMA_STRING_CHARS", "MAX_SCHEMA_PROPERTIES"):
-        assert getattr(decisions, name) == getattr(schemas, name), name
-    assert (schemas.MAX_ENUM_VALUES, schemas.MAX_SCHEMA_STRING_CHARS,
-            schemas.MAX_SCHEMA_PROPERTIES) == (1000, 120_000, 5000)
-
-
 MARA = Option("mara", "Mara")
 SERAPHINE = Option("seraphine", "Seraphine")
 
@@ -331,7 +318,6 @@ def test_render_is_sorted_indented_and_unescaped():
 
 def test_the_schema_json_filter_is_render():
     env = prompts._env()
-    assert env.filters["schema_json"] is schemas.render
     rendered = env.from_string("{{ schema | schema_json }}").render(schema=UNORDERED)
     assert rendered == schemas.render(UNORDERED)
     # What `tojson` would have done instead, which is why it is not used.
@@ -342,8 +328,6 @@ def test_the_schema_json_filter_is_render():
 def test_decide_system_template_is_unchanged():
     """`decide/system.j2` keeps `tojson`: its bytes are the same whatever
     filters the environment gains."""
-    source = (prompts.templates_dir() / "decide" / "system.j2").read_text(encoding="utf-8")
-    assert "{{ schema | tojson(indent=2) }}" in source and "schema_json" not in source
     bare = jinja2.Environment(loader=jinja2.FileSystemLoader(str(prompts.templates_dir())),
                               undefined=jinja2.StrictUndefined)
     items = [Item("Mara's <door> & bell", (Predicate("a", "?"),))]
@@ -406,26 +390,3 @@ def test_objects_only_is_find_object():
 
 
 # ---- the leaf ----
-def test_the_leaf_imports_only_the_standard_library():
-    tree = ast.parse(inspect.getsource(schemas))
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported |= {alias.name.split(".")[0] for alias in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            assert node.level == 0, f"relative import in schemas.py: {ast.dump(node)}"
-            imported.add((node.module or "").split(".")[0])
-    assert imported, "the walk found no imports at all"
-    assert imported <= set(sys.stdlib_module_names) | {"__future__"}, imported
-
-
-def test_decisions_binds_the_module_not_its_names():
-    found = 0
-    for path in Path(decisions.__file__).parent.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.level == 2:
-                assert node.module is None, ast.dump(node)
-                assert [a.name for a in node.names] == ["schemas"], ast.dump(node)
-                found += 1
-    assert found, "the package walk must find the schema module bindings"

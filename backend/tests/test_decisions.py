@@ -6,7 +6,6 @@ tests need no store and no client: every case is a pure function of its input.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 
 import pytest
@@ -27,7 +26,6 @@ from grimoire.decisions import (
     Ranking,
     Score,
 )
-from tests.test_llm import _sibling_imports
 
 MARA = Option("characters:mara", "Mara")
 WINIFRED = Option("characters:winifred", "Winifred")
@@ -649,27 +647,6 @@ def test_unanswered():
     )
 
 
-def test_constants():
-    assert decisions.REASONS == ("unreadable", "refused", "abstained", "error")
-    assert decisions.BACKENDS == ("structured", "native")
-    assert decisions.NOT_AN_OPTION == "not_an_option"
-    assert decisions.NO_OBJECT == "no_object"
-    assert decisions.NO_ITEM == "no_item"
-    assert decisions.MIN_OPTIONS_WITH_NONE == 1
-    assert (decisions.MIN_OPTIONS, decisions.MAX_OPTIONS) == (2, 255)
-    assert (decisions.MIN_LEVELS, decisions.MAX_LEVELS) == (2, 10)
-    assert decisions.MAX_ITEMS_PER_CALL == 8
-    assert decisions.RESERVED_IDS == ("answers", "rationale")
-
-
-def test_decisions_is_a_leaf():
-    """Nothing from the package but `schemas` (01f-C3), which is a leaf of
-    its own: the portable subset, its budgets and the reader are shared,
-    never a reach into the store or the gateway."""
-    assert _sibling_imports("decisions") == {"schemas"}
-    assert _sibling_imports("schemas") == set()
-
-
 # --- native: reserved none, option limit, string budgets ---------------------
 
 ONE_NULLABLE = Choice("id", "i", (Option("find-the-ledger", "Find the ledger"),),
@@ -1168,16 +1145,6 @@ def _rank_answer(value, rank: Rank | None = None) -> Answer:
     (result,) = decisions.parse(json.dumps({"0": {"answers": {rank.id: value}}}),
                                 [Item("ctx", (rank,))], explain=False)
     return result.answers[rank.id]
-
-
-def test_question_kinds_are_class_constants():
-    assert [cls.KIND for cls in (Predicate, Choice, Score, Rank, MultiSelect)] == [
-        "predicate", "choice", "score", "rank", "select"]
-    for cls in (Predicate, Choice, Score, Rank, MultiSelect):
-        assert "KIND" not in {f.name for f in dataclasses.fields(cls)}
-    assert _rank().KIND == "rank"
-    assert decisions.kinds([_item(), Item("c", (_rank(), Predicate("p", "i")))]) == (
-        "predicate", "choice", "score", "rank")
 
 
 def test_validate_rank_bounds():

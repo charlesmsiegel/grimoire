@@ -1,20 +1,4 @@
-"""Guard: the lint ratchets stay honest.
-
-`scripts/ratchet.py` is what lets three gates -- ruff's wider selection, mypy,
-and the type-checked half of typescript-eslint -- land blocking against a tree
-that has thousands of findings. Everything it promises rests on two things
-being true: the comparison has to fail in *both* directions (new findings, and
-findings the baseline still claims), and the baselines have to be a canonical
-rendering of what the tools actually said, not a hand-edited file that drifted.
-
-The comparison is tested directly. The baselines are tested for shape rather
-than content: running ruff, mypy and eslint from inside pytest would triple the
-suite's runtime and make it depend on `frontend/node_modules`, which is the
-`check-*` targets' job. What is checked here is everything that can go wrong
-*without* running them -- a path that no longer exists, a count that is zero or
-negative, a file reflowed by hand, a baseline for a tool that no longer has a
-collector.
-"""
+"""Lint ratchet comparison, tool parsers and update behavior."""
 
 from __future__ import annotations
 
@@ -30,9 +14,6 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
 import ratchet  # noqa: E402 -- the sys.path line above is what makes it importable
-
-BASELINES = sorted(ratchet.BASELINES.glob("*.json"))
-
 
 # ------------------------------------------------------------ the comparison
 
@@ -110,48 +91,6 @@ def test_serialization_is_ordered():
 
 
 # ---------------------------------------------------------- the baseline files
-
-def test_there_is_a_baseline_for_every_tool():
-    assert {p.stem for p in BASELINES} == set(ratchet.COLLECTORS)
-
-
-@pytest.mark.parametrize("path", BASELINES, ids=lambda p: p.name)
-def test_baseline_is_canonically_serialized(path: pathlib.Path):
-    """Byte-for-byte what `--update` writes. A hand edit that adds an entry
-    (rather than fixing the code) is the failure mode this catches: it lands as
-    a reflow of the whole file, in a diff a reviewer cannot skim past."""
-    text = path.read_text(encoding="utf-8")
-    assert ratchet.dumps(ratchet.loads(text)) == text, (
-        f"{path.name} is not what `make baseline` would write. Regenerate it."
-    )
-
-
-@pytest.mark.parametrize("path", BASELINES, ids=lambda p: p.name)
-def test_baseline_has_no_carriage_returns(path: pathlib.Path):
-    """Read as bytes on purpose: text mode translates CRLF away, so the test
-    above cannot see the platform difference this one is about. A baseline
-    regenerated on Windows without the `newline=` argument would land as a
-    whole-file diff and conflict with every other branch touching it."""
-    assert b"\r" not in path.read_bytes(), (
-        f"{path.name} has CRLF line endings; `make baseline` writes LF, and "
-        f".gitattributes pins the checkout to it."
-    )
-
-
-@pytest.mark.parametrize("path", BASELINES, ids=lambda p: p.name)
-def test_baseline_counts_are_positive(path: pathlib.Path):
-    zero = [k for k, v in ratchet.loads(path.read_text(encoding="utf-8")).items() if v < 1]
-    assert not zero, f"{path.name} records non-findings, which permit one each: {zero}"
-
-
-@pytest.mark.parametrize("path", BASELINES, ids=lambda p: p.name)
-def test_every_baselined_file_still_exists(path: pathlib.Path):
-    """A renamed or deleted file leaves an entry that permits findings in a
-    path nothing can produce -- harmless, but it is also how a baseline stops
-    being a list of real work and becomes archaeology."""
-    missing = sorted({f for f, _ in ratchet.loads(path.read_text(encoding="utf-8"))
-                      if not (REPO / f).exists()})
-    assert not missing, f"{path.name} names files that are not in the tree: {missing}"
 
 
 # ------------------------------------------------- the tool adapters

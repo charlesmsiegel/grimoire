@@ -17,5 +17,3 @@ def test_pid_change_keeps_facade_and_runtime_on_the_same_guard(monkeypatch):
     assert locks._registry_guard is owner._registry_guard
     assert locks._registry_guard is not before
     assert locks._world_lifecycle_pid == os.getpid()
-    assert '_registry_guard' in dir(locks)
-    assert '_world_lifecycle_pid' in dir(locks)

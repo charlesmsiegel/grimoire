@@ -13,7 +13,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -198,33 +197,6 @@ def test_transitive_versions_and_optional_absence(monkeypatch):
     versions.pop("shared")
     with pytest.raises(build.metadata.PackageNotFoundError):
         build.dependency_versions()
-
-
-def test_manifest_and_dependency_roots_cover_shipped_inputs():
-    build = _build()
-    project = tomllib.loads((ROOT / "backend" / "pyproject.toml").read_text())["project"]
-    roots = {re.match(r"[\w-]+", requirement)[0].lower()
-             for requirement in project["dependencies"]}
-    assert set(build.BASE_DEPENDENCIES) == roots
-    assert "tiktoken" in build.DESKTOP_DEPENDENCIES
-    assert {"httptools", "watchfiles", "websockets", "uvloop", "python-dotenv",
-            "pyyaml", "colorama"} <= set(build.DESKTOP_DEPENDENCIES)
-    desktop = {re.match(r"[\w-]+", requirement)[0].lower()
-               for requirement in project["optional-dependencies"]["desktop"]}
-    assert desktop <= set(build.BASE_DEPENDENCIES) | set(build.DESKTOP_DEPENDENCIES)
-    standard = {re.match(r"[\w-]+", requirement)[0].lower()
-                for requirement in build.metadata.requires("uvicorn") or []
-                if re.search(r"extra\s*==\s*['\"]standard['\"]", requirement)}
-    assert standard <= set(build.DESKTOP_DEPENDENCIES)
-    # Generated reports and README files are not shipped runtime inputs; their
-    # extensions must not become a requirement of this source-manifest guard.
-    for root in (ROOT / "backend" / "src" / "grimoire", ROOT / "templates"):
-        uncovered = [str(p.relative_to(root)) for p in root.rglob("*")
-                     if "__pycache__" not in p.parts
-                     and not any(part.casefold() == "docs" for part in p.relative_to(root).parts)
-                     and p.stem.casefold() != "readme" and p.is_file()
-                     and p.suffix not in build.SOURCE_SUFFIXES]
-        assert uncovered == []
 
 
 def test_cli_uses_explicit_paths(inputs, tmp_path):

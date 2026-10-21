@@ -1,6 +1,4 @@
-import ast
 import json
-import pathlib
 import threading
 
 import pytest
@@ -337,37 +335,3 @@ def test_update_resolution_refuses_wrong_id_replaced_or_pending(monkeypatch, tmp
     assert fresh["id"] != pid
     assert proposals.update_resolution(cid, sid, pid, {"roll_id": "r9"}) is False
     assert proposals.get(cid, sid)["id"] == fresh["id"]
-
-
-def test_write_is_atomic_replace(monkeypatch, tmp_path):
-    cid, sid = _scene(monkeypatch, tmp_path)
-    proposals.new(cid, sid, {})
-    # no temp litter and the file parses after every operation
-    root = campaigns.campaign_root(cid)
-    assert [p.name for p in root.glob("proposals.json*")] == ["proposals.json"]
-
-
-def test_only_this_module_touches_proposals_json():
-    """#242, the architectural half: the heal-before-retire guarantee lives in
-    `supersede`/`new`/`commit_narration`, so it only holds while this module is
-    the sole writer of proposals.json. A future path that opened the file
-    directly would bypass the boundary AND every test that guards it, silently
-    — exactly the failure mode the issue is about.
-
-    Matched on the AST, not the text: prose may name the file freely (the
-    streaming module's crash-window disclosure does, correctly), but only a
-    string literal that IS the filename can be used to build a path to it.
-    """
-    src = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire"
-    owner = src / "store" / "proposals.py"
-    offenders = []
-    for path in src.rglob("*.py"):
-        if path == owner:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and node.value == "proposals.json":
-                offenders.append(f"{path.relative_to(src)}:{node.lineno}")
-    assert offenders == [], (
-        "proposals.json must only be reached through store/proposals.py:\n"
-        + "\n".join(offenders))

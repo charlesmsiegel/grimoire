@@ -1,15 +1,11 @@
-import json
 import os
-import re
 import time
 from pathlib import Path
 
 import pytest
 
-from grimoire.store import entities, entity_schema, statcache, tokens
+from grimoire.store import entities, statcache, tokens
 from tests.test_token_counting import _Enc
-
-REPO = Path(__file__).resolve().parents[2]
 
 
 def test_create_read_and_stable_id(tmp_path: Path):
@@ -342,33 +338,6 @@ def test_require_entity_answers_from_a_stat_and_names_what_is_wrong(tmp_path: Pa
         entities.require_entity(tmp_path, "locations", eid)
 
 
-def test_the_frontend_ships_the_same_kind_list():
-    """`ENTITY_KINDS` in `frontend/src/api/types.ts` is this tuple, in order.
-
-    The frontend holds a second copy for two jobs the server cannot do at
-    build time: the compile-time union the tabs, labels and per-kind field
-    table are written against, and the fallback the import dialogs' Category
-    dropdown shows when `GET /api/entity-kinds` does not answer (#138).
-
-    Both jobs rot silently, and nothing else in either suite notices: a kind
-    added to `ENTITY_KINDS` here and forgotten in `types.ts` leaves the
-    fallback list short, and leaves the record it imports without a label or
-    per-kind fields -- both keyed by the union `types.ts` declares, so tsc
-    catches those two only once the kind is added THERE, which is what this
-    test is here to make happen.
-
-    What this does NOT reach: `WorldView`'s own `IndexKey` union and `INDEX`
-    array are hand-written and tied to nothing, so a kind can satisfy this
-    guard and still have no browsable tab. Keying those off `EntityKind` would
-    close it and is not this change's job.
-    """
-    src = (REPO / "frontend" / "src" / "api" / "types.ts").read_text(encoding="utf-8")
-    m = re.search(r"export const ENTITY_KINDS = \[(.*?)\] as const;", src, re.DOTALL)
-    assert m, "ENTITY_KINDS is not declared in types.ts in the shape this guard reads"
-    assert re.findall(r'"([^"]+)"', m.group(1)) == list(entities.ENTITY_KINDS), \
-        "frontend/src/api/types.ts ENTITY_KINDS has drifted from entities.ENTITY_KINDS"
-
-
 # ---- reclassify (#119): a record changes kind, and keeps its id ----
 
 def test_reclassify_keeps_the_id_and_the_record(tmp_path: Path):
@@ -468,73 +437,3 @@ def test_owner_refs_parses_the_frontmatter_line(tmp_path: Path):
         "characters:mara", "locations:tidewatch"]
     assert entities.owner_refs("") == []
     assert entities.owner_refs(None) == []
-
-
-def _frontend_field_table(src: str) -> dict:
-    """Read the controlled literal table; unfamiliar TS fails instead of vanishing.
-
-    A JSON token stream handles quoted labels without rewriting their contents.
-    No JS execution or checkout-specific Node environment is needed by this guard.
-    """
-    match = re.search(r"export const ENTITY_FIELDS:[^=]+=[ \t]*(\{.*?\n\});", src, re.DOTALL)
-    assert match, "ENTITY_FIELDS literal declaration not found"
-    text = match.group(1)
-    token = re.compile(r'\s+|//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?|[A-Za-z_]\w*|[\[\]{},:]', re.DOTALL)
-    tokens = []
-    pos = 0
-    while pos < len(text):
-        item = token.match(text, pos)
-        assert item is not None, f"unsupported field-table syntax near {text[pos:pos + 30]!r}"
-        value = item.group()
-        if not value.isspace() and not value.startswith(("//", "/*")):
-            tokens.append(value)
-        pos = item.end()
-    position = 0
-
-    def literal():
-        nonlocal position
-        value = tokens[position]
-        position += 1
-        if value in ("{", "["):
-            result = {} if value == "{" else []
-            end = "}" if value == "{" else "]"
-            while tokens[position] != end:
-                if value == "{":
-                    key = tokens[position]
-                    position += 1
-                    assert re.fullmatch(r'[A-Za-z_]\w*|"(?:\\.|[^"\\])*"', key)
-                    key = json.loads(key) if key.startswith('"') else key
-                    assert tokens[position] == ":"
-                    position += 1
-                    assert key not in result, f"duplicate field-table key {key}"
-                    result[key] = literal()
-                else:
-                    result.append(literal())
-                if tokens[position] != end:
-                    assert tokens[position] == ","
-                    position += 1
-            position += 1
-            return result
-        assert value.startswith('"') or value in ("true", "false") or re.fullmatch(r'-?\d+(?:\.\d+)?', value), value
-        return json.loads(value)
-
-    result = literal()
-    assert position == len(tokens), "trailing field-table syntax"
-    return result
-
-
-def test_the_frontend_ships_the_same_field_table():
-    """Every picker/constraint mirrors the save boundary, not just the kind union."""
-    src = (REPO / "frontend/src/api/types.ts").read_text(encoding="utf-8")
-    table = _frontend_field_table(src)
-    assert set(table) == set(entities.ENTITY_KINDS)
-    expected = {kind: [dict(spec) for spec in entity_schema.FIELDS.get(kind, ())]
-                for kind in entities.ENTITY_KINDS}
-    for fields in expected.values():
-        for field in fields:
-            for key in ("kinds", "options"):
-                if key in field:
-                    field[key] = list(field[key])
-    assert table == expected
-    assert [field["key"] for field in table["groups"]] == [
-        "group_type", "leader", "members", "headquarters"]

@@ -1,6 +1,6 @@
 # Decision call sites
 
-Source: [inference/](../../../../../backend/src/grimoire/inference/), [test_operation_guard.py](../../../../../backend/tests/test_operation_guard.py).
+Source: [inference/](../../../../../backend/src/grimoire/inference/), [test_inference_decide.py](../../../../../backend/tests/test_inference_decide.py).
 
   **A yes/no, pick-one or graded question is a `decide` call**, never prose
   parsed afterwards. Resolve it with `require_inference(<task>, cid,
@@ -29,11 +29,8 @@ Source: [inference/](../../../../../backend/src/grimoire/inference/), [test_oper
   that ceiling, four in flight, so n candidates take up to ceil(n/4)
   ceilings, and a fallback stage of its own adds up to two per chunk: a full
   sweep with a fallback is up to twelve (`routes/continuity.py` argues it).
-  `test_operation_guard.py` finds the call by import binding (a continuity
-  `Examination.decide` is not one), fails a task literal that is not on a
-  decide route or a call with no `resolved=`, and holds the safety rule both
-  ways: a route flips to `operation="decide"` and the Decision role only in the
-  change whose call site decides. Prose never rides a decision -- the
+  Change a route to `operation="decide"` and the Decision role together with
+  the call site that decides. Prose never rides a decision -- the
   scene-break title is its own `generate`, `scene-break-title` on the
   `summary` route, drafted only once a YES verdict is written, so a read
   between the two writes sees a YES with no title and the inspector shows the

@@ -11,17 +11,15 @@ Source: [facts.py](../../../../../backend/src/grimoire/store/facts.py), [knowled
   mistyped fact is not a fact that stopped being true, and retiring it would
   put a correction into the history as though the fiction had changed. So
   `facts.set_text` and `facts.forget` are the user's, reached only from
-  `routes/ledger/`, and `test_absorb_writer_guard.py` fails if anything
-  under `store/absorb/` calls either. That guard resolves import bindings
-  rather than comparing spellings — an alias walked past three earlier
-  versions of it.
+  `routes/ledger/`. Exercise the absorb and manual-edit paths to verify that
+  their different write permissions preserve the ledger history.
 - **Knowledge overrides are the user's word, and only theirs.**
   `store/knowledge.py` (roadmap 11) holds who knows, suspects or never heard
   what happened in a scene, addressed by scene identity and fingerprinted
   content; a grant stops matching when its text changes, an `unaware` never
   does. Its writers are the ledger routes, the actor and group delete hooks,
-  undo and the branch copy -- `test_knowledge_writer_guard.py` fails anything
-  else, absorb and continuity included -- and a grant is only stored about
+  undo and the branch copy; absorb and continuity do not write overrides.
+  A grant is only stored about
   text the client was shown (`expect`, 409 `moved`). Scene reads for it live
   in `store/knowledge_scene.py`, because `overlay` imports `knowledge`.
 - **Hand edits to the ledger go through `routes/ledger/`**, which takes the

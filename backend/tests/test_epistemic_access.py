@@ -13,8 +13,6 @@ import pytest
 from grimoire import decisions
 from grimoire.decisions import Answer, Decision, Escalation, ItemResult
 from grimoire.store import epistemic_access as ea
-from grimoire.store import routing
-from tests import test_task_policy as tp
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
@@ -115,30 +113,6 @@ def test_escalation_fires_only_on_permissive_answers():
                                question=p.question, escalate_on=p.escalate_on,
                                margins=dict(p.margins), answers=p.escalate_answers)
     assert [t.index for t in fired] == [0]
-
-
-def test_the_candidate_policy_row_breaks_no_rule(monkeypatch):
-    """02-C5a's candidate escalation row, checked against 01d's rules over the
-    route 11-S6 landed -- never sampled, escalated only on refusal or a
-    permissive low margin. Not registered: the task landed with escalation
-    off, as every task does."""
-    route = ea.ROUTE
-    assert route is not None and route.tasks == (ea.TASK,)
-    assert route.legacy == routing.NO_LEGACY and route.operation == "decide"
-    assert route.key == "epistemic" and route.default_role == "decision"
-    p = ea.policy()
-    assert not p.samples and "abstained" not in p.escalate_on
-    assert set(p.escalate_answers) == set(ea.PERMISSIVE) < set(ea.CLASSES)
-    assert tp.violations({ea.TASK: p}) == []
-
-
-def test_the_call_site_landed_the_route_and_the_case():
-    """11-S6: the route, an escalation-off policy row and the registered eval
-    case land with the call site (`routes/epistemic.py`)."""
-    assert routing.TASK_ROUTE[ea.TASK] == "epistemic"
-    assert routing.TASK_POLICY[ea.TASK] == routing.TaskPolicy()
-    assert ea.TASK in {c.task for c in case_mod.CASES}
-    assert not case_mod.KIT_CASES
 
 
 CASE = next(c for c in case_mod.CASES if c.id == "decide-epistemic-access")

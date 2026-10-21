@@ -7,7 +7,6 @@ other campaign-scoped mutator. A refactor that hands any borrower its own
 lock would leave every existing test passing and silently reopen that race.
 """
 
-import inspect
 import os
 import subprocess
 import sys
@@ -34,13 +33,7 @@ from grimoire.store import (
     sheets,
     worlds,
 )
-from grimoire.store.audit import apply as audit_apply
-from grimoire.store.audit import baselines as audit_baselines
 from grimoire.store.campaigns import read as campaigns_read
-from grimoire.store.scenes import locking as scenes_locking
-from grimoire.store.sheets import advancement as sheets_advancement
-from grimoire.store.sheets import creation as sheets_creation
-from grimoire.store.sheets import writer as sheets_writer
 
 
 def _campaign(monkeypatch, tmp_path, name="Run", module="pool-basic"):
@@ -310,62 +303,6 @@ def test_rolls_mutators_are_reentrant_under_a_held_campaign_lock(monkeypatch, tm
     assert done, "a rolls mutator deadlocked under an already-held campaign lock"
     assert done[0]["id"] == "r1"
     assert rolls.read(cid)[0]["scene"] == "s2"
-
-
-# ---- placement: the registry lives here and nowhere else (#245) ----
-
-
-def test_rolls_has_no_private_lock_registry():
-    """#255: `rolls` was the last campaign-scoped mutator running its own
-    `_LOCKS`/`_LOCKS_GUARD`. Reintroducing one would leave every rolls test
-    passing while quietly leaving the shared domain again -- and locks.py's
-    roster, which is how a reader discovers the domain, would go stale with
-    no way to detect it from locks.py alone."""
-    assert not hasattr(rolls, "_LOCKS")
-    assert not hasattr(rolls, "_LOCKS_GUARD")
-    assert not hasattr(rolls, "_lock")
-
-
-#: `sheets`, `audit` and `scenes` are packages now, so their borrowers are the
-#: files that actually take the lock -- three under `sheets/`, two under
-#: `audit/` (`prompt.py` reads sheets but takes no lock), and exactly one under
-#: `scenes/`: every scene mutator wears `locking._serialized`, so `locking.py`
-#: is the only file there that names the registry. No facade imports a `locks`
-#: of its own; all three are checked separately below.
-@pytest.mark.parametrize("mod", [sheets_writer, sheets_creation, sheets_advancement,
-                                 proposals, audit_baselines, audit_apply, scenes_locking,
-                                 rolls])
-def test_borrowers_neither_re_export_nor_re_implement_the_registry(mod):
-    """The lock domain is discoverable from store/locks.py only if no module
-    re-exports or re-implements it: `sheets.lock_for()` was the old name and
-    must not come back, and borrowers spell the call `locks.campaign_lock(...)`
-    at the point of use rather than importing the name into their own
-    namespace -- which is the readability the move was for."""
-    assert not hasattr(mod, "lock_for")
-    assert not hasattr(mod, "_campaign_locks")
-    assert not hasattr(mod, "campaign_lock")
-    assert mod.locks is locks
-
-
-@pytest.mark.parametrize("pkg", [sheets, audit, scenes])
-def test_a_borrower_facade_re_exports_no_part_of_the_registry(pkg):
-    """The other half of the rule above, for the borrowers that are packages:
-    each `__init__.py` re-exports every name its own files define, so a
-    registry name reintroduced anywhere under `sheets/`, `audit/` or `scenes/`
-    surfaces here -- including in a file the parametrized list above does not
-    name."""
-    assert not hasattr(pkg, "lock_for")
-    assert not hasattr(pkg, "_campaign_locks")
-    assert not hasattr(pkg, "campaign_lock")
-
-
-def test_module_edit_holds_every_campaign_lock_from_this_registry():
-    """The multi-campaign holder (User-edit vs LLM-play exclusion) must take
-    the same registry's locks, not a private one. It reaches them through
-    ``locks.hold_all`` (#234), which is where the sorted-order rule lives; the
-    order itself is asserted behaviourally in
-    ``test_module_edit_acquires_campaign_locks_in_sorted_order``."""
-    assert "locks.hold_all(" in inspect.getsource(module_edit._campaign_locks)
 
 
 # ---- hold_all: one deadline, sorted order (#234, #267) ----

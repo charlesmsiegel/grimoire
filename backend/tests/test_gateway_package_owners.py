@@ -1,8 +1,4 @@
-"""A package move must retain one owner for the gateway's shared state.
-
-The original interface contract pins exported names separately. These cases
-pin the state those names expose and the logical labels saved in the log.
-"""
+"""Gateway log records keep the labels used by log filters."""
 
 import importlib
 import logging
@@ -10,20 +6,6 @@ import logging
 import pytest
 
 from grimoire.store import logs
-
-
-@pytest.mark.parametrize("name, owner, binding", [
-    ("inference", "_tool_policy", "_LOOPING"),
-    ("inference", "_decision", "_BACKENDS"),
-    ("llm", "_accounting", "_count_stall"),
-    ("llm", "_accounting", "_count_executor"),
-    ("tool_calls", "_runs", "_RUNNING"),
-    ("decisions", "_models", "UNSTATED"),
-])
-def test_exported_shared_state_has_one_defining_owner(name, owner, binding):
-    package = importlib.import_module(f"grimoire.{name}")
-    implementation = importlib.import_module(f"grimoire.{name}.{owner}")
-    assert getattr(package, binding) is getattr(implementation, binding)
 
 
 @pytest.mark.parametrize("name", ["inference", "decisions", "llm"])

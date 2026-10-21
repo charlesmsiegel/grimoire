@@ -29,8 +29,6 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
-from grimoire.routes import campaigns as campaign_routes
-from grimoire.routes import continuity as continuity_routes
 from grimoire.routes import scenes as scene_routes
 from grimoire.store import atomic, campaigns, clock, fork, plot, revision, scenes, worlds
 from grimoire.store.continuity import candidates, reconcile
@@ -317,25 +315,6 @@ def test_a_preview_only_post_moves_nothing(client):
     assert _token(client, cid) == before
 
 
-def test_every_preview_only_campaign_route_is_marked_as_one():
-    """The marker is what the middleware reads, so an unmarked preview route is
-    a false `campaign_moved` waiting to happen.
-
-    Asserted on the endpoint rather than through a request for the one route
-    that cannot be driven cheaply: drafting a description needs an image in the
-    library and a provider call, and what is actually in question is one
-    attribute. `_draft_description` documents itself as preview-only — the
-    caller persists through the PUT on Save — and this is its only
-    campaign-scoped surface; the other three describe world records.
-    """
-    # The endpoint function itself, which is exactly what the middleware reads
-    # off `scope["route"]` -- the router is wrapped, so walking `app.routes` for
-    # it would be testing the wrapper.
-    assert campaign_routes.post_campaign_library_description_draft.grimoire_computes_only
-    assert scene_routes.post_scene_import_parse.grimoire_computes_only
-    # The explicit reconciliation refresh answers 202 having written nothing;
-    # its run's persists stamp for themselves (`reconcile._commit`).
-    assert continuity_routes.post_reconcile.grimoire_computes_only
 
 
 def test_a_turn_that_persists_no_post_still_records_its_terminal_write(client, monkeypatch):

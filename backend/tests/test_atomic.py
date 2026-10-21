@@ -8,7 +8,6 @@ recovery is a platform property these tests cannot exercise -- see the spec
 
 from __future__ import annotations
 
-import inspect
 import os
 import stat
 import subprocess
@@ -404,14 +403,8 @@ def test_concurrent_readers_never_see_a_partial_record(tmp_path):
     assert observed == [PRIOR, new]
 
 
-def test_reading_the_umask_does_not_race_other_threads(tmp_path):
-    """There is no getter for the umask -- you set it to read it -- so doing
-    that per-write would briefly expose a 0 umask to every other thread
-    creating a file. It must be sampled once, at import."""
-    src = inspect.getsource(atomic._carry_metadata)
-    assert "os.umask" not in src, "umask is being read inside a write call"
-    assert isinstance(atomic._UMASK, int)
-
+def test_a_write_preserves_the_process_umask(tmp_path):
+    """Publishing a record must leave the process creation mask unchanged."""
     before = os.umask(0o022)
     os.umask(before)
     atomic.write_text(tmp_path / "rec.md", "body")
@@ -456,32 +449,6 @@ def test_the_write_helpers_never_expose_the_temp_path(tmp_path, monkeypatch):
     reopens = [p for p, exclusive in opened if not exclusive]
     assert reopens == [], f"temp path was reopened by name: {reopens}"
     assert len(opened) == 2, f"expected one creating open per write, got {opened}"
-
-
-def test_no_api_hands_out_the_temp_pathname(tmp_path):
-    """The symlink-swap window existed only because a temp *path* was yielded
-    for PIL to open. PIL takes a file object, so that API is gone rather than
-    defended -- this pins it, since re-adding one would silently reopen the
-    hole."""
-    assert not hasattr(atomic, "tempfile_for"), \
-        "a path-yielding API is back; the swap window comes with it"
-    public = sorted(
-        n for n, v in vars(atomic).items()
-        if not n.startswith("_") and callable(v) and getattr(v, "__module__", "") == atomic.__name__)
-    # Reviewed additions, none of which hands back a temp's name.
-    # `append_line` writes THROUGH a caller-named path (#152's ledger), so it
-    # opens no swap window at all; `streaming_write` uses a temp but yields the
-    # file OBJECT, which the test below pins directly; `is_write_temp` is a
-    # pure predicate over a name a caller already has, and exists so the walks
-    # that copy or pack a directory of records (a world export, a world fork)
-    # recognize this module's temps from this module rather than from a
-    # pattern of their own that drifts. `read_text` and `open_text` only read
-    # the caller's existing record; the latter hands back a stream, not a temp.
-    # The list is the shape of the API, and
-    # every entry on it is here because someone argued for it.
-    assert public == ["append_line", "is_write_temp", "open_text", "read_text", "streaming_write",
-                      "write_bytes", "write_text"], \
-        f"unexpected public API: {public}"
 
 
 def test_the_streaming_writer_yields_a_handle_and_never_a_path(tmp_path):

@@ -190,67 +190,18 @@ command.
 
 ---
 
-## The architecture guards
+## Test quality
 
-Several rules are enforced by tests that parse the package's own ASTs. They
-exist because each one names a bug that actually shipped, and a paragraph
-cannot fail a test run.
+[AGENTS.md](AGENTS.md#test-behavior-not-repository-structure) owns the test-quality
+rules. Tests exercise application behavior, useful failure cases and supported
+wire/data contracts. Imports, source layout, naming and style belong to static
+analysis and review; do not build AST/regex source guards inside pytest or Vitest.
 
-| Guard test | Rule | Marker |
-|---|---|---|
-| `test_record_art_description_guards.py` | stale placement and shared-caption saves refuse newer data; cleanup preserves a later writer | none (behavioral regressions) |
-| `test_atomic_guard.py` | every store write goes through `store.atomic` | `# atomic-ok:` |
-| `test_writeset_guard.py` | every public publishing function in `store.atomic` ends its own body with a `writeset.note` statement, after it publishes (spec 05-C4), so the write-through queue sees every write; the non-publishing ones are an explicit allowlist | — |
-| `test_compiled_guard.py` | only `store.compiled` imports SQLite; reads require supplied keys/paths and literal SQL bounds; named decision hashes and resolvable wrappers cannot use persisted sources | — |
-| `test_overview_guard.py` | only `GET /worlds`, `GET /campaigns`, `GET /api/shell`, `GET /todo` and the post-turn warm import `store.overview`, and no decision site (`closed_by`, `list_scenes`, `read_scene`, `list_campaigns`, `read_campaign`, the to-do items and ignore routes, `continuity.effective` / `pending`) reaches an overview projection | — |
-| `test_overlay_guard.py` | campaign reads of inheritable records go through `store.overlay` | `# overlay-ok:` |
-| `test_pydantic_guard.py` | pydantic usage stays v1/v2-agnostic | `# pydantic-ok:` |
-| `test_paths_guard.py` | filesystem access goes through the resolvers | `# paths-ok:` |
-| `test_lock_order_guard.py` | only `locks.hold_all` holds more than one campaign lock | `# lock-order-ok:` |
-| `test_history_lock_guard.py` | route retrieval calls (`retrieve`, `gather`, `gather_sync`) never appear lexically inside a campaign-lock hold | none |
-| `test_lock_domain_guard.py` | campaign-scoped mutators take `locks.campaign_lock(cid)` | `# lock-domain-ok:` |
-| `test_usage_guard.py` | every generation route meters what it spends -- `decide_native` included, one meter per item -- every `inference.generate` call -- in the package, `backend/scripts/` and `evals/` -- passes `usage=` a meter's holder (`generate` itself forwards its caller's; the eval runner and the ingest script are named, capped exemptions), and every embeddings request passes a meter's holder | `# usage-ok:` |
-| `test_routing_guard.py` | every generation names a task, and every task belongs to a route in `store/routing.py`; the escalation seam (`escalation_inference`) names a task whose policy escalates to a role; every generation goes through `inference.generate`, its exact `GENERATION_DOORS` are `inference/_generation.py` (stream/complete), `inference/_decision_calls.py` (complete/decide_native), and `routes/config/_probes.py` (single/decide_native) | `# routing-ok:` |
-| `test_operation_guard.py` | every embed names a registered embed task, its `space=` traces to `embed_space.endpoint` (a cache-sync hook's `ctx.space` only through `cache_sync._context()`, spec 05), and only the operation and the model test reach the embeddings client; every decide names a task on a decide route (and every `decision_tool(...)` names one and passes a resolution; the decide tool's one inner `decide(<resolution>.task, ...)` is accepted); every generate, in the package, `backend/scripts/` and `evals/`, names a task on a generate route (a literal, or a name every caller hands one; the eval runner's `case.task` is held by its cases) and passes `resolved=`; every tool loop (`run_tools`, `stream_tools`) names a literal task on a generate route that requires tools or is in `routing.TOOLS_OPTIONAL` and passes `resolved=`, and every route requiring tools is looped by a call site | — |
-| `test_tool_guard.py` | a tool -- a `ToolSpec`'s `fn`, or an `execute=` handed to a tool loop -- never imports `store.atomic`, takes `campaign_lock` / `hold_all` or starts a run (`runs.run_*`, `start_detached`); its accounting (`usage`, `errors`, `_record_prompt`) is allowed | `# tool-ok:` |
-| `test_regex_prompt_guard.py` | every LLM reader of transcript text reads the prompt view (`store.regex.view`) | `# regex-ok:` |
-| `test_decision_capture.py` (its guard half) | every `decide` call in the package is captured through `routes/decision_capture.py`: `capture=<scope>.hook(...)` in `routes/`, or, outside it, a `capture=` that is a parameter of the enclosing function (a pass-through whose `routes/` caller supplies the hook); at most two markers | `# capture-ok:` |
-| `test_import_guard.py` | module-scope imports, acyclic graph, submodule binding inside `store/` | `# import-ok:` |
-| `test_path_guard_store.py` | the store never joins a caller-supplied id onto a path unchecked | — |
-| `test_absorb_writer_guard.py` | the absorb pass never edits or deletes a fact — only the user may | — |
-| `test_knowledge_writer_guard.py` | `knowledge.json` (roadmap 11 overrides) is written only by the ledger routes, the actor and group delete hooks, undo and the branch copy -- never by absorb, continuity, context or any other module | — |
-| `test_legacy_reader_guard.py` | only the planner (`store/inference/legacy_plan/`) reads the legacy model-settings layout -- the legacy config keys and a connection's `reasoning_effort` / `sampler_preset` -- outside the modules that own their spelling or storage, and only `resolve`, `migrate` and `retire` import it (`resolve` through one call of `overlay`) | — |
-| `test_lowering_retired_guard.py` | the connection-dict lowering stays deleted: in the package, `backend/scripts/` and `evals/`, nothing spells its keys (`FALLBACK_KEY`, `STRUCTURED_KEY`, `ACCOUNT_KEY`, or the `"_fallback"` / `"_structured"` / `"_account"` / `"_degrade"` strings), its builders (`_lowered`, `with_facts`, `own_sampling`, `lower` from `store.inference.resolve`), its shims (`from_lowered`, `_as_chain`, `without_fallback`, `_without_fallback`) or slice H's native table (`NATIVE_DECISION_KINDS`, `NativeAdapter`), and nothing reads `.conn` off a resolution, an attempt, a decide stage or a call | — |
-| `test_continuity_writer_guard.py` | continuity's discovery and projection modules, the Story Graph's included, never write plot or commitment records, events, scene ideas, reviewed aliases and links, or suppressions — only `continuity.review` and the routes apply a reviewed decision; roadmap 12's investigation package is scanned beside them, each module resolving its imports against its own package | — |
-| `test_investigation_writer_guard.py` | nothing under `store/investigation/` or in `routes/investigation.py` reaches a mutator of the ledger, the transcript, knowledge overrides, entities, play state, dossiers or the chronicle (an allowlist of readers per watched module); `reconcile.persist_investigation` is the one write, and only the route module may call it | — |
-| `test_continuity_wording.py` | reader-visible application source under `backend/src/grimoire/` and `frontend/src/` uses the continuity UI's tested vocabulary; repository documentation is outside the scan | — |
-| `test_unreachable_guard.py` | nothing follows a `return`, `raise`, `continue` or `break` in its block, in the package, the scripts and the evals -- except the bare `yield` that makes a function which only raises a generator | — |
-| `test_ratchet_guard.py` | the lint baselines are canonical, positive, and name files that exist | — |
-
-Clearing a genuinely safe call takes `# <marker>: <reason>`. **A marker with no
-reason fails, deliberately**, each guard caps how many exemptions exist, and —
-given how often this caught a stated reason that was not actually true — the
-reason has to hold up, not merely be present. Marker parsing is shared in
-`backend/tests/guard_markers.py`; a marker inside a string literal does not
-count.
-
-The compiled-cache guard permits artifact selections by kind plus a caller's
-complete key (point or at most128 supplied key placeholders), supplied-path
-source selections, and the named metadata probes. Unknown SELECT tables and
-ranking readers without required keys fail; a future index must constrain
-its results to the caller's live set. It checks literal SQL syntax, not bound
-parameter values or SQLite query plans. Its named decision traversal follows
-ordinary imports, re-exports, aliases and helper references, distinguishes
-lexical bindings from definition-time evaluation, and rejects uncertain
-constructor effects or exhausted proof budgets. This is a conservative,
-flow-insensitive guard, not a proof of arbitrary dynamic Python data flow.
-
-Each guard's docstring states its own reach, including where it stops seeing
-things — read the one that failed you before arguing with it. Two of them fail
-on code that looks perfectly ordinary, so the [store development guide](.agents/skills/grimoire-development/references/backend/store.md) explains
-both at length: classifying a new campaign-scoped mutator in `store/locks/_domain.py`,
-and how a cross-package import inside `store/` must bind a submodule rather
-than a name.
+Use state and output assertions for persistence, fault handling, lock exclusion,
+usage accounting and compatibility. A source string containing a lock name does
+not prove exclusion; a file existing after a save does not prove atomicity.
+Tests may inspect generated files and test-owned fixtures when those are the
+functional inputs or outputs of the operation being exercised.
 
 ---
 
@@ -310,7 +261,7 @@ What is worth knowing *here* is which command proves which:
 |---|---|
 | version-agnostic pydantic, across the whole suite | `make check-pydantic1` |
 | the APK still builds with your change in it | `make check-apk` (needs `make android-bootstrap` first) |
-| the resolvers really are used | `test_paths_guard.py`, in `make check-py` |
+| relocated runtime inputs still load | `test_env_overrides.py` and `test_where.py`, in `make check-py` |
 
 Neither of the first two runs as part of `make check-py`, so a change that only
 breaks Android passes a backend-only test run.

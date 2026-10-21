@@ -18,7 +18,6 @@ import hashlib
 import io
 import json
 import os
-import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1392,7 +1391,6 @@ def test_url_subject_fold_holds_its_target_name_lock(monkeypatch):
     assert image_subjects.read_subjects(wroot, gid)[url] == [char]
 
 
-
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction containment")
 def test_url_subjects_keep_a_junctioned_record_target(tmp_path):
     wid, wroot, char, wchar = _world()
@@ -1634,22 +1632,6 @@ def test_a_crash_before_thumbnail_cleanup_keeps_the_legacy_file(monkeypatch):
     assert not legacy.exists() and not thumb.exists()
 
 # ---- what may never migrate ---------------------------------------------------------
-
-
-def test_no_test_migrates_the_frozen_campaign():
-    """M17: the frozen campaign's `home/` is never handed to the migration or
-    the collector -- its value is being old. A test file that names the
-    fixture and either module is refused outright."""
-    here = Path(__file__).resolve()
-    tests = here.parent
-    offenders = []
-    for p in tests.rglob("*.py"):
-        if p == here:
-            continue
-        text = p.read_text(encoding="utf-8")
-        if "frozen_campaign" in text and re.search(r"\bimage_(?:migration|gc)\b", text):
-            offenders.append(p.relative_to(tests).as_posix())
-    assert offenders == []
 
 
 def test_startup_never_migrates():

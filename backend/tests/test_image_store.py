@@ -7,7 +7,6 @@ picture -- and every URL is under `example.invalid`.
 from __future__ import annotations
 
 import hashlib
-import inspect
 import io
 import json
 import os
@@ -208,7 +207,6 @@ def test_same_size_corrupt_blob_repaired():
     assert blob.read_bytes() == data
 
 
-
 # ---- blob_intact: a blob whose bytes no longer match its name (Codex) ----
 
 def test_blob_intact_vouches_for_a_blob_that_matches_its_name():
@@ -350,7 +348,6 @@ def test_ingest_touches_sidecar_on_pixel_duplicate():
 def test_ingest_has_no_unsanitized_door():
     # Every way in sanitizes; bundle import does too, so nothing needs a way
     # around it (and a way around it is how metadata reaches a shared blob).
-    assert "sanitize" not in inspect.signature(image_store.ingest).parameters
     with pytest.raises(TypeError):
         image_store.ingest(_png(_img()), "png", sanitize=False)
 
@@ -499,8 +496,6 @@ def test_read_fresh_bypasses_the_cache(monkeypatch):
     assert image_store.read_fresh("not-an-id") is None
 
 
-def test_one_description_cap():
-    assert image_store.MAX_DESCRIPTION == 4000
 
 
 def test_project_filters_scope():

@@ -244,9 +244,6 @@
   "frontend/src/components/WorldOverview.tsx": {
     "@typescript-eslint/no-floating-promises": 1
   },
-  "frontend/src/components/moduleEditShared.test.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 1
-  },
   "frontend/src/components/moduleEditShared.tsx": {
     "react/no-array-index-key": 2
   },

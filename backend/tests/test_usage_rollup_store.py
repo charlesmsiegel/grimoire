@@ -321,7 +321,6 @@ def test_a_reused_slug_inherits_the_ledgers_rows_exactly_as_a_full_scan_does(hom
     """
     _call(cost_usd=1.0, campaign="saltmarch", ts="2026-08-01T00:00:00Z")
 
-    assert not hasattr(usage_rollup, "forget")
     assert usage_rollup.campaign_totals("saltmarch")["cost_usd"] ==         usage.campaign_scenes("saltmarch")["totals"]["cost_usd"]
 
 

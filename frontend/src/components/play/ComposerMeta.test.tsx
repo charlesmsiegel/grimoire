@@ -1,6 +1,4 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { PHONE_PX } from "../../shell/tabs";
-import { bodiesNaming, bodiesOf, declares, stylesheet } from "../../testkit/stylesheet";
 import { ComposerMeta } from "./ComposerMeta";
 
 type Props = React.ComponentProps<typeof ComposerMeta>;
@@ -74,28 +72,4 @@ test("with no group there is no Order", () => {
   expect(screen.queryByRole("button", { name: /^Order:/ })).toBeNull();
   expect(screen.getByRole("button", { name: "What the model saw →" }))
     .toHaveAttribute("aria-expanded", "false");
-});
-
-// ---- the stylesheet's half: jsdom applies no CSS ----
-
-const { css, atWidth } = stylesheet();
-
-test("on a phone the strip wraps rather than hiding knobs past a scrolled edge", () => {
-  // It scrolled sideways with its scrollbar hidden, so the paragraphs box,
-  // Order and the inspector link were off the edge with nothing to say so.
-  const phone = atWidth(PHONE_PX);
-  for (const body of bodiesOf(phone, ".composer-meta")) {
-    expect(declares(body, "flex-wrap")).not.toBe("nowrap");
-    expect(declares(body, "overflow-x")).toBeNull();
-  }
-  expect(bodiesOf(css, ".composer-meta").some((b) => declares(b, "flex-wrap") === "wrap")).toBe(true);
-});
-
-test("where every knob fits, the strip is one row and only its sentences give way", () => {
-  const wide = /@container composer \(min-width: \d+px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
-  expect(bodiesOf(wide, ".composer-meta").map((b) => declares(b, "flex-wrap"))).toContain("nowrap");
-  const sentences = bodiesNaming(wide, "composer-meta-hint");
-  expect(sentences.some((b) => declares(b, "text-overflow") === "ellipsis"
-    && declares(b, "min-width") === "0")).toBe(true);
-  expect(bodiesNaming(wide, "composer-notice").length).toBeGreaterThan(0);
 });

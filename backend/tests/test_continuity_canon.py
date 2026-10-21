@@ -8,7 +8,6 @@ slices store and compare, so their inputs are part of the contract (spec §5.4,
 """
 
 import importlib
-import inspect
 
 import pytest
 from fastapi.testclient import TestClient
@@ -130,4 +129,3 @@ def test_lifecycle_fingerprint_has_no_last_scene():
     assert fp == canon.lifecycle_fingerprint(**dict(base, temporal_link_ids=["l1", "l2"]))
     assert fp != canon.lifecycle_fingerprint(**dict(base, beat_count=3))
     assert fp != canon.lifecycle_fingerprint(**dict(base, latest_beat="Gone."))
-    assert "last_scene" not in inspect.signature(canon.lifecycle_fingerprint).parameters

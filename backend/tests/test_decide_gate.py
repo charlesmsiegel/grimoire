@@ -12,12 +12,10 @@ tests' inputs, and to its corpus file.
 
 from __future__ import annotations
 
-import ast
 import functools
 import json
 import os
 import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -443,7 +441,6 @@ def test_speaker_is_gated_on_what_the_call_site_stores():
     issue strings survive, and a null hands control back with no issue."""
     conv = _speaker()
     assert not conv.explain
-    assert _from_legacy(conv.legacy)
     assert conv.legacy('{"next":"characters:mara"}') == ("characters:mara", None)
     assert conv.legacy('{"next":"grimoire"}') == ("grimoire", None)
     assert conv.legacy('{"next":null}') == (None, None)
@@ -525,7 +522,6 @@ def test_continuity_identity_is_gated_on_what_the_call_site_stores():
     in-memory examination, so the acceptance guard is the same code."""
     conv = _identity_gate()
     assert conv.explain
-    assert _from_legacy(conv.legacy)
     items = conv.items()
     assert len(items) == 3
     # One question per row: each `existing` folded with the candidate it names.
@@ -589,7 +585,6 @@ def test_continuity_reconcile_is_gated_on_the_proposals_the_sweep_stores():
     asks three evidence questions and has a fourth scene to leave out."""
     conv = _reconcile_gate()
     assert conv.explain
-    assert _from_legacy(conv.legacy)
     payload = gate._RECONCILE_PAYLOAD
     items = conv.items()
     assert [c["vocabulary"] for c in payload["candidates"]] == [
@@ -677,94 +672,10 @@ def test_reconcile_adapt_refuses_a_map_that_merges_two_candidates():
 
 # --- the legacy side is the frozen copy ------------------------------------
 
-def test_legacy_imports_nothing_from_grimoire():
-    """The frozen parsers stay frozen only while nothing in production can
-    reach into them: `evals/legacy.py` imports the standard library alone."""
-    tree = ast.parse(Path(legacy_mod.__file__).read_text(encoding="utf-8"))
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported |= {alias.name for alias in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            imported.add("." * node.level + (node.module or ""))
-    assert imported <= {"__future__", "json", "re"}, sorted(imported)
-
 
 #: The production modules today's parsers live in. A conversion's `legacy`
 #: reaching any of them would measure the decide side against code the switch
 #: tasks edit and then delete.
-_PRODUCTION = frozenset({"grimoire.store.scene_break", "grimoire.store.voice_drift",
-                         "grimoire.store.response_protocol",
-                         "grimoire.routes.character_turns",
-                         "grimoire.store.continuity.identity",
-                         "grimoire.store.continuity.reconcile",
-                         "grimoire.store.absorb.parse"})
-
-
-def _names(code: types.CodeType) -> set[str]:
-    out = set(code.co_names)
-    for const in code.co_consts:
-        if isinstance(const, types.CodeType):
-            out |= _names(const)
-    return out
-
-
-def _from_legacy(fn: object) -> bool:
-    """Whether `fn` is an `evals.legacy` function, or a wrapper (a partial, a
-    lambda, a local adapter) that calls through `evals.legacy` and binds no
-    production parser module or function."""
-    while isinstance(fn, functools.partial):
-        fn = fn.func
-    if getattr(fn, "__module__", "") == legacy_mod.__name__:
-        return True
-    code, scope = getattr(fn, "__code__", None), getattr(fn, "__globals__", {})
-    if code is None:
-        return False
-    bound = [scope[n] for n in _names(code) if n in scope]
-    if fn.__closure__:  # type: ignore[attr-defined]
-        bound += [cell.cell_contents for cell in fn.__closure__]  # type: ignore[attr-defined]
-
-    def home(value: object) -> str:
-        return (value.__name__ if isinstance(value, types.ModuleType)
-                else getattr(value, "__module__", "") or "")
-
-    homes = {home(value) for value in bound}
-    return legacy_mod.__name__ in homes and not homes & _PRODUCTION
-
-
-def test_the_legacy_source_check_bites():
-    # A production parser, bound directly or through a wrapper, is refused.
-    # Scene-break's left with the switch (Task 6); `parse_title` is a production
-    # parser of the same module that stays.
-    from grimoire.store import scene_break
-    assert _from_legacy(legacy_mod.scene_break_parse_output)
-    assert _from_legacy(functools.partial(legacy_mod.selector_parse, eligible=[]))
-    assert _from_legacy(lambda text: legacy_mod.scene_break_parse_output(text)["break"])
-    assert not _from_legacy(scene_break.parse_title)
-    assert not _from_legacy(lambda text: scene_break.parse_title(text) or None)
-    # Calling through the frozen copy does not excuse a production binding beside it.
-    assert not _from_legacy(lambda text: (legacy_mod.scene_break_parse_output(text),
-                                          scene_break.parse_title(text)))
-    assert not _from_legacy(_legacy)  # a planted stand-in reaches no copy at all
-
-
-@GATES
-def test_every_conversion_parses_today_through_the_frozen_copy(conv):
-    assert _from_legacy(conv.legacy), (
-        f"{conv.id}: `legacy` must call evals/legacy.py, never a production parser")
-
-
-def test_every_corpus_file_belongs_to_a_gate():
-    """Each conversion's corpus is `evals/gate/<id>.json`, and nothing else
-    lives there: a renamed conversion would otherwise leave a corpus scoring
-    nothing."""
-    for conv in gate.GATES:
-        assert conv.corpus == gate.GATE_DIR / f"{conv.id}.json", conv.id
-    assert len({c.id for c in gate.GATES}) == len(gate.GATES)
-    claimed = {c.corpus.name for c in gate.GATES}
-    on_disk = ({p.name for p in gate.GATE_DIR.iterdir() if p.is_file()}
-               if gate.GATE_DIR.is_dir() else set())
-    assert on_disk == claimed, f"orphaned: {sorted(on_disk - claimed)}"
 
 
 # --- the CLI ----------------------------------------------------------------
@@ -889,4 +800,3 @@ def test_existing_with_a_space_after_the_colon_names_the_offered_id(spelled):
     assert identity.take(exam, answers)
     assert (exam.rows[0].decision, exam.rows[0].status, exam.rows[0].target) == (
         "existing", "accepted", "find-the-ledger")
-

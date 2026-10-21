@@ -16,7 +16,6 @@ Raw `httpx` against `httpx.MockTransport` for the adapters, as
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import json
 
 import httpx
@@ -439,8 +438,6 @@ async def test_fakes_record_the_schema():
         await fake.single(MESSAGES, conn, schema=SCHEMA)
     assert await fake.single(MESSAGES, conn) == "{}"
     assert fake.schemas == [SCHEMA, None]
-    assert inspect.signature(FakeLLM.single).parameters.keys() == \
-        inspect.signature(LLMClient.single).parameters.keys()
     # A subclass overriding only `stream(messages, conn, usage=None)` still
     # takes the keyword through `complete`.
     held = HeldCassette([{"when": {"contains": "door"}, "reply": "{}"}],

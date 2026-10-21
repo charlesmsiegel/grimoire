@@ -13,10 +13,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 
-from grimoire.routes.common import THUMB_BUCKETS, THUMB_W
 from grimoire.store import assets, image_store, thumbs
-
-REPO = Path(__file__).resolve().parents[2]
 
 
 def _png_bytes(w=1200, h=800, color=(200, 30, 30)) -> bytes:
@@ -819,31 +816,6 @@ def test_a_width_snaps_up_to_its_bucket(client):
             assert max(im.size) == served, (asked, im.size)
 
 
-def test_the_client_buckets_are_server_buckets():
-    # `frontend/src/api/thumbs.ts` asks for exactly its THUMB widths, so each
-    # one must be a bucket already -- one that snapped to a neighbour would be
-    # served a different size than the srcset descriptor it was chosen by
-    # claims. Read from the client's own source, so a width added on either
-    # side alone fails here rather than going soft in a browser.
-    src = (REPO / "frontend" / "src" / "api" / "thumbs.ts").read_text(encoding="utf-8")
-    m = re.search(r"export const THUMB = \{(.*?)\} as const;", src, re.DOTALL)
-    assert m, "THUMB is not declared in thumbs.ts in the shape this guard reads"
-    client = [int(n) for n in re.findall(r":\s*(\d+)", m.group(1))]
-    assert client and set(client) <= set(THUMB_BUCKETS), (client, THUMB_BUCKETS)
-    assert THUMB_W in THUMB_BUCKETS
-    assert list(THUMB_BUCKETS) == sorted(THUMB_BUCKETS)
-
-
-def test_the_client_revision_is_the_server_revision():
-    # The client puts `t` in every `?w=` URL so a browser's cache is keyed on
-    # the pipeline that made a thumbnail. A revision bumped here and not there
-    # leaves every copy a browser cached immutable in place.
-    src = (REPO / "frontend" / "src" / "api" / "thumbs.ts").read_text(encoding="utf-8")
-    m = re.search(r"export const THUMB_REV = (\d+);", src)
-    assert m, "THUMB_REV is not declared in thumbs.ts in the shape this guard reads"
-    assert int(m.group(1)) == thumbs.REVISION
-
-
 # ---- what a browser keeps ----
 def test_a_thumbnail_is_validated_by_what_made_it(client, monkeypatch):
     # The thumbnail used to carry its source's ETag, so a thumbnail made the
@@ -934,7 +906,6 @@ def test_a_blob_key_names_no_path_and_costs_no_stat(client, tmp_path):
             raise AssertionError("a blob source is not statted")
 
     assert thumbs.thumbnail(NoStat(paths[1]), 256) is not None
-
 
 
 # ---- a blob whose bytes no longer match its name (Codex) ----

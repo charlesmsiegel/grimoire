@@ -1,15 +1,11 @@
-import ast
 import contextlib
-import inspect
 import io
 import json
 import threading
 import zipfile
-from pathlib import Path
 
 import pytest
 
-from grimoire.routes import mechanics, streaming
 from grimoire.store import (
     campaigns,
     characters,
@@ -22,8 +18,6 @@ from grimoire.store import (
     sheets,
     worlds,
 )
-from grimoire.store import checks as checks_mod
-from grimoire.store import context as context_mod
 from grimoire.store.frontmatter import parse_frontmatter
 from grimoire.store.module_edit import migrate as me_migrate
 from grimoire.store.modules import fields as modules_fields
@@ -1135,24 +1129,6 @@ def test_proposal_derivation_excluded_by_edit_lock(monkeypatch, tmp_path):
     assert rec["payload"]["check"] == "brawl"
 
 
-def test_proposal_route_sites_locked():
-    src = "\n".join(source for _path, source in _streaming_sources())
-    for line_marker in ("proposals.new(",):
-        # every proposals.new call site sits inside a
-        # `with store.locks.campaign_lock(` block — enforced by review, smoke-
-        # checked here: the file must contain at least one such wrap. The
-        # Keep the same logical streaming subsystem covered after its split,
-        # including a finalizer added to another leaf in the future.
-        assert line_marker in src
-        assert "locks.campaign_lock(" in src
-
-
-def test_r2_consumers_reference_campaign_lock():
-    assert "campaign_lock" in inspect.getsource(checks_mod.resolve_check)
-    assert "campaign_lock" in inspect.getsource(context_mod._mechanics)
-    assert "campaign_lock" in inspect.getsource(mechanics._continuation_rule_bodies)
-
-
 # ---- Phase 8 review follow-ups (#227) ---------------------------------------
 
 def test_recover_survives_an_io_error_during_replay(monkeypatch, tmp_path):
@@ -1333,72 +1309,6 @@ def test_duplicate_module_drops_dotfiles_and_os_cruft(monkeypatch, tmp_path):
     assert not (copied / "rules" / "Thumbs.db").exists()
     assert (copied / "rules" / "combat.md").exists()
     assert (copied / "sheets.json").exists()
-
-
-def _proposal_lock_sites(source):
-    """T11. Replaces a whole-module substring check that passed as long as the
-    file mentioned both names somewhere. Every `proposals.new(` call in the
-    streaming finalizers must be lexically inside a `with ...campaign_lock(...)`
-    block -- the exclusion `test_proposal_derivation_excluded_by_edit_lock`
-    proves at runtime for one site is here proved for all of them."""
-
-
-    tree = ast.parse(source)
-    parents: dict[ast.AST, ast.AST] = {}
-    for node in ast.walk(tree):
-        for child in ast.iter_child_nodes(node):
-            parents[child] = node
-
-    def is_lock(expr) -> bool:
-        return (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
-                and expr.func.attr == "campaign_lock")
-
-    sites = [n for n in ast.walk(tree)
-             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-             and n.func.attr == "new" and isinstance(n.func.value, ast.Attribute)
-             and n.func.value.attr == "proposals"]
-    scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
-    findings = []
-    for call in sites:
-        node = call
-        covered = False
-        while node in parents:
-            node = parents[node]
-            # The walk stops at the enclosing function: a `with` around a
-            # nested `def` covers the definition, not the call, which runs
-            # whenever the function is invoked -- possibly with no lock held.
-            if isinstance(node, scopes):
-                break
-            if isinstance(node, ast.With) and any(is_lock(i.context_expr) for i in node.items):
-                covered = True
-                break
-        findings.append((call.lineno, covered))
-    return findings
-
-
-def _streaming_sources():
-    root = Path(streaming.__file__).parent
-    return [(path.relative_to(root).as_posix(), path.read_text(encoding="utf-8"))
-            for path in sorted(root.rglob("*.py"))]
-
-
-def test_every_proposal_creation_site_sits_inside_a_campaign_lock():
-    sites = [(path, line, held) for path, source in _streaming_sources()
-             for line, held in _proposal_lock_sites(source)]
-    assert sites, "no proposals.new call sites found -- did the finalizers move?"
-    missing = [(path, line) for path, line, held in sites if not held]
-    assert not missing, f"proposals.new outside a campaign lock: {missing}"
-
-
-def test_proposal_guard_reaches_a_new_streaming_leaf(tmp_path, monkeypatch):
-    root = tmp_path / "streaming"
-    root.mkdir()
-    (root / "__init__.py").write_text("", encoding="utf-8")
-    (root / "_persistence.py").write_text(
-        "def unsafe(cid):\n    return store.proposals.new(cid, 's1', {})\n", encoding="utf-8")
-    monkeypatch.setattr(streaming, "__file__", str(root / "__init__.py"))
-    with pytest.raises(AssertionError, match="outside a campaign lock"):
-        test_every_proposal_creation_site_sits_inside_a_campaign_lock()
 
 
 def test_a_journal_whose_migration_is_torn_is_quarantined_not_replayed(monkeypatch, tmp_path):

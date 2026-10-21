@@ -9,16 +9,14 @@ would only make the counts harder to read.
 from __future__ import annotations
 
 import json
-import re
 
 import pytest
 
 from grimoire.store import calendars, campaigns, suggest, worlds
 from grimoire.store.continuity import doc as continuity_doc
 from grimoire.store.continuity import effective, pressure
-from grimoire.store.continuity.drivers import DRIVER_ACTIONS, DRIVER_KINDS
+from grimoire.store.continuity.drivers import DRIVER_KINDS
 from grimoire.store.suggest import NO_CONTROLS, Controls
-from tests.ts_unions import FRONTEND, STRINGS, TYPES, ts_union
 
 
 def _driver(ref: str, state: str = "ok", dormancy: int | None = None,
@@ -46,13 +44,6 @@ def _item(ref: str, kind: str, in_days: int | None, state: str, *,
             "actor": None, "age": None}
 
 
-def test_controls_tuples_are_pinned():
-    assert suggest.DRIVER_PROMPT_CAP == 40
-    assert suggest.MUST_CAP == 3
-    assert suggest.TIME_MODES == ("auto", "near", "move", "anchor")
-    assert suggest.ANCHOR_RELATIONS == ("before", "on", "after", "by")
-    assert suggest.MUST_KINDS == ("thread", "commitment")
-    assert suggest.TEMPORAL_KINDS == ("event", "birthday", "holiday")
 
 
 def test_no_controls_is_inactive():
@@ -712,44 +703,3 @@ def test_resolve_controls_canonicalization_falls_back_to_identity(monkeypatch, t
 
 
 # -- The TS mirrors (Decision 21; spec §20) ----------------------------------
-
-
-def _ts_const(src: str, name: str) -> tuple[str, ...]:
-    """`export const NAME = [ ... ] as const`, as a tuple of its strings."""
-    found = re.search(rf"export const {name} = \[([^\]]*)\] as const", src)
-    assert found, f"pressureControls.ts declares no `export const {name} = [...] as const`"
-    body = found.group(1)
-    assert re.fullmatch(r'\s*(?:"[^"]*"\s*,\s*)*"[^"]*"\s*,?\s*', body), \
-        f"{name} is not a list of string literals: {body!r}"
-    return tuple(re.findall(r'"([^"]*)"', body))
-
-
-def test_ts_mirrors_the_python_tuples():
-    """Each vocabulary the chooser shares with the server is declared once per
-    language, and each TS declaration is held to the one Python tuple rather
-    than to the other TS declaration."""
-    consts = (FRONTEND / "components" / "pressureControls.ts").read_text(encoding="utf-8")
-    assert _ts_const(consts, "SORT_ORDER") == pressure.SORT_ORDER
-    assert _ts_const(consts, "DRIVER_KINDS") == DRIVER_KINDS
-    assert _ts_const(consts, "DRIVER_ACTIONS") == DRIVER_ACTIONS
-    assert _ts_const(consts, "TIME_MODES") == suggest.TIME_MODES
-    assert _ts_const(consts, "ANCHOR_RELATIONS") == suggest.ANCHOR_RELATIONS
-    cap = re.search(r"export const MUST_CAP = (\d+);", consts)
-    assert cap, "pressureControls.ts declares no `export const MUST_CAP = <n>;`"
-    assert int(cap.group(1)) == suggest.MUST_CAP
-    # the two orders differ on purpose (Decision 9); the members may not
-    assert set(_ts_const(consts, "SORT_ORDER")) == set(pressure.PRESSURE_STATES)
-
-    types = TYPES.read_text(encoding="utf-8")
-    assert ts_union(types, "DriverKind") == DRIVER_KINDS
-    assert ts_union(types, "DriverAction") == DRIVER_ACTIONS
-    states = ts_union(types, "PressureState")
-    assert set(states) == set(pressure.PRESSURE_STATES)
-    assert states == pressure.SORT_ORDER
-    assert ts_union(types, "TimeMode") == suggest.TIME_MODES
-    assert ts_union(types, "AnchorRelation") == suggest.ANCHOR_RELATIONS
-    option = re.search(r"export type AnchorOption\s*=\s*\{([^}]*)\}", types)
-    assert option, "types.ts declares no `export type AnchorOption = { ... }`"
-    kind = re.search(r'\bkind:(' + STRINGS + r');', option.group(1))
-    assert kind, "AnchorOption has no `kind:` union of string literals"
-    assert tuple(re.findall(r'"([^"]*)"', kind.group(1))) == suggest.TEMPORAL_KINDS

@@ -7,9 +7,7 @@ already exist. Dates are asserted on the campaign's own fixed-day axis
 
 from __future__ import annotations
 
-import ast
 import contextlib
-import inspect
 import json
 import textwrap
 from typing import ClassVar
@@ -61,7 +59,6 @@ from tests.test_continuity_pressure import (
     _provider,
     _rule,
 )
-from tests.ts_unions import TYPES, ts_union
 
 #: A plugin that loads but cannot read a date: `__init__` succeeds, so
 #: `primary_provider` answers it, and `parse`/`describe` raise something that is
@@ -1335,24 +1332,6 @@ def test_the_graph_reads_the_group_listing_once(monkeypatch, tmp_path):
     assert len(small) == len(large), (small, large)
 
 
-def test_graph_calls_no_card_image_or_blocking_lock():
-    tree = ast.parse(inspect.getsource(graph))
-    forbidden = {"read_pc", "read_character", "list_images", "actor_name", "list_pcs",
-                 "campaign_lock"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            fn = node.func
-            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
-            assert name not in forbidden, ast.unparse(node)
-            if isinstance(fn, ast.Attribute) and fn.attr == "build":
-                assert ast.unparse(fn.value) != "timeline", ast.unparse(node)
-        if isinstance(node, ast.ImportFrom):
-            assert node.module is None or "timeline" not in node.module.split(".")
-            assert all(a.name != "timeline" and a.asname != "timeline" for a in node.names)
-        if isinstance(node, ast.Import):
-            assert all("timeline" not in a.name.split(".") for a in node.names)
-
-
 def _malformed_campaign(monkeypatch, tmp_path) -> tuple[str, str]:
     """Something in every optional file, plus a link from a thread to a
     commitment and from that commitment to an event, so an unreadable plot or
@@ -1462,19 +1441,3 @@ def test_every_edge_names_two_nodes(monkeypatch, tmp_path):
     assert {e["source"] for e in g["edges"]} <= set(graph.EDGE_SOURCES)
     assert _by_id(g)[f"idea:{lid}"]["time_anchor"] == anchor
     assert "commitments" in g["omitted"]
-
-
-# ---- the TS mirror (Decision 17; spec §20) -----------------------------------
-
-
-def test_ts_mirrors_the_graph_tuples():
-    """Each graph vocabulary is declared once per language, and the TS union in
-    `api/types.ts` is held to the Python tuple in declaration order -- the
-    same pin E's chooser vocabulary has, through the same parser."""
-    types = TYPES.read_text(encoding="utf-8")
-    assert ts_union(types, "NodeKind") == graph.NODE_KINDS
-    assert ts_union(types, "EdgeKind") == graph.EDGE_KINDS
-    assert ts_union(types, "EdgeSource") == graph.EDGE_SOURCES
-    assert ts_union(types, "LinkRelation") == effective.LINK_RELATIONS
-    assert ts_union(types, "EventStatus") == graph.EVENT_STATUSES
-    assert ts_union(types, "GraphPart") == graph.PARTS

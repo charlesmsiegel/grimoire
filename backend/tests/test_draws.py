@@ -8,12 +8,9 @@ new `draws.ALGORITHM`, with new goldens beside it.
 
 from __future__ import annotations
 
-import ast
-import inspect
 import json
 import math
 import random
-import sys
 from decimal import Decimal
 from fractions import Fraction
 
@@ -36,7 +33,6 @@ from grimoire.decisions import (
     native_answer,
 )
 from grimoire.draws import Eligibility, ReplayError, draw, draw_from, pick, quanta, replay, unit
-from tests.test_llm import _sibling_imports
 
 MARA, SERAPHINE, WINIFRED = "characters:mara", "characters:seraphine", "characters:winifred"
 GRIMOIRE = "grimoire"
@@ -310,25 +306,6 @@ def test_new_seed(monkeypatch):
     monkeypatch.setattr(draws, "_seed_source", lambda: 2**53)
     with pytest.raises(ValueError):
         draws.new_seed()
-
-
-def test_draws_is_a_leaf():
-    """Nothing from the package but `decisions`, bound as a module, and the
-    standard library: no store, no clock, no file."""
-    assert _sibling_imports("draws") == {"decisions"}
-    tree = ast.parse(inspect.getsource(draws))
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported |= {alias.name.split(".")[0] for alias in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            if node.level == 1:
-                assert node.module is None, ast.dump(node)
-                assert [a.name for a in node.names] == ["decisions"], ast.dump(node)
-            else:
-                imported.add((node.module or "").split(".")[0])
-    assert imported, "the walk found no imports at all"
-    assert imported <= set(sys.stdlib_module_names) | {"__future__"}, imported
 
 
 # --- Task 2: draw and the record ---------------------------------------------

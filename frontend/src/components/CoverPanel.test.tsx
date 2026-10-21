@@ -1,6 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { CampaignCover, CoverPanel } from "./CoverPanel";
-import { bodiesOf, declares, stylesheet } from "../testkit/stylesheet";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -219,15 +218,9 @@ test("a world cover that will not load falls back to the placeholder", async () 
   expect(screen.queryByRole("button", { name: "Remove cover" })).toBeNull();
 });
 
-test("the file input stays a visible, labelled control with the quiet button's look", async () => {
-  // Visible and labelled, so a keyboard reaches it (PostImagePicker's reason);
-  // its button dressed rather than the UA's grey bevel. jsdom applies no CSS,
-  // so the dress is read off the stylesheet.
+test("Cover image is a labelled file control", async () => {
   render(<CampaignCover cid="run" />);
   const input = await screen.findByLabelText("Cover image");
   expect(input).toHaveAttribute("type", "file");
-  const { css } = stylesheet();
-  const button = bodiesOf(css, 'input[type="file"]::file-selector-button');
-  expect(button.some((b) => declares(b, "border") === "1px solid var(--rule)"
-    && declares(b, "text-transform") === "uppercase")).toBe(true);
+
 });

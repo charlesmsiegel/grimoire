@@ -180,15 +180,6 @@ def test_generation_sorts_as_a_string_and_ends_with_the_run_id():
     assert first < second
 
 
-def test_constants_are_structural():
-    assert reconcile.SWEEPS == ("full", "incremental")
-    assert reconcile.RECONCILE_TOP_K == similarity.IDENTITY_TOP_K
-    assert reconcile.RECONCILE_BEATS == pending.ROW_BEATS
-    assert reconcile.RECONCILE_MAX_PAIRS == 20_000
-    assert reconcile.RECONCILE_MAX_CANDIDATES == 24
-    assert reconcile.RECONCILE_TEMPORAL_EVENTS == 3
-
-
 # ------------------------------------------------------------------- pairs
 
 

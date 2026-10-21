@@ -14,11 +14,8 @@ Invented ids and the codebase's placeholder names only.
 
 from __future__ import annotations
 
-import ast
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -350,7 +347,6 @@ def test_entry_is_public_and_keeps_both_base_rates_or_nothing():
     assert pricing.entry(BOTH) == BOTH
     assert pricing.entry({"prompt_usd_per_1k": 1}) is None
     assert pricing.entry("x") is None
-    assert not hasattr(pricing, "_entry")
 
 
 # ---- the API ----
@@ -418,19 +414,3 @@ def test_put_facts_rates_on_an_unknown_provider_is_404(client):
 
 
 # ---- the import graph ----
-def test_pricing_imports_no_inference():
-    src = Path(pricing.__file__).read_text(encoding="utf-8")
-    for node in ast.walk(ast.parse(src)):
-        names: list[str] = []
-        if isinstance(node, ast.Import):
-            names = [a.name for a in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            base_mod = "." * node.level + (node.module or "")
-            names = [base_mod] + [f"{base_mod}.{a.name}" for a in node.names]
-        for name in names:
-            assert "inference" not in name.split("."), name
-    backend = Path(__file__).resolve().parents[1]
-    done = subprocess.run([sys.executable, "-c", "import grimoire.store.usage"],
-                          cwd=backend, capture_output=True, text=True, check=False,
-                          env={**os.environ, "PYTHONPATH": str(backend / "src")})
-    assert done.returncode == 0, done.stderr

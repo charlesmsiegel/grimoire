@@ -1,19 +1,8 @@
-"""Usage keeps one shared accounting vocabulary, memo and clock owner."""
+"""Usage records and summaries share the injected clock."""
 
 import importlib
 
-import pytest
-
 from grimoire.store import usage
-
-
-@pytest.mark.parametrize("leaf, binding", [
-    ("_rows", "_ZERO"),
-    ("_unpriced", "_UNPRICED_POOL"),
-])
-def test_exported_usage_state_has_one_owner(leaf, binding):
-    owner = importlib.import_module(f"grimoire.store.usage.{leaf}")
-    assert getattr(usage, binding) is getattr(owner, binding)
 
 
 def test_ledger_and_report_use_the_same_clock_owner(monkeypatch, tmp_path):

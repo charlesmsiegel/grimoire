@@ -24,32 +24,12 @@ def test_process_state_replacement_is_visible_through_the_facade(monkeypatch):
     assert child.lock is not parent.lock
 
 
-def test_optional_import_flags_are_reads_of_the_defining_owner(monkeypatch):
-    support = importlib.import_module("grimoire.store.compiled._sqlite_support")
-    filesystem = importlib.import_module("grimoire.store.compiled._filesystem")
-    monkeypatch.setattr(support, "_sqlite", None)
-    monkeypatch.delattr(support, "_sqlite_available", raising=False)
-    monkeypatch.setattr(filesystem, "_ctypes", None)
-    monkeypatch.delattr(filesystem, "_ctypes_available", raising=False)
-    assert compiled._sqlite is None and compiled._ctypes is None
-    assert not hasattr(compiled, "_sqlite_available")
-    assert not hasattr(compiled, "_ctypes_available")
-    assert "_state" in dir(compiled)
-    assert "_sqlite_available" not in dir(compiled)
-    assert "_ctypes_available" not in dir(compiled)
-
-
-def test_registered_kinds_dictionary_is_shared_with_the_defining_owner():
-    contracts = importlib.import_module("grimoire.store.compiled._contracts")
-    assert compiled.KINDS is contracts.KINDS
-
-
-@pytest.mark.parametrize("optional, flag, alias", [
-    ("sqlite3", "_sqlite", "_sqlite_available"),
-    ("ctypes", "_ctypes", "_ctypes_available"),
+@pytest.mark.parametrize("optional, flag", [
+    ("sqlite3", "_sqlite"),
+    ("ctypes", "_ctypes"),
 ])
 @pytest.mark.parametrize("failure", ["ImportError", "OSError"])
-def test_unavailable_optional_import_keeps_the_package_importable(optional, flag, alias, failure):
+def test_unavailable_optional_import_keeps_the_package_importable(optional, flag, failure):
     script = f"""
 import builtins
 original = builtins.__import__
@@ -61,9 +41,6 @@ def without_optional(name, *args, **kwargs):
 builtins.__import__ = without_optional
 from grimoire.store import compiled
 assert compiled.{flag} is None
-assert not hasattr(compiled, {alias!r})
-assert {alias!r} not in dir(compiled)
-assert compiled._state is not None
 """
     subprocess.run([sys.executable, "-c", script], check=True, timeout=15,
                    capture_output=True, text=True)
