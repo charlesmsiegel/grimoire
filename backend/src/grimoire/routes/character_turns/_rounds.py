@@ -439,7 +439,7 @@ async def _compose_contribution(claim, client, resolved, turn, actor, *,
     return messages
 
 
-async def _generate_contribution(claim, client, resolved, turn, actor, messages, *, fresh):
+async def _generate_contribution(claim, client, resolved, turn, actor, *, messages, fresh):
     """Announce the composed contribution and stream it, metered, with the
     decide tool when `fresh` and offered. Once the call is done, `turn` holds
     the connection that served it and what made it, and no meter."""
@@ -559,6 +559,32 @@ async def _hand_on(claim, client, turn, actor, status):
     turn.continuation = None
 
 
+async def _contribution_frames(claim, client, resolved, turn, actor, *, outcome,
+                               app=None, embed_client=None, history_enabled=False):
+    """One contribution by `actor`, composed, streamed, filed and handed on.
+    It ends with `turn.terminal` set (a roll pause, an empty response) or
+    with `turn.ending` naming who is `next`."""
+    run = claim.run
+    turn.made_by = None
+    turn.tool_record = None
+    fresh = _fresh_contribution(turn)
+    messages = await _compose_contribution(
+        claim, client, resolved, turn, actor,
+        app=app, embed_client=embed_client, history_enabled=history_enabled)
+    async for frame in _generate_contribution(
+            claim, client, resolved, turn, actor, messages=messages, fresh=fresh):
+        yield frame
+    paused = turn.watcher.roll.complete or turn.watcher.roll.truncated
+    status = "incomplete" if paused or run.cancel_requested else "complete"
+    async for frame in _conclude_contribution(
+            claim, turn, actor, outcome, status, paused=paused):
+        yield frame
+    if turn.terminal:
+        return
+    async for frame in _hand_on(claim, client, turn, actor, status):
+        yield frame
+
+
 async def _round_frames(claim, client, resolved, turn, actor, outcome, *,
                         app=None, embed_client=None, history_enabled=False):
     """One round's contributions, from `actor` until nobody is next. Every
@@ -577,24 +603,12 @@ async def _round_frames(claim, client, resolved, turn, actor, outcome, *,
             turn.ending = {**after, "status": "complete"}
             actor = turn.round_record.get("actor_ref")
             continue
-        turn.made_by = None
-        turn.tool_record = None
-        fresh = _fresh_contribution(turn)
-        messages = await _compose_contribution(
-            claim, client, resolved, turn, actor,
-            app=app, embed_client=embed_client, history_enabled=history_enabled)
-        async for frame in _generate_contribution(
-                claim, client, resolved, turn, actor, messages, fresh=fresh):
-            yield frame
-        paused = turn.watcher.roll.complete or turn.watcher.roll.truncated
-        status = "incomplete" if paused or run.cancel_requested else "complete"
-        async for frame in _conclude_contribution(
-                claim, turn, actor, outcome, status, paused=paused):
+        async for frame in _contribution_frames(
+                claim, client, resolved, turn, actor, outcome=outcome,
+                app=app, embed_client=embed_client, history_enabled=history_enabled):
             yield frame
         if turn.terminal:
             return
-        async for frame in _hand_on(claim, client, turn, actor, status):
-            yield frame
         actor = turn.ending["next"]
     if run.cancel_requested:
         turn.round_record = await run_in_threadpool(_planning._stop, cid, sid, turn.round_record)
