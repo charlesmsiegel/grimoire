@@ -79,40 +79,41 @@ def _appendix_doc(e: dict) -> dict:
     return {"file": _export.appendix_filename(e, "xhtml"), "title": e["name"], "doc": doc}
 
 
-def build_epub(cid: str) -> tuple[bytes, str]:
-    """The whole campaign as an EPUB 3 book: (bytes, suggested filename)."""
-    data = _export.collect(cid, image_prefix="../images/")  # raises CampaignNotFound
-    images = data["images"]
-    chapters = [_chapter_doc(c) for c in data["chapters"]]
-    appendix = [_appendix_doc(e) for e in data["appendix"]]
+def _read_cover(path: Path | None) -> tuple[bytes, str] | None:
+    """The cover's bytes and packed name, or None for the no-cover book.
+
+    Read FIRST, so "there is a cover" is one decision everything downstream
+    follows. The manifest is composed from this and the image bytes are
+    written much later, at zip time -- reading it there instead would let a
+    cover deleted mid-export leave a cover page and a manifest entry pointing
+    at a file that never got written. A vanished cover simply produces the
+    no-cover book, which is what an export owes the user over an exception.
+    Named from the bytes like every other packed image, and dropped on the
+    same terms (#321): a cover we cannot declare would invalidate the book it
+    is the first page of. An uploaded cover is already validated
+    (`covers.validate`), so that only answers for one a sync client or a
+    hand-edit dropped into the campaign's assets directory -- and it lands in
+    the same no-cover book as a cover that vanished.
+    """
+    if path is None:
+        return None
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    ext = _export.packed_ext(raw)
+    return (raw, f"cover.{ext}") if ext is not None else None
+
+
+def _reading_docs(data: dict, chapters: list[dict], appendix: list[dict],
+                  cover: tuple[bytes, str] | None) -> tuple[list[tuple[str, str]], int]:
+    """Every spine document as (href, xhtml) in reading order, and the index
+    `nav.xhtml` is inserted at."""
     title = data["title"]
-
-    # Read the cover FIRST, so "there is a cover" is one decision everything
-    # downstream follows. The manifest is composed here and the image bytes are
-    # written much later, at zip time -- reading it there instead would let a
-    # cover deleted mid-export leave a cover page and a manifest entry pointing
-    # at a file that never got written. A vanished cover simply produces the
-    # no-cover book, which is what an export owes the user over an exception.
-    # Named from the bytes like every other packed image, and dropped on the
-    # same terms (#321): a cover we cannot declare would invalidate the book it
-    # is the first page of. An uploaded cover is already validated
-    # (`covers.validate`), so that only answers for one a sync client or a
-    # hand-edit dropped into the campaign's assets directory -- and it lands in
-    # the same no-cover book as a cover that vanished, below.
-    cover_bytes, cover_name = None, ""
-    if data["cover"] is not None:
-        try:
-            raw = data["cover"].read_bytes()
-        except OSError:
-            raw = None
-        ext = _export.packed_ext(raw) if raw is not None else None
-        if ext is not None:
-            cover_bytes, cover_name = raw, f"cover.{ext}"
-
     docs = []
-    if cover_bytes is not None:
+    if cover is not None:
         docs.append(("text/cover.xhtml",
-                     _render("cover.xhtml", title=title, src=f"../images/{cover_name}")))
+                     _render("cover.xhtml", title=title, src=f"../images/{cover[1]}")))
     docs.append(("text/titlepage.xhtml",
                  _render("titlepage.xhtml", title=title, world=data["world_name"],
                          date_range=data["date_range"])))
@@ -125,8 +126,16 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     if appendix:
         docs.append(("text/appendix.xhtml", _render("divider.xhtml", title="Appendix")))
         docs += [(f"text/{e['file']}", e["doc"]) for e in appendix]
+    return docs, contents_at
 
-    fonts = sorted(FONTS_DIR.glob("*.ttf")) if FONTS_DIR.exists() else []
+
+def _media_type(name: str) -> str:
+    return _EXT_MEDIA.get(name.rsplit(".", 1)[-1], "application/octet-stream")
+
+
+def _manifest(docs: list[tuple[str, str]], contents_at: int, fonts: list[Path],
+              image_names: list[str], cover: tuple[bytes, str] | None) -> tuple[list[dict], list[str]]:
+    """The package's manifest items and spine ids."""
     # Every item carries `properties` (usually ""): the template environment is
     # StrictUndefined, so an item missing the key raises rather than rendering
     # an empty attribute.
@@ -149,15 +158,40 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     # registry: it was dropped to its alt text at collect, so the
     # `application/octet-stream` default below is unreachable, and every
     # manifest entry names a core EPUB image type.
-    items += [{"id": f"img-{i}", "href": f"images/{name}",
-               "media_type": _EXT_MEDIA.get(name.rsplit(".", 1)[-1], "application/octet-stream"),
+    items += [{"id": f"img-{i}", "href": f"images/{name}", "media_type": _media_type(name),
                "properties": ""}
-              for i, name in enumerate(images.by_path.values())]
-    if cover_bytes is not None:
-        items.append({"id": "cover-img", "href": f"images/{cover_name}",
-                      "media_type": _EXT_MEDIA.get(cover_name.rsplit(".", 1)[-1],
-                                                   "application/octet-stream"),
-                      "properties": "cover-image"})
+              for i, name in enumerate(image_names)]
+    if cover is not None:
+        items.append({"id": "cover-img", "href": f"images/{cover[1]}",
+                      "media_type": _media_type(cover[1]), "properties": "cover-image"})
+    return items, spine
+
+
+def _ncx_points(chapters: list[dict], appendix: list[dict]) -> list[dict]:
+    """The NCX is EPUB 2's table of contents, and EPUB 3 keeps it legal precisely
+    so a book stays navigable on the reading systems that never learned the
+    nav document. Flat, because an NCX navPoint must point AT a document and
+    the nav's "Scenes"/"Appendix" groupings point at nothing -- depth is a
+    nicety, having every chapter reachable is not."""
+    points = [{"label": "Title", "href": "text/titlepage.xhtml"}]
+    points += [{"label": c["label"], "href": f"text/{c['file']}"} for c in chapters]
+    if appendix:
+        points.append({"label": "Appendix", "href": "text/appendix.xhtml"})
+        points += [{"label": e["title"], "href": f"text/{e['file']}"} for e in appendix]
+    return points
+
+
+def build_epub(cid: str) -> tuple[bytes, str]:
+    """The whole campaign as an EPUB 3 book: (bytes, suggested filename)."""
+    data = _export.collect(cid, image_prefix="../images/")  # raises CampaignNotFound
+    images = data["images"]
+    chapters = [_chapter_doc(c) for c in data["chapters"]]
+    appendix = [_appendix_doc(e) for e in data["appendix"]]
+    title = data["title"]
+    cover = _read_cover(data["cover"])
+    docs, contents_at = _reading_docs(data, chapters, appendix, cover)
+    fonts = sorted(FONTS_DIR.glob("*.ttf")) if FONTS_DIR.exists() else []
+    items, spine = _manifest(docs, contents_at, fonts, list(images.by_path.values()), cover)
 
     # One identifier, rendered into both the package and the NCX: EPUB 2 readers
     # check `dtb:uid` against `dc:identifier`, and two f-strings drifting apart
@@ -166,21 +200,12 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     identifier = f"urn:grimoire:campaign:{cid}"
     opf = _render("package.opf", identifier=identifier, title=title,
                   modified=data["updated"] or now_iso(),
-                  cover_id="cover-img" if cover_bytes is not None else "",
+                  cover_id="cover-img" if cover is not None else "",
                   items=items, spine=spine)
     nav = _render("nav.xhtml", chapters=chapters, appendix=appendix,
-                  cover=cover_bytes is not None)
-    # The NCX is EPUB 2's table of contents, and EPUB 3 keeps it legal precisely
-    # so a book stays navigable on the reading systems that never learned the
-    # nav document. Flat, because an NCX navPoint must point AT a document and
-    # the nav's "Scenes"/"Appendix" groupings point at nothing -- depth is a
-    # nicety, having every chapter reachable is not.
-    points = [{"label": "Title", "href": "text/titlepage.xhtml"}]
-    points += [{"label": c["label"], "href": f"text/{c['file']}"} for c in chapters]
-    if appendix:
-        points.append({"label": "Appendix", "href": "text/appendix.xhtml"})
-        points += [{"label": e["title"], "href": f"text/{e['file']}"} for e in appendix]
-    ncx = _render("toc.ncx", identifier=identifier, title=title, points=points)
+                  cover=cover is not None)
+    ncx = _render("toc.ncx", identifier=identifier, title=title,
+                  points=_ncx_points(chapters, appendix))
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -196,6 +221,6 @@ def build_epub(cid: str) -> tuple[bytes, str]:
             z.writestr(f"fonts/{f.name}", f.read_bytes())
         for p, name in images.by_path.items():
             z.writestr(f"images/{name}", p.read_bytes())
-        if cover_bytes is not None:
-            z.writestr(f"images/{cover_name}", cover_bytes)
+        if cover is not None:
+            z.writestr(f"images/{cover[1]}", cover[0])
     return buf.getvalue(), f"{cid}.epub"
