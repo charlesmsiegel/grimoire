@@ -8,11 +8,7 @@
     "SIM105": 1
   },
   "backend/scripts/ingest_scene.py": {
-    "C901": 1,
     "N818": 1
-  },
-  "backend/src/grimoire/claude_agent.py": {
-    "C901": 1
   },
   "backend/src/grimoire/embeddings.py": {
     "C901": 1
@@ -21,8 +17,7 @@
     "ASYNC109": 1
   },
   "backend/src/grimoire/llm/_retry.py": {
-    "ASYNC109": 1,
-    "C901": 1
+    "ASYNC109": 1
   },
   "backend/src/grimoire/openai_compatible.py": {
     "C901": 2
@@ -49,9 +44,6 @@
   "backend/src/grimoire/routes/entities.py": {
     "RUF005": 1
   },
-  "backend/src/grimoire/routes/mechanics.py": {
-    "C901": 1
-  },
   "backend/src/grimoire/routes/modules.py": {
     "A002": 3
   },
@@ -68,7 +60,6 @@
     "A002": 3
   },
   "backend/src/grimoire/routes/streaming/_persistence.py": {
-    "C901": 1,
     "SIM105": 1
   },
   "backend/src/grimoire/routes/streaming/_streams.py": {
@@ -103,10 +94,6 @@
     "PERF401": 1,
     "RUF012": 1
   },
-  "backend/src/grimoire/store/campaigns/lifecycle.py": {
-    "B023": 2,
-    "C901": 2
-  },
   "backend/src/grimoire/store/campaigns/paths.py": {
     "N818": 1
   },
@@ -131,9 +118,6 @@
   },
   "backend/src/grimoire/store/chronicle.py": {
     "PLW2901": 1
-  },
-  "backend/src/grimoire/store/climates/schema.py": {
-    "C901": 1
   },
   "backend/src/grimoire/store/commits.py": {
     "RUF003": 1
@@ -160,18 +144,9 @@
     "RUF005": 1
   },
   "backend/src/grimoire/store/epub.py": {
-    "A002": 1,
-    "C901": 1
+    "A002": 1
   },
   "backend/src/grimoire/store/export.py": {
-    "C901": 1
-  },
-  "backend/src/grimoire/store/expressions.py": {
-    "B905": 1,
-    "C901": 1,
-    "PGH003": 1
-  },
-  "backend/src/grimoire/store/external.py": {
     "C901": 1
   },
   "backend/src/grimoire/store/fork.py": {
@@ -560,14 +535,6 @@
     "RUF005": 1
   },
   "scripts/grimoire_sync.py": {
-    "C901": 1,
     "PLW2901": 1
-  },
-  "scripts/verify_templates.py": {
-    "A002": 1,
-    "B905": 2,
-    "C901": 1,
-    "E402": 6,
-    "ISC004": 1
   }
 }
