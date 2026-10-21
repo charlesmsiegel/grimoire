@@ -6,18 +6,15 @@ machine-readable kind. The read must answer whatever shape the files are in --
 it is what a reader opens to find out what is wrong.
 """
 
-import importlib
 import json
 from typing import ClassVar
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.embeddings
 import grimoire.llm
 import grimoire.store as store
 from grimoire import routes
-from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import doc, drivers, graph, pending
 from tests.llm_fakes import from_entries
@@ -25,13 +22,7 @@ from tests.test_continuity_apply import _cache
 from tests.test_continuity_graph import _recorded
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC, _plugin, _primary
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

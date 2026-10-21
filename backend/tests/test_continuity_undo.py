@@ -7,23 +7,14 @@ restores in `continuity.doc` validate for exactly that, and a refusal reaches
 the reader as a 409 rather than a cycle on disk or a 500.
 """
 
-import importlib
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire.main import create_app
 from grimoire.store.continuity import doc, effective, review
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

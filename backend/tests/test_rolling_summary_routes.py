@@ -12,7 +12,6 @@ import importlib
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
@@ -41,15 +40,7 @@ def _user_prompt(llm: FakeLLM, n: int) -> str:
     return llm.requests[n]["messages"][1]["content"]
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    # `with`, so the lifespan runs: producing routes hand their work to a
-    # runner that lives on it, and a client without one cannot drive a turn.
-    with TestClient(app) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 def _scene(client, posts=0):

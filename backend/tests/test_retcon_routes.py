@@ -8,27 +8,16 @@ across scenes, that the preview prices a replay before anything is cut, and that
 forking leaves the original alone.
 """
 
-import importlib
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
 from grimoire import routes, store
-from grimoire.main import create_app
 from tests import review_runs
 from tests.inference_fixtures import put_settings
 from tests.llm_fakes import FakeOpenRouter, FakeOpenRouterComplete
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    # `with`, so the lifespan runs: producing routes hand their work to a
-    # runner that lives on it, and a client without one cannot drive a turn.
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

@@ -8,23 +8,14 @@ labels are resolved server-side, and a hand-edited file costs the row's fields
 rather than the request.
 """
 
-import importlib
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire.main import create_app
 from grimoire.routes.campaigns import _ledger as campaign_ledger
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

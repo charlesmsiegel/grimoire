@@ -8,27 +8,19 @@ when nothing is waiting.
 
 from __future__ import annotations
 
-import importlib
 import json
 from collections import Counter
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire.main import create_app
 from grimoire.routes import todo
 from grimoire.store.modules import binding
-from tests.overview_support import audited, clear_memos, clock_forward
-
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    clear_memos()
-    with TestClient(create_app()) as c:
-        yield c
+from tests.overview_support import (
+    audited,
+    clock_forward,
+    overview_client,  # noqa: F401 -- a fixture, `client`
+)
 
 
 @pytest.fixture

@@ -9,14 +9,11 @@ built over them -- `rows` and `findings` -- against the shapes a hand edit can
 leave behind.
 """
 
-import importlib
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire.main import create_app
 from grimoire.store import scene_refs
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import candidates, canon, doc, effective, pending
@@ -26,12 +23,7 @@ MAP, CHART, LETTER = "thread:maras-map", "thread:winifreds-chart", "thread:serap
 OATH = "commitment:maras-oath"
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

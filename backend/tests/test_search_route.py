@@ -8,13 +8,9 @@ the route sits ahead of the generic `/{kind}` catch-alls (which
 
 from __future__ import annotations
 
-import importlib
-
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire.main import create_app
 from tests.inference_fixtures import put_settings
 
 #: Quoted, so the four words are one term rather than four -- "the" alone
@@ -23,14 +19,7 @@ from tests.inference_fixtures import put_settings
 PHRASE = '"owed to the sea"'
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    # `with`, so the lifespan runs: producing routes hand their work to a
-    # runner that lives on it, and a client without one cannot drive a turn.
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

@@ -15,16 +15,13 @@ visible from that site.
 
 from __future__ import annotations
 
-import importlib
 import io
 
 import pytest
-from fastapi.testclient import TestClient
 from PIL import Image
 
 import grimoire.store as store
 from grimoire import routes
-from grimoire.main import create_app
 from grimoire.store import inference_keys as keys
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
@@ -33,14 +30,7 @@ from . import review_runs
 from .inference_fixtures import put_settings
 from .llm_fakes import FakeLLM
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    with TestClient(app) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 def _fake(client) -> FakeLLM:

@@ -18,30 +18,18 @@ the rules that keep that safe are what this file pins:
   * one unusable card is skipped, not fatal.
 """
 
-import importlib
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
-from grimoire.main import create_app
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouterComplete
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    """conftest's `client`, minus its default fake.
-
-    Shadowed deliberately: every test here says what the provider answers, and
-    the shared fixture's stand-in would let one that forgot quietly derive
-    "Hello" for the whole roster and still pass.
-    """
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+# conftest's `client`, minus its default fake. Deliberately: every test here
+# says what the provider answers, and the shared fixture's stand-in would let
+# one that forgot quietly derive "Hello" for the whole roster and still pass.
+pytestmark = pytest.mark.unfaked_llm
 
 
 def _world(client, name="Realm"):

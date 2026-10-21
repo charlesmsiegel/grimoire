@@ -8,18 +8,15 @@ decide it, so a later floor change fails at that assertion rather than
 silently somewhere else.
 """
 
-import importlib
 import itertools
 import json
 import math
 import time
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import embeddings
-from grimoire.main import create_app
 from grimoire.store import config, embed_space, llm_connections, logs, usage, vectors
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import effective, review, similarity
@@ -30,12 +27,7 @@ S1, S2 = "001--saltmarch", "002--realm"
 MARA = "characters:mara"
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

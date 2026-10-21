@@ -49,13 +49,11 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
-import importlib
 import json
 import os
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import decisions, inference, llm, llm_sampling, wire
@@ -63,7 +61,6 @@ from grimoire.decisions import Answer, Item, ItemResult, Predicate
 from grimoire.llm import LLMClient
 from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
-from grimoire.main import create_app
 from grimoire.routes import character_turns
 from grimoire.routes.character_turns import _prompts as character_turns_prompts
 from grimoire.store.inference import resolve as inf
@@ -86,12 +83,7 @@ def _instant_backoff(monkeypatch):
     monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

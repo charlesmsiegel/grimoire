@@ -3,28 +3,8 @@ writes, and the undo for it."""
 
 from __future__ import annotations
 
-import importlib
-
-import pytest
-from fastapi.testclient import TestClient
-
 import grimoire.store as store
-from grimoire import routes
-from grimoire.main import create_app
 from grimoire.store.continuity import review as continuity_review
-from tests.llm_fakes import FakeOpenRouter
-
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
-    # `with`, so the lifespan runs: producing routes hand their work to a
-    # runner that lives on it, and a client without one cannot drive a turn.
-    with TestClient(app) as c:
-        yield c
 
 
 def _campaign(client):

@@ -4,16 +4,13 @@ Every refusal here is one a reader can act on (spec §5.1, §5.3, §5.7), and ev
 write lands in the journal so it can be undone from the Changes panel.
 """
 
-import importlib
 import json
 import re
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
-from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import canon, doc, effective, review
 
@@ -23,12 +20,7 @@ from .llm_fakes import from_entries
 S1, S2 = "001--saltmarch", "002--realm"
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

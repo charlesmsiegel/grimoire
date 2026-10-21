@@ -6,25 +6,15 @@ connection routes; what is here is the shared normalizer and the preview route
 the setup wizard and the New-connection form depend on.
 """
 
-import importlib
 
 import pytest
-from fastapi.testclient import TestClient
 
-import grimoire.store as store
 from grimoire import catalog, routes, wire
 from grimoire import llm_sampling as ls
 from grimoire.llm_errors import LLMError
-from grimoire.main import create_app
 from tests.llm_fakes import FakeCatalog
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 # ---- the normalizer ----

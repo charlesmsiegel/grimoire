@@ -10,28 +10,17 @@ of that screen: a fact that stopped being true, the scene that ended it and the
 fact that replaced it have been on disk since #114 and never left the server.
 """
 
-import importlib
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire.main import create_app
 from grimoire.routes.campaigns import LEDGER_RECENT
 from grimoire.store.continuity import doc as continuity_doc
 from grimoire.store.continuity import effective
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC, _plugin, _primary
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    # `with`, so the lifespan runs: producing routes hand their work to a
-    # runner that lives on it, and a client without one cannot drive a turn.
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 def _campaign(client):

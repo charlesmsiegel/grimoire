@@ -18,21 +18,17 @@ say something they cannot back up:
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
-from grimoire.main import create_app
 from grimoire.routes import scenes as scene_routes
 from grimoire.store import atomic, campaigns, clock, fork, plot, revision, scenes, worlds
 from grimoire.store.continuity import candidates, reconcile
-from tests.llm_fakes import FakeOpenRouter
 
 # --- the token itself ------------------------------------------------------
 
@@ -173,16 +169,6 @@ def test_a_bump_that_cannot_be_written_does_not_raise(unstamped, monkeypatch):
 
 
 # --- what moves it ---------------------------------------------------------
-
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
-    with TestClient(app) as c:
-        yield c
 
 
 def _campaign(client):

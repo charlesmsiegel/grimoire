@@ -5,14 +5,11 @@ connection kinds whose client can carry an image.
 """
 
 import base64
-import importlib
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import llm, routes
-from grimoire.main import create_app
 from tests import draft_runs as drafts
 from tests.inference_fixtures import put_settings
 from tests.llm_fakes import CapturingOpenRouter, FakeOpenRouterComplete
@@ -20,15 +17,7 @@ from tests.llm_fakes import CapturingOpenRouter, FakeOpenRouterComplete
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    app = create_app()
-    # `with`, so the lifespan runs: producing routes hand their work to a
-    # runner that lives on it, and a client without one cannot drive a turn.
-    with TestClient(app) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

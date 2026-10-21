@@ -10,31 +10,23 @@ spec widens from a 500 to "unknown".
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import time as time_module
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire.main import create_app
 from grimoire.routes import todo
 from grimoire.store import ledger_texts, overview, readstats, statcache
 from grimoire.store.continuity import effective
 from grimoire.store.overview import kinds
-from tests.overview_support import audited, clear_memos, clock_forward
-
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    clear_memos()
-    with TestClient(create_app()) as c:
-        yield c
+from tests.overview_support import (
+    audited,
+    clock_forward,
+    overview_client,  # noqa: F401 -- a fixture, `client`
+)
 
 
 @pytest.fixture

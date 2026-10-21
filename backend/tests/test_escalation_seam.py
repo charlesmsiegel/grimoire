@@ -13,16 +13,13 @@ Invented provider names and the codebase's placeholder names only.
 from __future__ import annotations
 
 import asyncio
-import importlib
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import decisions, inference
 from grimoire.decisions import Answer, Item, ItemResult, Predicate
 from grimoire.llm import _retry as llm_retry
-from grimoire.main import create_app
 from grimoire.routes import common, decision_capture
 from grimoire.store import routing
 from grimoire.store.inference import resolve as inf
@@ -41,12 +38,7 @@ def _instant_backoff(monkeypatch):
     monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 def _policy(monkeypatch, **fields) -> TaskPolicy:

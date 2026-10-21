@@ -17,17 +17,14 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import importlib
 import json
 import time
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import decisions, embeddings, llm_errors, routes
 from grimoire.llm import LLMClient
-from grimoire.main import create_app
 from grimoire.routes.scenes import _review_budget as scenes_review_budget
 from grimoire.store import llm_connections
 from grimoire.store.absorb.materializer import _continuity_rows as materializer_continuity_rows
@@ -66,12 +63,7 @@ BUDGET_SEMANTIC = ("the absorb time budget ran out during semantic matching — 
                    "basic matching used")
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

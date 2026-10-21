@@ -13,6 +13,7 @@ an in-process memo can be exercised without sleeping (spec 04 section 9.1).
 
 from __future__ import annotations
 
+import importlib
 import os
 import sqlite3
 import sys
@@ -24,6 +25,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from fastapi.testclient import TestClient
+
+import grimoire.store as store
+from grimoire.main import create_app
 from grimoire.store import characters, compiled, statcache
 from grimoire.store.compiled import _filesystem as compiled_filesystem
 from grimoire.store.scenes import read as scenes_read
@@ -98,6 +104,18 @@ def clear_memos() -> None:
     except ImportError:
         return
     overview_read._OVERVIEW_POOL.clear()
+
+
+@pytest.fixture(name="client")
+def overview_client(monkeypatch, tmp_path):
+    """An app over a throwaway store whose overview memos start empty, under
+    the name `client`: a module imports it to shadow conftest's. The app keeps
+    its own gateway client -- these suites install no default fake."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    clear_memos()
+    with TestClient(create_app()) as c:
+        yield c
 
 
 def register_overview_kinds(monkeypatch, *names: str) -> None:

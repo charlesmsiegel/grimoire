@@ -8,24 +8,13 @@ Every entity read hands back a `rev`; a save echoing it back gets a 409 instead
 of last-writer-wins.
 """
 
-import importlib
 
 import pytest
-from fastapi.testclient import TestClient
 
 from grimoire import store
-from grimoire.main import create_app
 from grimoire.store import campaigns, worlds
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    # `with`, so the lifespan runs: producing routes hand their work to a
-    # runner that lives on it, and a client without one cannot drive a turn.
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

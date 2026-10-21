@@ -20,13 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import importlib
 import json
 import threading
 from copy import deepcopy
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import decisions, inference, llm, routes, wire
@@ -37,7 +35,6 @@ from grimoire.inference import _decision_calls as inference_decision_calls
 from grimoire.llm import LLMClient
 from grimoire.llm import _retry as llm_retry
 from grimoire.llm_errors import LLMError
-from grimoire.main import create_app
 from grimoire.routes import common
 from grimoire.store import pricing, usage_rollup
 from grimoire.store.inference import facts
@@ -58,12 +55,7 @@ def _instant_backoff(monkeypatch):
     monkeypatch.setattr(llm_retry, "RETRY_BASE", 0.0)
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 # ---- resolutions ----

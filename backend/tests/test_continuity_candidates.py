@@ -8,25 +8,15 @@ Its writer overwrites a malformed file rather than refusing it -- the opposite
 of `doc`'s rule, because nothing in this file is a decision a reader made.
 """
 
-import importlib
 import json
 import os
 
 import pytest
-from fastapi.testclient import TestClient
 
-import grimoire.store as store
-from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import candidates
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

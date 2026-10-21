@@ -11,17 +11,14 @@ Neither survives a refactor on its own, so both are held here.
 
 from __future__ import annotations
 
-import importlib
 import io
 import json
 from urllib.parse import quote
 
 import pytest
-from fastapi.testclient import TestClient
 from PIL import Image
 
 import grimoire.store as store
-from grimoire.main import create_app
 from grimoire.routes import todo
 from grimoire.routes.common import thumb_query
 from grimoire.routes.todo import _catalog as todo_catalog
@@ -31,13 +28,7 @@ from grimoire.store.continuity import doc as continuity_doc
 from tests import inference_fixtures
 from tests.collection_fixtures import format1, format2
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

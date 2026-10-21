@@ -12,14 +12,11 @@ character appears in. These pin the contract:
     is still a capsule, and the tags are cleaned, de-duplicated and capped.
 """
 
-import importlib
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
-from grimoire.main import create_app
 from grimoire.store import search
 from grimoire.store.inference import settings as inference_settings
 from tests.draft_runs import post as draft_post
@@ -28,12 +25,7 @@ from tests.llm_fakes import FakeOpenRouterComplete
 MARKER = "The gate-warden hands the iron key across the threshold"
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 def _campaign(client):

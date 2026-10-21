@@ -8,16 +8,13 @@ structure and needs no app; the observer is a facade concern and needs a real
 neither, because by the time they run the verdict is already a dict.
 """
 
-import importlib
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import health, routes, wire
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
-from grimoire.main import create_app
 from grimoire.routes.config import _probes as config_probes
 from grimoire.store.inference import resolve as inference
 from tests import draft_runs as drafts
@@ -29,13 +26,7 @@ from tests.llm_fakes import (
     StallingGateway,
 )
 
-
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 def _conn(id: str = "openrouter", kind: str = "openrouter", rev: str = "") -> wire.Target:  # noqa: A002 - a connection's id, as the registry files it

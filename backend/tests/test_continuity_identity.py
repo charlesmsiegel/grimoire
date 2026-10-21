@@ -9,17 +9,14 @@ assertion rather than silently somewhere else. Stored records are seeded in a
 scene of their own (`s0`), never the one being absorbed.
 """
 
-import importlib
 import json
 import math
 import time
 
 import pytest
-from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import decisions, embeddings, inference, prompts
-from grimoire.main import create_app
 from grimoire.store import absorb, embed_space, llm_connections, vectors
 from grimoire.store.absorb import materializer
 from grimoire.store.campaigns import paths as campaigns_paths
@@ -31,12 +28,7 @@ from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
 NO_FACTS = {"cast": [], "location": "", "date": ""}
 
 
-@pytest.fixture
-def client(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    importlib.reload(store)
-    with TestClient(create_app()) as c:
-        yield c
+pytestmark = pytest.mark.unfaked_llm
 
 
 @pytest.fixture

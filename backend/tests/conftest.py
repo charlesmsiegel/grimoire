@@ -178,6 +178,10 @@ def pytest_configure(config):
         "markers",
         "product_birth: a fresh store is born as the product births one (the format "
         "marker alone), not as the suite's upgraded default library")
+    config.addinivalue_line(
+        "markers",
+        "unfaked_llm: the `client` fixture keeps the app's own gateway client rather "
+        "than installing its default fake")
 
 
 @pytest.fixture(autouse=True)
@@ -255,7 +259,7 @@ def _auto_reconcile_off_unless_asked(request, monkeypatch):
 
 
 @pytest.fixture
-def client(monkeypatch, tmp_path):
+def client(request, monkeypatch, tmp_path):
     """An app over a throwaway store, with the gateway faked.
 
     One copy, here, rather than the identical one three route-test files each
@@ -264,11 +268,18 @@ def client(monkeypatch, tmp_path):
     exactly that. A suite wanting a different fake overrides
     `routes.get_llm` again in the test itself, or declares its own `client`
     fixture, which still shadows this one.
+
+    `@pytest.mark.unfaked_llm` (a module's `pytestmark`, usually) leaves the
+    app's own gateway client in place: the suite installs its fake per test
+    and wants one that forgot to fail rather than answer "Hello". Some fifty
+    modules each carried their own copy of this fixture minus the fake line
+    before the marker existed.
     """
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     importlib.reload(store)
     app = create_app()
-    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
+    if request.node.get_closest_marker("unfaked_llm") is None:
+        app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
     # `with`, so the LIFESPAN RUNS. It did not used to, and nothing needed it
     # to; now every producing route hands its work to a runner that lives on
     # the lifespan's event loop, so a client without one cannot drive a turn at
