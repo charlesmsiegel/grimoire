@@ -5,6 +5,8 @@ bound module and sheets."""
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
@@ -163,7 +165,7 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction, request: Reques
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _roll_proposal_run(cid, sid, body, request, client, resolved, run)
+        return _roll_proposal_run(cid, sid, body, request, client, resolved=resolved, run=run)
 
 
 def _paused_response_round(cid: str, sid: str, proposal: dict) -> dict | None:
@@ -204,8 +206,146 @@ def _paused_response_round(cid: str, sid: str, proposal: dict) -> dict | None:
                    "Review the changed passage before continuing.")
 
 
+def _current_proposal(cid: str, sid: str, pid: str) -> dict:
+    """The scene's proposal record when it is still `pid` and not superseded;
+    refused 409 as stale otherwise."""
+    rec = store.proposals.get(cid, sid)
+    if rec is None or rec.get("id") != pid:
+        raise HTTPException(status_code=409, detail="proposal is stale")
+    if rec.get("status") == "superseded":
+        # A same-id superseded record that already resolved still owes its roll
+        # + 🎲 line to the transcript (the roll stands as history per spec). If
+        # a crash landed between the roll append and the line write, no other
+        # path heals it, so a stale client's retry becomes the recovery path:
+        # project idempotently (pure file I/O), then still 409 — no
+        # continuation is ever offered for a superseded record. A record
+        # superseded while still pending/resolving has no resolution to
+        # project; it stays a plain 409.
+        if isinstance(rec.get("resolution"), dict):
+            store.proposals.project(cid, sid, pid)
+        raise HTTPException(status_code=409, detail="proposal is stale")
+    return rec
+
+
+def _check_arguments(body: ProposalAction, payload: dict) -> tuple:
+    """The check an accept resolves: the player's overrides over the proposal's."""
+    return (body.check or payload.get("check"), body.actor or payload.get("actor"),
+            body.difficulty if body.difficulty is not None else payload.get("difficulty"),
+            body.modifier if body.modifier is not None else (payload.get("modifier") or 0))
+
+
+def _adjudicate_pending(cid: str, sid: str, body: ProposalAction, rec: dict) -> str | None:
+    """Decline or resolve the pending proposal `rec`. None once it has moved
+    on; the detail of a check that could not be resolved, after reverting the
+    proposal to pending, otherwise."""
+    pid = body.proposal
+    if body.action == "decline":
+        if not store.proposals.transition(cid, sid, pid, ("pending",), "declined"):
+            raise HTTPException(status_code=409, detail="proposal is stale")
+        return None
+    # accept
+    if not store.proposals.claim(cid, sid, pid):
+        raise HTTPException(status_code=409, detail="adjudication in progress")
+    try:
+        resolution = store.checks.resolve_check(cid, *_check_arguments(body, rec["payload"]))
+    except store.locks.StoreBusy:
+        # Contention is not a check failure and must not be dressed up
+        # as one (#234). Revert exactly as the broad path does, then
+        # let the 409 handler answer. The revert can itself contend; if
+        # it does the record stays "resolving", which needs no new
+        # machinery -- that is in proposals.NON_TERMINAL, so the next
+        # send's supersede() retires it, and until then this route
+        # answers 409 "adjudication in progress", which is accurate.
+        with contextlib.suppress(store.locks.StoreBusy):
+            store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
+        raise
+    except Exception as exc:  # noqa: BLE001 — any failure reverts cleanly
+        store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
+        return (str(exc) if isinstance(exc, store.checks.CheckError)
+                else "the check could not be resolved")
+    if not store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution):
+        # superseded mid-resolve: the pure roll result is discarded unlogged
+        raise HTTPException(status_code=409, detail="proposal was superseded")
+    return None
+
+
+@dataclass
+class _Continuation:
+    """What an adjudicated proposal hands its narration: the resolution (None
+    for a decline), and either the prompt `block` a paused character round
+    resumes with or the `messages` (and their `breakdown`) a narrator
+    continuation sends."""
+
+    resolution: dict | None = None
+    block: str = ""
+    messages: list = field(default_factory=list)
+    breakdown: Any = None
+
+
+def _prepare_continuation(cid: str, sid: str, pid: str, status: str, round_record: dict | None,
+                          *, primary) -> _Continuation | None:
+    """Project an adjudicated proposal and compose what continues from it.
+    None when nothing was projected; 409 when the record is neither resolved
+    nor declined."""
+    if status == "resolved":
+        resolution = store.proposals.project(cid, sid, pid)
+        if resolution is None:
+            # Another actor won the scene's record in the window between our
+            # pre-stream status read and the projection lock (a supersede +
+            # brand-new fence/send). Nothing was projected.
+            return None
+        store.responses.mark_applied(
+            cid, sid, round_record["id"] if round_record is not None else None)
+        if round_record is None:
+            messages, breakdown = _continuation_messages(
+                cid, sid, resolution, model=primary.model,
+                images=store.post_images.images_for(primary))
+            return _Continuation(resolution, messages=messages, breakdown=breakdown)
+        on_roll_docs, check_docs = _continuation_rule_bodies(cid, resolution)
+        return _Continuation(resolution, block=prompts.render(
+            "scene/roll_result.j2", resolution=resolution,
+            on_roll_docs=on_roll_docs, check_docs=check_docs))
+    if status == "declined":
+        if round_record is None:
+            messages, breakdown = _declined_continuation_messages(
+                cid, sid, model=primary.model,
+                images=store.post_images.images_for(primary))
+            return _Continuation(messages=messages, breakdown=breakdown)
+        return _Continuation(block=prompts.render("scene/roll_declined.j2"))
+    # defensive: a race moved the record out from under us
+    raise HTTPException(status_code=409, detail="proposal is stale")
+
+
+def _detached_continuation(cid: str, sid: str, pid: str, continuation: _Continuation, *,
+                           request: Request, client: LLMClient, resolved: UsableInference, run):
+    """Start the narrator's continuation of an adjudicated roll as a detached
+    run and tail it."""
+    primary = resolved.chain.primary
+    outcome = StreamOutcome()
+    # DETACHED like every other scene turn. The plan singles this producer out:
+    # it is `_continuation_stream`, in a different module, so a migration that
+    # did the chat path and stopped would pass every other detach test while
+    # locking the phone during an accepted roll still cancelled it and dropped
+    # the narration -- and a roll is exactly when a player looks away.
+    # The follow-ups ride it too (#397): an adjudicated roll's continuation
+    # appends narration like any other turn, so the summary and the break
+    # question want asking exactly as they do after a send. The hook comes from
+    # `scenes` rather than being written again here, so the two callers cannot
+    # disagree about what a turn asks for next.
+    stream = _continuation_stream(cid, sid, pid, continuation.messages, resolved, client,
+                                  identity=run.scene_identity, outcome=outcome,
+                                  after_turn=_follow_up_hook(request.app, cid, sid,
+                                                             client))
+    _record_prompt(cid, sid, "continuation", continuation.breakdown,
+                   model=primary.model, kind=primary.kind, messages=continuation.messages,
+                   conn=resolved.chain)
+    runs.start_detached(request.app, run, lambda: stream.body_iterator,
+                        outcome=outcome.result)
+    return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+
+
 def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Request,
-                       client: LLMClient, resolved: UsableInference, run):
+                       client: LLMClient, *, resolved: UsableInference, run):
     """The body of an adjudication, once the scene is reserved -- see
     `scenes._chat_run` for why every exit from it is wrapped."""
     primary = resolved.chain.primary
@@ -216,21 +356,7 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
         if _scene_moved(cid, sid, run.scene_identity):
             raise HTTPException(status_code=404, detail="scene not found")
         pid = body.proposal
-        rec = store.proposals.get(cid, sid)
-        if rec is None or rec.get("id") != pid:
-            raise HTTPException(status_code=409, detail="proposal is stale")
-        if rec.get("status") == "superseded":
-            # A same-id superseded record that already resolved still owes its roll
-            # + 🎲 line to the transcript (the roll stands as history per spec). If
-            # a crash landed between the roll append and the line write, no other
-            # path heals it, so a stale client's retry becomes the recovery path:
-            # project idempotently (pure file I/O), then still 409 — no
-            # continuation is ever offered for a superseded record. A record
-            # superseded while still pending/resolving has no resolution to
-            # project; it stays a plain 409.
-            if isinstance(rec.get("resolution"), dict):
-                store.proposals.project(cid, sid, pid)
-            raise HTTPException(status_code=409, detail="proposal is stale")
+        rec = _current_proposal(cid, sid, pid)
         status = rec["status"]
 
         if status == "narrated":
@@ -239,76 +365,25 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
             raise HTTPException(status_code=409, detail="adjudication in progress")
 
         round_record = _paused_response_round(cid, sid, rec)
-        resolution = None
-        block = ""
 
         if status == "pending":
-            if body.action == "decline":
-                if not store.proposals.transition(cid, sid, pid, ("pending",), "declined"):
-                    raise HTTPException(status_code=409, detail="proposal is stale")
-            else:  # accept
-                if not store.proposals.claim(cid, sid, pid):
-                    raise HTTPException(status_code=409, detail="adjudication in progress")
-                p = rec["payload"]
-                try:
-                    resolution = store.checks.resolve_check(
-                        cid, body.check or p.get("check"), body.actor or p.get("actor"),
-                        body.difficulty if body.difficulty is not None else p.get("difficulty"),
-                        body.modifier if body.modifier is not None else (p.get("modifier") or 0))
-                except store.locks.StoreBusy:
-                    # Contention is not a check failure and must not be dressed up
-                    # as one (#234). Revert exactly as the broad path does, then
-                    # let the 409 handler answer. The revert can itself contend; if
-                    # it does the record stays "resolving", which needs no new
-                    # machinery -- that is in proposals.NON_TERMINAL, so the next
-                    # send's supersede() retires it, and until then this route
-                    # answers 409 "adjudication in progress", which is accurate.
-                    with contextlib.suppress(store.locks.StoreBusy):
-                        store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
-                    raise
-                except Exception as exc:  # noqa: BLE001 — any failure reverts cleanly
-                    store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
-                    detail = (str(exc) if isinstance(exc, store.checks.CheckError)
-                              else "the check could not be resolved")
-                    # `failed`, not the default `landed`: nothing was generated
-                    # and nothing was persisted. Recorded `landed`, a poll would
-                    # read success while the stream carried an error, and the
-                    # phone would announce a reply that does not exist.
-                    return runs.answer_without_running(request.app, run, [
-                        _sse({"error": {"detail": detail, "kind": "check_error"}})],
-                        state="failed")
-                if not store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution):
-                    # superseded mid-resolve: the pure roll result is discarded unlogged
-                    raise HTTPException(status_code=409, detail="proposal was superseded")
+            detail = _adjudicate_pending(cid, sid, body, rec)
+            if detail is not None:
+                # `failed`, not the default `landed`: nothing was generated
+                # and nothing was persisted. Recorded `landed`, a poll would
+                # read success while the stream carried an error, and the
+                # phone would announce a reply that does not exist.
+                return runs.answer_without_running(request.app, run, [
+                    _sse({"error": {"detail": detail, "kind": "check_error"}})],
+                    state="failed")
             status = store.proposals.get(cid, sid)["status"]
 
-        if status == "resolved":
-            resolution = store.proposals.project(cid, sid, pid)
-            if resolution is None:
-                # Another actor won the scene's record in the window between our
-                # pre-stream status read and the projection lock (a supersede +
-                # brand-new fence/send). Nothing was projected — stop dead, same
-                # as any other lost-race case, with a clean done frame.
-                return runs.answer_without_running(request.app, run, [_sse({"done": True})])
-            store.responses.mark_applied(
-                cid, sid, round_record["id"] if round_record is not None else None)
-            if round_record is None:
-                messages, breakdown = _continuation_messages(
-                    cid, sid, resolution, model=primary.model,
-                    images=store.post_images.images_for(primary))
-            else:
-                on_roll_docs, check_docs = _continuation_rule_bodies(cid, resolution)
-                block = prompts.render("scene/roll_result.j2", resolution=resolution,
-                                       on_roll_docs=on_roll_docs, check_docs=check_docs)
-        elif status == "declined":
-            if round_record is None:
-                messages, breakdown = _declined_continuation_messages(
-                    cid, sid, model=primary.model,
-                    images=store.post_images.images_for(primary))
-            else:
-                block = prompts.render("scene/roll_declined.j2")
-        else:  # defensive: a race moved the record out from under us
-            raise HTTPException(status_code=409, detail="proposal is stale")
+        continuation = _prepare_continuation(cid, sid, pid, status, round_record,
+                                             primary=primary)
+        if continuation is None:
+            # Nothing was projected (`_prepare_continuation`) — stop dead, same
+            # as any other lost-race case, with a clean done frame.
+            return runs.answer_without_running(request.app, run, [_sse({"done": True})])
 
         if round_record is not None:
             messages_now = store.scenes.read_scene(cid, sid)["messages"]
@@ -322,29 +397,11 @@ def _roll_proposal_run(cid: str, sid: str, body: ProposalAction, request: Reques
     if round_record is not None:
         return character_turns.resume_roll(
             cid, sid, pid, request, client, resolved=resolved, run=run,
-            round_record=round_record, resolution=resolution, after_turn=_follow_up_hook(request.app, cid, sid, client),
-            appended_block=block)
-    outcome = StreamOutcome()
-    # DETACHED like every other scene turn. The plan singles this producer out:
-    # it is `_continuation_stream`, in a different module, so a migration that
-    # did the chat path and stopped would pass every other detach test while
-    # locking the phone during an accepted roll still cancelled it and dropped
-    # the narration -- and a roll is exactly when a player looks away.
-    # The follow-ups ride it too (#397): an adjudicated roll's continuation
-    # appends narration like any other turn, so the summary and the break
-    # question want asking exactly as they do after a send. The hook comes from
-    # `scenes` rather than being written again here, so the two callers cannot
-    # disagree about what a turn asks for next.
-    stream = _continuation_stream(cid, sid, pid, messages, resolved, client,
-                                  identity=run.scene_identity, outcome=outcome,
-                                  after_turn=_follow_up_hook(request.app, cid, sid,
-                                                             client))
-    _record_prompt(cid, sid, "continuation", breakdown,
-                   model=primary.model, kind=primary.kind, messages=messages,
-                   conn=resolved.chain)
-    runs.start_detached(request.app, run, lambda: stream.body_iterator,
-                        outcome=outcome.result)
-    return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+            round_record=round_record, resolution=continuation.resolution,
+            after_turn=_follow_up_hook(request.app, cid, sid, client),
+            appended_block=continuation.block)
+    return _detached_continuation(cid, sid, pid, continuation, request=request,
+                                  client=client, resolved=resolved, run=run)
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/checks")
