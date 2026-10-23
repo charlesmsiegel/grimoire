@@ -305,7 +305,8 @@ def flag_seq(entry: dict | None) -> int:
 def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[list],
          fields_digest: str, model: str, keep_flags: bool = False,
          seen_seq: int | None = None, raise_upstream: bool = False,
-         bump_gen: bool = False, touched: list | None = None) -> None:
+         bump_gen: bool = False, touched: list | None = None,
+         provenance: dict | None = None) -> None:
     """Store `key`'s snapshot and mark it `ok`. What happens to its flags:
 
     - by default they are cleared (a writer that read everything just now);
@@ -333,7 +334,8 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
     with locks.campaign_lock(cid):
         _write_json(_snapshot_path(cid, identity, key),
                     {"version": VERSION, "snapshot": snapshot,
-                     "fields_digest": fields_digest, "model": model, "at": now_iso()})
+                     "fields_digest": fields_digest, "model": model, "at": now_iso(),
+                     **({"provenance": provenance} if provenance is not None else {})})
         entries = read_index(cid, identity)
         prev = entries.get(key) or {}
         seq = flag_seq(prev)

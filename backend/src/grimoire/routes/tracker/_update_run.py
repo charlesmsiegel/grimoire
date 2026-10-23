@@ -83,7 +83,8 @@ async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: 
             _persistence._commit, cid, identity, prep["sid"], key, snapshot, changed=changed,
             digest=store.tracker.fields.digest(fields), model=resolved.chain.primary.model,
             flag_later=flag_later, seen_seq=prep["seen_seq"], gen=gen,
-            stale_base=prep["stale_base"], touched=restored, base=prep["base"])
+            stale_base=prep["stale_base"], touched=restored, base=prep["base"],
+            certificate=prep["provenance"])
     except Exception as exc:  # noqa: BLE001 -- as `_prepare`: never leave it `pending`
         await run_in_threadpool(_persistence._fail, cid, identity, prep["sid"], key, _text(exc), gen)
         return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}

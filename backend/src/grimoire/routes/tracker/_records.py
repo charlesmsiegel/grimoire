@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException, Request
 
 from ... import store
 from ...llm import LLMClient
+from ...store.tracker import provenance
 from .. import runs
 from ..common import _require_scene, get_llm
 from ..models import TrackerEdit
@@ -179,6 +180,9 @@ def put_tracker_record(cid: str, sid: str, key: str, body: TrackerEdit, request:
             # trace. Refused rather than lost -- the person edits once it lands.
             raise HTTPException(status_code=409, detail="tracker_busy")
         stored = records.read_snapshot(cid, ident, key)
+        proof = stored.get("provenance") if stored else None
+        if not provenance.valid(cid, sid, key, proof):
+            proof = None
         # A record with no snapshot (failed before it ever landed) is edited
         # from the state its post started from -- what the disclosure shows.
         prev = stored["snapshot"] if stored else walk.state_before(cid, sid, located["index"])[1]
@@ -206,7 +210,7 @@ def put_tracker_record(cid: str, sid: str, key: str, body: TrackerEdit, request:
         # must not land over it (`Mark`).
         records.save(cid, ident, key, snapshot, changed=kept + changed,
                      fields_digest=store.tracker.fields.digest(fields), model="user",
-                     keep_flags=True, bump_gen=True, touched=touched)
+                     keep_flags=True, bump_gen=True, touched=touched, provenance=proof)
         at = walk.index_of(cid, sid, key)
         if at is not None:
             # Only from a key ON the walk: an inactive variant is not what any
