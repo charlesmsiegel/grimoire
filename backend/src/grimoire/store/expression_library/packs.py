@@ -283,6 +283,7 @@ def export(target: contracts.ExpressionTarget, destination: Path) -> None:
 def _export_collection(collection: dict, destination: Path) -> None:
     metadata = {"format": 1, "default_outfit": collection["default_outfit"], "outfits": {}}
     buffer = io.BytesIO()
+    pixels = 0
     count = 1  # Include the metadata member in the importer's member budget.
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
         for outfit, data in collection["outfits"].items():
@@ -297,6 +298,10 @@ def _export_collection(collection: dict, destination: Path) -> None:
                     raise contracts.ExpressionUnavailableError("A sprite has not synchronized; retry export later")
                 with image.blob_path.open("rb") as stream:
                     raw = _bounded(stream, min(images.MAX_BYTES, MAX_UPLOAD - buffer.tell()))
+                _, decoded_pixels = images.validate(raw)
+                pixels += decoded_pixels
+                if pixels > MAX_PIXELS:
+                    raise contracts.ExpressionBudgetError("Decoded pack exceeds 128 megapixels")
                 archive.writestr(f"expressions/{outfit}/{expression}.{image.ext}", raw)
         archive.writestr("expressions/manifest.json", read.encoded(metadata))
     if buffer.tell() > MAX_UPLOAD:

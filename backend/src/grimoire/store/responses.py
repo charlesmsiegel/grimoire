@@ -566,8 +566,10 @@ def save_variant(
             variant["made_by"] = copy.deepcopy(made_by)
         if tool is not None:
             variant["tool"] = copy.deepcopy(tool)
+        audiences = appearance_paths.post_audiences(cid, sid, len(messages) + 1)
+        response_posts.remember_audiences(record["variants"], messages, audiences)
         variant["posts"] = response_posts.snapshot(messages, rid, part,
-            {"content": content, "post_id": variant["post_id"], "scene_state_token": state_token})
+            {"content": content, "post_id": variant["post_id"], "scene_state_token": state_token}, audiences)
         record["variants"].append(variant)
         if activate:
             record.update(active_variant=variant["id"], status=status)
@@ -775,13 +777,22 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
             )
         messages = read.read_scene(cid, sid)["messages"]
         excluded = _excluded_of(messages, rid)  # read before the parts collapse
+        response_posts.remember_audiences(record["variants"], messages,
+            appearance_paths.post_audiences(cid, sid, len(messages)))
+        # _invalidate reloads the ledger below; retain the audiences captured
+        # before this take disappears, including for older visible variants.
+        variants = record["variants"]
         saved = variant.get("posts") or [{"content": variant["content"],
-            "post_id": variant.get("post_id"), "scene_state_token": variant.get("scene_state_token")}]
+            "post_id": variant.get("post_id"), "scene_state_token": variant.get("scene_state_token"),
+            "audience": variant.get("audience", {})}]
         restored = [{**_message(record, post["content"], "complete", {**variant, **post}, excluded=excluded),
                      "response_part": post.get("response_part") or ""} for post in saved]
         messages, mapping = response_posts.place(messages, rid, index, restored, saved)
+        audiences_by_id = {post.get("post_id"): post.get("audience", {}) for post in saved}
         appearance_paths.remap_presence(
-            cid, sid, mapping, len(messages)
+            cid, sid, mapping, len(messages),
+            {i: audiences_by_id.get(m.get("post_id"), {})
+             for i, m in enumerate(messages) if m.get("response_id") == rid}
         )
         for message in messages[index + 1 :]:
             if message.get("response_id"):
@@ -789,7 +800,7 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
         _invalidate(cid, sid, index, in_context=excluded is None)
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
-        record.update(active_variant=vid, status="complete")
+        record.update(active_variant=vid, status="complete", variants=variants)
         _write(cid, data)
         write.replace_messages(cid, sid, messages)
 

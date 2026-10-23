@@ -131,3 +131,27 @@ def test_animated_image_is_reported_without_blocking_static_sprites(target):
     assert [row["expression"] for row in preview["images"]] == ["neutral"]
     assert any("joy.gif" in issue for issue in preview["issues"])
     assert accept(target, preview)["outfits"]["everyday"]["expressions"]["neutral"]["available"]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_export_enforces_aggregate_pixel_budget_before_publication(target, tmp_path, monkeypatch, existing):
+    outfit(target)
+    apply(target, {"op": "put-expression", "outfit": "everyday", "expression": "joy", "data": png(), "ext": "png"})
+    destination = tmp_path / "sprites.zip"
+    if existing:
+        destination.write_bytes(b"previous export")
+    monkeypatch.setattr(packs, "MAX_PIXELS", 191)  # Two 8x12 sprites each fit; their sum exceeds the budget.
+    with pytest.raises(contracts.ExpressionBudgetError, match="megapixels"):
+        packs.export(target, destination)
+    assert destination.read_bytes() == b"previous export" if existing else not destination.exists()
+
+
+def test_export_at_pixel_budget_round_trips_shared_sprite_members(target, tmp_path, monkeypatch):
+    outfit(target)
+    apply(target, {"op": "put-expression", "outfit": "everyday", "expression": "joy", "data": png(), "ext": "png"})
+    monkeypatch.setattr(packs, "MAX_PIXELS", 192)
+    destination = tmp_path / "sprites.zip"
+    packs.export(target, destination)
+    with destination.open("rb") as stream:
+        result = accept(target, packs.preview(target, stream, mode="grimoire"))
+    assert set(result["outfits"]["everyday"]["expressions"]) == {"neutral", "joy"}

@@ -29,6 +29,7 @@ export { READ_RETRIES, RUN_POLL_MISSES, RUN_POLL_MS, RUN_POLL_QUICK, RUN_POLL_SL
   STREAM_REATTACH_TRIES, type DraftScope } from "./runs";
 export type { ImageOpts } from "./paths";
 
+import { vnApi } from "./endpoints/vn";
 import { sceneRunApi } from "./runs";
 import { appApi } from "./endpoints/app";
 import { campaignsApi } from "./endpoints/campaigns";
@@ -48,6 +49,7 @@ import { expressionsApi } from "./endpoints/expressions";
  *  and `vi.spyOn(api, "x")` replaces a property of this object. The domains
  *  never share a key, so the spread order decides nothing. */
 export const api = {
+  ...vnApi,
   ...expressionsApi,
   ...appApi,
   ...worldsApi,

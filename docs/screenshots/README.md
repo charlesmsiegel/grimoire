@@ -6,7 +6,9 @@ The public images show the running application with synthetic text from
 [library.json](../../backend/tests/fixtures/documentation/library.json).
 They contain no records, images, model responses or statistics from a personal
 Grimoire library. Initials are the application's normal fallback for records
-without art; no generated artwork or image editing was used.
+without art in the original captures below; no generated artwork or image editing
+was used for those captures. The [PR #554 VN captures](pr-554/README.md) add
+procedurally generated fixture artwork.
 
 ## Published captures
 

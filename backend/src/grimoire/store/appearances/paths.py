@@ -116,26 +116,41 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
         _write(cid, data)
 
 
-def remap_presence(cid: str, sid: str, old_to_new: dict[int, int], new_count: int) -> None:
+def post_audiences(cid: str, sid: str, count: int) -> list[dict[str, bool]]:
+    """Snapshot proven observation, retaining unknown separately from known empty."""
+    known = {ref: rec.get("presence", {}).get(sid) for ref, rec in record(cid).items()
+             if isinstance(rec.get("presence", {}).get(sid), list)}
+    return [{ref: any(r["start"] <= i and (r.get("end") is None or i < r["end"])
+                      for r in intervals) for ref, intervals in known.items()} for i in range(count)]
+
+
+def remap_presence(cid: str, sid: str, old_to_new: dict[int, int], new_count: int,
+                   restored_audiences: dict[int, dict[str, bool]] | None = None) -> None:
     """Preserve visibility through transcript deletion/cuts using retained indices.
 
     New positions without an old source are never granted historical visibility.
+    Saved per-post audiences override positional mapping for restored takes;
+    an absent actor entry is unknown and cannot grant historical observation.
     An open interval remains open at the new end for actors currently present.
     Call alongside the transcript rewrite under the caller's campaign lock.
     """
     with locks.campaign_lock(cid):
         data = record(cid)
         changed = False
-        for rec in data.values():
+        for ref, rec in data.items():
             intervals = rec.get("presence", {}).get(sid)
             if not isinstance(intervals, list):
                 continue
-            visible = sorted(new for old, new in old_to_new.items()
+            visible = {new for old, new in old_to_new.items()
                              if any(r["start"] <= old and
                                     (r.get("end") is None or old < r["end"])
-                                    for r in intervals))
+                                    for r in intervals)}
+            for index, audience in (restored_audiences or {}).items():
+                visible.discard(index)
+                if audience.get(ref) is True:
+                    visible.add(index)
             rebuilt: list[dict] = []
-            for index in visible:
+            for index in sorted(visible):
                 if rebuilt and rebuilt[-1]["end"] == index:
                     rebuilt[-1]["end"] = index + 1
                 else:

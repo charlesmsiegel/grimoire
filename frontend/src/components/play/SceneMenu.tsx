@@ -1,3 +1,4 @@
+import { useParams } from "react-router-dom";
 import { useRef, useState } from "react";
 import { Dismiss, type DismissedBy } from "./Dismiss";
 
@@ -32,6 +33,7 @@ export function SceneMenu({ panels, onNewScene }: {
   panels: ScenePanel[];
   onNewScene: () => void;
 }) {
+  const { cid, sid } = useParams();
   const menu = useRef<HTMLDetailsElement>(null);
   const summary = useRef<HTMLElement>(null);
   const [open, setOpen] = useState(false);
@@ -60,6 +62,7 @@ export function SceneMenu({ panels, onNewScene }: {
     <details className="scene-menu" ref={menu} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className="scene-action" ref={summary}>Scene ⋯</summary>
       <div className="scene-menu-options">
+        {cid && sid && <a className="scene-menu-item" href={`/campaigns/${encodeURIComponent(cid)}/scenes/${encodeURIComponent(sid)}/vn`}>Visual novel reader</a>}
         {panels.map(({ label, open: shown, toggle }) => (
           <button key={label} className="scene-menu-item" aria-pressed={shown}
                   onClick={() => pick(toggle)}>

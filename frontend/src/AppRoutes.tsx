@@ -12,6 +12,7 @@ import { characterHref } from "./components/character/shared";
 import CampaignsView from "./routes/CampaignsView";
 import CampaignWizard from "./routes/CampaignWizard";
 import OpenScene from "./routes/OpenScene";
+import VisualNovelView from "./routes/VisualNovelView";
 import CampaignView from "./routes/CampaignView";
 import CampaignHub from "./routes/CampaignHub";
 import CampaignSettingsView from "./routes/CampaignSettingsView";
@@ -167,6 +168,7 @@ function campaignRoutes(ready: boolean, campaignKey: string) {
           because a list read top to bottom and a transcript being written
           into are not the same page wearing two states. */}
       <Route path="/campaigns/:cid/scenes" element={<ScenesView ready={ready} />} />
+      <Route path="/campaigns/:cid/scenes/:sid/vn" element={<VisualNovelView />} />
       <Route path="/campaigns/:cid/scenes/:sid" element={
         <CampaignView key={campaignKey} ready={ready} />} />
       {/* The review's own address. Same element, because a review is a mode

@@ -94,8 +94,8 @@ Sparse outfits are valid: start with `neutral`, then add expressions as needed.
 The resolver keeps the selected outfit whenever it has a usable sprite; missing
 anger in armor does not switch the character into an everyday outfit. The
 library uses the 28 tracker visible-mood labels, plus explicitly named custom
-labels. Missing tracker information resolves to neutral. This release provides
-the library; the VN stage and playback controls are separate follow-up work.
+labels. Missing tracker information resolves to neutral. The scene menu’s **Visual novel reader** uses these sprites for historical
+playback, with background and per-post appearance controls; see [Playing](playing.md#visual-novel-reader).
 
 Campaign libraries inherit the attached world character's selected version.
 Replacing one expression leaves the others inherited. **Remove override**

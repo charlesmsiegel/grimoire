@@ -30,3 +30,5 @@ export * from "./types/graph";
 export * from "./types/mechanics";
 export * from "./types/app";
 export * from "./types/expressions";
+
+export * from "./types/vn";
