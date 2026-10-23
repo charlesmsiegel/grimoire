@@ -39,6 +39,7 @@ import { reviewApi } from "./endpoints/review";
 import { scenesApi } from "./endpoints/scenes";
 import { settingsApi } from "./endpoints/settings";
 import { worldsApi } from "./endpoints/worlds";
+import { expressionsApi } from "./endpoints/expressions";
 
 /** Every call the backend answers, as one object.
  *
@@ -47,6 +48,7 @@ import { worldsApi } from "./endpoints/worlds";
  *  and `vi.spyOn(api, "x")` replaces a property of this object. The domains
  *  never share a key, so the spread order decides nothing. */
 export const api = {
+  ...expressionsApi,
   ...appApi,
   ...worldsApi,
   ...charactersApi,

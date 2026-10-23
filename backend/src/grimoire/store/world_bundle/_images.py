@@ -35,7 +35,8 @@ def _ingest_blobs(z: zipfile.ZipFile, members: _contracts._Members) -> dict[str,
     return local
 
 
-def _contain_refs(staging: Path, id_map: dict[str, str], contained: set[str]) -> None:
+def _contain_refs(staging: Path, id_map: dict[str, str], contained: set[str], *,
+                  exclude: tuple[Path, ...] = ()) -> None:
     """Hold every staged placement to what the bundle itself carries.
 
     A ref naming a bundle id is pointed at that object's local id (its focus
@@ -55,6 +56,9 @@ def _contain_refs(staging: Path, id_map: dict[str, str], contained: set[str]) ->
     # Names are compared case-folded, as a case-insensitive filesystem reads
     # them -- behind `_check_placement_spelling`, which refuses the variants.
     for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
+        if Path(dirpath) in exclude:
+            dirnames[:] = []
+            continue
         if _contracts._fold(Path(dirpath).name) != image_refs.REFS_DIR:
             continue
         dirnames[:] = []

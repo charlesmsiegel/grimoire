@@ -21,6 +21,7 @@ from .. import (
 from .. import paths as library_paths
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
+from ..expression_library import transfer as expression_transfer
 from ..paths import safe_id
 from . import _identity, _ledgers, _record_paths
 
@@ -200,6 +201,8 @@ def copy_record_dir_down(cid: str, kind: str, rid: str) -> None:
             if not p.is_file():
                 continue
             rel = p.relative_to(src)
+            if len(rel.parts) >= 3 and rel.parts[0] == "assets" and rel.parts[2] == "expressions":
+                continue
             if _image_slot_file(rel) or _tombstoned_asset(kind, rid, rel, gone):
                 continue
             target = dst / rel
@@ -216,6 +219,9 @@ def copy_record_dir_down(cid: str, kind: str, rid: str) -> None:
 
 
 def _copy_slots_down(kind: str, rid: str, src_v: Path, dst_v: Path, gone: set[str]) -> None:
+    if kind in ("characters", "pcs"):
+        local = dst_v / "expressions"
+        expression_transfer.materialize([src_v / "expressions", local], local)
     """`copy_record_dir_down` for one version folder: every slot the campaign
     has not tombstoned BY NAME."""
     vid = src_v.name

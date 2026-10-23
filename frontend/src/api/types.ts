@@ -29,3 +29,4 @@ export * from "./types/ledger";
 export * from "./types/graph";
 export * from "./types/mechanics";
 export * from "./types/app";
+export * from "./types/expressions";

@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 
 from .. import ziputil
+from ..expression_library import transfer as expression_transfer
 from ..frontmatter import parse_frontmatter
 from ..paths import ensure_home, slugify, uniquify
 from ..worlds import paths as worlds_paths
@@ -56,7 +57,12 @@ def import_bundle(path: Path) -> str:
             local = _images._ingest_blobs(z, members)
             # bundle id -> local id, for every object.
             id_map = {bid: local[m.blob_sha] for bid, m in metas.items()}
-            _images._contain_refs(staging, id_map, set(local.values()))
+            try:
+                expression_transfer.rehome(staging, id_map, set(local.values()))
+            except ValueError as exc:
+                raise _contracts.BundleError(str(exc)) from exc
+            _images._contain_refs(staging, id_map, set(local.values()),
+                                  exclude=tuple(expression_transfer.directories(staging)))
             _images._contain_manifests(staging, id_map, set(local.values()))
             wid = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
             if wid != manifest["world_id"]:

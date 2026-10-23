@@ -10,6 +10,7 @@ from .. import assets, atomic, image_refs, overlay
 from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
+from ..expression_library import transfer as expression_transfer
 from ..worlds import lifecycle as worlds_lifecycle
 from ..worlds import paths as worlds_paths
 from . import _read_shapes
@@ -105,10 +106,14 @@ def _copy_tree(src: Path, dst: Path) -> None:
         return
     for src_v in sorted(p for p in src.iterdir() if p.is_dir()):
         assets.copy_slots(src_v, dst / src_v.name, overwrite=True)
+        if (src_v / "expressions").exists():
+            expression_transfer.copy_local(src_v / "expressions", dst / src_v.name / "expressions")
     for p in sorted(src.rglob("*")):
         if not p.is_file():
             continue
         rel = p.relative_to(src)
+        if len(rel.parts) >= 2 and rel.parts[1] == "expressions":
+            continue
         if len(rel.parts) == 2 and assets.is_slot_file(rel):
             continue    # a legacy image file: `copy_slots` copied its slot
         if len(rel.parts) >= 3 and rel.parts[1] == image_refs.REFS_DIR:

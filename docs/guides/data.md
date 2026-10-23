@@ -54,6 +54,33 @@ ordinary backup retention.
 Backups can contain story text, provider credentials, prompts and logs. Keep
 them private, just like the source library.
 
+## Native actor packs
+
+The **Expressions** tab's **Full character / PC pack** section exports a
+`.grimoire-character.zip`: all versions, ordinary art, expression manifests,
+placements, hide rules and referenced image objects. This is separate from
+ordinary character-card export and from a single-version expression pack.
+World exports and full backups also retain expression assets. Image-only
+backups include their manifests and references; they still need the corresponding
+character records from a full backup.
+
+Import a native pack into its matching character or PC type, choose a destination
+actor ID, review its versions, then explicitly choose its world inheritance.
+Existing local files are never overwritten: use a new ID for a copy. Campaign
+packs can bind to their original, still-matching world actor and retain their
+patches and hide rules. The current store has no portable actor UUID, so this
+binding requires the original native file identity as well as matching card
+content. A copied library, recreated actor or changed dependency requires
+**Detached copy**, which materializes the exported visible expression state.
+Import never creates a world or silently attaches by slug.
+
+Native packs are limited to 512 archive members and 128 MiB, with a 20 MiB
+per-member limit. Sprite decoding has the expression import limits described
+in [Worldbuilding](worldbuilding.md#expression-outfits); ordinary gallery
+animations remain supported. Preview errors or conflicting destinations publish
+no actor. Preview tokens expire after 30 minutes and are tied to the selected
+destination and library.
+
 ## Share a library between devices
 
 Point each installation at its copy of the synced folder, use one device at a

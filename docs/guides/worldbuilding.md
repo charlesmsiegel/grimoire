@@ -81,6 +81,56 @@ can affect other records that reuse it.
 Removing art removes its placement. Reclaiming unused stored images is a separate
 [maintenance operation](data.md#image-maintenance).
 
+## Expression outfits
+
+Open a character or PC, select its version, and choose **Expressions**. This
+library is separate from Art and the avatar. **Edit expressions** adds or
+duplicates outfits, uploads individual sprites, edits outfit names, and sets
+the default outfit, fallback expression, scale and bottom-center alignment.
+Renaming an outfit changes its display name; its lowercase ID stays stable.
+
+Each image is a complete sprite. Transparent PNG or WebP images work well.
+Sparse outfits are valid: start with `neutral`, then add expressions as needed.
+The resolver keeps the selected outfit whenever it has a usable sprite; missing
+anger in armor does not switch the character into an everyday outfit. The
+library uses the 28 tracker visible-mood labels, plus explicitly named custom
+labels. Missing tracker information resolves to neutral. This release provides
+the library; the VN stage and playback controls are separate follow-up work.
+
+Campaign libraries inherit the attached world character's selected version.
+Replacing one expression leaves the others inherited. **Remove override**
+reveals the world sprite; **Hide** suppresses it in this campaign. Restore
+controls undo hiding. Detached characters never inherit by a matching name or ID.
+
+**Import expression pack** accepts a flat SillyTavern ZIP or folder into a chosen outfit,
+or a Grimoire ZIP/folder with `expressions/<outfit>/<expression>.png` (also JPEG,
+WebP and static GIF). Optional `expressions/manifest.json` carries format 1 outfit
+metadata and a default outfit. Review filename mappings before publication:
+alternate images and custom labels need explicit selection, and replacing an
+existing sprite needs its replacement checkbox. Invalid archives leave the
+collection unchanged; stale or expired previews must be uploaded again.
+New outfits retain their metadata even when they contain no sprites. Existing
+outfit settings are preserved. The preview shows the pack's default outfit.
+
+Imports allow 512 files, a 128 MiB upload, 512 MiB expanded data, 20 MiB and
+16 megapixels per sprite, and 128 megapixels decoded in total. Animated sprites
+and unsupported files are reported. Unsafe paths, duplicate normalized names,
+encryption and excessive compression are refused. Preview tokens expire after
+30 minutes; abandoned previews are bounded, so an older preview may expire sooner.
+
+**Export expression pack** exports the selected version's visible effective
+collection. **Full character / PC pack** exports every version, ordinary art and
+the original expression layers. See [Data and backups](data.md#native-actor-packs)
+for its import and inheritance choices. Ordinary PNG/JSON character cards do not
+include expression libraries.
+
+The editor reports unavailable configured defaults and fallback sprites while
+continuing to show usable images. **Clean up old revisions** removes retired
+expression references, keeping the current and previous revisions, active reader
+leases, and revisions less than one hour old. Removed or replaced image bytes
+remain until this cleanup and the existing Image maintenance scan/recycle flow
+release them; cleanup itself never deletes image objects.
+
 ## Understand campaign copies
 
 Campaigns read shared world records until a local edit makes them diverge. A

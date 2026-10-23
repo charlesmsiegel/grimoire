@@ -22,6 +22,7 @@ from .. import (
     paths,
     ziputil,
 )
+from ..expression_library import transfer as expression_transfer
 from ..frontmatter import parse_frontmatter
 from ..paths import now_iso
 from ..worlds import paths as worlds_paths
@@ -47,6 +48,12 @@ def bundle_filename(wid: str) -> str:
 # ---- export ----
 
 def write_bundle(wid: str, dest: Path) -> None:
+    root = worlds_paths.world_root(wid)
+    with expression_transfer.pinned_directories(expression_transfer.directories(root)):
+        _write_bundle(wid, dest)
+
+
+def _write_bundle(wid: str, dest: Path) -> None:
     """Zip the world at `wid` into `dest`. Raises ``WorldNotFound``.
 
     Written to a path rather than returned as bytes: a world with a full
@@ -88,10 +95,11 @@ def write_bundle(wid: str, dest: Path) -> None:
     # A crashed promotion is finished first: mid-swap, the picture it moved
     # out of the avatar slot is named only by its journal, which is not packed.
     assets.recover_promotions_in(root)
-    world = _world_entries(root)
+    world, expression_ids = _expression_entries(root, _world_entries(root))
     collections, pinned = _packed_manifests(root, world)
     _check_blob_sizes(root, collections)
     member_ids = _manifest_ids(collections)
+    member_ids.update(expression_ids)
     manifest = {"format": _contracts.COLLECTIONS_FORMAT if member_ids else _contracts.FORMAT, "kind": "world",
                 "world_id": wid, "name": meta.get("name", wid),
                 "app_version": app_version(), "exported": now_iso()}
@@ -125,6 +133,20 @@ def write_bundle(wid: str, dest: Path) -> None:
         dest.unlink(missing_ok=True)
         raise
 
+
+
+def _expression_entries(root: Path, world: list) -> tuple[list, dict]:
+    try:
+        expression_files, expression_ids = expression_transfer.snapshot(root)
+    except ValueError as exc:
+        raise _contracts.BundleError(str(exc)) from exc
+    expression_dirs = expression_transfer.directories(root)
+    world = [entry for entry in world if entry.src is None or not any(
+        entry.src.is_relative_to(directory) for directory in expression_dirs)]
+    world.extend(_contracts._Entry(f"{_contracts.WORLD_PREFIX}/{p.relative_to(root).as_posix()}",
+                                  compress=zipfile.ZIP_DEFLATED, data=data)
+                 for p, data in expression_files.items())
+    return world, expression_ids
 
 
 def _write_blob(z: zipfile.ZipFile, entry: _contracts._Entry) -> bool:
@@ -324,6 +346,8 @@ def _check_blob_sizes(root: Path, collections: list[tuple[str, dict]]) -> None:
     bundle is opened, so a refused export writes nothing, and the user is told
     which picture to replace."""
     for d, ref in image_refs.walk(root):
+        if _expression_placement(root, d):
+            continue
         size = _oversized(ref.image)
         if size is not None:
             where = d.relative_to(root).as_posix()
@@ -355,6 +379,11 @@ def _oversized(image_id: str | None) -> int | None:
     return size if size > _contracts.MAX_BUNDLE_BLOB_BYTES and image_store.blob_intact(blob) else None
 
 
+def _expression_placement(root: Path, directory: Path) -> bool:
+    parts = directory.relative_to(root).parts
+    return len(parts) >= 5 and parts[0] in ("characters", "pcs") and parts[2] == "assets" and parts[4] == "expressions"
+
+
 def _image_entries(root: Path, wid: str, member_ids: dict[str, str]) -> list[_contracts._Entry]:
     """The blob and the projected object of every image a placement under
     `root` or a format-2 collection manifest (`member_ids`) names -- once
@@ -373,7 +402,9 @@ def _image_entries(root: Path, wid: str, member_ids: dict[str, str]) -> list[_co
     """
     scope = image_scopes.world_scope(wid)
     out = []
-    for image_id in sorted(set(image_refs.walk_ids(root)) | member_ids.keys()):
+    ordinary = {ref.image for directory, ref in image_refs.walk(root)
+                if ref.image and not _expression_placement(root, directory)}
+    for image_id in sorted(ordinary | member_ids.keys()):
         obj = _packable_object(image_id)
         blob = _packable_blob(obj) if obj is not None else None
         blob_stat = None

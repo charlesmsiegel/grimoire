@@ -25,6 +25,12 @@ from __future__ import annotations
 
 #: Modules whose public campaign-scoped mutators all take `campaign_lock(cid)`.
 DOMAIN_MODULES: frozenset[str] = frozenset({
+    # Presentation writes preserve the same campaign boundary as their posts.
+    "store.scenes.post_identity",
+    "store.scene_history.records",
+    "store.expression_library.write",
+    "store.expression_library.lifecycle",
+    "store.expression_library.character_pack",
     # #73 settings validate and replace campaign.md, stamping only a real
     # change while holding the same lock as every other campaign writer.
     "store.campaign_settings",
