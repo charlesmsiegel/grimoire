@@ -1,6 +1,6 @@
 # PR #554 VN reader screenshots
 
-Captured on 2026-10-23 from the completed VN implementation in this commit.
+Captured on 2026-10-23 from the completed VN implementation on PR #554.
 These are direct, unedited Chromium viewport captures at device scale 1.
 
 | Capture | Viewport |
@@ -9,7 +9,7 @@ These are direct, unedited Chromium viewport captures at device scale 1.
 | [Mobile reader](vn-mobile.png) | 390 × 1100 |
 | [Presentation controls](vn-presentation-controls.png) | 1440 × 1100 |
 
-The isolated library uses only synthetic names and story text from
+The isolated library uses synthetic placeholder names and story text from
 [the documentation fixture](../../../backend/tests/fixtures/documentation/library.json).
 The character sprites and Counting House backdrop were made with the GPT image
 generator and stored through the application asset store. They demonstrate sprite
@@ -33,3 +33,24 @@ The viewport and exit flow were also checked at 1440 × 900, 390 × 844 and
 667 × 375: the reader matched the viewport bounds and exiting restored the app
 header. Temporary scripts, browser profiles, stores and logs remain outside the
 public tree.
+
+## Four-character captures
+
+Additional captures use the same reader implementation and backdrop, with four
+active, visible characters: Clerk, Mara, Seraphine, and Winifred. Seraphine is
+the speaker on the selected post. Winifred and the generic Clerk use two more
+GPT-generated sprites; the original two-character images above are retained.
+
+| Capture | Viewport |
+|---|---|
+| [Four-character desktop](vn-four-desktop.png) | 1440 × 1000 |
+| [Four-character mobile](vn-four-mobile.png) | 390 × 1100 |
+| [Four-character controls](vn-four-presentation-controls.png) | 1440 × 1500 |
+
+These captures use a newly seeded isolated fixture library. All four actors
+were verified on the stage and in the presentation settings. Images and fonts
+were loaded before capture. Browser checks reported no page errors or failed
+requests and no horizontal overflow at 390px. The mobile image shows the current
+layout fitting all four sprites in one row, which makes them smaller. The taller
+controls capture shows all four actor sections and the background/save controls.
+No application code was changed for these additional captures.
