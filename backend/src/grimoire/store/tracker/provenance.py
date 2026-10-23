@@ -12,6 +12,8 @@ import hashlib
 import json
 
 from .. import locks, responses
+from ..scene_history import capture as history_capture
+from ..scene_history import records as history_records
 from ..scenes import identity, read
 from . import fields, records, walk
 
@@ -38,7 +40,7 @@ def certificates(cid: str, sid: str) -> tuple[dict[str, dict | None], dict[str, 
     digest = hashlib.sha256()
     for message in messages:
         canonical = {k: message[k] for k in ("post_id", "role", "speaker", "content",
-                     "response_id", "response_part", "excluded") if k in message}
+                     "response_id", "response_part", "scene_state_token", "excluded") if k in message}
         digest.update(_digest(canonical).encode())
         prefixes.append(digest.hexdigest())
     expected: dict[str, dict | None] = {}
@@ -64,11 +66,36 @@ def certificates(cid: str, sid: str) -> tuple[dict[str, dict | None], dict[str, 
 
 def capture(cid: str, sid: str, key: str) -> dict | None:
     with locks.campaign_lock(cid):
-        return certificates(cid, sid)[0].get(key)
+        proof = certificates(cid, sid)[0].get(key)
+        if proof is None:
+            return None
+        messages = read.read_scene(cid, sid)["messages"]
+        at = walk.index_of(cid, sid, key)
+        if at is None:
+            return None
+        checkpoint = history_records.checkpoint(cid, proof["scene_identity"],
+                                                 messages[at].get("scene_state_token")) or {}
+        base_key, prior = walk.state_before(cid, sid, at)
+        present = walk.present_at(cid, sid, at)
+        # The ordinary tracker may bootstrap from today's card/play state.
+        # VN can certify that only when it matches evidence recorded with the
+        # post. Missing historical inputs remain unproven, not retrofitted.
+        for ref in present - prior.keys():
+            if checkpoint.get("input_digests", {}).get(ref) != history_capture.input_digest(cid, ref):
+                return None
+        if base_key and present & prior.keys():
+            base_at = walk.index_of(cid, sid, base_key)
+            base_state = history_records.checkpoint(cid, proof["scene_identity"],
+                messages[base_at].get("scene_state_token")) if base_at is not None else None
+            versions = {a["ref"]: a["version_id"] for a in (base_state or {}).get("actors", [])}
+            current = {a["ref"]: a["version_id"] for a in checkpoint.get("actors", [])}
+            if any(versions.get(ref) != current.get(ref) or ref not in current for ref in present & prior.keys()):
+                return None
+        return proof
 
 
 def valid(cid: str, sid: str, key: str, certificate: dict | None) -> bool:
     if not isinstance(certificate, dict) or certificate.get("format") != 1:
         return False
     with locks.campaign_lock(cid):
-        return certificates(cid, sid)[0].get(key) == certificate
+        return capture(cid, sid, key) == certificate

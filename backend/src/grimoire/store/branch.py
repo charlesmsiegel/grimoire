@@ -47,6 +47,7 @@ from .audit import baselines
 from .frontmatter import dump_frontmatter
 from .paths import now_iso, slugify, uniquify
 from .regex import rewrites as regex_rewrites
+from .scene_history import records as history_records
 from .scenes import identity as scenes_identity
 from .scenes import lifecycle as scenes_lifecycle
 from .scenes import paths as scenes_paths
@@ -175,6 +176,19 @@ def _locked(kept: list[dict], rid_map: dict[str, str]) -> set[str]:
     return {rid_map[old] for old, i in first.items() if i < last_roll}
 
 
+def _copy_presentation(cid: str, source: str, destination: str, kept: list, copied: list) -> dict:
+    try:
+        tokens = history_records.clone_tokens(cid, source, destination,
+                    {m["scene_state_token"] for m in kept if m.get("scene_state_token")})
+    except OSError:
+        log.warning("Could not copy public presentation checkpoints", exc_info=True)
+        tokens = {}
+    for message in copied:
+        if "scene_state_token" in message:
+            message["scene_state_token"] = tokens.get(message["scene_state_token"])
+    return tokens
+
+
 def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
     """Make a sibling of `sid` holding `messages[: through + 1]`; return its id.
 
@@ -220,6 +234,7 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
                   if m.get("response_id") in rid_map else dict(m) for m in messages]
         now = now_iso()
         new_ident = scenes_identity.mint()
+        tokens = _copy_presentation(cid, src_ident, new_ident, kept, copied)
         new_meta = {"title": new_title, "created": now, "updated": now, "identity": new_ident,
                     **{k: meta[k] for k in COPIED_KEYS if meta.get(k) not in (None, "")},
                     "branch_group": group, "branch_of": src_ident}
@@ -229,6 +244,7 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
             # Appearances before the cut: the cut reads the player cast.
             appearances_paths.join_branch(cid, sid, new_sid, through)
             responses.clone_for_branch(cid, sid, new_sid, rid_map, locked)
+            responses.remap_history_tokens(cid, new_sid, tokens)
             # The store phase's records travel with the posts they describe,
             # under the reissued response ids, so Restore original works in
             # the sibling as it did in the source.

@@ -335,7 +335,9 @@ def _post_class(env: _Env, ref: str, i: int) -> tuple[str, str]:
     found = _r1(env, ref, m, author)
     if found is not None:
         return found
-    if not knowledge.post_key(m) and env.ov.post_listed:
+    # Giving a legacy post a presentation address is not evidence that an actor
+    # knew it. Explicit grants above may settle it; migration alone never can.
+    if (not knowledge.post_key(m) or m.get("legacy_unkeyed")) and env.ov.post_listed:
         return "unknown", "unkeyed"
     if env.src.presence is None:
         return "unknown", "no_record"

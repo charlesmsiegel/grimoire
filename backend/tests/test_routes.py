@@ -2917,7 +2917,7 @@ def test_scene_location_set_get_and_move(client):
     # move: announces
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/location", json={"location": b}).json() == \
         {"ok": True, "moved": True, "name": "Drowned Market"}
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
+    assert _presentation_free(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == [
         {"role": "assistant", "content": "*The scene moves to Drowned Market.*",
          "speaker": store.scenes.TRANSITION_SPEAKER}]
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/location").json() == \
@@ -3636,7 +3636,7 @@ def test_delete_cast_removes_member_and_narrates_when_scene_has_messages(client)
     r = client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/seraphine")
     assert r.status_code == 200 and r.json() == {"ok": True}
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json() == []
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1] == \
+    assert _presentation_free(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1]) == \
         {"role": "assistant", "content": "*Seraphine leaves the scene.*",
          "speaker": store.scenes.TRANSITION_SPEAKER}
 
@@ -3778,7 +3778,7 @@ async def test_a_disconnect_mid_turn_still_persists_what_arrived(monkeypatch, tm
     assert "turns." in await frames.__anext__()
     await frames.aclose()  # exactly what Starlette does when the socket dies
     msgs = store.scenes.read_scene(cid, sid)["messages"]
-    assert msgs[-1] == {"role": "assistant", "content": "The tide turns."}
+    assert _presentation_free(msgs[-1]) == {"role": "assistant", "content": "The tide turns."}
 
 
 async def test_a_cancelled_turn_keeps_the_post_it_could_not_answer(monkeypatch, tmp_path):
@@ -3799,7 +3799,7 @@ async def test_a_cancelled_turn_keeps_the_post_it_could_not_answer(monkeypatch, 
     frames = resp.body_iterator
     assert await frames.__anext__() == ": heartbeat\n\n"
     await frames.aclose()
-    assert store.scenes.read_scene(cid, sid)["messages"] == [
+    assert _presentation_free(store.scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "user", "content": "and then?"}]
 
 
@@ -4046,7 +4046,7 @@ async def test_a_failed_turn_does_not_roll_back_once_a_newer_turn_claimed(monkey
         cid, sid, [{"role": "user", "content": "and then?"}], conn, StallingOpenRouter())
     frames = [f async for f in older.body_iterator]
 
-    assert store.scenes.read_scene(cid, sid)["messages"] == [
+    assert _presentation_free(store.scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "user", "content": "and then?"}]        # the post survives
     assert '"kind": "network"' in "".join(frames)
     assert "post_returned" not in "".join(frames)         # and the client is not told otherwise
@@ -4334,7 +4334,7 @@ def test_a_failed_retry_leaves_the_transcript_alone(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter()
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry")
     assert resp.status_code == 200
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
+    assert _presentation_free(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == [
         {"role": "user", "content": "and then?"}]
 
 
@@ -4350,7 +4350,7 @@ def test_chat_emits_a_heartbeat_while_the_model_is_silent(client):
     assert ": heartbeat\n\n" in resp.text
     assert 'data: {"delta": "At last."}' in resp.text
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs[-1] == {"role": "assistant", "content": "At last.", "connection": "openrouter"}
+    assert _presentation_free(msgs[-1]) == {"role": "assistant", "content": "At last.", "connection": "openrouter"}
 
 
 def test_the_opener_heartbeats_too(client):
@@ -4556,7 +4556,7 @@ def test_regenerate_sole_opening_post_returns_400(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 400
     # the opening post is untouched
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs == [{"role": "assistant", "content": "the greeting"}]
+    assert _presentation_free(msgs) == [{"role": "assistant", "content": "the greeting"}]
 
 
 def test_regenerate_past_a_trailing_roll_returns_400(client):
@@ -4684,7 +4684,7 @@ def test_picking_an_alternate_swaps_it_into_the_transcript(client):
     vid = _alt_id(client, cid, sid, 0)
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}").json() == {"ok": True}
 
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
+    assert _presentation_free(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "old reply"}]
     body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
@@ -5147,7 +5147,7 @@ def test_a_sidecar_that_cannot_be_written_does_not_fail_the_landed_reply(client,
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
 
     assert resp.status_code == 200 and '"done": true' in resp.text
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
+    assert _presentation_free(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == [
         {"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello", "connection": "openrouter"}]
 
 
@@ -5262,12 +5262,12 @@ def test_a_snapshot_taken_before_retention_trimmed_the_set_cannot_swap(client):
         f"/api/campaigns/{cid}/scenes/{sid}/alternates/{snapshot[0]['id']}")
     assert resp.status_code == 404
     # index 0 now holds "take 1"; the transcript is untouched rather than swapped
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1] == {
+    assert _presentation_free(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1]) == {
         "role": "assistant", "content": "take 8"}
     # and a snapshot id that survived the shift still names its own take
     assert client.post(
         f"/api/campaigns/{cid}/scenes/{sid}/alternates/{snapshot[1]['id']}").status_code == 200
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1] == {
+    assert _presentation_free(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1]) == {
         "role": "assistant", "content": "take 1"}
 
 
@@ -6121,7 +6121,7 @@ def test_first_post_adopts_opener_onto_empty_scene(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
                        json={"text": "  Mist rolls in.  "}).status_code == 200
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs == [{"role": "assistant", "content": "Mist rolls in."}]
+    assert _presentation_free(msgs) == [{"role": "assistant", "content": "Mist rolls in."}]
     # a second first-post is refused once the scene has messages
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
                        json={"text": "again"}).status_code == 409
@@ -11216,7 +11216,7 @@ def test_reply_is_split_into_per_speaker_posts(client):
                        json={"content": "hi"}) as r:
         r.read()
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs[1:] == [
+    assert _presentation_free(msgs[1:]) == [
         {"role": "assistant", "content": '"You dare?"', "speaker": "Seraphine Vale",
          "connection": "openrouter"},
         {"role": "assistant", "content": "Thunder rolls.", "connection": "openrouter"},
@@ -11234,7 +11234,7 @@ def test_regenerate_drops_the_whole_trailing_run(client):
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
     assert resp.status_code == 200
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs == [{"role": "user", "content": "hi"},
+    assert _presentation_free(msgs) == [{"role": "user", "content": "hi"},
                     {"role": "assistant", "content": "Hello", "connection": "openrouter"}]
 
 
@@ -11254,7 +11254,7 @@ def test_first_post_splits_speakers(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
                        json={"text": text}).status_code == 200
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    assert msgs == [
+    assert _presentation_free(msgs) == [
         {"role": "assistant", "content": "Mist rolls in."},
         {"role": "assistant", "content": "Who goes there?", "speaker": "Seraphine Vale"},
     ]
@@ -16374,3 +16374,11 @@ def test_an_anthropic_connection_needs_a_key_to_be_ready():
             "base_url": "", "api_key": "", "model": "claude-test"}
     assert inference.problem(conn) is not None
     assert inference.problem({**conn, "api_key": "test-key-anthropic"}) is None
+
+
+def _presentation_free(value):
+    """Keep narrative comparisons exact while presentation IDs vary."""
+    if isinstance(value, list):
+        return [_presentation_free(message) for message in value]
+    return {key: item for key, item in value.items()
+            if key not in ("post_id", "scene_state_token", "legacy_unkeyed")}

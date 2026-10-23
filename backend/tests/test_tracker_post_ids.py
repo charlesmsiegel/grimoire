@@ -47,6 +47,7 @@ def test_plain_append_mints_post_id(monkeypatch, tmp_path):
     i = scenes.append_message(cid, sid, "user", "Hello.")
     message = scenes.read_scene(cid, sid)["messages"][i]
     assert POST_ID.fullmatch(message.pop("post_id"))
+    message.pop("scene_state_token")
     assert message == {"role": "user", "content": "Hello."}
 
 

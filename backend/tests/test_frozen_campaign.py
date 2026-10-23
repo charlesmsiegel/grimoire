@@ -341,6 +341,7 @@ def _plays_a_turn(frozen_client: TestClient) -> None:
     # default); it is opaque, so pin its shape and compare the rest.
     posted = dict(messages[before])
     assert re.fullmatch(r"[0-9a-f]{32}", posted.pop("post_id"))
+    assert re.fullmatch(r"[0-9a-f]{64}", posted.pop("scene_state_token"))
     assert posted == {"role": "user", "content": "I have brought the salt.",
                       "speaker": "Winifred"}
     # The reply is stored one message per speaker block, so assert on the text

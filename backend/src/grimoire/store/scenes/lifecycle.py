@@ -34,6 +34,7 @@ from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import now_iso, safe_id, slugify, uniquify
+from ..scene_history import records as history_records
 from ..tracker import records as tracker_records
 from . import focus as focus_fields
 from . import identity, locking, paths, serialize
@@ -281,6 +282,10 @@ def delete_scene(cid: str, sid: str) -> None:
     # sidecars already gone -- the half-delete the order above exists to
     # prevent. Logged, so an orphan has a line saying where it came from.
     if ident:
+        try:
+            history_records.drop(cid, ident)
+        except OSError:
+            log.warning("Could not remove public scene history", exc_info=True)
         try:
             tracker_records.drop(cid, ident)
         except Exception:

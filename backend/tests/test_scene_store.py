@@ -29,7 +29,7 @@ from grimoire.store.scenes import write as scenes_write
 
 def _narrative(messages):
     """Compare story fields separately from durable address metadata."""
-    return [{k: v for k, v in m.items() if k != "post_id"} for m in messages]
+    return [{k: v for k, v in m.items() if k not in ("post_id", "scene_state_token")} for m in messages]
 
 
 def _campaign(monkeypatch, tmp_path):

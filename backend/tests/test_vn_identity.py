@@ -94,3 +94,17 @@ def test_failed_identity_migration_preserves_original_transcript(scene, monkeypa
     with pytest.raises(OSError, match="disk full"):
         store.responses.migrate_if_needed(cid, sid)
     assert path.read_bytes() == before
+
+
+def test_swipe_restores_each_post_of_multipart_variant(scene):
+    cid, sid = scene
+    store.scenes.append_message(cid, sid, "assistant", "First.", speaker="Mara")
+    record, = store.responses.migrate(cid, sid)
+    full = store.responses.save_variant(cid, sid, record["id"], "Second.", "complete", part="b")
+    original = store.scenes.read_scene(cid, sid)["messages"]
+    alternate = store.responses.save_variant(cid, sid, record["id"], "Other.", "complete", activate=False)
+    store.responses.activate(cid, sid, record["id"], alternate["id"])
+    store.responses.activate(cid, sid, record["id"], full["id"])
+    restored = store.scenes.read_scene(cid, sid)["messages"]
+    assert [(m["content"], m["post_id"]) for m in restored] == [
+        (m["content"], m["post_id"]) for m in original]

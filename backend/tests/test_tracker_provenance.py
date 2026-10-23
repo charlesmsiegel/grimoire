@@ -3,7 +3,7 @@
 import pytest
 
 from grimoire import store
-from grimoire.store.tracker import fields, paths, records, provenance, walk
+from grimoire.store.tracker import fields, paths, provenance, records, walk
 
 
 @pytest.fixture

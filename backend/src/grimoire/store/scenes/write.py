@@ -17,6 +17,7 @@ from ..appearances import cast
 from ..appearances import paths as appearance_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import now_iso, safe_id
+from ..scene_history import capture
 from . import locking, paths, post_identity, read, serialize, turns
 
 
@@ -117,11 +118,13 @@ def append_message(cid: str, sid: str, role: str, content: str,
     # change how many there are. Counting them directly keeps the index free of
     # any dependence on who is currently in the scene.
     index = len(serialize._markers(body))
-    block = serialize._message_block(post_identity.identified(
-        {"role": role, "speaker": speaker, "content": content, "post_id": post_id}))
+    observation = capture.current_public(cid, sid)
+    block = serialize._message_block(capture.stamped(post_identity.identified(
+        {"role": role, "speaker": speaker, "content": content, "post_id": post_id}), observation))
     body = serialize._append_block(body, block)
     meta["updated"] = now_iso()
     atomic.write_text(p, dump_frontmatter(meta, body))
+    capture.published(cid, sid, observation)
     return index
 
 
@@ -194,13 +197,16 @@ def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     if not kept:
         return
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    observation = capture.current_public(cid, sid)
     for seg in kept:
         body = serialize._append_block(
-            body, serialize._message_block(post_identity.identified({"role": "assistant", **seg})))
+            body, serialize._message_block(capture.stamped(
+                post_identity.identified({"role": "assistant", **seg}), observation)))
     sizes = turns._parse_turn_sizes(meta.get("turn_sizes", "")) + [len(kept)]
     meta["turn_sizes"] = ",".join(str(n) for n in sizes)
     meta["updated"] = now_iso()
     atomic.write_text(p, dump_frontmatter(meta, body))
+    capture.published(cid, sid, observation)
 
 
 @locking._serialized

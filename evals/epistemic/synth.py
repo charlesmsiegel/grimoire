@@ -40,7 +40,10 @@ class Stage:
 
     def legacy(self, text: str) -> int:
         """A post with no key, as an older store holds them."""
-        return scenes.append_message(self.cid, self.sid, "assistant", text)
+        messages = self.messages()
+        index = len(messages)
+        scenes.replace_messages(self.cid, self.sid, [*messages, {"role": "assistant", "content": text}])
+        return index
 
     def reply(self, ref: str, name: str, text: str) -> str:
         rnd = responses.new_round(self.cid, self.sid, eligible=[], automatic=False,

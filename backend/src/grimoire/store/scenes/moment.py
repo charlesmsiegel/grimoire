@@ -16,8 +16,9 @@ from __future__ import annotations
 from .. import atomic, calendars, overlay, scene_ids, scene_refs
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
-from ..paths import safe_id, uniquify
-from . import locking, paths, read, serialize, write
+from ..paths import now_iso, safe_id, uniquify
+from ..scene_history import capture
+from . import locking, paths, post_identity, read, serialize, write
 
 
 @locking._serialized
@@ -36,15 +37,18 @@ def set_location(cid: str, sid: str, eid: str) -> dict:
     if history and history[-1] == eid:
         return {"moved": False, "name": name}
     moved = bool(history)
-    if moved:
-        write.append_message(cid, sid, "assistant",
-                             serialize.LOCATION_MOVE.format(name=name),
-                             speaker=serialize.TRANSITION_SPEAKER)
-    # re-read after the possible append_message rewrite, then record the new current
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    observation = capture.current_public(cid, sid, location_id=eid)
+    if moved:
+        message = capture.stamped(post_identity.identified({"role": "assistant",
+            "content": serialize.LOCATION_MOVE.format(name=name),
+            "speaker": serialize.TRANSITION_SPEAKER}), observation)
+        body = serialize._append_block(body, serialize._message_block(message))
+        meta["updated"] = now_iso()
     history.append(eid)
     meta["location_history"] = ",".join(history)
     atomic.write_text(p, dump_frontmatter(meta, body))
+    capture.published(cid, sid, observation)
     return {"moved": moved, "name": name}
 
 

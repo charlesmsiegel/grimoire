@@ -14,7 +14,9 @@ from .. import atomic, locks
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from . import paths, read, serialize
 
-_ID = re.compile(r"[0-9a-f]{32}\Z")
+# Older post IDs already anchor knowledge grants. Preserve their valid spelling;
+# only newly minted addresses use UUID hex.
+_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 
 
 def address_of(message: dict) -> str | None:
@@ -44,6 +46,8 @@ def ensure_post_ids(cid: str, sid: str) -> dict:
         for message in scene["messages"]:
             address = address_of(message)
             if address is None or address in seen:
+                if not message.get("post_id") and not message.get("response_id"):
+                    message["legacy_unkeyed"] = True
                 message["post_id"] = address = uuid.uuid4().hex
             seen.add(address)
         path = paths._scene_path(cid, sid)

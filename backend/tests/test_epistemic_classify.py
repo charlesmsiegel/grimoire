@@ -198,6 +198,16 @@ def test_a_keyless_post_is_withheld_when_its_scene_has_post_listed_overrides(pie
     assert _post_classes(_view(st, win, [st.item()]))[old] == ("unknown", ("unkeyed",))
 
 
+def test_presentation_identity_migration_does_not_broaden_legacy_knowledge(pier):
+    st, win = pier["st"], pier["win"]
+    old = st.legacy("An old line, before posts had ids.")
+    _grant(st, win, "Winifred", "knows", keys=(_key(st, 0),))
+    assert _post_classes(_view(st, win, [st.item()]))[old] == ("unknown", ("unkeyed",))
+    responses.migrate_if_needed(st.cid, st.sid)
+    assert st.messages()[old]["post_id"]
+    assert _post_classes(_view(st, win, [st.item()]))[old] == ("unknown", ("unkeyed",))
+
+
 def test_a_whole_scene_entry_settles_a_keyless_post(pier):
     st, win = pier["st"], pier["win"]
     old = st.legacy("An old line, before posts had ids.")
