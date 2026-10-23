@@ -178,6 +178,9 @@ def test_ordered_keys_uses_active_variant_and_last_part(home):
     r2 = _reply(cid, sid, "Winifred", "Hello.")                             # 5
     alt = responses.save_variant(cid, sid, r2, "Hello again.", "complete", activate=False)
     responses.activate(cid, sid, r2, alt["id"])
+    legacy = scenes.read_scene(cid, sid)["messages"]
+    legacy[4].pop("post_id")
+    scenes.replace_messages(cid, sid, legacy, preserve_turn_sizes=True)
 
     variants = responses.variants_by_response(cid, sid)
     v1 = variants[r1][0]

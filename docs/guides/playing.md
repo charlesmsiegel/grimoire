@@ -94,3 +94,28 @@ material. A generated suggestion does not become authoritative by appearing ther
 - [Play view](../../frontend/src/routes/CampaignView.tsx) and [response actions](../../frontend/src/components/ResponseControls.tsx)
 - [Scene routes](../../backend/src/grimoire/routes/scenes/), [run registry](../../backend/src/grimoire/routes/runs/) and [wrap-up UI](../../frontend/src/components/review/)
 - [Continuity review](../../backend/src/grimoire/store/continuity/review.py) and [knowledge overrides](../../backend/src/grimoire/store/knowledge.py)
+
+
+## Visual novel reader
+
+Open **Scene ⋯ → Visual novel reader** to read the current scene on a stage.
+The reader fills the application viewport. Choose **Exit VN** to return to play
+and restore Campaign, Library, and the other navigation.
+Previous/Next and First/Last move between posts; the Post selector jumps directly.
+The arrow keys, Home and End provide the same navigation. Autoplay advances at
+its selected interval and stops at the end, on an error, or when presentation
+settings open. The reader remembers your stable post in this browser when storage
+is available; a removed post recovers to the first surviving post with a notice.
+
+**Refresh** reads newly published posts while keeping your current post. **Back to
+play** returns to that exact scene's composer to continue generating or editing.
+The reader displays the canonical transformed text and does not run generation.
+
+**Presentation settings** changes the current post's outfit, expression, actor
+visibility, or background. Automatic uses its recorded public scene information;
+None removes background art. Save stores those choices with the library, separate
+from narrative facts. Reset to automatic clears this post's overrides. If another
+save wins first, a stale-save error preserves your draft; refresh before retrying.
+Only actors and location art supported by that post's history are offered.
+Missing history leaves a neutral stage; missing portraits fall back to an avatar
+and then initials. No authored art is required to read a scene.

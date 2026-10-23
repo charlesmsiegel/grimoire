@@ -22,7 +22,7 @@ THINK = {"name": "Strip ledgers", "pattern": r"<ledger>[\s\S]*?</ledger>", "repl
 
 def _scene(cid, messages, title="Saltmarch"):
     sid = scenes.create_scene(cid, title)
-    scenes.append_messages(cid, sid, messages)
+    scenes.replace_messages(cid, sid, messages)
     return sid
 
 

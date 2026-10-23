@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { matchPath, useLocation, useNavigate } from "react-router-dom";
 import { api, type ProviderHealth } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_MODE } from "./theme/themes";
@@ -59,7 +59,9 @@ const Shell = memo(function Shell(
   // docstring calls a navigation surface beside them an answer of "nothing,
   // finish this first". On a first run the rail would otherwise offer
   // Campaigns, Library and Configuration before setup has been answered.
-  const noRail = railless(location.pathname) || focus;
+  // VN owns the viewport; its exit link restores the ordinary shell.
+  const immersive = !!matchPath('/campaigns/:cid/scenes/:sid/vn', location.pathname);
+  const noRail = railless(location.pathname) || focus || immersive;
   const storeGen = useStoreGeneration();
 
   return (
@@ -72,10 +74,10 @@ const Shell = memo(function Shell(
           `CampaignView` the scene bar and scene head — together those are the
           ~300px of chrome that, on a phone, left a transcript about half the
           viewport. */}
-      {focus ? <FocusRestore />
+      {!immersive && (focus ? <FocusRestore />
              : <AppHeader model={model} connection={connection} ready={ready}
                           health={health} railDrawer={!docked} campaign={shell.payload?.campaign}
-                          onOpenRail={openRail} />}
+                          onOpenRail={openRail} />)}
       <AppPaletteSource payload={shell.payload} />
       <CommandPalette />
       {/* `?`, and the sheet that lists whatever is bound where you are

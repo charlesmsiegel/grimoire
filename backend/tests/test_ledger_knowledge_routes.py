@@ -463,7 +463,9 @@ def test_a_grant_binds_to_the_prompt_text_it_showed(client, world):
 
 
 def test_the_scene_read_shows_everything_a_whole_scene_grant_exposes(client, world):
-    store.scenes.append_message(world["cid"], world["sid"], "user", "An old keyless line.")
+    messages = store.scenes.read_scene(world["cid"], world["sid"])["messages"]
+    store.scenes.replace_messages(world["cid"], world["sid"],
+                                 [*messages, {"role": "user", "content": "An old keyless line."}])
     store.chronicle.restore(world["cid"], world["sid"],
                             {"id": world["sid"], "summary": "Mara learned the code.",
                              "one_line": "The code."})

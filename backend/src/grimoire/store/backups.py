@@ -163,6 +163,8 @@ def _is_image_selected(root: Path, directory: Path, path: Path) -> bool:
         return False
     if parts and parts[-1] == _IMAGE_REFS:
         return path.suffix == ".json" and "assets" in parts[:-1]
+    if len(parts) >= 3 and parts[-3] == "assets" and parts[-1] == "expressions":
+        return path.name == "manifest.json"
     return parts[:len(_IMAGE_STORE)] == _IMAGE_STORE
 
 

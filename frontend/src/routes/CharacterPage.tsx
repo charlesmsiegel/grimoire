@@ -17,6 +17,7 @@ import { useEntityKinds } from "../components/useEntityKinds";
 import { RecordArtEntry, RecordArtViewer } from "../components/art/RecordArtEntry";
 import { useRecordArt } from "../components/art/useRecordArt";
 import { ArtTab } from "../components/character/ArtTab";
+import { ExpressionsSection } from "../components/expressions/ExpressionsSection";
 import { MobileArtEntry } from "../components/MobileArtEntry";
 import { CampaignSection } from "../components/character/CampaignSection";
 import { CardTab } from "../components/character/CardTab";
@@ -32,7 +33,7 @@ import {
 } from "../components/character/shared";
 import { sectionHref } from "../worldPaths";
 
-type CardTabKey = "card" | "lore" | "greetings" | "art";
+type CardTabKey = "card" | "lore" | "greetings" | "art" | "expressions";
 
 /** One character, on a page of its own.
  *
@@ -697,6 +698,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         {([["card", "Card", null],
            ["lore", "Lore", loreCount],
            ["greetings", "Greetings", greetingCount],
+           ["expressions", "Expressions", null],
            ["art", "Art", artCount]] as [CardTabKey, string, number | null][])
           .map(([key, label, count]) => (
             <button key={key} role="tab" aria-selected={tab === key}
@@ -708,6 +710,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       </div>
 
       <div className="card-pane-body" role="tabpanel">
+        {tab === "expressions" && vid && <ExpressionsSection target={{ scope: scope.kind, owner_id: scope.id, kind: "characters", actor_id: eid, version_id: vid }} />}
         {tab === "card" && (
           <CardTab scope={scope} wid={wid} cid={eid} vid={vid} card={card} detail={detail}
                    module={module}

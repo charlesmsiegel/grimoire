@@ -114,7 +114,7 @@ def test_no_rewrite_rules_no_record_file(client, monkeypatch):
     assert [m["content"] for m in raw] == ["Wait...", "Edited...", "Again...", "Legacy..."]
     # No post id is minted for a legacy reply nothing rewrote: its block is the
     # plain one it always was.
-    assert "post_id" not in raw[-1]
+    assert raw[-1]["post_id"]
     assert not (store.campaigns.paths.campaign_root(cid) / "rewrites").exists()
     assert records(client, cid, sid) == {}
     assert not any("rewritten" in m for m in messages(client, cid, sid))
@@ -174,7 +174,7 @@ def test_editing_another_part_of_the_response_keeps_the_record(client):
 def test_edit_of_a_message_with_no_id_is_not_rewritten(client):
     cid, sid = seed(client)
     put_rules(client, cid, {**ELLIPSIS, "targets": ["model", "user"]})
-    store.scenes.append_message(cid, sid, "user", "An old post.")
+    store.scenes.replace_messages(cid, sid, [{"role": "user", "content": "An old post."}])
     assert edit(client, cid, sid, 0, "a...b").status_code == 200
     assert store.scenes.read_scene(cid, sid)["messages"][0]["content"] == "a...b"
     assert records(client, cid, sid) == {}
@@ -383,7 +383,7 @@ def test_a_rewrite_that_empties_a_legacy_reply_is_not_applied(client, monkeypatc
     send(client, cid, sid, "Every word of this.")
     reply = store.scenes.read_scene(cid, sid)["messages"][-1]
     assert reply["content"] == "Every word of this."
-    assert "post_id" not in reply
+    assert reply["post_id"]
     assert records(client, cid, sid) == {}
 
 
@@ -409,7 +409,7 @@ def test_a_rewrite_that_forges_a_post_in_a_legacy_reply_is_not_applied(client, m
     send(client, cid, sid, "She paused... then spoke.")
     raw = store.scenes.read_scene(cid, sid)["messages"]
     assert [m["content"] for m in raw] == ["Hello", "She paused... then spoke."]
-    assert "post_id" not in raw[-1]
+    assert raw[-1]["post_id"]
     assert records(client, cid, sid) == {}
 
 

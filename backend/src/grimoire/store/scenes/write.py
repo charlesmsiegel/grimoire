@@ -17,7 +17,8 @@ from ..appearances import cast
 from ..appearances import paths as appearance_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import now_iso, safe_id
-from . import locking, paths, read, serialize, turns
+from ..scene_history import capture
+from . import locking, paths, post_identity, read, serialize, turns
 
 
 @locking._serialized
@@ -99,8 +100,8 @@ def append_message(cid: str, sid: str, role: str, content: str,
     `post_id` is the opaque id the scene tracker keys a record to. It rides in
     the same per-post metadata comment as `response_id` (via `_message_block`,
     whose whitelist is what every later whole-transcript rewrite round-trips),
-    so it survives edits, cuts and renumbering where an index would not. Left
-    None the block is the plain `_block`, byte-identical to before ids existed.
+    so it survives edits, cuts and renumbering where an index would not. A
+    caller without an id gets a new one, including rolls and transitions.
 
     The index is read under the same lock as the write, which is what makes it
     usable as an identity later (`remove_trailing_user_post`). Counted from the
@@ -117,12 +118,13 @@ def append_message(cid: str, sid: str, role: str, content: str,
     # change how many there are. Counting them directly keeps the index free of
     # any dependence on who is currently in the scene.
     index = len(serialize._markers(body))
-    block = (serialize._message_block({"role": role, "speaker": speaker,
-                                       "content": content, "post_id": post_id})
-             if post_id else serialize._block(role, speaker, content))
+    observation = capture.current_public(cid, sid)
+    block = serialize._message_block(capture.stamped(post_identity.identified(
+        {"role": role, "speaker": speaker, "content": content, "post_id": post_id}), observation))
     body = serialize._append_block(body, block)
     meta["updated"] = now_iso()
     atomic.write_text(p, dump_frontmatter(meta, body))
+    capture.published(cid, sid, observation)
     return index
 
 
@@ -159,7 +161,7 @@ def append_messages(cid: str, sid: str, messages: list[dict],
     # measured 7.8s of pure string copying against 3.8ms for the join, all of
     # it inside the campaign lock. Fixing the I/O without fixing this fixes the
     # smaller half.
-    blocks = [serialize._message_block(m) for m in messages]
+    blocks = [serialize._message_block(post_identity.identified(m)) for m in messages]
     if blocks:
         tail = "\n\n".join(b.rstrip("\n") for b in blocks) + "\n"
         body = (body.rstrip() + "\n\n" + tail) if body.strip() else tail
@@ -195,13 +197,16 @@ def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     if not kept:
         return
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    observation = capture.current_public(cid, sid)
     for seg in kept:
         body = serialize._append_block(
-            body, serialize._message_block({"role": "assistant", **seg}))
+            body, serialize._message_block(capture.stamped(
+                post_identity.identified({"role": "assistant", **seg}), observation)))
     sizes = turns._parse_turn_sizes(meta.get("turn_sizes", "")) + [len(kept)]
     meta["turn_sizes"] = ",".join(str(n) for n in sizes)
     meta["updated"] = now_iso()
     atomic.write_text(p, dump_frontmatter(meta, body))
+    capture.published(cid, sid, observation)
 
 
 @locking._serialized

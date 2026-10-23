@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ... import store
+from ...store.tracker import provenance
 from . import _fences, _transcript
 from ._router import router as router
 
@@ -80,6 +81,7 @@ def _prepare(cid: str, identity: str, hint: str, key: str, gen: int | None = Non
             "seen_seq": seen,
             "stale_base": stale_base,
             "base": _fences._base_mark(base_key, entries),
+            "provenance": provenance.capture(cid, sid, key),
             "own": own["snapshot"] if own else None,
             # The pairs this post's own record changed, and those a person
             # touched there without moving a value (an awareness-only edit is
@@ -112,7 +114,8 @@ def _settle_unwritten(cid: str, sid: str, identity: str, key: str, reason: str) 
 def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict, *,
             changed: list, digest: str, model: str, flag_later: bool = False,
             seen_seq: int = 0, gen: int | None = None, stale_base: bool = False,
-            touched: list | None = None, base: _fences.Base | None = None) -> bool:
+            touched: list | None = None, base: _fences.Base | None = None,
+            certificate: dict | None = None) -> bool:
     """Store the result, unless the post went away while the model answered.
 
     RE-CHECKED under the lock that covers the write, because the check in
@@ -155,7 +158,9 @@ def _commit(cid: str, identity: str, hint: str, key: str, snapshot: dict, *,
         # result never saw, and the record must keep saying so.
         store.tracker.records.save(cid, identity, key, snapshot, changed=changed,
                                    fields_digest=digest, model=model, seen_seq=seen_seq,
-                                   raise_upstream=stale_base, touched=touched)
+                                   raise_upstream=stale_base, touched=touched,
+                                   provenance=(certificate if not stale_base and
+                                       provenance.valid(cid, sid, key, certificate) else None))
         if flag_later:
             at = store.tracker.walk.index_of(cid, sid, key)
             if at is not None:

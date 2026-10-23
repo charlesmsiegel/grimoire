@@ -555,15 +555,8 @@ def test_a_deliberate_refusal_stamps_nothing(client):
     assert _token(client, cid) == before
 
 
-def test_a_scene_location_that_failed_part_way_stamps(client, monkeypatch):
-    """One of the reported instances, covered by the rule above rather than by a
-    stamp of its own. `set_location` appends the transition message and then
-    rewrites `location_history` in a second atomic write; a failure between them
-    leaves the transcript changed and answers non-2xx.
-
-    The scene needs a location already, because the FIRST setting is silent —
-    no transition, so nothing is written before the failure.
-    """
+def test_failed_atomic_location_change_preserves_scene(client, monkeypatch):
+    """Location and its transition are one publication; failure changes neither."""
     cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
     for name in ("The Tearoom", "The Quay"):
@@ -578,18 +571,18 @@ def test_a_scene_location_that_failed_part_way_stamps(client, monkeypatch):
         calls.append(a)
         raise OSError(5, "the history could not be written")
 
-    # `dump_frontmatter` on THIS module is only reached for the history
-    # rewrite: the transition message went through `write.append_message`,
-    # which has its own. Patching the shared `atomic.write_text` instead would
-    # break the append *and* the stamp, and prove nothing.
+    # Fail the combined transition/history publication before replacement.
+    # Patching the shared atomic writer would also break the middleware's
+    # conservative failure stamp, hiding the behavior being checked here.
     monkeypatch.setattr(store.scenes.moment, "dump_frontmatter", die)
     with pytest.raises(OSError):
         client.put(f"/api/campaigns/{cid}/scenes/{sid}/location",
                    json={"location": "the-quay"})
     assert calls, "the history write never ran, so this asserts nothing"
-    # The transition really did land, which is what makes the stamp owed.
+    # No transition or new location escaped the failed atomic publication.
     scene = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()
-    assert any("Quay" in m["content"] for m in scene["messages"])
+    assert not any("Quay" in m["content"] for m in scene["messages"])
+    assert store.scenes.get_location_history(cid, sid) == ["the-tearoom"]
     assert _token(client, cid) != before
 
 

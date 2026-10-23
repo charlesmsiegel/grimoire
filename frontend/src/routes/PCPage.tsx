@@ -19,6 +19,7 @@ import { sectionHref } from "../worldPaths";
 import { RecordArtEntry, RecordArtViewer } from "../components/art/RecordArtEntry";
 import { useRecordArt } from "../components/art/useRecordArt";
 import { PCArtTab } from "../components/pc/PCArtTab";
+import { ExpressionsSection } from "../components/expressions/ExpressionsSection";
 import { MobileArtEntry } from "../components/MobileArtEntry";
 import { whenLabel } from "../components/turnLabels";
 import { useCreationRequest } from "../components/useCreationRequest";
@@ -26,7 +27,7 @@ import { useCreationRequest } from "../components/useCreationRequest";
 const BLANK: Persona = {
   name: "", pronouns: "", summary: "", description: "", birthdate: "", goals: "", player_notes: "",
 };
-type Tab = "persona" | "lore" | "art" | "sheet";
+type Tab = "persona" | "lore" | "art" | "sheet" | "expressions";
 
 /** A PC record is the unit of navigation and writing. The section page owns
  * only its index and creation; this page owns one record's persona, version,
@@ -374,14 +375,15 @@ function PCRecord({ campaign }: { campaign: boolean }) {
         onOpenArt={() => selectTab("art")}
         onOpenPreview={(opener) => { if (art.preview) art.openImage(art.preview, opener); }} />
       <div className="card-tabs" role="tablist" aria-label="PC">
-        {(["persona", "lore", "art", "sheet"] as Tab[])
+        {(["persona", "lore", "art", "expressions", "sheet"] as Tab[])
           .filter((t) => t !== "sheet" || module)
           .map((t) => <button key={t} role="tab" aria-selected={tab === t}
             className={"tab" + (tab === t ? " active" : "")} onClick={() => selectTab(t)}>
-            {t === "persona" ? "Persona" : t === "lore" ? "Lore" : t === "art" ? art.count === null ? "Art" : `Art ${art.count}` : "Sheet"}
+            {t === "persona" ? "Persona" : t === "lore" ? "Lore" : t === "expressions" ? "Expressions" : t === "art" ? art.count === null ? "Art" : `Art ${art.count}` : "Sheet"}
           </button>)}
       </div>
       <div className="card-pane-body" role="tabpanel">
+        {tab === "expressions" && vid && <ExpressionsSection target={{ scope: scope.kind, owner_id: scope.id, kind: "pcs", actor_id: pid, version_id: vid }} />}
         {tab === "persona" && (mode === "view" ? revision ? <div className="pc-revision">
           <div className="banner">Earlier text, replaced {whenLabel(revision.saved)}. Read-only.</div>
           <div className="form-actions">

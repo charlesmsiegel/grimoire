@@ -78,7 +78,9 @@ def list_scenes(cid: str) -> list[dict]:
             if not safe_id(p.stem):   # enumeration agrees with the resolvers
                 continue
             out.append({"id": p.stem, **_scene_row(p)})
-    out.sort(key=lambda m: m["updated"], reverse=True)
+    # Timestamps have second precision; copies may enumerate equal-time files
+    # in a different order. The stable ID breaks ties consistently in both.
+    out.sort(key=lambda m: (m["updated"], m["id"]), reverse=True)
     _resolve_groups(out)
     return out
 

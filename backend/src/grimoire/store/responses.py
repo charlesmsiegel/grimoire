@@ -14,11 +14,12 @@ import hashlib
 import json
 import uuid
 
-from . import atomic, locks, proposals, response_snapshots, rolls
+from . import atomic, locks, proposals, response_posts, response_snapshots, rolls
 from .appearances import paths as appearance_paths
 from .campaigns import paths as campaign_paths
 from .paths import now_iso
-from .scenes import identity, read, serialize, write
+from .scene_history import capture as history_capture
+from .scenes import identity, post_identity, read, serialize, write
 
 
 class ResponseNotFound(Exception):  # noqa: N818 - follows existing SceneNotFound store contract
@@ -33,6 +34,18 @@ class ResponseConflict(Exception):  # noqa: N818 - public store domain exception
 
 def _path(cid):
     return campaign_paths.campaign_root(cid) / "responses.json"
+
+
+def remap_history_tokens(cid: str, sid: str, tokens: dict[str, str]) -> None:
+    """Branch variants retain only observations copied with their scene prefix."""
+    with locks.campaign_lock(cid):
+        data = _read(cid)
+        for record in _scope(cid, sid, data)["responses"].values():
+            for variant in record["variants"]:
+                variant["scene_state_token"] = tokens.get(variant.get("scene_state_token"))
+                for post in variant.get("posts", []):
+                    post["scene_state_token"] = tokens.get(post.get("scene_state_token"))
+        _write(cid, data)
 
 
 def _read(cid):
@@ -168,6 +181,10 @@ def _message(record, content, status, variant=None, excluded=None):
     # rebuilt whole, so a writer that does not pass the flag through drops it.
     hidden = {"excluded": excluded} if excluded else {}
     return {**thinking, **served,
+        **({"legacy_unkeyed": True} if variant.get("legacy_unkeyed") else {}),
+        "scene_state_token": variant.get("scene_state_token"),
+        "post_id": variant.get("post_id") or uuid.uuid5(uuid.NAMESPACE_URL,
+                                                       "grimoire-post:" + variant["id"]).hex,
         "role": "assistant",
         "speaker": record["speaker"],
         "content": content,
@@ -232,7 +249,8 @@ def migrate_if_needed(cid: str, sid: str) -> dict:
     identity-less until something else happened to ask.
     """
     scene = read.read_scene(cid, sid)
-    if not needs_migration(scene["messages"]) and identity.scene_identity(cid, sid):
+    if (not needs_migration(scene["messages"]) and not post_identity.missing(scene["messages"])
+            and identity.scene_identity(cid, sid)):
         return scene
     migrate(cid, sid)
     return read.read_scene(cid, sid)
@@ -241,6 +259,7 @@ def migrate_if_needed(cid: str, sid: str) -> dict:
 def migrate(cid: str, sid: str) -> list[dict]:
     """Assign legacy posts IDs once, under the transcript's campaign lock."""
     with locks.campaign_lock(cid):
+        post_identity.ensure_post_ids(cid, sid)
         data = _read(cid)
         scope = _scope(cid, sid, data)
         messages = read.read_scene(cid, sid)["messages"]
@@ -261,6 +280,9 @@ def migrate(cid: str, sid: str) -> list[dict]:
                 # Its connection rides along, so a swipe away and back puts
                 # the post's provenance back with its text.
                 "variants": [{"id": vid, "content": message["content"], "status": "complete",
+                              "post_id": message["post_id"],
+                              **({"legacy_unkeyed": True} if message.get("legacy_unkeyed") else {}),
+                              "scene_state_token": message.get("scene_state_token"),
                               **({"connection": message["connection"]}
                                  if message.get("connection") else {})}],
             }
@@ -273,6 +295,16 @@ def migrate(cid: str, sid: str) -> list[dict]:
                 }
             )
             changed = True
+        for message in messages:
+            record = scope["responses"].get(message.get("response_id"))
+            if record is None:
+                continue
+            for variant in record["variants"]:
+                if not variant.get("post_id"):
+                    variant["post_id"] = (message["post_id"]
+                        if variant["id"] == record["active_variant"]
+                        else uuid.uuid5(uuid.NAMESPACE_URL, "grimoire-post:" + variant["id"]).hex)
+                    changed = True
         if changed:
             _write(cid, data)
             write.replace_messages(cid, sid, messages, preserve_turn_sizes=True)
@@ -507,9 +539,16 @@ def save_variant(
             else []
         )
         previous: dict = next((v for v in record["variants"] if v["id"] == record["active_variant"]), {})
+        prior_post = next((m for m in messages if m.get("response_id") == rid
+                           and m.get("response_part", "") == part), None)
+        observation = history_capture.current_public(cid, sid) if prior_post is None else None
+        state_token = (prior_post.get("scene_state_token") if prior_post is not None
+                       else observation[0] if observation else None)
         thinking_parts: dict[str, str] = dict(previous.get("reasoning_parts", {})) if part else {}
         thinking_parts[part] = reasoning
         variant = {
+            "post_id": _id(),
+            "scene_state_token": state_token,
             "reasoning": "\n\n".join(s for s in thinking_parts.values() if s),
             "reasoning_parts": thinking_parts,
             "id": _id(),
@@ -527,6 +566,10 @@ def save_variant(
             variant["made_by"] = copy.deepcopy(made_by)
         if tool is not None:
             variant["tool"] = copy.deepcopy(tool)
+        audiences = appearance_paths.post_audiences(cid, sid, len(messages) + 1)
+        response_posts.remember_audiences(record["variants"], messages, audiences)
+        variant["posts"] = response_posts.snapshot(messages, rid, part,
+            {"content": content, "post_id": variant["post_id"], "scene_state_token": state_token}, audiences)
         record["variants"].append(variant)
         if activate:
             record.update(active_variant=variant["id"], status=status)
@@ -549,6 +592,7 @@ def save_variant(
                 write.replace_messages(cid, sid, messages, preserve_turn_sizes=True)
             if status == "complete" and part:
                 _complete_parts(cid, sid, rid)
+            history_capture.published(cid, sid, observation)
         return copy.deepcopy(variant)
 
 
@@ -733,19 +777,30 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
             )
         messages = read.read_scene(cid, sid)["messages"]
         excluded = _excluded_of(messages, rid)  # read before the parts collapse
-        retained = [i for i, m in enumerate(messages) if i == index or m.get("response_id") != rid]
+        response_posts.remember_audiences(record["variants"], messages,
+            appearance_paths.post_audiences(cid, sid, len(messages)))
+        # _invalidate reloads the ledger below; retain the audiences captured
+        # before this take disappears, including for older visible variants.
+        variants = record["variants"]
+        saved = variant.get("posts") or [{"content": variant["content"],
+            "post_id": variant.get("post_id"), "scene_state_token": variant.get("scene_state_token"),
+            "audience": variant.get("audience", {})}]
+        restored = [{**_message(record, post["content"], "complete", {**variant, **post}, excluded=excluded),
+                     "response_part": post.get("response_part") or ""} for post in saved]
+        messages, mapping = response_posts.place(messages, rid, index, restored, saved)
+        audiences_by_id = {post.get("post_id"): post.get("audience", {}) for post in saved}
         appearance_paths.remap_presence(
-            cid, sid, {old: new for new, old in enumerate(retained)}, len(retained)
+            cid, sid, mapping, len(messages),
+            {i: audiences_by_id.get(m.get("post_id"), {})
+             for i, m in enumerate(messages) if m.get("response_id") == rid}
         )
-        messages = [messages[i] for i in retained]
-        messages[index] = _message(record, variant["content"], "complete", variant, excluded=excluded)
         for message in messages[index + 1 :]:
             if message.get("response_id"):
                 message["context_changed"] = True
         _invalidate(cid, sid, index, in_context=excluded is None)
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
-        record.update(active_variant=vid, status="complete")
+        record.update(active_variant=vid, status="complete", variants=variants)
         _write(cid, data)
         write.replace_messages(cid, sid, messages)
 

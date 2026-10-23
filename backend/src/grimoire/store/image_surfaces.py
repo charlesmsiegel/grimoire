@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +68,7 @@ from . import (
     pcs,
     world_images,
 )
+from .filesystem_links import linked as linked
 from .frontmatter import parse_frontmatter_head
 from .paths import safe_id
 
@@ -197,34 +197,6 @@ def _subdirs(d: Path) -> tuple[list[Path], list[_Bad]]:
         return [], [(d, _why(d))]
     return [d / n for n in sorted(good)], sorted(bad)
 
-
-def linked(root: Path, d: Path) -> bool:
-    """Whether any component between `root` and `d` (inclusive) is a
-    symlink or Windows junction -- or `d` is not under `root` at all. Such a directory may hold
-    files outside the pinned root, and a run would unlink them there (M4)."""
-    try:
-        parts = d.relative_to(root).parts
-    except ValueError:
-        return True
-    cur = root
-    for part in parts:
-        cur = cur / part
-        try:
-            info = cur.lstat()
-        except (FileNotFoundError, NotADirectoryError):
-            continue
-        except OSError:
-            # Cannot prove this component is not a link: fail closed, as the
-            # callers that skip a linked directory expect, rather than raising
-            # into an inventory that only checks for a link (#478).
-            return True
-        # Path.is_junction arrived in 3.12; lstat exposes the junction tag on
-        # every supported Windows Python without rejecting cloud placeholders.
-        if (stat.S_ISLNK(info.st_mode) or (os.name == "nt"
-                and getattr(info, "st_reparse_tag", 0)
-                == getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None))):
-            return True
-    return False
 
 
 def _roots(root: Path) -> Iterator[tuple[str, Path, str | None]]:

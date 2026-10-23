@@ -109,7 +109,7 @@ def test_leave_narrates_once_scene_has_messages(monkeypatch, tmp_path):
     ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")
     scenes.append_message(cid, sid, "user", "hi")
     ap.leave(cid, sid, "characters", "seraphine")
-    assert scenes.read_scene(cid, sid)["messages"] == [
+    assert _presentation_free(scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "*Seraphine leaves the scene.*",
          "speaker": scenes.TRANSITION_SPEAKER},
@@ -124,7 +124,7 @@ def test_appear_narrates_first_time_join_into_a_messaged_scene(monkeypatch, tmp_
     sid = scenes.create_scene(cid, "S")
     scenes.append_message(cid, sid, "user", "hi")
     ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")  # first-ever lock
-    assert scenes.read_scene(cid, sid)["messages"] == [
+    assert _presentation_free(scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "*Seraphine joins the scene.*",
          "speaker": scenes.TRANSITION_SPEAKER},
@@ -142,11 +142,11 @@ def test_appear_narrates_join_once_scene_has_messages(monkeypatch, tmp_path):
     sid2 = scenes.create_scene(cid, "S2")
     # already-locked actor rejoining a *different*, non-empty scene: narrates
     ap.appear(cid, sid2, "characters", "seraphine", "corrupted", "npc")
-    assert scenes.read_scene(cid, sid)["messages"] == [{"role": "user", "content": "hi"}]  # untouched
+    assert _presentation_free(scenes.read_scene(cid, sid)["messages"]) == [{"role": "user", "content": "hi"}]  # untouched
     scenes.append_message(cid, sid2, "user", "hi")
     ap.leave(cid, sid2, "characters", "seraphine")
     ap.appear(cid, sid2, "characters", "seraphine", "corrupted", "npc")
-    assert scenes.read_scene(cid, sid2)["messages"][-1] == \
+    assert _presentation_free(scenes.read_scene(cid, sid2)["messages"][-1]) == \
         {"role": "assistant", "content": "*Seraphine joins the scene.*",
          "speaker": scenes.TRANSITION_SPEAKER}
 
@@ -169,7 +169,7 @@ def test_appear_narrate_false_suppresses_narration(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "S")
     scenes.append_message(cid, sid, "assistant", "*The study is silent.*")
     ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc", narrate=False)
-    assert scenes.read_scene(cid, sid)["messages"] == [
+    assert _presentation_free(scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "assistant", "content": "*The study is silent.*"}]
 
 
@@ -745,3 +745,11 @@ def test_player_label_picks_the_first_of_several_players(monkeypatch, tmp_path):
     ap.appear(cid, sid, "pcs", second, svid, "player")
     ap.appear(cid, sid, "pcs", first, fvid, "player")
     assert ap.player_label(cid, sid) == "Adair Finch"
+
+
+def _presentation_free(value):
+    """Keep narrative comparisons exact while presentation IDs vary."""
+    if isinstance(value, list):
+        return [_presentation_free(message) for message in value]
+    return {key: item for key, item in value.items()
+            if key not in ("post_id", "scene_state_token", "legacy_unkeyed")}
