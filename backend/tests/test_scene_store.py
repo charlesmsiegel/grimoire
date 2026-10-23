@@ -27,6 +27,11 @@ from grimoire.store.scenes import serialize
 from grimoire.store.scenes import write as scenes_write
 
 
+def _narrative(messages):
+    """Compare story fields separately from durable address metadata."""
+    return [{k: v for k, v in m.items() if k != "post_id"} for m in messages]
+
+
 def _campaign(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
@@ -49,7 +54,7 @@ def test_create_list_and_read_empty(monkeypatch, tmp_path):
     assert sid.endswith("my-first-scene")
     metas = scenes.list_scenes(cid)
     assert len(metas) == 1 and metas[0]["id"] == sid and metas[0]["title"] == "My First Scene"
-    assert scenes.read_scene(cid, sid)["messages"] == []
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == []
 
 
 def test_list_scenes_reports_absorbed_as_done(monkeypatch, tmp_path):
@@ -79,7 +84,7 @@ def test_append_and_parse_roundtrip(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "Roundtrip")
     scenes.append_message(cid, sid, "user", "Describe the keeper.\n\n**Not a real marker** still mine.")
     scenes.append_message(cid, sid, "assistant", "She is older than the salt.")
-    assert scenes.read_scene(cid, sid)["messages"] == [
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "user", "content": "Describe the keeper.\n\n**Not a real marker** still mine."},
         {"role": "assistant", "content": "She is older than the salt."},
     ]
@@ -122,11 +127,11 @@ def test_set_location_first_is_silent_then_move_announces(monkeypatch, tmp_path)
     # first set: silent
     assert scenes.set_location(cid, sid, a) == {"moved": False, "name": "Salt Cathedral"}
     assert scenes.get_location_history(cid, sid) == [a]
-    assert scenes.read_scene(cid, sid)["messages"] == []
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == []
     # change: announces and records
     assert scenes.set_location(cid, sid, b) == {"moved": True, "name": "Drowned Market"}
     assert scenes.get_location_history(cid, sid) == [a, b]
-    assert scenes.read_scene(cid, sid)["messages"] == [
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "assistant", "content": "*The scene moves to Drowned Market.*",
          "speaker": scenes.TRANSITION_SPEAKER}]
     # re-select current: no-op
@@ -164,7 +169,7 @@ def test_edit_message_roundtrip_and_bounds(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "user", "frist")
     scenes.append_message(cid, sid, "assistant", "She nods.")
     scenes.edit_message(cid, sid, 0, "first")
-    assert scenes.read_scene(cid, sid)["messages"] == [
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "She nods."}]
     with pytest.raises(IndexError):
@@ -186,7 +191,7 @@ def test_rename_changes_id_keeps_order(monkeypatch, tmp_path):
     assert new_sid != sid and new_sid.endswith("shiny-new-name")
     metas = scenes.list_scenes(cid)
     assert len(metas) == 1 and metas[0]["id"] == new_sid and metas[0]["updated"] == before
-    assert scenes.read_scene(cid, new_sid)["messages"] == [{"role": "user", "content": "keep me"}]
+    assert _narrative(scenes.read_scene(cid, new_sid)["messages"]) == [{"role": "user", "content": "keep me"}]
     with pytest.raises(scenes.SceneNotFound):
         scenes.read_scene(cid, sid)
 
@@ -197,7 +202,7 @@ def test_rename_to_same_title_is_noop(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "user", "hi")
     new_sid = scenes.rename_scene(cid, sid, "Same")
     assert new_sid == sid
-    assert scenes.read_scene(cid, new_sid)["messages"] == [{"role": "user", "content": "hi"}]
+    assert _narrative(scenes.read_scene(cid, new_sid)["messages"]) == [{"role": "user", "content": "hi"}]
 
 
 def test_traversal_sid_is_rejected(monkeypatch, tmp_path):
@@ -214,12 +219,12 @@ def test_set_datetime_first_silent_then_advance(monkeypatch, tmp_path):
     assert res == {"advanced": False, "friendly": "29 June 2026", "id": "001--2026-06-29--s"}
     sid = res["id"]
     assert scenes.get_time_history(cid, sid) == ["2026-06-29"]
-    assert scenes.read_scene(cid, sid)["messages"] == []
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == []
     # change: appends an italic transition line; filename keeps the start date
     res = scenes.set_datetime(cid, sid, "2026-07-04T09:00")
     assert res == {"advanced": True, "friendly": "4 July 2026", "id": sid}
     assert scenes.get_time_history(cid, sid) == ["2026-06-29", "2026-07-04T09:00"]
-    assert scenes.read_scene(cid, sid)["messages"] == [
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "assistant", "content": "*Time passes. It is now 4 July 2026.*",
          "speaker": scenes.TRANSITION_SPEAKER}]
     # re-set the same current: no-op
@@ -372,7 +377,8 @@ def test_script_labels_store_and_derive_roles(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "assistant", '"You dare?"', speaker="Seraphine Vale")
     scenes.append_message(cid, sid, "assistant", "The hall falls silent.")
     raw = (campaigns.campaign_root(cid) / "scenes" / f"{sid}.md").read_text(encoding="utf-8")
-    assert "**Elara Vane:** I draw my blade." in raw
+    assert "**Elara Vane:**" in raw
+    assert scenes.read_scene(cid, sid)["messages"][0]["content"] == "I draw my blade."
     assert "**Seraphine Vale:**" in raw and "(Seraphine Vale)" not in raw
     msgs = scenes.read_scene(cid, sid)["messages"]
     assert [(m["role"], m.get("speaker")) for m in msgs] == [
@@ -413,7 +419,8 @@ def test_unsafe_speaker_falls_back_to_reserved_label(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "S")
     scenes.append_message(cid, sid, "user", "hi", speaker="x" * 65)
     raw = (campaigns.campaign_root(cid) / "scenes" / f"{sid}.md").read_text(encoding="utf-8")
-    assert "**You:** hi" in raw
+    assert "**You:**" in raw
+    assert scenes.read_scene(cid, sid)["messages"][0]["content"] == "hi"
 
 
 def test_stamp_user_speaker_backfills_only_bare_user_lines(monkeypatch, tmp_path):
@@ -425,7 +432,8 @@ def test_stamp_user_speaker_backfills_only_bare_user_lines(monkeypatch, tmp_path
     assert [(m["role"], m.get("speaker")) for m in msgs] == [
         ("user", "Elara Vane"), ("assistant", None)]
     raw = (campaigns.campaign_root(cid) / "scenes" / f"{sid}.md").read_text(encoding="utf-8")
-    assert "**Elara Vane:** first, before the PC joined" in raw
+    assert "**Elara Vane:**" in raw
+    assert msgs[0]["content"] == "first, before the PC joined"
 
 
 def test_split_reply_segments_and_guards():
@@ -456,7 +464,7 @@ def test_remove_trailing_assistant_run(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "assistant", "one", speaker="Seraphine Vale")
     scenes.append_message(cid, sid, "assistant", "two")
     scenes.remove_trailing_assistant_run(cid, sid)
-    assert scenes.read_scene(cid, sid)["messages"] == [{"role": "user", "content": "hi"}]
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == [{"role": "user", "content": "hi"}]
     with pytest.raises(IndexError):
         scenes.remove_trailing_assistant_run(cid, sid)
 
@@ -476,7 +484,7 @@ def test_remove_trailing_user_post_takes_back_the_orphan(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "assistant", "hello")
     at = scenes.append_message(cid, sid, "user", "and then?")
     assert scenes.remove_trailing_user_post(cid, sid, at, "and then?") is True
-    assert scenes.read_scene(cid, sid)["messages"] == [
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
     ]
@@ -510,7 +518,7 @@ def test_remove_trailing_user_post_will_not_take_a_twins_post(monkeypatch, tmp_p
     # fires. A's post is then last again and A's undo would fire on a re-run.
     assert scenes.remove_trailing_user_post(cid, sid, second, "and then?") is True
     assert scenes.remove_trailing_user_post(cid, sid, first, "and then?") is True
-    assert scenes.read_scene(cid, sid)["messages"] == []
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == []
 
 
 def test_remove_trailing_user_post_keeps_turn_boundaries(monkeypatch, tmp_path):
@@ -631,7 +639,7 @@ def test_trim_continuation_preserves_roll_speaker(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "assistant", "🎲 rolled 14 vs DC 12 — success",
                           speaker=scenes.ROLL_SPEAKER)                         # 2: manual roll line
     scenes.trim_continuation(cid, sid, 1)
-    assert scenes.read_scene(cid, sid)["messages"] == [
+    assert _narrative(scenes.read_scene(cid, sid)["messages"]) == [
         {"role": "user", "content": "I attack."},
         {"role": "assistant", "content": "🎲 rolled 14 vs DC 12 — success",
          "speaker": scenes.ROLL_SPEAKER},

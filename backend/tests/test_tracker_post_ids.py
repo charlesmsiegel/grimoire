@@ -42,12 +42,12 @@ def test_post_id_survives_a_cut_after_it(monkeypatch, tmp_path):
     assert len(msgs) == 1 and msgs[i]["post_id"] == "b" * 32
 
 
-def test_plain_append_carries_no_post_id(monkeypatch, tmp_path):
+def test_plain_append_mints_post_id(monkeypatch, tmp_path):
     cid, sid = _scene(monkeypatch, tmp_path)
     i = scenes.append_message(cid, sid, "user", "Hello.")
-    assert scenes.read_scene(cid, sid)["messages"][i] == {"role": "user", "content": "Hello."}
-    # Byte-identical to what it was before post ids existed: no metadata comment.
-    assert "grimoire-response" not in scenes.paths._scene_path(cid, sid).read_text(encoding="utf-8")
+    message = scenes.read_scene(cid, sid)["messages"][i]
+    assert POST_ID.fullmatch(message.pop("post_id"))
+    assert message == {"role": "user", "content": "Hello."}
 
 
 def _chat(client, cid, sid, content):

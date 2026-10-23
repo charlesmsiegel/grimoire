@@ -18,7 +18,7 @@ from . import atomic, locks, proposals, response_snapshots, rolls
 from .appearances import paths as appearance_paths
 from .campaigns import paths as campaign_paths
 from .paths import now_iso
-from .scenes import identity, read, serialize, write
+from .scenes import identity, post_identity, read, serialize, write
 
 
 class ResponseNotFound(Exception):  # noqa: N818 - follows existing SceneNotFound store contract
@@ -168,6 +168,8 @@ def _message(record, content, status, variant=None, excluded=None):
     # rebuilt whole, so a writer that does not pass the flag through drops it.
     hidden = {"excluded": excluded} if excluded else {}
     return {**thinking, **served,
+        "post_id": variant.get("post_id") or uuid.uuid5(uuid.NAMESPACE_URL,
+                                                       "grimoire-post:" + variant["id"]).hex,
         "role": "assistant",
         "speaker": record["speaker"],
         "content": content,
@@ -232,7 +234,8 @@ def migrate_if_needed(cid: str, sid: str) -> dict:
     identity-less until something else happened to ask.
     """
     scene = read.read_scene(cid, sid)
-    if not needs_migration(scene["messages"]) and identity.scene_identity(cid, sid):
+    if (not needs_migration(scene["messages"]) and not post_identity.missing(scene["messages"])
+            and identity.scene_identity(cid, sid)):
         return scene
     migrate(cid, sid)
     return read.read_scene(cid, sid)
@@ -241,6 +244,7 @@ def migrate_if_needed(cid: str, sid: str) -> dict:
 def migrate(cid: str, sid: str) -> list[dict]:
     """Assign legacy posts IDs once, under the transcript's campaign lock."""
     with locks.campaign_lock(cid):
+        post_identity.ensure_post_ids(cid, sid)
         data = _read(cid)
         scope = _scope(cid, sid, data)
         messages = read.read_scene(cid, sid)["messages"]
@@ -261,6 +265,7 @@ def migrate(cid: str, sid: str) -> list[dict]:
                 # Its connection rides along, so a swipe away and back puts
                 # the post's provenance back with its text.
                 "variants": [{"id": vid, "content": message["content"], "status": "complete",
+                              "post_id": message["post_id"],
                               **({"connection": message["connection"]}
                                  if message.get("connection") else {})}],
             }
@@ -273,6 +278,16 @@ def migrate(cid: str, sid: str) -> list[dict]:
                 }
             )
             changed = True
+        for message in messages:
+            record = scope["responses"].get(message.get("response_id"))
+            if record is None:
+                continue
+            for variant in record["variants"]:
+                if not variant.get("post_id"):
+                    variant["post_id"] = (message["post_id"]
+                        if variant["id"] == record["active_variant"]
+                        else uuid.uuid5(uuid.NAMESPACE_URL, "grimoire-post:" + variant["id"]).hex)
+                    changed = True
         if changed:
             _write(cid, data)
             write.replace_messages(cid, sid, messages, preserve_turn_sizes=True)
@@ -510,6 +525,7 @@ def save_variant(
         thinking_parts: dict[str, str] = dict(previous.get("reasoning_parts", {})) if part else {}
         thinking_parts[part] = reasoning
         variant = {
+            "post_id": _id(),
             "reasoning": "\n\n".join(s for s in thinking_parts.values() if s),
             "reasoning_parts": thinking_parts,
             "id": _id(),
