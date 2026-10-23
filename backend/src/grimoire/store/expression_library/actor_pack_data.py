@@ -174,6 +174,19 @@ def _ordinary_assets(target, source, versions, files):
                     if image_surfaces.linked(store_paths.home(), path):
                         raise contracts.ExpressionUnavailableError("Linked ordinary image")
                     files[f"actor/assets/{vid}/{name}{path.suffix}"] = _file_bytes(path)
+            if name == assets.AVATAR:
+                # Image inheritance and occurrence crop inheritance are independent.
+                # A legacy image also needs a focus-only placement in the archive.
+                focus = (overlay.read_focus(target.owner_id, target.actor_id, vid, target.kind)
+                         if target.scope == "campaign" else assets.read_focus(source, target.actor_id, vid, target.kind))
+                placement = f"actor/assets/{vid}/image-refs/{name}.json"
+                payload = json.loads(files.get(placement, b'{"format":1}'))
+                payload.pop("focus", None)
+                if focus is not None:
+                    payload["focus"] = focus
+                if payload.get("image") or focus is not None:
+                    files[placement] = storage.encoded(payload)
+
 
 
 def _objects(files):

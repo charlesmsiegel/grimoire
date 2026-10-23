@@ -102,7 +102,7 @@ def _candidate(parts, mode: str, outfit_id: str | None, issues: list[str]):
             return None
         outfit = contracts.slug(outfit_id)
     stem = Path(parts[-1]).stem.lower()
-    alternate = re.fullmatch(r"(.+?)(?:[_-]\d+| \(\d+\))", stem)
+    alternate = re.fullmatch(r"(.+?)(?:[_-]\d+| \(\d+\))", stem) if mode == "sillytavern" else None
     expression = alternate[1] if alternate else stem
     try:
         contracts.slug(expression)
@@ -149,7 +149,9 @@ def _inspect_members(archive, mode, outfit_id):
             payloads[name] = raw
     counts = Counter((r["outfit"], r["expression"]) for r in rows)
     for row in rows:
-        row["ambiguous"] = row["expression"] not in fields.VISIBLE_MOODS or counts[row["outfit"], row["expression"]] > 1
+        row["ambiguous"] = (row["expression"] is None
+                            or (mode == "sillytavern" and row["expression"] not in fields.VISIBLE_MOODS)
+                            or counts[row["outfit"], row["expression"]] > 1)
     return rows, metadata, issues, payloads
 
 

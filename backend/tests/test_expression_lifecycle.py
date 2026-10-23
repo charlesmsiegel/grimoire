@@ -36,8 +36,11 @@ def test_materialize_keeps_patch_and_hidden_expression(target):
     lifecycle.materialize_effective(local)
     manifest, refs = read.layer(paths.directory(local))
     assert manifest["outfits"]["everyday"]["label"] == "Travel"
-    assert ("everyday", "neutral") not in refs
+    assert refs["everyday", "neutral"].image is not None
+    assert "neutral" not in read.effective(local)["outfits"]["everyday"]["expressions"]
     assert "neutral" in manifest["hidden_expressions"]["everyday"]
+    restored = apply(local, {"op": "restore-expression", "outfit": "everyday", "expression": "neutral"})
+    assert restored["outfits"]["everyday"]["expressions"]["neutral"]["available"]
 
 
 def test_world_bundle_round_trip_preserves_expression_objects(target, tmp_path, monkeypatch):

@@ -24,7 +24,8 @@ def materialize(directories: list[Path], destination: Path) -> None:
 def _materialize(layers: list, destination: Path, before: dict, revision_id: str) -> None:
     if not any(m["revision"] for _, _, m, _ in layers):
         return
-    merged = storage.merge(layers)
+    # Flatten the complete authored layers; hide flags must remain reversible.
+    merged = storage.merge(layers, include_hidden=True)
     manifest = storage.empty()
     manifest.update({k: copy.deepcopy(merged[k]) for k in
                      ("default_outfit", "hidden_outfits", "hidden_expressions")})

@@ -107,7 +107,7 @@ def _expressions(prior: dict, refs: dict, outfit: str, source: str, revision: st
     return expressions
 
 
-def merge(layers: list) -> dict:
+def merge(layers: list, *, include_hidden: bool = False) -> dict:
     outfits: dict = {}
     default = None
     hidden_outfits = set()
@@ -115,10 +115,11 @@ def merge(layers: list) -> dict:
     for source, _, manifest, refs in layers:
         default = manifest["default_outfit"] or default
         for outfit in manifest["hidden_outfits"]:
-            outfits.pop(outfit, None)
+            if not include_hidden:
+                outfits.pop(outfit, None)
             hidden_outfits.add(outfit)
         for outfit, meta in sorted(manifest["outfits"].items()):
-            if outfit in hidden_outfits:
+            if outfit in hidden_outfits and not include_hidden:
                 continue
             prior = outfits.get(outfit, {})
             expressions = _expressions(prior, refs, outfit, source, manifest["revision"])
@@ -128,7 +129,7 @@ def merge(layers: list) -> dict:
         for outfit, labels in manifest["hidden_expressions"].items():
             hidden_expressions.setdefault(outfit, set()).update(labels)
             for label in labels:
-                if outfit in outfits:
+                if outfit in outfits and not include_hidden:
                     outfits[outfit]["expressions"].pop(label, None)
     outfits = dict(sorted(outfits.items()))
     default, warnings = _defaults(outfits, default)

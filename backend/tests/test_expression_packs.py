@@ -155,3 +155,19 @@ def test_export_at_pixel_budget_round_trips_shared_sprite_members(target, tmp_pa
     with destination.open("rb") as stream:
         result = accept(target, packs.preview(target, stream, mode="grimoire"))
     assert set(result["outfits"]["everyday"]["expressions"]) == {"neutral", "joy"}
+
+
+def test_native_expression_pack_preserves_numbered_custom_label_and_fallback(target, tmp_path):
+    outfit(target)
+    apply(target, {"op": "put-expression", "outfit": "everyday", "expression": "joy_1", "data": png()},
+          {"op": "patch-outfit", "outfit": "everyday", "metadata": {"fallback_expression": "joy_1"}})
+    destination = tmp_path / "custom.zip"
+    packs.export(target, destination)
+    apply(target, {"op": "remove-outfit", "outfit": "everyday"})
+    with destination.open("rb") as stream:
+        preview = packs.preview(target, stream, mode="grimoire")
+    assert {row["expression"] for row in preview["images"]} == {"neutral", "joy_1"}
+    assert all(not row["ambiguous"] for row in preview["images"])
+    result = accept(target, preview)["outfits"]["everyday"]
+    assert result["fallback_expression"] == "joy_1"
+    assert result["expressions"]["joy_1"]["available"]

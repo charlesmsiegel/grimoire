@@ -184,3 +184,53 @@ def test_native_pack_rebases_own_card_image_urls_to_imported_actor(target, tmp_p
     expected = f"/api/worlds/{destination.owner_id}/characters/{destination.actor_id}/versions/{target.version_id}/images/gallery_1"
     assert imported["data"]["description"] == f"![portrait]({expected}?v=old) ![other]({unrelated})"
     assert assets.image_path(imported_root, destination.actor_id, target.version_id, "gallery_1") is not None
+
+
+@pytest.mark.parametrize("campaign_scope", [False, True])
+def test_detached_pack_can_restore_hidden_local_content(target, tmp_path, campaign_scope):
+    outfit(target)
+    if campaign_scope:
+        target = campaign_target(target)
+    outfit(target, "formal")
+    apply(target, {"op": "patch-outfit", "outfit": "formal", "metadata": {"label": "Formal coat"}},
+          {"op": "hide-outfit", "outfit": "formal"},
+          {"op": "hide-expression", "outfit": "everyday", "expression": "neutral"})
+    actor = contracts.ExpressionActorTarget(target.scope, target.owner_id, target.kind, target.actor_id)
+    archive = tmp_path / "hidden.zip"
+    character_pack.export(actor, archive)
+    destination = replace(actor, actor_id="seraphine")
+    with archive.open("rb") as stream:
+        preview = character_pack.import_preview(stream, destination)
+    character_pack.import_commit(preview["token"], destination, "detached")
+    imported = replace(target, actor_id=destination.actor_id)
+    assert "formal" not in read.effective(imported)["outfits"]
+    result = apply(imported, {"op": "restore-outfit", "outfit": "formal"},
+                   {"op": "restore-expression", "outfit": "everyday", "expression": "neutral"})
+    assert result["outfits"]["formal"]["label"] == "Formal coat"
+    assert result["outfits"]["formal"]["expressions"]["neutral"]["available"]
+    assert result["outfits"]["everyday"]["expressions"]["neutral"]["available"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_native_pack_retains_campaign_crop_on_inherited_avatar(target, tmp_path, legacy):
+    root = worlds.world_root(target.owner_id)
+    if legacy:
+        directory = assets.version_dir(root, target.actor_id, target.version_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "avatar.png").write_bytes(png())
+    else:
+        assets.put_in(assets.version_dir(root, target.actor_id, target.version_id), "avatar", png(), "png")
+    assets.write_focus(root, target.actor_id, target.version_id, 20)
+    local = campaign_target(target)
+    croot = campaigns.campaign_root(local.owner_id)
+    assets.write_focus(croot, target.actor_id, target.version_id, 80)
+    assert overlay.read_focus(local.owner_id, target.actor_id, target.version_id) == 80
+    actor = contracts.ExpressionActorTarget("campaign", local.owner_id, target.kind, target.actor_id)
+    archive = tmp_path / "crop.zip"
+    character_pack.export(actor, archive)
+    destination = contracts.ExpressionActorTarget("world", target.owner_id, target.kind, "seraphine")
+    with archive.open("rb") as stream:
+        preview = character_pack.import_preview(stream, destination)
+    character_pack.import_commit(preview["token"], destination, "detached")
+    assert assets.image_path(root, destination.actor_id, target.version_id, "avatar") is not None
+    assert assets.read_focus(root, destination.actor_id, target.version_id) == 80

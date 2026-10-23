@@ -358,6 +358,7 @@ def test_a_campaign_whose_stored_world_id_is_unusable_reads_no_world_records(
 # unsafe id must never reach a handler as an unhandled exception, whatever
 # route carries it.
 _FILL = {"post_id": "p1", "sid": "s1", "rid": "r1", "gid": "g1", "eid": "e1", "kind": "locations",
+         "version_id": "default", "token": "0" * 32, "outfit": "everyday", "label": "neutral",
          "vid": "default", "mid": "pool-basic", "name": "avatar", "pid": "p1",
          "tid": "t1", "char": "c1", "aid": "a1", "version": "default",
          "actor_id": "a1", "id": "x1", "content_id": "c1", "nonce": "n1",

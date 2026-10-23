@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import Path as PathParameter
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -53,9 +54,11 @@ def errors():
 
 
 def scoped_router(scope: str) -> APIRouter:
-    result = APIRouter(prefix=f"/{scope}s/{{owner_id}}/{{kind}}/{{actor_id}}/versions/{{version_id}}/expressions")
+    owner_parameter = "cid" if scope == "campaign" else "owner_id"
+    result = APIRouter(prefix=f"/{scope}s/{{{owner_parameter}}}/{{kind}}/{{actor_id}}/versions/{{version_id}}/expressions")
 
-    def target(owner_id: str, kind: str, actor_id: str, version_id: str):
+    def target(kind: str, actor_id: str, version_id: str,
+               owner_id: str = PathParameter(..., alias=owner_parameter)):
         with errors():
             value = contracts.ExpressionTarget(scope, owner_id, kind, actor_id, version_id)
             paths.resolved(value)
@@ -79,6 +82,7 @@ def scoped_router(scope: str) -> APIRouter:
             return {"removed_revisions": lifecycle.cleanup_revisions(address)}
 
     @result.post("/imports/preview")
+    @common.computes_only
     def preview(file: UploadFile = File(...), mode: str = Form(...), outfit_id: str | None = Form(None),
                 address=Depends(target)):
         with errors():
@@ -91,6 +95,7 @@ def scoped_router(scope: str) -> APIRouter:
                                  expected_effective_revision=body.expected_effective_revision)
 
     @result.post("/imports/folder")
+    @common.computes_only
     def folder(files: list[UploadFile] = File(...), mode: str = Form("grimoire"),
                outfit_id: str | None = Form(None), address=Depends(target)):
         with errors():
@@ -140,9 +145,10 @@ def serve_image(address, outfit: str, label: str, request: Request):
 
 
 def actor_router(scope: str) -> APIRouter:
-    result = APIRouter(prefix=f"/{scope}s/{{owner_id}}/{{kind}}/{{actor_id}}/bundle")
+    owner_parameter = "cid" if scope == "campaign" else "owner_id"
+    result = APIRouter(prefix=f"/{scope}s/{{{owner_parameter}}}/{{kind}}/{{actor_id}}/bundle")
 
-    def target(owner_id: str, kind: str, actor_id: str):
+    def target(kind: str, actor_id: str, owner_id: str = PathParameter(..., alias=owner_parameter)):
         with errors():
             value = contracts.ExpressionActorTarget(scope, owner_id, kind, actor_id)
             actor_pack_data.owner_root(value)
@@ -157,6 +163,7 @@ def actor_router(scope: str) -> APIRouter:
                 "Content-Disposition": f'attachment; filename="{address.actor_id}.grimoire-character.zip"'})
 
     @result.post("/imports/preview")
+    @common.computes_only
     def preview_actor(file: UploadFile = File(...), address=Depends(target)):
         with errors():
             return character_pack.import_preview(file.file, address)

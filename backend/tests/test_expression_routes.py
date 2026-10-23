@@ -7,6 +7,7 @@ import pytest
 
 from grimoire.store import campaigns, characters, image_gc, image_store, pcs, worlds
 from grimoire.store import paths as store_paths
+from grimoire.store import revision as campaign_revision
 from grimoire.store.expression_library import paths, read
 from tests.test_expression_packs import archive
 from tests.test_expressions_store import apply, outfit, png
@@ -28,32 +29,47 @@ def test_library_round_trip_in_each_scope(client, scope, kind):
     assert len(empty["standard_labels"]) == 28
     body = {"expected_effective_revision": empty["effective_revision"],
             "mutations": [{"op": "create-outfit", "outfit": "armor", "metadata": {"label": "Armor"}}]}
+    before = campaign_revision.current(owner) if scope == "campaign" else None
     created = client.post(url + "/mutations", json=body)
     assert created.status_code == 200, created.text
+    if scope == "campaign":
+        assert campaign_revision.current(owner) != before
+        before = campaign_revision.current(owner)
     assert client.post(url + "/mutations", json=body).status_code == 409
-    revision = created.json()["effective_revision"]
-    uploaded = client.put(url + "/armor/neutral/image", data={"expected_effective_revision": revision},
+    if scope == "campaign":
+        assert campaign_revision.current(owner) == before
+    effective_revision = created.json()["effective_revision"]
+    uploaded = client.put(url + "/armor/neutral/image", data={"expected_effective_revision": effective_revision},
                           files={"file": ("sprite.png", png(), "image/png")})
     assert uploaded.status_code == 200, uploaded.text
+    if scope == "campaign":
+        assert campaign_revision.current(owner) != before
     image = client.get(url + "/armor/neutral/image")
     assert image.status_code == 200 and image.headers["content-type"] == "image/png"
     assert client.get(url + "/export").status_code == 200
     assert client.get(url.replace(f"/versions/{version}/", "/versions/missing/")).status_code == 404
 
 
-def test_pack_preview_commit_uses_same_validated_target(client):
+@pytest.mark.parametrize("scope", ["world", "campaign"])
+def test_pack_preview_commit_uses_same_validated_target(client, scope):
     wid = worlds.create_world("Realm")
     actor, version = characters.create_character(worlds.world_root(wid), "Mara")
-    url = f"/api/worlds/{wid}/characters/{actor}/versions/{version}/expressions"
+    owner = wid if scope == "world" else campaigns.create_campaign("Saltmarch", wid)
+    before = campaign_revision.current(owner) if scope == "campaign" else None
+    url = f"/api/{scope}s/{owner}/characters/{actor}/versions/{version}/expressions"
     response = client.post(url + "/imports/preview", data={"mode": "sillytavern", "outfit_id": "everyday"},
                            files={"file": ("sprites.zip", archive({"neutral.png": png()}).getvalue(), "application/zip")})
     assert response.status_code == 200, response.text
     preview = response.json()
+    if scope == "campaign":
+        assert campaign_revision.current(owner) == before
     result = client.post(url + f"/imports/{preview['token']}/commit", json={
         "expected_effective_revision": preview["effective_revision"],
         "selection": [{"file": "neutral.png", "outfit": "everyday", "expression": "neutral", "overwrite": False}]})
     assert result.status_code == 200, result.text
     assert result.json()["outfits"]["everyday"]["expressions"]["neutral"]["available"]
+    if scope == "campaign":
+        assert campaign_revision.current(owner) != before
 
 
 def test_folder_preview_honors_flat_format_and_outfit(client, target):
@@ -95,9 +111,14 @@ def test_native_actor_route_round_trip(client, scope, kind):
     url = f"/api/{scope}s/{owner}/{kind}"
     packed = client.get(url + f"/{actor}/bundle")
     assert packed.status_code == 200, packed.text
+    before = campaign_revision.current(owner) if scope == "campaign" else None
     destination = url + "/imported/bundle/imports"
     preview = client.post(destination + "/preview", files={"file": ("actor.zip", packed.content, "application/zip")})
     assert preview.status_code == 200, preview.text
+    if scope == "campaign":
+        assert campaign_revision.current(owner) == before
     result = client.post(destination + f'/{preview.json()["token"]}/commit', json={"disposition": "detached"})
     assert result.status_code == 200, result.text
     assert result.json()["actor_id"] == "imported"
+    if scope == "campaign":
+        assert campaign_revision.current(owner) != before
