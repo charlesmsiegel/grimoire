@@ -8,7 +8,7 @@ They contain no records, images, model responses or statistics from a personal
 Grimoire library. Initials are the application's normal fallback for records
 without art in the original captures below; no generated artwork or image editing
 was used for those captures. The [PR #554 VN captures](pr-554/README.md) add
-procedurally generated fixture artwork.
+GPT-generated fixture artwork.
 
 ## Published captures
 

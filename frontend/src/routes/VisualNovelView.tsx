@@ -73,7 +73,7 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
   ]);
   const playHref = `/campaigns/${encodeURIComponent(cid)}/scenes/${encodeURIComponent(sid)}`;
   return <main className="vn-reader" aria-label="Visual novel reader">
-    <header className="vn-header"><Link to={playHref}>Back to play</Link><h1>{scene?.title || 'Visual novel'}</h1><button disabled={refreshing} onClick={() => void refresh()}>Refresh</button></header>
+    <header className="vn-header"><Link to={playHref}>Exit VN</Link><h1>{scene?.title || 'Visual novel'}</h1><button disabled={refreshing} onClick={() => void refresh()}>Refresh</button></header>
     {notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
     <section className="vn-stage" aria-label={stage?.location_name ? `Stage: ${stage.location_name}` : 'Stage: unknown location'}>
       {stage?.background_url && <img key={stage.background_url} className="vn-background" src={stage.background_url} alt="" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />}

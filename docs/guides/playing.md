@@ -99,6 +99,8 @@ material. A generated suggestion does not become authoritative by appearing ther
 ## Visual novel reader
 
 Open **Scene ⋯ → Visual novel reader** to read the current scene on a stage.
+The reader fills the application viewport. Choose **Exit VN** to return to play
+and restore Campaign, Library, and the other navigation.
 Previous/Next and First/Last move between posts; the Post selector jumps directly.
 The arrow keys, Home and End provide the same navigation. Autoplay advances at
 its selected interval and stops at the end, on an error, or when presentation
