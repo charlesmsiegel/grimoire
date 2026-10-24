@@ -52,7 +52,7 @@
  *  An unterminated opener ends the scan and keeps everything from it onward:
  *  half a comment is not a comment, and dropping the rest of the message on
  *  account of a typo would be the worst possible reading of it. */
-function withoutComments(value: string): string {
+export function withoutComments(value: string): string {
   let out = "";
   let i = 0;
   for (;;) {

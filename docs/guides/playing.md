@@ -101,11 +101,24 @@ material. A generated suggestion does not become authoritative by appearing ther
 Open **Scene ⋯ → Visual novel reader** to read the current scene on a stage.
 The reader fills the application viewport. Choose **Exit VN** to return to play
 and restore Campaign, Library, and the other navigation.
-Previous/Next and First/Last move between posts; the Post selector jumps directly.
-The arrow keys, Home and End provide the same navigation. Autoplay advances at
-its selected interval and stops at the end, on an error, or when presentation
-settings open. The reader remembers your stable post in this browser when storage
-is available; a removed post recovers to the first surviving post with a notice.
+Tap the dialogue or choose **Continue** to advance through a post. Paragraphs
+with one or two sentences appear together; longer paragraphs advance one sentence
+at a time. Previous retraces those passages, First/Last jump to the scene's ends,
+and the Post selector starts the chosen post. The arrow keys, Home and End provide
+the same navigation. Selecting text or following a link does not advance.
+Autoplay is optional and advances one passage per interval. It stops at the end,
+on an error, when you navigate manually, or when presentation settings open.
+The reader remembers your post and passage in this browser when storage is
+available; a removed post recovers to the first surviving post with a notice.
+
+Illustrations appear as temporary backgrounds when you reach them. An image
+between paragraphs lasts through the following paragraph; an image inside prose
+lasts through the rest of that paragraph. Another image or a change of scene
+background replaces it sooner. Image transitions can split a two-sentence
+paragraph. Going back restores the illustration for that passage.
+
+The speaker and dialogue sit in an inset panel with the reader controls attached.
+Character sprites scale to the stage and extend behind the dialogue panel.
 
 **Refresh** reads newly published posts while keeping your current post. **Back to
 play** returns to that exact scene's composer to continue generating or editing.
