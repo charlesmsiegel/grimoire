@@ -115,10 +115,17 @@ Illustrations appear as temporary backgrounds when you reach them. An image
 between paragraphs lasts through the following paragraph; an image inside prose
 lasts through the rest of that paragraph. Another image or a change of scene
 background replaces it sooner. Image transitions can split a two-sentence
-paragraph. Going back restores the illustration for that passage.
+paragraph. Going back restores the illustration for that passage. Illustrations
+fit above the dialogue panel without cropping, and character sprites stay hidden
+while an illustration is displayed. Image descriptions remain available to screen
+readers but are not repeated in the dialogue box.
 
 The speaker and dialogue sit in an inset panel with the reader controls attached.
 Character sprites scale to the stage and extend behind the dialogue panel.
+PC sprites are hidden by default. Enable **Presentation settings → Show PC sprites**
+to show them; this reader preference applies immediately across scenes and is
+remembered in this browser. Post-specific Hide choices still apply, and resetting
+a post's appearance does not reset this reader preference.
 
 **Refresh** reads newly published posts while keeping your current post. **Back to
 play** returns to that exact scene's composer to continue generating or editing.

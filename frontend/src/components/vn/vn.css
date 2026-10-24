@@ -22,7 +22,12 @@
   background: radial-gradient(ellipse at 50% 30%, #374855, #151c26 75%);
 }
 .vn-background { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; }
-.vn-splash { z-index: -1; }
+/* Illustrations get real layout space above the controls. Merely containing
+   an absolute background would still leave portrait art behind the dialogue. */
+.vn-stage-illustration { flex-direction: column; align-items: center; background: #10141b; }
+.vn-illustration { position: relative; flex: 1; min-height: 0; width: 100%; margin-top: max(2.75rem, env(safe-area-inset-top)); }
+.vn-splash { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.vn-stage-illustration .vn-dialogue-panel { flex-shrink: 0; }
 .vn-header { position: absolute; top: max(.75rem, env(safe-area-inset-top)); left: 1.5rem; right: 1.5rem; pointer-events: none; }
 .vn-header h1 { margin: 0; font-size: clamp(1rem, 2vw, 1.35rem); font-weight: 500; text-shadow: 0 1px 5px #000, 0 0 12px #000; }
 .vn-cast {
@@ -66,7 +71,6 @@
 .vn-dialogue-text a { color: #5f4315; text-decoration: underline; }
 .vn-dialogue-text .quoted { color: inherit; }
 .vn-dialogue-text pre { max-width: 100%; overflow: auto; }
-.vn-image-caption { font-style: italic; color: #635b4c; }
 .vn-toolbar { display: grid; grid-template-columns: 1fr auto; gap: .3rem .7rem; padding: .4rem .75rem .65rem; border-top: 1px solid #71695330; }
 .vn-navigation, .vn-options { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem; }
 .vn-navigation { grid-column: 1; }

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { api, type VNStage } from '../api/client';
 import VisualNovelView from './VisualNovelView';
@@ -99,6 +99,78 @@ const scene = { scene_identity: 'scene-one', title: 'Saltmarch', posts: [ { post
 const stage: VNStage = { scene_identity: 'scene-one', post_id: 'a', revision: '0', actors: [], backgrounds: [], background_url: null, location_name: null, notices: [], override: { actors: {}, background: null } };
 function mount() { return render(<MemoryRouter initialEntries={['/campaigns/c/scenes/s/vn']}><Routes><Route path="/campaigns/:cid/scenes/:sid/vn" element={<VisualNovelView />} /></Routes></MemoryRouter>); }
 beforeEach(() => { localStorage.clear(); vi.mocked(api.getVNScene).mockResolvedValue(structuredClone(scene)); vi.mocked(api.getVNPost).mockImplementation(async (_c, _s, id) => ({ ...stage, post_id: id })); });
+
+const cast: VNStage['actors'] = [
+  { ref: 'characters:mara', name: 'Mara', version_id: 'v1', speaking: true, automatic_outfit: null, outfits: [], candidates: [{ url: '/mara.png', presentation: { scale: 1, offset_x: 0, offset_y: 0, anchor: 'bottom-center' } }] },
+  { ref: 'pcs:winifred', name: 'Winifred', version_id: 'v1', speaking: false, automatic_outfit: null, outfits: [], candidates: [{ url: '/winifred.png', presentation: { scale: 1, offset_x: 0, offset_y: 0, anchor: 'bottom-center' } }] },
+];
+
+test('illustrations have accessible descriptions without dialogue captions and hide all sprites until expiry or failure', async () => {
+  localStorage.setItem('vn-show-pc-sprites', 'true');
+  vi.mocked(api.getVNScene).mockResolvedValue({ ...scene, posts: [{ ...scene.posts[0], content: '![Forest](/forest.png)\n\nLook around.\n\nTime to go.' }] });
+  vi.mocked(api.getVNPost).mockResolvedValue({ ...stage, actors: cast });
+  mount();
+  await screen.findByRole('img', { name: 'Forest' });
+  expect(within(screen.getByRole('article', { name: 'Current post' })).queryByText('Forest')).not.toBeInTheDocument();
+  expect(screen.queryByRole('img', { name: 'Mara' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('img', { name: 'Winifred' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  expect(screen.getByText('Look around.')).toBeInTheDocument();
+  expect(screen.queryByRole('img', { name: 'Mara' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  expect(screen.getByRole('img', { name: 'Mara' })).toBeInTheDocument();
+  expect(screen.getByRole('img', { name: 'Winifred' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+  fireEvent.error(screen.getByRole('img', { name: 'Forest' }));
+  expect(screen.getByRole('img', { name: 'Mara' })).toBeInTheDocument();
+  expect(screen.getByRole('img', { name: 'Winifred' })).toBeInTheDocument();
+});
+
+test('PC sprites default off and the reader toggle persists through posts and reload without changing post overrides', async () => {
+  vi.mocked(api.getVNPost).mockImplementation(async (_c, _s, id) => ({ ...stage, post_id: id, actors: cast }));
+  const view = mount(); await screen.findByText('First words');
+  expect(screen.getByRole('img', { name: 'Mara' })).toBeInTheDocument();
+  expect(screen.queryByRole('img', { name: 'Winifred' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Presentation settings' }));
+  expect(screen.getByRole('checkbox', { name: 'Show PC sprites' })).not.toBeChecked();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show PC sprites' }));
+  expect(screen.getByRole('img', { name: 'Winifred' })).toBeInTheDocument();
+  vi.mocked(api.saveVNPresentation).mockResolvedValue({ ...stage, actors: cast });
+  fireEvent.click(screen.getByRole('button', { name: 'Reset to automatic' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Reset to automatic' })).toBeEnabled());
+  expect(screen.getByRole('checkbox', { name: 'Show PC sprites' })).toBeChecked();
+  fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  await screen.findByText('Last words');
+  expect(screen.getByRole('img', { name: 'Winifred' })).toBeInTheDocument();
+  view.unmount(); mount(); await screen.findByText('Last words');
+  expect(screen.getByRole('img', { name: 'Winifred' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Presentation settings' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show PC sprites' }));
+  expect(screen.queryByRole('img', { name: 'Winifred' })).not.toBeInTheDocument();
+});
+
+test('enabling PC sprites respects a post-specific hidden actor', async () => {
+  vi.mocked(api.getVNPost).mockResolvedValue({ ...stage, actors: cast.map(actor => ({ ...actor, hidden: actor.ref.startsWith('pcs:') })) });
+  mount(); await screen.findByText('First words');
+  fireEvent.click(screen.getByRole('button', { name: 'Presentation settings' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Show PC sprites' }));
+  expect(screen.queryByRole('img', { name: 'Winifred' })).not.toBeInTheDocument();
+  expect(screen.getByRole('img', { name: 'Mara' })).toBeInTheDocument();
+});
+
+test('PC visibility remains usable when browser storage is unavailable', async () => {
+  const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Unavailable'); });
+  const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Unavailable'); });
+  try {
+    vi.mocked(api.getVNPost).mockResolvedValue({ ...stage, actors: cast });
+    mount(); await screen.findByText('First words');
+    expect(screen.queryByRole('img', { name: 'Winifred' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Presentation settings' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show PC sprites' }));
+    expect(screen.getByRole('img', { name: 'Winifred' })).toBeInTheDocument();
+  } finally { read.mockRestore(); write.mockRestore(); }
+});
 test('reads markdown, navigates stable posts and returns to exact play URL', async () => { mount(); expect(await screen.findByText('First words')).toBeInTheDocument(); expect(screen.getByRole('link', { name: 'Exit VN' })).toHaveAttribute('href', '/campaigns/c/scenes/s'); fireEvent.click(screen.getByRole('button', { name: 'Next' })); expect(await screen.findByText('Last words')).toBeInTheDocument(); expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled(); fireEvent.keyDown(window, { key: 'ArrowLeft' }); expect(await screen.findByText('First words')).toBeInTheDocument(); });
 test('refresh preserves cursor and visibly recovers deleted posts', async () => { mount(); await screen.findByText('First words'); fireEvent.click(screen.getByRole('button', { name: 'Next' })); await screen.findByText('Last words'); vi.mocked(api.getVNScene).mockResolvedValue({ ...scene, posts: [scene.posts[0]] }); fireEvent.click(screen.getByRole('button', { name: 'Refresh' })); expect(await screen.findByText(/no longer available/i)).toBeInTheDocument(); expect(screen.getByText('First words')).toBeInTheDocument(); });
 test('retains a settings draft after save failure and resets automatic presentation', async () => { vi.mocked(api.saveVNPresentation).mockRejectedValueOnce(new Error('Stale presentation')); mount(); await screen.findByText('First words'); fireEvent.click(screen.getByRole('button', { name: 'Presentation settings' })); fireEvent.click(screen.getByRole('button', { name: 'Save presentation' })); expect(await screen.findByText('Stale presentation')).toBeInTheDocument(); expect(screen.getByRole('button', { name: 'Save presentation' })).toBeEnabled(); vi.mocked(api.saveVNPresentation).mockResolvedValue(stage); fireEvent.click(screen.getByRole('button', { name: 'Reset to automatic' })); await waitFor(() => expect(api.saveVNPresentation).toHaveBeenLastCalledWith('c', 's', 'a', { scene_identity: 'scene-one', expected_revision: '0', actors: {}, background: null })); });

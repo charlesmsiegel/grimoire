@@ -37,6 +37,12 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [settings, setSettings] = useState(false);
+  // This is a reader preference, independent of a historical post's saved
+  // outfit/visibility overrides. A new browser starts with the player offstage.
+  const [showPCSprites, setShowPCSprites] = useState(() => {
+    try { return localStorage.getItem('vn-show-pc-sprites') === 'true'; }
+    catch { return false; }
+  });
   const [auto, setAuto] = useState(false);
   const [seconds, setSeconds] = useState(5);
   const [refreshing, setRefreshing] = useState(false);
@@ -71,6 +77,12 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
   const carryKey = `${postId}/${splash?.id ?? ''}`;
   const splashVisible = shownStage && splash && splash.id !== failedSplash && splash.id !== dismissedSplash
     && (splash.postId === postId || (carry?.key === carryKey && carry.allowed));
+
+  function changePCSprites(show: boolean) {
+    setShowPCSprites(show);
+    try { localStorage.setItem('vn-show-pc-sprites', String(show)); }
+    catch { /* The preference still works for this reader without storage. */ }
+  }
 
   function move(next: number, manual = true) {
     const target = sequence[next];
@@ -149,12 +161,12 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
   }
   const playHref = `/campaigns/${encodeURIComponent(cid)}/scenes/${encodeURIComponent(sid)}`;
   return <main className="vn-reader" aria-label="Visual novel reader">
-    <section className="vn-stage" aria-label={shownStage?.location_name ? `Stage: ${shownStage.location_name}` : 'Stage: unknown location'}>
-      {shownStage?.background_url && <img key={shownStage.background_url} className="vn-background" src={shownStage.background_url} alt="" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />}
-      {splashVisible && <img key={splash.id} className="vn-background vn-splash" src={splash.url} alt={splash.alt} onError={() => setFailedSplash(splash.id)} />}
+    <section className={`vn-stage${splashVisible ? ' vn-stage-illustration' : ''}`} aria-label={shownStage?.location_name ? `Stage: ${shownStage.location_name}` : 'Stage: unknown location'}>
+      {!splashVisible && shownStage?.background_url && <img key={shownStage.background_url} className="vn-background" src={shownStage.background_url} alt="" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />}
+      {splashVisible && <div className="vn-illustration"><img key={splash.id} className="vn-splash" src={splash.url} alt={splash.alt} onError={() => setFailedSplash(splash.id)} /></div>}
       <header className="vn-header"><h1>{scene?.title || 'Visual novel'}</h1></header>
-      <div className="vn-cast">{shownStage?.actors.filter(a => !a.hidden).map(a => <ActorSprite key={`${postId}:${a.ref}:${shownStage.revision}`} actor={a} />)}</div>
-      {!shownStage?.actors.length && <p className="vn-neutral">{shownStage ? 'No recorded cast' : post ? 'Loading stage…' : 'No posts yet. Continue in play to begin.'}</p>}
+      {!splashVisible && <div className="vn-cast">{shownStage?.actors.filter(a => !a.hidden && (showPCSprites || !a.ref.startsWith('pcs:'))).map(a => <ActorSprite key={`${postId}:${a.ref}:${shownStage.revision}`} actor={a} />)}</div>}
+      {!splashVisible && !shownStage?.actors.length && <p className="vn-neutral">{shownStage ? 'No recorded cast' : post ? 'Loading stage…' : 'No posts yet. Continue in play to begin.'}</p>}
       <div className="vn-dialogue-panel">
         {/* Native Next and registered arrows provide keyboard access. Prose
             stays selectable and links semantic instead of nesting in a button. */}
@@ -164,7 +176,7 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
             <span className="vn-progress">{current ? `${current.number + 1} / ${postSteps.length}` : ''}</span></div>
           <div className="vn-dialogue-text" ref={dialogue} aria-live="polite">
             {current && <ReadingStepContent step={current} />}
-            {current && !current.tree.children.some(n => n.type !== 'definition' && n.type !== 'footnoteDefinition') && <p className="vn-image-caption">{splash?.alt || 'No text in this post.'}</p>}
+            {current && !splash && !current.tree.children.some(n => n.type !== 'definition' && n.type !== 'footnoteDefinition') && <p>No text in this post.</p>}
             {post?.excluded && <small>Excluded from generation context</small>}
           </div>
         </article>
@@ -189,7 +201,8 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
         <div className="vn-notices">{notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
           {[...new Set(shownStage?.notices ?? [])].map(n => <p role="status" key={n}>{n}</p>)}</div>
       </div>
-      {settings && shownStage && <PresentationSettings key={`${scene?.scene_identity}:${postId}`} cid={cid} sid={sid} stage={shownStage} onSaved={updated => {
+      {settings && shownStage && <PresentationSettings key={`${scene?.scene_identity}:${postId}`} cid={cid} sid={sid} stage={shownStage}
+        showPCSprites={showPCSprites} onShowPCSpritesChange={changePCSprites} onSaved={updated => {
         if (updated.background_url !== shownStage.background_url && splash) setDismissedSplash(splash.id);
         setStage(updated);
       }} onClose={() => setSettings(false)} />}
