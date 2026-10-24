@@ -95,6 +95,8 @@ library is separate from Art and the avatar. **Edit expressions** adds or
 duplicates outfits, uploads individual sprites, edits outfit names, and sets
 the default outfit, fallback expression, scale and bottom-center alignment.
 Renaming an outfit changes its display name; its lowercase ID stays stable.
+The character's **Expressions** tab badge counts the selected version's available
+outfits, including inherited outfits and excluding hidden ones.
 
 Each image is a complete sprite. Transparent PNG or WebP images work well.
 Sparse outfits are valid: start with `neutral`, then add expressions as needed.

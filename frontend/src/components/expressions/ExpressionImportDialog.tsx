@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type ExpressionImportPreview, type ExpressionImportSelection, type ExpressionTarget } from "../../api/client";
 import { errorText } from "../../api/errors";
+import { expressionsChanged } from "../../appEvents";
 
 type Choice = ExpressionImportSelection & { selected: boolean };
 export function ExpressionImportDialog({ target, outfit, onImported, onClose }: {
@@ -43,6 +44,10 @@ export function ExpressionImportDialog({ target, outfit, onImported, onClose }: 
     setBusy(true); setError(null);
     try {
       await api.publishExpressionPack(target, preview, selected.map(({ file, outfit, expression, overwrite }) => ({ file, outfit, expression, overwrite })));
+      // Publication outlives this dialog and its original version editor.
+      // Notify whichever collection is mounted now, even after A → B → A.
+      expressionsChanged();
+      // A replacement dialog may now be open; only this dialog may close itself.
       if (live.current) onImported();
     } catch (err) { if (live.current) setError(errorText(err)); }
     finally { if (live.current) setBusy(false); }

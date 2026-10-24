@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type ExpressionTarget } from "../../api/client";
 import { ExpressionGrid } from "./ExpressionGrid";
 import { ExpressionImportDialog } from "./ExpressionImportDialog";
@@ -8,11 +8,13 @@ import { SpritePreview } from "./SpritePreview";
 import { useExpressions } from "./useExpressions";
 import "./expressions.css";
 
-export function ExpressionsSection({ target }: { target: ExpressionTarget }) {
-  return <Library key={JSON.stringify(target)} target={target} />;
+type Props = { target: ExpressionTarget; active?: boolean; onCountChange?: (count: number | null) => void };
+
+export function ExpressionsSection(props: Props) {
+  return <Library key={JSON.stringify(props.target)} {...props} />;
 }
 
-function Library({ target }: { target: ExpressionTarget }) {
+function Library({ target, active = true, onCountChange }: Props) {
   const { collection, busy, error, reload, mutate, upload, cleanup, cleaned } = useExpressions(target);
   const [editing, setEditing] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -20,6 +22,10 @@ function Library({ target }: { target: ExpressionTarget }) {
   const [newId, setNewId] = useState("");
   const [custom, setCustom] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
+  // Keep one collection alive for both the badge and editor so a late badge
+  // read cannot overwrite a newer count after an outfit edit or import.
+  useEffect(() => { onCountChange?.(collection && !error ? Object.keys(collection.outfits).length : null); }, [collection, error, onCountChange]);
+  if (!active) return null;
   const id = collection && selected in collection.outfits ? selected : collection?.default_outfit ?? "";
   const outfit = collection?.outfits[id];
   return <section className="expressions-section" aria-label="Expression library">
@@ -38,7 +44,7 @@ function Library({ target }: { target: ExpressionTarget }) {
         <p className="field-hint">Keeps the current and previous revisions, active reads, and recent uploads. Use Image maintenance afterward to reclaim unused image files.</p>
         {cleaned !== null && <p role="status">Removed {cleaned} old revisions.</p>}</div>}
       {importing && <ExpressionImportDialog target={target} outfit={id} onClose={() => setImporting(false)}
-        onImported={() => { setImporting(false); void reload(); }} />}
+        onImported={() => { setImporting(false); }} />}
       {Object.keys(collection.outfits).length ? <label>Outfit<select aria-label="Outfit" value={id} disabled={busy} onChange={e => { setSelected(e.target.value); setPreview(null); setCustom(""); }}>
         {Object.entries(collection.outfits).map(([key, value]) => <option key={key} value={key}>{value.label}{key === collection.default_outfit ? " (default)" : ""}</option>)}
       </select></label> : <p>No outfits yet.</p>}

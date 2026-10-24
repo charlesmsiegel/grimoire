@@ -132,6 +132,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   // cross-record context
   const [worldGreetings, setWorldGreetings] = useState<Greeting[] | null>(null);
   const [greetingError, setGreetingError] = useState<unknown>(null);
+  const [expressionCount, setExpressionCount] = useState<{ version: string; count: number | null } | null>(null);
+  const onExpressionCount = useCallback((count: number | null) => { setExpressionCount({ version: vid, count }); }, [vid]);
   const [imageAppearances, setImageAppearances] = useState<Appearance[]>([]);
   const [loreCount, setLoreCount] = useState<number | null>(null);
   const [roster, setRoster] = useState<CharacterSummary[]>([]);
@@ -704,7 +706,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         {([["card", "Card", null],
            ["lore", "Lore", loreCount],
            ["greetings", "Greetings", greetingCount],
-           ["expressions", "Expressions", null],
+           ["expressions", "Expressions", expressionCount?.version === vid ? expressionCount.count : null],
            ["art", "Art", artCount]] as [CardTabKey, string, number | null][])
           .map(([key, label, count]) => (
             <button key={key} role="tab" aria-selected={tab === key}
@@ -716,7 +718,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       </div>
 
       <div className="card-pane-body" role="tabpanel">
-        {tab === "expressions" && vid && <ExpressionsSection target={{ scope: scope.kind, owner_id: scope.id, kind: "characters", actor_id: eid, version_id: vid }} />}
+        {vid && <ExpressionsSection target={{ scope: scope.kind, owner_id: scope.id, kind: "characters", actor_id: eid, version_id: vid }}
+          active={tab === "expressions"} onCountChange={onExpressionCount} />}
         {tab === "card" && (
           <>
           <CardTab scope={scope} wid={wid} cid={eid} vid={vid} card={card} detail={detail}

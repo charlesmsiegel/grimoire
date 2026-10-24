@@ -29,6 +29,7 @@ const shell = channel();
 const notices = channel();
 const storeMoves = channel();
 const art = channel();
+const expressions = channel();
 const runEnds = channel();
 
 /** A detached run this client was following reached its end: a send the run
@@ -48,6 +49,11 @@ export const onRunEnded = runEnds.subscribe;
  *  saved before a legacy cleanup failure. Refusals emit no landed-write signal. */
 export const artChanged = art.emit;
 export const onArtChanged = art.subscribe;
+
+/** An expression write may finish after its editor was retired. Refresh the
+ * current collection too, including a new mount of that same version. */
+export const expressionsChanged = expressions.emit;
+export const onExpressionsChanged = expressions.subscribe;
 
 /** The set of campaigns, or one of their names, changed. */
 export const campaignsChanged = campaigns.emit;

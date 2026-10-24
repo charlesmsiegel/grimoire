@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ExpressionCollection, type ExpressionMutation, type ExpressionTarget } from "../../api/client";
 import { errorText } from "../../api/errors";
+import { expressionsChanged, onExpressionsChanged } from "../../appEvents";
 
 /** Mounted per target. A retired editor can finish a write to its original
  * actor, but can never install that response in the next actor's editor. */
@@ -20,10 +21,15 @@ export function useExpressions(target: ExpressionTarget) {
     } catch (err) { if (live.current && request === sequence.current) setError(errorText(err)); }
   }, [target.scope, target.owner_id, target.kind, target.actor_id, target.version_id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { live.current = true; void reload(); return () => { live.current = false; }; }, [reload]);
+  useEffect(() => onExpressionsChanged(() => { void reload(); }), [reload]);
   async function save(action: (revision: string) => Promise<ExpressionCollection>) {
     if (!collection || writing.current || !live.current) return;
     writing.current = true; setBusy(true); setError(null); ++sequence.current;
-    try { const result = await action(collection.effective_revision); if (live.current) setCollection(result); }
+    try {
+      const result = await action(collection.effective_revision);
+      if (live.current) setCollection(result);
+      expressionsChanged();
+    }
     catch (err) { if (live.current) setError(errorText(err)); }
     finally { writing.current = false; if (live.current) setBusy(false); }
   }
