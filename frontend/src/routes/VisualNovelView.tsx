@@ -6,6 +6,8 @@ import { ActorSprite } from '../components/vn/ActorSprite';
 import { PresentationSettings } from '../components/vn/PresentationSettings';
 import { readingSteps, type Splash } from '../components/vn/readingSteps';
 import { ReadingStepContent } from '../components/vn/ReadingStep';
+import { useVNReply } from '../components/vn/useVNReply';
+import { VNReply } from '../components/vn/VNReply';
 import '../components/vn/vn.css';
 
 type Position = { postId: string; step: number };
@@ -69,7 +71,6 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
   cursor.current = current ? { postId, step: current.number } : position;
   const first = index <= 0;
   const last = index >= sequence.length - 1;
-  const canStep = !!post && !settings;
   // Do not paint a previous post's stage during the render before its effect
   // cleans up. The asynchronous response also carries both stable identities.
   const shownStage = stage?.post_id === postId && stage.scene_identity === scene?.scene_identity ? stage : null;
@@ -90,22 +91,34 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
     if (manual) setAuto(false);
     setPosition({ postId: target.post.post_id, step: target.number });
   }
-  async function refresh() {
+  async function refresh(advance = false) {
     const request = ++readSequence.current;
     setRefreshing(true); setAuto(false); setError(''); setNotice('');
     try {
       const result = await api.getVNScene(cid, sid);
-      if (!alive.current || request !== readSequence.current) return;
+      if (!alive.current || request !== readSequence.current) return false;
       let desired = cursor.current;
+      if (advance && scene?.scene_identity === result.scene_identity) {
+        const known = new Set(scene.posts.map(p => p.post_id));
+        const appended = result.posts.filter(p => !known.has(p.post_id));
+        const next = appended.find(p => p.role !== 'user') ?? appended[0];
+        if (next) desired = { postId: next.post_id, step: 0 };
+      }
       if (!desired.postId || (scene && result.scene_identity !== scene.scene_identity)) desired = bookmark(result.scene_identity);
       if (desired.postId && !result.posts.some(p => p.post_id === desired.postId)) {
         setNotice('That post is no longer available. Reading from the first surviving post.'); desired = beginning;
       }
       setScene(result); setPosition(desired.postId ? desired : { postId: result.posts[0]?.post_id ?? '', step: 0 });
       setStage(null); setCarry(null); setFailedSplash(''); setDismissedSplash('');
+      return true;
     } catch (e) { if (alive.current && request === readSequence.current) setError(e instanceof Error ? e.message : String(e)); }
     finally { if (alive.current && request === readSequence.current) setRefreshing(false); }
+    return false;
   }
+  const reply = useVNReply(cid, sid, async () => {
+    if (!await refresh(true)) throw new Error('Could not load the reply. Check reply to try again.');
+  });
+  const canStep = !!post && !settings && !reply.locked;
   const refreshRef = useRef(refresh); refreshRef.current = refresh;
   useEffect(() => { alive.current = true; void refreshRef.current(); return () => { alive.current = false; }; }, []); // route-keyed lifetime
   useEffect(() => {
@@ -142,12 +155,12 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
   }, [cid, sid, scene, splash, postId, shownStage, carryKey]);
   useEffect(() => {
     if (!auto) return;
-    if (last || error || settings) { setAuto(false); return; }
+    if (last || error || settings || reply.locked) { setAuto(false); return; }
     if (!shownStage || (splash && splash.postId !== postId && carry?.key !== carryKey)) return;
     const target = sequence[index + 1];
     const timer = setTimeout(() => setPosition({ postId: target.post.post_id, step: target.number }), seconds * 1000);
     return () => clearTimeout(timer);
-  }, [auto, last, error, settings, shownStage, splash, postId, carry, carryKey, seconds, sequence, index]);
+  }, [auto, last, error, settings, reply.locked, shownStage, splash, postId, carry, carryKey, seconds, sequence, index]);
   useHotkeys([
     { keys: 'arrowleft', label: 'Previous passage', group: 'VN READER', enabled: canStep && !first, run: () => move(index - 1) },
     { keys: 'arrowright', label: 'Next passage', group: 'VN READER', enabled: canStep && !last, run: () => move(index + 1) },
@@ -166,7 +179,7 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
       {splashVisible && <div className="vn-illustration"><img key={splash.id} className="vn-splash" src={splash.url} alt={splash.alt} onError={() => setFailedSplash(splash.id)} /></div>}
       <header className="vn-header"><h1>{scene?.title || 'Visual novel'}</h1></header>
       {!splashVisible && <div className="vn-cast">{shownStage?.actors.filter(a => !a.hidden && (showPCSprites || !a.ref.startsWith('pcs:'))).map(a => <ActorSprite key={`${postId}:${a.ref}:${shownStage.revision}`} actor={a} />)}</div>}
-      {!splashVisible && !shownStage?.actors.length && <p className="vn-neutral">{shownStage ? 'No recorded cast' : post ? 'Loading stage…' : 'No posts yet. Continue in play to begin.'}</p>}
+      {!splashVisible && !shownStage?.actors.length && <p className="vn-neutral">{shownStage ? 'No recorded cast' : post ? 'Loading stage…' : 'No posts yet. Write your reply to begin.'}</p>}
       <div className="vn-dialogue-panel">
         {/* Native Next and registered arrows provide keyboard access. Prose
             stays selectable and links semantic instead of nesting in a button. */}
@@ -180,23 +193,24 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
             {post?.excluded && <small>Excluded from generation context</small>}
           </div>
         </article>
+        {scene && !settings && <VNReply reply={reply} playHref={playHref} canReply={last} />}
         <nav className="vn-toolbar" aria-label="Reader controls">
           <div className="vn-navigation">
             <button disabled={!canStep || first} onClick={() => move(0)}>First</button>
             <button disabled={!canStep || first} onClick={() => move(index - 1)}>Previous</button>
-            <label>Post<select aria-label="Post" disabled={!post || settings} value={postId} onChange={e => move(sequence.findIndex(s => s.post.post_id === e.target.value))}>
+            <label>Post<select aria-label="Post" disabled={!canStep} value={postId} onChange={e => move(sequence.findIndex(s => s.post.post_id === e.target.value))}>
               {scene?.posts.map((p, i) => <option key={p.post_id} value={p.post_id}>{i + 1} · {p.speaker || p.role}</option>)}
             </select></label>
             <button disabled={!canStep || last} onClick={() => move(sequence.length - 1)}>Last</button>
           </div>
           <div className="vn-options">
             <Link to={playHref}>Exit VN</Link>
-            <button disabled={refreshing} onClick={() => void refresh()}>Refresh</button>
-            <button disabled={!shownStage} onClick={() => { setAuto(false); setSettings(s => !s); }}>Presentation settings</button>
-            <button disabled={!post || last || settings || !!error} aria-pressed={auto} onClick={() => setAuto(a => !a)}>{auto ? 'Stop autoplay' : 'Start autoplay'}</button>
+            <button disabled={refreshing || reply.locked} onClick={() => void refresh()}>Refresh</button>
+            <button disabled={!shownStage || reply.locked} onClick={() => { setAuto(false); setSettings(s => !s); }}>Presentation settings</button>
+            <button disabled={!canStep || last || !!error} aria-pressed={auto} onClick={() => setAuto(a => !a)}>{auto ? 'Stop autoplay' : 'Start autoplay'}</button>
             <label>Seconds<select aria-label="Seconds per passage" value={seconds} onChange={e => setSeconds(Number(e.target.value))}>{[3, 5, 10, 20].map(s => <option key={s} value={s}>{s}</option>)}</select></label>
           </div>
-          <button className="vn-continue" aria-label="Next" disabled={!canStep || last} onClick={() => move(index + 1)}>{last ? 'End of scene' : 'Continue'} <span aria-hidden="true">▸</span></button>
+          <button className="vn-continue" aria-label="Next" disabled={!canStep || last} onClick={() => move(index + 1)}>{last ? 'Your turn' : 'Continue'} <span aria-hidden="true">▸</span></button>
         </nav>
         <div className="vn-notices">{notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
           {[...new Set(shownStage?.notices ?? [])].map(n => <p role="status" key={n}>{n}</p>)}</div>

@@ -55,6 +55,7 @@
   margin: 0 0 max(1.5rem, env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
   color: #292b2b;
   background: linear-gradient(110deg, #f6f2e9f5, #e9e5dbeb);
   border: 1px solid #fff8;
@@ -63,6 +64,14 @@
   backdrop-filter: blur(8px);
 }
 .vn-dialogue { min-height: 0; display: flex; flex-direction: column; padding: .65rem clamp(1rem, 3vw, 2rem) 0; cursor: pointer; }
+.vn-reply { padding: .4rem clamp(1rem, 3vw, 2rem) .65rem; flex-shrink: 0; }
+.vn-reply > label { font-weight: 600; font-size: .9rem; margin-bottom: .25rem; }
+.vn-reply-entry { display: flex; align-items: stretch; gap: .5rem; flex-wrap: wrap; }
+.vn-reply textarea { flex: 1; min-width: 10rem; width: 100%; min-height: 3rem; max-height: 18dvh; resize: vertical; font: inherit; color: #292b2b; background: #fffaf0; border: 1px solid #716953; border-radius: 3px; padding: .4rem .6rem; }
+.vn-reply textarea:focus-visible { outline: 3px solid #b88c36; outline-offset: 2px; }
+.vn-reply p { margin: .4rem 0 0; font-size: .85rem; }
+.vn-reply a { color: #5f4315; text-decoration: underline; }
+.vn-toolbar { flex-shrink: 0; }
 .vn-speaker-line { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; border-bottom: 1px solid #71695380; }
 .vn-speaker { margin: 0 0 .3rem; font-family: var(--font-display, Georgia, serif); font-size: clamp(1.1rem, 2vw, 1.4rem); font-weight: 600; }
 .vn-progress { font-size: .75rem; color: #615b50; font-variant-numeric: tabular-nums; }

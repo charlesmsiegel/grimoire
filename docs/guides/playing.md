@@ -127,9 +127,17 @@ to show them; this reader preference applies immediately across scenes and is
 remembered in this browser. Post-specific Hide choices still apply, and resetting
 a post's appearance does not reset this reader preference.
 
-**Refresh** reads newly published posts while keeping your current post. **Back to
-play** returns to that exact scene's composer to continue generating or editing.
-The reader displays the canonical transformed text and does not run generation.
+At the last passage, **Your reply** lets you take your turn without leaving VN.
+Write your text and choose **Send reply**; Enter inserts a new line. The next
+response opens at its first passage after generation finishes. Your unsent draft
+survives browsing backward. **Stop reply** asks the server to stop generation.
+If a connection fails, **Check reply** resolves the pending turn before another
+send; text removed from the transcript is restored to the box. Roll decisions
+link back to normal play.
+
+**Refresh** reads newly published posts while keeping your current post.
+**Exit VN** returns to that exact scene for the full play and editing controls.
+The reader displays the canonical transformed text.
 
 **Presentation settings** changes the current post's outfit, expression, actor
 visibility, or background. Automatic uses its recorded public scene information;
