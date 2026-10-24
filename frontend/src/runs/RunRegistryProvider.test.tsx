@@ -26,6 +26,19 @@ function capture(): { registry: RunRegistry; unmount: () => void } {
 
 const SEND = { cid: "c1", sid: "s1", attempt: "a-1", text: "Mara waits.", runId: null };
 
+it('parks a reroll draft without turning its pending handle into a submitted reply', () => {
+  const { registry } = capture();
+  registry.begin({ ...SEND, text: '', draft: 'An unsent reply' });
+  const held = registry.pending('c1', 's1')!;
+  expect(registry.parked('c1', 's1')).toBe('An unsent reply');
+  registry.recovered('c1', 's1');
+  // Play's adoption already restored parked words. Changing this handle would
+  // make its recovery path append those same words as a returned user post.
+  expect(held.text).toBe('');
+  expect(registry.pending('c1', 's1')).toBeUndefined();
+  expect(registry.parked('c1', 's1')).toBe('An unsent reply');
+});
+
 // FILE-WIDE, not per-describe. The registry now mirrors its pending map to
 // `localStorage` so a send survives the renderer being restarted -- which also
 // means every `capture()` rehydrates whatever the previous test left behind,

@@ -155,7 +155,6 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
   // that never takes focus leaves the reader tabbing through the page behind
   // it. As a ref callback this would re-run on every render and pull focus
   // back off whatever they had just tabbed to.
-  useEffect(() => { panel.current?.focus(); }, []);
   // Escape, and the scene's own bindings held off while this covers it (#193).
   // All three dismissal paths share the caption discard/pending decision.
   // Uploads retain their existing close policy: refusing only the keyboard
@@ -165,6 +164,9 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
        whileTyping: true, run: closePicker }],
     { modal: true },
   );
+  // Register above the parent overlay before taking focus: its containment
+  // otherwise still considers itself topmost and sends focus back underneath.
+  useEffect(() => { panel.current?.focus(); }, []);
 
   const isLibrary = target.kind === "campaign";
   useEffect(() => isLibrary ? onArtChanged(() => setRevision((n) => n + 1)) : undefined, [isLibrary]);

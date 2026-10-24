@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/client';
+import type { ChatEvent } from '../../api/stream';
 import { awaitRun } from '../../api/runs';
 import { ApiError, RunEndedError } from '../../api/transport';
 import { isAbortError, newAttemptId, type RunHandle } from '../../api/stream';
@@ -12,7 +13,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : Str
 /** VN reads durable posts in sentence steps, so it waits for a turn to settle
  *  instead of rendering deltas that would keep changing those step boundaries.
  *  The registry still owns pending words, just as it does in ordinary play. */
-export function useVNReply(cid: string, sid: string, onSettled: () => Promise<void>) {
+export function useVNReply(cid: string, sid: string, onSettled: (target?: Attempt['readingTarget']) => Promise<void>) {
   const registry = useRunRegistry();
   const [text, setText] = useState(() => registry.parked(cid, sid) ?? '');
   const [phase, setPhase] = useState<Phase>('checking');
@@ -23,6 +24,7 @@ export function useVNReply(cid: string, sid: string, onSettled: () => Promise<vo
   const operation = useRef<AbortController | null>(null);
   const locked = useRef(true);
   const needsRefresh = useRef(false);
+  const readingTarget = useRef<Attempt['readingTarget']>(pending.current?.readingTarget);
   const settled = useRef(onSettled); settled.current = onSettled;
 
   function begin(next: Phase) {
@@ -87,9 +89,9 @@ export function useVNReply(cid: string, sid: string, onSettled: () => Promise<vo
       assertCurrent(controller);
       if (durable.run?.state === 'running') throw new Error('The reply is still running. Check reply to reconnect.');
       if (durable.retained || outcome?.done && !outcome.error || result.success) {
-        registry.settle(cid, sid); setText('');
+        registry.settle(cid, sid); if (held.text) setText('');
       } else {
-        registry.recovered(cid, sid); setText(held.text);
+        registry.recovered(cid, sid); if (held.text) setText(held.text);
       }
       pending.current = undefined;
     }
@@ -107,9 +109,10 @@ export function useVNReply(cid: string, sid: string, onSettled: () => Promise<vo
       }
     }
     if (needsRefresh.current) {
-      await settled.current();
+      await settled.current(readingTarget.current);
       assertCurrent(controller);
       needsRefresh.current = false;
+      readingTarget.current = undefined;
     }
     const { record: roll } = await api.getRollProposal(cid, sid);
     assertCurrent(controller);
@@ -130,23 +133,24 @@ export function useVNReply(cid: string, sid: string, onSettled: () => Promise<vo
     return () => { operation.current?.abort(); operation.current = null; };
   }, []); // The parent reader is keyed by campaign and scene.
 
-  async function send() {
-    const content = text.trim();
-    if (locked.current || proposal || !content) return;
+  async function execute(start: (emit: (event: ChatEvent) => void, signal: AbortSignal, attempt: string) => Promise<void>, content: string, target?: Attempt['readingTarget']) {
+    if (locked.current || proposal) return;
     const controller = begin('sending');
-    const held = { cid, sid, text: content, attempt: newAttemptId(), runId: null };
+    const held: Attempt = { cid, sid, text: content, attempt: newAttemptId(), runId: null,
+      ...(!content ? { draft: text } : {}), ...(target ? { readingTarget: target } : {}) };
+    readingTarget.current = target;
     pending.current = held;
     registry.begin(held);
     const outcome: Outcome = { done: false, error: '' };
     let connectionError = '';
     try {
       try {
-        await api.chat(cid, sid, content, event => {
+        await start(event => {
           if (!current(controller)) return;
           if (event.run) { discovered.current = event.run; registry.attach(cid, sid, event.run.id); }
           if (event.done) outcome.done = true;
           if (event.error) outcome.error = event.error.detail;
-        }, undefined, controller.signal, held.attempt);
+        }, controller.signal, held.attempt);
       } catch (why) {
         assertCurrent(controller);
         connectionError = message(why);
@@ -155,6 +159,15 @@ export function useVNReply(cid: string, sid: string, onSettled: () => Promise<vo
       await reconcile(controller, outcome);
       if (connectionError && current(controller)) setError(connectionError);
     } catch (why) { failed(controller, why); }
+  }
+
+  async function send() {
+    const content = text.trim();
+    if (!content) return;
+    await execute((emit, signal, attempt) => api.chat(cid, sid, content, emit, undefined, signal, attempt), content);
+  }
+  async function run(start: (emit: (event: ChatEvent) => void, signal: AbortSignal, attempt: string) => Promise<void>, target?: Attempt['readingTarget']) {
+    await execute(start, '', target);
   }
 
   async function stop() {
@@ -171,6 +184,6 @@ export function useVNReply(cid: string, sid: string, onSettled: () => Promise<vo
     } catch (why) { failed(controller, why); }
   }
 
-  return { text, setText, phase, error, proposal, send, stop, check,
+  return { text, setText, phase, error, proposal, send, run, stop, check,
     locked: phase !== 'ready', canStop: !!pending.current || !!discovered.current };
 }

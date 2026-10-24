@@ -127,3 +127,31 @@
   .vn-toolbar .vn-continue { min-width: 0; min-height: 44px; flex-shrink: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .vn-reader * { animation: none; transition: none; } }
+
+.vn-dialogue-panel[hidden] { display: none; }
+.vn-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; padding: .35rem .65rem; overflow: visible; }
+.vn-toolbar .vn-continue { margin-left: auto; min-width: 44px; align-self: auto; }
+.vn-continue span { margin: 0; }
+.vn-show-dialogue { position: absolute; bottom: max(1rem, env(safe-area-inset-bottom)); right: 1rem; z-index: 2; }
+.vn-modal-backdrop { position: fixed; inset: 0; z-index: 25; display: grid; place-items: center; background: #0008; padding: 1rem; }
+.vn-modal { width: min(650px, 100%); max-height: calc(100dvh - 2rem); overflow: auto; box-sizing: border-box; background: var(--bg, #1e2935); color: var(--text, #f4eee0); border: 1px solid #73808d; border-radius: 6px; padding: 1rem; box-shadow: 0 12px 50px #000a; }
+.vn-modal header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: .75rem; }
+.vn-modal h2 { margin: 0; }
+.vn-modal button, .vn-modal select, .vn-modal input { min-height: 44px; max-width: 100%; }
+.vn-modal label { display: flex; gap: .5rem; align-items: center; margin-block: .5rem; }
+.vn-modal textarea { width: 100%; box-sizing: border-box; min-height: 25dvh; }
+.vn-menu-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: .75rem; }
+.vn-action-status { order: 1; flex-basis: 100%; margin: .25rem; font-size: .85rem; }
+@media (max-width: 600px) {
+  .vn-toolbar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .25rem; padding: .3rem .4rem; }
+  .vn-toolbar button, .vn-toolbar a { font-size: .85rem; padding-inline: .35rem; justify-content: center; }
+  .vn-toolbar .vn-insert-image { grid-column: span 2; }
+  .vn-toolbar .vn-continue { margin: 0; grid-column: auto; grid-row: auto; }
+  .vn-action-status { grid-column: 1 / -1; }
+  .vn-reply { padding: .35rem .85rem; }
+  .vn-modal-backdrop { padding: .5rem; }
+  .vn-modal { max-height: calc(100dvh - 1rem); padding: .75rem; }
+}
+@media (pointer: coarse) {
+  .vn-reader button, .vn-toolbar a, .vn-modal button, .vn-modal select { min-height: 48px; min-width: 48px; }
+}

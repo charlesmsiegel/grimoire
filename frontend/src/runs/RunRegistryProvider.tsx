@@ -30,6 +30,12 @@ export type Attempt = {
   sid: string;
   attempt: string;
   text: string;
+  /** An unsent composer draft carried alongside a non-message generation
+   * (for example a VN reroll). Settling that run must leave these words parked. */
+  draft?: string;
+  /** Where a sentence reader should reopen after replacement posts land.
+   * Post IDs change with variants; the scene identity fences the index fallback. */
+  readingTarget?: { sceneIdentity: string; postId: string; index: number };
   runId: string | null;
   /** Set once the run is resolved and its post was NOT retained: the words are
    *  handed back to the composer, and this entry is the only durable copy of
@@ -126,7 +132,8 @@ function isEntry(v: unknown): v is [string, Attempt] {
   const a = v[1] as Partial<Attempt> | null;
   return !!a && typeof a === "object"
     && typeof a.cid === "string" && typeof a.sid === "string"
-    && typeof a.attempt === "string" && typeof a.text === "string";
+    && typeof a.attempt === "string" && typeof a.text === "string"
+    && (a.draft === undefined || typeof a.draft === "string");
 }
 
 function readStored(): [string, Attempt][] {
@@ -214,17 +221,29 @@ export function RunRegistryProvider({ children }: { children: ReactNode }) {
       return found && !found.recovered ? found : undefined;
     },
     settle(cid, sid) {
-      pending.current.delete(key(cid, sid));
-      persist(key(cid, sid), null);
+      const k = key(cid, sid);
+      const found = pending.current.get(k);
+      if (found?.draft) {
+        const { draft, ...attempt } = found;
+        const parked = { ...attempt, text: draft, recovered: true };
+        pending.current.set(k, parked); persist(k, parked);
+      } else {
+        pending.current.delete(k); persist(k, null);
+      }
       // The run is over, and whatever it wrote landed after the request that
       // started it settled: what the client remembers predates it.
       runEnded();
     },
     recovered(cid, sid) {
-      const found = pending.current.get(key(cid, sid));
+      const k = key(cid, sid);
+      const found = pending.current.get(k);
       if (!found) return;
-      found.recovered = true;
-      persist(key(cid, sid), found);
+      // Adoption may still hold the pending handle. Its empty submitted text
+      // must stay empty: parked() has already restored the separate draft.
+      const { draft, ...attempt } = found;
+      const parked = { ...attempt, text: draft ?? attempt.text, recovered: true };
+      pending.current.set(k, parked);
+      persist(k, parked);
       runEnded();   // over too, and rolled back: a write all the same
     },
     parked(cid, sid) {
@@ -232,7 +251,7 @@ export function RunRegistryProvider({ children }: { children: ReactNode }) {
       // recovered this scene's send since this provider was built.
       const k = key(cid, sid);
       const found = pending.current.get(k) ?? new Map(readStored()).get(k);
-      return found?.recovered ? found.text : undefined;
+      return found?.draft ?? (found?.recovered ? found.text : undefined);
     },
     rekey(cid, from, to) {
       if (from === to) return;

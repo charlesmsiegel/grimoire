@@ -101,15 +101,30 @@ material. A generated suggestion does not become authoritative by appearing ther
 Open **Scene ⋯ → Visual novel reader** to read the current scene on a stage.
 The reader fills the application viewport. Choose **Exit VN** to return to play
 and restore Campaign, Library, and the other navigation.
-Tap the dialogue or choose **Continue** to advance through a post. Paragraphs
+Tap the stage or dialogue, press **Enter**, or use the next arrow to advance through a post. Paragraphs
 with one or two sentences appear together; longer paragraphs advance one sentence
-at a time. Previous retraces those passages, First/Last jump to the scene's ends,
-and the Post selector starts the chosen post. The arrow keys, Home and End provide
-the same navigation. Selecting text or following a link does not advance.
-Autoplay is optional and advances one passage per interval. It stops at the end,
-on an error, when you navigate manually, or when presentation settings open.
+at a time. Wheel down advances and wheel up goes back; scrollable prose keeps
+its normal scrolling, including at its ends. **Menu** holds Previous/First/Last
+and the Post selector. The arrow keys, Home and End provide the same navigation.
+Selecting text or following a link does not advance. Focused controls keep their
+normal Enter behavior.
+**Auto** advances one passage per interval. Set the interval in Menu. Auto stops
+at the end, on an error, when you navigate manually, or when an overlay opens.
+**H** hides the whole dialogue panel and pauses Auto. Press H again, tap the stage,
+or choose **Show dialogue** to restore it without advancing. **Esc** opens/closes
+Menu; in another dialog it closes that dialog first. Menu also holds Presentation
+settings, Refresh, and shortcut help. The bottom controls have touch-sized targets.
 The reader remembers your post and passage in this browser when storage is
 available; a removed post recovers to the first surviving post with a notice.
+
+The bottom row offers **Reroll**, **Edit**, and **Insert image** for eligible posts.
+Reroll always opens a guidance dialog before generating and can use a different
+provider/model. Edit opens the complete stored post, including text transformed
+for display. Insert image uses the existing art picker and appends to an editable
+draft; choose Save to change the post. Retcon remains a separate, confirmed action.
+Broader post actions and history are available through **Exit VN** in normal play.
+When your reply box appears, **Enter** sends nonblank text and **Shift+Enter** adds
+a line. Empty Enter does nothing; reading controls never submit a reply.
 
 Illustrations appear as temporary backgrounds when you reach them. An image
 between paragraphs lasts through the following paragraph; an image inside prose

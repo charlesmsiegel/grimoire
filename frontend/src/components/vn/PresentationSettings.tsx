@@ -10,7 +10,7 @@ export function PresentationSettings({ stage, cid, sid, showPCSprites, onShowPCS
   const [busy, setBusy] = useState(false);
   // Cleanup invalidates saves after this post's settings leave the screen.
   const [scope] = useState(() => ({ active: true }));
-  useHotkeys([{ keys: 'escape', run: onClose }], { modal: true });
+  useHotkeys([{ keys: 'escape', whileTyping: true, run: onClose }], { modal: true });
   function actorChange(ref: string, patch: VNActorOverride) { setDraft(d => ({ ...d, actors: { ...d.actors, [ref]: { ...d.actors[ref], ...patch } } })); }
   async function save(reset: boolean) {
     setBusy(true); setError('');
