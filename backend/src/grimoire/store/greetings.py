@@ -211,24 +211,22 @@ def greeting_count(root: Path) -> int:
 
 
 def add_featuring_counts(rows: list[dict], greeting_rows: list[dict]) -> list[dict]:
-    """Fold the world greetings each character is present at into the roster's
-    `greeting_count`, in place, and return the rows.
+    """Set roster badges to the playable records featuring each character.
 
-    The store's own count is the card's (`characters._greeting_count`: a
-    non-empty first_mes plus the alternates); the character page's Greetings
-    tab shows those AND the world greetings featuring the character, and the
-    grid badge has to say the same number. Being present is what counts, not
-    being the primary: a greeting names its whole cast in `present`, and one
-    that merely stars somebody else is still an opening this character has.
+    Card first messages and alternates are import sources, not playable
+    records. Including them double-counted an opening after import. Being
+    present is what counts, not being the primary: a greeting names its whole
+    cast in `present`, including characters who are not its source.
     Lives here rather than in `characters` because this module imports that
-    one, and the graph stays acyclic.
+    one, and the graph stays acyclic. The scoped list has already resolved
+    campaign inheritance and overrides.
     """
     featuring: dict[str, int] = {}
     for g in greeting_rows:
-        for c in g.get("present") or []:
+        for c in set(g.get("present") or []):
             featuring[c] = featuring.get(c, 0) + 1
     for row in rows:
-        row["greeting_count"] = row.get("greeting_count", 0) + featuring.get(row["id"], 0)
+        row["greeting_count"] = featuring.get(row["id"], 0)
     return rows
 
 

@@ -352,10 +352,14 @@ def _seed_greeting(client, wid, name, character, present):
 
 def test_world_roster_greeting_count_includes_world_greetings_featuring_them(client):
     """The grid badge and the character page's Greetings tab report the same
-    number: card openings plus the world greetings the character is present
-    at. A greeting they are merely absent from is somebody else's."""
+    number: only playable world greetings the character is present at. A
+    greeting they are merely absent from is somebody else's."""
     wid, _cid = _world_and_campaign(client)
-    mara = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    mara = client.post(f"/api/worlds/{wid}/characters", json={
+        "name": "Mara", "card": {"spec": "chara_card_v3", "spec_version": "3.0", "data": {
+            "name": "Mara", "first_mes": "Tide Watch", "alternate_greetings": ["Rain."],
+        }},
+    }).json()["character"]
     sera = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
     _seed_greeting(client, wid, "Tide Watch", mara, [mara, sera])
     _seed_greeting(client, wid, "Mara Alone", mara, [mara])
@@ -367,9 +371,23 @@ def test_world_roster_greeting_count_includes_world_greetings_featuring_them(cli
 
 def test_campaign_roster_greeting_count_sees_inherited_world_greetings(client):
     wid, cid = _world_and_campaign(client)
-    mara = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
-    _seed_greeting(client, wid, "Tide Watch", mara, [mara])
+    mara = client.post(f"/api/worlds/{wid}/characters", json={
+        "name": "Mara", "card": {"spec": "chara_card_v3", "spec_version": "3.0", "data": {
+            "name": "Mara", "first_mes": "Tide Watch",
+        }},
+    }).json()["character"]
+    gid = _seed_greeting(client, wid, "Tide Watch", mara, [mara])
 
     roster = client.get(f"/api/campaigns/{cid}/characters").json()
 
     assert [(c["id"], c["greeting_count"]) for c in roster] == [(mara, 1)]
+
+    # A campaign override of the same record still counts once. Its cast,
+    # rather than the inherited cast, decides which character gets the badge.
+    sera = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    response = client.put(f"/api/campaigns/{cid}/greetings/{gid}", json={"present": [sera]})
+    assert response.status_code == 200, response.text
+    counts = {c["id"]: c["greeting_count"] for c in client.get(f"/api/campaigns/{cid}/characters").json()}
+    assert counts == {mara: 0, sera: 1}
+    world_counts = {c["id"]: c["greeting_count"] for c in client.get(f"/api/worlds/{wid}/characters").json()}
+    assert world_counts == {mara: 1, sera: 0}

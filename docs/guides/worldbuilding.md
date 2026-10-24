@@ -68,6 +68,13 @@ A greeting can specify text, characters, a location, PC eligibility and links to
 other greetings. Use these for repeatable openings or a sequence of prepared
 scenes. The campaign records which openings have been played.
 
+A character's **Greetings** tab shows the greetings associated with the selected
+version, with a linked title and full text for each opening. Source greetings
+use their linked version; supporting characters use their default version.
+The card's first message and alternates are editable under **Card**; import them
+as world greetings before using them to start scenes. Card import sources do
+not contribute to the playable greeting count.
+
 A greeting is optional. The new-scene chooser also supports your own premise,
 generated ideas and importing an existing transcript.
 

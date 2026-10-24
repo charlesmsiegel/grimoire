@@ -1,126 +1,47 @@
-import { useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import type { Greeting } from "../../api/client";
+import { api, type EntityScope, type Greeting } from "../../api/client";
+import { ErrorNote } from "../ErrorNote";
 import { GreetingMarkdown } from "../GreetingMarkdown";
-import { EditableField } from "./EditableField";
 
-/** The character's openings: editable card greetings followed by linked world
- *  greetings that feature them. World greetings remain separate records; this
- *  view collects both kinds without copying world content into the card.
- */
-export function GreetingsTab(
-  { name, cid, firstMes, greetings, worldGreetings, editing, onEditingChange, busy,
-    onSaveFirstMes, onSaveGreetings, worldGreetingHref }: {
-    name: string;
-    cid: string;
-    firstMes: string;
-    greetings: string[];
-    worldGreetings: Greeting[];
-    editing: string | null;
-    onEditingChange: (key: string | null) => void;
-    busy: boolean;
-    onSaveFirstMes: (next: string) => Promise<boolean>;
-    onSaveGreetings: (next: string[]) => Promise<boolean>;
-    worldGreetingHref: (gid: string) => string;
-  },
-) {
-  /** A greeting being written that the card does not have yet.
-   *
-   *  It cannot be added by saving a placeholder first: `buildCard` drops blank
-   *  greetings on the way out — deliberately, so an emptied one is removed —
-   *  so a blank saved now would not survive the round trip that created it,
-   *  and the row would vanish under whatever had been typed into it. The row
-   *  lives here until it has content worth storing. */
-  const [adding, setAdding] = useState(false);
-  const empty = !firstMes.trim() && greetings.length === 0 && worldGreetings.length === 0 && !adding;
-
-  return <>
-    <EditableField
-      label="First message"
-      value={firstMes}
-      placeholder="No first message."
-      rendered={<GreetingMarkdown>{firstMes}</GreetingMarkdown>}
-      editing={editing === "greetings:first"}
-      onEditingChange={(open) => onEditingChange(open ? "greetings:first" : null)}
-      disabled={busy}
-      onSave={onSaveFirstMes}
-    />
-
-    {greetings.map((g, i) => (
-      <EditableField
-        // The position IS a greeting's identity — the card stores a bare list
-        // with no ids, and this UI only edits in place, appends and drops the
-        // last, so an index can never point at a different greeting than the
-        // one it pointed at before.
-        // eslint-disable-next-line react/no-array-index-key
-        key={i}
-        label={`Alternate greeting ${i + 1}`}
-        value={g}
-        rendered={<blockquote className="greeting-quote"><GreetingMarkdown>{g}</GreetingMarkdown></blockquote>}
-        editing={editing === `greetings:${i}`}
-        onEditingChange={(open) => onEditingChange(open ? `greetings:${i}` : null)}
-        disabled={busy}
-        onSave={(next) => onSaveGreetings(greetings.map((x, j) => (j === i ? next : x)))}
-      />
-    ))}
-
-    {adding && (
-      <EditableField
-        label={`Alternate greeting ${greetings.length + 1}`}
-        value=""
-        placeholder="Nothing written yet."
-        editing={editing === "greetings:new"}
-        onEditingChange={(open) => {
-          onEditingChange(open ? "greetings:new" : null);
-          if (!open) setAdding(false);      // cancelling drops the row entirely
-        }}
-        disabled={busy}
-        onSave={async (next) => {
-          if (!next.trim()) { setAdding(false); return true; }
-          const ok = await onSaveGreetings([...greetings, next]);
-          if (ok) setAdding(false);
-          return ok;
-        }}
-      />
-    )}
-
-    <div className="form-actions">
-      <button className="subtle" type="button" disabled={busy || adding}
-              onClick={() => { setAdding(true); onEditingChange("greetings:new"); }}>
-        + Add greeting
-      </button>
-      {greetings.length > 0 && (
-        <button className="subtle" type="button" disabled={busy}
-                onClick={() => {
-                  if (!window.confirm(`Remove alternate greeting ${greetings.length}?`)) return;
-                  void onSaveGreetings(greetings.slice(0, -1));
-                }}>
-          Remove last
-        </button>
-      )}
-    </div>
-
-    {worldGreetings.length > 0 && (
-      <div className="card-field">
-        <div className="card-field-head"><span className="data-label">World greetings</span></div>
-        <div className="chip-row">
-          {worldGreetings.map((g) => (
-            <Link key={g.id} className="chip on" to={worldGreetingHref(g.id)}>
-              {g.character === cid ? `★ ${g.name}` : g.name}
-            </Link>
-          ))}
-        </div>
-      </div>
-    )}
-
-    {empty && (
-      <p className="empty-state">
-        No greetings on this card. A greeting is the <span className="empty-what">opening
-        a scene can start from</span> — add one here, or import a card that carries
-        some. World greetings that merely feature {name} are listed on the Card tab.
-      </p>
-    )}
-  </>;
+/** The same effective scoped records supply this list and the tab count. */
+export function GreetingsTab({ scope, greetings, error, greetingHref }: {
+  scope: EntityScope;
+  greetings: Greeting[] | null;
+  error: unknown;
+  greetingHref: (id: string) => string;
+}) {
+  if (error) return <div role="alert"><ErrorNote err={error} /></div>;
+  if (greetings === null) return <p className="field-hint">Reading greetings...</p>;
+  if (greetings.length === 0) return <p className="empty-state">
+    No playable greetings feature this character. Import card greetings or add this character
+    to a greeting's cast to make it appear here.
+  </p>;
+  return <section aria-label="Playable greetings">
+    {greetings.map((g, index) => <Fragment key={`${scope.kind}/${scope.id}/${g.id}`}>
+      {index > 0 && <hr />}
+      <article>
+        <h3><Link to={greetingHref(g.id)}>{g.name}</Link></h3>
+        <GreetingBody scope={scope} id={g.id} />
+      </article>
+    </Fragment>)}
+  </section>;
 }
 
-export default GreetingsTab;
+/** Mounted only for visible greetings. The parent's scope/id key retires both
+ * the text and its pending read when navigation replaces the record. */
+function GreetingBody({ scope, id }: { scope: EntityScope; id: string }) {
+  const { kind, id: ownerId } = scope;
+  const [body, setBody] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  useEffect(() => {
+    let alive = true;
+    api.readGreeting({ kind, id: ownerId }, id)
+      .then(g => { if (alive) setBody(g.body); })
+      .catch((err: unknown) => { if (alive) setError(err); });
+    return () => { alive = false; };
+  }, [kind, ownerId, id]);
+  if (error) return <div role="alert"><ErrorNote err={error} /></div>;
+  if (body === null) return <p className="field-hint" role="status">Loading greeting...</p>;
+  return <GreetingMarkdown>{body}</GreetingMarkdown>;
+}

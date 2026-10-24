@@ -22,6 +22,7 @@ import { MobileArtEntry } from "../components/MobileArtEntry";
 import { CampaignSection } from "../components/character/CampaignSection";
 import { CardTab } from "../components/character/CardTab";
 import { CapsuleSection } from "../components/character/CapsuleSection";
+import { CardGreetings } from "../components/character/CardGreetings";
 import { GreetingsTab } from "../components/character/GreetingsTab";
 import { ImportVersionDialog, type ImportChoice } from "../components/character/ImportVersionDialog";
 import { TaglineSection } from "../components/character/TaglineSection";
@@ -129,7 +130,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
     useState<{ scenes: string[]; casefile: Casefile | null } | null>(null);
 
   // cross-record context
-  const [worldGreetings, setWorldGreetings] = useState<Greeting[]>([]);
+  const [worldGreetings, setWorldGreetings] = useState<Greeting[] | null>(null);
+  const [greetingError, setGreetingError] = useState<unknown>(null);
   const [imageAppearances, setImageAppearances] = useState<Appearance[]>([]);
   const [loreCount, setLoreCount] = useState<number | null>(null);
   const [roster, setRoster] = useState<CharacterSummary[]>([]);
@@ -292,8 +294,8 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         .then((a) => { if (alive) setImageAppearances(a); })
         .catch(() => { if (alive) setImageAppearances([]); });
     }
-    api.listGreetings(scope).then((g) => { if (alive) setWorldGreetings(g); })
-      .catch(() => { if (alive) setWorldGreetings([]); });
+    api.listGreetings(scope).then((g) => { if (alive) { setWorldGreetings(g); setGreetingError(null); } })
+      .catch((err: unknown) => { if (alive) { setWorldGreetings(null); setGreetingError(err); } });
     api.listCharacters(scope).then((r) => { if (alive) setRoster(r); })
       .catch(() => { if (alive) setRoster([]); });
     api.listEntities(scope, "lore")
@@ -559,9 +561,13 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
 
   const version = detail.versions.find((v) => v.id === vid);
   const name = card.data.name || detail.meta.name;
-  const firstMes = (card.data.first_mes as string) ?? "";
-  const featuringGreetings = worldGreetings.filter((g) => (g.present ?? []).includes(eid));
-  const greetingCount = (firstMes.trim() ? 1 : 0) + greetings.length + featuringGreetings.length;
+  // Match the greeting editor's cast links: the source names a specific version,
+  // while supporting cast uses each character's default. Source membership must
+  // not fall through to the supporting rule when its linked version differs.
+  const featuringGreetings = worldGreetings?.filter((g) => g.character === eid
+    ? g.version === vid
+    : (g.present ?? []).includes(eid) && vid === detail.meta.default_version) ?? null;
+  const greetingCount = featuringGreetings?.length ?? null;
   const artCount = art.count;
   // `scope.id` is a slug and a poor heading, but a heading with the wrong
   // subject would be worse than a plain one, so it stands in only when the
@@ -712,6 +718,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       <div className="card-pane-body" role="tabpanel">
         {tab === "expressions" && vid && <ExpressionsSection target={{ scope: scope.kind, owner_id: scope.id, kind: "characters", actor_id: eid, version_id: vid }} />}
         {tab === "card" && (
+          <>
           <CardTab scope={scope} wid={wid} cid={eid} vid={vid} card={card} detail={detail}
                    module={module}
                    editing={editing} onEditingChange={setEditing} busy={busy}
@@ -725,6 +732,10 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
                    onPatchBook={(i, patch) => setBookReview(
                      (cur) => cur!.map((e, j) => (j === i ? { ...e, ...patch } : e)))}
                    onCancelBook={() => setBookReview(null)} />
+          <CardGreetings key={vid} firstMes={(card.data.first_mes as string) ?? ""} greetings={greetings}
+            editing={editing} onEditingChange={setEditing} busy={busy}
+            onSaveFirstMes={(v) => saveField({ first_mes: v })} onSaveGreetings={saveGreetings} />
+          </>
         )}
 
         {tab === "lore" && (
@@ -737,12 +748,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
         )}
 
         {tab === "greetings" && (
-          <GreetingsTab name={name} cid={eid} firstMes={firstMes} greetings={greetings}
-                        worldGreetings={featuringGreetings}
-                        editing={editing} onEditingChange={setEditing} busy={busy}
-                        onSaveFirstMes={(v) => saveField({ first_mes: v })}
-                        onSaveGreetings={saveGreetings}
-                        worldGreetingHref={greetingHref} />
+          <GreetingsTab scope={scope} greetings={featuringGreetings} error={greetingError} greetingHref={greetingHref} />
         )}
 
         {tab === "art" && (
