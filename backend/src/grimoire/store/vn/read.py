@@ -1,18 +1,21 @@
-"""A public historical stage, with assets limited to its proven cast/location.
+"""A public historical stage, with a neutral cast fallback for legacy posts.
 
-Only projection.at_post supplies story state. Current cards supply display names
-and asset choices for that exact version, never cast, location or private mood.
+Recorded posts use only projection.at_post for story state. The tokenless legacy
+prefix can display scene membership at locked versions, clearly marked as an
+approximation, without inventing historical mood, clothing or location.
 """
 
 from urllib.parse import quote
 
 from .. import characters, entities, locks, overlay, pcs, responses
+from ..appearances import paths as appearances
 from ..expression_library import contracts, resolve
 from ..expression_library import read as expressions
 from ..record_art import read as art
 from ..record_art import targets
 from ..regex import view
 from ..scene_history import projection, records
+from ..scene_history.contracts import ActorAtPost
 from ..scenes import identity, post_identity
 from . import overrides
 
@@ -91,18 +94,27 @@ def _actor(cid, actor, selected, speaker, notices):
 def post(cid, sid, post_id):
     with locks.campaign_lock(cid):
         current = post_identity.ensure_post_ids(cid, sid)
-        message = next((m for m in current["messages"] if m["post_id"] == post_id), None)
-        if message is None:
+        at = next((i for i, m in enumerate(current["messages"]) if m["post_id"] == post_id), None)
+        if at is None:
             raise FileNotFoundError("This post is no longer in the scene; refresh the reader")
+        message = current["messages"][at]
         historic = projection.at_post(cid, sid, post_id)
         ident = historic.cursor.scene_identity
         saved = overrides.read(cid, ident, post_id)
         notices = []
-        if records.checkpoint(cid, ident, message.get("scene_state_token")) is None:
+        stage_actors = historic.actors
+        # Imports predate per-post observations. Display their scene cast, but
+        # never fill a missing modern checkpoint or a gap after recorded history.
+        if not any("scene_state_token" in m for m in current["messages"][:at + 1]):
+            stage_actors = tuple(ActorAtPost(ref.replace("/", ":", 1), row["version"])
+                                 for ref, row in sorted(appearances.record(cid).items())
+                                 if sid in row.get("scenes", []))
+            notices.append("Per-post cast was not recorded; using scene cast and neutral expressions by default.")
+        elif records.checkpoint(cid, ident, message.get("scene_state_token")) is None:
             notices.append("Historical stage information is unavailable for this post.")
         actors = [_actor(cid, actor, saved["actors"].get(actor.ref, {}), historic.speaker_ref, notices)
-                  for actor in historic.actors]
-        # Old imported speaker labels can highlight only an unambiguous proven actor.
+                  for actor in stage_actors]
+        # Old imported speaker labels can highlight only an unambiguous stage actor.
         if not historic.speaker_ref and sum(a["name"] == message.get("speaker") for a in actors) == 1:
             for actor in actors:
                 actor["speaking"] = actor["name"] == message.get("speaker")

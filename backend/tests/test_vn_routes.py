@@ -190,3 +190,87 @@ def test_automatic_expression_choices_stay_in_resolved_outfit(vn):
     assert selected.status_code == 200
     assert selected.json()["actors"][0]["automatic_outfit"] == "everyday"
     assert "/armor/joy/image" in selected.json()["actors"][0]["candidates"][0]["url"]
+
+def test_legacy_scene_uses_scene_cast_with_neutral_expression(vn):
+    client, cid, _, aid, vid, _ = vn
+    sid = store.scenes.create_scene(cid, "Legacy")
+    store.appearances.appear(cid, sid, "characters", aid, vid, "npc", narrate=False)
+    store.scenes.append_messages(cid, sid, [{"role": "assistant", "speaker": "Mara", "content": "Old greeting."}])
+    scene = store.scenes.read_scene(cid, sid)
+    post = scene["messages"][0]["post_id"]
+    endpoint = f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{post}"
+    original = store.scenes.paths._scene_path(cid, sid).read_bytes()
+    stage = client.get(endpoint).json()
+    assert [(a["ref"], a["version_id"]) for a in stage["actors"]] == [("characters:" + aid, vid)]
+    assert "/armor/neutral/image" in stage["actors"][0]["candidates"][0]["url"]
+    assert stage["actors"][0]["speaking"] is True
+    assert any("scene cast" in notice.lower() and "neutral" in notice.lower() for notice in stage["notices"])
+    assert stage["backgrounds"] == []
+    assert store.scenes.paths._scene_path(cid, sid).read_bytes() == original
+    selected = client.put(endpoint + "/presentation", json={
+        "scene_identity": stage["scene_identity"], "expected_revision": stage["revision"],
+        "actors": {"characters:" + aid: {"expression": "joy"}}, "background": None})
+    assert selected.status_code == 200
+    assert "/armor/joy/image" in selected.json()["actors"][0]["candidates"][0]["url"]
+
+
+@pytest.mark.parametrize("with_actor", [False, True])
+def test_legacy_scene_does_not_require_art_or_use_other_scene_cast(vn, with_actor):
+    client, cid, _, _, _, _ = vn
+    sid = store.scenes.create_scene(cid, "Legacy")
+    if with_actor:
+        root = store.campaigns.world_root_of(cid)
+        aid, vid = store.characters.create_character(root, "Seraphine")
+        store.appearances.appear(cid, sid, "characters", aid, vid, "npc", narrate=False)
+    store.scenes.append_messages(cid, sid, [{"role": "user", "content": "Old question."}])
+    post = store.scenes.read_scene(cid, sid)["messages"][0]["post_id"]
+    result = client.get(f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{post}")
+    assert result.status_code == 200
+    stage = result.json()
+    if with_actor:
+        assert [a["ref"] for a in stage["actors"]] == ["characters:" + aid]
+        assert stage["actors"][0]["candidates"] == []
+    else:
+        assert stage["actors"] == []
+
+
+@pytest.mark.parametrize("missing_checkpoint", [False, True])
+def test_tokenless_post_after_recorded_history_stays_unknown(vn, missing_checkpoint):
+    client, cid, sid, _, _, _ = vn
+    first = store.scenes.read_scene(cid, sid)["messages"][0]
+    if missing_checkpoint:
+        ident = identity.scene_identity(cid, sid)
+        (records.directory(cid, ident) / (first["scene_state_token"] + ".json")).unlink()
+    store.scenes.append_messages(cid, sid, [{"role": "user", "content": "Unrecorded gap."}])
+    post = store.scenes.read_scene(cid, sid)["messages"][-1]["post_id"]
+    stage = client.get(f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{post}").json()
+    assert stage["actors"] == []
+    assert stage["backgrounds"] == []
+    assert "Historical stage information is unavailable for this post." in stage["notices"]
+
+
+def test_recorded_empty_cast_is_not_replaced_by_later_scene_cast(vn):
+    client, cid, _, aid, vid, _ = vn
+    sid = store.scenes.create_scene(cid, "Empty stage")
+    store.scenes.append_message(cid, sid, "user", "Alone.")
+    post = store.scenes.read_scene(cid, sid)["messages"][0]["post_id"]
+    store.appearances.appear(cid, sid, "characters", aid, vid, "npc", narrate=False)
+    stage = client.get(f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{post}").json()
+    assert stage["actors"] == []
+
+def test_legacy_prefix_does_not_use_later_public_mood(vn):
+    client, cid, _, aid, vid, _ = vn
+    sid = store.scenes.create_scene(cid, "Legacy")
+    store.appearances.appear(cid, sid, "characters", aid, vid, "npc", narrate=False)
+    store.scenes.append_messages(cid, sid, [{"role": "user", "content": "Old question."}])
+    store.scenes.append_message(cid, sid, "user", "Later question.")
+    key = walk.ordered_keys(cid, sid)[-1][1]
+    tracker_records.save(cid, store.scenes.scene_identity(cid, sid), key,
+        {"characters:" + aid: {"present": True, "fields": {
+            "visible_mood": {"value": "joy", "aware": "present"}}}},
+        changed=[], fields_digest=fields.digest(fields.effective(cid, sid)), model="test",
+        provenance=provenance.capture(cid, sid, key))
+    posts = store.scenes.read_scene(cid, sid)["messages"]
+    stages = [client.get(f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{p['post_id']}").json() for p in posts]
+    assert "/armor/neutral/image" in stages[0]["actors"][0]["candidates"][0]["url"]
+    assert "/armor/joy/image" in stages[1]["actors"][0]["candidates"][0]["url"]
