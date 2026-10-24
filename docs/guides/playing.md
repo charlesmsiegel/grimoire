@@ -8,6 +8,12 @@ The campaign hub leads to Scenes, waiting work, campaign settings, the Ledger,
 Timeline and Story Graph. Sheets appears when a mechanics module makes it
 relevant.
 
+The Scenes list starts with the highest scene number. Use **Sort** to cycle
+between scene number, last played and title; use the direction button to reverse
+the order. The app remembers both choices. Last played follows scene activity,
+including edits. Scenes without a number or activity time stay at the end when
+sorting by that field.
+
 Campaign settings can override global model and context choices. Removing an
 override returns the field to inheritance. Provider credentials and the library
 location remain global settings.

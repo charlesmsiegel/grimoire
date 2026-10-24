@@ -128,6 +128,7 @@ function renderScenes(opts: { state?: unknown } = {}) {
 }
 
 beforeEach(() => {
+  localStorage.removeItem("grimoire.sort.scenes");
   vi.mocked(api.deleteScene).mockReset().mockResolvedValue({ ok: true });
   vi.mocked(api.getCampaign).mockResolvedValue({ meta: META, body: "" });
   vi.mocked(api.getShell).mockResolvedValue(shell());
@@ -151,12 +152,112 @@ test("every scene is listed with its number from its own id", async () => {
   expect(within(rows[2]).getByText("1")).toBeInTheDocument();
 });
 
+const listedSceneIds = () => screen.getAllByRole("listitem").map(row =>
+  within(row).getAllByRole("link")[0].getAttribute("href")?.split("/").pop());
+
+test("scene numbers default to descending and reverse without changing the chooser reference", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue([
+    scene({ id: "2--gate", title: "Gate" }), scene({ id: "legacy", title: "Legacy" }),
+    scene({ id: "10--watch", title: "Watch" }), scene({ id: "3--rain", title: "Rain" }),
+  ]);
+  renderScenes();
+  await screen.findByText("Watch");
+  expect(listedSceneIds()).toEqual(["10--watch", "3--rain", "2--gate", "legacy"]);
+  fireEvent.click(screen.getByRole("button", { name: "Reverse scene order" }));
+  expect(listedSceneIds()).toEqual(["2--gate", "3--rain", "10--watch", "legacy"]);
+  fireEvent.change(screen.getByLabelText(/filter scenes by title/i), { target: { value: "watch" } });
+  expect(listedSceneIds()).toEqual(["10--watch"]);
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  expect(await screen.findByTestId("after")).toHaveTextContent('"2--gate"');
+});
+
+test("sort controls cycle through recent activity and natural title order and reverse each", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue([
+    scene({ id: "3--arrival", title: "Arrival", created: "2026-01-02T12:00:00Z" }),
+    scene({ id: "10--gate", title: "The Gate 10", updated: "2026-01-03T09:30:00Z" }),
+    scene({ id: "legacy", title: "ZZZ", updated: "invalid" }),
+    scene({ id: "2--gate", title: "The gate 2", updated: "2026-01-03T12:00:00+02:00" }),
+  ]);
+  renderScenes();
+  await screen.findByText("Arrival");
+  fireEvent.click(screen.getByRole("button", { name: "Sort scenes by last played" }));
+  expect(listedSceneIds()).toEqual(["2--gate", "10--gate", "3--arrival", "legacy"]);
+  expect(screen.getByText(/Run One · last played first/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Reverse scene order" }));
+  expect(listedSceneIds()).toEqual(["3--arrival", "10--gate", "2--gate", "legacy"]);
+  fireEvent.click(screen.getByRole("button", { name: "Sort scenes by title" }));
+  expect(listedSceneIds()).toEqual(["3--arrival", "2--gate", "10--gate", "legacy"]);
+  fireEvent.click(screen.getByRole("button", { name: "Reverse scene order" }));
+  expect(listedSceneIds()).toEqual(["legacy", "10--gate", "2--gate", "3--arrival"]);
+  fireEvent.click(screen.getByRole("button", { name: "Sort scenes by number" }));
+  expect(listedSceneIds()).toEqual(["10--gate", "3--arrival", "2--gate", "legacy"]);
+});
+
+test("missing activity falls back to creation and equal keys have a stable scene-id order", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue([
+    scene({ id: "3--b", title: "Same", updated: "2026-01-01T00:00:00Z" }),
+    scene({ id: "3--a", title: "Same", updated: "2026-01-01T00:00:00Z" }),
+    scene({ id: "5--c", title: "Other", updated: "invalid", created: "2026-01-03T00:00:00Z" }),
+    scene({ id: "legacy", title: "Legacy" }),
+  ]);
+  renderScenes();
+  await screen.findByText("Other");
+  expect(listedSceneIds()).toEqual(["5--c", "3--a", "3--b", "legacy"]);
+  fireEvent.click(screen.getByRole("button", { name: "Sort scenes by last played" }));
+  expect(listedSceneIds()).toEqual(["5--c", "3--a", "3--b", "legacy"]);
+  fireEvent.click(screen.getByRole("button", { name: "Reverse scene order" }));
+  expect(listedSceneIds()).toEqual(["3--a", "3--b", "5--c", "legacy"]);
+  fireEvent.click(screen.getByRole("button", { name: "Sort scenes by title" }));
+  expect(listedSceneIds()).toEqual(["legacy", "5--c", "3--a", "3--b"]);
+});
+
+test("scene sort mode and direction survive a page remount", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue([
+    scene({ id: "1--first", title: "First", updated: "2026-01-03T00:00:00Z" }),
+    scene({ id: "2--second", title: "Second", updated: "2026-01-02T00:00:00Z" }),
+  ]);
+  const first = renderScenes();
+  await screen.findByText("First");
+  fireEvent.click(screen.getByRole("button", { name: "Sort scenes by last played" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reverse scene order" }));
+  first.unmount();
+  renderScenes();
+  await screen.findByText("First");
+  expect(listedSceneIds()).toEqual(["2--second", "1--first"]);
+  expect(screen.getByRole("button", { name: "Sort scenes by title" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Reverse scene order" })).toHaveTextContent("Ascending");
+});
+
+test.each(["bad json", '{"by":"unknown","descending":true}', '{"by":"played","descending":"false"}'])(
+  "invalid saved scene order uses descending numbers: %s", async saved => {
+    localStorage.setItem("grimoire.sort.scenes", saved);
+    vi.mocked(api.listScenes).mockResolvedValue([
+      scene({ id: "1--first", title: "First" }), scene({ id: "2--second", title: "Second" }),
+    ]);
+    renderScenes();
+    await screen.findByText("First");
+    expect(listedSceneIds()).toEqual(["2--second", "1--first"]);
+    expect(screen.getByRole("button", { name: "Sort scenes by last played" })).toBeTruthy();
+  });
+
+test("unavailable preference storage still allows scene sorting", async () => {
+  const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("Unavailable"); });
+  const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Unavailable"); });
+  try {
+    renderScenes();
+    await screen.findByText("The third");
+    expect(listedSceneIds()).toEqual(["003--third", "002--second", "001--first"]);
+    fireEvent.click(screen.getByRole("button", { name: "Reverse scene order" }));
+    expect(listedSceneIds()).toEqual(["001--first", "002--second", "003--third"]);
+  } finally { read.mockRestore(); write.mockRestore(); }
+});
+
 test("the eyebrow names the campaign, what this list is, and how much is open", async () => {
   // The design's eyebrow is richer than the bare campaign name: it also says
   // what kind of list this is and how much of it still needs playing.
   renderScenes();
   await screen.findByText("The third");
-  expect(screen.getByText("Run One · last played first · 1 open"))
+  expect(screen.getByText("Run One · highest number first · 1 open"))
     .toBeInTheDocument();
 });
 
@@ -168,7 +269,7 @@ test("the eyebrow drops the open count rather than claiming zero", async () => {
   ]);
   renderScenes();
   await screen.findByText("The first");
-  expect(screen.getByText("Run One · last played first")).toBeInTheDocument();
+  expect(screen.getByText("Run One · highest number first")).toBeInTheDocument();
 });
 
 test("the action names what to do, and it is not the same verb for every state", async () => {
@@ -606,7 +707,7 @@ test("a closed branch is not counted or listed as open", async () => {
   ]);
   renderScenes();
   await screen.findByText("Other");
-  expect(screen.getByText("Run One · last played first · 1 open")).toBeInTheDocument();
+  expect(screen.getByText("Run One · highest number first · 1 open")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^Open/ }));
   await screen.findByText("Other");
   expect(screen.queryByText("Alt")).toBeNull();

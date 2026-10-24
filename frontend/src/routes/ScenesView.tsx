@@ -12,8 +12,9 @@ import { bucketPrice, estimatedTokensTitle, UNPRICED } from "../components/cost"
 import { usePublishShellContext } from "../components/ShellStatus";
 import { useCampaignShell } from "../shell/ShellPayloadContext";
 import { sceneNumber } from "./sceneNumber";
+import { loadSceneOrder, orderScenes, saveSceneOrder, sceneOrderLabel, type SceneOrder } from "./sceneOrder";
 
-/** Every scene in the campaign, the one played most recently first.
+/** Every scene in the campaign, highest scene number first by default.
  *
  *  The rail says how many there are and the hub shows the last five; this is
  *  the list you read top to bottom. Its one real job is the **state-dependent
@@ -112,6 +113,14 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
   const [delFailed, setDelFailed] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
+  const [order, setOrder] = useState<SceneOrder>(loadSceneOrder);
+
+  function changeOrder(next: SceneOrder) {
+    setOrder(next);
+    saveSceneOrder(next);
+  }
+  const nextSort = order.by === "number" ? "played" : order.by === "played" ? "title" : "number";
+  const sortNames = { number: "Scene number", played: "Last played", title: "Title" };
 
   usePublishShellContext(meta ? { campaign: meta.name, scene: "" } : null);
 
@@ -230,13 +239,13 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return (scenes ?? []).filter((s) => {
+    return orderScenes((scenes ?? []).filter((s) => {
       if (filter === "open" && (s.done || s.closed_by)) return false;
       if (filter === "absorbed" && !s.done) return false;
       if (needle && !s.title.toLowerCase().includes(needle)) return false;
       return true;
-    });
-  }, [scenes, filter, q]);
+    }), order);
+  }, [scenes, filter, q, order]);
 
   const counts = useMemo(() => ({
     all: scenes?.length ?? 0,
@@ -305,9 +314,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
     <PageShell column={column} columnLabel="Scenes">
       <div className="page-wide view-anim">
         <div className="eyebrow">
-          {/* The order the server sorts by: a turn moves its scene to the top,
-              so this is not creation order, and "newest first" said it was. */}
-          {[meta?.name, "last played first", counts.open ? `${counts.open} open` : null]
+          {[meta?.name, sceneOrderLabel(order), counts.open ? `${counts.open} open` : null]
             .filter(Boolean).join(" · ")}
         </div>
         <div className="scenes-head">
@@ -403,6 +410,16 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
             <input className="rail-search" type="search" value={q}
                    placeholder="Filter by title…" aria-label="Filter scenes by title"
                    onChange={(e) => setQ(e.target.value)} />
+            <button type="button" className="data-label sort-toggle"
+                    aria-label={`Sort scenes by ${nextSort === "played" ? "last played" : nextSort}`}
+                    onClick={() => changeOrder({ by: nextSort, descending: nextSort !== "title" })}>
+              Sort · {sortNames[order.by]}
+            </button>
+            <button type="button" className="subtle" aria-label="Reverse scene order"
+                    title={sceneOrderLabel(order)}
+                    onClick={() => changeOrder({ ...order, descending: !order.descending })}>
+              {order.descending ? "Descending ↓" : "Ascending ↑"}
+            </button>
             <span className="field-hint">
               {shown.length === counts.all
                 ? `${counts.all} ${counts.all === 1 ? "scene" : "scenes"}`
