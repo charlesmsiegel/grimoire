@@ -26,7 +26,10 @@ pytestmark = pytest.mark.tracker
 
 TRACKER = {"system_contains": "You maintain the scene state tracker"}
 MARA_SAYS = 'Mara answers.\n```handoff\n{"next":null}\n```'
-RUN_TIMEOUT = 10.0
+# These disk-backed background runs share the full suite's worker pool.
+# This is a completion bound, not a latency contract; order and flags are
+# asserted separately once the work settles.
+RUN_TIMEOUT = 30.0
 
 
 def _llm(tracker_reply: dict | str | None = None) -> FakeLLM:
@@ -74,7 +77,9 @@ def _updates(client, cid, ident) -> list:
 def _settle(client, cid, sid) -> list:
     found = _updates(client, cid, _ident(cid, sid))
     for run in found:
-        assert run.terminal.wait(timeout=RUN_TIMEOUT), "a tracker update never finished"
+        assert run.terminal.wait(timeout=RUN_TIMEOUT), (
+            f"tracker update {run.id} ({run.kind}) never finished: {run.state}, {run.error}"
+        )
     return found
 
 

@@ -764,9 +764,9 @@ test("a stale poll answer landing after a newer read does not overwrite it or st
       keys: [{ index: 0, key: "p-0" }, { index: 1, key: "p-1" }], entries: newer });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(await screen.findByRole("button", { name: "Re-run tracker from here" }));
-    // p-1 is the second of two tracked posts: a re-run from it is one call.
+    // p-1 is the second of two tracked posts: a re-run from it covers one post.
     expect(confirm).toHaveBeenCalledWith(
-      "Re-run the tracker for 1 post from here? That is 1 model call.");
+      "Re-run the tracker for 1 post from here? This uses paid tracker and expression selection calls.");
     confirm.mockRestore();
     await screen.findByText("Tracker · Mara: Visible mood → fear");
     // Now the older answer arrives, still showing the old state of p-1.

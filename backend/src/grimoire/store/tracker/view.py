@@ -10,6 +10,7 @@ which values are private so it can play them as unspoken.
 
 from __future__ import annotations
 
+from . import expression_fields
 from . import fields as field_defs
 
 NARRATOR = "grimoire"
@@ -28,7 +29,7 @@ def _values(entry: dict, fields: list[dict], all_: bool, viewer) -> list[dict]:
     switched off has no definition to label it under and is not shown."""
     out = []
     stored = entry.get("fields") or {}
-    for field in field_defs.active(fields):
+    for field in expression_fields.narrative_fields(field_defs.active(fields)):
         cur = stored.get(field["key"])
         if not cur:
             continue

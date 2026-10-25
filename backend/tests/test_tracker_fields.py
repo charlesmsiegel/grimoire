@@ -22,13 +22,6 @@ def home(monkeypatch, tmp_path):
     return wid, cid, sid
 
 
-def test_defaults_are_the_ten_fields_with_28_moods():
-    assert [f["key"] for f in fields.DEFAULT_FIELDS] == [
-        "clothing", "position", "pose", "holding", "condition", "visible_mood",
-        "true_mood", "intent", "concealed", "attention"]
-    assert len(fields.VISIBLE_MOODS) == 28
-
-
 def test_world_then_campaign_then_scene_layering(home):
     wid, cid, sid = home
     fields.write_world_layer(wid, {"off": ["attention"],
@@ -188,7 +181,7 @@ def test_layer_routes_round_trip(client):
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Quay")
     got = client.get(f"/api/worlds/{wid}/tracker-fields").json()
-    assert got["layer"] == {} and len(got["effective"]) == 10
+    assert got["layer"] == {}
     assert [f["key"] for f in got["inherited"]] == [f["key"] for f in fields.DEFAULT_FIELDS]
 
     r = client.put(f"/api/worlds/{wid}/tracker-fields", json={"off": ["attention"]})

@@ -67,6 +67,13 @@ def _actor(cid, actor, selected, speaker, notices):
     automatic_outfit = next((oid for oid, row in outfits.items()
                              if any(alias and alias.casefold() in clothing for alias in row["clothing_aliases"])),
                             collection["default_outfit"])
+    legacy_outfit = automatic_outfit
+    decision_row = outfits.get(actor.expression_outfit, {}).get("expressions", {}).get(actor.expression_mood)
+    decision = None
+    if decision_row and decision_row.get("available") and decision_row.get("image_id"):
+        decision = resolve.SpriteChoice(actor.expression_outfit, actor.expression_mood,
+                                        decision_row["image_id"], decision_row.get("token"), "exact")
+        automatic_outfit = actor.expression_outfit
     outfit_id = selected.get("outfit")
     if outfit_id and outfit_id not in outfits:
         notices.append("A selected outfit is unavailable; using automatic presentation.")
@@ -78,10 +85,19 @@ def _actor(cid, actor, selected, speaker, notices):
         expression = None
     prefix = (f"/api/campaigns/{quote(cid, safe='')}/{kind}/{quote(aid, safe='')}/versions/"
               f"{quote(actor.version_id, safe='')}/expressions")
+    # Manual choices stay authoritative; a computed pair is one exact image,
+    # never permission to exhaust arbitrary faces before the old automatic path.
+    choices = []
+    if selected.get("outfit") in outfits or expression is not None:
+        choices.extend(resolve.candidates(collection, outfit_id, expression or actor.visible_mood,
+                                          explicit=expression is not None))
+    elif decision is not None:
+        choices.append(decision)
+    choices.extend(resolve.candidates(collection, legacy_outfit, actor.visible_mood))
     candidates = [{"url": f"{prefix}/{choice.outfit_id}/{choice.expression}/image?v={quote(choice.token or '', safe='')}",
                    "presentation": outfits[choice.outfit_id]["presentation"]}
-                  for choice in resolve.candidates(collection, outfit_id, expression or actor.visible_mood,
-                                                   explicit=expression is not None) if choice.image_id is not None]
+                  for choice in choices if choice.image_id is not None]
+    candidates = list({row["url"]: row for row in candidates}.values())
     avatar = next((row for row in _art(cid, kind, aid, actor.version_id, notices) if row["name"] == "avatar"), None)
     if avatar:
         candidates.append({"url": avatar["url"], "presentation": contracts.PRESENTATION})

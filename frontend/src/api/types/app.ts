@@ -349,6 +349,8 @@ export type TrackerField = {
   aware: "present" | "self"; hint: string; options?: string[];
   /** Switched off: kept in the list so a stored value still has a label. */
   off?: boolean;
+  /** Decision-owned presentation value, shown read-only. */
+  computed?: boolean;
 };
 export type TrackerEntry = {
   status: "pending" | "ok" | "failed";

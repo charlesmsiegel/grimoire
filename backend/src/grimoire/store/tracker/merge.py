@@ -33,6 +33,7 @@ import json
 import re
 from collections.abc import Callable
 
+from . import expression_fields
 from . import fields as field_defs
 
 MAX_TEXT = 200
@@ -179,7 +180,7 @@ def _writable(fields: list[dict]) -> dict[str, dict]:
     """Key -> definition for the fields a value may be written to. Switched-off
     fields are absent: their stored values stay (and are kept by the copy), but
     nothing new lands under a label the person turned off."""
-    return {f["key"]: f for f in field_defs.active(fields)}
+    return {f["key"]: f for f in expression_fields.narrative_fields(field_defs.active(fields))}
 
 
 def _same_aware(a, b) -> bool:
@@ -407,6 +408,8 @@ def apply_edit(prev: dict, edits: dict, fields: list[dict]) -> tuple[dict, list[
         if ref not in snap or not isinstance(values, dict):
             raise ValueError(f"unknown character {ref!r}")
         for key, edit in values.items():
+            if key in expression_fields.KEYS:
+                raise ValueError(f"{key}: computed by the Decision model; use VN presentation overrides")
             if key not in defs:
                 raise ValueError(f"unknown or switched-off field {key!r}")
             _edit_one(snap, ref, defs[key], edit, changed)

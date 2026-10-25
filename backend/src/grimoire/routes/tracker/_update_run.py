@@ -11,7 +11,7 @@ from ... import store
 from ...llm import LLMClient
 from ...llm_errors import LLMError
 from ..common import _llm_http_error, require_inference, run_error
-from . import _locks, _persistence
+from . import _expression_selection, _locks, _persistence
 from ._router import router as router
 
 
@@ -78,19 +78,28 @@ async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: 
     # a person typed into it, and the reply did not itself move, is kept.
     snapshot, changed, restored = store.tracker.merge.keep_user_values(
         snapshot, prep["own"], prep["prior"], changed, prep["set_here"])
+    snapshot, expressions, expression_summary = await _expression_selection.choose(
+        cid, prep['sid'], identity, key, prep, snapshot, client)
     try:
         written = await run_in_threadpool(
             _persistence._commit, cid, identity, prep["sid"], key, snapshot, changed=changed,
             digest=store.tracker.fields.digest(fields), model=resolved.chain.primary.model,
             flag_later=flag_later, seen_seq=prep["seen_seq"], gen=gen,
             stale_base=prep["stale_base"], touched=restored, base=prep["base"],
-            certificate=prep["provenance"])
+            certificate=prep["provenance"], expressions=expressions, expression_prep=prep)
     except Exception as exc:  # noqa: BLE001 -- as `_prepare`: never leave it `pending`
         await run_in_threadpool(_persistence._fail, cid, identity, prep["sid"], key, _text(exc), gen)
         return {"state": "failed", "error": {"kind": "run_failed", "detail": _text(exc)}}
     if not written:
         return {"state": "landed", "result": {"skipped": True}}
-    return {"state": "landed", "result": {"changed": len(changed)}}
+    # Publication may clear one actor whose assets changed after selection.
+    expression_summary.update(
+        selected=sum(all(k in actor.get('fields', {}) for k in _expression_selection.KEYS)
+                     for ref, actor in snapshot.items() if ref in prep['present']),
+        failed=len(expressions['errors']))
+    expression_summary['skipped'] = max(0, len(prep['present']) - expression_summary['selected']
+                                         - expression_summary['failed'])
+    return {"state": "landed", "result": {"changed": len(changed), "expressions": expression_summary}}
 
 
 def _detail(exc: HTTPException) -> str:

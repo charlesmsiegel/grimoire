@@ -21,6 +21,8 @@ _ORDER: tuple[RouteKey, ...] = (
     (('PUT',), '/campaigns/{cid}/scenes/{sid}/tracker/records/{key}', 'put_tracker_record'),
     (('POST',), '/campaigns/{cid}/scenes/{sid}/tracker/records/{key}/retry', 'post_tracker_retry'),
     (('POST',), '/campaigns/{cid}/scenes/{sid}/tracker/records/{key}/rerun-from', 'post_tracker_rerun_from'),
+    (('POST',), '/campaigns/{cid}/scenes/{sid}/tracker/records/{key}/expressions', 'post_tracker_expressions'),
+    (('GET',), '/campaigns/{cid}/scenes/{sid}/tracker/runs', 'get_tracker_runs'),
 )
 
 

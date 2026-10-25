@@ -3,9 +3,11 @@ import { TrackerDisclosure, rerunPrompt, summaryText } from "./TrackerDisclosure
 import { shareSummary } from "./share";
 import { api } from "../../api/client";
 import type { TrackerEntry, TrackerRecord, TrackerSummary } from "../../api/client";
+import { awaitRun } from "../../api/runs";
 
 vi.mock("../../api/client", () => ({ api: { getTrackerRecord: vi.fn(), editTrackerRecord: vi.fn(),
-  retryTracker: vi.fn(), rerunTrackerFrom: vi.fn() } }));
+  retryTracker: vi.fn(), rerunTrackerFrom: vi.fn(), refreshTrackerExpressions: vi.fn() } }));
+vi.mock("../../api/runs", () => ({ awaitRun: vi.fn() }));
 
 const F = { upstream_changed: false, text_changed: false };
 const NAMES = { "characters:mara": "Mara", "characters:winifred": "Winifred" };
@@ -38,10 +40,46 @@ function mount(entry: TrackerEntry | undefined, over: Partial<{ enabled: boolean
 }
 
 beforeEach(() => {
+  vi.mocked(api.refreshTrackerExpressions).mockReset();
+  vi.mocked(awaitRun).mockReset();
   vi.mocked(api.getTrackerRecord).mockReset().mockResolvedValue(RECORD);
   vi.mocked(api.editTrackerRecord).mockReset().mockResolvedValue(RECORD);
   vi.mocked(api.retryTracker).mockReset().mockResolvedValue({} as TrackerSummary);
   vi.mocked(api.rerunTrackerFrom).mockReset().mockResolvedValue({} as TrackerSummary);
+});
+
+test("computed selections display but cannot be edited", async () => {
+  vi.mocked(api.getTrackerRecord).mockResolvedValue({ ...RECORD,
+    fields: [...RECORD.fields, { key: "expression-mood", label: "Expression mood", type: "text", aware: "present", hint: "", computed: true }],
+    snapshot: { "characters:mara": { present: true, fields: { ...RECORD.snapshot!["characters:mara"].fields,
+      "expression-mood": { value: "custom-smile", aware: "present" } } } },
+  });
+  mount(OK);
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
+  await screen.findByText(/custom-smile/);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(screen.queryByRole("textbox", { name: "Mara Expression mood" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Mara Expression mood awareness" })).not.toBeInTheDocument();
+});
+
+test("expression refresh waits for its run, reloads values and reports partial results", async () => {
+  const run = { id: "expressions", state: "running" as const, attempt_id: null, next_index: 0 };
+  vi.mocked(api.refreshTrackerExpressions).mockResolvedValue({ run });
+  let finish!: (value: import("../../api/stream").RunHandle) => void;
+  vi.mocked(awaitRun).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const changed = mount(OK);
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
+  const action = await screen.findByRole("button", { name: "Refresh expressions" });
+  fireEvent.click(action);
+  await waitFor(() => expect(awaitRun).toHaveBeenCalled());
+  expect(action).toBeDisabled();
+  expect(api.refreshTrackerExpressions).toHaveBeenCalledWith("run", "s1", "p-1");
+  expect(api.retryTracker).not.toHaveBeenCalled();
+  expect(api.editTrackerRecord).not.toHaveBeenCalled();
+  finish({ ...run, state: "landed", result: { selected: 1, skipped: 0, failed: 1 } } as never);
+  await screen.findByText(/1 selected.*1 failed/);
+  expect(api.getTrackerRecord).toHaveBeenCalledTimes(2);
+  expect(changed).toHaveBeenCalled();
 });
 
 test("summary states", () => {
@@ -207,7 +245,7 @@ test("Re-run tracker from here asks, naming the posts it will pay for, then runs
     fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
     fireEvent.click(await screen.findByRole("button", { name: "Re-run tracker from here" }));
     expect(confirm).toHaveBeenCalledWith(
-      "Re-run the tracker for 3 posts from here? That is 3 model calls.");
+      "Re-run the tracker for 3 posts from here? This uses paid tracker and expression selection calls.");
     await waitFor(() => expect(api.rerunTrackerFrom).toHaveBeenCalledWith("run", "s1", "p-1"));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   } finally { confirm.mockRestore(); }
@@ -226,7 +264,7 @@ test("a declined re-run confirm sends nothing", async () => {
 });
 
 test("the re-run prompt reads right for one post", () => {
-  expect(rerunPrompt(1)).toBe("Re-run the tracker for 1 post from here? That is 1 model call.");
+  expect(rerunPrompt(1)).toBe("Re-run the tracker for 1 post from here? This uses paid tracker and expression selection calls.");
 });
 
 test("a pending entry reads updating and offers no Retry", () => {
@@ -335,4 +373,14 @@ test("a list that reads the same after trimming is not an edit", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
   expect(api.editTrackerRecord).not.toHaveBeenCalled();
+});
+
+
+test("expression refresh shows server failures and recovers its controls", async () => {
+  vi.mocked(api.refreshTrackerExpressions).mockRejectedValue(new Error("Generate tracker state first"));
+  mount(OK);
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Refresh expressions" }));
+  await screen.findByText(/Generate tracker state first/);
+  expect(screen.getByRole("button", { name: "Refresh expressions" })).toBeEnabled();
 });

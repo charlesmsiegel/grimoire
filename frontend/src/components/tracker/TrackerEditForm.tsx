@@ -42,7 +42,7 @@ function orderedActors(snapshot: Record<string, TrackerActor>): [string, Tracker
 
 /** A switched-off field is offered only where a value is already stored. */
 function editableFields(fields: TrackerField[], actor: TrackerActor): TrackerField[] {
-  return fields.filter((f) => !f.off || actor.fields[f.key] !== undefined);
+  return fields.filter((f) => !f.computed && (!f.off || actor.fields[f.key] !== undefined));
 }
 
 /** The form over one record's values. It submits only what moved: a value

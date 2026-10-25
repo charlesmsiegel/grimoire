@@ -160,8 +160,25 @@ link back to normal play.
 **Exit VN** returns to that exact scene for the full play and editing controls.
 The reader displays the canonical transformed text.
 
+With the tracker enabled, each tracked post also selects sprites using the
+Decision model: one batched stage chooses from each present character's usable
+outfits, then another chooses from the selected outfit's available expressions.
+Custom expression labels are supported. These choices are recorded with the
+post and appear when background tracking finishes, without moving your passage.
+If a decision or its image is unavailable, VN uses its existing clothing and
+visible-mood matching, outfit fallbacks, avatar, and initials.
+
+Choose **Menu > Refresh expressions** to rerun just those two selection stages
+for the current post. The tracker disclosure offers the same action for an
+existing record. Other tracked values and manual presentation overrides stay
+intact. Generate tracker state first if the post has no snapshot. **Retry** and
+**Re-run tracker from here** regenerate narrative tracker state and sprite choices;
+expression refresh updates only sprite choices. Reading and paging make no model
+calls. Turning tracking off stops new selection work.
+
 **Presentation settings** changes the current post's outfit, expression, actor
-visibility, or background. Automatic uses its recorded public scene information;
+visibility, or background. Manual choices take priority. Automatic first uses the
+recorded outfit/expression decision, then its recorded public scene information;
 None removes background art. Save stores those choices with the library, separate
 from narrative facts. Reset to automatic clears this post's overrides. If another
 save wins first, a stale-save error preserves your draft; refresh before retrying.

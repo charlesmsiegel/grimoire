@@ -16,6 +16,8 @@ class ActorAtPost:
     version_id: str
     visible_mood: str | None = None
     clothing: str | None = None
+    expression_outfit: str | None = None
+    expression_mood: str | None = None
 
 
 @dataclass(frozen=True)

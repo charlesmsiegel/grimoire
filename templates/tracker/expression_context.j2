@@ -1,0 +1,9 @@
+Actor: {{ name }}
+Actor reference: {{ ref }}
+{% if outfit %}Selected outfit: {{ outfit | tojson }}
+{% endif %}
+Public tracked state: {{ public | tojson }}
+{% for message in posts %}{{ message.speaker }}: {{ message.content }}
+{% endfor %}
+Current post : {{ post.speaker }}: {{ post.content }}
+

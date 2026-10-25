@@ -150,7 +150,8 @@ export function TrackerFieldsEditor({ scope }: { scope: EditorScope }) {
         </div>
         <aside className="detail-sidebar">
           <div className="form-actions">
-            <button className="subtle" onClick={() => startEdit(f)} disabled={saving}>Edit</button>
+            {!f.computed && <button className="subtle" onClick={() => startEdit(f)} disabled={saving}>Edit</button>}
+            {f.computed && <p className="field-hint">Selected automatically for presentation.</p>}
           </div>
           <div className="side-section">
             <h4>Field</h4>

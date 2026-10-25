@@ -4,6 +4,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import { defaultUrlTransform } from 'react-markdown';
 import { withoutComments } from '../../markdown/commentPlugin';
+import { remarkQuotePlugin } from '../../markdown/quotePlugin';
 
 export type Splash = { url: string; alt: string; postId: string; id: string };
 export type ReadingStep = { tree: Root; splash?: Splash };
@@ -12,7 +13,7 @@ export type ReadingStep = { tree: Root; splash?: Splash };
 // step is a slice of parsed prose with its inherited wrappers and backdrop;
 // walking backward therefore needs no inverse events. A future pacing option
 // changes the ranges below without changing navigation or stored narrative.
-const parser = unified().use(remarkParse).use(remarkGfm);
+const parser = unified().use(remarkParse).use(remarkGfm).use(remarkQuotePlugin);
 const TITLES = /\b(?:Mr|Mrs|Ms|Dr|Prof|St|Sr|Jr|vs|etc|e\.g|i\.e)\.$/i;
 type SegmenterClass = new (locale: string, options: { granularity: 'sentence' }) => {
   segment(text: string): Iterable<{ index: number; segment: string }>;
@@ -83,7 +84,7 @@ export function readingSteps(content: string, postId: string, inherited?: Splash
     if ('children' in node) node.children.forEach(collect);
   }
   collect(parsed);
-  const tree = resolve(parsed, definitions) as Root;
+  const tree = parser.runSync(resolve(parsed, definitions)) as Root;
   const steps: ReadingStep[] = [];
   let splash = inherited;
   let imageIndex = 0;

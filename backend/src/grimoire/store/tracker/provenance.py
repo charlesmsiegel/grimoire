@@ -15,7 +15,7 @@ from .. import locks, responses
 from ..scene_history import capture as history_capture
 from ..scene_history import records as history_records
 from ..scenes import identity, read
-from . import fields, records, walk
+from . import expression_fields, fields, records, walk
 
 
 def _digest(value) -> str:
@@ -60,7 +60,7 @@ def certificates(cid: str, sid: str) -> tuple[dict[str, dict | None], dict[str, 
                 proven[key] = body["snapshot"]
             # Fingerprint includes the snapshot itself, not only index flags:
             # manual changes remain observable even after index reconstruction.
-            base = {"key": key, "fingerprint": _digest(body)}
+            base = {"key": key, "fingerprint": _digest(expression_fields.narrative_body(body))}
     return expected, proven
 
 

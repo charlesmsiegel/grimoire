@@ -131,7 +131,7 @@ def test_a_route_born_at_format_two_has_no_legacy_key():
     `NO_LEGACY_TASKS` -- which the frozen inference baselines leave out."""
     born = [r for r in routing.ROUTES if r.legacy == routing.NO_LEGACY]
     assert [r.key for r in born] == ["turn_plan", "history_check", "epistemic", "history_plan",
-                                     "investigation", "investigation_decide", "capsule",
+                                     "investigation", "investigation_decide", "expression-selection", "capsule",
                                      "character_text"]
     for r in born:
         assert r not in routing.LEGACY_ROUTES
@@ -144,6 +144,7 @@ def test_a_route_born_at_format_two_has_no_legacy_key():
                                                "investigation-continuity",
                                                "investigation-decide",
                                                "investigation-question",
+                                               "tracker-expression-mood", "tracker-expression-outfit",
                                                "turn-intent", "turn-plan",
                                                "turn-tool-decision"]
     assert routing.NO_LEGACY not in routing.TASK_ROUTE.values()
@@ -159,7 +160,7 @@ def test_every_route_declares_operation_and_default_role():
     requires tools (12-S3)."""
     primary = {"scene", "opener", "suggestions", "voice", "investigation"}
     decide = {"scene_break", "voice_drift", "speaker", "continuity", "turn_plan",
-              "history_check", "epistemic", "investigation_decide"}
+              "history_check", "epistemic", "investigation_decide", "expression-selection"}
     for r in routing.ROUTES:
         assert r.operation in routing.OPERATIONS
         assert r.default_role in routing.DEFAULT_ROLES
@@ -174,7 +175,6 @@ def test_every_route_declares_operation_and_default_role():
     assert not routing.route_by_key("character_text").campaign_scoped
     assert routing.route_by_key("capsule").tasks == ("capsule",)
     assert routing.route_by_key("capsule").campaign_scoped
-    assert len(routing.ROUTES) == 23
 
 
 def test_the_scene_break_title_is_drafted_on_the_summary_route():

@@ -2,12 +2,14 @@
 
 from contextlib import contextmanager
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..llm import LLMClient
 from ..store.expression_library import contracts
 from ..store.vn import overrides, read
 from . import common
+from .tracker import _expression_refresh
 
 router = APIRouter(prefix="/campaigns/{cid}/scenes/{sid}/vn")
 
@@ -52,3 +54,9 @@ def save(cid: str, sid: str, post_id: str, body: Presentation):
     common._require_scene(cid, sid)
     with errors():
         return read.save(cid, sid, post_id, body.scene_identity, body.expected_revision, body.actors, body.background)
+
+
+@router.post("/posts/{post_id}/expressions", status_code=202)
+def refresh_expressions(cid: str, sid: str, post_id: str, request: Request,
+                        client: LLMClient = Depends(common.get_llm)):
+    return _expression_refresh.start_post(request.app, cid, sid, post_id, client)

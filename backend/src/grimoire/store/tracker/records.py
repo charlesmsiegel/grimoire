@@ -43,7 +43,7 @@ from pathlib import Path
 
 from .. import atomic, locks
 from ..paths import now_iso
-from . import paths
+from . import expression_fields, paths
 
 VERSION = 1
 FLAGS = ("upstream_changed", "text_changed")
@@ -306,7 +306,7 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
          fields_digest: str, model: str, keep_flags: bool = False,
          seen_seq: int | None = None, raise_upstream: bool = False,
          bump_gen: bool = False, touched: list | None = None,
-         provenance: dict | None = None) -> None:
+         provenance: dict | None = None, expressions: dict | None = None) -> None:
     """Store `key`'s snapshot and mark it `ok`. What happens to its flags:
 
     - by default they are cleared (a writer that read everything just now);
@@ -335,7 +335,8 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
         _write_json(_snapshot_path(cid, identity, key),
                     {"version": VERSION, "snapshot": snapshot,
                      "fields_digest": fields_digest, "model": model, "at": now_iso(),
-                     **({"provenance": provenance} if provenance is not None else {})})
+                     **({"provenance": provenance} if provenance is not None else {}),
+                     **({"expressions": expressions} if expressions is not None else {})})
         entries = read_index(cid, identity)
         prev = entries.get(key) or {}
         seq = flag_seq(prev)
@@ -354,6 +355,31 @@ def save(cid: str, identity: str, key: str, snapshot: dict, *, changed: list[lis
         if gen:
             entries[key][GEN] = gen
         _write_index(cid, identity, entries)
+
+
+def save_expressions(cid: str, identity: str, key: str, snapshot: dict, expressions: dict,
+                     expected: dict, expected_index: dict) -> bool:
+    """Patch presentation only, unless newer work superseded its source read.
+
+    A newer tracker run can change only the index's generation/status while
+    leaving snapshot bytes untouched. Compare both in the publication hold.
+    Keep the narrative envelope and index intact: sprite refresh is neither
+    a new narrative model result nor proof that stale narrative became fresh.
+    """
+    with locks.campaign_lock(cid):
+        current = read_snapshot(cid, identity, key)
+        if (current is None or current != expected
+                or read_index(cid, identity).get(key) != expected_index):
+            return False
+        for ref, actor in current["snapshot"].items():
+            incoming = snapshot.get(ref, {}).get("fields", {})
+            for field in expression_fields.KEYS:
+                actor["fields"].pop(field, None)
+                if field in incoming:
+                    actor["fields"][field] = incoming[field]
+        current["expressions"] = expressions
+        _write_json(_snapshot_path(cid, identity, key), current)
+        return True
 
 
 def mark_failed(cid: str, identity: str, key: str, error: str,

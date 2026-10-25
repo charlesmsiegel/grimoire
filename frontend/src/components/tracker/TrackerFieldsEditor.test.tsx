@@ -334,3 +334,12 @@ test("the same layer saves an unrelated field's switch without the dead addition
   await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(
     CAMPAIGN, { fields: [], change: {}, off: ["visible_mood"] }));
 });
+
+
+test("computed field definitions are read-only but can be switched off", async () => {
+  serve({}, [{ key: "expression-outfit", label: "Expression outfit", type: "text", aware: "present", hint: "", computed: true }]);
+  await open("Expression outfit");
+  expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Switch off" }));
+  await waitFor(() => expect(api.setTrackerFields).toHaveBeenCalledWith(CAMPAIGN, { fields: [], change: {}, off: ["expression-outfit"] }));
+});

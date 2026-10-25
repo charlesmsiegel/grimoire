@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, type VNScene, type VNStage } from '../api/client';
+import { api, type VNScene } from '../api/client';
 import { useHotkeys, useOtherModalOpen } from '../shortcuts/useHotkeys';
 import { ActorSprite } from '../components/vn/ActorSprite';
 import { PresentationSettings } from '../components/vn/PresentationSettings';
 import { readingSteps, type Splash } from '../components/vn/readingSteps';
 import { ReadingStepContent } from '../components/vn/ReadingStep';
+import { useVNStage } from '../components/vn/useVNStage';
 import { useVNReply } from '../components/vn/useVNReply';
 import { VNReply } from '../components/vn/VNReply';
 import { VNDialog } from '../components/vn/VNDialog';
@@ -39,7 +40,6 @@ export default function VisualNovelView() {
 function VNReader({ cid, sid }: { cid: string; sid: string }) {
   const [scene, setScene] = useState<VNScene | null>(null);
   const [position, setPosition] = useState<Position>(beginning);
-  const [stage, setStage] = useState<VNStage | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [settings, setSettings] = useState(false);
@@ -76,6 +76,8 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
   const index = current ? sequence.indexOf(current) : -1;
   const post = current?.post;
   const postId = post?.post_id ?? '';
+  const presentation = useVNStage(cid, sid, scene, postId, refreshing);
+  const { stage } = presentation;
   cursor.current = current ? { postId, step: current.number } : position;
   const first = index <= 0;
   const last = index >= sequence.length - 1;
@@ -122,7 +124,7 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
         setNotice('That post is no longer available. Reading from the first surviving post.'); desired = beginning;
       }
       setScene(result); setPosition(desired.postId ? desired : { postId: result.posts[0]?.post_id ?? '', step: 0 });
-      setStage(null); setCarry(null); setFailedSplash(''); setDismissedSplash('');
+      setCarry(null); setFailedSplash(''); setDismissedSplash('');
       return true;
     } catch (e) { if (alive.current && request === readSequence.current) setError(e instanceof Error ? e.message : String(e)); }
     finally { if (alive.current && request === readSequence.current) setRefreshing(false); }
@@ -148,16 +150,7 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
     try { localStorage.setItem(`vn-cursor:${scene.scene_identity}`, JSON.stringify(bounded)); } catch { /* Reading remains available without browser storage. */ }
     if (dialogue.current) dialogue.current.scrollTop = 0;
   }, [scene, current, postId]);
-  useEffect(() => {
-    setSettings(false); setStage(null);
-    if (!scene || !postId) return;
-    let active = true;
-    setError('');
-    api.getVNPost(cid, sid, postId).then(result => {
-      if (active && result.scene_identity === scene.scene_identity && result.post_id === postId) setStage(result);
-    }).catch(e => { if (active) { setError(e instanceof Error ? e.message : String(e)); setAuto(false); } });
-    return () => { active = false; };
-  }, [cid, sid, postId, scene]);
+  useEffect(() => { setSettings(false); }, [scene, postId]);
   useEffect(() => {
     setCarry(null);
     if (!scene || !splash || splash.postId === postId || !shownStage) return;
@@ -224,12 +217,14 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
             <button onClick={showMenu}>Menu</button>
           <button className="vn-continue" aria-label="Next" disabled={!canStep || last} onClick={() => move(index + 1)}><span aria-hidden="true">▸</span></button>
         </nav>
-        <div className="vn-notices">{notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
+        <div className="vn-notices">{presentation.notice && <p role="status">{presentation.notice}</p>}{presentation.error && <p role="alert">{presentation.error}</p>}{presentation.busy && <p role="status">Refreshing expressions...</p>}{notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
           {[...new Set(shownStage?.notices ?? [])].map(n => <p role="status" key={n}>{n}</p>)}</div>
       </div>
       {menu && <VNDialog title="VN menu" onClose={() => setMenu(false)}>
         <div className="vn-menu-actions">
           <button disabled={!shownStage || reply.locked} onClick={() => { setMenu(false); setSettings(true); }}>Presentation settings</button>
+          <button disabled={!postId || !shownStage || !presentation.enabled || presentation.busy || presentation.tracking || refreshing || reply.locked}
+            onClick={() => { setMenu(false); void presentation.refreshExpressions(); }}>Refresh expressions</button>
           <button onClick={() => { setMenu(false); hideDialogue(); }}>{hidden ? 'Show dialogue' : 'Hide dialogue'}</button>
           <button disabled={refreshing || reply.locked} onClick={() => { setMenu(false); void refresh(); }}>Refresh</button>
         </div>
@@ -249,7 +244,7 @@ function VNReader({ cid, sid }: { cid: string; sid: string }) {
       {settings && shownStage && <PresentationSettings key={`${scene?.scene_identity}:${postId}`} cid={cid} sid={sid} stage={shownStage}
         showPCSprites={showPCSprites} onShowPCSpritesChange={changePCSprites} onSaved={updated => {
         if (updated.background_url !== shownStage.background_url && splash) setDismissedSplash(splash.id);
-        setStage(updated);
+        presentation.saved(updated);
       }} onClose={() => setSettings(false)} />}
     </section>
   </main>;

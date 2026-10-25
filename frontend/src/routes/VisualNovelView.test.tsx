@@ -185,13 +185,13 @@ test('autoplay advances sentences within the final post and manual navigation st
     expect(screen.getByText('One.')).toBeInTheDocument();
   } finally { vi.useRealTimers(); }
 });
-vi.mock('../api/client', () => ({ api: { getVNScene: vi.fn(), getVNPost: vi.fn(), saveVNPresentation: vi.fn(), chat: vi.fn(), findRun: vi.fn(), attemptState: vi.fn(), cancelAttempt: vi.fn(), cancelRun: vi.fn(), getRollProposal: vi.fn(), getScene: vi.fn(), listScenes: vi.fn() } }));
+vi.mock('../api/client', () => ({ api: { getTracker: vi.fn(), getTrackerRuns: vi.fn(), refreshVNExpressions: vi.fn(), getVNScene: vi.fn(), getVNPost: vi.fn(), saveVNPresentation: vi.fn(), chat: vi.fn(), findRun: vi.fn(), attemptState: vi.fn(), cancelAttempt: vi.fn(), cancelRun: vi.fn(), getRollProposal: vi.fn(), getScene: vi.fn(), listScenes: vi.fn() } }));
 vi.mock('../api/runs', () => ({ awaitRun: vi.fn() }));
 const scene = { scene_identity: 'scene-one', title: 'Saltmarch', posts: [ { post_id: 'a', content: '**First words**', role: 'assistant', speaker: 'Mara', excluded: false }, { post_id: 'b', content: 'Last words', role: 'assistant', speaker: null, excluded: false } ] };
 const stage: VNStage = { scene_identity: 'scene-one', post_id: 'a', revision: '0', actors: [], backgrounds: [], background_url: null, location_name: null, notices: [], override: { actors: {}, background: null } };
 function menuAction(name: string) { fireEvent.click(screen.getByRole('button', { name: 'Menu' })); fireEvent.click(screen.getByRole('button', { name })); }
 function mount() { return render(<RunRegistryProvider><MemoryRouter initialEntries={['/campaigns/c/scenes/s/vn']}><Routes><Route path="/campaigns/:cid/scenes/:sid/vn" element={<VisualNovelView />} /></Routes></MemoryRouter></RunRegistryProvider>); }
-beforeEach(() => { localStorage.clear(); vi.mocked(api.getVNScene).mockResolvedValue(structuredClone(scene)); vi.mocked(api.getVNPost).mockImplementation(async (_c, _s, id) => ({ ...stage, post_id: id })); });
+beforeEach(() => { vi.mocked(api.getTracker).mockResolvedValue({ enabled: true } as never); vi.mocked(api.getTrackerRuns).mockResolvedValue({ runs: [] }); localStorage.clear(); vi.mocked(api.getVNScene).mockResolvedValue(structuredClone(scene)); vi.mocked(api.getVNPost).mockImplementation(async (_c, _s, id) => ({ ...stage, post_id: id })); });
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getScene).mockResolvedValue({ meta: { id: 's', title: 'Saltmarch' }, messages: scene.posts.map(p => ({ post_id: p.post_id, content: p.content, role: 'assistant' as const, ...(p.speaker ? { speaker: p.speaker } : {}) })) });
@@ -458,4 +458,34 @@ test('recovering an older attempt still waits for a newer scene turn from anothe
   expect(screen.getByRole('textbox', { name: 'Your reply' })).toBeDisabled();
   await act(async () => finish());
   await waitFor(() => expect(screen.getByRole('textbox', { name: 'Your reply' })).toBeEnabled());
+});
+
+
+test('expressions refresh only the stage and retain the sentence cursor and manual override', async () => {
+  vi.mocked(api.getVNScene).mockResolvedValue({ ...scene, posts: [{ ...scene.posts[0], content: 'First. Second. Third.' }] });
+  const run = { id: 'expression-refresh', state: 'landed' as const, attempt_id: null, next_index: 0 };
+  vi.mocked(api.refreshVNExpressions).mockResolvedValue({ run });
+  vi.mocked(awaitRun).mockResolvedValue({ ...run, result: { selected: 1, skipped: 0, failed: 1 } });
+  mount(); await screen.findByText('First.');
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  expect(screen.getByText('Second.')).toBeInTheDocument();
+  vi.mocked(api.getVNPost).mockResolvedValue({ ...stage, revision: 'updated', location_name: 'Saltmarch', override: { actors: { mara: { hidden: true } }, background: null } });
+  menuAction('Refresh expressions');
+  await screen.findByRole('region', { name: 'Stage: Saltmarch' });
+  expect(screen.getByText('Second.')).toBeInTheDocument();
+  expect(api.refreshVNExpressions).toHaveBeenCalledWith('c', 's', 'a');
+  expect(api.chat).not.toHaveBeenCalled();
+  expect(api.saveVNPresentation).not.toHaveBeenCalled();
+  await screen.findByText(/1 selected.*1 failed/);
+});
+
+test('a detached tracker completion updates the current stage without moving the sentence', async () => {
+  vi.mocked(api.getVNScene).mockResolvedValue({ ...scene, posts: [{ ...scene.posts[0], content: 'First. Second. Third.' }] });
+  mount(); await screen.findByText('First.');
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  vi.mocked(api.getVNPost).mockResolvedValue({ ...stage, revision: 'updated', location_name: 'Saltmarch' });
+  vi.mocked(api.getTrackerRuns).mockResolvedValue({ runs: [{ id: 'background', state: 'landed', kind: 'tracker-update', scene_identity: 'scene-one', attempt_id: null, next_index: 0 }] });
+  await screen.findByRole('region', { name: 'Stage: Saltmarch' }, { timeout: 2500 });
+  expect(screen.getByText('Second.')).toBeInTheDocument();
+  expect(api.refreshVNExpressions).not.toHaveBeenCalled();
 });

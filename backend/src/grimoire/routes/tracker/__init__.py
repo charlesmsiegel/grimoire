@@ -42,6 +42,7 @@ from ..common import (
     run_error,
 )
 from ..models import CampaignTracker, TrackerEdit, TrackerLayer
+from . import _expression_refresh as _expression_refresh
 
 # Explicit compatibility aliases retain the original binding and star surface.
 from . import _router as _router

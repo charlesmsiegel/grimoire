@@ -16,6 +16,35 @@ test('paces long paragraphs by sentence and keeps two sentences together', () =>
     .toEqual(['Alone.', 'One. Two.', 'First.', 'Second!', 'Third?']);
 });
 
+test.each([['"', '"'], ['“', '”']])('keeps %s dialogue highlighted across sentence pages', (open, close) => {
+  const { steps } = readingSteps(`${open}First. Second. Third.${close} Plain narration.`, 'a');
+  const view = render(<ReadingStepContent step={steps[1]} />);
+  expect(screen.getByText('Second.').closest('.quoted')).not.toBeNull();
+  view.rerender(<ReadingStepContent step={steps[2]} />);
+  expect(screen.getByText(`Third.${close}`).closest('.quoted')).not.toBeNull();
+  view.rerender(<ReadingStepContent step={steps[3]} />);
+  expect(view.container.querySelector('.quoted')).toBeNull();
+});
+
+test('closing dialogue inside emphasis leaves following narration plain', () => {
+  const { steps } = readingSteps('"One **two"** plain. Third. Fourth.', 'a');
+  const view = render(<ReadingStepContent step={steps[0]} />);
+  expect(screen.getByText('two"').closest('strong')).not.toBeNull();
+  expect(screen.getByText('two"').closest('.quoted')).not.toBeNull();
+  expect(view.container.querySelector('p')?.lastChild?.textContent).toBe(' plain. ');
+  expect(view.container.querySelector('p')?.lastChild?.nodeType).toBe(Node.TEXT_NODE);
+});
+
+test('quote state resets at paragraphs and ignores literal quote marks in code and comments', () => {
+  const { steps } = readingSteps('"Read [the map](/map) and `a"b` <!-- " --> now.\n\nPlain next paragraph.', 'a');
+  const view = render(<ReadingStepContent step={steps[0]} />);
+  expect(screen.getByRole('link', { name: 'the map' })).toHaveAttribute('href', '/map');
+  expect(screen.getByText('a"b').tagName).toBe('CODE');
+  expect(screen.getByText('now.').closest('.quoted')).not.toBeNull();
+  view.rerender(<ReadingStepContent step={steps[1]} />);
+  expect(view.container.querySelector('.quoted')).toBeNull();
+});
+
 test('keeps emphasis and resolved links intact across sentence boundaries', () => {
   const { steps } = readingSteps('**First. Second. Third.** Read [the map][map].\n\n[map]: /map', 'a');
   const view = render(<ReadingStepContent step={steps[1]} />);

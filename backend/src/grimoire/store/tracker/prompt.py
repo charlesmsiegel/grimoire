@@ -14,6 +14,7 @@ from ... import prompts
 from .. import cards, characters, overlay, pcs, playstate
 from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
+from . import expression_fields
 from . import fields as field_defs
 
 _UNREADABLE = (characters.CharacterNotFound, characters.VersionNotFound,
@@ -120,7 +121,7 @@ def build_messages(fields: list[dict], prior: dict, roster: dict[str, str],
                    context_posts: list[dict], post: dict) -> list[dict]:
     """The system/user pair for one update. `post` and `context_posts` items are
     `{"speaker", "content"}`; switched-off fields are not shown."""
-    active = field_defs.active(fields)
+    active = expression_fields.narrative_fields(field_defs.active(fields))
     shown = [{"key": f["key"], "label": _label(f), "type": f["type"], "aware": f.get("aware"),
               "options": f.get("options") or [], "hint": f.get("hint", "")}
              for f in active]
@@ -130,3 +131,10 @@ def build_messages(fields: list[dict], prior: dict, roster: dict[str, str],
                 "tracker/update_user.j2", fields=shown,
                 characters=_characters(active, prior, roster, present, new_refs),
                 newcomers=newcomers, context_posts=context_posts, post=post)}]
+
+
+def expression_context(ref: str, name: str, public: dict, posts: list[dict],
+                       post: dict, outfit: dict | None = None) -> str:
+    """Render one actor's public evidence for either conditioned decision stage."""
+    return prompts.render("tracker/expression_context.j2", ref=ref, name=name,
+                          public=public, posts=posts, post=post, outfit=outfit)

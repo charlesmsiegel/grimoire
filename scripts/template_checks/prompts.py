@@ -12,6 +12,7 @@ from grimoire.store import (
     taglines,
     voice_anchors,
 )
+from grimoire.store.tracker import prompt as tracker_prompt
 
 from .harness import REPORT, check, check_messages, render, require_carried
 
@@ -222,5 +223,14 @@ def check_scene_break() -> None:
     require_carried("scene break", SCENE_BREAK_CARRIED)
 
 
+def check_expression_context() -> None:
+    for outfit in (None, {"id": "armor", "label": "Armor", "clothing_aliases": ["coat"]}):
+        data = {"ref": "characters:mara", "name": "Mara", "public": {"clothing": "coat"},
+                "posts": [{"speaker": "You", "content": "The door opens."}],
+                "post": {"speaker": "Mara", "content": "Ready."}, "outfit": outfit}
+        check("expression decision context", render("tracker/expression_context.j2", **data),
+              tracker_prompt.expression_context(**data))
+
+
 CHECKS = (check_plaintext_and_taglines, check_scenario, check_dossiers, check_voice_anchors,
-          check_rolling_summary, check_scene_break)
+          check_rolling_summary, check_scene_break, check_expression_context)

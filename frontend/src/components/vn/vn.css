@@ -78,7 +78,10 @@
 .vn-dialogue-text { min-height: 5.5rem; max-height: 27dvh; overflow: auto; padding: .55rem 0 .8rem; font-size: clamp(1rem, 1.4vw, 1.2rem); line-height: 1.55; overflow-wrap: anywhere; }
 .vn-dialogue-text p { margin: .25rem 0; }
 .vn-dialogue-text a { color: #5f4315; text-decoration: underline; }
-.vn-dialogue-text .quoted { color: inherit; }
+/* The dialogue panel is always pale, independent of the surrounding theme.
+   Give speech its own ink rather than inheriting narration or a dark-theme accent. */
+.vn-dialogue-text .quoted { color: #74401d; font-weight: 500; }
+.vn-dialogue-text strong .quoted { font-weight: inherit; }
 .vn-dialogue-text pre { max-width: 100%; overflow: auto; }
 .vn-toolbar { display: grid; grid-template-columns: 1fr auto; gap: .3rem .7rem; padding: .4rem .75rem .65rem; border-top: 1px solid #71695330; }
 .vn-navigation, .vn-options { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem; }

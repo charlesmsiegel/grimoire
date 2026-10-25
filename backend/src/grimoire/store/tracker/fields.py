@@ -35,7 +35,7 @@ from .. import atomic, locks
 from ..campaigns import read as campaigns_read
 from ..scenes import identity as scenes_identity
 from ..worlds import paths as worlds_paths
-from . import paths
+from . import expression_fields, paths
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +69,7 @@ DEFAULT_FIELDS = (
    "hint": "Something on them or about them that others do not know."},
   {"key": "attention", "label": "Attention", "type": "text", "aware": "present",
    "hint": "Who or what they are focused on right now."},
+    *expression_fields.DEFINITIONS,
 )
 
 TYPES = ("text", "list", "enum")
@@ -86,6 +87,8 @@ class FieldLayerError(ValueError):
 # --- validation ---------------------------------------------------------------
 
 def _check_key(key) -> str:
+    if isinstance(key, str) and key in expression_fields.KEYS:
+        return key
     if not isinstance(key, str) or not _KEY.match(key):
         raise FieldLayerError(
             f"field key {key!r} must be lowercase letters, digits and underscores, "
@@ -179,6 +182,8 @@ def _validate_change(raw_change, existing: dict, *, scene: bool) -> dict:
     change: dict = {}
     for key, props in raw_change.items():
         _check_key(key)
+        if key in expression_fields.KEYS:
+            raise FieldLayerError(f"field {key!r} is decision-owned and cannot be redefined")
         if not isinstance(props, dict):
             raise FieldLayerError(f"field {key!r}: a change must be an object")
         if "key" in props:
@@ -273,7 +278,8 @@ def active(fields: list[dict]) -> list[dict]:
 
 def digest(fields: list[dict]) -> str:
     """A short fingerprint of a field set, to tell whether it moved."""
-    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(json.dumps(expression_fields.narrative_fields(fields),
+                                    sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
 # --- reading ------------------------------------------------------------------

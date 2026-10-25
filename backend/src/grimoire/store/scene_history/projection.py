@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from .. import locks, responses
 from ..scenes import identity, read
-from ..tracker import fields, provenance, walk
+from ..tracker import expression_fields, fields, provenance, walk
+from ..tracker import records as tracker_records
 from . import records
 from .contracts import ActorAtPost, HistoricalPresentation, VNCursor
 
@@ -40,13 +41,34 @@ def at_post(cid: str, sid: str, post_id: str) -> HistoricalPresentation:
         source = records.checkpoint(cid, ident, messages[source_at].get("scene_state_token")) if source_at is not None else None
         versions = {a["ref"]: a["version_id"] for a in (source or {}).get("actors", [])}
         public = {f["key"] for f in fields.active(fields.effective(cid, sid)) if f.get("aware") == "present"}
+        # Narrative state may carry forward, but a sprite decision belongs only
+        # to its owning tracked post (all response parts share that owner).
+        keys, owners = walk._scan(messages, responses.variants_by_response(cid, sid))
+        own_key = owners.get(at)
+        own_at = next((i for i, key in keys if key == own_key), None)
+        own_body = tracker_records.read_snapshot(cid, ident, own_key) if own_key is not None and own_key in proven else None
+        selection = (own_body or {}).get("expressions")
+        selected: dict = {}
+        selection_versions: dict = {}
+        if (isinstance(selection, dict) and own_at is not None
+                and selection.get("scene_identity") == ident and selection.get("key") == own_key
+                and selection.get("post_id") == messages[own_at].get("post_id")
+                and isinstance(selection.get("versions"), dict)
+                and public >= expression_fields.KEYS):
+            selected = own_body["snapshot"] if own_body is not None else {}
+            selection_versions = selection["versions"]
         actors = []
         for actor in checkpoint.get("actors", []):
             state = snapshot.get(actor["ref"], {})
             values = (state.get("fields", {}) if state.get("present")
                       and versions.get(actor["ref"]) == actor["version_id"] else {})
             mood = _visible(values, public, "visible_mood")
+            chosen = selected.get(actor["ref"], {})
+            chosen_values = (chosen.get("fields", {}) if chosen.get("present")
+                             and selection_versions.get(actor["ref"]) == actor["version_id"] else {})
             actors.append(ActorAtPost(actor["ref"], actor["version_id"],
                                      mood if mood in fields.VISIBLE_MOODS else None,
-                                     _visible(values, public, "clothing")))
+                                     _visible(values, public, "clothing"),
+                                     _visible(chosen_values, public, "expression-outfit"),
+                                     _visible(chosen_values, public, "expression-mood")))
         return HistoricalPresentation(cursor, tuple(actors), checkpoint.get("location_id"), speaker)

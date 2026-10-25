@@ -339,6 +339,12 @@ def _decide_prompts() -> dict[str, tuple[str, str]]:
 #: Their route tests script their own replies, so a cassette entry for them
 #: would be one nothing reads.
 NOT_IN_CASSETTE = {
+    "tracker-expression-outfit": ("campaign_flow has no sprite collections; "
+                                   "test_expression_selection.py and test_expression_refresh.py "
+                                   "drive outfit selection with scripted decide replies"),
+    "tracker-expression-mood": ("campaign_flow has no sprite collections; "
+                                 "test_expression_selection.py and test_expression_refresh.py "
+                                 "drive mood selection with scripted decide replies"),
     "scene-break": ("the play loop's follow-up, which `test_scene_break_routes.py` and "
                     "`test_turn_follow_ups.py` drive with scripted decide replies"),
     "response-selector": ("the next-speaker pick in group play, which "

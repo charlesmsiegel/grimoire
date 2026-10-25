@@ -3,6 +3,7 @@
 import { notifyShell } from "../notify";
 import { entityBase } from "../paths";
 import { postZip, request } from "../transport";
+import type { RunHandle } from "../stream";
 import type { CampaignModule, CampaignTrackerSetting, EntityScope, GroupState,
   ModuleContentEntry, ModuleDetail, ModuleEditResult, ModuleRenameKind, ModuleSummary, Sheet,
   SheetBulkResult, SheetCoverage, SheetExpected, SheetRoster, TrackerEdits, TrackerLayer,
@@ -140,6 +141,10 @@ export const mechanicsApi = {
         : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`)
       .then(notifyShell),
   // --- the scene state tracker ---------------------------------------------
+  getTrackerRuns: (cid: string, sid: string) =>
+    request<{ runs: RunHandle[] }>("GET", `/api/campaigns/${cid}/scenes/${sid}/tracker/runs`, undefined, { fresh: true }),
+  refreshTrackerExpressions: (cid: string, sid: string, key: string) =>
+    request<{ run: RunHandle }>("POST", `/api/campaigns/${cid}/scenes/${sid}/tracker/records/${encodeURIComponent(key)}/expressions`),
   /** Polled while an update is pending, so never the shared read. */
   getTracker: (cid: string, sid: string) =>
     request<TrackerSummary>("GET", `/api/campaigns/${cid}/scenes/${sid}/tracker`,
