@@ -2,6 +2,8 @@
 
 **Status: OPEN — no design selected.** Research note for the permanent, unmerged `roadmapping` branch. This is neither a spec nor permission to refactor.
 
+**Code-location update (2026-10-26):** the October 15 code references below describe the correct conceptual baseline but some former monolithic `.py` files (especially `store/overlay.py`, `store/sync.py`, inference/route modules) were converted into cohesive **packages** on `main`. Inspect their current `__init__.py` facades and leaf owners before designing a new reader/writer contract. See the [backend package theory](../engineering/backend-package-theory.md) and [validation](../engineering/backend-package-validation.md). **No World View / dependency-DAG option was selected by that refactor.** This research decision remains open.
+
 ## Why this needs a deliberate decision
 
 Grimoire's 0.2.x architecture already has meaningful world/campaign inheritance and mechanics/content integration. Adding general composition potentially changes entity identity, resolver semantics, synchronization, provenance, copy-on-write, asset lookup, and prompt activation. Repo partitioning (mechanics, worlds, content packs, private/unofficial, personal data) is a *distribution decision*, not by itself a model for runtime composition.
