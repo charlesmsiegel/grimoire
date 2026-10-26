@@ -183,5 +183,8 @@ None removes background art. Save stores those choices with the library, separat
 from narrative facts. Reset to automatic clears this post's overrides. If another
 save wins first, a stale-save error preserves your draft; refresh before retrying.
 Only actors and location art supported by that post's history are offered.
-Missing history leaves a neutral stage; missing portraits fall back to an avatar
-and then initials. No authored art is required to read a scene.
+Imported scenes without per-post history use their recorded scene cast and configured
+scene location as an approximate stage. The reader labels these fallbacks; it does
+not add historical observations. Missing history for recorded posts leaves a neutral
+stage. Missing portraits fall back to an avatar and then initials. No authored art
+is required to read a scene.

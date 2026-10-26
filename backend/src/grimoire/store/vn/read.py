@@ -2,7 +2,8 @@
 
 Recorded posts use only projection.at_post for story state. The tokenless legacy
 prefix can display scene membership at locked versions, clearly marked as an
-approximation, without inventing historical mood, clothing or location.
+approximation. Their configured scene location is a display fallback only, never
+a recorded historical observation.
 """
 
 from urllib.parse import quote
@@ -17,6 +18,7 @@ from ..regex import view
 from ..scene_history import projection, records
 from ..scene_history.contracts import ActorAtPost
 from ..scenes import identity, post_identity
+from ..scenes import read as scene_read
 from . import overrides
 
 
@@ -35,6 +37,22 @@ def _art(cid, kind, actor, version, notices):
     except (targets.ArtTargetNotFoundError, ValueError, OSError):
         notices.append("Some historical art is unavailable; using a neutral stage.")
         return []
+
+
+def _avatar_url(cid, kind, actor, version, notices):
+    # Playback needs one avatar token, not the gallery editor's captions and
+    # world-original shelf. Validate the historical version before consulting
+    # memoized avatar facts, which may outlive the version's card.
+    try:
+        address = targets.resolve("campaign", cid, kind, actor, version)
+        token = overlay.avatar_v(cid, actor, address.version, kind, v=address.view)
+    except (targets.ArtTargetNotFoundError, ValueError, OSError):
+        notices.append("Some historical art is unavailable; using a neutral stage.")
+        return None
+    if token is None:
+        return None
+    return (f"/api/campaigns/{quote(cid, safe='')}/{kind}/{quote(actor, safe='')}/versions/"
+            f"{quote(address.version, safe='')}/images/avatar?v={quote(token, safe='')}")
 
 
 def _name(cid, kind, actor, version):
@@ -98,9 +116,9 @@ def _actor(cid, actor, selected, speaker, notices):
                    "presentation": outfits[choice.outfit_id]["presentation"]}
                   for choice in choices if choice.image_id is not None]
     candidates = list({row["url"]: row for row in candidates}.values())
-    avatar = next((row for row in _art(cid, kind, aid, actor.version_id, notices) if row["name"] == "avatar"), None)
+    avatar = _avatar_url(cid, kind, aid, actor.version_id, notices)
     if avatar:
-        candidates.append({"url": avatar["url"], "presentation": contracts.PRESENTATION})
+        candidates.append({"url": avatar, "presentation": contracts.PRESENTATION})
     return {"ref": actor.ref, "version_id": actor.version_id, "name": _name(cid, kind, aid, actor.version_id),
             "speaking": actor.ref == speaker, "automatic_outfit": automatic_outfit, "hidden": selected.get("hidden", False), "candidates": candidates,
             "outfits": [{"id": oid, "label": row["label"], "expressions": sorted(row["expressions"])}
@@ -121,7 +139,8 @@ def post(cid, sid, post_id):
         stage_actors = historic.actors
         # Imports predate per-post observations. Display their scene cast, but
         # never fill a missing modern checkpoint or a gap after recorded history.
-        if not any("scene_state_token" in m for m in current["messages"][:at + 1]):
+        legacy = not any("scene_state_token" in m for m in current["messages"][:at + 1])
+        if legacy:
             stage_actors = tuple(ActorAtPost(ref.replace("/", ":", 1), row["version"])
                                  for ref, row in sorted(appearances.record(cid).items())
                                  if sid in row.get("scenes", []))
@@ -135,11 +154,15 @@ def post(cid, sid, post_id):
             for actor in actors:
                 actor["speaking"] = actor["name"] == message.get("speaker")
         backgrounds, location_name = [], None
-        if historic.location_id:
+        legacy_locations = scene_read.histories(current["meta"])["locations"] if legacy else []
+        location_id = historic.location_id or next(reversed(legacy_locations), None)
+        if legacy_locations and not historic.location_id:
+            notices.append("Per-post location was not recorded; using the configured scene location as an approximate backdrop.")
+        if location_id:
             try:
-                location_name = overlay.read_entity(cid, "locations", historic.location_id)["meta"]["name"]
+                location_name = overlay.read_entity(cid, "locations", location_id)["meta"]["name"]
                 backgrounds = [{"name": r["name"], "url": r["url"]}
-                               for r in _art(cid, "locations", historic.location_id, None, notices)]
+                               for r in _art(cid, "locations", location_id, None, notices)]
             except (entities.EntityNotFound, ValueError, OSError, LookupError):
                 notices.append("The historical location is unavailable; using a neutral stage.")
         background = saved["background"]

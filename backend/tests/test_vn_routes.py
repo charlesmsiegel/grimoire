@@ -1,6 +1,7 @@
 """VN playback consumes public post history, never today's cast or private fields."""
 
 import json
+import shutil
 
 import pytest
 
@@ -274,3 +275,114 @@ def test_legacy_prefix_does_not_use_later_public_mood(vn):
     stages = [client.get(f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{p['post_id']}").json() for p in posts]
     assert "/armor/neutral/image" in stages[0]["actors"][0]["candidates"][0]["url"]
     assert "/armor/joy/image" in stages[1]["actors"][0]["candidates"][0]["url"]
+
+
+
+def test_legacy_scene_uses_configured_location_as_approximate_backdrop(vn):
+    client, cid, _, _, _, _ = vn
+    root = store.campaigns.campaign_root(cid)
+    lid = store.entities.create_entity(root, "locations", "Harbour", "")
+    assets.put_image(root, lid, "default", "avatar", png(), "png", "locations")
+    sid = store.scenes.create_scene(cid, "Legacy backdrop")
+    store.scenes.set_location(cid, sid, lid)
+    store.scenes.append_messages(cid, sid, [{"role": "user", "content": "Old arrival."}])
+    post = store.scenes.read_scene(cid, sid)["messages"][0]["post_id"]
+    endpoint = f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{post}"
+    original = store.scenes.paths._scene_path(cid, sid).read_bytes()
+    stage = client.get(endpoint).json()
+    assert stage["location_name"] == "Harbour"
+    assert stage["background_url"]
+    assert client.get(stage["background_url"]).content == png()
+    assert any("scene location" in notice.lower() for notice in stage["notices"])
+    assert store.scenes.paths._scene_path(cid, sid).read_bytes() == original
+    hidden = client.put(endpoint + "/presentation", json={
+        "scene_identity": stage["scene_identity"], "expected_revision": stage["revision"],
+        "actors": {}, "background": "none"})
+    assert hidden.status_code == 200
+    assert hidden.json()["background_url"] is None
+
+
+@pytest.mark.parametrize("history", ["recorded-null", "null-token", "missing-checkpoint", "after-recorded"])
+def test_modern_unknown_location_does_not_use_scene_backdrop(vn, history):
+    client, cid, sid, _, _, post = vn
+    first = store.scenes.read_scene(cid, sid)["messages"][0]
+    if history == "null-token":
+        path = store.scenes.paths._scene_path(cid, sid)
+        text = atomic.read_text(path)
+        marker = '"scene_state_token": ' + json.dumps(first["scene_state_token"])
+        assert marker in text
+        atomic.write_text(path, text.replace(marker, '"scene_state_token": null', 1))
+    elif history == "missing-checkpoint":
+        ident = identity.scene_identity(cid, sid)
+        (records.directory(cid, ident) / (first["scene_state_token"] + ".json")).unlink()
+    elif history == "after-recorded":
+        store.scenes.append_messages(cid, sid, [{"role": "user", "content": "Unrecorded gap."}])
+        post = store.scenes.read_scene(cid, sid)["messages"][-1]["post_id"]
+    root = store.campaigns.campaign_root(cid)
+    lid = store.entities.create_entity(root, "locations", "Harbour", "")
+    assets.put_image(root, lid, "default", "avatar", png(), "png", "locations")
+    store.scenes.set_location(cid, sid, lid)
+    stage = client.get(f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{post}").json()
+    assert stage["backgrounds"] == []
+    assert stage["background_url"] is None
+
+
+def _stage_actor(vn, kind):
+    client, cid, sid, aid, vid, post = vn
+    root = store.campaigns.world_root_of(cid)
+    if kind == "pcs":
+        aid, vid = store.pcs.create_pc(root, "Winifred", [])
+        store.appearances.appear(cid, sid, kind, aid, vid, "player", narrate=False)
+        store.scenes.append_message(cid, sid, "user", "Look around.")
+        post = store.scenes.read_scene(cid, sid)["messages"][-1]["post_id"]
+    return client, cid, sid, aid, vid, post
+
+
+@pytest.mark.parametrize("kind", ["characters", "pcs"])
+def test_vn_avatar_caption_work_does_not_grow_with_gallery(vn, monkeypatch, kind):
+    client, cid, sid, aid, vid, post = _stage_actor(vn, kind)
+    wroot = store.campaigns.world_root_of(cid)
+    croot = store.campaigns.campaign_root(cid)
+    assets.put_image(wroot, aid, vid, "avatar", png(), "png", kind)
+    own = png((200, 100, 50, 255))
+    assets.put_image(croot, aid, vid, "avatar", own, "png", kind)
+    snapshot = store.image_descriptions.description_state_in
+    reads = []
+
+    def counted(*args, **kwargs):
+        reads.append(args[1])
+        return snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(store.image_descriptions, "description_state_in", counted)
+    endpoint = f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{post}"
+    assert client.get(endpoint).status_code == 200
+    baseline_reads = len(reads)
+    for number in range(8):
+        assets.put_image(wroot, aid, vid, f"gallery_{number}", png(), "png", kind)
+    reads.clear()
+    stage = client.get(endpoint).json()
+    actor = next(a for a in stage["actors"] if a["ref"] == f"{kind}:{aid}")
+    avatar = next(row for row in actor["candidates"] if "/images/avatar?" in row["url"])
+    assert client.get(avatar["url"]).content == own
+    assert len(reads) <= baseline_reads + 1
+
+
+@pytest.mark.parametrize("kind", ["characters", "pcs"])
+@pytest.mark.parametrize("state", ["tombstoned", "detached", "deleted-version"])
+def test_vn_avatar_fallback_respects_effective_actor_identity(vn, kind, state):
+    client, cid, sid, aid, vid, post = _stage_actor(vn, kind)
+    wroot = store.campaigns.world_root_of(cid)
+    croot = store.campaigns.campaign_root(cid)
+    assets.put_image(wroot, aid, vid, "avatar", png(), "png", kind)
+    if state == "tombstoned":
+        store.overlay.delete_image(cid, aid, vid, "avatar", kind)
+    elif state == "detached":
+        shutil.copytree(wroot / kind / aid, croot / kind / aid, dirs_exist_ok=True)
+        assets.delete_image(croot, aid, vid, "avatar", kind)
+        atomic.write_text(croot / "detached.json", json.dumps([f"{kind}/{aid}"]))
+    else:
+        actors = store.characters if kind == "characters" else store.pcs
+        actors.require_version(store.overlay.actor_root(cid, kind, aid), aid, vid).unlink()
+    stage = client.get(f"/api/campaigns/{cid}/scenes/{sid}/vn/posts/{post}").json()
+    actor = next(a for a in stage["actors"] if a["ref"] == f"{kind}:{aid}")
+    assert not any("/images/avatar?" in row["url"] for row in actor["candidates"])
