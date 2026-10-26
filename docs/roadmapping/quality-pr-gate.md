@@ -1,6 +1,8 @@
 # Quality PR gate — B+ floor after remediation
 
 **Status:** agreed direction / proposed implementation policy; **NOT CURRENTLY ENFORCED**.
+
+**Calibration/status snapshot (2026-10-26):** the `code-overview` map on `main` now names **12 units**. The checked-in **October 21** Health grades are Store B+ 87.2, API B+ 89.2, Providers/Prompts B+ 87.1, Backend Tests A− 92.1, Decisions A 95.9, Tool Calls A 93.2, Frontend B− 82.2, Evals B 84.0, Inference B 85.0 and LLM B 84.8; Scripts/Android ungraded. These are **dated**, before the later VN changes. There is **no hard B+ CI job currently enabled**. Do not treat graded Health alone as a Theory pass or use an unchecked generic code-doctor scan against unsupported languages. See [Execution Roadmap](execution-roadmap.md).
 **Date:** 2026-10-15.
 **Applies to:** Grimoire pull requests, after code remediation and skill calibration.
 **Branch:** this remains on the permanently unmerged `roadmapping` planning branch. Implementation requires a separately reviewed spec/PR from `main`.
