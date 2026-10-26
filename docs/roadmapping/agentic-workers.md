@@ -1,6 +1,8 @@
 # Agentic Workers — cross-cutting architecture
 
 **Status:** long-term architectural capability / design direction, not an approved implementation spec.
+
+**Implementation status update (2026-10-26):** The owner confirms **the bounded-investigation roadmap (12) has landed**, along with earlier 01g tool-calling infrastructure and 01–12 foundations. The October 15 partial-implementation snapshot below is historical, not a remaining ticket. The long-term sprint here is **broader, optional multi-step in-app authoring/world-maintenance workers**, requiring guarded proposals and reliable state writes. No requirement to run agents for routine narration. See [Execution Roadmap](execution-roadmap.md) and [World Maintenance](world-maintenance.md).
 **Date:** 2026-10-15
 
 ## Product intent
@@ -22,7 +24,7 @@ Agentic workers belong alongside cheap decision models and single-shot narrative
 ## Existing code foundation (main, inspected 2026-10-15)
 
 - 01g Tool Calling is marked landed in `ROADMAP-CHECKLIST.md`: provider-neutral tool loops (`inference.run_tools`), cost/output/time/tool budgets, metering, and Decision-as-tool.
-- Roadmap 12 Bounded Agentic Investigation has code for E2 continuity investigation, E3 history questions, toolset and budget/trace; it is *not fully landed*, RP escalation E1 remains unimplemented, and its switches ship off.
+- **Historical October 15 snapshot only:** roadmap 12 Bounded Agentic Investigation then had partial E2/E3 toolset/budget/trace code and deferred E1. This is **superseded** by the owner's confirmation that roadmap 12 has since landed. Verify current route/feature switches when defining later agentic-workflow work.
 - Existing external `.claude/skills/world-card-integration/`, `populate-world-content/`, and `grimoire-store-editing/` offer mature behavioral examples for world curation. Do not rewrite these as an unrelated second system without evaluating reuse.
 - Existing `routes/investigation.py` uses `store/investigation/` for a read-oriented, traced toolset and independently validated outcome. This is a useful **pilot**, not necessarily a general-purpose authoring-worker contract.
 
