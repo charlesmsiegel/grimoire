@@ -5,6 +5,12 @@
 **Repository:** `charlesmsiegel/grimoire`.
 **Do not merge the `roadmapping` branch.** Implemented work goes through its own PRs from current `main`.
 
+## Final status as of 2026-10-26
+
+This document is an **audit trail of decisions from October 15**, not a queue of issues to execute today. GitHub currently shows **zero open issues and zero open PRs**. The four formerly remaining independently actionable issues (#62, #128, #208, #437) were closed as completed on October 16. The ten then-in-review PRs were no longer open. The 19 retired trackers' unimplemented or optional goals remain traceable through [Inventory](inventory.md), [Deferred Systems](deferred-systems.md), [Discretionary Backlog](backlog-discretionary.md), [Archived Issue Text](archived-issue-text.md) and the [Sprint Register](sprint-register.md).
+
+The team moved into technical-debt cleanup and has already landed significant modularization and lint/test work. **Do not restart the pre-cleanup backlog phase** when executing the [current roadmap](execution-roadmap.md).
+
 ## Decision
 
 **Original plan:** First land as many practical, relatively independent existing backlog issues as possible, explicitly excluding inventory- and mechanics-related work. **Updated 2026-10-15:** A *simple, mechanics-free Inventory MVP* is now a near-term feature candidate because quantity tracking is immediately useful in monster-catching RP; full inventory/mechanics integration remains deferred. Close issues once their implementations are actually complete and verified. Record the completed capabilities and original product goals in the thematic roadmapping documents without accidentally turning completed work back into new to-dos.
@@ -34,7 +40,7 @@ The following **active product goals** were analyzed and documented. **Twelve tr
 
 ---
 
-## Current immediate implementation backlog
+## Historical immediate implementation backlog — October 15 snapshot
 
 **Keep OPEN until implementation and review:** #62 (sparse emergent NPC capsule/tags), #128 (prompt inclusion reasons), #208 (macOS launcher icon), #437 (Images library placement and entity browse UX). The active ten PRs and issues they reference are also to stay open until landing and verification. The goal is eventually **zero open issues before the tech-debt sprint**, not to call undone features completed.
 
