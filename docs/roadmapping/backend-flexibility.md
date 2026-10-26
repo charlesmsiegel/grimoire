@@ -2,6 +2,8 @@
 
 **Status:** Proposed ordering and engineering research agenda, **not** approved specs or release commitments.
 
+**Update 2026-10-26:** The earlier implementation-roadmap specs **01–12 landed** (owner-confirmed); the `ROADMAP-CHECKLIST.md` file was removed from `main`. **Mechanics II (13) is deferred to the main mechanics-improvement sprint**, not a pre-cleanup task. Backlog consolidation and first-wave modularization are complete. Some old file paths in the October 15 reconnaissance below refer to monoliths since converted into real packages (`store/overlay/`, `store/sync/`, `inference/`, `tool_calls/`). Check current owner modules and [validation](../engineering/backend-package-validation.md) when preparing a spec; the **architectural decisions** remain open. See [Execution Roadmap](execution-roadmap.md).
+
 **Prerequisite sequencing preference:** land selected stable non-inventory/non-mechanics backlog PRs first, then reconcile their delivered goals and baseline the code for the cleanup wave. Avoid landing architecture-coupled backlog work that locks in the world-identity or mechanic design before the intended spikes. See [backlog-consolidation.md](backlog-consolidation.md).
 **Date:** 2026-10-15.
 **Branch rule:** `roadmapping` is never merged; implementation specs and PRs branch from current `main`.
@@ -18,7 +20,7 @@ Grimoire's file-based Markdown/frontmatter and existing editable JSON records re
 
 Code / repository review on main:
 
-- `store/routing.py`, `inference.py`, `tool_calls.py`: task-based inference, structured decisions, sampling, tool loops, budgets and cost attribution. The current `ROADMAP-CHECKLIST.md` marks 01/01a–01i/02 and 01g tool calling landed.
+- `store/routing.py`, `inference.py`, `tool_calls.py`: task-based inference, structured decisions, sampling, tool loops, budgets and cost attribution. The **historical, now-retired** `ROADMAP-CHECKLIST.md` marked 01/01a–01i/02 and 01g tool calling landed; by October 26 the owner confirmed 01–12 had landed.
 - `routes/investigation.py` and `store/investigation/`: early bounded multi-step investigators; 12 is **not** fully landed and read/write capabilities must remain carefully separated.
 - `store/overlay.py`, `store/sync.py`: effective campaign-over-world copy-on-write, tombstones, detachments, promotion, and incoming conflict review. The code assumes *one physical world root* and `kind/id` identities within that view.
 - `store/modules/pack.py`, `binding.py`, `sheets/`, `checks.py`, `dice.py`: declarative mechanic packs, optional content templates, world default and campaign override of one mechanics system (including `none`).
