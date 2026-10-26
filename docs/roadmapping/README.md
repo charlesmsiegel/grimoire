@@ -1,49 +1,67 @@
-# Roadmapping workspace
+# Grimoire — future sprint proposals
 
-**DO NOT MERGE THIS BRANCH.** `roadmapping` is a permanent planning workspace, not an implementation branch. Ideas are promoted into **separate reviewed specs and implementation branches based on current `main`**. Never open a PR to merge `roadmapping`.
+This directory contains **what we might build or improve next**, not a changelog, retired issue queue or implementation checklist. Each linked file is an independently understandable **pre-spec sprint proposal**: intended outcome, work, a proving scenario, dependencies and **Open questions at the bottom**.
 
-## Start here — October 26, 2026 reconciliation
+**Start from the player's or developer's outcome, not from a version number.** Select a proposal, decide its open questions, then create a reviewed spec and implementation branch from current main. The planning-only roadmapping branch is **never merged**.
 
-- **[Execution roadmap](execution-roadmap.md)** — current status, enabling work, practical sequence, acceptance scenarios and definition of ready.
-- **[Sprint register](sprint-register.md)** — **all 104 named workstreams/shipped baselines** from the thematic inventory, with source links and deliberate deferrals. Check this before starting a new sprint.
-- **[Sprints](sprints.md)** — the thirteen thematic blocks, not a delivery checklist or fixed schedule.
-- **[Releases](releases.md)** — provisional 0.2.x / 0.3.x / 1.0 player outcomes, not release promises.
+## 1. Code quality and foundations
 
-The earlier GitHub issue backlog is cleared. Previously deferred features have **not** been implemented simply because the issues closed. The historic implementation roadmaps 01–12 are owner-confirmed landed; **Mechanics II is deliberately deferred to the main mechanics-improvement sprint**. Production Python package modularization and the VN/expressions core have since landed. The next engineering phase is **remaining technical-debt simplification, valid score baselines and skill/gate calibration**, not a rerun of those delivered projects.
+| Sprint proposal | What success means |
+|---|---|
+| [Engineering Health](sprints/engineering-health.md) | Simpler, safer code, fewer verified defects, stronger tests/types and clearer boundaries |
+| [Skill Calibration](sprints/skill-calibration.md) | Reliable coding-skills detectors and Naur theory judgments without avoidable false positives |
+| [Quality Gate](sprints/quality-gate.md) | After calibration, **B+ (87/100) per applicable graded package/report** becomes a dependable merge requirement |
+| [World Resolution & Identity](sprints/world-resolution.md) | One source-aware effective-world interface, stable identity and migration-safe provenance |
+| [Content Composition & Worldbuilding](sprints/content-composition.md) | Worlds reuse genuine shared catalogs and optional add-ons without duplicating or flooding prompts |
+| [Mechanics & Rulesets](sprints/mechanics.md) | Real D&D, WoD, Ars Magica and PbtA semantics, including deferred **Mechanics II** actions/effects |
+| [State Transactions](sprints/state-transactions.md) | Validated, recoverable, exactly-once committed game effects and file-backed state |
 
-## Product direction
+These are **not one strict dependency chain**: the World View and ruleset-contract experiments can run beside engineering cleanup. Do not create an abstract platform before testing it with player-facing vertical slices.
 
-Grimoire is a **general-purpose, local-first, fiction-first roleplaying engine**. Mechanics-free casual roleplay, including consensual adult ERP, remains first-class alongside rules-driven tabletop campaigns (D&D, World of Darkness, Ars Magica, PbtA).
+## 2. Small playable improvements
 
-**Compute what can be computed; use LLMs where they add value.** Authoritative facts, rules, identity, write scopes, legality and recoverable outcomes are explicit; models interpret ambiguity, make optional bounded decisions or proposals and narrate/voice established consequences.
+| Sprint proposal | What success means |
+|---|---|
+| [Inventory](sprints/inventory.md) | In freeform RP the PC has the correct number of capture balls, potions and other resources, with manual edits and no double spending |
+| [Creature → Character](sprints/creature-to-character.md) | A goblin can become a named NPC; a captured monster immediately becomes a distinct actor inheriting species defaults |
+| [Character Development & Party](sprints/character-development.md) | Individuals grow and can join/leave parties or reserves without losing identity or distinct state |
+| [Challenges & Exploration](sprints/challenges.md) | Meaningful obstacles, multiple solutions, quests, travel and player agency with persistent outcomes |
 
-The world's authored content is independent of its ruleset; campaigns choose **one mechanics module or `none`**. Preserve Markdown/frontmatter and the current human-editable JSON as authoritative files. Derived databases, caches and indexes must remain disposable unless a concrete superior roleplay experience justifies otherwise.
+Inventory's simple counted-holdings slice need **not** wait for full mechanics or a universal content-package manager.
 
-## Player-facing feature and long-term requirement documents
+## 3. Longer-running story and world systems
 
-- [Inventory](inventory.md) — **near-term** mechanics-free quantities/holdings; later equipment, transfer, provenance, resolution and review. #167–171 retained.
-- [Creature → Character](creature-to-character.md) — one reusable creature archetype produces unique persistent individuals; immediate creation on committed monster capture, defaults inherited until overridden.
-- [Visual Novel & Expressions](visual-novel.md) — **shipped baseline** in PR #554 and October follow-ups; separate unresolved presentation candidates from already-delivered VN and outfit-expression libraries.
-- [Campaign tuning](campaign-tuning.md) — difficulty, pacing, drama vs simulation, tone, lethality, pressure, spotlight and related controls.
-- [Deferred systems](deferred-systems.md) — qualified character variants, spatial worlds, library activity, scene copying, time skips, long activities, optional replay, export refinements.
-- [Discretionary backlog](backlog-discretionary.md) — multi-PC, optional live preview, remaining auxiliary generation, HUD customization; #151 and #190 may never need implementation.
+| Sprint proposal | What success means |
+|---|---|
+| [NPC Autonomy & Societies](sprints/societies.md) | Relationships, reputations, faction goals and believable NPC behavior |
+| [World Simulation & Time](sprints/world-simulation.md) | Offscreen developments, calendars, time skips and long activities have coherent consequences |
+| [Locations & Maps](sprints/spatial-world.md) | Source-aware spatial graph, neighborhood/path queries and optional authorable maps |
+| [Narrative Design](sprints/storytelling.md) | Arcs, scenarios and consequences follow player choices without railroading |
+| [Campaign Management](sprints/campaign-management.md) | Safe scene transfer/fork, portable history, refined anonymized/POV exports |
+| [Context & Evaluation](sprints/context-evaluation.md) | Reliable memory, audience-aware retrieval, inspectable prompts and measured play quality |
+| [Generation Systems](sprints/generation.md) | Bounded decisions, consistent narration, model routing, cost control and useful auxiliary tasks |
+| [Agentic Workers](sprints/agentic-workers.md) | Optional safe multi-step investigation/authoring without making every turn an agent |
+| [World Maintenance](sprints/world-maintenance.md) | Reviewable, source-scoped multi-file edits with history, conflicts and external-editor support |
 
-## Architecture and engineering planning
+## 4. Optional and later expansion
 
-- [Fiction-first architecture](architecture.md) — decisions, narration, outcomes and inference cost tiers.
-- [Backend flexibility](backend-flexibility.md) — World Resolution, Content Identity, Mechanics Extensibility, State Transactions, Change Sets, agent runtime, and prioritized proof cases.
-- [Content architecture study](content-architecture-study.md) — **open decision**: source-aware World view, library/DAG architecture, inheritance, provenance and migration constraints.
-- [Content-composition discussion log](content-composition.md) — earlier debated alternatives; **do not** read early proposals as approved decisions.
-- [File authority](file-authority.md) — editable file-backed source of truth and evaluation of read-only projections.
-- [World maintenance](world-maintenance.md) — optional in-app world/cast/lore integrations through reviewable scoped writes, alongside external Codex/Claude agents.
-- [Agentic workers](agentic-workers.md) — bounded tool-using jobs; optional alongside cheap decision models and single-shot narration.
-- [Engineering health](engineering-health.md) — Naur Theory Building, intentional code simplification, types, tests, error handling, migration, concurrency and hygiene.
-- [Quality PR gate](quality-pr-gate.md) — after cleanup and detector calibration, a **B+ (87/100) floor per applicable graded package/report**, including independently verified theory, not repo-average grade laundering.
+| Sprint proposal | What success means |
+|---|---|
+| [Presentation & Accessibility](sprints/presentation.md) | Better scene UI, visual storytelling/VN extensions, optional HUD and usable desktop/mobile controls |
+| [Media — Image, Voice & Audio](sprints/media.md) | Optional generated art, character voices and sound without changing story authority |
+| [Campaign Tuning](sprints/campaign-tuning.md) | Real, independent difficulty, pacing, drama, tone, lethality and adaptive-play controls |
+| [Content Ecosystem](sprints/content-ecosystem.md) | Portable imports, sharing, package versioning, optional marketplace |
+| [Multi-PC & Multiplayer](sprints/multi-pc.md) | Several properly attributed PC posts per turn; networked collaboration only when justified |
+| [Procedural Generation](sprints/procedural-generation.md) | Reviewed, reusable worlds/places/encounters that respect established content |
 
-## Historical backlog and provenance — retain, don't re-implement blindly
+These topics are retained **as candidates**, not 1.0 promises. Features such as a full marketplace, networked multiplayer, historical replay and universal auxiliary-result routing may never be worth building.
 
-- [Backlog consolidation](backlog-consolidation.md) — historical two-wave issue-retirement plan, dispositions and why closures were not feature completion.
-- [Archived issue text](archived-issue-text.md) — complete original text of **19 moved issues**, with dated alternatives preserved as history.
-- [Discretionary backlog](backlog-discretionary.md) — uncommitted and optional goals to revisit only when a real player need arises.
+## Before promoting a sprint to a specification
 
-**Every candidate is preserved in the [Sprint Register](sprint-register.md).** These documents are not implementation specs. When an actual sprint is selected, verify the then-current code, recover the subsystem theory, specify invariants/compatibility/acceptance and create an independently reviewed spec/branch. Update the register after each landing, distinguishing **shipped / partial / deferred / declined** work. `roadmapping` itself remains unmerged permanently.
+- Read [Principles](principles.md) for immutable constraints: fiction-first, one rules module or none, Markdown/JSON authority, qualified identities, safe writes, modest inference cost and normal external editing.
+- Use [Capability lookup](capabilities.md) to find a workstream by its older thematic name; every future-oriented label has a sprint home.
+- Review the **Open questions at the bottom** of its sprint file. Answer significant choices or make an explicit testable research spike; don't silently settle them in code.
+- Verify current main before proposing work. A delivered foundation is not an absent feature.
+- Write concrete acceptance scenarios, compatibility/failure tests, interfaces, migration/rollback and an independent code-spec review.
+
+The directory deliberately contains no issue histories, old PR lists or stale status snapshots. Those remain available through normal Git history without cluttering pre-spec browsing.
