@@ -8,6 +8,10 @@ The purpose is to leave the GitHub issue queue containing only the work intended
 
 The full original issue bodies, including all old options, dependencies and test notes, are preserved in [archived-issue-text.md](archived-issue-text.md). Original "current state" and implementation notes may predate the current backend; any later spec must recheck `main`.
 
+## Status reconciliation — 2026-10-26
+
+This is the **historic discretionary-issue review**, not an active GitHub work queue. The four then-unlinked issues #62, #128, #208 and #437 were completed October 16; the ten PRs in review at the time are no longer open. The seven retired discretionary goals below remain **future / optional** only where unmet, and #151 and #190 may be unnecessary altogether. No closure of an optional tracker proves a shipped feature. The active planning order is in [Execution Roadmap](execution-roadmap.md) and every named sprint in [Sprint Register](sprint-register.md).
+
 ## 1. Multi-PC turn loop — #81
 
 **Original:** [#81 — Multi-PC turn loop](https://github.com/charlesmsiegel/grimoire/issues/81)
@@ -116,9 +120,9 @@ The full original issue bodies, including all old options, dependencies and test
 
 ---
 
-## Work intentionally left in the GitHub backlog
+## Historical work left in the GitHub backlog on October 15 (since completed)
 
-These four **unlinked-to-active-PR** issues should **be implemented during the backlog completion phase**, not retired to long-term planning:
+At the time these four **unlinked-to-active-PR** issues were chosen for implementation rather than deferral. **All four were later closed as completed on October 16, 2026**; preserve this table only as the original disposition, not a current to-do list:
 
 | Open issue | Work to do | Note |
 |---|---|---|
