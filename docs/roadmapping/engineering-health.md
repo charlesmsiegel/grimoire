@@ -2,6 +2,10 @@
 
 **Status:** candidate cross-cutting sprint family and priority guidance, not approved implementation specs.
 
+**Current status — 2026-10-26:** Backlog consolidation and the initial cleanup wave **have happened**. Production Python's 37 oversized packages were split and validated on `main` (see [validation](../engineering/backend-package-validation.md)); subsequent frontend API/type/component and shared test-fixture simplifications also landed. Do **not** rerun these as pending work. The immediate value now is remaining cognitive complexity, type/lint debt, semantic correctness, test fidelity and Naur's theory; then detector calibration and eventually a hard PR gate. [Execution Roadmap](execution-roadmap.md) is the living order. Historic pre-cleanup instructions below are retained as context, not a current blocking phase.
+
+**Objective baseline:** the committed 2026-10-26 `main` ratchets record **590 Ruff, 132 mypy, 280 ESLint** existing findings. The generated 2026-10-21 code-overview health scores improved dramatically over the August report, but are **not** a current post-VN or complete Theory judgment: some packages remain below B+ and Scripts/Android are ungraded. Retake a pinned full assessment before using scores as a merge gate.
+
 **Sequencing update (2026-10-15):** First land as many independent existing non-inventory, non-mechanics backlog issues as practical and close them with evidence; reconcile shipped capability and residual goals into the thematic roadmap; **then** capture the post-backlog code-quality baseline and begin concentrated cleanup. Major architectural-coupled backlog issues may need to wait. See [backlog-consolidation.md](backlog-consolidation.md).
 **Date:** 2026-10-15.
 **Working branch:** `roadmapping` stays unmerged. Individual changes go through normal specs, branches, tests and reviews based on `main`.
@@ -67,7 +71,7 @@ Reviewed against current main:
 - `lint-baselines/ruff.json` and `lint-baselines/mypy.json`, with `scripts/ratchet.py`, already prevent new findings and support gradual baseline reduction. `mypy.ini` documents a nonzero existing debt. Don't "fix" metrics by disabling rules or increasing baselines.
 - `CONTRIBUTING.md`, `CLAUDE.md`, `AGENTS.md` and AST guards already enforce module imports, storage atomicity, lock domains, copy-on-write and other invariants. Improvements should strengthen, not bypass, them.
 - The October 8 test-suite acceleration produced a *measured* major gain. `docs/superpowers/validation/2026-10-08-test-performance-report.md` reports CI critical path reduced from 58.1 to 11.5 minutes median on its measured baseline, while maintaining ~93.7% combined coverage; `2026-10-08-test-consolidation-ledger.md` records why further consolidation was not justified on that snapshot. Reprofile today's tree before proposing more.
-- `backend/src/grimoire/store/overlay.py` and `routes/campaigns.py` are large and heavily interconnected, but line count alone is **not** evidence that arbitrary file splitting improves design. Focus on narrow dependency boundaries and real cognitive load, without weakening invariants.
+- The former `store/overlay.py` and `routes/campaigns.py` monoliths were subsequently **converted to packages** with explicit compatibility and review evidence. This historical hotspot prompted useful work; don't repeat a successful physical split purely for smaller-file metrics. Evaluate the *current* owner modules and remaining cognitive coupling without weakening invariants.
 - `docs/store-guarantees.md` states known transaction and concurrency limitations. These are excellent inputs to targeted correctness/hardening sprints.
 
 Repository-provided code-health HTML reports, where present, are **triage signals**, not audited truth or replacements for profiling, call-graph analysis and code review. Avoid chasing a synthetic score.
