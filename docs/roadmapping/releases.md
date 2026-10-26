@@ -10,9 +10,15 @@ Major 0.2.0 achievements reported by the project owner:
 
 Useful shorthand: **Playable Roleplay / Narrative Orchestration**. This is not an exhaustive Git-derived changelog. Current 0.2.0 is followed by iterative fixes/tweaks, perhaps through about 0.2.20 before the next feature family.
 
+## October 26, 2026 — execution status, not a new version commitment
+
+The backlog phase has finished (**zero open issues/PRs** on the checked repository), and substantial backend/front-end modularization, code hygiene and test-fixture deduplication have landed. The October 23 [VN/expressions](visual-novel.md) core is also shipped. The following pre-cleanup description is now **historical context**. See [Execution Roadmap](execution-roadmap.md) for what's still actually pending.
+
+The owner confirmed that all earlier implementation roadmaps **01–12 landed**. **Mechanics II (13) is deferred** to the principal mechanics-improvement sprint; do not interpret the old roadmap checklist's schedule as current. A modest, independent **Inventory** MVP and the creature-to-character capture workflow remain candidates, not shipped features.
+
 ## Pre-cleanup backlog phase (2026-10-15 plan)
 
-Before the concentrated Engineering Health cleanup and later B+ PR-gate work, finish the small active backlog and the ten in-review PRs; move discretionary work into the roadmap rather than invent busywork. Inventory now has a **near-term mechanics-independent counts/holdings MVP** because it already improves fictional continuity in monster-catching campaigns; it need not wait for a D&D-style mechanics release. Close with verification and map delivered **capabilities** and residual **goals** to the roadmap; do not reschedule completed issues as new work. Defer features whose assumptions depend on the proposed content-identity/world resolution work. See [backlog-consolidation.md](backlog-consolidation.md). This is sequencing, **not** a new version-number commitment.
+**Historical plan, completed:** Before the concentrated Engineering Health cleanup and later B+ PR-gate work, finish the small active backlog and the ten then-in-review PRs; move discretionary work into the roadmap rather than invent busywork. Inventory now has a **near-term mechanics-independent counts/holdings MVP** because it already improves fictional continuity in monster-catching campaigns; it need not wait for a D&D-style mechanics release. Close with verification and map delivered **capabilities** and residual **goals** to the roadmap; do not reschedule completed issues as new work. Defer features whose assumptions depend on the proposed content-identity/world resolution work. See [backlog-consolidation.md](backlog-consolidation.md). This is sequencing, **not** a new version-number commitment.
 
 ## Provisional player-outcome release themes
 | Family | Goal |
