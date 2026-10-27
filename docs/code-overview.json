@@ -1,6 +1,6 @@
 {
   "schema": "code-overview/1",
-  "generated": "2026-10-21",
+  "generated": "2026-10-26",
   "packages": [
     {
       "name": "grimoire-store",
@@ -46,6 +46,7 @@
         "backend/src/grimoire/openai_compatible.py",
         "backend/src/grimoire/openrouter.py",
         "backend/src/grimoire/prompts.py",
+        "backend/src/grimoire/provider_http.py",
         "backend/src/grimoire/schemas.py",
         "backend/src/grimoire/template_paths.py",
         "backend/src/grimoire/wire.py",
@@ -144,14 +145,18 @@
     }
   ],
   "notes": [
-    "Existing package scopes recovered from Git history; four module-to-package moves now receive separate reports by user request.",
-    "The former grimoire-llm unit is named grimoire-providers-prompts; grimoire-llm now identifies the llm package.",
+    "The existing 12-package map is retained on refresh; all mapped roots exist. Manifest discovery is contextual evidence, not a replacement for the settled subsystem boundaries.",
+    "The grimoire-providers-prompts unit owns adapters, shared contracts and templates; decisions, inference, llm and tool_calls remain separately mapped packages.",
     "Android stays one Kotlin/Python packaging unit with ungraded health; no Kotlin specialist is installed.",
     "Scripts include shell and PowerShell with incomplete semantic coverage; installed skill helper roots are architectural context, excluded from root-doctor health analysis.",
     "Reports use repository source and synthetic fixtures only; live providers and private libraries are not accessed.",
     "Scripts health is ungraded as a whole because Python analysis does not establish shell/PowerShell or installed-helper coverage. Root health excludes ungraded units and uses the completed-category intersection across Python and TypeScript.",
-    "Repository and eval measurement grades are omitted: the installed rubric cannot encode result-not-audited without a false zero or pass. Evidence remains in docs/measurement-audit.json; a separate stored-baseline report is not rolled into coverage.",
-    "Scripts and backend-tests contain performance instruments whose results were not audited. Their measurement pages/grades are omitted, with explicit evidence states in docs/measurement-audit.json.",
-    "Incomplete doctor categories were rerun with 900-second and 8192-MiB limits, plus a 16384-MiB import-analysis attempt. Terminal analyses use independently reviewed, result-preserving import-search pruning and ordered TypeScript file batches. Final root health categories: complexity, correctness, design, duplication, hygiene, security, tests."
+    "Repository, evals, scripts and backend-tests measurement pages remain omitted because the installed rubric cannot represent result_not_audited without a false zero or pass. Evidence and limitations remain in docs/measurement-audit.json; the separate stored embedding baseline is not rolled into coverage.",
+    "The theory panels comprise three independent source readers per unit, with sampled coverage and cited change rehearsals. These grades are judgments; different models or sample choices are not directly comparable.",
+    "Refresh drift: provider_http.py was added to the existing grimoire-providers-prompts unit because provider adapters share its HTTP client lifecycle. No package boundaries changed.",
+    "Health reanalysis: upstream coding-skills commit 0abbaa37b66605c969e1dc7c71092e80a56f7462 completed all 32 Python and 25 TypeScript detectors with no errors or skips. Repository health now grades all seven categories across its analyzed Python/TypeScript units; Android and mixed scripts remain ungraded. Installed analyzer sources are unchanged from that upstream commit.",
+    "The direct upstream aggregate runs used a 2048-MiB process address-space ceiling: TypeScript used two workers and a 300-second aggregate bound; Python completed on a four-worker rerun with a 900-second aggregate bound after its initial 300-second run was interrupted. The former 5-second per-file and 120-second per-category wrapper limits were not applied to aggregate runs. The targeted global-state check still exceeded five seconds and completed separately in about six seconds.",
+    "Historical theory rerun: the a3366bc7064cd76b6cb3683ee3a8b778235b324f scope-aware workflow produced 39 independent theory-verdict/2 judgments for 13 existing units, bound to frozen source-snapshotted briefs and shared baseline rehearsals. Previous grades and desired scores were withheld. The rendering-only upstream fix 2ad43849ec53df8e659b196c979bf4acfbffae2c publishes the same validated judgments as theory/2 reports; it does not alter the rubric or scores. Health results are unchanged.",
+    "Current Theory rerun: causal workflow source 51776afd9149c4b76e330333ed6b94818363a38b (delivery archive ddeda7a20d42d39d9bd6d8cb047a3dd0a4164954) produced 39 fresh independent theory-verdict/3 judgments for the repaired uncommitted tree. The same 13 units and baseline rehearsal IDs/requirements were retained; seven briefs record nonmaterial source/citation drift. Previous grades, desired scores, peer outputs and repair narratives were withheld. Theory and summaries are refreshed; Health, codemap and measurement evidence remain earlier baselines. Both source and judge protocol changed, preventing causal attribution of score differences. Exact served model snapshot and inference seed are unavailable; fingerprints, raw votes and uncertainty are retained."
   ]
 }

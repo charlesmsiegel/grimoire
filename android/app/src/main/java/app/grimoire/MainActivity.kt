@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var web: WebView
     private lateinit var loading: View
     private lateinit var status: TextView
+    private var serverSubscription: (() -> Unit)? = null
 
     // <input type="file"> support (character card import, image upload)
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -124,14 +125,14 @@ class MainActivity : ComponentActivity() {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         val opening = sceneFrom(intent)
-        ServerRuntime.subscribe(
+        serverSubscription = ServerRuntime.subscribe(
             onReady = { port ->
                 runOnUiThread {
-                    if (web.url == null) web.loadUrl(pageFor(port, opening))
+                    if (!isDestroyed && web.url == null) web.loadUrl(pageFor(port, opening))
                 }
             },
             onFailure = { message ->
-                runOnUiThread { status.text = message }
+                runOnUiThread { showServerFailure(message) }
             },
         )
     }
@@ -159,10 +160,26 @@ class MainActivity : ComponentActivity() {
         // `onCreate` path has not run its `loadUrl` yet either -- so hand the
         // scene to the subscription rather than dropping it. `subscribe` fires
         // immediately when the port is already known, which is the common case.
-        ServerRuntime.subscribe(
-            onReady = { port -> runOnUiThread { web.loadUrl(pageFor(port, opening)) } },
-            onFailure = { message -> runOnUiThread { status.text = message } },
+        serverSubscription?.invoke()
+        serverSubscription = ServerRuntime.subscribe(
+            onReady = { port -> runOnUiThread {
+                if (!isDestroyed) web.loadUrl(pageFor(port, opening))
+            } },
+            onFailure = { message -> runOnUiThread { showServerFailure(message) } },
         )
+    }
+
+    private fun showServerFailure(message: String) {
+        if (isDestroyed) return
+        status.text = message
+        loading.visibility = View.VISIBLE
+        web.visibility = View.GONE
+    }
+
+    override fun onDestroy() {
+        serverSubscription?.invoke()
+        serverSubscription = null
+        super.onDestroy()
     }
 
     /** The page to open: the app, or the `/open` resolver for a tapped scene.
@@ -231,6 +248,10 @@ class MainActivity : ComponentActivity() {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                // WebView can finish its error page after the native failure
+                // callback. That callback's visible status must remain the
+                // final state rather than being hidden by this late event.
+                ServerRuntime.failure?.let { showServerFailure(it); return }
                 loading.visibility = View.GONE
                 web.visibility = View.VISIBLE
             }

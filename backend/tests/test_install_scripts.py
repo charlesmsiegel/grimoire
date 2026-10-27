@@ -67,6 +67,7 @@ def test_a_failed_rebuild_is_announced_in_the_browser(tmp_path):
     shutil.copy2(RUN_UNIX, run)
     built = root / "frontend" / "dist" / "index.html"
     built.parent.mkdir(parents=True)
+    shutil.copy2(FRONTEND / "build-inputs.txt", root / "frontend" / "build-inputs.txt")
     built.write_text("the previous build", encoding="utf-8")
     hour_ago = time.time() - 3600
     os.utime(built, (hour_ago, hour_ago))

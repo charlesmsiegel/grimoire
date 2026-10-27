@@ -241,7 +241,7 @@ jobs:
       # image happens to carry.
       #
       # check-apk builds frontend/dist first (the assets pipeline stages it into
-      # the APK) and then reuses the `apk` target, which copies the output to
+      # the APK), runs Android unit tests, then reuses `apk`, which copies the output to
       # build/grimoire-debug.apk.
       - run: make check-apk BUILD_PYTHON="${{ steps.buildpy.outputs.python-path }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4

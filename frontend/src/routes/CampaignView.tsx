@@ -16,6 +16,7 @@ import {
 import { THUMB } from "../api/thumbs";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
 import { useRunRegistry } from "../runs/RunRegistryProvider";
+import { findOrFenceAttempt } from "../runs/recoverAttempt";
 import { forkNotes } from "../components/forkNotes";
 import { shareSummary } from "../components/tracker/share";
 import { lastOkKey, pendingAfter, type NowTracker } from "../components/tracker/TrackerNow";
@@ -2788,6 +2789,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   const adoptPendingRun = useCallback(async (cid: string, sid: string) => {
     const held = registry.pending(cid, sid);
+    const observedTurn = streamTokenRef.current;
+    const ownsObservation = () => !abortRef.current
+      && streamTokenRef.current === observedTurn;
     // NO HELD ATTEMPT IS NOT NOTHING TO DO. The provider is recreated empty by
     // a full reload -- and on Android the WebView's renderer can be restarted
     // out from under a perfectly healthy backend turn, which is precisely the
@@ -2807,6 +2811,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       } catch {
         return;                 // a failed lookup is not an answer; ask again later
       }
+      if (!ownsObservation() || registry.pending(cid, sid)) return;
       if (live && live.state === "running") {
         // Only a TURN has frames to read. A `review` run is live work on this
         // scene too -- an absorb the reader started before the phone locked --
@@ -2851,6 +2856,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // settle. `abortRef` is set for exactly as long as this view owns a
     // stream, which is the question being asked.
     if (abortRef.current) return;
+    // A reload has no component-local busy state, but this pending send still
+    // owns the scene. Lock before the first await so an unavailable lookup or
+    // fence cannot expose Send over work whose outcome remains unknown.
+    setBusy(true);
+    setStreamingId(sid);
+    runRef.current = { cid, sid, attempt: held.attempt, id: held.runId };
+    // Visibility can start another recovery while this pass awaits a request.
+    // That pass may resolve this attempt and let the player send again. Every
+    // continuation must still own this attempt and have no active observer;
+    // otherwise settling by scene would erase the new send's durable words.
+    const current = () => ownsObservation()
+      && registry.pending(cid, sid)?.attempt === held.attempt;
     // By ATTEMPT, not by the run id we may or may not have seen. The id is a
     // shortcut; the attempt is what names this send in the window where no
     // frame ever arrived, which is the window worth recovering from.
@@ -2865,10 +2882,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // change, or the next mount, asks again.
     let handle;
     try {
-      handle = (await api.findRun(cid, sid, held.attempt)).run;
+      handle = await findOrFenceAttempt(cid, sid, held.attempt);
     } catch {
       return;
     }
+    if (!current()) return;
     if (handle && handle.state === "running") {
       // STILL GENERATING, and this is the case the whole feature is for. Read
       // the frames produced while we were away and keep reading live -- the
@@ -2886,7 +2904,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // recovery pass that would have got it right never runs.
     let durable: boolean;
     try {
-      durable = (await api.attemptState(cid, sid, held.attempt)).retained;
+      const state = await api.attemptState(cid, sid, held.attempt);
+      if (!current()) return;
+      // Execution and post presence answer different questions. Preserve the
+      // later execution evidence too, rather than settling a still-live send
+      // merely because its player post is already durable.
+      if (state.run?.state === "running") {
+        await attachToRun(cid, sid, state.run.id);
+        return;
+      }
+      handle = state.run ?? handle;
+      durable = state.retained;
     } catch {
       return;
     }
@@ -2899,6 +2927,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // run that is over while the text stays durable until a later send.
     if (durable) registry.settle(cid, sid);
     else registry.recovered(cid, sid);
+    if (!durable && held.text) {
+      // The post is not in the scene. Either it was rolled back or it never
+      // landed -- and both mean the player's words exist only here. Ambiguity
+      // resolves toward the recoverable error every time: wrong this way costs
+      // one duplicate they can see and delete, wrong the other way costs them
+      // their words with no trace at all.
+      // Return the words before unlocking. A new Send replaces the registry
+      // entry, so delaying this behind a refresh could lose or mix the words
+      // while the player is already composing the next turn.
+      recoverPrompt(cid, sid, held.text);
+    }
     // Whatever this component was left holding for that send is resolved now.
     // An unconfirmed Stop deliberately leaves the composer locked and `runRef`
     // set (see `runStream`'s finally), on the grounds that the run may still be
@@ -2911,7 +2950,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setStreaming("");
     setStreamingSpeakers([]);
     setBusy(false);
-    await selectScene(sid).catch(() => -1);
+    await selectScene(sid, ownsObservation).catch(() => -1);
+    if (!ownsObservation()) return;
     // FAILED WHILE WE WERE AWAY, and the server knows why. The rest of recovery
     // only asks whether the post was retained, refetches and unlocks, so a
     // provider error, a store failure or a check that would not resolve simply
@@ -2922,14 +2962,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // successful load -- which is right for an ordinary scene open and wrong
     // here, so this has to be the last word rather than the first.
     if (handle?.state === "failed" && handle.error) fail(handle.error, true, "scene");
-    if (!durable) {
-      // The post is not in the scene. Either it was rolled back or it never
-      // landed -- and both mean the player's words exist only here. Ambiguity
-      // resolves toward the recoverable error every time: wrong this way costs
-      // one duplicate they can see and delete, wrong the other way costs them
-      // their words with no trace at all.
-      if (held.text) recoverPrompt(cid, sid, held.text);
-    }
   }, [registry, recoverPrompt]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -3232,10 +3264,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // forward.
       let adopted = false;
       let undiscoverable = false;
+      let superseded = false;
       if (!unstopped && !stopped && !finished && !errored && !refused) {
         try {
-          const live = (await api.findRun(cid, id, attempt)).run;
-          if (live && live.state === "running") {
+          const live = await findOrFenceAttempt(cid, id, attempt);
+          // Clearing the old abortRef allows visibility recovery to take over
+          // during this request. Its observer or a newly submitted attempt now
+          // owns the view; this continuation must neither attach again nor
+          // tear down that owner's preview, handle or durable words.
+          superseded = !!abortRef.current || streamTokenRef.current !== streamToken
+            || registry.pending(cid, id)?.attempt !== attempt;
+          if (!superseded && live && live.state === "running") {
             adopted = true;
             void attachToRun(cid, id, live.id);
           }
@@ -3253,7 +3292,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // `busy`, the streamed preview, `runRef` -- is skipped when the Stop
       // went unconfirmed, so Stop is still there to press and still knows
       // what to press about.
-      if (!unstopped && !adopted && !undiscoverable) {
+      if (!unstopped && !adopted && !undiscoverable && !superseded) {
         // Beside `abortRef`, and load-bearing for the same reason: left set, a
         // Stop pressed while the NEXT turn is still connecting would address this
         // one -- terminal by then, so the route would answer politely and the
@@ -4308,11 +4347,25 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // The handle is read BEFORE the abort: `runStream`'s `finally` clears it.
   function cancelTurn() {
     const handle = runRef.current;
+    const observing = !!abortRef.current;
     abortRef.current?.abort();
     // Stored, not awaited here: this is an onClick and the button must not hang
     // on it. `runStream`'s teardown awaits it before releasing the scene, which
     // is where the waiting belongs -- see `cancelRef`.
-    if (handle) cancelRef.current = stopRun(handle);
+    if (handle) {
+      if (observing) cancelRef.current = stopRun(handle);
+      else {
+        // A reload can be locked while recovery is still discovering. There
+        // is no stream's finally to await cancellation in that state, so this
+        // path owns its result and lets recovery establish the durable facts.
+        void stopRun(handle).then(() => adoptPendingRun(handle.cid, handle.sid)).catch(() => {
+          if (registry.pending(handle.cid, handle.sid)?.attempt === handle.attempt) {
+            setError({ text: "could not reach the server to stop this turn — it "
+                             + "may still be generating", retryable: false });
+          }
+        });
+      }
+    }
   }
 
   async function stopRun(

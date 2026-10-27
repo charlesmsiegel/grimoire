@@ -2541,6 +2541,7 @@ test("a prompt handed back by recovery survives a reload", async () => {
 
   // The run ended and its post was rolled back: the words come back.
   vi.mocked(api.findRun).mockResolvedValue({ run: null });
+  vi.mocked(api.cancelAttempt).mockResolvedValue({ run: null });
   vi.mocked(api.attemptState).mockResolvedValue(fixture({ retained: false }));
   act(() => { document.dispatchEvent(new Event("visibilitychange")); });
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("Mara waits."));
@@ -2694,6 +2695,7 @@ test("a recovery pass that could not reach the server keeps the send pending", a
 
   // Connectivity returns, and the pass that can answer does.
   vi.mocked(api.findRun).mockResolvedValue({ run: null });
+  vi.mocked(api.cancelAttempt).mockResolvedValue({ run: null });
   vi.mocked(api.attemptState).mockResolvedValue(fixture({ retained: false }));
   act(() => { document.dispatchEvent(new Event("visibilitychange")); });
 

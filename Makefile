@@ -276,6 +276,7 @@ check-pydantic1:
 # A recipe action rather than a prerequisite list: as prerequisites, parallel
 # make could start gradle before the frontend bundle it packages exists.
 check-apk: web-dist
+	$(GRADLEW) :app:testDebugUnitTest $(if $(BUILD_PYTHON),-Pgrimoire.buildPython="$(BUILD_PYTHON)",)
 	$(MAKE) apk BUILD_PYTHON="$(BUILD_PYTHON)"
 
 web-dist: frontend-deps

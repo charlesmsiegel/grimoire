@@ -55,9 +55,18 @@ def reserve_turn(app, cid: str, sid: str, kind: str,
     # cannot land between the check and the reservation. Reentrant.
     with store.locks.campaign_lock(cid):
         _fences.require_scene_open(cid, sid)
-        return _reserve(app, cid, sid, "turn", kind,
-                        attempt_id or uuid.uuid4().hex,
-                        adopt_terminal=adopt_terminal)
+        run, fresh = _reserve(app, cid, sid, "turn", kind,
+                              attempt_id or uuid.uuid4().hex,
+                              adopt_terminal=adopt_terminal)
+        # A recovery fence can beat reservation while the POST is in preflight.
+        # Waiting for the runner to consume it is too late: route setup appends
+        # the player's post and retires proposals before the producer starts.
+        # Seal that outcome here and take the callers' existing replay branch,
+        # leaving turn-owned state untouched and releasing scene exclusion.
+        if fresh and run.cancel_requested:
+            _execution.release_before_start(app, run, "cancelled")
+            return run, False
+        return run, fresh
 
 
 def reserve_review(app, cid: str, sid: str, kind: str,

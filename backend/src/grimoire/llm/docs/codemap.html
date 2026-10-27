@@ -190,8 +190,8 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire-llm — Codebase Atlas</h1>
-  <p class="doc-sub">Source maps, behavioral boundaries and review priorities</p>
-  <div class="doc-meta">generated 2026-10-21 · 0e9e7f4be · tracked source; existing coverage</div>
+  <p class="doc-sub">Current source, explicit lifetime boundaries and retained review cases</p>
+  <div class="doc-meta">generated 2026-10-26 · f290a7a9 · source rebuilt; coverage unavailable</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -219,18 +219,26 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <button role="tab" data-tab="flows" aria-selected="false" aria-controls="flows">Critical Flows</button>
 <button role="tab" data-tab="boundaries" aria-selected="false" aria-controls="boundaries">Boundaries &amp; Ownership</button>
 <button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button>
-<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button>
-<button role="tab" data-tab="coverage" aria-selected="false" aria-controls="coverage">Coverage</button></nav>
+<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-<h2>grimoire-llm</h2><p>The LLM facade dispatches neutral targets through instance-owned provider clients. Retry is safe only before visible prose; stream cleanup, timeout, fallback and usage stamping share that lifecycle boundary.</p><p>Cancellation does not guarantee an uncooperative provider iterator has stopped. Cleanup and abandoned work must remain accounted for at their actual lifetime boundary.</p><h3>Reading order</h3><ol><li><code>backend/src/grimoire/llm/_client.py:27</code> — Read injected provider clients and callbacks.</li><li><code>backend/src/grimoire/llm/_client.py:105</code> — Build primary and per-call fallback attempts.</li><li><code>backend/src/grimoire/llm/_retry.py:81</code> — Understand the pre-visible-prose retry rule.</li><li><code>backend/src/grimoire/llm/_lifecycle.py:82</code> — Follow stream timeout and closing ownership.</li><li><code>backend/src/grimoire/llm/_accounting.py:1</code> — Inspect per-attempt accounting and local estimates.</li></ol><p class="dim">The inventory excludes generated docs. This is a tracked-source audit at 0e9e7f4be. Existing coverage is line coverage from the recorded artifacts, not a fresh test result or a claim about model quality.</p>
+<div class="card hero"><h2>grimoire-llm</h2><p>The LLM facade dispatches provider-neutral chains through instance-owned adapters while keeping store lookups behind injected callbacks. Retries, fallback routing, stream lifetime, refusal classification and attempt accounting are separated into focused leaves.</p></div><h2>Reading order and entry points</h2><ol><li><code>backend/src/grimoire/llm/__init__.py</code></li><li><code>backend/src/grimoire/llm/_client.py</code></li><li><code>backend/src/grimoire/llm/_retry.py</code></li><li><code>backend/src/grimoire/llm/_routes.py</code></li><li><code>backend/src/grimoire/llm/_lifecycle.py</code></li><li><code>backend/src/grimoire/llm/_accounting.py</code></li><li><code>backend/src/grimoire/llm/_refusals.py</code></li></ol><p>Start with the entry/facade, then read the defining leaves and the failure boundaries. Documentation directories are excluded from every automated source inventory.</p><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">flowchart LR
+  A["Caller chain"]
+  B["Facade"]
+  C["Adapter"]
+  D["Attempt accounting"]
+  A --&gt; B
+  B --&gt; C
+  C --&gt; D
+</pre></div></div><div class="callout warn">Static analysis describes repository source only. No private library or live provider was consulted. Coverage and eval results are not inferred from test-file counts; see generated tabs and the measurement audit for available evidence.</div>
+<h2>Fresh analysis and its limits</h2><p>Inventory: 8 recognized files, 2051 nonblank lines. These include recognized assets and configuration; they are not a count of executable statements. 1 dependency modules are drawn. The graph uses a depth of three to distinguish responsibility packages.</p><p>Highest churn × branch proxy: <code>backend/src/grimoire/llm/_client.py</code>. This selects reading priority; it is not a reproduced defect or a timing measurement.</p><p><strong>Coverage:</strong> no parseable coverage artifact found (searched for coverage.xml, cobertura*.xml, lcov.info, coverage.lcov, coverage.out) No test suite was run to manufacture coverage for this atlas.</p><p><strong>LLM detector:</strong> LLM call sites are found textually by SDK method name: a call made through your own wrapper, by an unrecognized client, or with a model id read from config at runtime will be missed, and a detected parameter is evidence it is passed somewhere in the call, not that it holds on every path. The application uses its own facade and direct HTTP adapters, so an absent LLM Ops tab does not establish absence of model calls.</p><p>Computed resource patterns hit the detector reporting cap. The resource summary preserves the truncation counts; dynamic paths remain incomplete evidence.</p>
 </section>
 <section class="panel" id="inventory" role="tabpanel">
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">7</div><div class="l">source files</div></div>
-  <div class="kpi"><div class="n">1,917</div><div class="l">lines of code</div></div>
+  <div class="kpi accent"><div class="n">8</div><div class="l">source files</div></div>
+  <div class="kpi"><div class="n">2,051</div><div class="l">lines of code</div></div>
   <div class="kpi"><div class="n">1</div><div class="l">languages</div></div>
   <div class="kpi warn"><div class="n">0%</div><div class="l">test code share</div></div>
 </div>
@@ -238,38 +246,40 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <h2>Languages</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
-<tbody><tr><td>Python</td><td class='num'>1,917</td><td class='num'>7</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>100.0%</td></tr></tbody></table></div>
+<tbody><tr><td>Python</td><td class='num'>2,051</td><td class='num'>8</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>100.0%</td></tr></tbody></table></div>
 
 
 <h2>Top-level directories</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
-<tbody><tr><td><code>backend/</code></td><td class='num'>1,917</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>backend/</code></td><td class='num'>2,051</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr></tbody></table></div>
 
 <div class="grid cols-2">
 <div>
 <h2>Largest files</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">LOC</th><th>Size</th><th class="num">Branches</th></tr></thead>
-<tbody><tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>467</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>70</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>313</td><td><div class="bar "><i style="width:67.0%"></i></div></td><td class='num'>52</td></tr>
-<tr><td><code>backend/src/grimoire/llm/__init__.py</code></td><td class='num'>299</td><td><div class="bar "><i style="width:64.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>265</td><td><div class="bar "><i style="width:56.7%"></i></div></td><td class='num'>45</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>229</td><td><div class="bar "><i style="width:49.0%"></i></div></td><td class='num'>28</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>194</td><td><div class="bar "><i style="width:41.5%"></i></div></td><td class='num'>23</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>150</td><td><div class="bar "><i style="width:32.1%"></i></div></td><td class='num'>31</td></tr></tbody></table></div>
+<tbody><tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>439</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>59</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>410</td><td><div class="bar "><i style="width:93.4%"></i></div></td><td class='num'>59</td></tr>
+<tr><td><code>backend/src/grimoire/llm/__init__.py</code></td><td class='num'>299</td><td><div class="bar "><i style="width:68.1%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>265</td><td><div class="bar "><i style="width:60.4%"></i></div></td><td class='num'>45</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>229</td><td><div class="bar "><i style="width:52.2%"></i></div></td><td class='num'>28</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>194</td><td><div class="bar "><i style="width:44.2%"></i></div></td><td class='num'>23</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>172</td><td><div class="bar "><i style="width:39.2%"></i></div></td><td class='num'>35</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_post_images.py</code></td><td class='num'>43</td><td><div class="bar "><i style="width:9.8%"></i></div></td><td class='num'>7</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Most branch-heavy files</h2>
 <p class="dim">Branch count ≈ decision points (if/for/while/case/catch/&amp;&amp;/||). A rough cyclomatic-complexity proxy.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Branches</th><th>Heat</th><th class="num">LOC</th><th class="num">Max depth</th></tr></thead>
-<tbody><tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>70</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>467</td><td class='num'>11</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>52</td><td><div class="bar warn"><i style="width:74.3%"></i></div></td><td class='num'>313</td><td class='num'>12</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>45</td><td><div class="bar warn"><i style="width:64.3%"></i></div></td><td class='num'>265</td><td class='num'>7</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>31</td><td><div class="bar warn"><i style="width:44.3%"></i></div></td><td class='num'>150</td><td class='num'>6</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>28</td><td><div class="bar warn"><i style="width:40.0%"></i></div></td><td class='num'>229</td><td class='num'>3</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>23</td><td><div class="bar warn"><i style="width:32.9%"></i></div></td><td class='num'>194</td><td class='num'>12</td></tr>
+<tbody><tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>59</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>439</td><td class='num'>11</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>59</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>410</td><td class='num'>11</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>45</td><td><div class="bar warn"><i style="width:76.3%"></i></div></td><td class='num'>265</td><td class='num'>7</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>35</td><td><div class="bar warn"><i style="width:59.3%"></i></div></td><td class='num'>172</td><td class='num'>4</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>28</td><td><div class="bar warn"><i style="width:47.5%"></i></div></td><td class='num'>229</td><td class='num'>3</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>23</td><td><div class="bar warn"><i style="width:39.0%"></i></div></td><td class='num'>194</td><td class='num'>12</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_post_images.py</code></td><td class='num'>7</td><td><div class="bar warn"><i style="width:11.9%"></i></div></td><td class='num'>43</td><td class='num'>3</td></tr>
 <tr><td><code>backend/src/grimoire/llm/__init__.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>299</td><td class='num'>1</td></tr></tbody></table></div>
 </div>
 </div>
@@ -281,17 +291,17 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 
 <div class="kpis">
   <div class="kpi accent"><div class="n">1</div><div class="l">modules</div></div>
-  <div class="kpi"><div class="n">17</div><div class="l">file-level imports</div></div>
+  <div class="kpi"><div class="n">20</div><div class="l">file-level imports</div></div>
   <div class="kpi"><div class="n">0</div><div class="l">runtime loads</div></div>
   <div class="kpi good"><div class="n">0</div><div class="l">cycles</div></div>
   <div class="kpi"><div class="n">1</div><div class="l">top-level arm</div></div>
 </div>
-<p class="dim">Scoped to <code>backend/src/grimoire/llm/</code>: 56 import(s) and load(s) reach 16 file(s) outside those roots. They resolved, and are not drawn.</p>
-<div class="callout good"><b>No module-level dependency cycles detected.</b> The import graph is a DAG at this grouping level.</div><details open><summary>File-level import cycles: 1 strongly-connected group</summary><div class="body"><p class="dim">Files that (transitively) import each other. In Python these often include type-annotation or lazy in-function imports — less harmful than top-level cycles, but each one still couples the files' lifecycles. Worth explaining case-by-case in the Boundaries tab.</p><ul><li><span class='badge warn'>group 1</span> <code>backend/src/grimoire/llm/__init__.py</code> ⇄ <code>backend/src/grimoire/llm/_accounting.py</code> ⇄ <code>backend/src/grimoire/llm/_client.py</code> ⇄ <code>backend/src/grimoire/llm/_retry.py</code></li></ul></div></details>
+<p class="dim">Scoped to <code>backend/src/grimoire/llm/</code>: 58 import(s) and load(s) reach 16 file(s) outside those roots. They resolved, and are not drawn.</p>
+<div class="callout good"><b>No module-level dependency cycles detected.</b> The import graph is a DAG at this grouping level.</div><details open><summary>File-level import cycles: 1 strongly-connected group</summary><div class="body"><p class="dim">Files that (transitively) import each other. In Python these often include type-annotation or lazy in-function imports — less harmful than top-level cycles, but each one still couples the files' lifecycles. Worth explaining case-by-case in the Boundaries tab.</p><ul><li><span class='badge warn'>group 1</span> <code>backend/src/grimoire/llm/__init__.py</code> ⇄ <code>backend/src/grimoire/llm/_accounting.py</code> ⇄ <code>backend/src/grimoire/llm/_client.py</code> ⇄ <code>backend/src/grimoire/llm/_post_images.py</code> ⇄ <code>backend/src/grimoire/llm/_retry.py</code></li></ul></div></details>
 <h2>Module dependency graph</h2>
 <p class="dim">Node area = lines of code · solid arrows = imports, dashed = runtime loads (a rendered template, a prompt read off disk) · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
 <div class="viz" data-render="forcegraph" style="height:620px"></div>
-<script type="application/json">{"nodes":[{"id":"backend/src/grimoire/llm","label":"llm","group":"backend","size":1917,"fanIn":0,"fanOut":0,"meta":"backend/src/grimoire/llm \u00b7 7 files"}],"links":[],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
+<script type="application/json">{"nodes":[{"id":"backend/src/grimoire/llm","label":"llm","group":"backend","size":2051,"fanIn":0,"fanOut":0,"meta":"backend/src/grimoire/llm \u00b7 8 files"}],"links":[],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
 
 <div class="grid cols-2">
 <div>
@@ -299,32 +309,34 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <p class="dim">Changes here ripple widely — review with extra care.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Fan-in</th><th></th><th class="num">Fan-out</th></tr></thead>
-<tbody><tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>4</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>3</td><td><div class="bar "><i style="width:75.0%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>backend/src/grimoire/llm/__init__.py</code></td><td class='num'>3</td><td><div class="bar "><i style="width:75.0%"></i></div></td><td class='num'>6</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:50.0%"></i></div></td><td class='num'>5</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:25.0%"></i></div></td><td class='num'>4</td></tr></tbody></table></div>
+<tbody><tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>5</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/src/grimoire/llm/__init__.py</code></td><td class='num'>4</td><td><div class="bar "><i style="width:80.0%"></i></div></td><td class='num'>6</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>3</td><td><div class="bar "><i style="width:60.0%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:40.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:40.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:40.0%"></i></div></td><td class='num'>5</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:20.0%"></i></div></td><td class='num'>5</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_post_images.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:20.0%"></i></div></td><td class='num'>2</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Highest fan-out (most dependencies)</h2>
 <p class="dim">High fan-out can indicate orchestrators — or god modules doing too much.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Fan-out</th><th></th><th class="num">Fan-in</th></tr></thead>
-<tbody><tr><td><code>backend/src/grimoire/llm/__init__.py</code></td><td class='num'>6</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>3</td></tr>
+<tbody><tr><td><code>backend/src/grimoire/llm/__init__.py</code></td><td class='num'>6</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>4</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>5</td><td><div class="bar warn"><i style="width:83.3%"></i></div></td><td class='num'>1</td></tr>
 <tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>5</td><td><div class="bar warn"><i style="width:83.3%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>4</td><td><div class="bar warn"><i style="width:66.7%"></i></div></td><td class='num'>1</td></tr>
 <tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>2</td><td><div class="bar warn"><i style="width:33.3%"></i></div></td><td class='num'>3</td></tr>
+<tr><td><code>backend/src/grimoire/llm/_post_images.py</code></td><td class='num'>2</td><td><div class="bar warn"><i style="width:33.3%"></i></div></td><td class='num'>1</td></tr>
 <tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>2</td></tr>
 <tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>4</td></tr></tbody></table></div>
+<tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>5</td></tr></tbody></table></div>
 </div>
 </div>
 
 <h2>Runtime resources</h2>
 <p class="dim">Files loaded rather than imported — templates, prompts, schemas, embedded data — and the
-code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 11 computed path(s) and 0 file(s) hit the reporting cap.</p>
+code that names them. Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path. 12 computed path(s) and 0 file(s) hit the reporting cap.</p>
 
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Asset</th><th class="num">Loaders</th><th>Loaded at</th></tr></thead>
@@ -337,8 +349,8 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">1</div><div class="l">commits (24 months ago)</div></div>
-  <div class="kpi"><div class="n">7</div><div class="l">files touched</div></div>
+  <div class="kpi accent"><div class="n">6</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi"><div class="n">8</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">_client.py</div><div class="l">top hotspot</div></div>
 </div>
 <div class="callout"><b>How to read this:</b> files that are both <i>complex</i> and <i>frequently changed</i> are where defects concentrate — complexity makes mistakes likely, churn gives them opportunities. Prioritize refactoring and review attention here, not on complex-but-stable code.</div>
@@ -347,18 +359,19 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 <h2>Churn × size map</h2>
 <p class="dim">Area = lines of code · color = commit count since 24 months ago · hover for details.</p>
 <div class="viz" data-render="treemap" style="height:540px"></div>
-<script type="application/json">{"items":[{"name":"backend/src/grimoire/llm/_client.py","value":467,"metric":1,"meta":"70 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/_retry.py","value":313,"metric":1,"meta":"52 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/_refusals.py","value":265,"metric":1,"meta":"45 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/_lifecycle.py","value":150,"metric":1,"meta":"31 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/_routes.py","value":229,"metric":1,"meta":"28 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/_accounting.py","value":194,"metric":1,"meta":"23 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/__init__.py","value":299,"metric":1,"meta":"0 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":1}</script>
+<script type="application/json">{"items":[{"name":"backend/src/grimoire/llm/_client.py","value":439,"metric":2,"meta":"59 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/llm/_retry.py","value":410,"metric":2,"meta":"59 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/llm/_lifecycle.py","value":172,"metric":2,"meta":"35 branches \u00b7 2 authors"},{"name":"backend/src/grimoire/llm/_refusals.py","value":265,"metric":1,"meta":"45 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/_routes.py","value":229,"metric":1,"meta":"28 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/_accounting.py","value":194,"metric":1,"meta":"23 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/_post_images.py","value":43,"metric":1,"meta":"7 branches \u00b7 1 authors"},{"name":"backend/src/grimoire/llm/__init__.py","value":299,"metric":1,"meta":"0 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":2}</script>
 
 <h2>Hotspot ranking</h2>
 <p class="dim">Score = commits × (branch points + 1). Tests excluded.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
-<tbody><tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>1</td><td class='num'>70</td><td class='num'>467</td><td class='num'>1</td><td class='num' data-sort='71'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>1</td><td class='num'>52</td><td class='num'>313</td><td class='num'>1</td><td class='num' data-sort='53'><div class="bar bad"><i style="width:74.6%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>1</td><td class='num'>45</td><td class='num'>265</td><td class='num'>1</td><td class='num' data-sort='46'><div class="bar bad"><i style="width:64.8%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>1</td><td class='num'>31</td><td class='num'>150</td><td class='num'>1</td><td class='num' data-sort='32'><div class="bar bad"><i style="width:45.1%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>1</td><td class='num'>28</td><td class='num'>229</td><td class='num'>1</td><td class='num' data-sort='29'><div class="bar bad"><i style="width:40.8%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>1</td><td class='num'>23</td><td class='num'>194</td><td class='num'>1</td><td class='num' data-sort='24'><div class="bar bad"><i style="width:33.8%"></i></div></td></tr>
+<tbody><tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>2</td><td class='num'>59</td><td class='num'>439</td><td class='num'>2</td><td class='num' data-sort='120'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>2</td><td class='num'>59</td><td class='num'>410</td><td class='num'>2</td><td class='num' data-sort='120'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>2</td><td class='num'>35</td><td class='num'>172</td><td class='num'>2</td><td class='num' data-sort='72'><div class="bar bad"><i style="width:60.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>1</td><td class='num'>45</td><td class='num'>265</td><td class='num'>1</td><td class='num' data-sort='46'><div class="bar bad"><i style="width:38.3%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>1</td><td class='num'>28</td><td class='num'>229</td><td class='num'>1</td><td class='num' data-sort='29'><div class="bar bad"><i style="width:24.2%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>1</td><td class='num'>23</td><td class='num'>194</td><td class='num'>1</td><td class='num' data-sort='24'><div class="bar bad"><i style="width:20.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/llm/_post_images.py</code></td><td class='num'>1</td><td class='num'>7</td><td class='num'>43</td><td class='num'>1</td><td class='num' data-sort='8'><div class="bar bad"><i style="width:6.7%"></i></div></td></tr>
 <tr><td><code>backend/src/grimoire/llm/__init__.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>299</td><td class='num'>1</td><td class='num' data-sort='1'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
 
 
@@ -366,62 +379,53 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 </section>
 <section class="panel" id="flows" role="tabpanel">
 
-<h2>Pre-content retry</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
-Caller-&gt;&gt;Facade: request stream
-Facade-&gt;&gt;Primary: first attempt
-alt transient failure before prose
-Facade-&gt;&gt;Primary: bounded retry
-else primary exhausted
-Facade-&gt;&gt;Fallback: one resolved fallback
-end</pre></div></div><h2>Failure after prose</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
-Provider--&gt;&gt;Facade: visible prose
-Facade--&gt;&gt;Caller: deliver prose
-Provider--&gt;&gt;Facade: failure
-Facade--&gt;&gt;Caller: error without restarting content
-Facade-&gt;&gt;Lifecycle: settle and close iterator</pre></div></div><h3>Seams to review</h3><p>Cancellation does not guarantee an uncooperative provider iterator has stopped. Cleanup and abandoned work must remain accounted for at their actual lifetime boundary.</p><p><code>backend/src/grimoire/llm/_client.py:27</code> · <code>backend/src/grimoire/llm/_client.py:105</code> · <code>backend/src/grimoire/llm/_retry.py:81</code></p>
+<h2>Complete request</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+  participant A as Caller chain
+  participant B as Facade
+  participant C as Adapter
+  participant D as Attempt accounting
+  A-&gt;&gt;B: Pass resolved chain and callback holder
+  B-&gt;&gt;C: Select provider adapter
+  alt Attempt fails before an answer
+    C--&gt;&gt;A: Error or explicitly incomplete result
+  else supported path
+    C-&gt;&gt;D: Complete one attempt
+    D--&gt;&gt;A: Stamp serving identity and usage
+  end
+</pre></div></div><p>Implementation: <code>backend/src/grimoire/llm/_client.py</code>. A closed client wait is not proof an underlying task or worker stopped; settlement is intentionally bounded.</p><h2>Streaming attempt</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+  participant A as Facade
+  participant B as Retry driver
+  participant C as Provider stream
+  participant D as Lifecycle settlement
+  A-&gt;&gt;B: Open stream for a target
+  B-&gt;&gt;C: Retry only before visible prose
+  alt Provider fails after prose has been delivered
+    C--&gt;&gt;A: Error or explicitly incomplete result
+  else supported path
+    C-&gt;&gt;D: Read deltas and heartbeats
+    D--&gt;&gt;A: Settle or abandon cleanup under bound
+  end
+</pre></div></div><p>Implementation: <code>backend/src/grimoire/llm/_retry.py</code>. A closed client wait is not proof an underlying task or worker stopped; settlement is intentionally bounded.</p>
+
 </section>
 <section class="panel" id="boundaries" role="tabpanel">
 
-<h2>Ownership</h2><p>The facade owns attempt lifecycle and observer callbacks; adapters own payloads; the caller supplies configuration callbacks and the meter. Gateway code need not read the store.</p><p><code>backend/src/grimoire/llm/_client.py:27</code> · <code>backend/src/grimoire/llm/_client.py:105</code> · <code>backend/src/grimoire/llm/_retry.py:81</code> · <code>backend/src/grimoire/llm/_lifecycle.py:82</code> · <code>backend/src/grimoire/llm/_accounting.py:1</code></p><h3>Interpreting the dependency graph</h3><p>The graph includes facade re-exports, type/test references and textual runtime-load candidates. A strongly connected component is a review lead, not proof of a runtime import failure. Package facades can form return edges to their implementation owners; do not delete public aliases just to flatten the graph. Load paths assembled entirely at runtime are invisible.</p>
+<h2>Concern ownership</h2><div class="tbl-wrap"><table><thead><tr><th>Concern</th><th>Owner</th><th>Boundary</th></tr></thead><tbody><tr><td>Client and callbacks</td><td><code>backend/src/grimoire/llm/_client.py</code></td><td>Clients are instance-owned; config, health, captures and image access are injected.</td></tr><tr><td>Retry and stream attempts</td><td><code>backend/src/grimoire/llm/_retry.py</code></td><td>Attempt policy surrounds provider sends.</td></tr><tr><td>Lifecycle</td><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td>Cancellation settlement and client closing are bounded.</td></tr><tr><td>Accounting</td><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td>Each attempt stamps serving identity and reports usage separately.</td></tr></tbody></table></div><h2>Shared-state and dependency boundaries</h2><p>A closed client wait is not proof an underlying task or worker stopped; settlement is intentionally bounded. <code>backend/src/grimoire/llm/_lifecycle.py</code>.</p><p>The Dependencies tab reports only edges within this unit; edges to other package roots are counted separately. A textual graph cannot prove all runtime-selected template, plugin or callback edges.</p>
+<h2>Cycle interpretation</h2><p>The textual graph reports 0 module-level and 1 file-level strongly connected components. The component centers on the LLM facade and its client/retry/refusal leaves. The public facade retains compatibility aliases; those edges should be reviewed at the defining leaf instead of interpreted as a demonstrated runtime failure.</p><p>Component entry points: <code>backend/src/grimoire/llm/__init__.py</code> (5 files). Complete member lists remain in the Dependencies tab.</p>
 </section>
 <section class="panel" id="invariants" role="tabpanel">
 
-<h2>Contract and its limit</h2><p>A failed stream is not restarted after prose was delivered. Retrying then would duplicate visible output that the server cannot retract.</p><p><code>backend/src/grimoire/llm/_client.py:105</code> · <code>backend/src/grimoire/llm/_retry.py:81</code> · <code>backend/src/grimoire/llm/_lifecycle.py:82</code></p><h3>Review priority</h3><div class="callout warn">Cancellation does not guarantee an uncooperative provider iterator has stopped. Cleanup and abandoned work must remain accounted for at their actual lifetime boundary.</div><h3>Analysis limits</h3><p>The automated LLM detector recognizes SDK-shaped calls and can miss this application’s wrappers and direct HTTP transports. An omitted LLM Ops tab does not mean this code makes no model calls. Textual dependency/load edges and checker findings need semantic review before fixes.</p>
+<h2>Observable invariants and limits</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence</th></tr></thead><tbody><tr><td>The facade receives configuration through values/callables and does not import store state.</td><td><code>backend/src/grimoire/llm/_client.py</code></td></tr><tr><td>Retry count is normalized nonnegative and malformed values fall back to defaults.</td><td><code>backend/src/grimoire/llm/_client.py</code></td></tr><tr><td>Provider-specific refusals remain typed so upper operations can choose a limited retry.</td><td><code>backend/src/grimoire/llm/_refusals.py</code></td></tr></tbody></table></div><h2>Risk ranking</h2><ol><li>A closed client wait is not proof an underlying task or worker stopped; settlement is intentionally bounded. <code>backend/src/grimoire/llm/_lifecycle.py</code></li><li>Attempt-local holder reset must preserve caller-owned collectors while preventing retry leakage. <code>backend/src/grimoire/llm/_accounting.py</code></li><li>Compatibility exports and defining leaves are different patch seams; patching a copied name may not change internal behavior. <code>backend/src/grimoire/llm/__init__.py</code></li></ol><p>These are source-review priorities, not new reproduced defects. The health page separates deterministic findings from unverified candidates.</p>
+
+<h2>Reconciliation with the previous atlas</h2><p>The previous risk checklist was re-read against current source after the fresh pass. The following cases remain open or retain an important limit; their old line coordinates were replaced where code moved. Earlier source-shape test assurances remain withdrawn: behavioral checks, not source spelling, establish runtime contracts.</p><ul><li>A failed stream is not restarted after prose was delivered: retrying would duplicate visible output that cannot be retracted. Cancellation settlement remains bounded even when an underlying iterator does not cooperate. <code>backend/src/grimoire/llm/_retry.py:81</code> · <code>backend/src/grimoire/llm/_lifecycle.py:82</code></li></ul>
+
 </section>
 <section class="panel" id="glossary" role="tabpanel">
 
-<h2>Domain to code</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Meaning</th></tr></thead><tbody><tr><td>route</td><td>one target with retry allowance</td></tr><tr><td>fallback</td><td>a separate resolved target</td></tr><tr><td>heartbeat</td><td>content-free liveness chunk</td></tr><tr><td>holder</td><td>per-call usage collection seam</td></tr></tbody></table></div><p><code>backend/src/grimoire/llm/_client.py:27</code></p>
-</section>
-<section class="panel" id="coverage" role="tabpanel">
-
-
-<div class="kpis">
-  <div class="kpi good"><div class="n">98%</div><div class="l">line coverage (measured files)</div></div>
-  <div class="kpi"><div class="n">7</div><div class="l">files measured</div></div>
-  <div class="kpi good"><div class="n">0</div><div class="l">source files not measured</div></div>
-</div>
-<div class="callout"><b>Source:</b> <code>C:\Users\charl\github\grimoire\backend\coverage.xml</code> (cobertura). This tab renders an existing artifact — it did not run the tests. Coverage says which lines executed under test, not that their behavior was asserted; pair it with the Invariants tab before trusting a green file.</div>
-
-<h2>Uncovered complexity map</h2>
-<p class="dim">Area = lines of code · color = % uncovered · the large, hot blocks are the untested complexity.</p>
-<div class="viz" data-render="treemap" style="height:520px"></div>
-<script type="application/json">{"items":[{"name":"backend/src/grimoire/llm/_client.py","value":467,"metric":4.3,"meta":"96% covered \u00b7 70 branches"},{"name":"backend/src/grimoire/llm/_lifecycle.py","value":150,"metric":1.5,"meta":"98% covered \u00b7 31 branches"},{"name":"backend/src/grimoire/llm/_refusals.py","value":265,"metric":1.1,"meta":"99% covered \u00b7 45 branches"},{"name":"backend/src/grimoire/llm/_routes.py","value":229,"metric":1.2,"meta":"99% covered \u00b7 28 branches"},{"name":"backend/src/grimoire/llm/_accounting.py","value":194,"metric":1.0,"meta":"99% covered \u00b7 23 branches"},{"name":"backend/src/grimoire/llm/__init__.py","value":299,"metric":0.0,"meta":"100% covered \u00b7 0 branches"},{"name":"backend/src/grimoire/llm/_retry.py","value":313,"metric":0.0,"meta":"100% covered \u00b7 52 branches"}],"valueLabel":"LOC","metricLabel":"% uncovered","metricMax":100}</script>
-<h2>Highest-risk files — complex and untested</h2>
-<p class="dim">Risk = branch points × uncovered share. Tests excluded from the ranking.</p>
-<div class="tbl-wrap"><table class="sortable">
-<thead><tr><th>File</th><th class="num">Coverage</th><th class="num">Lines</th><th class="num">Branches</th><th class="num">Untested complexity</th></tr></thead>
-<tbody><tr><td><code>backend/src/grimoire/llm/_client.py</code></td><td class='num'>96%</td><td class='num'>176/184</td><td class='num'>70</td><td class='num' data-sort='3.0'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_lifecycle.py</code></td><td class='num'>98%</td><td class='num'>64/65</td><td class='num'>31</td><td class='num' data-sort='0.5'><div class="bar bad"><i style="width:16.7%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_refusals.py</code></td><td class='num'>99%</td><td class='num'>87/88</td><td class='num'>45</td><td class='num' data-sort='0.5'><div class="bar bad"><i style="width:16.7%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_routes.py</code></td><td class='num'>99%</td><td class='num'>80/81</td><td class='num'>28</td><td class='num' data-sort='0.3'><div class="bar bad"><i style="width:10.0%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_accounting.py</code></td><td class='num'>99%</td><td class='num'>98/99</td><td class='num'>23</td><td class='num' data-sort='0.2'><div class="bar bad"><i style="width:6.7%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/__init__.py</code></td><td class='num'>100%</td><td class='num'>100/100</td><td class='num'>0</td><td class='num' data-sort='0.0'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
-<tr><td><code>backend/src/grimoire/llm/_retry.py</code></td><td class='num'>100%</td><td class='num'>103/103</td><td class='num'>52</td><td class='num' data-sort='0.0'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
-
-
+<h2>Terms that carry a contract</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Meaning here</th><th>Source</th></tr></thead><tbody><tr><td>Chain</td><td>per-call ordered targets and fallback</td><td><code>backend/src/grimoire/llm/_routes.py</code></td></tr><tr><td>Attempt</td><td>one serving connection/model send</td><td><code>backend/src/grimoire/llm/_accounting.py</code></td></tr><tr><td>Refusal</td><td>typed protocol rejection</td><td><code>backend/src/grimoire/llm/_refusals.py</code></td></tr></tbody></table></div>
 
 </section><!--DOC_BODY--></main>
-<footer class="doc"></footer>
+<footer class="doc">Generated by code-visualization. Inventory, dependency, hotspot and LLM tabs are automated; judgments were rebuilt from source and reconciled with the prior risk checklist. No private library or live provider was accessed.</footer>
 <script>
 (function(){
   const btns=[...document.querySelectorAll('nav.tabs button')];

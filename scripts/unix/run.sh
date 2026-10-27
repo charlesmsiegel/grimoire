@@ -42,9 +42,15 @@ fi
 # after a `git pull` serve the new UI rather than the one the installer built:
 # git stamps every file it writes with the checkout time. Directories count too,
 # since deleting a file changes nothing but its directory's mtime. A missing
-# entry is skipped rather than fatal; test_install_scripts.py asserts they all
-# exist and that scripts/windows/run.ps1 watches the same list.
-BUNDLE_INPUTS=(src public index.html package.json package-lock.json tsconfig.json vite.config.ts)
+# entry is skipped rather than fatal. Desktop and Android read one inventory
+# so adding a real build input cannot update one host while leaving another
+# serving stale bytes. Include the inventory itself so changing it rebuilds.
+# `read` rather than `mapfile` keeps this compatible with macOS's Bash 3.
+BUNDLE_INPUTS=(build-inputs.txt)
+while IFS= read -r input || [ -n "$input" ]; do
+  input="${input%$'\r'}"  # a Windows checkout may give the inventory CRLF lines
+  if [ -n "$input" ]; then BUNDLE_INPUTS+=("$input"); fi
+done < "$ROOT/frontend/build-inputs.txt"
 
 bundle_is_stale() {
   local paths=() p
