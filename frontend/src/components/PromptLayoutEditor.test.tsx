@@ -30,7 +30,7 @@ function Host({ onReset = () => {}, initial = SECTIONS }: {
 const rowIds = () =>
   screen.getAllByTestId("layout-row").map((r) => r.getAttribute("data-id"));
 const state = (): PromptLayoutSection[] =>
-  JSON.parse(screen.getByTestId("state").textContent!);
+  JSON.parse(screen.getByTestId("state").textContent);
 
 test("lists the sections in the order it is given", () => {
   render(<Host />);
@@ -39,7 +39,7 @@ test("lists the sections in the order it is given", () => {
 
 test("an unset label shows blank with the default as its placeholder", () => {
   render(<Host />);
-  const input = screen.getByLabelText("Label for World info") as HTMLInputElement;
+  const input = screen.getByLabelText<HTMLInputElement>("Label for World info");
   expect(input.value).toBe("");
   expect(input.placeholder).toBe("World info");
 });

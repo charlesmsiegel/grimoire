@@ -19,6 +19,7 @@ vi.mock("../api/client", async () => {
       readRecordArt: vi.fn(), appendRecordArt: vi.fn(), promoteRecordArt: vi.fn(), removeRecordArt: vi.fn(),
       setRecordArtFocus: vi.fn(), setRecordArtDescription: vi.fn(), draftRecordArtDescription: vi.fn(), getImageUsage: vi.fn(),
       getActorMembership: vi.fn(), readCharacter: vi.fn(), listCharacters: vi.fn(), deleteCharacter: vi.fn(),
+      rememberedCharacters: vi.fn(), rememberedAppearances: vi.fn(), countUndescribedImages: vi.fn(),
       updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
       setCharacterName: vi.fn(), setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
       getCalendarConfig: vi.fn(),

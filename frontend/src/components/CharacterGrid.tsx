@@ -78,7 +78,7 @@ export function CharacterGrid(
   useEffect(() => { setWizardOpen(false); }, [visit]);
 
   const describe = useDescribeBacklog(scope, fence, setError);
-  const imports = useCharacterImports({ wid, scope, reload, setError, navigate });
+  const imports = useCharacterImports({ wid, scope, reload, setError, navigate, fence });
   const untagged = useMemo(() => (worldScope ? chars.filter((c) => !c.tagline) : []),
                            [worldScope, chars]);
   const taglines = useTaglineBatch({ wid, untaggedCount: untagged.length, reload, setError, fence });
@@ -124,7 +124,12 @@ export function CharacterGrid(
       <CharacterImportDialogs wid={wid} chars={chars} imports={imports}
                               urlPromptOpen={urlPromptOpen}
                               onCloseUrlPrompt={() => setUrlPromptOpen(false)}
-                              onTaglineSaved={() => { void reload(); }} />
+                              onTaglineSaved={() => {
+                                if (liveVisit.current !== visit) return;
+                                void reload().catch((err: unknown) => {
+                                  if (liveVisit.current === visit) setError(err);
+                                });
+                              }} />
       {textImportOpen && worldScope && (
         <TextCharacterImport key={scopeKey} wid={scope.id}
           onCancel={() => setTextImportOpen(false)}

@@ -3,7 +3,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { ApiError, api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type EntitySummary, type Greeting, type GreetingMark } from "../api/client";
 import { errorText } from "../api/errors";
 import { encodeSegment } from "../urlSegment";
-import { Field } from "./Field";
 import { DemotePanel } from "./DemotePanel";
 import { GreetingMarkdown } from "./GreetingMarkdown";
 import { LibraryPanel } from "./LibraryPanel";
@@ -11,40 +10,9 @@ import { StaleRecordBanner } from "./StaleRecordBanner";
 import { SubjectsPopover } from "./SubjectsPopover";
 import { TaggingQueue } from "./TaggingQueue";
 import { useCreationRequest } from "./useCreationRequest";
-
-const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any", pcless: false, location: "", phase: "", sequence: null as number | null, optional: false };
-
-/** Same edges, order included: these are stored as written, and a reorder is a
- *  change this form has no way to have made by accident. */
-const sameEdges = (a: Edges, b: Edges) =>
-  a.leads_to.join("\u0000") === b.leads_to.join("\u0000")
-  && a.excludes.join("\u0000") === b.excludes.join("\u0000");
-const NO_EDGES: Edges = { leads_to: [], excludes: [] };
-
-// Marks are campaign-only (a world has no play history), so the rail's mark
-// chips are too; search works in both scopes.
-const MARKS: Exclude<GreetingMark, null>[] = ["played", "completed", "skipped"];
-const MARK_LABEL: Record<string, string> = { played: "played", completed: "done", skipped: "skip" };
-
-// NFC on both sides before folding case. Names arrive from hand-written
-// markdown and imported cards, so an accented one can be stored decomposed
-// (e + combining acute) while the reader types it composed; the two render
-// identically and would otherwise never match (Codex review). This normalizes
-// form, not accents: "cafe" still does not find "café", which keeps the match
-// rule something a reader can predict.
-const fold = (s: string) => s.normalize("NFC").toLowerCase();
-
-/** `list` with `id` added, or taken out if it is already there. */
-const toggled = (list: string[], id: string) =>
-  list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
-
-/** One plot-map edge list as chips: every other greeting, lit where `on` names it. */
-function edgeChips(others: Greeting[], on: string[], onToggle: (id: string) => void) {
-  return others.map((g) => (
-    <button key={g.id} className={"chip" + (on.includes(g.id) ? " on" : "")}
-            onClick={() => onToggle(g.id)}>{g.name}</button>
-  ));
-}
+import { BLANK, NO_EDGES, greetingDraft, sameEdges } from "./greetingEditor/form";
+import { GreetingFields } from "./greetingEditor/GreetingFields";
+import { GreetingRail } from "./greetingEditor/GreetingRail";
 
 export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, selected, isNew = false, sectionPath, recordHref,
                                  onChanged, onBusy, onEdgeDraft, hold = null, refreshKey = 0 }:
@@ -135,12 +103,6 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   const [picking, setPicking] = useState<string | null>(null); // image name being edited
   const [untagged, setUntagged] = useState<Appearance[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
-  // Rail filters. `query` matches names; `hiddenMarks` holds the marks the
-  // reader has switched OFF, so the default (an empty set) hides nothing -- a
-  // list that silently starts short is worse than one that starts long.
-  const [query, setQuery] = useState("");
-  const [hiddenMarks, setHiddenMarks] = useState<Set<Exclude<GreetingMark, null>>>(new Set());
-
   // Both lists, because the rail's verdict needs both: greetings are what it
   // counts, and character names are half of what search matches -- so before
   // they land, a query on a character reads as "no matches" while it is really
@@ -149,17 +111,46 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   const [listsReady, setListsReady] = useState(false);
 
   const scopeKey = `${scope.kind}:${scope.id}`;
+  const { kind: scopeKind, id: scopeId } = scope;
   const currentScope = useRef(scopeKey);
   currentScope.current = scopeKey;
-  const reload = useCallback(() => api.listGreetings(scope).then((list) => {
-    if (currentScope.current === scopeKey) setGreetings(list);
-  }), [scope.kind, scope.id]);
+  const currentGreeting = useRef({ gid, selected, scopeKey });
+  currentGreeting.current = { gid, selected, scopeKey };
+  const catalogEpoch = useRef(0);
+  const catalogRequest = useRef(0);
+  const reload = useCallback(async (still: () => boolean = () => true) => {
+    // A write from a retired scope may finish after the next scope started
+    // loading. It must not take that visit's catalog token before we reject it.
+    if (currentScope.current !== scopeKey || !still()) return;
+    const epoch = catalogEpoch.current;
+    const request = ++catalogRequest.current;
+    const list = await api.listGreetings({ kind: scopeKind, id: scopeId });
+    // Equal scope names do not identify one visit (A → B → A), and a newer
+    // refresh owns the list even when an older response arrives last.
+    if (epoch === catalogEpoch.current && request === catalogRequest.current
+        && currentScope.current === scopeKey && still()) setGreetings(list);
+  }, [scopeKind, scopeId, scopeKey]);
   useEffect(() => {
+    let current = true;
+    // This ref is a lifetime counter, not a DOM node. Retire callbacks from
+    // the effect being cleaned up, including a return to the same scope.
+    const lifetime = catalogEpoch;
     setListsReady(false);
-    Promise.all([reload(), api.listCharacters(scope).then(setChars)])
-      .catch(() => {})                   // a failed list is still a settled one
-      .finally(() => setListsReady(true));
-    api.listTags(wid).then(setTags);  // tag vocabulary stays a world concern
+    setGreetings([]);
+    setChars([]);
+    setTags({});
+    setLocations([]);
+    setUntagged([]);
+    // Both searches must settle, including a failed one. Promise.all would
+    // call the rail ready as soon as one fails while the other still loads.
+    void Promise.allSettled([reload(), api.listCharacters(scope).then((items) => {
+      if (current) setChars(items);
+    })]).then(() => { if (current) setListsReady(true); });
+    // Tag vocabulary stays a world concern. When it is unavailable, saved
+    // references still render their raw ids rather than becoming an error
+    // from an unrelated or retired scope.
+    void api.listTags(wid).then((items) => { if (current) setTags(items); },
+                              () => { if (current) setTags({}); });
     // Not in the `listsReady` gate above: that gate exists so the rail's "no
     // matches" verdict waits for what it SEARCHES (names and characters), and
     // locations are neither. A failed read leaves the picker empty; the stored
@@ -167,28 +158,34 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     // picker has not earned the right to say.
     setLocationsRead(false);
     api.listEntities(scope, "locations")
-      .then((ls) => { setLocations(ls); setLocationsRead(true); })
-      .catch(() => setLocations([]));
-    if (worldScope) api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
-    // The rail filters describe THIS scope's list and must not survive into the
-    // next one: this component is reused across a scope change, so a search and
-    // a hidden mark set in one campaign would silently omit rows from another
-    // -- against the "everything shown by default" rule, and invisibly, since
-    // a campaign -> world -> campaign trip hides the chips in the middle leg
-    // while the exclusion they represent is still in force (Codex review).
-    setQuery("");
-    setHiddenMarks(new Set());
+      .then((ls) => { if (current) { setLocations(ls); setLocationsRead(true); } })
+      .catch(() => { if (current) setLocations([]); });
+    if (worldScope) api.listUntaggedImages(wid)
+      .then((items) => { if (current) setUntagged(items); })
+      .catch(() => { if (current) setUntagged([]); });
+    return () => { current = false; lifetime.current++; };
   }, [wid, worldScope, reload]);  // eslint-disable-line react-hooks/exhaustive-deps -- scope is captured by reload
 
   function closeQueue() {
     setQueueOpen(false);
-    api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
+    const epoch = catalogEpoch.current;
+    api.listUntaggedImages(wid)
+      .then((items) => { if (epoch === catalogEpoch.current) setUntagged(items); })
+      .catch(() => { if (epoch === catalogEpoch.current) setUntagged([]); });
   }
 
   function queueSaved(savedGid: string) {
     // The queue's save landed; a re-read that fails leaves the chips as they
     // were read, until the greeting is next opened.
-    if (savedGid === gid) api.getGreetingSubjects(wid, savedGid).then(setSubjects).catch(() => {});
+    // Close can retire the queue while its PUT is pending. Its old callback
+    // must still address the loaded and selected greeting before starting a
+    // new read; taking the latest sequence alone would adopt the next view.
+    const view = currentGreeting.current;
+    if (savedGid !== view.gid || savedGid !== view.selected || scopeKey !== view.scopeKey) return;
+    const request = selectionRead.current;
+    if (savedGid === gid) api.getGreetingSubjects(wid, savedGid)
+      .then((items) => { if (request === selectionRead.current) setSubjects(items); })
+      .catch(() => {}); // optional refresh: retain the selected record's chips
   }
 
   /** Bumped on every selection change, the null one included. Without that,
@@ -266,34 +263,39 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   // URL selection and Cancel share one read sequence: a late reload cannot
   // overwrite the record the reader moved to, or banner it with an old error.
   const selectionRead = useRef(0);
-  async function select(id: string, still: () => boolean = () => true) {
+  function claimSelectionRead(still: () => boolean = () => true) {
     const request = ++selectionRead.current;
+    return () => request === selectionRead.current && still();
+  }
+
+  async function readSelection(id: string, current: () => boolean) {
     try {
-      setError(null);
-      setStale(null);
       const g = await api.readGreeting(scope, id);
-      if (!still() || request !== selectionRead.current) return;   // the reader moved on while this was in flight
+      if (!current()) return;   // the reader moved on while this was in flight
       setGid(id);
       setRev(g.rev);
-      setForm({
-        name: g.meta.name, character: g.meta.character, version: g.meta.version,
-        body: g.body.trim(), present: g.meta.present ?? [], requires_tags: g.meta.requires_tags,
-        predecessor_join: g.meta.predecessor_join, pcless: g.meta.pcless ?? false,
-        location: g.meta.location ?? "", phase: g.meta.phase ?? "",
-        sequence: g.meta.sequence ?? null, optional: g.meta.optional ?? false,
-      });
+      setStale(null);
+      setForm(greetingDraft(g));
       setEdges(g.edges);
       setLoadedEdges(g.edges);
       setPredecessors(g.predecessors ?? []);
       setMode("view"); // existing greetings are read-only until Edit
       setPicking(null);
-      if (worldScope) api.getGreetingSubjects(wid, id).then(setSubjects).catch(() => setSubjects({}));
+      setSubjects({});
+      if (worldScope) api.getGreetingSubjects(wid, id)
+        .then((items) => { if (current()) setSubjects(items); })
+        .catch(() => { if (current()) setSubjects({}); });
     } catch (err: unknown) {
-      if (request === selectionRead.current && still()) throw err;
+      if (current()) throw err;
     }
   }
 
-  const versions = chars.find((c) => c.id === form.character)?.versions ?? [];
+  async function select(id: string, still: () => boolean = () => true) {
+    const current = claimSelectionRead(still);
+    setError(null);
+    setStale(null);
+    await readSelection(id, current);
+  }
 
   /** `base` is the rev this save claims to be replacing -- normally the one
    *  loaded, and on an explicit overwrite the one the 409 reported. */
@@ -361,24 +363,39 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   }
 
   async function discardAndReload() {
-    setStale(null);
     if (!gid) return;
-    await reload();
+    // Reserve before the list refresh: starting a new selection only after
+    // that await would let an old reload supersede the reader's newer move.
+    const current = claimSelectionRead();
+    retireSave();
+    setError(null);
     try {
-      await select(gid);
-    } catch {
-      resetForm(); // the greeting is gone from disk entirely
+      await reload(current);
+    } catch (err: unknown) {
+      if (current()) setError(errorText(err));
+      return; // even a list 404 says nothing about the selected record
+    }
+    if (!current()) return;
+    try {
+      await readSelection(gid, current);
+    } catch (err: unknown) {
+      if (!current()) return;
+      if (err instanceof ApiError && err.status === 404) resetForm();
+      else setError(errorText(err)); // keep the draft and stale retry choice
     }
   }
 
   async function importFromCharacter() {
     if (!form.character || !form.version) return;
     if (hold) { setError(hold); return; }
+    const request = selectionRead.current;
     beginWrite();
     try {
       await api.importGreetings(wid, { character: form.character, version: form.version });
       await reload();
-      onChanged?.();
+      if (currentScope.current === scopeKey) onChanged?.();
+    } catch (err: unknown) {
+      if (request === selectionRead.current) setError(errorText(err));
     } finally {
       endWrite();
     }
@@ -401,17 +418,6 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     }
   }
 
-  // Updaters rather than a spread of the form this render holds: the chip
-  // lists below that call these are memoized, so a click can reach a closure
-  // from several keystrokes ago -- and spreading THAT form would put the body
-  // back the way it was then.
-  const toggle = useCallback((list: "leads_to" | "excludes", id: string) =>
-    setEdges((e) => ({ ...e, [list]: toggled(e[list], id) })), []);
-  const toggleTag = useCallback((tid: string) =>
-    setForm((f) => ({ ...f, requires_tags: toggled(f.requires_tags, tid) })), []);
-  const togglePresent = useCallback((cid: string) =>
-    setForm((f) => ({ ...f, present: toggled(f.present, cid) })), []);
-
   const mark: GreetingMark = greetings.find((g) => g.id === gid)?.mark ?? null;
 
   async function setMark(status: "completed" | "skipped" | "none") {
@@ -424,12 +430,10 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     }
   }
 
-  // Everything from here to the rail is memoized on what it reads, because
-  // this editor re-renders on every keystroke in the body and a world can hold
-  // a great many greetings and characters: the rail, the mark counts, and the
-  // form's chip lists -- two of them a chip per OTHER greeting -- were all
-  // rebuilt for each letter typed.
-  const others = useMemo(() => greetings.filter((g) => g.id !== gid), [greetings, gid]);
+  // Keep reader name lookups stable across draft keystrokes. The rail and
+  // field components own the corresponding memoized lists: a world can hold
+  // many greetings and characters, so rebuilding every chip for each letter
+  // typed would make editing pay for the whole browse surface.
   const charById = useMemo(() => new Map(chars.map((c) => [c.id, c])), [chars]);
   const charName = useCallback((id: string) => charById.get(id)?.name ?? id, [charById]);
   // Falls back to the raw id, as every other reference chip here does: a
@@ -438,51 +442,6 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
   const locName = (id: string) => locations.find((l) => l.id === id)?.name ?? id;
   const locationKnown = locations.some((l) => l.id === form.location);
 
-  // --- rail filtering -------------------------------------------------------
-  const markCounts = useMemo(
-    () => MARKS.map((m) => [m, greetings.filter((g) => g.mark === m).length] as const),
-    [greetings]);
-
-  function toggleMark(m: Exclude<GreetingMark, null>) {
-    setHiddenMarks((prev) => {
-      const next = new Set(prev);
-      if (next.has(m)) next.delete(m); else next.add(m);
-      return next;
-    });
-  }
-
-  const shownGreetings = useMemo(() => {
-    // Name, source character, and every present character -- all of which the
-    // list payload already carries, so this costs no request. Bodies are NOT
-    // searched: they only exist on the per-greeting read.
-    const needle = fold(query.trim());
-    const matchesQuery = (g: Greeting) => !needle
-      || [g.name, charName(g.character), ...(g.present ?? []).map(charName)]
-        .some((s) => fold(s).includes(needle));
-    return greetings.filter((g) => {
-      // The open greeting always stays listed. Its content is on screen either
-      // way, and dropping its row would leave the body with no visible source --
-      // the reader would see a record the list denies having.
-      if (g.id === gid) return true;
-      if (!worldScope && g.mark && hiddenMarks.has(g.mark)) return false;
-      return matchesQuery(g);
-    });
-  }, [greetings, gid, worldScope, hiddenMarks, query, charName]);
-  const hiddenCount = greetings.length - shownGreetings.length;
-  const rail = useMemo(() => shownGreetings.map((g) => (
-    <Link
-      key={g.id}
-      className={"row" + (gid === g.id ? " active" : "")}
-      to={recordHref(g.id)}
-    >
-      {g.name}
-      {!worldScope && g.mark && (
-        <span className={`mark-badge ${g.mark}`}>
-          {MARK_LABEL[g.mark]}
-        </span>
-      )}
-    </Link>
-  )), [shownGreetings, gid, worldScope, recordHref]);
   const greetName = (id: string) => greetings.find((g) => g.id === id)?.name ?? id;
   // the version a present character is cast at: source at the greeting's version, others at their default
   const presentVid = (id: string) => (id === form.character ? form.version : (chars.find((c) => c.id === id)?.default_version ?? ""));
@@ -505,36 +464,21 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
     return path.startsWith(prefix) ? decodeURIComponent(path.slice(prefix.length)) : path;
   };
 
-  // The form's long lists, for the rail's reason: each rebuilt only when what
-  // it lists or which of them are on changes, never for a keystroke elsewhere.
-  const characterOptions = useMemo(
-    () => chars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>), [chars]);
-  const locationOptions = useMemo(
-    () => locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>), [locations]);
-  const presentChips = useMemo(() => chars.map((c) => (
-    <button key={c.id} className={"chip" + (form.present.includes(c.id) ? " on" : "")}
-            onClick={() => togglePresent(c.id)}>{c.name}</button>
-  )), [chars, form.present, togglePresent]);
-  const tagChips = useMemo(() => Object.keys(tags).sort().map((tid) => (
-    <button key={tid} className={"chip" + (form.requires_tags.includes(tid) ? " on" : "")}
-            onClick={() => toggleTag(tid)}>{tags[tid]}</button>
-  )), [tags, form.requires_tags, toggleTag]);
-  const leadsToChips = useMemo(
-    () => edgeChips(others, edges.leads_to, (id) => toggle("leads_to", id)),
-    [others, edges.leads_to, toggle]);
-  const excludesChips = useMemo(
-    () => edgeChips(others, edges.excludes, (id) => toggle("excludes", id)),
-    [others, edges.excludes, toggle]);
-
   async function saveSubjects(name: string, cids: string[]) {
     if (!gid) return;
+    const request = selectionRead.current;
+    const current = () => request === selectionRead.current;
     try {
       await api.setImageSubjects(wid, gid, name, cids);
-      setSubjects(await api.getGreetingSubjects(wid, gid));
+      if (!current()) return;
+      const subjects = await api.getGreetingSubjects(wid, gid);
+      if (!current()) return;
+      setSubjects(subjects);
       setPicking(null);
-      setUntagged(await api.listUntaggedImages(wid, true));
+      const untagged = await api.listUntaggedImages(wid, true);
+      if (current()) setUntagged(untagged);
     } catch (err: unknown) {
-      setError(errorText(err));
+      if (current()) setError(errorText(err));
     }
   }
 
@@ -561,51 +505,19 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
 
   return (
     <div className="editor">
-      <div className="editor-list">
-        <Link className="primary new" to={{ pathname: sectionPath, search: "?new=1" }}>+ New greeting</Link>
-        {worldScope && untagged.length > 0 && (
-          <button className="subtle new" onClick={() => setQueueOpen(true)}>
-            ▶ Tag images ({untagged.length})
-          </button>
-        )}
-        <input className="rail-search" type="search" value={query} aria-label="Search greetings"
-               placeholder="Search name or character…"
-               onChange={(e) => setQuery(e.target.value)} />
-        {!worldScope && markCounts.some(([, n]) => n > 0) && (
-          <div className="rail-filters" role="group" aria-label="Filter by mark">
-            {markCounts.filter(([, n]) => n > 0).map(([m, n]) => (
-              <button key={m} className={"chip" + (hiddenMarks.has(m) ? "" : " on")}
-                      aria-pressed={!hiddenMarks.has(m)}
-                      title={hiddenMarks.has(m) ? `Show ${MARK_LABEL[m]}` : `Hide ${MARK_LABEL[m]}`}
-                      onClick={() => toggleMark(m)}>
-                {MARK_LABEL[m]} {n}
-              </button>
-            ))}
-          </div>
-        )}
-        {rail}
-        {/* One status line, always in the DOM rather than mounted on demand:
-            filtering happens while focus is still in the search box, so a
-            result count that only appears afterwards is never announced. Live
-            regions have to exist before the text changes to be read out. */}
-        {/* One status line, always in the DOM rather than mounted on demand:
-            filtering happens while focus is still in the search box, so a
-            result count that only appears afterwards is never announced. Live
-            regions have to exist before the text changes to be read out. */}
-        <div className="field-hint rail-empty" role="status" aria-live="polite">
-          {!listsReady
-            ? ""                        /* silence, not a verdict, while loading */
-            : shownGreetings.length === 0
-              ? "No greetings match."
-              : hiddenCount > 0 ? `${hiddenCount} hidden` : ""}
-        </div>
-      </div>
+      {/* Filters describe this scope's list: a campaign → world → campaign
+          trip must not silently carry hidden marks or search into the next
+          scope (Codex review). The rail owns that browse-only reset. */}
+      <GreetingRail scopeKey={JSON.stringify([wid, scope.kind, scope.id])} scope={scope}
+                    greetings={greetings} chars={chars} gid={gid} sectionPath={sectionPath}
+                    recordHref={recordHref} untaggedCount={untagged.length}
+                    listsReady={listsReady} onTagImages={() => setQueueOpen(true)} />
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
         {stale && (
-          <StaleRecordBanner label="greeting" rev={stale.rev} onReload={discardAndReload}
-                             onOverwrite={() => save(stale.rev)} />
+          <StaleRecordBanner label="greeting" rev={stale.rev} onReload={() => { void discardAndReload(); }}
+                             onOverwrite={() => { void save(stale.rev); }} />
         )}
         {worldScope && queueOpen ? (
           <TaggingQueue wid={wid} chars={chars} greetings={greetings} queue={untagged}
@@ -633,7 +545,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
                     <button className="chip" onClick={() => setPicking(name)}>＋ subjects</button>
                     {picking === name && (
                       <SubjectsPopover chars={chars} present={form.present} value={subjects[name] ?? []}
-                                       onSave={(cids) => saveSubjects(name, cids)}
+                                       onSave={(cids) => { void saveSubjects(name, cids); }}
                                        onClose={() => setPicking(null)} />
                     )}
                   </>
@@ -676,11 +588,11 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
                   </div>
                   <div className="chips">
                     <button className={"chip" + (mark === "completed" ? " on" : "")} disabled={mark === "played"}
-                            onClick={() => setMark("completed")}>Mark complete</button>
+                            onClick={() => { void setMark("completed"); }}>Mark complete</button>
                     <button className={"chip" + (mark === "skipped" ? " on" : "")} disabled={mark === "played"}
-                            onClick={() => setMark("skipped")}>Won't do</button>
+                            onClick={() => { void setMark("skipped"); }}>Won't do</button>
                     <button className="chip" disabled={!mark}
-                            onClick={() => setMark("none")}>Clear</button>
+                            onClick={() => { void setMark("none"); }}>Clear</button>
                   </div>
                 </div>
               )}
@@ -725,144 +637,11 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
         ) : (
         <div className="form">
           <h3>{gid ? "Edit greeting" : "New greeting"}</h3>
-          <Field label="Name">
-            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </Field>
-          <Field label="Character"
-                 hint={gid ? "re-pointing keeps this greeting's id and plot-map edges; {{char}} already baked into the text does not change" : undefined}>
-            <select value={form.character} aria-label="Character"
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      // A re-point follows the primary into the cast: the old
-                      // character's chip becomes the new one's (deduped if both
-                      // were present), and a non-empty cast that lacks the new
-                      // primary gains it -- the speaker must not be absent from
-                      // its own opener. An EMPTY cast stays empty (the store
-                      // falls back to the primary), and clearing to narrator
-                      // leaves the chips to the reader.
-                      let present = form.present;
-                      if (next) {
-                        present = present
-                          .map((id) => (form.character && id === form.character ? next : id))
-                          .filter((id, i, arr) => arr.indexOf(id) === i);
-                        if (present.length > 0 && !present.includes(next)) {
-                          present = [...present, next];
-                        }
-                      }
-                      setForm({ ...form, character: next, version: "", present });
-                    }}>
-              <option value="">— no character (narrator-only) —</option>
-              {characterOptions}
-              {/* A stored character the list does not offer (deleted since, or
-                  the list failed). Without this the controlled select renders
-                  the narrator option while the field still holds the dead id —
-                  same rule as the location picker below. */}
-              {form.character && !chars.some((c) => c.id === form.character) && (
-                <option value={form.character}>
-                  {listsReady ? `${form.character} (missing)` : form.character}
-                </option>
-              )}
-            </select>
-          </Field>
-          {form.character && (
-            <Field label="Version">
-              <select value={form.version} aria-label="Version"
-                      onChange={(e) => setForm({ ...form, version: e.target.value })}>
-                <option value="">— pick a version —</option>
-                {versions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                {form.version && !versions.some((v) => v.id === form.version) && (
-                  <option value={form.version}>
-                    {listsReady ? `${form.version} (missing)` : form.version}
-                  </option>
-                )}
-              </select>
-            </Field>
-          )}
-          {worldScope && form.character && (
-            <div className="form-actions">
-              <button className="subtle" onClick={importFromCharacter} disabled={!form.character || !form.version}>
-                Import greetings from this character/version
-              </button>
-            </div>
-          )}
-          <Field label="Greeting text">
-            <textarea value={form.body} rows={6} onChange={(e) => setForm({ ...form, body: e.target.value })} />
-          </Field>
-          <Field label="Offscreen"
-                 hint="an NPC-only opener — no player character; {{user}} becomes your PC's name">
-            <div className="chips">
-              <button className={"chip" + (form.pcless ? " on" : "")}
-                      onClick={() => setForm({ ...form, pcless: !form.pcless })}>
-                Offscreen (no PC)
-              </button>
-            </div>
-          </Field>
-          <Field label="Location"
-                 hint="where a scene from this greeting opens — the new-scene form starts here, and can be changed or cleared there">
-            <select value={form.location} aria-label="Location"
-                    onChange={(e) => setForm({ ...form, location: e.target.value })}>
-              <option value="">— no location —</option>
-              {locationOptions}
-              {/* A stored id the list does not offer. Without this the
-                  controlled select renders blank, which claims the greeting
-                  has no location while the field still holds one, and the next
-                  save would silently carry it through. Shown as itself, so it
-                  can be seen and cleared — but called "missing" only once the
-                  list has actually come back, because until then its absence
-                  says nothing about the location. */}
-              {form.location && !locations.some((l) => l.id === form.location) && (
-                <option value={form.location}>
-                  {locationsRead ? `${form.location} (missing)` : form.location}
-                </option>
-              )}
-            </select>
-          </Field>
-          <Field label="Present characters" hint="everyone cast into the scene when it starts from this greeting">
-            <div className="chips">
-              {presentChips}
-              {chars.length === 0 && <span className="field-hint">No characters in this world yet.</span>}
-            </div>
-          </Field>
-          <Field label="Phase" hint="story phase used to keep recommendations near the current arc">
-            <input aria-label="Phase" type="text" value={form.phase}
-                   onChange={(e) => setForm({ ...form, phase: e.target.value })} />
-          </Field>
-          <Field label="Sequence" hint="author order within the phase">
-            <input aria-label="Sequence" type="number" min="1" value={form.sequence ?? ""}
-                   onChange={(e) => setForm({ ...form, sequence: e.target.value ? Number(e.target.value) : null })} />
-          </Field>
-          <Field label="Optional" hint="recommend alongside direct successors while this phase is current">
-            <div className="chips">
-              <button className={"chip" + (form.optional ? " on" : "")}
-                      onClick={() => setForm({ ...form, optional: !form.optional })}>
-                Optional within phase
-              </button>
-            </div>
-          </Field>
-          <Field label="Required tags" hint="the greeting unlocks only if a player PC carries these">
-            <div className="chips">
-              {tagChips}
-              {Object.keys(tags).length === 0 && <span className="field-hint">No tags in this world yet.</span>}
-            </div>
-          </Field>
-          <Field label="Predecessor join">
-            <select value={form.predecessor_join} aria-label="Predecessor join"
-                    onChange={(e) => setForm({ ...form, predecessor_join: e.target.value as "all" | "any" })}>
-              <option value="all">all predecessors must be played</option>
-              <option value="any">any predecessor unlocks it</option>
-            </select>
-          </Field>
-          <Field label="Leads to" hint="greetings this one unlocks once played">
-            <div className="chips">
-              {leadsToChips}
-              {others.length === 0 && <span className="field-hint">No other greetings yet.</span>}
-            </div>
-          </Field>
-          <Field label="Excludes" hint="playing this one locks these (mutually exclusive)">
-            <div className="chips">
-              {excludesChips}
-            </div>
-          </Field>
+          <GreetingFields form={form} setForm={setForm} edges={edges} setEdges={setEdges}
+                          chars={chars} locations={locations} tags={tags}
+                          greetings={greetings} gid={gid} listsReady={listsReady}
+                          locationsRead={locationsRead} worldScope={worldScope}
+                          onImport={() => { void importFromCharacter(); }} />
           <div className="form-actions">
             {gid && <button className="subtle" title={hold ?? undefined} disabled={!!hold || writing}
                             onClick={() => remove(greetings.find((g) => g.id === gid)!)}>Delete</button>}
@@ -872,7 +651,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, onOpenLocation, se
               retireSave(); void select(gid).catch((err: unknown) => setError(errorText(err)));
             }}>Cancel</button>
               : <Link className="subtle" to={sectionPath}>Cancel</Link>}
-            <button className="primary" onClick={() => save()} title={hold ?? undefined}
+            <button className="primary" onClick={() => { void save(); }} title={hold ?? undefined}
                     disabled={!form.name.trim() || (!!form.character && !form.version)
                               || !!hold || writing}>
               {gid ? "Save greeting" : "Create greeting"}

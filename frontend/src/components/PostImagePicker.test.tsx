@@ -140,7 +140,7 @@ test("a library whose listing failed offers no upload", async () => {
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
   expect(await screen.findByText("campaign not found")).toBeTruthy();
-  expect((screen.getByLabelText(/add an image/i) as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByLabelText<HTMLInputElement>(/add an image/i)).disabled).toBe(true);
   // and it does not also claim there are no images: the read is what failed
   expect(screen.queryByText(/no campaign images yet/i)).toBeNull();
 });
@@ -193,7 +193,7 @@ test("the file input is a real, focusable control rather than a styled label", a
   // would offer AVIF and BMP, which the upload refuses.
   render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
                           onInsert={() => {}} onClose={() => {}} />);
-  const input = await screen.findByLabelText(/add an image/i) as HTMLInputElement;
+  const input = await screen.findByLabelText<HTMLInputElement>(/add an image/i);
   expect(input.type).toBe("file");
   expect(input.accept).toBe("image/png,image/jpeg,image/gif,image/webp");
   expect(getComputedStyle(input).display).not.toBe("none");

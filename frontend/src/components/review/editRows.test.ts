@@ -11,11 +11,11 @@ import {
 } from "./editRows";
 import type { Dossiers, IdentityCheck, StagedEdit } from "../../api/client";
 
-const edit = (over: Partial<StagedEdit> = {}) => ({
+const edit = (over: Partial<StagedEdit> = {}): StagedEdit => ({
   id: "lore:the-pact", kind: "lore", target: { kind: "lore", id: "the-pact" },
   label: "The Pact — lore", field: "body", before: "", after: "x", authored: false,
   ...over,
-} as StagedEdit);
+});
 
 const cited = (over: Partial<NonNullable<StagedEdit["review"]>> = {}) => ({
   certainty: 0.9, quote: "They broke it by morning.", speaker: "Mara",

@@ -509,6 +509,54 @@ test("a failing file is named and the rest still import", async () => {
 
 // ---------------------------------------------------------------- taglines
 
+test("a pending file import cannot reclaim the grid after a round trip between worlds", async () => {
+  let finish!: (result: { character: string; version: string }) => void;
+  const pending = new Promise<{ character: string; version: string }>((resolve) => { finish = resolve; });
+  vi.mocked(api.importCharacter).mockReturnValueOnce(pending);
+  const view = render(<MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
+  await screen.findByText("Seraphine");
+  fireEvent.change(screen.getByLabelText("Import character card"),
+    { target: { files: [new File(["{}"], "card.json")] } });
+  fireEvent.click(await screen.findByRole("button", { name: "Import" }));
+  await waitFor(() => expect(api.importCharacter).toHaveBeenCalledTimes(1));
+  view.rerender(<MemoryRouter><Spy />
+    <CharacterGrid scope={{ kind: "world", id: "saltmarch" }} wid="saltmarch" />
+  </MemoryRouter>);
+  await screen.findByText("Seraphine");
+  view.rerender(<MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
+  await screen.findByText("Seraphine");
+  vi.mocked(api.listCharacters).mockClear();
+  await act(async () => { finish({ character: "mara", version: "default" }); });
+  expect(lastLocation).toBe("/");
+  expect(api.localizeImages).not.toHaveBeenCalled();
+  expect(api.listCharacters).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("a tagline save from a retired import queue cannot refresh a later visit", async () => {
+  vi.mocked(api.importCharacterFromChub).mockResolvedValue(fixture({
+    character: "mara", version: "default", gallery: { stored: 0 }, lore: { created: [] },
+  }));
+  vi.mocked(api.importCharacterBook).mockResolvedValue({ created: [] });
+  let finish!: (result: { ok: boolean }) => void;
+  vi.mocked(api.setCharacterTagline).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  const view = render(<MemoryRouter><Spy /><CharacterGrid scope={WORLD} wid="realm" /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole("button", { name: "Download from URL" }));
+  fireEvent.change(screen.getByLabelText("Card URLs"), { target: { value: "https://example.test/card" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.change(await screen.findByLabelText("Tagline"), { target: { value: "Keeps the tide." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setCharacterTagline).toHaveBeenCalledTimes(1));
+  view.rerender(<MemoryRouter><Spy />
+    <CharacterGrid scope={{ kind: "world", id: "saltmarch" }} wid="saltmarch" />
+  </MemoryRouter>);
+  await screen.findByText("Seraphine");
+  vi.mocked(api.listCharacters).mockClear();
+  await act(async () => { finish({ ok: true }); });
+  expect(api.listCharacters).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog", { name: "Set tagline" })).toBeNull();
+});
+
 test("the derive button counts the characters with no tagline", async () => {
   vi.mocked(api.listCharacters).mockResolvedValue([
     row("a", "A", { tagline: "set" }), row("b", "B"), row("c", "C"),

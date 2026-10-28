@@ -1,0 +1,1372 @@
+{
+  "schema": "code-overview-audit/1",
+  "generated": "2026-10-27",
+  "branch": "docs/code-quality",
+  "base_commit": "43d8349fc5d0bcb1094e8991ce2bbfadaf3da434",
+  "source_manifest_sha256": "fc99a43f0cebd732a2cb35c29583332ce74e7f5daae9511a80897261d2c74f60",
+  "source_input_files": 2962,
+  "source_state": "Same application inputs as before this refresh and the previous final Health audit. Only downstream generated documentation changed.",
+  "install_receipt": {
+    "source": "/workspace/work/coding-skills-02a2f312",
+    "current_source_link": "/workspace/work/coding-skills",
+    "uploaded_revision": "02a2f31258da6dfac3521b0bb8b3fb55a3e4ef36",
+    "installed_skills": {
+      "typescript-code-doctor": 56,
+      "python-code-doctor": 65
+    },
+    "preserved_skill_files": 246,
+    "preserved_skills": [
+      "brutal-review",
+      "code-deleter",
+      "code-doctor",
+      "code-overview",
+      "code-visualization",
+      "django-code-doctor",
+      "fix-issue",
+      "fix-pr",
+      "legal-survey",
+      "literature-survey",
+      "pr-visualization",
+      "rust-code-doctor",
+      "science-investigation",
+      "theory-building",
+      "update-docs"
+    ],
+    "install_destination": "/workspace/work/installed/.codex/skills",
+    "reason_for_selective_install": "Uploaded code-overview omits prior Theory scope/causal grading updates. Installed only the requested detector updates; preserved other existing skills.",
+    "case_replay": [
+      {
+        "case": "sql",
+        "file": "backend/src/grimoire/store/compiled/_deletion.py",
+        "line": 257,
+        "observed": [
+          {
+            "file": "/workspace/grimoire/backend/src/grimoire/store/compiled/_deletion.py",
+            "line": 257,
+            "smell_type": "sql_injection",
+            "description": "Call to .execute() passes a dynamically built SQL string",
+            "suggestion": "Use parameterized queries \u2014 pass parameters as the second argument (e.g. execute(sql, params)); never interpolate values into SQL.",
+            "severity": "high",
+            "code_snippet": "conn.execute(f'DELETE FROM {_quote_table(name)}')",
+            "kind": "finding",
+            "also_caused_by": []
+          }
+        ]
+      },
+      {
+        "case": "exception",
+        "file": "backend/src/grimoire/embeddings.py",
+        "line": 800,
+        "observed": []
+      },
+      {
+        "case": "duplicate",
+        "file": "frontend/src/routes/CampaignView.stopAndAttach.test.tsx",
+        "line": 537,
+        "observed": []
+      }
+    ],
+    "installed_replay": [
+      {
+        "case": "sql",
+        "classification": [
+          "finding"
+        ]
+      },
+      {
+        "case": "exception",
+        "classification": []
+      },
+      {
+        "case": "duplicate",
+        "classification": []
+      }
+    ],
+    "source_matches_upload": true,
+    "validation": {
+      "skill_structures": 17,
+      "focused_tests": {
+        "passed": 332,
+        "log": "/workspace/work/coding-skills-install-02a2f312/tests.log"
+      },
+      "semantic_tests_log": "/workspace/work/coding-skills-install-02a2f312/semantic-tests.log",
+      "ruff": "PASS",
+      "foreign_cwd_cli": "PASS"
+    }
+  },
+  "tool_manifest_sha256": "f765ef1edca177c429c337e66c69874b917e611b4b1decd90787f4dffbe3a0da",
+  "tool_files": 350,
+  "components": {
+    "health": {
+      "status": "incomplete Design coverage; other named categories scored",
+      "inputs": {
+        "raw": {
+          "path": "/workspace/work/code-overview-recompute-02a2f312/doctors/raw.json",
+          "sha256": "5fee7ff1e705ab4b05c0cd82dd7dccc8c1b4115f3de425f9c5212d9cb3978430"
+        },
+        "py": {
+          "path": "/workspace/work/code-overview-recompute-02a2f312/doctors-bounded/py.json",
+          "sha256": "f69a3af0c7992946c67112156406dd27d59fa374049ad797f34ff8f6931bd151"
+        },
+        "ts": {
+          "path": "/workspace/work/code-overview-recompute-02a2f312/doctors-isolated/ts.json",
+          "sha256": "32724b65442db5b6e319bcb0fd4210326dd7c320fb3cdca0e43fba706699dfc9"
+        }
+      },
+      "analyzer_errors": {
+        "py": {
+          "local_imports": "Isolated bounded-local_imports failed: timeout"
+        },
+        "ts": {}
+      },
+      "execution_protocol": [
+        "Fresh current-source analysis using installed Python/TypeScript doctors from uploaded 02a2f312 and the preserved overview/rubric tools. Source unchanged since the previous Health audit; scorer/protocol changes prevent attributing score differences to code improvements.",
+        "Every named analyzer was attempted from repository context. Fresh native per-file/tree tasks bound cache lifetime and use native merging, filtering, sorting and report validation; failed aggregate attempts are excluded. No reported finding is silently reclassified or filtered by this refresh.",
+        "Analysis is incomplete for the named detector errors. A failed detector ungrades its rubric category; a zero finding count there means unknown. The local-import check maps to Design, not Hygiene. Read analyzer_errors and execution evidence before comparing grades."
+      ],
+      "failed_attempts_excluded": [
+        "initial aggregates",
+        "4 GiB Python retry",
+        "8 GiB Python retry",
+        "initial isolated Python batches"
+      ],
+      "upstream_failure": {
+        "detector": "python-code-doctor/find_local_imports.py",
+        "symptom": "Cyclic import traversal expands path-dependent seen sets in _heavy_chain/_load_cost; repeated memory exhaustion. Separate complete-file-list bounded attempt timed out.",
+        "evidence": [
+          "doctors-isolated/python-code-doctor/file-000.log",
+          "doctors-isolated/python-code-doctor/file-001.log",
+          "doctors-bounded/python-code-doctor/execution.json"
+        ],
+        "graded_effect": "Python Design ungraded; root uses six completed categories. No category marked clean on error."
+      },
+      "comparison_limit": "Version and category coverage changed. Before/after Health scores are not a like-for-like measure of code improvement."
+    },
+    "codemap": {
+      "status": "13 fresh atlases",
+      "automated_jobs": 65,
+      "scope_adapter": "External runner admits exact file roots from the settled map; installed analyzers and in_roots filtering unchanged. Fresh-run resource cache only reuses identical current inputs.",
+      "coverage": {
+        "inputs": [
+          {
+            "path": "backend/coverage.xml",
+            "sha256": "f2b623182abbae815d9bd4c27ebf84b7932925d3ebae570b500a35faff1d2a15",
+            "mtime": 1793088054.2070947
+          },
+          {
+            "path": "frontend/coverage/lcov.info",
+            "sha256": "01b3406d6455f9195464a541d9459dc5efb522bed9ed7b2deae4d709b27750ed",
+            "mtime": 1793101673.4997654
+          }
+        ],
+        "combined": "/workspace/work/code-overview-recompute-02a2f312/coverage-combined.xml",
+        "files": 1250,
+        "method": "Re-encode existing per-line hits into one scoped Cobertura input. No tests run; oldest input timestamp preserved.",
+        "native_evidence": "Backend inputs byte-identical to prior full-gate inputs; frontend inputs match final5982-test gate source. Receipts in previous health audit; no new gate claim."
+      },
+      "prior_findings": "All prior Invariants & Risks checklists and component-specific cycle interpretations are explicitly retained with their evidence limits; no app fixes claimed.",
+      "citation_validation": "Native verifier reports no broken citations. It skips .j2/.ps1/.kts; supplemental path/line-bound/source-hash verification covers these explicitly, without changing installed tools."
+    },
+    "theory": {
+      "status": "13 fresh panels; 39 v3 judgments validated against frozen scope/source digests",
+      "aggregation": "Unchanged ordinal ladder, fixed weights, per-dimension median of three independent votes. No prior/desired scores exposed.",
+      "model": "Codex independent agents; exact served model snapshot and seed unavailable",
+      "briefs": [
+        {
+          "unit": "grimoire-store",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/grimoire-store.json",
+          "brief_digest": "1f45043da50639b6a1a6861926cd95e142b96ff044505658262cef57e1912522",
+          "revised": false,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/grimoire-store.json",
+          "changed_paths": [],
+          "citation_moves": {}
+        },
+        {
+          "unit": "grimoire-api",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/grimoire-api.json",
+          "brief_digest": "0b01ebb3d647ab200245ac8c625f802bc54873e4e298999892fbdb9d864b00dc",
+          "revised": false,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/grimoire-api.json",
+          "changed_paths": [],
+          "citation_moves": {}
+        },
+        {
+          "unit": "grimoire-providers-prompts",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/grimoire-providers-prompts.json",
+          "brief_digest": "d2e358d724d2ef7afeb248730930c243bb315c753688a27bc305aa59dffdd6cb",
+          "revised": true,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/grimoire-providers-prompts.json",
+          "changed_paths": [
+            "backend/src/grimoire/llm/_client.py",
+            "backend/tests/test_llm_lifecycle.py"
+          ],
+          "citation_moves": {
+            "backend/src/grimoire/llm/_client.py:105": "backend/src/grimoire/llm/_client.py:107",
+            "backend/src/grimoire/llm/_client.py:31": "backend/src/grimoire/llm/_client.py:33",
+            "backend/tests/test_llm_lifecycle.py:62": "backend/tests/test_llm_lifecycle.py:63"
+          }
+        },
+        {
+          "unit": "backend-tests",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/backend-tests.json",
+          "brief_digest": "955b2853085953077e3206c5a67cfadede9ae9bffee927665ed965d5a678b12e",
+          "revised": false,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/backend-tests.json",
+          "changed_paths": [],
+          "citation_moves": {}
+        },
+        {
+          "unit": "frontend",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/frontend.json",
+          "brief_digest": "3bbf0b3a5749684af4b10d906b196c515260fd27cb6786a500fc6b72ec1d89a3",
+          "revised": false,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/frontend.json",
+          "changed_paths": [],
+          "citation_moves": {}
+        },
+        {
+          "unit": "evals",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/evals.json",
+          "brief_digest": "13ab410f0c6f2ae05654cf22e0f9519fb2c5f747d348d83e174c2480c56ba4bb",
+          "revised": false,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/evals.json",
+          "changed_paths": [],
+          "citation_moves": {}
+        },
+        {
+          "unit": "scripts",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/scripts.json",
+          "brief_digest": "1ba71ef0bdcfcd4202de95dc4df3d2d6d8f64fbf71f9329d55f08d1c9fa0aa24",
+          "revised": false,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/scripts.json",
+          "changed_paths": [],
+          "citation_moves": {}
+        },
+        {
+          "unit": "android",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/android.json",
+          "brief_digest": "3b086dd419ef1a70118a0d99de833f9d2bac8845a0033377fb6a37fdaf25c752",
+          "revised": false,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/android.json",
+          "changed_paths": [],
+          "citation_moves": {}
+        },
+        {
+          "unit": "grimoire-decisions",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/grimoire-decisions.json",
+          "brief_digest": "d4b711d2155a20333a468afa65f6f1072248a0972bfef92b355aca583da8107c",
+          "revised": true,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/grimoire-decisions.json",
+          "changed_paths": [
+            "backend/src/grimoire/llm/_client.py"
+          ],
+          "citation_moves": {
+            "backend/src/grimoire/llm/_client.py:355": "backend/src/grimoire/llm/_client.py:357"
+          }
+        },
+        {
+          "unit": "grimoire-inference",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/grimoire-inference.json",
+          "brief_digest": "eb4457270bc720db040be2dbcf5271cb250df4def371bd8373e0c799f8a4204c",
+          "revised": true,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/grimoire-inference.json",
+          "changed_paths": [
+            "backend/src/grimoire/llm/_client.py"
+          ],
+          "citation_moves": {
+            "backend/src/grimoire/llm/_client.py:233": "backend/src/grimoire/llm/_client.py:235"
+          }
+        },
+        {
+          "unit": "grimoire-llm",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/grimoire-llm.json",
+          "brief_digest": "c1496d582004a2ef0e72e5b79ec40900a14dbfc6a3732f4344c2f19ae74f5d86",
+          "revised": true,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/grimoire-llm.json",
+          "changed_paths": [
+            "backend/src/grimoire/llm/_client.py",
+            "backend/tests/test_llm_lifecycle.py"
+          ],
+          "citation_moves": {
+            "backend/src/grimoire/llm/_client.py:152": "backend/src/grimoire/llm/_client.py:154",
+            "backend/src/grimoire/llm/_client.py:178": "backend/src/grimoire/llm/_client.py:180",
+            "backend/src/grimoire/llm/_client.py:196": "backend/src/grimoire/llm/_client.py:198",
+            "backend/src/grimoire/llm/_client.py:233": "backend/src/grimoire/llm/_client.py:235",
+            "backend/src/grimoire/llm/_client.py:294": "backend/src/grimoire/llm/_client.py:296",
+            "backend/src/grimoire/llm/_client.py:309": "backend/src/grimoire/llm/_client.py:311",
+            "backend/src/grimoire/llm/_client.py:31": "backend/src/grimoire/llm/_client.py:33",
+            "backend/src/grimoire/llm/_client.py:355": "backend/src/grimoire/llm/_client.py:357",
+            "backend/src/grimoire/llm/_client.py:441": "backend/src/grimoire/llm/_client.py:443",
+            "backend/src/grimoire/llm/_client.py:486": "backend/src/grimoire/llm/_client.py:488",
+            "backend/tests/test_llm_lifecycle.py:137": "backend/tests/test_llm_lifecycle.py:191",
+            "backend/tests/test_llm_lifecycle.py:62": "backend/tests/test_llm_lifecycle.py:63",
+            "backend/tests/test_llm_lifecycle.py:97": "backend/tests/test_llm_lifecycle.py:98"
+          }
+        },
+        {
+          "unit": "grimoire-tool-calls",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/grimoire-tool-calls.json",
+          "brief_digest": "67c09789fe1a1157045cf494de7c4feffc98d2f93d937db7de3ae595749e688c",
+          "revised": false,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/grimoire-tool-calls.json",
+          "changed_paths": [],
+          "citation_moves": {}
+        },
+        {
+          "unit": "grimoire",
+          "brief": "/workspace/work/code-overview-recompute-02a2f312/briefs/grimoire.json",
+          "brief_digest": "1d39a49942ca82704065c8fca47ae74abad314b6e1802e5987144c2a5b5be1ec",
+          "revised": true,
+          "previous_brief": "/workspace/work/code-overview-recompute-02a2f312/previous-briefs/grimoire.json",
+          "changed_paths": [
+            "frontend/src/routes/CampaignView.tsx"
+          ],
+          "citation_moves": {
+            "frontend/src/routes/CampaignView.tsx:1": "frontend/src/routes/CampaignView.tsx:1"
+          }
+        }
+      ],
+      "dissent": "Root and frontend totals are 100/100/87.5. Library-root/recovery identity dissent and counterevidence remain embedded; headline 100 is not unanimous."
+    },
+    "measurement": {
+      "status": "Fresh inventory, public corpus counts and stored ranking recomputation; whole-unit coverage ungraded",
+      "runs": [
+        {
+          "analyzer": "metrics",
+          "exit_code": 0,
+          "seconds": 145.4
+        },
+        {
+          "analyzer": "examples",
+          "exit_code": 0,
+          "seconds": 0.74
+        },
+        {
+          "analyzer": "fail-soft",
+          "exit_code": 0,
+          "seconds": 19.63
+        },
+        {
+          "analyzer": "threshold-trace",
+          "exit_code": 0,
+          "seconds": 2.52
+        }
+      ],
+      "evidence_page": "docs/measurement-evidence.html",
+      "audit": "docs/measurement-audit.json",
+      "not_run": [
+        "live provider calls",
+        "private library access",
+        "new evaluation experiments"
+      ],
+      "canonical_omissions": [
+        {
+          "unit": "backend-tests",
+          "path": "backend/tests/docs/measurement.html",
+          "reason": "Whole-unit measurement result_not_audited cannot be represented honestly by the installed rubric; readable ungraded evidence is supplied separately."
+        },
+        {
+          "unit": "evals",
+          "path": "evals/docs/measurement.html",
+          "reason": "Whole-unit measurement result_not_audited cannot be represented honestly by the installed rubric; readable ungraded evidence is supplied separately."
+        },
+        {
+          "unit": "scripts",
+          "path": "scripts/docs/measurement.html",
+          "reason": "Whole-unit measurement result_not_audited cannot be represented honestly by the installed rubric; readable ungraded evidence is supplied separately."
+        },
+        {
+          "unit": "grimoire",
+          "path": "docs/measurement.html",
+          "reason": "Whole-unit measurement result_not_audited cannot be represented honestly by the installed rubric; readable ungraded evidence is supplied separately."
+        }
+      ],
+      "interpretation": "Unknown results are not zero, never-measured, no-instrument or successful experiment claims. Stored-baseline coverage is scoreability of the stored synthetic artifact, not good retrieval quality."
+    },
+    "native_gates": {
+      "mode": "reused passing native gates after exact unchanged-source proof; no new application test run for this report refresh",
+      "source_binding": {
+        "mode": "full-gate-plus-frontend-only-recheck",
+        "final_source_manifest_sha256": "fc99a43f0cebd732a2cb35c29583332ce74e7f5daae9511a80897261d2c74f60",
+        "full_gate_source_manifest_sha256": "9d2b87c2db9f3d420930ed03319cc2423c50e7f556f40a127a62a9ff862846ad",
+        "all_other_source_config_template_and_backend_inputs_identical": true,
+        "changed_since_full_gate": {
+          "frontend/src/components/CharacterGrid.test.tsx": {
+            "before": "0bfd2431ac16ce05a4afd8303cc37a0353685d993d771cb8b863c3285c452827",
+            "after": "4e6360535a5c2527e7dd21465d9022852e6b3f7304b9811a4cb2d8d8fc284637"
+          },
+          "frontend/src/components/CharacterGrid.tsx": {
+            "before": "5532adb3fd7283f55d3599d2081c86faa425ca2126dc080e8b290066f6bf2024",
+            "after": "26b62c4afc5773695e577c49bd725a2d1a83f42188a086d44263f3d9da66c815"
+          },
+          "frontend/src/components/EntityEditor.creation.test.tsx": {
+            "before": "935190c8ff867dbb55e2406d5eac711a32787fc4c245e178913050d939224984",
+            "after": "73bc2aae3e2d0653ec6215af66ba38e204ded47f8c9643fe5fe92ad494ddf4d4"
+          },
+          "frontend/src/components/EntityEditor.tsx": {
+            "before": "4054a2af4fdbfcdeb9e017b741b515043a58a8b2c9aef63a451fa4c238a3a0b6",
+            "after": "3ee700b1284c975a23868ac4e31c5316f1054da32a8733e6ab0dd98cca68861e"
+          },
+          "frontend/src/components/SceneInspector.datetime.test.tsx": {
+            "before": "d223761cc3a0d8c245aa4ff75aca4793cc528d192f032ad368c8b78d122e9ee9",
+            "after": "a882552a1da652c59ce19970e0de56048bc80abe50cb627f75540be20bd32be1"
+          },
+          "frontend/src/components/character/shared.tsx": {
+            "before": "49fe8ce19fbdba24ac2638c87a6cc961fef2fa3e06d1ff449c944d3afed45c5b",
+            "after": "81bde50cc197cb31adb620ff868a56328570d079689f1a6ef4c5b75b7ebdb85b"
+          },
+          "frontend/src/components/characterGrid/useCharacterImports.test.tsx": {
+            "before": null,
+            "after": "a45880c36326c8b805f38fb2e602ade73068b11be03cc43ce22ef0c9d7e197bd"
+          },
+          "frontend/src/components/characterGrid/useCharacterImports.ts": {
+            "before": "870087ca8fc03433e9c513c1769118fad83034fb09d711ca53b453cb9437b973",
+            "after": "f1f94d2ae92d8db2413749c3e0ac747b5d973ba0e600342505a008a949127271"
+          },
+          "frontend/src/components/sceneInspector/useSceneMoment.ts": {
+            "before": "fb4120d40401f41f83961e680ef280af89497362a3167b6dcd4103f6d50d479e",
+            "after": "2735bca73496c9b5488fff55a2c3c1d5b1d9650169f5b25ca79a4857889e6aa9"
+          },
+          "frontend/src/components/vn/VNPostControls.test.tsx": {
+            "before": "8ae5c7aed3c20a748a650e0401d7d7c13d3551ff3bb860d44dc1d9e27cce83ce",
+            "after": "1d07635e48ce818a2a0db7bf3928a43e8a8986a84cd6421d7a8e734731329e9b"
+          },
+          "frontend/src/components/vn/VNPostControls.tsx": {
+            "before": "bd86e1b13d02f68cfa92aca056c4b173f68ab094dace1aeca122d2482083ca56",
+            "after": "85f4958129d3fcb4f423db87d3483be3eb7bf3f5f52644571b6ecc45f219c29d"
+          },
+          "frontend/src/components/vn/useVNStage.test.tsx": {
+            "before": "94be3aac30ca9c09fc312cae88f0b7e73cb4f2924f803414e47c3d1afbe1b539",
+            "after": "21f01c2c8077ad226aebc84dcea8bf820814f34910f6fd9e270f9809f33cbfc0"
+          },
+          "frontend/src/components/vn/useVNStage.ts": {
+            "before": "6c2be701e2697c7db4d6536bb71470960cd37adbaea90d78fa04e77f4abbe88f",
+            "after": "64efdaf5e5d95d215ce04ebc1451a586a6b6b27fc623f52b4909e4abd81865e6"
+          },
+          "frontend/src/routes/CampaignView.directorDrafts.test.tsx": {
+            "before": "09bee0a168f8d8b0b6b6059f70dd4e73084d2c2c7011e80dda876953f49c8810",
+            "after": "897af0d974e82b3b5d980e9b635d6117df7405f285625eb3e2b02cc8c7909dd1"
+          },
+          "frontend/src/routes/CampaignView.recoveryAndFlush.test.tsx": {
+            "before": "4ab43ee3183f661b9c5cfc048f256dc2608942f44abeaff66ce4366defd910e0",
+            "after": "9c0c4a4de2533eb669b05a222a47f6d177afbbd42349a90b9cc28545ae2d2cda"
+          },
+          "frontend/src/routes/CampaignView.stopAndAttach.test.tsx": {
+            "before": "16c1f43bf0eb8eb824d50db303099c743cc541a876525aa4303e5701aea7ec27",
+            "after": "89f240e9af2385736c018c21845b6b8bc3496b0fb8a43b69e14319b7df62c85a"
+          },
+          "frontend/src/routes/CharacterPage.importNotice.test.tsx": {
+            "before": null,
+            "after": "bd8fa01775cdf256bc21dcc094ff9d53185625d2dfa5db1fe0742e2f5f749b97"
+          },
+          "frontend/src/routes/CharacterPage.tsx": {
+            "before": "e90b45dc58998c6c692ab16cd2c1423807edf5839c47867d017f40bcabad06aa",
+            "after": "af373febdf4696bd1b8e327ad46ce89da07dfaf302eb16de20a863d49494f6f6"
+          },
+          "frontend/src/routes/campaign/campaignTypes.ts": {
+            "before": "a30e4d8867e31a4810b1549060df50368846c427275438e8b362091cafb00bb1",
+            "after": "d256832ac3312bac89a36823d41682fa921a4be8755fe78c8ccaadb0253ae533"
+          },
+          "frontend/src/routes/campaign/executeTurn.ts": {
+            "before": "caeff9ffd229f0c9663f17e9413340a1738df6a71a395b2dabb6ee5274c815e4",
+            "after": "568cb9d21acb44bcf9a2676eece2d47bf7518e46b99305b716483cfa0053e1e0"
+          },
+          "frontend/src/routes/campaign/observeTurnStream.ts": {
+            "before": null,
+            "after": "bf41f15b9fc58324681fa99e883bb04846d2a7d1dfb4d847050dc8c34e419b07"
+          },
+          "frontend/src/routes/campaign/runSettlement.ts": {
+            "before": "a8d1b330e50044d8302697af61291bc83d81fc337503caac296105dbfc02e515",
+            "after": "f52e9f07b45083bc63a1c9fb41fc17a74ba2e8ec4ed94266c9cdcc57d31dbd67"
+          },
+          "frontend/src/routes/campaign/settleTurn.ts": {
+            "before": null,
+            "after": "7e6bffc1901fe6363957d7ff564a059da5e251e93a599d515871fc1d28c654a7"
+          },
+          "frontend/src/routes/campaign/transcriptSwipeState.ts": {
+            "before": null,
+            "after": "7947a49acf428f38bcdb5a6ea3e3e6030cc09db5f8569c84a805b4ae469abfcb"
+          },
+          "frontend/src/routes/campaign/turnRecoveryPolicy.ts": {
+            "before": null,
+            "after": "062d349660d8323ba5e492c3f501c174bfab0d88aec64e1b4da503adde0ce3ab"
+          },
+          "frontend/src/routes/campaign/useTranscriptSwipes.tsx": {
+            "before": "ea8efe0918e932aa999a89a32b50a543826cb2e6d64019713c11154bec830b43",
+            "after": "b81a0c7a3421eb705e64cf9affd04c4615d4829f93248e70d40043d17584e99e"
+          },
+          "frontend/src/testkit/characterPage.tsx": {
+            "before": "d299de65cba8be70b1d2ca583f36bc1515f55cfbbce44f27f227f94e4d73f147",
+            "after": "22fac3155093d2c0800ebb96ccbbb5e1be2a0732e4a62b1ba6330a66beafee36"
+          }
+        },
+        "reused_checks_with_unchanged_inputs": [
+          "check-lint",
+          "check-mypy",
+          "check-templates",
+          "check-py",
+          "check-pydantic1"
+        ],
+        "rerun_checks": [
+          "check-web",
+          "check-eslint"
+        ],
+        "frontend_recheck": {
+          "command": [
+            "make",
+            "-j2",
+            "check-web",
+            "check-eslint",
+            "PY=/workspace/grimoire/backend/.venv/bin/python"
+          ],
+          "exit_code": 0,
+          "seconds": 479.63,
+          "started_utc": "2026-10-27T11:39:54.093300+00:00",
+          "finished_utc": "2026-10-27T11:47:53.722614+00:00",
+          "synthetic_home": "/workspace/work/audit-fixes/gate-home",
+          "source_manifest_sha256": "fc99a43f0cebd732a2cb35c29583332ce74e7f5daae9511a80897261d2c74f60",
+          "source_stable": true,
+          "source_drift": []
+        }
+      },
+      "previous_verification": {
+        "original_repository_gate": {
+          "command": [
+            "make",
+            "-j2",
+            "check",
+            "PY=/workspace/grimoire/backend/.venv/bin/python"
+          ],
+          "exit_code": 0,
+          "seconds": 1911.87,
+          "started_utc": "2026-10-27T07:33:03.568068+00:00",
+          "finished_utc": "2026-10-27T08:04:55.440840+00:00",
+          "synthetic_home": "/workspace/work/eslint-large-modules/gate-home",
+          "source_manifest_sha256": "9d2b87c2db9f3d420930ed03319cc2423c50e7f556f40a127a62a9ff862846ad",
+          "source_stable": true,
+          "source_drift": []
+        },
+        "final_source_validation": {
+          "mode": "full-gate-plus-frontend-only-recheck",
+          "final_source_manifest_sha256": "fc99a43f0cebd732a2cb35c29583332ce74e7f5daae9511a80897261d2c74f60",
+          "full_gate_source_manifest_sha256": "9d2b87c2db9f3d420930ed03319cc2423c50e7f556f40a127a62a9ff862846ad",
+          "all_other_source_config_template_and_backend_inputs_identical": true,
+          "changed_since_full_gate": {
+            "frontend/src/components/CharacterGrid.test.tsx": {
+              "before": "0bfd2431ac16ce05a4afd8303cc37a0353685d993d771cb8b863c3285c452827",
+              "after": "4e6360535a5c2527e7dd21465d9022852e6b3f7304b9811a4cb2d8d8fc284637"
+            },
+            "frontend/src/components/CharacterGrid.tsx": {
+              "before": "5532adb3fd7283f55d3599d2081c86faa425ca2126dc080e8b290066f6bf2024",
+              "after": "26b62c4afc5773695e577c49bd725a2d1a83f42188a086d44263f3d9da66c815"
+            },
+            "frontend/src/components/EntityEditor.creation.test.tsx": {
+              "before": "935190c8ff867dbb55e2406d5eac711a32787fc4c245e178913050d939224984",
+              "after": "73bc2aae3e2d0653ec6215af66ba38e204ded47f8c9643fe5fe92ad494ddf4d4"
+            },
+            "frontend/src/components/EntityEditor.tsx": {
+              "before": "4054a2af4fdbfcdeb9e017b741b515043a58a8b2c9aef63a451fa4c238a3a0b6",
+              "after": "3ee700b1284c975a23868ac4e31c5316f1054da32a8733e6ab0dd98cca68861e"
+            },
+            "frontend/src/components/SceneInspector.datetime.test.tsx": {
+              "before": "d223761cc3a0d8c245aa4ff75aca4793cc528d192f032ad368c8b78d122e9ee9",
+              "after": "a882552a1da652c59ce19970e0de56048bc80abe50cb627f75540be20bd32be1"
+            },
+            "frontend/src/components/character/shared.tsx": {
+              "before": "49fe8ce19fbdba24ac2638c87a6cc961fef2fa3e06d1ff449c944d3afed45c5b",
+              "after": "81bde50cc197cb31adb620ff868a56328570d079689f1a6ef4c5b75b7ebdb85b"
+            },
+            "frontend/src/components/characterGrid/useCharacterImports.test.tsx": {
+              "before": null,
+              "after": "a45880c36326c8b805f38fb2e602ade73068b11be03cc43ce22ef0c9d7e197bd"
+            },
+            "frontend/src/components/characterGrid/useCharacterImports.ts": {
+              "before": "870087ca8fc03433e9c513c1769118fad83034fb09d711ca53b453cb9437b973",
+              "after": "f1f94d2ae92d8db2413749c3e0ac747b5d973ba0e600342505a008a949127271"
+            },
+            "frontend/src/components/sceneInspector/useSceneMoment.ts": {
+              "before": "fb4120d40401f41f83961e680ef280af89497362a3167b6dcd4103f6d50d479e",
+              "after": "2735bca73496c9b5488fff55a2c3c1d5b1d9650169f5b25ca79a4857889e6aa9"
+            },
+            "frontend/src/components/vn/VNPostControls.test.tsx": {
+              "before": "8ae5c7aed3c20a748a650e0401d7d7c13d3551ff3bb860d44dc1d9e27cce83ce",
+              "after": "1d07635e48ce818a2a0db7bf3928a43e8a8986a84cd6421d7a8e734731329e9b"
+            },
+            "frontend/src/components/vn/VNPostControls.tsx": {
+              "before": "bd86e1b13d02f68cfa92aca056c4b173f68ab094dace1aeca122d2482083ca56",
+              "after": "85f4958129d3fcb4f423db87d3483be3eb7bf3f5f52644571b6ecc45f219c29d"
+            },
+            "frontend/src/components/vn/useVNStage.test.tsx": {
+              "before": "94be3aac30ca9c09fc312cae88f0b7e73cb4f2924f803414e47c3d1afbe1b539",
+              "after": "21f01c2c8077ad226aebc84dcea8bf820814f34910f6fd9e270f9809f33cbfc0"
+            },
+            "frontend/src/components/vn/useVNStage.ts": {
+              "before": "6c2be701e2697c7db4d6536bb71470960cd37adbaea90d78fa04e77f4abbe88f",
+              "after": "64efdaf5e5d95d215ce04ebc1451a586a6b6b27fc623f52b4909e4abd81865e6"
+            },
+            "frontend/src/routes/CampaignView.directorDrafts.test.tsx": {
+              "before": "09bee0a168f8d8b0b6b6059f70dd4e73084d2c2c7011e80dda876953f49c8810",
+              "after": "897af0d974e82b3b5d980e9b635d6117df7405f285625eb3e2b02cc8c7909dd1"
+            },
+            "frontend/src/routes/CampaignView.recoveryAndFlush.test.tsx": {
+              "before": "4ab43ee3183f661b9c5cfc048f256dc2608942f44abeaff66ce4366defd910e0",
+              "after": "9c0c4a4de2533eb669b05a222a47f6d177afbbd42349a90b9cc28545ae2d2cda"
+            },
+            "frontend/src/routes/CampaignView.stopAndAttach.test.tsx": {
+              "before": "16c1f43bf0eb8eb824d50db303099c743cc541a876525aa4303e5701aea7ec27",
+              "after": "89f240e9af2385736c018c21845b6b8bc3496b0fb8a43b69e14319b7df62c85a"
+            },
+            "frontend/src/routes/CharacterPage.importNotice.test.tsx": {
+              "before": null,
+              "after": "bd8fa01775cdf256bc21dcc094ff9d53185625d2dfa5db1fe0742e2f5f749b97"
+            },
+            "frontend/src/routes/CharacterPage.tsx": {
+              "before": "e90b45dc58998c6c692ab16cd2c1423807edf5839c47867d017f40bcabad06aa",
+              "after": "af373febdf4696bd1b8e327ad46ce89da07dfaf302eb16de20a863d49494f6f6"
+            },
+            "frontend/src/routes/campaign/campaignTypes.ts": {
+              "before": "a30e4d8867e31a4810b1549060df50368846c427275438e8b362091cafb00bb1",
+              "after": "d256832ac3312bac89a36823d41682fa921a4be8755fe78c8ccaadb0253ae533"
+            },
+            "frontend/src/routes/campaign/executeTurn.ts": {
+              "before": "caeff9ffd229f0c9663f17e9413340a1738df6a71a395b2dabb6ee5274c815e4",
+              "after": "568cb9d21acb44bcf9a2676eece2d47bf7518e46b99305b716483cfa0053e1e0"
+            },
+            "frontend/src/routes/campaign/observeTurnStream.ts": {
+              "before": null,
+              "after": "bf41f15b9fc58324681fa99e883bb04846d2a7d1dfb4d847050dc8c34e419b07"
+            },
+            "frontend/src/routes/campaign/runSettlement.ts": {
+              "before": "a8d1b330e50044d8302697af61291bc83d81fc337503caac296105dbfc02e515",
+              "after": "f52e9f07b45083bc63a1c9fb41fc17a74ba2e8ec4ed94266c9cdcc57d31dbd67"
+            },
+            "frontend/src/routes/campaign/settleTurn.ts": {
+              "before": null,
+              "after": "7e6bffc1901fe6363957d7ff564a059da5e251e93a599d515871fc1d28c654a7"
+            },
+            "frontend/src/routes/campaign/transcriptSwipeState.ts": {
+              "before": null,
+              "after": "7947a49acf428f38bcdb5a6ea3e3e6030cc09db5f8569c84a805b4ae469abfcb"
+            },
+            "frontend/src/routes/campaign/turnRecoveryPolicy.ts": {
+              "before": null,
+              "after": "062d349660d8323ba5e492c3f501c174bfab0d88aec64e1b4da503adde0ce3ab"
+            },
+            "frontend/src/routes/campaign/useTranscriptSwipes.tsx": {
+              "before": "ea8efe0918e932aa999a89a32b50a543826cb2e6d64019713c11154bec830b43",
+              "after": "b81a0c7a3421eb705e64cf9affd04c4615d4829f93248e70d40043d17584e99e"
+            },
+            "frontend/src/testkit/characterPage.tsx": {
+              "before": "d299de65cba8be70b1d2ca583f36bc1515f55cfbbce44f27f227f94e4d73f147",
+              "after": "22fac3155093d2c0800ebb96ccbbb5e1be2a0732e4a62b1ba6330a66beafee36"
+            }
+          },
+          "reused_checks_with_unchanged_inputs": [
+            "check-lint",
+            "check-mypy",
+            "check-templates",
+            "check-py",
+            "check-pydantic1"
+          ],
+          "rerun_checks": [
+            "check-web",
+            "check-eslint"
+          ],
+          "frontend_recheck": {
+            "command": [
+              "make",
+              "-j2",
+              "check-web",
+              "check-eslint",
+              "PY=/workspace/grimoire/backend/.venv/bin/python"
+            ],
+            "exit_code": 0,
+            "seconds": 479.63,
+            "started_utc": "2026-10-27T11:39:54.093300+00:00",
+            "finished_utc": "2026-10-27T11:47:53.722614+00:00",
+            "synthetic_home": "/workspace/work/audit-fixes/gate-home",
+            "source_manifest_sha256": "fc99a43f0cebd732a2cb35c29583332ce74e7f5daae9511a80897261d2c74f60",
+            "source_stable": true,
+            "source_drift": []
+          }
+        },
+        "test_summary": {
+          "mode": "full-gate-plus-frontend-only-recheck",
+          "source_manifest_sha256": "fc99a43f0cebd732a2cb35c29583332ce74e7f5daae9511a80897261d2c74f60",
+          "backend_full_gate_source_manifest_sha256": "9d2b87c2db9f3d420930ed03319cc2423c50e7f556f40a127a62a9ff862846ad",
+          "backend_runs_in_log_order": [
+            {
+              "passed": 21611,
+              "skipped": 113,
+              "warnings": 12,
+              "duration": "1504.03s (0:25:04)"
+            },
+            {
+              "passed": 21617,
+              "skipped": 107,
+              "warnings": 10,
+              "duration": "1667.29s (0:27:47)"
+            }
+          ],
+          "backend_coverage_percent": 94.0,
+          "frontend_recheck": {
+            "log_sha256": "9cf21491f6292ebb1fac38bb4ccf3a18670ab3d78430dd8d80093a1eebebd3dd",
+            "source_manifest_sha256": "fc99a43f0cebd732a2cb35c29583332ce74e7f5daae9511a80897261d2c74f60",
+            "frontend": {
+              "files_passed": 319,
+              "tests_passed": 5982,
+              "coverage_percent": {
+                "statements": 89.76,
+                "branches": 85.01,
+                "functions": 85.8,
+                "lines": 92.68
+              }
+            }
+          }
+        },
+        "frontend_bundle": {
+          "command": [
+            "npm",
+            "run",
+            "build"
+          ],
+          "cwd": "frontend",
+          "exit_code": 0,
+          "seconds": 110.55,
+          "source_manifest_sha256": "fc99a43f0cebd732a2cb35c29583332ce74e7f5daae9511a80897261d2c74f60",
+          "source_stable": true
+        }
+      }
+    }
+  },
+  "units": [
+    {
+      "unit": "grimoire-store",
+      "health": {
+        "before": {
+          "grade": "C",
+          "score": 76.7
+        },
+        "after": {
+          "grade": "C+",
+          "score": 77.1
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        }
+      }
+    },
+    {
+      "unit": "grimoire-api",
+      "health": {
+        "before": {
+          "grade": "B",
+          "score": 84.9
+        },
+        "after": {
+          "grade": "B",
+          "score": 84.3
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        }
+      }
+    },
+    {
+      "unit": "grimoire-providers-prompts",
+      "health": {
+        "before": {
+          "grade": "B",
+          "score": 83.2
+        },
+        "after": {
+          "grade": "B",
+          "score": 86.5
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        }
+      }
+    },
+    {
+      "unit": "backend-tests",
+      "health": {
+        "before": {
+          "grade": "A-",
+          "score": 92.0
+        },
+        "after": {
+          "grade": "A-",
+          "score": 92.7
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "unit": "frontend",
+      "health": {
+        "before": {
+          "grade": "C+",
+          "score": 79.0
+        },
+        "after": {
+          "grade": "C+",
+          "score": 79.2
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "design",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          87.5
+        ]
+      },
+      "measurement": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        }
+      }
+    },
+    {
+      "unit": "evals",
+      "health": {
+        "before": {
+          "grade": "B",
+          "score": 85.9
+        },
+        "after": {
+          "grade": "B+",
+          "score": 88.0
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "unit": "scripts",
+      "health": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "graded_categories": []
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "unit": "android",
+      "health": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "graded_categories": []
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        }
+      }
+    },
+    {
+      "unit": "grimoire-decisions",
+      "health": {
+        "before": {
+          "grade": "A-",
+          "score": 92.9
+        },
+        "after": {
+          "grade": "A-",
+          "score": 92.0
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        }
+      }
+    },
+    {
+      "unit": "grimoire-inference",
+      "health": {
+        "before": {
+          "grade": "C+",
+          "score": 78.8
+        },
+        "after": {
+          "grade": "B-",
+          "score": 81.0
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        }
+      }
+    },
+    {
+      "unit": "grimoire-llm",
+      "health": {
+        "before": {
+          "grade": "B+",
+          "score": 88.8
+        },
+        "after": {
+          "grade": "A-",
+          "score": 91.2
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        }
+      }
+    },
+    {
+      "unit": "grimoire-tool-calls",
+      "health": {
+        "before": {
+          "grade": "A",
+          "score": 93.2
+        },
+        "after": {
+          "grade": "A",
+          "score": 94.3
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          100
+        ]
+      },
+      "measurement": {
+        "before": {
+          "grade": "\u2014",
+          "score": null
+        },
+        "after": {
+          "grade": "\u2014",
+          "score": null
+        }
+      }
+    },
+    {
+      "unit": "grimoire",
+      "health": {
+        "before": {
+          "grade": "B-",
+          "score": 82.6
+        },
+        "after": {
+          "grade": "B-",
+          "score": 82.5
+        },
+        "graded_categories": [
+          "correctness",
+          "security",
+          "tests",
+          "complexity",
+          "duplication",
+          "hygiene"
+        ]
+      },
+      "theory": {
+        "before": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "after": {
+          "grade": "A+",
+          "score": 100.0
+        },
+        "judge_totals": [
+          100,
+          100.0,
+          87.5
+        ]
+      },
+      "measurement": {
+        "before": null,
+        "after": null
+      }
+    }
+  ],
+  "generated_html_count": 63,
+  "generated_html": [
+    "backend/src/grimoire/store/docs/summary.html",
+    "backend/src/grimoire/store/docs/codemap.html",
+    "backend/src/grimoire/store/docs/health.html",
+    "backend/src/grimoire/store/docs/theory.html",
+    "backend/src/grimoire/store/docs/measurement.html",
+    "backend/src/grimoire/routes/docs/summary.html",
+    "backend/src/grimoire/routes/docs/codemap.html",
+    "backend/src/grimoire/routes/docs/health.html",
+    "backend/src/grimoire/routes/docs/theory.html",
+    "backend/src/grimoire/routes/docs/measurement.html",
+    "backend/src/grimoire/docs/summary.html",
+    "backend/src/grimoire/docs/codemap.html",
+    "backend/src/grimoire/docs/health.html",
+    "backend/src/grimoire/docs/theory.html",
+    "backend/src/grimoire/docs/measurement.html",
+    "backend/tests/docs/summary.html",
+    "backend/tests/docs/codemap.html",
+    "backend/tests/docs/health.html",
+    "backend/tests/docs/theory.html",
+    "frontend/docs/summary.html",
+    "frontend/docs/codemap.html",
+    "frontend/docs/health.html",
+    "frontend/docs/theory.html",
+    "frontend/docs/measurement.html",
+    "evals/docs/summary.html",
+    "evals/docs/codemap.html",
+    "evals/docs/health.html",
+    "evals/docs/theory.html",
+    "scripts/docs/summary.html",
+    "scripts/docs/codemap.html",
+    "scripts/docs/health.html",
+    "scripts/docs/theory.html",
+    "android/docs/summary.html",
+    "android/docs/codemap.html",
+    "android/docs/health.html",
+    "android/docs/theory.html",
+    "android/docs/measurement.html",
+    "backend/src/grimoire/decisions/docs/summary.html",
+    "backend/src/grimoire/decisions/docs/codemap.html",
+    "backend/src/grimoire/decisions/docs/health.html",
+    "backend/src/grimoire/decisions/docs/theory.html",
+    "backend/src/grimoire/decisions/docs/measurement.html",
+    "backend/src/grimoire/inference/docs/summary.html",
+    "backend/src/grimoire/inference/docs/codemap.html",
+    "backend/src/grimoire/inference/docs/health.html",
+    "backend/src/grimoire/inference/docs/theory.html",
+    "backend/src/grimoire/inference/docs/measurement.html",
+    "backend/src/grimoire/llm/docs/summary.html",
+    "backend/src/grimoire/llm/docs/codemap.html",
+    "backend/src/grimoire/llm/docs/health.html",
+    "backend/src/grimoire/llm/docs/theory.html",
+    "backend/src/grimoire/llm/docs/measurement.html",
+    "backend/src/grimoire/tool_calls/docs/summary.html",
+    "backend/src/grimoire/tool_calls/docs/codemap.html",
+    "backend/src/grimoire/tool_calls/docs/health.html",
+    "backend/src/grimoire/tool_calls/docs/theory.html",
+    "backend/src/grimoire/tool_calls/docs/measurement.html",
+    "docs/summary.html",
+    "docs/codemap.html",
+    "docs/health.html",
+    "docs/theory.html",
+    "docs/recorded-embedding-baseline.html",
+    "docs/measurement-evidence.html"
+  ],
+  "publication": "All reports rebuilt on the existing branch. No commit or push performed by this refresh."
+}

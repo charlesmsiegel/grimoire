@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { useLayoutEffect, useRef } from 'react';
 import { api, type VNStage } from '../../api/client';
 import { awaitRun } from '../../api/runs';
 import { useVNStage } from './useVNStage';
@@ -112,4 +113,143 @@ test('a successful background stage read clears an earlier read failure', async 
   vi.mocked(api.getTrackerRuns).mockResolvedValue({ runs: [run] });
   await waitFor(() => expect(result.current.stage).toEqual(stage), { timeout: 2500 });
   expect(result.current.error).toBe('');
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+type Tracker = Awaited<ReturnType<typeof api.getTracker>>;
+
+describe('tracker discovery lifecycle', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  test('retries a failed capability read without reloading and stops after success while discovering runs', async () => {
+    const initial = deferred<Tracker>();
+    const retry = deferred<Tracker>();
+    vi.mocked(api.getTracker).mockReturnValueOnce(initial.promise).mockReturnValueOnce(retry.promise);
+    const { result, unmount } = renderHook(() => useVNStage('c', 's', scene, 'a'));
+    await act(async () => result.current.refreshExpressions());
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    // Rejection and the next lifecycle tick must not suppress run discovery.
+    await act(async () => initial.reject(new Error('Temporary tracker failure')));
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(api.getTracker).toHaveBeenCalledTimes(2);
+    expect(api.getTrackerRuns).toHaveBeenCalledTimes(2);
+    await act(async () => result.current.refreshExpressions());
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    await act(async () => retry.resolve({ enabled: true } as Tracker));
+    expect(result.current.enabled).toBe(true);
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    await act(async () => result.current.refreshExpressions());
+    expect(api.refreshVNExpressions).toHaveBeenCalledExactlyOnceWith('c', 's', 'a');
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(api.getTracker).toHaveBeenCalledTimes(2);
+    expect(api.getTrackerRuns).toHaveBeenCalledTimes(5);
+    unmount();
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(api.getTrackerRuns).toHaveBeenCalledTimes(5);
+  });
+
+  test('a successful disabled answer is authoritative and never retries or permits paid work', async () => {
+    vi.mocked(api.getTracker).mockResolvedValue({ enabled: false } as Tracker);
+    const { result, unmount } = renderHook(() => useVNStage('c', 's', scene, 'a'));
+    await act(async () => {});
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    await act(async () => result.current.refreshExpressions());
+    expect(result.current.enabled).toBe(false);
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    expect(api.getTracker).toHaveBeenCalledTimes(1);
+    expect(api.getTrackerRuns).toHaveBeenCalledTimes(4);
+    unmount();
+  });
+
+  test('the first new-scene consumer and retained callback cannot spend old scene enablement', async () => {
+    const pending = deferred<Tracker>();
+    const nextScene = { ...scene, scene_identity: 'scene-two' };
+    const { result, rerender, unmount } = renderHook(({ sid, consume }) => {
+      const value = useVNStage('c', sid, sid === 's' ? scene : nextScene, sid === 's' ? 'a' : 'b');
+      const consumed = useRef('');
+      useLayoutEffect(() => {
+        if (consume && consumed.current !== sid) {
+          consumed.current = sid;
+          void value.refreshExpressions();
+        }
+      }, [sid, consume, value]); // The first consumer runs before passive lifecycle resets.
+      return value;
+    }, { initialProps: { sid: 's', consume: false } });
+    await act(async () => {});
+    expect(result.current.enabled).toBe(true);
+    const retiredRefresh = result.current.refreshExpressions;
+    vi.mocked(api.getTracker).mockReturnValue(pending.promise);
+    await act(async () => rerender({ sid: 'next', consume: true }));
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    await act(async () => retiredRefresh());
+    expect(result.current.enabled).toBe(false);
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    await act(async () => pending.resolve({ enabled: true } as Tracker));
+    await act(async () => result.current.refreshExpressions());
+    expect(api.refreshVNExpressions).toHaveBeenCalledExactlyOnceWith('c', 'next', 'b');
+    await act(async () => retiredRefresh());
+    expect(api.refreshVNExpressions).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  test('a retained enabled action cannot target a new route reusing the same snapshot or an unmounted view', async () => {
+    const pending = deferred<Tracker>();
+    const { result, rerender, unmount } = renderHook(({ cid, sid }) => useVNStage(cid, sid, scene, 'a'), { initialProps: { cid: 'c', sid: 's' } });
+    await act(async () => {});
+    expect(result.current.enabled).toBe(true);
+    const retiredRefresh = result.current.refreshExpressions;
+    vi.mocked(api.getTracker).mockReturnValue(pending.promise);
+    rerender({ cid: 'next-c', sid: 'next-s' });
+    await act(async () => retiredRefresh());
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    await act(async () => pending.resolve({ enabled: true } as Tracker));
+    const unmountedRefresh = result.current.refreshExpressions;
+    unmount();
+    await act(async () => unmountedRefresh());
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+  });
+
+  test('stalled capability discovery leaves run polls live without duplicating its pending read', async () => {
+    const pending = deferred<Tracker>();
+    vi.mocked(api.getTracker).mockReturnValue(pending.promise);
+    const { result, unmount } = renderHook(() => useVNStage('c', 's', scene, 'a'));
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    await act(async () => result.current.refreshExpressions());
+    expect(api.getTracker).toHaveBeenCalledTimes(1);
+    expect(api.getTrackerRuns).toHaveBeenCalledTimes(4);
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    unmount();
+    await act(async () => pending.resolve({ enabled: true } as Tracker));
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(api.getTrackerRuns).toHaveBeenCalledTimes(4);
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+  });
+
+  test('retired and unmounted capability responses cannot authorize current actions', async () => {
+    const retired = deferred<Tracker>();
+    const current = deferred<Tracker>();
+    vi.mocked(api.getTracker).mockReturnValueOnce(retired.promise).mockReturnValueOnce(current.promise);
+    const { result, rerender, unmount } = renderHook(({ sid }) => useVNStage('c', sid, scene, 'a'), { initialProps: { sid: 's' } });
+    const retiredRefresh = result.current.refreshExpressions;
+    rerender({ sid: 'next' });
+    await act(async () => retired.resolve({ enabled: true } as Tracker));
+    await act(async () => result.current.refreshExpressions());
+    await act(async () => retiredRefresh());
+    expect(result.current.enabled).toBe(false);
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    const unmountedRefresh = result.current.refreshExpressions;
+    unmount();
+    await act(async () => current.resolve({ enabled: true } as Tracker));
+    await act(async () => unmountedRefresh());
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(api.refreshVNExpressions).not.toHaveBeenCalled();
+    expect(api.getTrackerRuns).toHaveBeenCalledTimes(2);
+    expect(api.getTracker).toHaveBeenCalledTimes(2);
+  });
 });

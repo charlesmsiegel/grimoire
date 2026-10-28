@@ -7,6 +7,15 @@
 import { api, type Card, type CardFormat, type ChubImportResult, type EntityScope } from "../../api/client";
 import { sectionHref } from "../../worldPaths";
 
+/** A committed file import's failed roster readback, carried to the record
+ *  because opening it retires the grid and its inline report. */
+export type CharacterImportNotice = {
+  scope: EntityScope;
+  character: string;
+  version: string;
+  warning: string;
+};
+
 /** The V3 card's prose fields in editing order, with the control each wants.
  *
  *  `components/cardFields.ts` keeps a second, label-only list in *reading*

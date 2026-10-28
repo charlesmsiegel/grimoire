@@ -190,8 +190,8 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire-tool-calls — Codebase Atlas</h1>
-  <p class="doc-sub">Current source, explicit lifetime boundaries and retained review cases</p>
-  <div class="doc-meta">generated 2026-10-26 · f290a7a9 · source rebuilt; coverage unavailable</div>
+  <p class="doc-sub">Current source and explicit ownership, failure and recovery contracts</p>
+  <div class="doc-meta">generated 2026-10-27 · 43d8349f + working tree fc99a43f0ceb</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -219,19 +219,16 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <button role="tab" data-tab="flows" aria-selected="false" aria-controls="flows">Critical Flows</button>
 <button role="tab" data-tab="boundaries" aria-selected="false" aria-controls="boundaries">Boundaries &amp; Ownership</button>
 <button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button>
-<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
+<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button>
+<button role="tab" data-tab="coverage" aria-selected="false" aria-controls="coverage">Coverage</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-<div class="card hero"><h2>grimoire-tool-calls</h2><p>Tool calls are a provider-neutral protocol leaf: definitions, argument collection, history lowering and bounded execution contracts are shared by adapters and the operation layer. The actual multi-turn loop lives in inference, not in this package.</p></div><h2>Reading order and entry points</h2><ol><li><code>backend/src/grimoire/tool_calls/__init__.py</code></li><li><code>backend/src/grimoire/tool_calls/_definitions.py</code></li><li><code>backend/src/grimoire/tool_calls/_messages.py</code></li><li><code>backend/src/grimoire/tool_calls/_runs.py</code></li></ol><p>Start with the entry/facade, then read the defining leaves and the failure boundaries. Documentation directories are excluded from every automated source inventory.</p><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">flowchart LR
-  A["Neutral history"]
-  B["Provenance check"]
-  C["Provider lowering"]
-  D["Adapter request"]
-  A --&gt; B
-  B --&gt; C
-  C --&gt; D
-</pre></div></div><div class="callout warn">Static analysis describes repository source only. No private library or live provider was consulted. Coverage and eval results are not inferred from test-file counts; see generated tabs and the measurement audit for available evidence.</div>
-<h2>Fresh analysis and its limits</h2><p>Inventory: 4 recognized files, 1277 nonblank lines. These include recognized assets and configuration; they are not a count of executable statements. 1 dependency modules are drawn. The graph uses a depth of three to distinguish responsibility packages.</p><p>Highest churn × branch proxy: <code>backend/src/grimoire/tool_calls/_messages.py</code>. This selects reading priority; it is not a reproduced defect or a timing measurement.</p><p><strong>Coverage:</strong> no parseable coverage artifact found (searched for coverage.xml, cobertura*.xml, lcov.info, coverage.lcov, coverage.out) No test suite was run to manufacture coverage for this atlas.</p><p><strong>LLM detector:</strong> LLM call sites are found textually by SDK method name: a call made through your own wrapper, by an unrecognized client, or with a model id read from config at runtime will be missed, and a detected parameter is evidence it is passed somewhere in the call, not that it holds on every path. The application uses its own facade and direct HTTP adapters, so an absent LLM Ops tab does not establish absence of model calls.</p><p>Computed resource patterns hit the detector reporting cap. The resource summary preserves the truncation counts; dynamic paths remain incomplete evidence.</p>
+<div class="card hero"><h2>Problem and responsibility</h2><p>Provide the provider-neutral tool vocabulary, validation, streamed call accumulation and provider message lowering used by adapters/facade/inference, plus bounded-run data contracts and a caller-selectable default executor.</p><p><code>backend/src/grimoire/tool_calls/__init__.py:1</code>, <code>backend/src/grimoire/tool_calls/_definitions.py:112</code>, <code>backend/src/grimoire/tool_calls/_messages.py:143</code>, <code>backend/src/grimoire/tool_calls/_runs.py:56</code>, <code>backend/src/grimoire/tool_calls/_runs.py:295</code></p></div><h2>Current inventory</h2><p>4 recognized source/configuration/asset files; 1277 nonblank lines. These are inventory counts, not executable statements. Unsupported extensions and oversized files remain listed in the automated Inventory tab.</p><h2>Entry points and reading order</h2><div class="tbl-wrap"><table><thead><tr><th>Read</th><th>Why</th></tr></thead><tbody><tr><td><code>backend/src/grimoire/tool_calls/__init__.py</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>backend/src/grimoire/tool_calls/_definitions.py</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>backend/src/grimoire/tool_calls/_runs.py</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>backend/src/grimoire/tool_calls/_messages.py</code></td><td>Large current source file selected by the inventory; inspect its responsibility before extending it.</td></tr></tbody></table></div><h2>Intended responsibility handoffs</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">flowchart LR
+  N0[&quot;Declare portable Toolset&quot;] --&gt; N1[&quot;Validate argument shape&quot;]
+  N1[&quot;Validate argument shape&quot;] --&gt; N2[&quot;Collect ordered call fragments&quot;]
+  N2[&quot;Collect ordered call fragments&quot;] --&gt; N3[&quot;Lower neutral tool history&quot;]
+  N3[&quot;Lower neutral tool history&quot;] --&gt; N4[&quot;Return paired result messages&quot;]</pre></div></div><p>Current churn × branch-proxy reading priorities: <code>backend/src/grimoire/tool_calls/_messages.py</code>, <code>backend/src/grimoire/tool_calls/_definitions.py</code>, <code>backend/src/grimoire/tool_calls/_runs.py</code>. Churn comes from committed history; current sizes/branches read the working tree. Newly extracted uncommitted helpers have little or no independent history, so a low hotspot rank is not evidence they need no review.</p><p>The scope and guarantees below distinguish declared intent, inferred intent and observed implementation. Code was source-sampled; this report does not claim exhaustive execution verification.</p><p><strong>Existing test artifacts:</strong> Coverage is re-rendered from saved backend XML and frontend LCOV line hits, partitioned to this scope. No tests were run for the atlas; provenance and original artifact times are retained in the overview audit. Unmeasured files remain listed, and coverage of measured files does not establish coverage of every language.</p><p><strong>Model-call detector:</strong> Known SDK spellings are a textual inventory. The app also uses its own inference facade and direct HTTP adapters; a missing LLM Ops tab is not evidence that no model work occurs.</p>
+
 </section>
 <section class="panel" id="inventory" role="tabpanel">
 
@@ -303,8 +300,8 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <thead><tr><th>File</th><th class="num">Fan-in</th><th></th><th class="num">Fan-out</th></tr></thead>
 <tbody><tr><td><code>backend/src/grimoire/tool_calls/_definitions.py</code></td><td class='num'>3</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>backend/src/grimoire/tool_calls/__init__.py</code></td><td class='num'>2</td><td><div class="bar "><i style="width:66.7%"></i></div></td><td class='num'>3</td></tr>
-<tr><td><code>backend/src/grimoire/tool_calls/_runs.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:33.3%"></i></div></td><td class='num'>2</td></tr>
-<tr><td><code>backend/src/grimoire/tool_calls/_messages.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:33.3%"></i></div></td><td class='num'>2</td></tr></tbody></table></div>
+<tr><td><code>backend/src/grimoire/tool_calls/_messages.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:33.3%"></i></div></td><td class='num'>2</td></tr>
+<tr><td><code>backend/src/grimoire/tool_calls/_runs.py</code></td><td class='num'>1</td><td><div class="bar "><i style="width:33.3%"></i></div></td><td class='num'>2</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Highest fan-out (most dependencies)</h2>
@@ -333,7 +330,7 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">3</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi accent"><div class="n">4</div><div class="l">commits (24 months ago)</div></div>
   <div class="kpi"><div class="n">4</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">_messages.py</div><div class="l">top hotspot</div></div>
 </div>
@@ -359,53 +356,79 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 </section>
 <section class="panel" id="flows" role="tabpanel">
 
-<h2>Tool history lowering</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
-  participant A as Neutral history
-  participant B as Provenance check
-  participant C as Provider lowering
-  participant D as Adapter request
-  A-&gt;&gt;B: Supply assistant and tool messages
-  B-&gt;&gt;C: Drop foreign opaque continuation state
-  alt Opaque state belongs to a different attempt
-    C--&gt;&gt;A: Error or explicitly incomplete result
-  else supported path
-    C-&gt;&gt;D: Lower neutral history to provider format
-    D--&gt;&gt;A: Send provider-specific message blocks
-  end
-</pre></div></div><p>Implementation: <code>backend/src/grimoire/tool_calls/_messages.py</code>. Timeout cannot stop a Python thread; abandoned work still consumes executor capacity until it settles.</p><h2>Execute bounded tool</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
-  participant A as Loop
-  participant B as Registered executor
-  participant C as Bounded worker pool
-  participant D as Result or timeout
-  A-&gt;&gt;B: Dispatch checked tool arguments
-  B-&gt;&gt;C: Submit to bounded worker pool
-  alt Deadline expires before worker settlement
-    C--&gt;&gt;A: Error or explicitly incomplete result
-  else supported path
-    C-&gt;&gt;D: Wait within call deadline
-    D--&gt;&gt;A: Return output while capacity follows actual worker
-  end
-</pre></div></div><p>Implementation: <code>backend/src/grimoire/tool_calls/_runs.py</code>. Timeout cannot stop a Python thread; abandoned work still consumes executor capacity until it settles.</p>
+<h2>Main supported workflow</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+  participant P0 as Declare portable Toolset
+  participant P1 as Validate argument shape
+  participant P2 as Collect ordered call fragments
+  participant P3 as Lower neutral tool history
+  participant P4 as Return paired result messages
+  P0-&gt;&gt;P1: explicit handoff
+  P1-&gt;&gt;P2: explicit handoff
+  P2-&gt;&gt;P3: explicit handoff
+  P3-&gt;&gt;P4: explicit handoff
+  alt supported work completes
+    P4--&gt;&gt;P0: result with identity and outcome
+  else failure or unavailable evidence
+    P4--&gt;&gt;P0: retain explicit error or unknown state
+  end</pre></div></div><p>Implementation entry points: <code>backend/src/grimoire/tool_calls/__init__.py</code>, <code>backend/src/grimoire/tool_calls/_definitions.py</code>, <code>backend/src/grimoire/tool_calls/_runs.py</code>. The diagram shows responsibility handoffs rather than every internal call.</p><h2>Failure, recovery or alternate workflow</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+  participant P0 as Default executor admits call
+  participant P1 as Bound worker occupancy
+  participant P2 as Return timeout or cancellation
+  participant P3 as Owner later drains workers
+  P0-&gt;&gt;P1: explicit handoff
+  P1-&gt;&gt;P2: explicit handoff
+  P2-&gt;&gt;P3: explicit handoff
+  alt supported work completes
+    P3--&gt;&gt;P0: result with identity and outcome
+  else failure or unavailable evidence
+    P3--&gt;&gt;P0: retain explicit error or unknown state
+  end</pre></div></div><p>Provider/model-scoped opaque data must not leak into a different provider history. <code>backend/src/grimoire/tool_calls/_definitions.py</code>, <code>backend/src/grimoire/tool_calls/_runs.py</code></p>
 
 </section>
 <section class="panel" id="boundaries" role="tabpanel">
 
-<h2>Concern ownership</h2><div class="tbl-wrap"><table><thead><tr><th>Concern</th><th>Owner</th><th>Boundary</th></tr></thead><tbody><tr><td>Tool definitions</td><td><code>backend/src/grimoire/tool_calls/_definitions.py</code></td><td>Names, portable schemas and choices are checked before transport lowering.</td></tr><tr><td>Message lowering</td><td><code>backend/src/grimoire/tool_calls/_messages.py</code></td><td>Neutral assistant/tool history becomes provider wire blocks.</td></tr><tr><td>Budgets and worker ownership</td><td><code>backend/src/grimoire/tool_calls/_runs.py</code></td><td>Executor capacity remains occupied while an abandoned thread still runs.</td></tr><tr><td>Public interface</td><td><code>backend/src/grimoire/tool_calls/__init__.py</code></td><td>Facade retains compatibility for callers while definitions live in leaves.</td></tr></tbody></table></div><h2>Shared-state and dependency boundaries</h2><p>Timeout cannot stop a Python thread; abandoned work still consumes executor capacity until it settles. <code>backend/src/grimoire/tool_calls/_runs.py</code>.</p><p>The Dependencies tab reports only edges within this unit; edges to other package roots are counted separately. A textual graph cannot prove all runtime-selected template, plugin or callback edges.</p>
-<h2>Cycle interpretation</h2><p>The textual graph reports 0 module-level and 1 file-level strongly connected components. The public facade, definitions and run contracts form the reported component. Public compatibility aliases and actual execution dependencies need separate review; the graph alone does not establish import failure.</p><p>Component entry points: <code>backend/src/grimoire/tool_calls/__init__.py</code> (3 files). Complete member lists remain in the Dependencies tab.</p>
+<h2>Owned state and permitted effects</h2><div class="tbl-wrap"><table><thead><tr><th>Responsibility</th><th>Contract evidence</th></tr></thead><tbody><tr><td>Own immutable tool/budget/event/result/trace/context value records, per-Collector attempt buffers/provenance and the default executor&#x27;s bounded worker occupancy. Track running tool threads for executor drain/global idle, including threads whose awaiter stopped waiting.</td><td><code>backend/src/grimoire/tool_calls/_definitions.py:81</code>, <code>backend/src/grimoire/tool_calls/_definitions.py:112</code>, <code>backend/src/grimoire/tool_calls/_messages.py:143</code>, <code>backend/src/grimoire/tool_calls/_runs.py:56</code>, <code>backend/src/grimoire/tool_calls/_runs.py:230</code>, <code>backend/src/grimoire/tool_calls/_runs.py:295</code></td></tr></tbody></table></div><h2>Neighbor owners</h2><div class="tbl-wrap"><table><thead><tr><th>Owner</th><th>Neighbor contract</th></tr></thead><tbody><tr><td>grimoire.schemas in grimoire-providers-prompts</td><td>schemas owns the deliberately portable closed-object parameter/output subset; tool validation and conformance reuse it rather than claiming arbitrary JSON Schema support. <code>backend/src/grimoire/schemas.py:1</code>, <code>backend/src/grimoire/tool_calls/_definitions.py:214</code></td></tr><tr><td>grimoire.inference</td><td>inference owns admission, tool budgets/deadlines, argument rejection, execution/error presentation, terminal/proposal behavior, fallback target changes and result/event emission. The default executor itself does not implement that loop. <code>backend/src/grimoire/inference/_tool_loops.py:75</code>, <code>backend/src/grimoire/inference/_tool_dispatch.py:46</code>, <code>backend/src/grimoire/inference/_tool_loops.py:40</code>, <code>backend/src/grimoire/inference/_tool_targets.py:12</code></td></tr><tr><td>grimoire.llm and grimoire-providers-prompts</td><td>llm owns attempt lifecycle/reset and retries; provider clients/adapters feed Collector and use neutral lowering. Provider-specific opaque state is scoped by provenance before replay. <code>backend/src/grimoire/llm/_accounting.py:133</code>, <code>backend/src/grimoire/adapters.py:1</code>, <code>backend/src/grimoire/openai_compatible.py:333</code>, <code>backend/src/grimoire/anthropic.py:285</code>, <code>backend/src/grimoire/tool_calls/_messages.py:38</code></td></tr></tbody></table></div><h2>Conservative graph interpretation</h2><p>0 grouped module components and 1 file components were detected. Grouping, compatibility re-exports, erased TypeScript imports and textual asset references can create components that are not executable initialization cycles. These components are review leads; inspect actual imported names, loads and initialization order before changing an owner boundary.</p><h3>Component-specific reading</h3><p>The public facade, definitions and run contracts form the reported component. Public compatibility aliases and actual execution dependencies need separate review; the graph alone does not establish import failure.</p><p>Component entry points: <code>backend/src/grimoire/tool_calls/__init__.py</code> (3 files). Complete members are retained in Dependencies.</p><p>Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path.</p>
+
 </section>
 <section class="panel" id="invariants" role="tabpanel">
 
-<h2>Observable invariants and limits</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence</th></tr></thead><tbody><tr><td>Opaque provider state is dropped when another kind/provider/model owns the next attempt.</td><td><code>backend/src/grimoire/tool_calls/_messages.py</code></td></tr><tr><td>A retry resets the collector so fragments from a failed attempt cannot become the next call.</td><td><code>backend/src/grimoire/tool_calls/__init__.py</code></td></tr><tr><td>Worker capacity is bounded independently of the shared default executor.</td><td><code>backend/src/grimoire/tool_calls/_runs.py</code></td></tr></tbody></table></div><h2>Risk ranking</h2><ol><li>Timeout cannot stop a Python thread; abandoned work still consumes executor capacity until it settles. <code>backend/src/grimoire/tool_calls/_runs.py</code></li><li>Argument fragments and provider-only opaque history are different state; both need retry and provenance checks. <code>backend/src/grimoire/tool_calls/_messages.py</code></li><li>Portable schemas limit expressiveness, while conformance checks remain necessary at tool-execution boundaries. <code>backend/src/grimoire/tool_calls/_definitions.py</code></li></ol><p>These are source-review priorities, not new reproduced defects. The health page separates deterministic findings from unverified candidates.</p>
+<h2>Supported invariants</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence status</th><th>Source</th></tr></thead><tbody><tr><td>Validate tool definitions/names/distinctness, supported parameter schemas, declared effects and positive bounds before a Toolset is used; arguments must match the portable schema, with booleans distinct from numeric types.</td><td>declared; source-sampled, not re-executed here</td><td><code>backend/src/grimoire/tool_calls/_definitions.py:149</code>, <code>backend/src/grimoire/tool_calls/_definitions.py:179</code>, <code>backend/src/grimoire/tool_calls/_definitions.py:236</code>, <code>backend/src/grimoire/tool_calls/_definitions.py:256</code></td></tr><tr><td>Collector begin resets the old attempt; calls preserve begin order and malformed JSON becomes arguments=None with raw text retained. Opaque provider state is echoed only to the same kind/provider/model; neutral tool history retains ordinary messages and matching tool-result IDs.</td><td>declared; source-sampled, not re-executed here</td><td><code>backend/src/grimoire/tool_calls/_messages.py:143</code>, <code>backend/src/grimoire/tool_calls/_messages.py:306</code>, <code>backend/src/grimoire/tool_calls/_messages.py:38</code>, <code>backend/src/grimoire/tool_calls/_messages.py:75</code>, <code>backend/tests/test_tool_wire.py:99</code>, <code>backend/tests/test_tool_calls.py:410</code></td></tr><tr><td>Default registered execution awaits async functions and runs sync functions in its own bounded pool. Occupied/abandoned threads retain capacity until finished; saturation yields ToolError(CAPACITY) instead of queueing. drain/idle expose when such threads have finished.</td><td>declared; source-sampled, not re-executed here</td><td><code>backend/src/grimoire/tool_calls/_runs.py:295</code>, <code>backend/src/grimoire/tool_calls/_runs.py:251</code>, <code>backend/src/grimoire/tool_calls/_runs.py:323</code>, <code>backend/tests/test_tool_loop.py:412</code>, <code>backend/tests/test_tool_loop.py:756</code></td></tr><tr><td>RunBudget validates supported limits; LoopResult/Event/TraceEntry distinguish completion, budget exhaustion, failure, deferred terminal calls and declined calls. Trace contracts carry references/sizes rather than tool argument/result text; truncation includes its marker within the limit.</td><td>declared; source-sampled, not re-executed here</td><td><code>backend/src/grimoire/tool_calls/_runs.py:56</code>, <code>backend/src/grimoire/tool_calls/_runs.py:110</code>, <code>backend/src/grimoire/tool_calls/_runs.py:182</code>, <code>backend/tests/test_tool_calls.py:489</code></td></tr></tbody></table></div><h2>Failure and concurrency seams</h2><p>Provider/model-scoped opaque data must not leak into a different provider history. <code>backend/src/grimoire/tool_calls/__init__.py</code>, <code>backend/src/grimoire/tool_calls/_definitions.py</code></p><p>Timing out a synchronous tool does not stop its thread; worker occupancy and explicit owner cleanup matter. <code>backend/src/grimoire/tool_calls/_definitions.py</code>, <code>backend/src/grimoire/tool_calls/_runs.py</code></p><h2>Prioritized maintenance watchlist</h2><ol><li>Provider/model-scoped opaque data must not leak into a different provider history.</li><li>Timing out a synchronous tool does not stop its thread; worker occupancy and explicit owner cleanup matter.</li><li>Review changes where high churn intersects branch-heavy code; preserve the behavioral contract when splitting implementation. The hotspot ranking is a proxy, not a measured defect probability.</li></ol><h2>Explicit limits</h2><p>Do not orchestrate model turns, choose routes, meter provider calls, apply proposals or perform campaign publication. inference owns the bounded run and hands calls to a caller-owned executor; provider adapters only lower and collect calls. <code>backend/src/grimoire/tool_calls/__init__.py:1</code>, <code>backend/src/grimoire/inference/_tool_loops.py:75</code>, <code>backend/src/grimoire/inference/_tool_dispatch.py:46</code>, <code>backend/src/grimoire/tool_calls/_definitions.py:53</code></p><p>The effect/context contract is read/propose with proposal collection, not a Python security sandbox or automatic durable write capability. The default executor does not enforce run clocks, kill threads, or guarantee exactly-once tool/provider execution; the loop bounds waiting. <code>backend/src/grimoire/tool_calls/_definitions.py:81</code>, <code>backend/src/grimoire/tool_calls/_definitions.py:112</code>, <code>backend/src/grimoire/tool_calls/_runs.py:323</code>, <code>backend/src/grimoire/inference/_tool_loops.py:75</code>, <code>backend/src/grimoire/deadline.py:1</code></p><h2>Retained review checklist</h2><p>The prior atlas is reconciled here as a findings checklist alongside the fresh analysis. Application inputs are unchanged during this refresh; no prior concern is closed merely because a new detector omits it. The source citations were checked again for reachability; these remain source-review evidence with the limits stated below.</p><h2>Observable invariants and limits</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence</th></tr></thead><tbody><tr><td>Opaque provider state is dropped when another kind/provider/model owns the next attempt.</td><td><code>backend/src/grimoire/tool_calls/_messages.py</code></td></tr><tr><td>A retry resets the collector so fragments from a failed attempt cannot become the next call.</td><td><code>backend/src/grimoire/tool_calls/__init__.py</code></td></tr><tr><td>Worker capacity is bounded independently of the shared default executor.</td><td><code>backend/src/grimoire/tool_calls/_runs.py</code></td></tr></tbody></table></div><h2>Risk ranking</h2><ol><li>Timeout cannot stop a Python thread; abandoned work still consumes executor capacity until it settles. <code>backend/src/grimoire/tool_calls/_runs.py</code></li><li>Argument fragments and provider-only opaque history are different state; both need retry and provenance checks. <code>backend/src/grimoire/tool_calls/_messages.py</code></li><li>Portable schemas limit expressiveness, while conformance checks remain necessary at tool-execution boundaries. <code>backend/src/grimoire/tool_calls/_definitions.py</code></li></ol><p>These are source-review priorities, not new reproduced defects. The health page separates deterministic findings from unverified candidates.</p>
 
-<h2>Reconciliation with the previous atlas</h2><p>The previous risk checklist was re-read against current source after the fresh pass. The following cases remain open or retain an important limit; their old line coordinates were replaced where code moved. Earlier source-shape test assurances remain withdrawn: behavioral checks, not source spelling, establish runtime contracts.</p><ul><li>Provider/model provenance, budget validation and outstanding worker capacity remain separate contracts. A timeout cannot kill a Python thread, so capacity and library ownership must follow actual completion. <code>backend/src/grimoire/tool_calls/_messages.py:38</code> · <code>backend/src/grimoire/tool_calls/_runs.py:56</code></li></ul>
+<h3>Previously recorded concrete cases</h3><p>These earlier source-review cases remain open or retain their stated limit. This refresh does not claim to have repaired or runtime-reproduced them. Earlier source-shape test assurances remain withdrawn: behavioral checks, not source spelling, establish runtime contracts.</p><ul><li>Provider/model provenance, budget validation and outstanding worker capacity remain separate contracts. A timeout cannot kill a Python thread, so capacity and library ownership must follow actual completion. <code>backend/src/grimoire/tool_calls/_messages.py:38</code> · <code>backend/src/grimoire/tool_calls/_runs.py:56</code></li></ul>
 
 </section>
 <section class="panel" id="glossary" role="tabpanel">
 
-<h2>Terms that carry a contract</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Meaning here</th><th>Source</th></tr></thead><tbody><tr><td>Collector</td><td>streamed call accumulator</td><td><code>backend/src/grimoire/tool_calls/__init__.py</code></td></tr><tr><td>Opaque</td><td>provider-provenanced continuation state</td><td><code>backend/src/grimoire/tool_calls/_messages.py</code></td></tr><tr><td>Budget</td><td>limits on a run, not final accounting</td><td><code>backend/src/grimoire/tool_calls/_runs.py</code></td></tr></tbody></table></div>
+<h2>Domain vocabulary</h2><div class="tbl-wrap"><table><thead><tr><th>Domain term</th><th>Code concept</th><th>Meaning and boundary</th></tr></thead><tbody><tr><td>Toolset</td><td>ToolSpec and Toolset</td><td>Portable caller-supplied definitions and effects.</td></tr><tr><td>Tool call</td><td>ToolCall and argument accumulation</td><td>Fragments assemble into an ordered call with evidence retained.</td></tr><tr><td>Opaque state</td><td>provider/model identity on history</td><td>Provider-specific continuation data is not portable across arbitrary model switches.</td></tr><tr><td>Executor</td><td>bounded default executor</td><td>A timed-out synchronous thread may still occupy capacity.</td></tr></tbody></table></div><p>Defining source entry points: <code>backend/src/grimoire/tool_calls/__init__.py</code>, <code>backend/src/grimoire/tool_calls/_definitions.py</code>, <code>backend/src/grimoire/tool_calls/_runs.py</code>. No naming defect is asserted beyond the distinctions explained here.</p><p>Names describe different ownership levels: a request, an observed run, a committed record and an optional follow-up are not interchangeable success states. An ordinal Theory judgment, a detector-density Health score and measured application quality are also different questions.</p>
+
+</section>
+<section class="panel" id="coverage" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi good"><div class="n">98%</div><div class="l">line coverage (measured files)</div></div>
+  <div class="kpi"><div class="n">4</div><div class="l">files measured</div></div>
+  <div class="kpi good"><div class="n">0</div><div class="l">source files not measured</div></div>
+</div>
+<div class="callout"><b>Source:</b> <code>/workspace/work/code-overview-recompute-02a2f312/coverage-combined.xml</code> (cobertura). This tab renders an existing artifact — it did not run the tests. Coverage says which lines executed under test, not that their behavior was asserted; pair it with the Invariants tab before trusting a green file.</div>
+
+<h2>Uncovered complexity map</h2>
+<p class="dim">Area = lines of code · color = % uncovered · the large, hot blocks are the untested complexity.</p>
+<div class="viz" data-render="treemap" style="height:520px"></div>
+<script type="application/json">{"items":[{"name":"backend/src/grimoire/tool_calls/_messages.py","value":342,"metric":2.1,"meta":"98% covered \u00b7 94 branches"},{"name":"backend/src/grimoire/tool_calls/_definitions.py","value":264,"metric":2.3,"meta":"98% covered \u00b7 58 branches"},{"name":"backend/src/grimoire/tool_calls/_runs.py","value":294,"metric":2.0,"meta":"98% covered \u00b7 29 branches"},{"name":"backend/src/grimoire/tool_calls/__init__.py","value":377,"metric":0.0,"meta":"100% covered \u00b7 3 branches"}],"valueLabel":"LOC","metricLabel":"% uncovered","metricMax":100}</script>
+<h2>Highest-risk files — complex and untested</h2>
+<p class="dim">Risk = branch points × uncovered share. Tests excluded from the ranking.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Coverage</th><th class="num">Lines</th><th class="num">Branches</th><th class="num">Untested complexity</th></tr></thead>
+<tbody><tr><td><code>backend/src/grimoire/tool_calls/_messages.py</code></td><td class='num'>98%</td><td class='num'>238/243</td><td class='num'>94</td><td class='num' data-sort='2.0'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/tool_calls/_definitions.py</code></td><td class='num'>98%</td><td class='num'>167/171</td><td class='num'>58</td><td class='num' data-sort='1.3'><div class="bar bad"><i style="width:65.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/tool_calls/_runs.py</code></td><td class='num'>98%</td><td class='num'>192/196</td><td class='num'>29</td><td class='num' data-sort='0.6'><div class="bar bad"><i style="width:30.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/tool_calls/__init__.py</code></td><td class='num'>100%</td><td class='num'>98/98</td><td class='num'>3</td><td class='num' data-sort='0.0'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
+
+
 
 </section><!--DOC_BODY--></main>
-<footer class="doc">Generated by code-visualization. Inventory, dependency, hotspot and LLM tabs are automated; judgments were rebuilt from source and reconciled with the prior risk checklist. No private library or live provider was accessed.</footer>
+<footer class="doc">Generated from fresh scoped inventory, dependency, hotspot and model-call scans, existing coverage artifacts and current source reading. No private library or live provider accessed.</footer>
 <script>
 (function(){
   const btns=[...document.querySelectorAll('nav.tabs button')];

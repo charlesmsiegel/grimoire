@@ -57,7 +57,7 @@ test("a rejected upload shows the error and keeps the current cover", async () =
   const input = await screen.findByLabelText(/cover image/i);
   fireEvent.change(input, { target: { files: [file()] } });
   expect(await screen.findByText("not a readable image")).toBeTruthy();
-  expect((screen.getByRole("img") as HTMLImageElement).getAttribute("src")).toBe("/api/campaigns/run/cover?v=v1");
+  expect((screen.getByRole<HTMLImageElement>("img")).getAttribute("src")).toBe("/api/campaigns/run/cover?v=v1");
 });
 
 test("a rejected removal shows the error and keeps the current cover", async () => {
@@ -70,12 +70,12 @@ test("a rejected removal shows the error and keeps the current cover", async () 
   await screen.findByRole("img");
   fireEvent.click(screen.getByRole("button", { name: /remove/i }));
   expect(await screen.findByText("cover could not be removed")).toBeTruthy();
-  expect((screen.getByRole("img") as HTMLImageElement).getAttribute("src")).toBe("/api/campaigns/run/cover?v=v1");
+  expect((screen.getByRole<HTMLImageElement>("img")).getAttribute("src")).toBe("/api/campaigns/run/cover?v=v1");
 });
 
 test("uploading resets the file input so the same file can be re-picked", async () => {
   render(<CampaignCover cid="run" />);
-  const input = await screen.findByLabelText(/cover image/i) as HTMLInputElement;
+  const input = await screen.findByLabelText<HTMLInputElement>(/cover image/i);
   // jsdom never populates a file input's `value` from an assigned FileList
   // the way a real browser fakepath would, so asserting on `input.value`
   // after upload can't tell a reset apart from one that never happened.
@@ -132,11 +132,11 @@ test("an upload in flight for one campaign leaves the next one usable", async ()
   // `busy` must be reset by the cid change itself: the abandoned upload's own
   // setBusy(false) is suppressed by the live-cid guard, so nothing else ever
   // re-enables these — b's panel would stay disabled forever.
-  expect((screen.getByLabelText(/replace cover image/i) as HTMLInputElement).disabled).toBe(false);
-  expect((screen.getByRole("button", { name: /remove/i }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByLabelText<HTMLInputElement>(/replace cover image/i)).disabled).toBe(false);
+  expect((screen.getByRole<HTMLButtonElement>("button", { name: /remove/i })).disabled).toBe(false);
 
   await act(async () => { releasePut({ ext: "png", v: "vA" }); });
-  expect((screen.getByRole("img") as HTMLImageElement).getAttribute("src"))
+  expect((screen.getByRole<HTMLImageElement>("img")).getAttribute("src"))
     .toBe("/api/campaigns/b/cover?v=vB");
 });
 
@@ -150,11 +150,11 @@ test("a removal in flight for one campaign does not clear the next one's cover",
   await waitFor(() => expect(api.deleteCampaignCover).toHaveBeenCalledWith("a"));
 
   rerender(<CampaignCover cid="b" />);
-  await waitFor(() => expect((screen.getByRole("img") as HTMLImageElement).getAttribute("src"))
+  await waitFor(() => expect((screen.getByRole<HTMLImageElement>("img")).getAttribute("src"))
     .toBe("/api/campaigns/b/cover?v=vB"));
 
   await act(async () => { releaseDel({ ok: true }); });
-  expect((screen.getByRole("img") as HTMLImageElement).getAttribute("src"))
+  expect((screen.getByRole<HTMLImageElement>("img")).getAttribute("src"))
     .toBe("/api/campaigns/b/cover?v=vB");
 });
 

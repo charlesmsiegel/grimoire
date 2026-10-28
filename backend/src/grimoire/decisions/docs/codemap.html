@@ -190,8 +190,8 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire-decisions — Codebase Atlas</h1>
-  <p class="doc-sub">Current source, explicit lifetime boundaries and retained review cases</p>
-  <div class="doc-meta">generated 2026-10-26 · f290a7a9 · source rebuilt; coverage unavailable</div>
+  <p class="doc-sub">Current source and explicit ownership, failure and recovery contracts</p>
+  <div class="doc-meta">generated 2026-10-27 · 43d8349f + working tree fc99a43f0ceb</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -219,19 +219,16 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <button role="tab" data-tab="flows" aria-selected="false" aria-controls="flows">Critical Flows</button>
 <button role="tab" data-tab="boundaries" aria-selected="false" aria-controls="boundaries">Boundaries &amp; Ownership</button>
 <button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button>
-<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
+<button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button>
+<button role="tab" data-tab="coverage" aria-selected="false" aria-controls="coverage">Coverage</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-<div class="card hero"><h2>grimoire-decisions</h2><p>Decisions model closed questions with caller-specified legal answers, separate from free-form generation. Pure request/result types, schema construction, tolerant parsing and native probability lifting form a store-free gateway leaf.</p></div><h2>Reading order and entry points</h2><ol><li><code>backend/src/grimoire/decisions/__init__.py</code></li><li><code>backend/src/grimoire/decisions/_models.py</code></li><li><code>backend/src/grimoire/decisions/_schemas.py</code></li><li><code>backend/src/grimoire/decisions/_structured.py</code></li><li><code>backend/src/grimoire/decisions/_native.py</code></li><li><code>backend/src/grimoire/decisions/_reports.py</code></li></ol><p>Start with the entry/facade, then read the defining leaves and the failure boundaries. Documentation directories are excluded from every automated source inventory.</p><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">flowchart LR
-  A["Caller items"]
-  B["Schema builder"]
-  C["Model reply"]
-  D["Tolerant parser"]
-  A --&gt; B
-  B --&gt; C
-  C --&gt; D
-</pre></div></div><div class="callout warn">Static analysis describes repository source only. No private library or live provider was consulted. Coverage and eval results are not inferred from test-file counts; see generated tabs and the measurement audit for available evidence.</div>
-<h2>Fresh analysis and its limits</h2><p>Inventory: 6 recognized files, 2352 nonblank lines. These include recognized assets and configuration; they are not a count of executable statements. 1 dependency modules are drawn. The graph uses a depth of three to distinguish responsibility packages.</p><p>Highest churn × branch proxy: <code>backend/src/grimoire/decisions/_native.py</code>. This selects reading priority; it is not a reproduced defect or a timing measurement.</p><p><strong>Coverage:</strong> no parseable coverage artifact found (searched for coverage.xml, cobertura*.xml, lcov.info, coverage.lcov, coverage.out) No test suite was run to manufacture coverage for this atlas.</p><p><strong>LLM detector:</strong> LLM call sites are found textually by SDK method name: a call made through your own wrapper, by an unrecognized client, or with a model id read from config at runtime will be missed, and a detected parameter is evidence it is passed somewhere in the call, not that it holds on every path. The application uses its own facade and direct HTTP adapters, so an absent LLM Ops tab does not establish absence of model calls.</p><p>Computed resource patterns hit the detector reporting cap. The resource summary preserves the truncation counts; dynamic paths remain incomplete evidence.</p>
+<div class="card hero"><h2>Problem and responsibility</h2><p>Define the provider-neutral contract for closed questions about supplied text: caller-fixed legal answers, validated requests, schemas, tolerant readback and result/report metadata. Keep execution of those questions with inference.</p><p><code>backend/src/grimoire/decisions/__init__.py:1</code></p></div><h2>Current inventory</h2><p>6 recognized source/configuration/asset files; 2352 nonblank lines. These are inventory counts, not executable statements. Unsupported extensions and oversized files remain listed in the automated Inventory tab.</p><h2>Entry points and reading order</h2><div class="tbl-wrap"><table><thead><tr><th>Read</th><th>Why</th></tr></thead><tbody><tr><td><code>backend/src/grimoire/decisions/__init__.py</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>backend/src/grimoire/decisions/_models.py</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>backend/src/grimoire/decisions/_structured.py</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>backend/src/grimoire/decisions/_native.py</code></td><td>Large current source file selected by the inventory; inspect its responsibility before extending it.</td></tr><tr><td><code>backend/src/grimoire/decisions/_reports.py</code></td><td>Large current source file selected by the inventory; inspect its responsibility before extending it.</td></tr></tbody></table></div><h2>Intended responsibility handoffs</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">flowchart LR
+  N0[&quot;Caller fixed legal answers&quot;] --&gt; N1[&quot;Validate question contract&quot;]
+  N1[&quot;Validate question contract&quot;] --&gt; N2[&quot;Build bounded batch schema&quot;]
+  N2[&quot;Build bounded batch schema&quot;] --&gt; N3[&quot;Read provider reply&quot;]
+  N3[&quot;Read provider reply&quot;] --&gt; N4[&quot;Preserve answer or failure state&quot;]</pre></div></div><p>Current churn × branch-proxy reading priorities: <code>backend/src/grimoire/decisions/_native.py</code>, <code>backend/src/grimoire/decisions/_reports.py</code>, <code>backend/src/grimoire/decisions/_structured.py</code>. Churn comes from committed history; current sizes/branches read the working tree. Newly extracted uncommitted helpers have little or no independent history, so a low hotspot rank is not evidence they need no review.</p><p>The scope and guarantees below distinguish declared intent, inferred intent and observed implementation. Code was source-sampled; this report does not claim exhaustive execution verification.</p><p><strong>Existing test artifacts:</strong> Coverage is re-rendered from saved backend XML and frontend LCOV line hits, partitioned to this scope. No tests were run for the atlas; provenance and original artifact times are retained in the overview audit. Unmeasured files remain listed, and coverage of measured files does not establish coverage of every language.</p><p><strong>Model-call detector:</strong> Known SDK spellings are a textual inventory. The app also uses its own inference facade and direct HTTP adapters; a missing LLM Ops tab is not evidence that no model work occurs.</p>
+
 </section>
 <section class="panel" id="inventory" role="tabpanel">
 
@@ -341,7 +338,7 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">3</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi accent"><div class="n">4</div><div class="l">commits (24 months ago)</div></div>
   <div class="kpi"><div class="n">6</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">_native.py</div><div class="l">top hotspot</div></div>
 </div>
@@ -369,53 +366,81 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 </section>
 <section class="panel" id="flows" role="tabpanel">
 
-<h2>Structured answer</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
-  participant A as Caller items
-  participant B as Schema builder
-  participant C as Model reply
-  participant D as Tolerant parser
-  A-&gt;&gt;B: Fix the legal answer domain
-  B-&gt;&gt;C: Build portable batch schema
-  alt An index or option cannot be established
-    C--&gt;&gt;A: Error or explicitly incomplete result
-  else supported path
-    C-&gt;&gt;D: Receive raw model object
-    D--&gt;&gt;A: Parse each item to legal answer or reason
-  end
-</pre></div></div><p>Implementation: <code>backend/src/grimoire/decisions/_structured.py</code>. Tolerant parsing must remain strict about legal values; salvaging malformed JSON must not manufacture an answer.</p><h2>Native answer</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
-  participant A as Neutral item
-  participant B as Native form
-  participant C as Endpoint report
-  participant D as Neutral result
-  A-&gt;&gt;B: Describe a neutral question
-  B-&gt;&gt;C: Lower to supported endpoint form
-  alt Native endpoint cannot carry the question
-    C--&gt;&gt;A: Error or explicitly incomplete result
-  else supported path
-    C-&gt;&gt;D: Read probability or choice report
-    D--&gt;&gt;A: Lift to neutral answer and report
-  end
-</pre></div></div><p>Implementation: <code>backend/src/grimoire/decisions/_native.py</code>. Tolerant parsing must remain strict about legal values; salvaging malformed JSON must not manufacture an answer.</p>
+<h2>Main supported workflow</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+  participant P0 as Caller fixed legal answers
+  participant P1 as Validate question contract
+  participant P2 as Build bounded batch schema
+  participant P3 as Read provider reply
+  participant P4 as Preserve answer or failure state
+  P0-&gt;&gt;P1: explicit handoff
+  P1-&gt;&gt;P2: explicit handoff
+  P2-&gt;&gt;P3: explicit handoff
+  P3-&gt;&gt;P4: explicit handoff
+  alt supported work completes
+    P4--&gt;&gt;P0: result with identity and outcome
+  else failure or unavailable evidence
+    P4--&gt;&gt;P0: retain explicit error or unknown state
+  end</pre></div></div><p>Implementation entry points: <code>backend/src/grimoire/decisions/__init__.py</code>, <code>backend/src/grimoire/decisions/_models.py</code>, <code>backend/src/grimoire/decisions/_structured.py</code>. The diagram shows responsibility handoffs rather than every internal call.</p><h2>Failure, recovery or alternate workflow</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+  participant P0 as Native decision report
+  participant P1 as Lift to neutral answer evidence
+  participant P2 as Preserve ties and margins
+  participant P3 as Evaluate declared escalation trigger
+  P0-&gt;&gt;P1: explicit handoff
+  P1-&gt;&gt;P2: explicit handoff
+  P2-&gt;&gt;P3: explicit handoff
+  alt supported work completes
+    P3--&gt;&gt;P0: result with identity and outcome
+  else failure or unavailable evidence
+    P3--&gt;&gt;P0: retain explicit error or unknown state
+  end</pre></div></div><p>Abstention, unreadable output and a legal answer must not collapse into a default choice. <code>backend/src/grimoire/decisions/_models.py</code>, <code>backend/src/grimoire/decisions/_structured.py</code></p>
 
 </section>
 <section class="panel" id="boundaries" role="tabpanel">
 
-<h2>Concern ownership</h2><div class="tbl-wrap"><table><thead><tr><th>Concern</th><th>Owner</th><th>Boundary</th></tr></thead><tbody><tr><td>Vocabulary and result shapes</td><td><code>backend/src/grimoire/decisions/_models.py</code></td><td>Choice/rank/select/joint contracts make the answer domain explicit.</td></tr><tr><td>Portable schemas</td><td><code>backend/src/grimoire/decisions/_schemas.py</code></td><td>Schema construction stays within the shared provider subset.</td></tr><tr><td>Structured parsing</td><td><code>backend/src/grimoire/decisions/_structured.py</code></td><td>A malformed answer is an unanswered result, not an invented default.</td></tr><tr><td>Native lifting and confidence</td><td><code>backend/src/grimoire/decisions/_native.py</code></td><td>Provider-native forms are translated into the same neutral results.</td></tr></tbody></table></div><h2>Shared-state and dependency boundaries</h2><p>Tolerant parsing must remain strict about legal values; salvaging malformed JSON must not manufacture an answer. <code>backend/src/grimoire/decisions/_structured.py</code>.</p><p>The Dependencies tab reports only edges within this unit; edges to other package roots are counted separately. A textual graph cannot prove all runtime-selected template, plugin or callback edges.</p>
-<h2>Cycle interpretation</h2><p>The textual graph reports 0 module-level and 1 file-level strongly connected components. The component centers on the public compatibility facade and its defining leaves. Inspect actual names imported and initialization order; the report does not prove a runtime initialization failure.</p><p>Component entry points: <code>backend/src/grimoire/decisions/__init__.py</code> (5 files). Complete member lists remain in the Dependencies tab.</p>
+<h2>Owned state and permitted effects</h2><div class="tbl-wrap"><table><thead><tr><th>Responsibility</th><th>Contract evidence</th></tr></thead><tbody><tr><td>Own request/result/report value shapes and their local validation and transformations. Frozen dataclass records and newly built parse/schema outputs carry answers, optional provenance, usage/call records and escalation records; this package owns no network session or durable campaign state.</td><td><code>backend/src/grimoire/decisions/_models.py:152</code>, <code>backend/src/grimoire/decisions/_models.py:392</code>, <code>backend/src/grimoire/decisions/_models.py:447</code>, <code>backend/src/grimoire/decisions/_models.py:509</code>, <code>backend/src/grimoire/decisions/__init__.py:1</code></td></tr></tbody></table></div><h2>Neighbor owners</h2><div class="tbl-wrap"><table><thead><tr><th>Owner</th><th>Neighbor contract</th></tr></thead><tbody><tr><td>grimoire.schemas in grimoire-providers-prompts</td><td>schemas owns the portable schema reader/validator and budgets shared by decisions, prompt rendering and model-derived output. <code>backend/src/grimoire/schemas.py:1</code></td></tr><tr><td>grimoire.inference</td><td>inference.decide validates before metering, executes structured/native stages and optional escalation, and stamps actual backend/server information onto result values. <code>backend/src/grimoire/inference/_decision.py:138</code>, <code>backend/src/grimoire/inference/_decision.py:248</code></td></tr><tr><td>provider wire adapters, grimoire.llm and grimoire.inference/templates</td><td>Provider adapters own their native request/response envelopes; llm owns sending them. Structured decision prompt text belongs to templates/decide and is rendered by inference. <code>backend/src/grimoire/openai_compatible.py:184</code>, <code>backend/src/grimoire/openrouter.py:135</code>, <code>backend/src/grimoire/inference/_decision_calls.py:38</code>, <code>templates/decide/system.j2:1</code></td></tr></tbody></table></div><h2>Conservative graph interpretation</h2><p>0 grouped module components and 1 file components were detected. Grouping, compatibility re-exports, erased TypeScript imports and textual asset references can create components that are not executable initialization cycles. These components are review leads; inspect actual imported names, loads and initialization order before changing an owner boundary.</p><h3>Component-specific reading</h3><p>The component centers on the public compatibility facade and its defining leaves. Inspect actual names imported and initialization order; the report does not prove a runtime initialization failure.</p><p>Component entry points: <code>backend/src/grimoire/decisions/__init__.py</code> (5 files). Complete members are retained in Dependencies.</p><p>Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path.</p>
+
 </section>
 <section class="panel" id="invariants" role="tabpanel">
 
-<h2>Observable invariants and limits</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence</th></tr></thead><tbody><tr><td>An answer nobody gave is None plus a reason rather than a fallback option.</td><td><code>backend/src/grimoire/decisions/__init__.py</code></td></tr><tr><td>The parser answers every supplied item even when the reply is unreadable.</td><td><code>backend/src/grimoire/decisions/_structured.py</code></td></tr><tr><td>Ranking count and uniqueness are parser responsibilities when portable schemas cannot express them.</td><td><code>backend/src/grimoire/decisions/_schemas.py</code></td></tr></tbody></table></div><h2>Risk ranking</h2><ol><li>Tolerant parsing must remain strict about legal values; salvaging malformed JSON must not manufacture an answer. <code>backend/src/grimoire/decisions/_structured.py</code></li><li>Native endpoints cannot carry every neutral question shape; native-gap reporting is part of correctness. <code>backend/src/grimoire/decisions/_native.py</code></li><li>Confidence, margin and triggers describe an endpoint report, not calibrated model certainty. <code>backend/src/grimoire/decisions/_reports.py</code></li></ol><p>These are source-review priorities, not new reproduced defects. The health page separates deterministic findings from unverified candidates.</p>
+<h2>Supported invariants</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence status</th><th>Source</th></tr></thead><tbody><tr><td>An unanswered question is None with a closed-vocabulary reason, never a guessed default; false/zero, empty selection, abstention, unreadable input and provider error remain distinct. Missing native probability/distribution evidence stays missing.</td><td>declared; source-sampled, not re-executed here</td><td><code>backend/src/grimoire/decisions/_models.py:392</code>, <code>backend/src/grimoire/decisions/_models.py:234</code>, <code>backend/tests/test_decisions.py:418</code>, <code>backend/tests/test_decisions.py:541</code></td></tr><tr><td>For supported Item inputs, structured parsing tolerates documented surrounding/folded JSON forms, never raises on malformed reply text, preserves input order, and leaves unoffered, mistyped or missing values unreadable.</td><td>declared; source-sampled, not re-executed here</td><td><code>backend/src/grimoire/decisions/_structured.py:247</code>, <code>backend/tests/test_decisions.py:397</code>, <code>backend/tests/test_decisions.py:547</code></td></tr><tr><td>Validation rejects ambiguous identifiers/aliases and uncarryable individual requests. Chunks respect shared schema budgets; post-read rules enforce ranking/selection bounds excluded from the portable wire schema. Native-only gaps name a limit rather than truncating questions.</td><td>declared; source-sampled, not re-executed here</td><td><code>backend/src/grimoire/decisions/_schemas.py:188</code>, <code>backend/src/grimoire/decisions/_schemas.py:293</code>, <code>backend/src/grimoire/decisions/__init__.py:1</code>, <code>backend/src/grimoire/decisions/_native.py:240</code>, <code>backend/tests/test_decisions.py:61</code></td></tr><tr><td>Ties are explicit tiers; flattening a tied ranking needs a caller-supplied tiebreak. Native pointwise marginals are distinct from a joint distribution, and unreadable/error answers do not trigger uncertainty escalation.</td><td>declared; source-sampled, not re-executed here</td><td><code>backend/src/grimoire/decisions/_models.py:340</code>, <code>backend/src/grimoire/decisions/_models.py:392</code>, <code>backend/src/grimoire/decisions/_reports.py:201</code></td></tr></tbody></table></div><h2>Failure and concurrency seams</h2><p>Abstention, unreadable output and a legal answer must not collapse into a default choice. <code>backend/src/grimoire/decisions/__init__.py</code>, <code>backend/src/grimoire/decisions/_models.py</code></p><p>Schema budgets, input order and native representability must remain explicit when adding a question kind. <code>backend/src/grimoire/decisions/_models.py</code>, <code>backend/src/grimoire/decisions/_structured.py</code></p><h2>Prioritized maintenance watchlist</h2><ol><li>Abstention, unreadable output and a legal answer must not collapse into a default choice.</li><li>Schema budgets, input order and native representability must remain explicit when adding a question kind.</li><li>Review changes where high churn intersects branch-heavy code; preserve the behavioral contract when splitting implementation. The hotspot ranking is a proxy, not a measured defect probability.</li></ol><h2>Explicit limits</h2><p>Do not perform provider I/O, task resolution, retries, metering/persistence or escalation hops. This package supplies their pure contracts and trigger descriptions; inference and llm execute them. <code>backend/src/grimoire/decisions/__init__.py:1</code>, <code>backend/src/grimoire/inference/_decision.py:248</code>, <code>backend/src/grimoire/llm/_client.py:357</code></p><p>A native endpoint need not represent every otherwise valid question. In particular a ranking needs an explicit pointwise question for native lowering; a structured stage may still answer it. No absent probability or strict order is fabricated. <code>backend/src/grimoire/decisions/_native.py:240</code>, <code>backend/src/grimoire/decisions/_models.py:211</code>, <code>backend/src/grimoire/decisions/_models.py:340</code></p><h2>Retained review checklist</h2><p>The prior atlas is reconciled here as a findings checklist alongside the fresh analysis. Application inputs are unchanged during this refresh; no prior concern is closed merely because a new detector omits it. The source citations were checked again for reachability; these remain source-review evidence with the limits stated below.</p><h2>Observable invariants and limits</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence</th></tr></thead><tbody><tr><td>An answer nobody gave is None plus a reason rather than a fallback option.</td><td><code>backend/src/grimoire/decisions/__init__.py</code></td></tr><tr><td>The parser answers every supplied item even when the reply is unreadable.</td><td><code>backend/src/grimoire/decisions/_structured.py</code></td></tr><tr><td>Ranking count and uniqueness are parser responsibilities when portable schemas cannot express them.</td><td><code>backend/src/grimoire/decisions/_schemas.py</code></td></tr></tbody></table></div><h2>Risk ranking</h2><ol><li>Tolerant parsing must remain strict about legal values; salvaging malformed JSON must not manufacture an answer. <code>backend/src/grimoire/decisions/_structured.py</code></li><li>Native endpoints cannot carry every neutral question shape; native-gap reporting is part of correctness. <code>backend/src/grimoire/decisions/_native.py</code></li><li>Confidence, margin and triggers describe an endpoint report, not calibrated model certainty. <code>backend/src/grimoire/decisions/_reports.py</code></li></ol><p>These are source-review priorities, not new reproduced defects. The health page separates deterministic findings from unverified candidates.</p>
 
-<h2>Reconciliation with the previous atlas</h2><p>The previous risk checklist was re-read against current source after the fresh pass. The following cases remain open or retain an important limit; their old line coordinates were replaced where code moved. Earlier source-shape test assurances remain withdrawn: behavioral checks, not source spelling, establish runtime contracts.</p><ul><li>Partial in-range reply indices remain ambiguous: with three requested items, keys 1 and 2 may be a partial zero-based answer or a one-based answer shifted by one. Foreign-index rejection cannot distinguish them; pair proposals still need human review. <code>backend/src/grimoire/decisions/_structured.py:50</code> · <code>backend/src/grimoire/decisions/_structured.py:58</code></li></ul>
+<h3>Previously recorded concrete cases</h3><p>These earlier source-review cases remain open or retain their stated limit. This refresh does not claim to have repaired or runtime-reproduced them. Earlier source-shape test assurances remain withdrawn: behavioral checks, not source spelling, establish runtime contracts.</p><ul><li>Partial in-range reply indices remain ambiguous: with three requested items, keys 1 and 2 may be a partial zero-based answer or a one-based answer shifted by one. Foreign-index rejection cannot distinguish them; pair proposals still need human review. <code>backend/src/grimoire/decisions/_structured.py:50</code> · <code>backend/src/grimoire/decisions/_structured.py:58</code></li></ul>
 
 </section>
 <section class="panel" id="glossary" role="tabpanel">
 
-<h2>Terms that carry a contract</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Meaning here</th><th>Source</th></tr></thead><tbody><tr><td>Decision</td><td>closed question</td><td><code>backend/src/grimoire/decisions/__init__.py</code></td></tr><tr><td>Unreadable</td><td>reply cannot establish a legal answer</td><td><code>backend/src/grimoire/decisions/_structured.py</code></td></tr><tr><td>Native</td><td>provider-specific endpoint lowered to neutral results</td><td><code>backend/src/grimoire/decisions/_native.py</code></td></tr></tbody></table></div>
+<h2>Domain vocabulary</h2><div class="tbl-wrap"><table><thead><tr><th>Domain term</th><th>Code concept</th><th>Meaning and boundary</th></tr></thead><tbody><tr><td>Question</td><td>Predicate, Choice, Score, Rank and related shapes</td><td>Legal answer space is fixed by the caller.</td></tr><tr><td>Answer</td><td>Answer and ItemResult</td><td>Unreadable, refused and abstained are distinct from a legal answer.</td></tr><tr><td>Native report</td><td>native lifting and tiers</td><td>Provider evidence is normalized without inventing a winner for ties.</td></tr></tbody></table></div><p>Defining source entry points: <code>backend/src/grimoire/decisions/__init__.py</code>, <code>backend/src/grimoire/decisions/_models.py</code>, <code>backend/src/grimoire/decisions/_structured.py</code>. No naming defect is asserted beyond the distinctions explained here.</p><p>Names describe different ownership levels: a request, an observed run, a committed record and an optional follow-up are not interchangeable success states. An ordinal Theory judgment, a detector-density Health score and measured application quality are also different questions.</p>
+
+</section>
+<section class="panel" id="coverage" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi good"><div class="n">99%</div><div class="l">line coverage (measured files)</div></div>
+  <div class="kpi"><div class="n">6</div><div class="l">files measured</div></div>
+  <div class="kpi good"><div class="n">0</div><div class="l">source files not measured</div></div>
+</div>
+<div class="callout"><b>Source:</b> <code>/workspace/work/code-overview-recompute-02a2f312/coverage-combined.xml</code> (cobertura). This tab renders an existing artifact — it did not run the tests. Coverage says which lines executed under test, not that their behavior was asserted; pair it with the Invariants tab before trusting a green file.</div>
+
+<h2>Uncovered complexity map</h2>
+<p class="dim">Area = lines of code · color = % uncovered · the large, hot blocks are the untested complexity.</p>
+<div class="viz" data-render="treemap" style="height:520px"></div>
+<script type="application/json">{"items":[{"name":"backend/src/grimoire/decisions/_reports.py","value":300,"metric":1.2,"meta":"99% covered \u00b7 95 branches"},{"name":"backend/src/grimoire/decisions/_native.py","value":345,"metric":1.0,"meta":"99% covered \u00b7 103 branches"},{"name":"backend/src/grimoire/decisions/_models.py","value":566,"metric":0.8,"meta":"99% covered \u00b7 70 branches"},{"name":"backend/src/grimoire/decisions/_schemas.py","value":271,"metric":0.6,"meta":"99% covered \u00b7 75 branches"},{"name":"backend/src/grimoire/decisions/__init__.py","value":633,"metric":0.0,"meta":"100% covered \u00b7 2 branches"},{"name":"backend/src/grimoire/decisions/_structured.py","value":237,"metric":0.0,"meta":"100% covered \u00b7 79 branches"}],"valueLabel":"LOC","metricLabel":"% uncovered","metricMax":100}</script>
+<h2>Highest-risk files — complex and untested</h2>
+<p class="dim">Risk = branch points × uncovered share. Tests excluded from the ranking.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th class="num">Coverage</th><th class="num">Lines</th><th class="num">Branches</th><th class="num">Untested complexity</th></tr></thead>
+<tbody><tr><td><code>backend/src/grimoire/decisions/_reports.py</code></td><td class='num'>99%</td><td class='num'>161/163</td><td class='num'>95</td><td class='num' data-sort='1.1'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/decisions/_native.py</code></td><td class='num'>99%</td><td class='num'>192/194</td><td class='num'>103</td><td class='num' data-sort='1.0'><div class="bar bad"><i style="width:90.9%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/decisions/_models.py</code></td><td class='num'>99%</td><td class='num'>249/251</td><td class='num'>70</td><td class='num' data-sort='0.6'><div class="bar bad"><i style="width:54.5%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/decisions/_schemas.py</code></td><td class='num'>99%</td><td class='num'>174/175</td><td class='num'>75</td><td class='num' data-sort='0.4'><div class="bar bad"><i style="width:36.4%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/decisions/__init__.py</code></td><td class='num'>100%</td><td class='num'>166/166</td><td class='num'>2</td><td class='num' data-sort='0.0'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr>
+<tr><td><code>backend/src/grimoire/decisions/_structured.py</code></td><td class='num'>100%</td><td class='num'>134/134</td><td class='num'>79</td><td class='num' data-sort='0.0'><div class="bar bad"><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
+
+
 
 </section><!--DOC_BODY--></main>
-<footer class="doc">Generated by code-visualization. Inventory, dependency, hotspot and LLM tabs are automated; judgments were rebuilt from source and reconciled with the prior risk checklist. No private library or live provider was accessed.</footer>
+<footer class="doc">Generated from fresh scoped inventory, dependency, hotspot and model-call scans, existing coverage artifacts and current source reading. No private library or live provider accessed.</footer>
 <script>
 (function(){
   const btns=[...document.querySelectorAll('nav.tabs button')];

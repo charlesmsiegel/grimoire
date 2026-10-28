@@ -2,69 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   api, type Config, type ConfigUpdate, type PlayDecisionsInfo, type PromptLayoutSection,
-  type SceneContext,
 } from "../api/client";
-import { BackupsPanel } from "../components/BackupsPanel";
-import { ContextBudgetBar } from "../components/ContextBudgetBar";
-import { EMBEDDINGS_COPY } from "../components/inference/copy";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
-import { ImageStoreCard } from "../components/ImageStoreCard";
-import { StorageLocation } from "../components/StorageLocation";
-import { StoreConflictNotice } from "../components/StoreConflictNotice";
 import { ThemePicker } from "../components/ThemePicker";
 import { isDecision } from "../components/turnLabels";
 import { useThemeSetting } from "../theme/useThemeSetting";
 import { DRAFT_FIELDS, GROUPS, LINKS, SECTIONS, type Draft, type DraftField, type SectionId, type SectionDef } from "../configSections";
-
-/** Every config field this page edits. One list, because it is what the draft
- *  is built from, what the dirty count is counted over, and what Save sends —
- *  three copies of the same list of names is how a field gets added to the
- *  form and quietly never saved. */
-/** The floors `store/logs.py` accepts, quietest first — `logs.FLOORS`, which
- *  deliberately stops at `error` and does not include `critical`: the error
- *  store is a view over this file's ERROR rows, so a floor above them would be
- *  a setting that silently switches #156 off. The server clamps a hand-edited
- *  config the same way.
- *
- *  Spelled here rather than fetched: it is the vocabulary of a `<select>`, and
- *  a dropdown that cannot render until a request lands flickers on every
- *  visit. `GET /logs/level` reports the one actually in force. */
-const LOG_LEVELS = ["debug", "info", "warning", "error"] as const;
-
-/** A stored `log_level` as the floor actually in force, mirroring
- *  `logs.level_name` then `logs.FLOORS`'s clamp.
- *
- *  A store written before `critical` stopped being offered still holds it, and
- *  without this the select renders with no matching option (showing the
- *  first), reads as unchanged against the dirty count, and writes `critical`
- *  straight back on the next save — against a backend that clamps it to
- *  `error` anyway. Anything unrecognized falls to the default the same way the
- *  server's `level_name` does, so the control never shows a floor that is not
- *  the one being applied. */
-function normalizeFloor(value: string): string {
-  const level = (value || "").trim().toLowerCase();
-  if (level === "critical") return "error";          // clamped by `logs.FLOORS`
-  return (LOG_LEVELS as readonly string[]).includes(level) ? level : "info";
-}
-
-/** The saved state, in the shape the form edits. `??` guards a store written
- *  by an older build that has never heard of one of these keys: absent, it
- *  would make the field permanently dirty against `undefined` and send
- *  `undefined` back on every Save. */
-function draftOf(c: Config): Draft {
-  const d = {} as Draft;
-  for (const f of DRAFT_FIELDS) d[f] = c[f] ?? "";
-  // The one field that is not stored as it is edited. A store from the
-  // three-theme era still holds `codex`/`manuscript`/`astral`, which matches no
-  // segment of the picker — normalized here so the baseline the dirty count
-  // compares against is the value the control can actually show, and an
-  // untouched legacy theme does not read as an unsaved change.
-  d.log_level = normalizeFloor(d.log_level);
-  return d;
-}
+import { ContextSection } from "./configView/ContextSection";
+import { InstallSections } from "./configView/InstallSections";
+import { NumField } from "./configView/NumField";
+import { draftOf, sameLayout, type Probe } from "./configView/settingsDraft";
 
 /** Ids of panes that became pages of their own (Settings → Inference), and
  *  where each went, so a link written before still lands where its setting
@@ -75,76 +25,6 @@ const MOVED = new Map<string, string>([
   ["models", "/models"], ["semantic", "/models"], ["connection", "/models"],
   ["routing", "/models/edit"], ["samplers", "/presets"], ["pricing", "/models#rates"],
 ]);
-
-/** One numeric setting. A component rather than nineteen copies of the same
- *  five lines — and declared at module scope, not inside `ConfigView`, because
- *  a component defined during render is a new type every render and React
- *  would remount the input on each keystroke, taking the caret with it. */
-function NumField(
-  { id, label, value, placeholder, unit, caption, decimal = false, disabled = false, onChange }: {
-    id: string; label: string; value: string; placeholder?: string;
-    unit?: string; caption?: string; decimal?: boolean; disabled?: boolean;
-    onChange: (next: string) => void;
-  },
-) {
-  return (
-    <div className="config-field">
-      <label htmlFor={id}>{label}</label>
-      <div className="config-input">
-        <input id={id} type="text" inputMode={decimal ? "decimal" : "numeric"}
-               value={value} placeholder={placeholder} disabled={disabled}
-               onChange={(e) => onChange(e.target.value)} />
-        {unit && <span className="config-unit" aria-hidden>{unit}</span>}
-      </div>
-      {caption && <p className="config-caption">{caption}</p>}
-    </div>
-  );
-}
-
-/** Why images are not reaching the model even though the switch is on (#377).
- *  Silent when they are, or when the switch is off: the hint exists so turning
- *  the setting on cannot quietly do nothing. Reads the SAVED answer, so it
- *  speaks about the connection as stored, not about an unsaved draft. */
-function ImagesReachHint({ reach, on }: { reach?: string | undefined; on: boolean }) {
-  if (!on) return null;
-  if (reach === "unknown") {
-    return (
-      <p className="field-hint">
-        Images are not being sent: the connection your scenes use is not known to read images.
-        Open its provider under Providers to refresh its model list, or set the model's
-        vision there.
-      </p>
-    );
-  }
-  if (reach === "none") {
-    return (
-      <p className="field-hint">
-        Images are not being sent: no connection is set up for your scenes yet.
-      </p>
-    );
-  }
-  if (reach === "no") {
-    return (
-      <p className="field-hint">
-        Images are not being sent: the connection your scenes use cannot read images, so it
-        is sent their descriptions.
-      </p>
-    );
-  }
-  return null;
-}
-
-/** Whether two layouts would store the same thing. Compared field by field
- *  rather than by JSON string so a key-order change in the API response cannot
- *  read as an edit the reader never made. */
-function sameLayout(a: PromptLayoutSection[], b: PromptLayoutSection[]) {
-  return a.length === b.length && a.every((row, i) =>
-    row.id === b[i].id && row.label === b[i].label && row.enabled === b[i].enabled);
-}
-
-/** What the context bar is drawn from: a prompt some campaign actually built,
- *  and which campaign that was. */
-type Probe = { ctx: SceneContext; campaign: string } | null;
 
 /** Find one real prompt to draw the context bar against.
  *
@@ -226,10 +106,19 @@ export default function ConfigView() {
   const decisionsStarted = useRef(false);
 
   useEffect(() => {
+    // This required read owns its failure; a page left before it settles has
+    // no draft or error left to install. Optional section reads stay separate.
+    let live = true;
     api.getConfig().then((c) => {
+      if (!live) return;
       setConfig(c);
       setDraft(draftOf(c));
+    }).catch((e: unknown) => {
+      if (!live) return;
+      setError(typeof e === "object" && e !== null && "detail" in e && typeof e.detail === "string"
+        ? e.detail : "Could not load these settings");
     });
+    return () => { live = false; };
   }, []);
 
   // Fetched when the Context section is first opened, not on mount: it is
@@ -243,7 +132,7 @@ export default function ConfigView() {
   useEffect(() => {
     if (section !== "context" || probeStarted.current) return;
     probeStarted.current = true;
-    lastPrompt().then(setProbe);
+    void lastPrompt().then(setProbe);
   }, [section]);
 
   // Same lazy rule as the probe: thirty rows fetched when the Prompt layout
@@ -383,6 +272,19 @@ export default function ConfigView() {
     }
   }
 
+  async function resetLayout() {
+    setBusy(true);
+    try {
+      const stored = await api.putPromptLayout([]);
+      setLayout(stored.sections);
+      setLayoutSaved(stored.sections);
+    } catch {
+      setLayoutFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const current = SECTIONS.find((s) => s.id === section)!;
 
   const column = (
@@ -455,418 +357,15 @@ export default function ConfigView() {
         <h1 className="screen-title">{current.label}</h1>
 
         {error && <div className="banner error-banner">{error}</div>}
-        {!draft && <p className="empty-state">Loading…</p>}
+        {!draft && !error && <p className="empty-state">Loading…</p>}
 
-        {draft && section === "storage" && (
-          <>
-            <StorageLocation onMoved={() => setStoreEpoch((n) => n + 1)} />
-            <p className="field-hint">
-              The one setting on this page that does not wait for Save: moving the
-              library moves the file this form writes to, so a draft held back for
-              it would land in whichever store the pointer named by the time you
-              pressed Save.
-            </p>
-            {/* Remounted on a move: the notice describes one library, and the
-                pointer now names a different one. */}
-            <StoreConflictNotice key={storeEpoch} />
-            {/* Remounted on a move too: a run the card is following belongs to
-                the library it started in, and a move is refused while one is
-                live, so what this shows after one is the new library's. */}
-            <ImageStoreCard key={`image-store-${storeEpoch}`} />
-          </>
-        )}
-
-        {draft && section === "setup" && (
-          <>
-            <p className="config-copy">
-              The four questions a new library is asked: where it lives, which
-              model runs it, how it looks, and the first world to play in.
-              Every step commits as it is answered, so Back is navigation
-              rather than undo — walking it again does not put anything back.
-            </p>
-            <p className="config-copy">
-              Worth re-running when you move to another machine, or point the
-              storage location at a library that has never been set up here.
-              Nothing in it is destructive: the storage step is the same
-              control as <em>Storage</em> above, and the world step offers a
-              new world rather than replacing the ones you have.
-            </p>
-            <div className="form-actions">
-              {/* The explicit re-entry signal. `/welcome` is a redirect once
-                  setup is done, so a bare link would bounce straight back
-                  here -- see the route's own comment in `App.tsx`. */}
-              <Link className="hub-primary" to="/welcome?again=1">
-                Run first-run setup again →
-              </Link>
-            </div>
-          </>
-        )}
-
-        {draft && section === "backups" && (
-          <>
-            <p className="config-copy">
-              A full backup is the whole library zipped into one file — worlds, campaigns,
-              scenes, settings. Everything grimoire knows is plain files under the
-              storage location, so an archive is a complete restore point and nothing
-              else has to be running to use it. The rebuildable thumbnail cache and the
-              backups folder itself are left out.
-            </p>
-            <p className="config-copy">
-              Automatic backups happen while the app is running and nowhere else: it
-              checks hourly whether the newest archive is older than the interval. They
-              are <strong>off</strong> until you turn them on, because each archive is a
-              second copy of your library and the count below multiplies it — and if your
-              storage location is a synced folder, every archive is uploaded whole. Point
-              the folder somewhere outside the library to avoid that.
-            </p>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                aria-label="Back up automatically"
-                checked={draft.backup_enabled === "on"}
-                onChange={(e) => edit("backup_enabled", e.target.checked ? "on" : "off")}
-              />
-              Back up automatically
-            </label>
-            <div className="config-fields">
-              <NumField id="cfg-backup-interval" label="Every" unit="hours"
-                        placeholder="24" caption="checked against the newest archive"
-                        value={draft.backup_interval_hours}
-                        onChange={(v) => edit("backup_interval_hours", v)} />
-              <NumField id="cfg-backup-keep" label="Keep" unit="archives"
-                        placeholder="7" caption="0 = keep every one"
-                        value={draft.backup_keep}
-                        onChange={(v) => edit("backup_keep", v)} />
-              <div className="config-field">
-                <label htmlFor="cfg-backup-dir">Backup folder</label>
-                <div className="config-input">
-                  <input id="cfg-backup-dir" type="text" className="mono-input"
-                         value={draft.backup_dir}
-                         placeholder={`${config?.data_dir ?? ""}/backups`}
-                         onChange={(e) => edit("backup_dir", e.target.value)} />
-                </div>
-                <p className="config-caption">blank = inside the library</p>
-              </div>
-            </div>
-            {/* The saved value, not the draft: the list below is the folder the
-                server is actually writing to, and re-reading it against a field
-                nobody has saved yet would show an empty directory as if it were
-                the state of your backups. */}
-            <BackupsPanel dir={config?.backup_dir ?? ""} />
-          </>
-        )}
-
-        {draft && section === "logging" && (
-          <>
-            <p className="config-copy">
-              What the backend writes down about itself, in{" "}
-              <code>{config?.data_dir ?? "your library"}/logs</code> — one JSON line per
-              entry, a file per month, readable in any editor. This is the floor:
-              anything quieter is never written at all, so turning it down is how the
-              files stay small and turning it up is what you do before reproducing a
-              bug. <strong>Errors are recorded whatever this says.</strong>
-            </p>
-            {/* The capture boundary is incoming bodies, not request logging.
-                A provider can echo private content, so explain it where the
-                reader chooses the logging level and decides what to share. */}
-            <p className="config-copy">
-              Requests and authorization headers are not captured. At Debug level,
-              logs include complete incoming LLM response bodies, including reasoning
-              text and provider metadata. They also name the campaign and scene a
-              failure happened in, and occasionally a character. Read the log before
-              sharing it; response bodies can contain private campaign content.
-            </p>
-            <div className="config-fields">
-              <div className="config-field">
-                <label htmlFor="cfg-log-level">Record</label>
-                <div className="config-input">
-                  <select id="cfg-log-level" value={draft.log_level}
-                          onChange={(e) => edit("log_level", e.target.value)}>
-                    {LOG_LEVELS.map((l) => (
-                      <option key={l} value={l}>{l} and above</option>
-                    ))}
-                  </select>
-                </div>
-                <p className="config-caption">
-                  debug is verbose and off by default
-                </p>
-              </div>
-            </div>
-            <p className="config-copy">
-              <Link to="/stats">Instrumentation</Link> is where these are read back —
-              filtered, tailed live, and counted per module beside the latency figures.
-            </p>
-          </>
-        )}
-
-        {draft && section === "timeouts" && (
-          <>
-            <p className="config-copy">
-              How long a generation may go without sending anything before it is abandoned, and
-              how long one end-of-scene absorb (extraction, dossiers, mechanics audit) may take
-              in total — past the budget, the remaining dossier refreshes are skipped and the
-              audit reports as failed, leaving the absorb itself intact. Set either to
-              <code> 0</code> to remove the limit, e.g. for a slow local endpoint.
-            </p>
-            <p className="config-copy">
-              The call ceiling bounds one whole one-shot generation — a tagline, a voice
-              anchor, scene suggestions — because a reply that keeps trickling in never trips
-              the no-reply timeout above. Scene prose is deliberately exempt (a long reply you
-              are already reading must not be cut off mid-sentence), and so is absorb, which
-              the budget beside it already covers. <code>0</code> removes it.
-            </p>
-            <p className="config-copy">
-              A call that fails for a passing reason — a rate limit, a dropped
-              connection — is re-sent up to the retry count, with a growing pause
-              between tries. Only ever <em>before</em> the reply starts arriving: once
-              text is on screen it is never re-requested, because a second attempt
-              would repeat what you have already read. <code>0</code> retries sends
-              once and reports the failure.
-            </p>
-            <p className="config-copy">
-              If the model still cannot answer, the role's fallback — set on the{" "}
-              <Link to="/models">Models</Link> page — gets one attempt, and it can be an entirely
-              different provider.
-            </p>
-            <div className="config-fields">
-              <NumField id="cfg-llm-timeout" label="No-reply timeout" unit="seconds"
-                        placeholder="120" value={draft.llm_timeout}
-                        onChange={(v) => edit("llm_timeout", v)} />
-              <NumField id="cfg-absorb-budget" label="Absorb budget" unit="seconds"
-                        placeholder="600" value={draft.absorb_budget}
-                        onChange={(v) => edit("absorb_budget", v)} />
-              <NumField id="cfg-llm-call-budget" label="One-shot call ceiling" unit="seconds"
-                        placeholder="300" value={draft.llm_call_budget}
-                        onChange={(v) => edit("llm_call_budget", v)} />
-              <NumField id="cfg-llm-retries" label="Retries" placeholder="2"
-                        caption="0 = send once, then report the failure"
-                        value={draft.llm_retries}
-                        onChange={(v) => edit("llm_retries", v)} />
-            </div>
-          </>
+        {draft && (
+          <InstallSections section={section} draft={draft} config={config} edit={edit}
+                           storeEpoch={storeEpoch} onStoreMoved={() => setStoreEpoch((n) => n + 1)} />
         )}
 
         {draft && section === "context" && (
-          <>
-            <p className="config-copy">
-              The token ceiling a scene's prompt is packed into. Over it, whole sections are
-              dropped — recalled scenes first, then the older conversation, then the standing
-              frame; the system prompts, the characters and the reply format are never dropped.
-              The scene inspector shows what was cut. <code>0</code> means no ceiling, and
-              nothing is ever dropped.
-            </p>
-            <p className="config-copy">
-              Context scan depth is how far back the keyword scan reads: the last so many
-              messages of the transcript, and nothing older. World info, recalled scenes,
-              keyed mechanics rules and the semantic-recall query all share that window, so it
-              decides whether an entry last named twenty posts ago is still in play — and, set
-              high enough, whether one scene drags the whole world in. <code>0</code> empties
-              it: nothing in the transcript activates anything, though a scene's opener and a
-              director's note still do, being this turn's own input.
-            </p>
-            <p className="config-copy">
-              Lore recursion depth lets world info that was let in name more of it: an entry's
-              text is scanned for other entries' keys, up to this many steps out. Each step can
-              bring in more lore than the transcript ever mentioned, so it costs budget.{" "}
-              <code>0</code> leaves it off; an entry can opt out of pulling or being pulled.
-            </p>
-            <p className="config-copy">
-              Kept turn prompts is how many past turns each campaign keeps a frozen copy of
-              the exact prompt for, readable from the scene inspector's Turn history. They
-              hold whole prompts, so the count is per campaign rather than per scene — playing
-              one scene for long enough ages out another's. Decisions (speaker picks,
-              scene-break and voice checks) are kept separately, as many again, so they
-              never age out a turn. <code>0</code> records none.
-            </p>
-            <p className="config-copy">
-              Named off-scene characters bounds the one-line directory of characters the
-              campaign can see but has never cast. It grows with the world rather than with
-              the story, so on a large library it quietly eats the budget everything below it
-              is competing for. Past the ceiling, the characters the present cast's own cards
-              mention are kept first and the rest are left out — the scene inspector prices
-              the tier on its own row, so you can see what it costs before changing this.{" "}
-              <code>0</code> names every one of them.
-            </p>
-            <div className="config-fields">
-              <NumField id="cfg-context-budget" label="Context budget" unit="tokens"
-                        placeholder="0" caption="0 = no ceiling" value={draft.context_budget}
-                        onChange={(v) => edit("context_budget", v)} />
-              <NumField id="cfg-context-scan-depth" label="Context scan depth"
-                        unit="messages" placeholder="8"
-                        caption="0 = no scan window"
-                        value={draft.context_scan_depth}
-                        onChange={(v) => edit("context_scan_depth", v)} />
-              <NumField id="cfg-lore-recursion-depth" label="Lore recursion depth"
-                        unit="levels" placeholder="0" caption="0 = off, max 3"
-                        value={draft.lore_recursion_depth}
-                        onChange={(v) => edit("lore_recursion_depth", v)} />
-              <NumField id="cfg-archive-depth" label="Recalled scenes" placeholder="3"
-                        caption="older scenes a keyword match may pull back"
-                        value={draft.archive_depth}
-                        onChange={(v) => edit("archive_depth", v)} />
-              <NumField id="cfg-prompt-log-depth" label="Kept turn prompts" placeholder="50"
-                        caption="per campaign; decisions are kept separately, as many again"
-                        value={draft.prompt_log_depth}
-                        onChange={(v) => edit("prompt_log_depth", v)} />
-              <NumField id="cfg-offscene-known-limit" label="Named off-scene characters"
-                        placeholder="40" caption="0 = name every one of them"
-                        value={draft.offscene_known_limit}
-                        onChange={(v) => edit("offscene_known_limit", v)} />
-            </div>
-            <p className="config-copy">Each present character writes a separate response. Continue, or a reply chip with an empty composer, requests one additional contribution; a reply chip with text posts it with that character leading the round.</p>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                aria-label="Name an active speaker in group scenes"
-                checked={draft.speaker_turn_taking === "on"}
-                onChange={(e) => edit("speaker_turn_taking", e.target.checked ? "on" : "off")}
-              />
-              Name an active speaker in group scenes
-            </label>
-            <p className="config-copy">
-              With three or more characters in a scene, every card goes into the prompt and the
-              model decides for itself who answers — which is how one character monologues for
-              three turns while the others stand there. This names one to carry each turn: whoever
-              the last post spoke to, or failing that whoever has been quiet longest. It is worked
-              out from the transcript each turn and stored nowhere, so a reroll picks the same
-              character rather than advancing a rotation you never saw. It adds a short section to
-              every group-scene prompt, and does nothing in a scene with fewer than two characters.
-            </p>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                aria-label="Send post images to models that can read them"
-                checked={draft.send_images === "on"}
-                onChange={(e) => edit("send_images", e.target.checked ? "on" : "off")}
-              />
-              Send post images to models that can read them
-            </label>
-            <div className="config-fields">
-              <NumField id="cfg-send-images-limit" label="Images sent" placeholder="3"
-                        caption="the newest in the conversation, at most 20; 0 sends none"
-                        value={draft.send_images_limit}
-                        disabled={draft.send_images !== "on"}
-                        onChange={(v) => edit("send_images_limit", v)} />
-            </div>
-            <p className="config-copy">
-              A picture in the transcript otherwise reaches the model as its description. With
-              this on, the newest few go to the model as images — on every turn they stay in
-              the conversation, so they are paid for on every one. A model without image input
-              is always sent the descriptions, and under a tight budget pictures are the
-              first thing given up. Whether a model reads images comes from its provider's model
-              list, or from the model's vision setting on the Providers page.
-            </p>
-            <ImagesReachHint reach={config?.send_images_reach} on={draft.send_images === "on"} />
-            {probe && (
-              <>
-                <ContextBudgetBar
-                  ctx={probe.ctx}
-                  label={`LAST TURN IN ${probe.campaign.toUpperCase()}, AGAINST THIS BUDGET`}
-                />
-                <p className="config-copy">
-                  The bar is the last prompt that campaign actually built — the numbers
-                  already exist in the context builder, and reading them here is what makes
-                  the budget field mean something before you spend a turn finding out.
-                  {probe.ctx.budget_tokens !== Number(draft.context_budget) && (
-                    <> It was packed to a ceiling of{" "}
-                      {probe.ctx.budget_tokens > 0
-                        ? probe.ctx.budget_tokens.toLocaleString()
-                        : "no"}{" "}
-                      tokens, which is not what the field above says now.</>
-                  )}
-                </p>
-              </>
-            )}
-            <p className="config-copy">
-              World info activates on keywords. Semantic recall adds a second pass over the
-              entries the keywords missed, picking the ones closest in meaning to what has just
-              been said — so the lore about a character's inherited sword can surface when the
-              scene talks about the blade her mother left her. It only ever adds, never removes,
-              and lore owned by an absent character stays hidden either way. Set recalled entries
-              to <code>0</code> to turn recall off. It needs the Embedding role.
-            </p>
-            <h2 className="section-label">Historical recall</h2>
-            <p className="config-copy">
-              Recall bounded summaries and excerpts from earlier scenes. Set recalled scenes
-              to <code>0</code> to turn it off. Embeddings are optional: structural relationships
-              and keyword matches also find scenes. With an Embedding role configured, semantic
-              recall sends recent scene text to its provider and may cost money. An endpoint
-              that reports no price (a local or OpenAI-compatible server) makes the Costs
-              totals read incomplete until you set per-token rates for its model.
-            </p>
-            <p className="config-copy">
-              Each speaker recalls for itself: every contribution the narrator or a character
-              writes runs its own retrieval, so with an Embedding role a round in which two
-              characters speak embeds two queries, and three if the narrator writes too. A
-              character sees only what it was present for or you marked it as knowing. Reranking adds a decision call for the
-              narrator and may cost money. The live inspector previews the narrator's structural and
-              keyword recall without embedding or reranking calls.
-            </p>
-            <div className="config-fields">
-              <NumField id="cfg-history-depth" label="Historical scene depth" placeholder="0"
-                        caption="0 = history recall off" value={draft.history_recall_depth}
-                        onChange={(v) => edit("history_recall_depth", v)} />
-              <NumField id="cfg-history-budget" label="History recall budget" placeholder="1200"
-                        unit="tokens" caption="also bounded by the model window and context budget"
-                        value={draft.history_recall_budget}
-                        onChange={(v) => edit("history_recall_budget", v)} />
-              <NumField id="cfg-history-threshold" label="History minimum cosine" decimal
-                        placeholder="0.35" caption="minimum cosine similarity"
-                        value={draft.history_recall_threshold}
-                        onChange={(v) => edit("history_recall_threshold", v)} />
-              <label className="toggle">
-                <input type="checkbox" checked={draft.history_recall_rerank === "on"}
-                       onChange={(e) => edit("history_recall_rerank", e.target.checked ? "on" : "off")} />
-                Rerank history
-              </label>
-            </div>
-            <p className="config-copy">
-              History planning spends one short call on the Fast role when recalled history
-              looks thin: it asks what earlier events the turn needs and searches once more.
-              The repair step may add a decision call and one more planning call. Each may
-              cost money, a model with no stated price makes the Costs totals read
-              incomplete until you set its rates, and a turn that plans can wait a few seconds
-              longer before its reply starts.
-            </p>
-            <div className="config-fields">
-              <label className="toggle">
-                <input type="checkbox" checked={draft.history_plan === "auto"}
-                       onChange={(e) => edit("history_plan", e.target.checked ? "auto" : "off")} />
-                Plan history recall
-              </label>
-              <label className="toggle">
-                <input type="checkbox" checked={draft.history_plan_repair !== "off"}
-                       disabled={draft.history_plan !== "auto"}
-                       onChange={(e) => edit("history_plan_repair", e.target.checked ? "on" : "off")} />
-                Repair a thin plan once
-              </label>
-            </div>
-            <p className="config-copy">{EMBEDDINGS_COPY}</p>
-            <div className="config-fields">
-              <NumField id="cfg-semantic-depth" label="Recalled entries" placeholder="0"
-                        caption="0 = recall off" value={draft.semantic_recall_depth}
-                        onChange={(v) => edit("semantic_recall_depth", v)} />
-              <NumField id="cfg-semantic-threshold" label="Similarity threshold" decimal
-                        placeholder="0.4" caption="0 to 1" value={draft.semantic_recall_threshold}
-                        onChange={(v) => edit("semantic_recall_threshold", v)} />
-            </div>
-            <p className="config-copy">
-              What counts as "close enough" differs between embedding models, so tune the
-              threshold (0 to 1) against the scene inspector, which shows what actually
-              activated.
-            </p>
-            <p className="config-copy">
-              <strong>This sends text to the Embedding role's provider.</strong> With the
-              Embedding role set, these go to that provider as well as to the providers your
-              other roles use — a second place your campaign is read: recent scene text and the
-              world info being searched (recall), image descriptions (the art catalogue), the
-              scenes and records being searched when you search the library by meaning, and
-              plot-thread and commitment summaries after each wrap-up (finding possible
-              overlaps). Choose a local provider for
-              the <Link to="/models/edit">Embedding role</Link> to keep it on your
-              machine.
-            </p>
-          </>
+          <ContextSection draft={draft} edit={edit} reach={config?.send_images_reach} probe={probe} />
         )}
 
         {draft && section === "layout" && (
@@ -890,18 +389,7 @@ export default function ConfigView() {
             <PromptLayoutEditor
               rows={layout} failed={layoutFailed} busy={busy}
               onChange={setLayout}
-              onReset={async () => {
-                setBusy(true);
-                try {
-                  const stored = await api.putPromptLayout([]);
-                  setLayout(stored.sections);
-                  setLayoutSaved(stored.sections);
-                } catch {
-                  setLayoutFailed(true);
-                } finally {
-                  setBusy(false);
-                }
-              }} />
+              onReset={() => { void resetLayout(); }} />
             <p className="config-copy">
               The tier beside each section is the order the budget packer drops things in when a
               prompt will not fit, and it is not editable — recalled lore sits below the recalled
@@ -1222,7 +710,7 @@ export default function ConfigView() {
             <button className="btn-outline" onClick={revert} disabled={!dirtyCount || busy}>
               Revert
             </button>
-            <button className="btn-accent" onClick={save} disabled={!dirtyCount || busy}>
+            <button className="btn-accent" onClick={() => { void save(); }} disabled={!dirtyCount || busy}>
               {busy ? "Saving…" : "Save"}
             </button>
           </div>

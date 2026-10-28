@@ -190,8 +190,8 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">android — Codebase Atlas</h1>
-  <p class="doc-sub">Current source, explicit lifetime boundaries and retained review cases</p>
-  <div class="doc-meta">generated 2026-10-26 · f290a7a9 · source rebuilt; coverage unavailable</div>
+  <p class="doc-sub">Current source and explicit ownership, failure and recovery contracts</p>
+  <div class="doc-meta">generated 2026-10-27 · 43d8349f + working tree fc99a43f0ceb</div>
 </header>
 <!-- code-overview:nav --><style>
 .co-nav{position:sticky;top:0;z-index:60;max-width:1280px;margin:0 auto;padding:10px 28px;
@@ -222,50 +222,48 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-<div class="card hero"><h2>android</h2><p>Android is an embedded host for the same local HTTP application. Kotlin owns process/service/WebView lifecycle, Chaquopy starts Python, and the Python entrypoint binds a stable loopback origin before expensive backend imports.</p></div><h2>Reading order and entry points</h2><ol><li><code>android/app/src/main/java/app/grimoire/MainActivity.kt</code></li><li><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></li><li><code>android/app/src/main/java/app/grimoire/ServerService.kt</code></li><li><code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code></li><li><code>android/app/src/main/python/android_entry.py</code></li><li><code>android/app/src/main/AndroidManifest.xml</code></li></ol><p>Start with the entry/facade, then read the defining leaves and the failure boundaries. Documentation directories are excluded from every automated source inventory.</p><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">flowchart LR
-  A["Activity"]
-  B["Server runtime"]
-  C["Python listener"]
-  D["WebView request"]
-  A --&gt; B
-  B --&gt; C
-  C --&gt; D
-</pre></div></div><div class="callout warn">Static analysis describes repository source only. No private library or live provider was consulted. Coverage and eval results are not inferred from test-file counts; see generated tabs and the measurement audit for available evidence.</div>
-<h2>Fresh analysis and its limits</h2><p>Inventory: 6 recognized files, 956 nonblank lines. These include recognized assets and configuration; they are not a count of executable statements. 2 dependency modules are drawn. The graph uses a depth of three to distinguish responsibility packages.</p><p>Highest churn × branch proxy: <code>android/app/src/main/python/android_entry.py</code>. This selects reading priority; it is not a reproduced defect or a timing measurement.</p><p><strong>Coverage:</strong> no parseable coverage artifact found (searched for coverage.xml, cobertura*.xml, lcov.info, coverage.lcov, coverage.out) No test suite was run to manufacture coverage for this atlas.</p><p><strong>LLM detector:</strong> LLM call sites are found textually by SDK method name: a call made through your own wrapper, by an unrecognized client, or with a model id read from config at runtime will be missed, and a detected parameter is evidence it is passed somewhere in the call, not that it holds on every path. The application uses its own facade and direct HTTP adapters, so an absent LLM Ops tab does not establish absence of model calls.</p><p>Unrecognized files are listed as excluded in Inventory; the absence of their lines or edges is a language-coverage limit.</p><p>Computed resource patterns hit the detector reporting cap. The resource summary preserves the truncation counts; dynamic paths remain incomplete evidence.</p>
+<div class="card hero"><h2>Problem and responsibility</h2><p>Package and host the shared Python FastAPI backend, built React UI and prompt templates on Android; the unit owns native bootstrap, process/service and browser lifecycle around that shared application.</p><p><code>docs/reference/android.md:5</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:44</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt:28</code></p></div><h2>Current inventory</h2><p>8 recognized source/configuration/asset files; 1062 nonblank lines. These are inventory counts, not executable statements. Unsupported extensions and oversized files remain listed in the automated Inventory tab.</p><h2>Entry points and reading order</h2><div class="tbl-wrap"><table><thead><tr><th>Read</th><th>Why</th></tr></thead><tbody><tr><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>android/app/src/main/java/app/grimoire/ServerStartup.kt</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>android/app/src/main/python/android_entry.py</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>android/app/src/main/java/app/grimoire/MainActivity.kt</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr><tr><td><code>android/frontend.gradle.kts</code></td><td>Own contract or workflow entry; read defining leaves before changing a compatibility facade.</td></tr></tbody></table></div><h2>Intended responsibility handoffs</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">flowchart LR
+  N0[&quot;Start native host once&quot;] --&gt; N1[&quot;Bootstrap embedded Python&quot;]
+  N1[&quot;Bootstrap embedded Python&quot;] --&gt; N2[&quot;Bind listening loopback socket&quot;]
+  N2[&quot;Bind listening loopback socket&quot;] --&gt; N3[&quot;Report actual port&quot;]
+  N3[&quot;Report actual port&quot;] --&gt; N4[&quot;Load shared web interface&quot;]</pre></div></div><p>Current churn × branch-proxy reading priorities: <code>android/app/src/main/python/android_entry.py</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt</code>, <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code>. Churn comes from committed history; current sizes/branches read the working tree. Newly extracted uncommitted helpers have little or no independent history, so a low hotspot rank is not evidence they need no review.</p><p>The scope and guarantees below distinguish declared intent, inferred intent and observed implementation. Code was source-sampled; this report does not claim exhaustive execution verification.</p><p><strong>Coverage tab omitted:</strong> No production file in this scope is measured by the available artifacts; not a zero coverage measurement.</p><p><strong>Model-call detector:</strong> Known SDK spellings are a textual inventory. The app also uses its own inference facade and direct HTTP adapters; a missing LLM Ops tab is not evidence that no model work occurs.</p>
+
 </section>
 <section class="panel" id="inventory" role="tabpanel">
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">6</div><div class="l">source files</div></div>
-  <div class="kpi"><div class="n">956</div><div class="l">lines of code</div></div>
+  <div class="kpi accent"><div class="n">8</div><div class="l">source files</div></div>
+  <div class="kpi"><div class="n">1,062</div><div class="l">lines of code</div></div>
   <div class="kpi"><div class="n">2</div><div class="l">languages</div></div>
-  <div class="kpi warn"><div class="n">0%</div><div class="l">test code share</div></div>
+  <div class="kpi warn"><div class="n">6%</div><div class="l">test code share</div></div>
 </div>
 
 <h2>Languages</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Language</th><th class="num">LOC</th><th class="num">Files</th><th>Share</th><th class="num">%</th></tr></thead>
-<tbody><tr><td>Kotlin</td><td class='num'>719</td><td class='num'>4</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>75.2%</td></tr>
-<tr><td>Python</td><td class='num'>223</td><td class='num'>1</td><td><div class="bar "><i style="width:31.0%"></i></div></td><td class='num'>23.3%</td></tr>
-<tr><td>Markdown</td><td class='num'>14</td><td class='num'>1</td><td><div class="bar "><i style="width:1.9%"></i></div></td><td class='num'>1.5%</td></tr></tbody></table></div>
-<p class="dim">Coverage: 26 file(s) in unrecognized languages are not counted above (.png (10), .xml (7), .kts (3), (no ext) (2), .properties (2)).</p>
+<tbody><tr><td>Kotlin</td><td class='num'>825</td><td class='num'>6</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>77.7%</td></tr>
+<tr><td>Python</td><td class='num'>223</td><td class='num'>1</td><td><div class="bar "><i style="width:27.0%"></i></div></td><td class='num'>21.0%</td></tr>
+<tr><td>Markdown</td><td class='num'>14</td><td class='num'>1</td><td><div class="bar "><i style="width:1.7%"></i></div></td><td class='num'>1.3%</td></tr></tbody></table></div>
+<p class="dim">Coverage: 27 file(s) in unrecognized languages are not counted above (.png (10), .xml (7), .kts (4), (no ext) (2), .properties (2)).</p>
 
 <h2>Top-level directories</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
-<tbody><tr><td><code>android/</code></td><td class='num'>956</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr></tbody></table></div>
+<tbody><tr><td><code>android/</code></td><td class='num'>1,062</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr></tbody></table></div>
 
 <div class="grid cols-2">
 <div>
 <h2>Largest files</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">LOC</th><th>Size</th><th class="num">Branches</th></tr></thead>
-<tbody><tr><td><code>android/app/src/main/java/app/grimoire/MainActivity.kt</code></td><td class='num'>250</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>11</td></tr>
-<tr><td><code>android/app/src/main/python/android_entry.py</code></td><td class='num'>223</td><td><div class="bar "><i style="width:89.2%"></i></div></td><td class='num'>23</td></tr>
-<tr><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td><td class='num'>204</td><td><div class="bar "><i style="width:81.6%"></i></div></td><td class='num'>11</td></tr>
-<tr><td><code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code></td><td class='num'>167</td><td><div class="bar "><i style="width:66.8%"></i></div></td><td class='num'>12</td></tr>
-<tr><td><code>android/app/src/main/java/app/grimoire/ServerService.kt</code></td><td class='num'>98</td><td><div class="bar "><i style="width:39.2%"></i></div></td><td class='num'>5</td></tr></tbody></table></div>
+<tbody><tr><td><code>android/app/src/main/java/app/grimoire/MainActivity.kt</code></td><td class='num'>269</td><td><div class="bar "><i style="width:100.0%"></i></div></td><td class='num'>15</td></tr>
+<tr><td><code>android/app/src/main/python/android_entry.py</code></td><td class='num'>223</td><td><div class="bar "><i style="width:82.9%"></i></div></td><td class='num'>23</td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td><td class='num'>175</td><td><div class="bar "><i style="width:65.1%"></i></div></td><td class='num'>10</td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code></td><td class='num'>167</td><td><div class="bar "><i style="width:62.1%"></i></div></td><td class='num'>12</td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerService.kt</code></td><td class='num'>98</td><td><div class="bar "><i style="width:36.4%"></i></div></td><td class='num'>5</td></tr>
+<tr><td><code>android/app/src/test/java/app/grimoire/ServerStartupTest.kt</code> <span class="badge neutral">test</span></td><td class='num'>68</td><td><div class="bar "><i style="width:25.3%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerStartup.kt</code></td><td class='num'>48</td><td><div class="bar "><i style="width:17.8%"></i></div></td><td class='num'>12</td></tr></tbody></table></div>
 </div>
 <div>
 <h2>Most branch-heavy files</h2>
@@ -273,10 +271,12 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Branches</th><th>Heat</th><th class="num">LOC</th><th class="num">Max depth</th></tr></thead>
 <tbody><tr><td><code>android/app/src/main/python/android_entry.py</code></td><td class='num'>23</td><td><div class="bar warn"><i style="width:100.0%"></i></div></td><td class='num'>223</td><td class='num'>5</td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/MainActivity.kt</code></td><td class='num'>15</td><td><div class="bar warn"><i style="width:65.2%"></i></div></td><td class='num'>269</td><td class='num'>5</td></tr>
 <tr><td><code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>167</td><td class='num'>4</td></tr>
-<tr><td><code>android/app/src/main/java/app/grimoire/MainActivity.kt</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>250</td><td class='num'>5</td></tr>
-<tr><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td><td class='num'>11</td><td><div class="bar warn"><i style="width:47.8%"></i></div></td><td class='num'>204</td><td class='num'>8</td></tr>
-<tr><td><code>android/app/src/main/java/app/grimoire/ServerService.kt</code></td><td class='num'>5</td><td><div class="bar warn"><i style="width:21.7%"></i></div></td><td class='num'>98</td><td class='num'>5</td></tr></tbody></table></div>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerStartup.kt</code></td><td class='num'>12</td><td><div class="bar warn"><i style="width:52.2%"></i></div></td><td class='num'>48</td><td class='num'>3</td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td><td class='num'>10</td><td><div class="bar warn"><i style="width:43.5%"></i></div></td><td class='num'>175</td><td class='num'>8</td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerService.kt</code></td><td class='num'>5</td><td><div class="bar warn"><i style="width:21.7%"></i></div></td><td class='num'>98</td><td class='num'>5</td></tr>
+<tr><td><code>android/app/src/test/java/app/grimoire/ServerStartupTest.kt</code> <span class="badge neutral">test</span></td><td class='num'>0</td><td><div class="bar warn"><i style="width:1.5%"></i></div></td><td class='num'>68</td><td class='num'>2</td></tr></tbody></table></div>
 </div>
 </div>
 
@@ -286,7 +286,7 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">2</div><div class="l">modules</div></div>
+  <div class="kpi accent"><div class="n">3</div><div class="l">modules</div></div>
   <div class="kpi"><div class="n">0</div><div class="l">file-level imports</div></div>
   <div class="kpi"><div class="n">0</div><div class="l">runtime loads</div></div>
   <div class="kpi good"><div class="n">0</div><div class="l">cycles</div></div>
@@ -297,7 +297,7 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <h2>Module dependency graph</h2>
 <p class="dim">Node area = lines of code · solid arrows = imports, dashed = runtime loads (a rendered template, a prompt read off disk) · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
 <div class="viz" data-render="forcegraph" style="height:620px"></div>
-<script type="application/json">{"nodes":[{"id":"android/app/src/main/java/app/grimoire","label":"android","group":"android","size":719,"fanIn":0,"fanOut":0,"meta":"android/app/src/main/java/app/grimoire \u00b7 4 files"},{"id":"android/app/src/main/python","label":"python","group":"android","size":223,"fanIn":0,"fanOut":0,"meta":"android/app/src/main/python \u00b7 1 files"}],"links":[],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
+<script type="application/json">{"nodes":[{"id":"android/app/src/main/java/app/grimoire","label":"android","group":"android","size":757,"fanIn":0,"fanOut":0,"meta":"android/app/src/main/java/app/grimoire \u00b7 5 files"},{"id":"android/app/src/main/python","label":"python","group":"android","size":223,"fanIn":0,"fanOut":0,"meta":"android/app/src/main/python \u00b7 1 files"},{"id":"android/app/src/test/java/app/grimoire","label":"test","group":"android","size":68,"fanIn":0,"fanOut":0,"meta":"android/app/src/test/java/app/grimoire \u00b7 1 files"}],"links":[],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
 
 <div class="grid cols-2">
 <div>
@@ -316,7 +316,9 @@ table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
 <tr><td><code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
 <tr><td><code>android/app/src/main/java/app/grimoire/ServerService.kt</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
-<tr><td><code>android/app/src/main/python/android_entry.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
+<tr><td><code>android/app/src/main/python/android_entry.py</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>android/app/src/test/java/app/grimoire/ServerStartupTest.kt</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerStartup.kt</code></td><td class='num'>0</td><td><div class="bar warn"><i style="width:0.0%"></i></div></td><td class='num'>0</td></tr></tbody></table></div>
 </div>
 </div>
 
@@ -335,8 +337,8 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">31</div><div class="l">commits (24 months ago)</div></div>
-  <div class="kpi"><div class="n">5</div><div class="l">files touched</div></div>
+  <div class="kpi accent"><div class="n">32</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi"><div class="n">7</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">android_entry.py</div><div class="l">top hotspot</div></div>
 </div>
 <div class="callout"><b>How to read this:</b> files that are both <i>complex</i> and <i>frequently changed</i> are where defects concentrate — complexity makes mistakes likely, churn gives them opportunities. Prioritize refactoring and review attention here, not on complex-but-stable code.</div>
@@ -345,70 +347,71 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 <h2>Churn × size map</h2>
 <p class="dim">Area = lines of code · color = commit count since 24 months ago · hover for details.</p>
 <div class="viz" data-render="treemap" style="height:540px"></div>
-<script type="application/json">{"items":[{"name":"android/app/src/main/python/android_entry.py","value":223,"metric":10,"meta":"23 branches \u00b7 2 authors"},{"name":"android/app/src/main/java/app/grimoire/MainActivity.kt","value":250,"metric":6,"meta":"11 branches \u00b7 1 authors"},{"name":"android/app/src/main/java/app/grimoire/RunNotifier.kt","value":167,"metric":4,"meta":"12 branches \u00b7 1 authors"},{"name":"android/app/src/main/java/app/grimoire/ServerRuntime.kt","value":204,"metric":4,"meta":"11 branches \u00b7 1 authors"},{"name":"android/app/src/main/java/app/grimoire/ServerService.kt","value":98,"metric":3,"meta":"5 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":10}</script>
+<script type="application/json">{"items":[{"name":"android/app/src/main/python/android_entry.py","value":223,"metric":10,"meta":"23 branches \u00b7 2 authors"},{"name":"android/app/src/main/java/app/grimoire/MainActivity.kt","value":269,"metric":7,"meta":"15 branches \u00b7 2 authors"},{"name":"android/app/src/main/java/app/grimoire/ServerRuntime.kt","value":175,"metric":5,"meta":"10 branches \u00b7 2 authors"},{"name":"android/app/src/main/java/app/grimoire/RunNotifier.kt","value":167,"metric":4,"meta":"12 branches \u00b7 1 authors"},{"name":"android/app/src/main/java/app/grimoire/ServerService.kt","value":98,"metric":3,"meta":"5 branches \u00b7 1 authors"},{"name":"android/app/src/main/java/app/grimoire/ServerStartup.kt","value":48,"metric":1,"meta":"12 branches \u00b7 1 authors"}],"valueLabel":"LOC","metricLabel":"commits","metricMax":10}</script>
 
 <h2>Hotspot ranking</h2>
-<p class="dim">Score = commits × (branch points + 1). Tests excluded. 27 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: android/README.md (9), android/app/build.gradle.kts (9), android/app/src/main/AndroidManifest.xml (5).</p>
+<p class="dim">Score = commits × (branch points + 1). Tests excluded. 28 frequently-changed non-code file(s) (config/SQL/proto/docs) are not ranked here — top: android/app/build.gradle.kts (10), android/README.md (9), android/app/src/main/AndroidManifest.xml (5).</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th class="num">Commits</th><th class="num">Branches</th><th class="num">LOC</th><th class="num">Authors</th><th class="num">Hotspot score</th></tr></thead>
 <tbody><tr><td><code>android/app/src/main/python/android_entry.py</code></td><td class='num'>10</td><td class='num'>23</td><td class='num'>223</td><td class='num'>2</td><td class='num' data-sort='240'><div class="bar bad"><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>android/app/src/main/java/app/grimoire/MainActivity.kt</code></td><td class='num'>6</td><td class='num'>11</td><td class='num'>250</td><td class='num'>1</td><td class='num' data-sort='72'><div class="bar bad"><i style="width:30.0%"></i></div></td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/MainActivity.kt</code></td><td class='num'>7</td><td class='num'>15</td><td class='num'>269</td><td class='num'>2</td><td class='num' data-sort='112'><div class="bar bad"><i style="width:46.7%"></i></div></td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td><td class='num'>5</td><td class='num'>10</td><td class='num'>175</td><td class='num'>2</td><td class='num' data-sort='55'><div class="bar bad"><i style="width:22.9%"></i></div></td></tr>
 <tr><td><code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code></td><td class='num'>4</td><td class='num'>12</td><td class='num'>167</td><td class='num'>1</td><td class='num' data-sort='52'><div class="bar bad"><i style="width:21.7%"></i></div></td></tr>
-<tr><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td><td class='num'>4</td><td class='num'>11</td><td class='num'>204</td><td class='num'>1</td><td class='num' data-sort='48'><div class="bar bad"><i style="width:20.0%"></i></div></td></tr>
-<tr><td><code>android/app/src/main/java/app/grimoire/ServerService.kt</code></td><td class='num'>3</td><td class='num'>5</td><td class='num'>98</td><td class='num'>1</td><td class='num' data-sort='18'><div class="bar bad"><i style="width:7.5%"></i></div></td></tr></tbody></table></div>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerService.kt</code></td><td class='num'>3</td><td class='num'>5</td><td class='num'>98</td><td class='num'>1</td><td class='num' data-sort='18'><div class="bar bad"><i style="width:7.5%"></i></div></td></tr>
+<tr><td><code>android/app/src/main/java/app/grimoire/ServerStartup.kt</code></td><td class='num'>1</td><td class='num'>12</td><td class='num'>48</td><td class='num'>1</td><td class='num' data-sort='13'><div class="bar bad"><i style="width:5.4%"></i></div></td></tr></tbody></table></div>
 
 
 
 </section>
 <section class="panel" id="flows" role="tabpanel">
 
-<h2>Cold start</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
-  participant A as Activity
-  participant B as Server runtime
-  participant C as Python listener
-  participant D as WebView request
-  A-&gt;&gt;B: Request server startup
-  B-&gt;&gt;C: Launch one bootstrap thread
-  alt Backend import or bootstrap fails
-    C--&gt;&gt;A: Error or explicitly incomplete result
-  else supported path
-    C-&gt;&gt;D: Bind and report listening port before imports
-    D--&gt;&gt;A: Queue WebView request until server accepts
-  end
-</pre></div></div><p>Implementation: <code>android/app/src/main/python/android_entry.py</code>. An emulator-free source review does not establish Android background execution or notification behavior on a device.</p><h2>Detached completion</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
-  participant A as Run registry
-  participant B as Run callback
-  participant C as Foreground service
-  participant D as Completion notification
-  A-&gt;&gt;B: Run count crosses zero
-  B-&gt;&gt;C: Invoke cross-language callback
-  alt Callback or foreground promotion fails
-    C--&gt;&gt;A: Error or explicitly incomplete result
-  else supported path
-    C-&gt;&gt;D: Promote or demote service
-    D--&gt;&gt;A: Notify terminal run with scene identity
-  end
-</pre></div></div><p>Implementation: <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code>. An emulator-free source review does not establish Android background execution or notification behavior on a device.</p>
+<h2>Main supported workflow</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+  participant P0 as Start native host once
+  participant P1 as Bootstrap embedded Python
+  participant P2 as Bind listening loopback socket
+  participant P3 as Report actual port
+  participant P4 as Load shared web interface
+  P0-&gt;&gt;P1: explicit handoff
+  P1-&gt;&gt;P2: explicit handoff
+  P2-&gt;&gt;P3: explicit handoff
+  P3-&gt;&gt;P4: explicit handoff
+  alt supported work completes
+    P4--&gt;&gt;P0: result with identity and outcome
+  else failure or unavailable evidence
+    P4--&gt;&gt;P0: retain explicit error or unknown state
+  end</pre></div></div><p>Implementation entry points: <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code>, <code>android/app/src/main/java/app/grimoire/ServerStartup.kt</code>, <code>android/app/src/main/python/android_entry.py</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt</code>. The diagram shows responsibility handoffs rather than every internal call.</p><h2>Failure, recovery or alternate workflow</h2><div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">sequenceDiagram
+  participant P0 as Live work callback
+  participant P1 as Promote process service
+  participant P2 as Observe terminal outcome
+  participant P3 as Notify with stable scene identity
+  P0-&gt;&gt;P1: explicit handoff
+  P1-&gt;&gt;P2: explicit handoff
+  P2-&gt;&gt;P3: explicit handoff
+  alt supported work completes
+    P3--&gt;&gt;P0: result with identity and outcome
+  else failure or unavailable evidence
+    P3--&gt;&gt;P0: retain explicit error or unknown state
+  end</pre></div></div><p>Process survival, completed durable writes and resumable live execution are different guarantees. The native host does not make interrupted provider work durable. <code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code>, <code>android/frontend.gradle.kts</code></p>
 
 </section>
 <section class="panel" id="boundaries" role="tabpanel">
 
-<h2>Concern ownership</h2><div class="tbl-wrap"><table><thead><tr><th>Concern</th><th>Owner</th><th>Boundary</th></tr></thead><tbody><tr><td>Embedded server lifetime</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td><td>One process-wide runtime tracks port, failures and callbacks.</td></tr><tr><td>Foreground promotion</td><td><code>android/app/src/main/java/app/grimoire/ServerService.kt</code></td><td>Detached work keeps the hosting process eligible to continue while the phone is locked.</td></tr><tr><td>Notifications</td><td><code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code></td><td>Completion notices resolve scenes through durable identity.</td></tr><tr><td>Socket and storage bootstrap</td><td><code>android/app/src/main/python/android_entry.py</code></td><td>Port stability preserves origin state; HOME selects app storage without disabling user relocation.</td></tr></tbody></table></div><h2>Shared-state and dependency boundaries</h2><p>An emulator-free source review does not establish Android background execution or notification behavior on a device. <code>android/app/src/main/java/app/grimoire/ServerService.kt</code>.</p><p>The Dependencies tab reports only edges within this unit; edges to other package roots are counted separately. A textual graph cannot prove all runtime-selected template, plugin or callback edges.</p>
-<h2>Cycle interpretation</h2><p>The textual graph reports 0 module-level and 0 file-level strongly connected components. No cyclic component was detected within this scope; that does not prove absence of dynamic dependencies.</p>
+<h2>Owned state and permitted effects</h2><div class="tbl-wrap"><table><thead><tr><th>Responsibility</th><th>Contract evidence</th></tr></thead><tbody><tr><td>Own process-local interpreter/server startup state, port/failure subscribers, service callbacks, foreground visibility, notification channels and native file-chooser/browser lifecycle state.</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:52</code>, <code>android/app/src/main/java/app/grimoire/ServerService.kt:24</code>, <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:29</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt:30</code></td></tr><tr><td>Own extracted web/template assets and extraction marker under internal app storage, plus a per-install port record and USB-readable-store sentinel beside the default library. Bootstrap may adjust existing library permissions for cable access; application content and chosen storage-pointer semantics remain owned by the shared store.</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:156</code>, <code>android/app/src/main/python/android_entry.py:52</code>, <code>android/app/src/main/python/android_entry.py:74</code>, <code>docs/reference/android.md:59</code></td></tr></tbody></table></div><h2>Neighbor owners</h2><div class="tbl-wrap"><table><thead><tr><th>Owner</th><th>Neighbor contract</th></tr></thead><tbody><tr><td>grimoire-api (main.py and shared FastAPI app)</td><td>Shared backend assembly resolves the extracted distribution and serves SPA navigation with a revalidated document and cached immutable resources; Android passes resource locations rather than assuming a desktop checkout. <code>backend/src/grimoire/main.py:45</code>, <code>backend/src/grimoire/main.py:59</code>, <code>backend/src/grimoire/main.py:107</code>, <code>android/app/src/main/python/android_entry.py:212</code></td></tr><tr><td>grimoire-api run subsystem; grimoire-store attempts</td><td>Backend run registry/runner owns execution, exclusions, terminal state and callback delivery. The registry is process-local; store attempts persist whether a bounded retained player-post marker exists, not a replayable execution outcome. <code>backend/src/grimoire/routes/runs/_registry.py:16</code>, <code>backend/src/grimoire/routes/runs/_registry.py:82</code>, <code>backend/src/grimoire/routes/runs/_contracts.py:26</code>, <code>backend/src/grimoire/store/attempts.py:1</code></td></tr><tr><td>frontend (OpenScene and RunRegistryProvider)</td><td>The shared frontend owns SPA scene resolution and pending-send/text recovery in localStorage, including bounded busy lookup retries and useful campaign fallbacks; the native shell supplies an encoded /open target. <code>frontend/src/routes/OpenScene.tsx:1</code>, <code>frontend/src/routes/OpenScene.tsx:32</code>, <code>frontend/src/runs/RunRegistryProvider.tsx:20</code>, <code>frontend/src/runs/RunRegistryProvider.tsx:111</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt:185</code></td></tr><tr><td>grimoire-store</td><td>The shared store owns data-root/pointer resolution and atomic record replacement. It guarantees complete old/new records, not multi-file transactions or rename durability across power loss; shell process lifecycle does not expand that boundary. <code>backend/src/grimoire/store/paths.py:18</code>, <code>backend/src/grimoire/store/paths.py:48</code>, <code>backend/src/grimoire/store/atomic.py:8</code>, <code>docs/reference/storage.md:42</code></td></tr><tr><td>backend-tests and repository Android build tooling</td><td>Backend-tests owns device-free behavioral tests for Android entrypoint socket/origin/startup/failure behavior. Actual APK builds and device verification require the separate Android toolchain and runtime. <code>backend/tests/test_android_entry.py:1</code>, <code>docs/reference/android.md:53</code></td></tr></tbody></table></div><h2>Conservative graph interpretation</h2><p>0 grouped module components and 0 file components were detected. Grouping, compatibility re-exports, erased TypeScript imports and textual asset references can create components that are not executable initialization cycles. These components are review leads; inspect actual imported names, loads and initialization order before changing an owner boundary.</p><h3>Component-specific reading</h3><p>No cyclic component was detected within this scope; that does not prove absence of dynamic dependencies.</p><p>Resource edges are found textually: a quoted path is an edge only when it resolves to a file that exists. Paths assembled entirely at runtime (no literal segment) are invisible, and a resolved string is evidence of a reference, not proof the file is loaded on every code path.</p>
+
 </section>
 <section class="panel" id="invariants" role="tabpanel">
 
-<h2>Observable invariants and limits</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence</th></tr></thead><tbody><tr><td>The reported port is already listening before backend import, and later startup failure closes its socket.</td><td><code>android/app/src/main/python/android_entry.py</code></td></tr><tr><td>ServerRuntime starts once per process; process reclamation is the effective shutdown boundary.</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td></tr><tr><td>HOME relocates defaults while leaving Storage-location choices available.</td><td><code>android/app/src/main/python/android_entry.py</code></td></tr></tbody></table></div><h2>Risk ranking</h2><ol><li>An emulator-free source review does not establish Android background execution or notification behavior on a device. <code>android/app/src/main/java/app/grimoire/ServerService.kt</code></li><li>USB readability deliberately changes filesystem permissions inside Android app storage; scoped-storage assumptions are part of that contract. <code>android/app/src/main/python/android_entry.py</code></li><li>A stable preferred port can conflict; fallback binding must keep both startup and future origin behavior understandable. <code>android/app/src/main/python/android_entry.py</code></li></ol><p>These are source-review priorities, not new reproduced defects. The health page separates deterministic findings from unverified candidates.</p>
+<h2>Supported invariants</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence status</th><th>Source</th></tr></thead><tbody><tr><td>Bind only loopback, reuse the recorded port when possible to preserve WebView origin, otherwise report/record the port actually bound. Corrupt/unwritable port records degrade to a new usable origin rather than failing bootstrap.</td><td>declared; source-sampled, not re-executed here</td><td><code>docs/reference/android.md:16</code>, <code>android/app/src/main/python/android_entry.py:148</code>, <code>android/app/src/main/python/android_entry.py:163</code>, <code>backend/tests/test_android_entry.py:90</code>, <code>backend/tests/test_android_entry.py:138</code></td></tr><tr><td>Report a listening socket before heavy backend imports so the first request can queue; startup failure closes that socket and propagates a failure rather than leaving a queued connection hanging.</td><td>declared; source-sampled, not re-executed here</td><td><code>android/app/src/main/python/android_entry.py:6</code>, <code>android/app/src/main/python/android_entry.py:219</code>, <code>backend/tests/test_android_entry.py:200</code></td></tr><tr><td>HOME points to app storage without permanently forcing GRIMOIRE_HOME, allowing the shared storage-location pointer to remain effective; inability to adjust USB permissions must not stop application startup.</td><td>declared; source-sampled, not re-executed here</td><td><code>docs/reference/android.md:68</code>, <code>android/app/src/main/python/android_entry.py:74</code>, <code>android/app/src/main/python/android_entry.py:212</code></td></tr><tr><td>Foreground service promotion supports detached work while UI is backgrounded, but notification/promotion refusal is fail-soft. Completion notifications skip cancellation and foreground viewers and name review versus turn results; native deep links encode campaign/identity components.</td><td>declared; source-sampled, not re-executed here</td><td><code>docs/reference/android.md:84</code>, <code>android/app/src/main/java/app/grimoire/ServerService.kt:66</code>, <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:85</code>, <code>android/app/src/main/java/app/grimoire/RunNotifier.kt:155</code></td></tr></tbody></table></div><h2>Failure and concurrency seams</h2><p>Process survival, completed durable writes and resumable live execution are different guarantees. The native host does not make interrupted provider work durable. <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code>, <code>android/app/src/main/java/app/grimoire/ServerStartup.kt</code></p><p>APK resource freshness and a stable browser origin affect whether the shared recovery model remains usable after updates. <code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code>, <code>android/frontend.gradle.kts</code></p><h2>Prioritized maintenance watchlist</h2><ol><li>Process survival, completed durable writes and resumable live execution are different guarantees. The native host does not make interrupted provider work durable.</li><li>APK resource freshness and a stable browser origin affect whether the shared recovery model remains usable after updates.</li><li>Review changes where high churn intersects branch-heavy code; preserve the behavioral contract when splitting implementation. The hotspot ranking is a proxy, not a measured defect probability.</li></ol><h2>Explicit limits</h2><p>There is no Android fork of story/persistence/product UI; native shell changes do not own model routing, store transaction semantics or full scene-identity resolution. <code>docs/reference/android.md:5</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt:28</code>, <code>frontend/src/routes/OpenScene.tsx:1</code></p><p>The service cannot defeat force-stop or arbitrary OS termination. Process-local run execution/attempt mappings do not survive restart or reaping, while written records and bounded player-post retention tracking are separate persistent facts; neither the shell nor this recovery boundary promises exactly-once provider execution. <code>docs/reference/android.md:84</code>, <code>backend/src/grimoire/routes/runs/_contracts.py:26</code>, <code>backend/src/grimoire/store/attempts.py:1</code>, <code>docs/reference/storage.md:42</code></p><p>The APK excludes desktop Claude subscription SDK integration and does not promise testing on every device. APK compilation is separate from the ordinary gate and does not establish device runtime behavior. <code>docs/reference/android.md:29</code>, <code>docs/reference/android.md:53</code>, <code>docs/reference/android.md:84</code>, <code>backend/tests/test_android_entry.py:1</code></p><h2>Retained review checklist</h2><p>The prior atlas is reconciled here as a findings checklist alongside the fresh analysis. Application inputs are unchanged during this refresh; no prior concern is closed merely because a new detector omits it. The source citations were checked again for reachability; these remain source-review evidence with the limits stated below.</p><h2>Observable invariants and limits</h2><div class="tbl-wrap"><table><thead><tr><th>Contract</th><th>Evidence</th></tr></thead><tbody><tr><td>The reported port is already listening before backend import, and later startup failure closes its socket.</td><td><code>android/app/src/main/python/android_entry.py</code></td></tr><tr><td>ServerRuntime starts once per process; process reclamation is the effective shutdown boundary.</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td></tr><tr><td>HOME relocates defaults while leaving Storage-location choices available.</td><td><code>android/app/src/main/python/android_entry.py</code></td></tr></tbody></table></div><h2>Risk ranking</h2><ol><li>An emulator-free source review does not establish Android background execution or notification behavior on a device. <code>android/app/src/main/java/app/grimoire/ServerService.kt</code></li><li>USB readability deliberately changes filesystem permissions inside Android app storage; scoped-storage assumptions are part of that contract. <code>android/app/src/main/python/android_entry.py</code></li><li>A stable preferred port can conflict; fallback binding must keep both startup and future origin behavior understandable. <code>android/app/src/main/python/android_entry.py</code></li></ol><p>These are source-review priorities, not new reproduced defects. The health page separates deterministic findings from unverified candidates.</p>
 
-<h2>Reconciliation with the previous atlas</h2><p>The previous risk checklist was re-read against current source after the fresh pass. The following cases remain open or retain an important limit; their old line coordinates were replaced where code moved. Earlier source-shape test assurances remain withdrawn: behavioral checks, not source spelling, establish runtime contracts.</p><ul><li>WebView navigation checks loopback host rather than exact scheme and port. A busy preferred port or failed port-record write can change the origin; no exploit or device experiment was run. <code>android/app/src/main/java/app/grimoire/MainActivity.kt:228</code> · <code>android/app/src/main/python/android_entry.py:176</code></li><li>Startup has no in-process retry transition: ensureStarted latches started before bootstrap, and bootstrap failure publishes an error without clearing it. Python readiness failures close the listening socket. <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:85</code> · <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:178</code> · <code>android/app/src/main/python/android_entry.py:254</code></li><li>Foreground promotion and notification delivery can fail; saved records survive process death but unfinished in-memory runs do not become durable jobs. <code>android/app/src/main/java/app/grimoire/ServerService.kt:66</code></li></ul>
+<h3>Previously recorded concrete cases</h3><p>These earlier source-review cases remain open or retain their stated limit. This refresh does not claim to have repaired or runtime-reproduced them. Earlier source-shape test assurances remain withdrawn: behavioral checks, not source spelling, establish runtime contracts.</p><ul><li>WebView navigation checks loopback host rather than exact scheme and port. A busy preferred port or failed port-record write can change the origin; no exploit or device experiment was run. <code>android/app/src/main/java/app/grimoire/MainActivity.kt:228</code> · <code>android/app/src/main/python/android_entry.py:176</code></li><li>Startup has no in-process retry transition: ensureStarted latches started before bootstrap, and bootstrap failure publishes an error without clearing it. Python readiness failures close the listening socket. <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:85</code> · <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt:178</code> · <code>android/app/src/main/python/android_entry.py:254</code></li><li>Foreground promotion and notification delivery can fail; saved records survive process death but unfinished in-memory runs do not become durable jobs. <code>android/app/src/main/java/app/grimoire/ServerService.kt:66</code></li></ul>
 
 </section>
 <section class="panel" id="glossary" role="tabpanel">
 
-<h2>Terms that carry a contract</h2><div class="tbl-wrap"><table><thead><tr><th>Term</th><th>Meaning here</th><th>Source</th></tr></thead><tbody><tr><td>Runtime</td><td>process-wide embedded server owner</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td></tr><tr><td>Origin</td><td>stable loopback port plus host</td><td><code>android/app/src/main/python/android_entry.py</code></td></tr><tr><td>Run callback</td><td>cross-language lifetime signal</td><td><code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code></td></tr></tbody></table></div>
+<h2>Domain vocabulary</h2><div class="tbl-wrap"><table><thead><tr><th>Domain term</th><th>Code concept</th><th>Meaning and boundary</th></tr></thead><tbody><tr><td>Host</td><td>ServerRuntime</td><td>Process owner of the embedded Python server.</td></tr><tr><td>Startup</td><td>ServerStartup and android_entry</td><td>Binding a usable socket precedes reporting readiness.</td></tr><tr><td>Run notification</td><td>RunNotifier</td><td>A terminal notice uses stable scene identity.</td></tr><tr><td>Browser origin</td><td>remembered loopback port</td><td>Origin stability supports the shared UI recovery state.</td></tr></tbody></table></div><p>Defining source entry points: <code>android/app/src/main/java/app/grimoire/ServerRuntime.kt</code>, <code>android/app/src/main/java/app/grimoire/ServerStartup.kt</code>, <code>android/app/src/main/python/android_entry.py</code>, <code>android/app/src/main/java/app/grimoire/MainActivity.kt</code>, <code>android/app/src/main/java/app/grimoire/RunNotifier.kt</code>, <code>android/frontend.gradle.kts</code>. No naming defect is asserted beyond the distinctions explained here.</p><p>Names describe different ownership levels: a request, an observed run, a committed record and an optional follow-up are not interchangeable success states. An ordinal Theory judgment, a detector-density Health score and measured application quality are also different questions.</p>
 
 </section><!--DOC_BODY--></main>
-<footer class="doc">Generated by code-visualization. Inventory, dependency, hotspot and LLM tabs are automated; judgments were rebuilt from source and reconciled with the prior risk checklist. No private library or live provider was accessed.</footer>
+<footer class="doc">Generated from fresh scoped inventory, dependency, hotspot and model-call scans, existing coverage artifacts and current source reading. No private library or live provider accessed.</footer>
 <script>
 (function(){
   const btns=[...document.querySelectorAll('nav.tabs button')];

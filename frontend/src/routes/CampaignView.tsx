@@ -1,266 +1,75 @@
-import { Thinking } from "../components/Thinking";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useLocation, useMatch, useNavigate, useParams } from "react-router-dom";
-import { sceneNumber as numberOf } from "./sceneNumber";
-import {
-  api, ApiError, invalidateConfigCache, type Actor, type SceneMeta,
-  type Message, type RosterEntry, type SceneAlternates,
-  type SceneDatetime, type ProposalRecord, type SceneCheckActor,
-  type ResponseOverride, type ResponseBundle, type GroupSettings,
-  type Briefing, type Casefile, type Provenance, type SceneLocation, type SceneWeather,
-  type CampaignBudget,
-  type IncomingRef,
-  type SceneUsage,
-  type TrackerSummary, type UsagePostBucket, type QuickReply, type QuickReplyTask,
-} from "../api/client";
-import { THUMB } from "../api/thumbs";
-import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
-import { useRunRegistry } from "../runs/RunRegistryProvider";
-import { findOrFenceAttempt } from "../runs/recoverAttempt";
-import { forkNotes } from "../components/forkNotes";
-import { shareSummary } from "../components/tracker/share";
-import { lastOkKey, pendingAfter, type NowTracker } from "../components/tracker/TrackerNow";
-import { errorText, isProviderFailure, isSetupFailure } from "../api/errors";
-import { configChanged } from "../appEvents";
-import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
-import { CastPanel } from "../components/CastPanel";
-import { NewSceneChooser } from "../components/NewSceneChooser";
-import { PostImagePicker, type PickerTarget } from "../components/PostImagePicker";
-import { ChangesPanel } from "../components/ChangesPanel";
-import { PassageCharacterDialog } from "../components/PassageCharacterDialog";
-import { ReplayPanel } from "../components/ReplayPanel";
-import { IncomingReview } from "../components/IncomingReview";
-import { CompositionPanel } from "../components/CompositionPanel";
-import { CalendarConfig } from "../components/CalendarConfig";
-import { CampaignCover } from "../components/CoverPanel";
-import { SceneTrackerPanel } from "../components/tracker/SceneTrackerPanel";
-import { SceneInspector, type RewrittenPost } from "../components/SceneInspector";
-import {
-  UNPRICED, bucketPrice, estimatedTokensTitle, headlineIsEstimate,
-} from "../components/cost";
-import MechanicsConfig from "../components/MechanicsConfig";
-import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
-import { canGenerateOnRoute, NO_REROLL_ROUTE, rerollOverrides, type RerollRoute } from "../components/RerollRoute";
-import { initialsOf, Portrait } from "../components/Portrait";
-import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
-import { onConfigChanged } from "../appEvents";
-import { usePublishSceneModel, usePublishSceneSpend, usePublishShellContext }
-  from "../components/ShellStatus";
-import { RollProposal, type ResolveBody } from "../components/RollProposal";
-import { PageShell } from "../components/PageShell";
-import { sectionHref } from "../worldPaths";
+import { errorText } from "../api/errors";
 import { useFocus } from "../components/focus";
-import { ComposerMeta } from "../components/play/ComposerMeta";
-import { PlayBanners, type PlayError } from "../components/play/PlayBanners";
-import { SceneMenu } from "../components/play/SceneMenu";
+import { PageShell } from "../components/PageShell";
 import CastColumn from "../components/play/CastColumn";
-import ReviewColumn, { ApproveCitedButton } from "../components/review/ReviewColumn";
+import Conditions from "../components/play/Conditions";
+import DossierColumn from "../components/play/DossierColumn";
+import { PlayBanners } from "../components/play/PlayBanners";
+import {
+  type TranscriptActions
+} from "../components/play/TranscriptPost";
+import type { QuickReplyContext } from "../components/quickReplies";
+import { NO_REROLL_ROUTE, type RerollRoute } from "../components/RerollRoute";
 import NothingToWrapUp from "../components/review/NothingToWrapUp";
-import { useReviewAddress } from "../components/review/useReviewAddress";
+import ReviewColumn, { ApproveCitedButton } from "../components/review/ReviewColumn";
 import ReviewPanel from "../components/review/ReviewPanel";
 import ReviewTranscript from "../components/review/ReviewTranscript";
+import { useReviewAddress } from "../components/review/useReviewAddress";
 import { useSceneReview } from "../components/review/useSceneReview";
-import DossierColumn from "../components/play/DossierColumn";
-import Conditions from "../components/play/Conditions";
-import GroupPanel from "../components/play/GroupPanel";
-import ReplyChips from "../components/play/ReplyChips";
-import { QuickReplyStrip } from "../components/QuickReplyStrip";
-import type { QuickReplyContext } from "../components/quickReplies";
-import { usePaletteSource, type PaletteItem } from "../components/palette";
-import { useHotkeys } from "../shortcuts/useHotkeys";
-import { StreamingMarkdown } from "../components/play/StreamingMarkdown";
-import { applyDisplay } from "../components/play/displayFrames";
-import { quotedIn } from "../components/play/citation";
-import { RegexTestDialog, type RegexTestTarget } from "../components/play/RegexTestDialog";
-import {
-  DIRECTOR_LABEL, DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER, TranscriptRun, isNarrator,
-  type TranscriptActions, type TranscriptContext, type TranscriptReroll, type TranscriptRunData,
-  type TranscriptVariantSwipe,
-} from "../components/play/TranscriptPost";
-import { useResponseSwipe } from "../components/play/useResponseSwipe";
-import { swipeTitle } from "../components/play/swipeTitle";
-
-// The transcript's four kinds of line — a roll, a transition, a director note
-// and what a shown note is labelled — are defined beside the row that renders
-// them (`components/play/TranscriptPost`), and imported above.
-// The window token of a transcript that has been edited optimistically. Real
-// tokens come from `++windowTokenRef` and so start at 1; this identifies posts
-// that no fetch produced, so every readiness gate comparing against a fetch's
-// token stays correctly closed while the ownership beside it stays readable.
-// Not -1, which `NO_ALTERNATES.window` already uses — matching there would be a
-// coincidence rather than a meaning.
-const OPTIMISTIC_TOKEN = -2;
-
-// A scene with no reroll alternates — the initial state and what every failed
-// fetch falls back to. `cid`/`sid` are the campaign and scene the set was
-// fetched FOR: switching scenes does not cancel an in-flight fetch, so scene
-// A's response can land after scene B's and would otherwise show A's indices
-// against B — where clicking the control swaps by index and would hit the
-// wrong variant.
-//
-// The campaign half is not redundant. React Router reuses this component
-// between /campaigns/A and /campaigns/B, so during a campaign switch `cid` is
-// already B while `activeId` and the loaded set are still A's — a sid-only
-// gate compares two stale values, passes, and offers A's set against B.
-//
-// `window` is the third part of the key and the one campaign+scene cannot
-// supply: a REFRESH of the scene already on screen (every reroll, roll and
-// edit ends in one) leaves both halves equal, so they cannot tell a set
-// fetched for the transcript being rendered from one fetched for the transcript
-// still in flight. Reroll optimistically drops the trailing run, so that window
-// is exactly when the messages on screen end at the user post — and a set
-// matched against them hangs the picker off that post.
-type ScopedAlternates = SceneAlternates & {
-  cid: string | null; sid: string | null; window: number;
-};
-const NO_ALTERNATES: ScopedAlternates = {
-  cid: null, sid: null, window: -1, active: null, alternates: [],
-};
-// No rewritten posts, as one object, so the memoized inspector is not handed a
-// fresh empty list on every transcript read of a scene with none.
-const NO_REWRITES: RewrittenPost[] = [];
-
-// Scene history loads a page at a time from the tail (#94). A scene that has
-// run for months is hundreds of posts, and mounting all of them costs a
-// visible pause on every scene switch; the reader almost always wants the
-// recent end. Older posts arrive by scrolling up (or the button that scroll
-// falls back to), which prepends the next page and holds the viewport still.
-const GROUP_ORDER_LABEL: Record<GroupSettings["order"], string> = {
-  directed: "Directed", manual: "Manual", list: "List", natural: "Natural",
-};
-const PAGE_SIZE = 60;
-
-/** The cast column's moods while there are none to show. A module-level object
- *  so the memoized column is handed the same one every render. */
-const NO_MOODS: Readonly<Record<string, string>> = Object.freeze({});
-// How many extra rounds Stop will ask the server before giving the composer
-// back. The cancel route waits for the run itself, but that wait is bounded, so
-// a provider slow to unwind can answer while still `running`; each round is
-// another full server-side wait, so a handful covers minutes without the client
-// having to know what the server's timeout is.
-const STOP_POLLS = 4;
-// Scrolled this close to the top, "show me more" is what the reader means.
-const NEAR_TOP_PX = 120;
-// ...and this close to the bottom, they are following the reply as it streams,
-// so new content should keep scrolling itself into view. Farther up than this
-// they are reading something specific and must not be yanked away from it.
-const NEAR_BOTTOM_PX = 80;
-
-// Resolves when the signal aborts, for racing a wait that has no cancellation
-// of its own against Stop. `once`, so a long-lived controller does not
-// accumulate listeners across the turns that share it.
-function settleOn<T>(signal: AbortSignal, value: T): Promise<T> {
-  return new Promise<T>((resolve) => {
-    if (signal.aborted) resolve(value);
-    else signal.addEventListener("abort", () => resolve(value), { once: true });
-  });
-}
-
-// Where the scene on screen lives (#87). The scene is IN the URL rather than in
-// component state, so a reload, a bookmark or a shared link comes back to the
-// scene the reader was in — rather than to whichever scene was edited last,
-// which is all `list_scenes`' updated-descending order can offer.
-function sceneUrl(cid: string, sid: string): string {
-  return `/campaigns/${encodeURIComponent(cid)}/scenes/${encodeURIComponent(sid)}`;
-}
-
-// The scene rail lists scenes most-recently-edited first, but the displayed
-// number must reflect story order — the id's own leading number (its
-// filename stem is "<NNN>--<date>--<slug>"), never the list position, which
-// drifts out of story order as soon as any earlier scene is re-edited.
-function sceneNumber(id: string, fallback: number): number {
-  return numberOf(id) ?? fallback;
-}
-
-// A superseded or narrated proposal is finished. `declined` is NOT, and used to
-// be filtered out with them: the backend keeps re-streaming a declined record's
-// continuation on request (mechanics.post_roll_proposal), so a decline whose
-// narration never landed is recoverable — but only if something renders it.
-// Dropping it stranded the record with no way back, which Stop made easy to
-// reach and an upstream failure could always reach; RollProposal now offers it
-// the same Continue narration it offers a stopped accept.
-function liveProposal(record: ProposalRecord | null): ProposalRecord | null {
-  return record && record.status !== "superseded" && record.status !== "narrated"
-    ? record : null;
-}
-
-// All three sorts put the most-recent thing first, matching "updated" (the
-// API's own order, most-recently-edited first — the existing default):
-// "date" is latest in-story date first, "order" is the highest scene number
-// first. Scenes with no in-story date always sort after every dated scene.
-
-/** A function whose identity never changes and which always runs the latest
- *  closure it was handed.
- *
- *  For the handlers this view passes to memoized children — the transcript
- *  rows, the context column, the inspector. Every one of them is declared in
- *  the render body and closes over this render's state, so as a plain prop it
- *  is a new function on every keystroke and every streamed delta, and a
- *  memoized child compares it, finds it changed and re-renders anyway. Rather
- *  than a dependency list per handler, which is where a stale closure would
- *  come from, the ref follows the render and the wrapper never moves.
- *
- *  Updated in a layout effect, not during render: the wrapper is only ever
- *  called from an event handler, after the commit that installed its closure,
- *  and a render that React throws away must not leave its closure behind. */
-function useStableCallback<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
-  const ref = useRef(fn);
-  useLayoutEffect(() => { ref.current = fn; });
-  return useCallback((...args: A) => ref.current(...args), []);
-}
-
-/** `useStableCallback` for a whole set of handlers at once: an object built on
- *  the first render whose members forward to the latest render's. The keys are
- *  fixed by that first render, so a call site hands in the same set every
- *  time. */
-type StableHandlers<T extends { [K in keyof T]: (...args: never[]) => void }> = {
-  [K in keyof T]: (...args: Parameters<T[K]>) => void;
-};
-
-function useStableHandlers<T extends { [K in keyof T]: (...args: never[]) => void }>(
-  handlers: T,
-): StableHandlers<T> {
-  const ref = useRef(handlers);
-  useLayoutEffect(() => { ref.current = handlers; });
-  const [stable] = useState(() => {
-    const out: StableHandlers<T> = { ...handlers };
-    for (const key in handlers) {
-      if (!Object.prototype.hasOwnProperty.call(handlers, key)) continue;
-      out[key] = (...args: Parameters<T[typeof key]>) => ref.current[key](...args);
-    }
-    return out;
-  });
-  return stable;
-}
-
-/** A manual task in flight: which surface started it, in which scene. */
-function taskKey(origin: "strip" | "inspector", cid: string, sid: string, task: string): string {
-  return `${origin}:${cid}/${sid}:${task}`;
-}
+import { RollProposal } from "../components/RollProposal";
+import { type RewrittenPost } from "../components/SceneInspector";
+import { usePublishSceneSpend, usePublishShellContext } from "../components/ShellStatus";
+import { useRunRegistry } from "../runs/RunRegistryProvider";
+import { CampaignComposer } from "./campaign/CampaignComposer";
+import { CampaignDialogs } from "./campaign/CampaignDialogs";
+import { CampaignPanels } from "./campaign/CampaignPanels";
+import { CampaignReplay } from "./campaign/CampaignReplay";
+import { CampaignSceneBar } from "./campaign/CampaignSceneBar";
+import { CampaignSceneSetup } from "./campaign/CampaignSceneSetup";
+import { NO_MOODS, NO_REWRITES, sceneUrl, useStableCallback, useStableHandlers } from "./campaign/campaignShared";
+import { CampaignTranscript } from "./campaign/CampaignTranscript";
+import type { Current, DirectorNote, SceneKey, WindowKey } from "./campaign/campaignTypes";
+import { executeTurn, type TurnRequest } from "./campaign/executeTurn";
+import { askAfterPost as askPostFollowups } from "./campaign/postWriteFollowups";
+import { stopRun } from "./campaign/runSettlement";
+import { useAlternateActions } from "./campaign/useAlternateActions";
+import { useCampaignNavigation } from "./campaign/useCampaignNavigation";
+import { useCampaignPalette } from "./campaign/useCampaignPalette";
+import { useCampaignPanels } from "./campaign/useCampaignPanels";
+import { useCampaignPresentation } from "./campaign/useCampaignPresentation";
+import { useCampaignShortcuts } from "./campaign/useCampaignShortcuts";
+import { useComposerDraft } from "./campaign/useComposerDraft";
+import { useComposerRecovery } from "./campaign/useComposerRecovery";
+import { usePlayErrors } from "./campaign/usePlayErrors";
+import { usePostEdits } from "./campaign/usePostEdits";
+import { useProposalState } from "./campaign/useProposalState";
+import { useQuickReplies } from "./campaign/useQuickReplies";
+import { useRunRecovery } from "./campaign/useRunRecovery";
+import { useRunRecoveryTriggers } from "./campaign/useRunRecoveryTriggers";
+import type { RunSession } from "./campaign/useRunSession";
+import { useRunSession } from "./campaign/useRunSession";
+import { useSceneAccounting } from "./campaign/useSceneAccounting";
+import { useSceneAlternates } from "./campaign/useSceneAlternates";
+import { useSceneCatalog } from "./campaign/useSceneCatalog";
+import { useSceneContinuity } from "./campaign/useSceneContinuity";
+import { useSceneIdentity } from "./campaign/useSceneIdentity";
+import { useSceneMetadata } from "./campaign/useSceneMetadata";
+import { useSceneMutationLatch } from "./campaign/useSceneMutationLatch";
+import { useSceneMutations } from "./campaign/useSceneMutations";
+import { useSceneRolls } from "./campaign/useSceneRolls";
+import { useSceneSeed } from "./campaign/useSceneSeed";
+import { useSceneTracker } from "./campaign/useSceneTracker";
+import { useTranscriptPresentation } from "./campaign/useTranscriptPresentation";
+import { useTranscriptSpeakers } from "./campaign/useTranscriptSpeakers";
+import { useTranscriptSwipes } from "./campaign/useTranscriptSwipes";
+import { useTranscriptWindow } from "./campaign/useTranscriptWindow";
+import { useTurnActions } from "./campaign/useTurnActions";
 
 export default function CampaignView({ ready }: { ready: boolean }) {
   const { cid = "" } = useParams();
-  // The model THIS campaign's scene turns run on, which is not necessarily the
-  // library's: a campaign can override Primary, or point its scene route
-  // elsewhere. Read here because the header has a pathname and no cid, and
-  // answered by the resolver -- the campaign inference view's `scene` route,
-  // whose `resolves` is what `require_inference` would serve a turn and whose
-  // `problem` is the seam's own refusal of it, so the dot cannot say "ready"
-  // about a send the server would refuse. A failed read publishes nothing and
-  // the header keeps the library's answer (`GET /config`).
-  const [sceneModel, setSceneModel] = useState<string | null>(null);
-  const [sceneReady, setSceneReady] = useState<boolean | null>(null);
-  const [sceneProblem, setSceneProblem] = useState<string | null>(null);
-  const [modelsRev, setModelsRev] = useState(0);
-  const [sceneReadFor, setSceneReadFor] = useState<{ cid: string; revision: number } | null>(null);
-  // Whether a turn here has a model to answer it: the campaign's own scene
-  // route after this campaign/config read has answered. An explicit failed
-  // read retains the library fallback, but a pending read cannot grant it.
-  // The library's alone was wrong both ways -- a campaign whose own Primary
-  // works read "no model is ready", and one whose override has no key read
-  // ready until a send came back refused.
-  const canGenerate = sceneReadFor?.cid === cid && sceneReadFor.revision === modelsRev
-    && (sceneReady ?? ready);
+
   // Focus mode: the scene bar and the scene head go with the app header and the
   // context column, leaving the transcript and the composer. Together they were
   // the ~300px above the first line of prose on a phone — the scene bar worst of
@@ -292,419 +101,22 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const wrapUp = !!wrapMatch;
   const navigate = useNavigate();
   const location = useLocation();
-  const [name, setName] = useState("");
-  const [worldName, setWorldName] = useState("");
-  const [dt, setDt] = useState<SceneDatetime | null>(null);
-  const [showCalendar, setShowCalendar] = useState(false);
-  const [showMechanics, setShowMechanics] = useState(false);
-  const [showStyle, setShowStyle] = useState(false);
-  const [showCover, setShowCover] = useState(false);
-  /** The per-scene tracker fields: what this scene stops tracking, and what it adds. */
-  const [showTracker, setShowTracker] = useState(false);
-  /** Whether this scene's director notes are visible.
-   *
-   *  Per scene and not persisted: it is a way of looking at what is on screen,
-   *  like scrolling, and a reader who turned notes on to check one turn should
-   *  not find them on in a scene they open next week. Reset by the effect that
-   *  reads a scene, beside every other piece of per-scene view state. */
-  const [showNotes, setShowNotes] = useState(false);
-  const [scenes, setScenes] = useState<SceneMeta[]>([]);
-  // Which campaign `scenes` describes. The router reuses this component across
-  // /campaigns/A → /campaigns/B, so between the switch and B's list landing
-  // `scenes` still holds A's rows — and the resolver below would read B's sid
-  // as missing from them and redirect the reader to one of A's scenes under
-  // B's id. Every wholesale replacement goes through `installScenes` so the
-  // two cannot drift; the one plain `setScenes` left is a rename re-keying the
-  // list it already has, which cannot change whose list it is.
-  const [sceneListCid, setSceneListCid] = useState<string | null>(null);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  // Which transcript is actually ON SCREEN, campaign and scene. `activeId` is
-  // what the user picked; this is what has landed. They differ while a select is
-  // in flight, and anything keyed to the transcript — the swipe control above
-  // all — has to follow this one, or it renders against the previous scene's
-  // posts. Both halves, for the reason the alternate state carries both: scene
-  // ids repeat across campaigns, so A→B with a colliding id reads as a refresh
-  // and a sid-only key never notices the transcript is still A's.
-  const [loaded, setLoaded] = useState<{ cid: string; sid: string; token: number } | null>(null);
-  // Which scene's transcript is on screen, for the one reader that has to keep
-  // its answer through a rename: the empty-scene setup panel. `loaded` is the
-  // answer for everything that ACTS on the posts, and a rename drops it on
-  // purpose (`reviewSceneRenamed`) until the re-read lands. The setup panel acts
-  // on no post, and a first date set -- one of its own fields -- is a rename, so
-  // gating it on `loaded` would remount it mid-setup, throwing away what it
-  // holds and re-reading the campaign's whole character list. This follows the
-  // rename instead (`adoptSceneId`), and is otherwise set and cleared exactly
-  // where `loaded` is.
-  const [landedScene, setLandedScene] = useState<{ cid: string; sid: string } | null>(null);
 
-  // "The transcript on screen is the active scene's own."
-  //
-  // They diverge for exactly one read: `runStream`'s finally refreshes the
-  // TURN's scene, which is allowed to install over the scene the reader has
-  // since opened (the pull-back is load-bearing — a failed turn's recovered
-  // prompt has to appear against the scene it was written for). The resolver
-  // then corrects `activeId` back to the URL's scene, and until that read lands
-  // the previous scene's messages are still rendered.
-  //
-  // EVERY control that derives an index, an affordance or an optimistic removal
-  // from the RENDERED messages and then writes to `activeId` has to read this,
-  // or it shows the reader one scene's transcript and mutates another's. Named
-  // once because doing it per control is how the second one got missed: the
-  // edit form was gated and reroll was not, so Regenerate replaced a reply of
-  // the active scene that the reader had never been shown (codex review, P1).
-  //
-  // Null `loaded` is UNKNOWN ownership, not safe ownership. This used to read
-  // `!loaded ||`, on the reasoning that the only thing that nulls it is an
-  // optimistic edit, which extends the active scene's own transcript. True at
-  // the moment of the edit and false immediately after: nothing re-establishes
-  // it when the reader navigates, so a send or reroll followed by opening
-  // another scene left the previous scene's posts rendered, `activeId` moved,
-  // and this predicate answering "active" — which is exactly the state it
-  // exists to forbid (codex review, P1). `showOptimistically` now keeps the
-  // ownership and drops only the fetch identity, so the honest answer is
-  // available and the carve-out is gone.
-  //
-  // The other two nulls — a rename that outdated the set, a swap whose re-read
-  // failed — mean "nobody knows what this transcript is" and are correctly
-  // false here too.
-  const transcriptIsActive =
-    !!loaded && loaded.cid === cid && loaded.sid === activeId;
+  const { activeId, currentCampaign, selectIdentity, selected } = useSceneIdentity({ cid });
 
-  // Every LOCAL edit to the transcript goes through here, and each one retires
-  // `loaded`'s FETCH IDENTITY while keeping its ownership. Matching tokens only
-  // prove a set and a *fetch* describe the same scene — an optimistic edit
-  // changes the posts under both without touching either, so a
-  // stale-but-consistent pair still passes. Reroll is the case that bites: it
-  // removes the displayed reply, and the set keyed to that reply stays valid,
-  // so the picker drops onto the user post above it.
-  //
-  // It used to null the whole record, which threw away the answer to a
-  // different question — WHICH scene these posts are — and `transcriptIsActive`
-  // had no choice but to guess.
-  //
-  // The owner is CARRIED, never re-derived. Stamping the active scene's id
-  // looks equivalent and is not: Send stays enabled while a freshly selected
-  // scene is still loading (see `runStream`'s baseline read), so the reader can
-  // select B and send while B's GET is in flight — `activeIdRef` already says B
-  // while the messages being extended are still A's. Deriving the owner there
-  // labels A's posts as B's, which is worse than not knowing, because the guard
-  // then believes them and offers edits whose indices address A against a file
-  // that is B (codex review, P1).
-  //
-  // Null stays null for the same reason: an unowned transcript is one nothing
-  // may act on, and inventing an owner is exactly the mistake above.
-  //
-  // Loading and paging deliberately do NOT come through here: they are what
-  // `loaded` describes, and a prepend extends that transcript rather than
-  // replacing it.
-  function showOptimistically(edit: (m: Message[]) => Message[]) {
-    setMessages(edit);
-    setLoaded((cur) => (cur ? { ...cur, token: OPTIMISTIC_TOKEN } : null));
-  }
-  // `messages` is a WINDOW onto the transcript's tail, not the whole of it.
-  // `firstIndex` is the absolute index of `messages[0]`, so every index this
-  // component hands the API (edit, reroll) stays the index the backend means,
-  // and `firstIndex > 0` is exactly "there are older posts to load".
-  const [firstIndex, setFirstIndex] = useState(0);
-  // The guard is the REF; the state only drives the button's label. Scroll
-  // fires in bursts and setState is async, so two events in one tick would
-  // both read `loadingOlder === false` and prepend the same page twice.
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const loadingOlderRef = useRef(false);
-  // How much history is on screen. A refresh of the *same* scene (after a
-  // reply, an edit, a roll) re-reads this much rather than snapping back to
-  // one page, so pages the reader already scrolled up to survive the re-fetch.
-  const windowSizeRef = useRef(PAGE_SIZE);
-  // Whether a player turn exists ANYWHERE in the transcript (the server
-  // answers for the whole of it; null until a windowed read says). Reroll
-  // hangs off this: an offscreen scene never stores a user post, so no amount
-  // of unloaded history above the window implies one exists.
-  const [hasUserPost, setHasUserPost] = useState<boolean | null>(null);
-  // The greeting the scene on screen was started from ("" for none). Read off
-  // the same load as its transcript, so an empty scene opened for an adapted
-  // greeting (#91) still offers the adaptation after a reload.
-  const [openedFrom, setOpenedFrom] = useState("");
-  // Every scene load takes the next token; a page that resolves after the
-  // window it was asked for has moved on is DROPPED. Without it an older-page
-  // request for scene A, still in flight when the reader switches to scene B,
-  // prepends A's posts onto B and installs A's offset — after which an edit
-  // sends B's id with an A-derived index and overwrites an unrelated post.
-  const windowTokenRef = useRef(0);
-  const [streaming, setStreaming] = useState("");
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  // Which scene a turn is streaming into, or null. Distinct from `activeId`,
-  // which is the scene being *looked at* — a player can start a turn on A and
-  // navigate to B while it runs, and the write still lands in A. Anything that
-  // would move A's file has to stay locked for as long as that is true, so the
-  // lock follows the stream rather than the view (review, #95). State, not a
-  // ref, because the rail renders it.
-  const [streamingId, setStreamingId] = useState<string | null>(null);
-  // Which turn owns `streamingId`. The lock outlives `busy` — it is held across
-  // the post-cancel flush poll — so a newer turn can claim it while an older
-  // one is still unwinding, and only the current owner may release it.
-  const streamTokenRef = useRef(0);
-  // How many scene-renaming requests are in flight. A rename is a PUT that
-  // moves the scene file, and until it answers nobody knows which id is
-  // current — so a turn started inside that window can be handed the old one
-  // and have its write land nowhere. `streamingId` closes the other direction
-  // (rename blocked during a turn); this closes turn-blocked-during-a-rename
-  // (review, #95). A counter, not a flag: the rail and the two date controls
-  // can overlap, and the last one to finish must not unblock the others.
-  //
-  // Still a list of surfaces, which is the same shape of fragility the lock
-  // has — but the guard is now at the one place turns start, so a surface that
-  // forgets to report is a narrower miss than one that forgets to lock.
-  const [renamesInFlight, setRenamesInFlight] = useState(0);
-  // "A turn can still write to the scene on screen." NOT `busy`, which clears
-  // the instant the socket dies while the shielded abort write lands seconds
-  // later — the whole point of `streamingId`.
-  //
-  // Named and derived once because review has now found four surfaces sitting
-  // on the wrong one of these, one at a time: rename, the two date controls,
-  // End scene, and the dice roll. Every control that mutates *this* scene's
-  // transcript without going through `runStream` reads this, so the next one
-  // is a missing `sceneLocked` rather than a fifth rediscovery of the rule.
-  //
-  // It covers a run this component never started, too, and that is what makes
-  // it right once a turn outlives its request: `attachToRun` sets
-  // `streamingId` for an ADOPTED run exactly as `runStream` does for one it
-  // began, so a turn recovered after a reload -- or one still generating when
-  // the tab came back -- locks the scene the same way. The server refuses
-  // these mutations either way (`scene_busy`, keyed on the `turn`/`review`
-  // exclusion key); this is the affordance that stops the player being told no.
-  // Declared just below `review`, because a live REVIEW holds the scene on
-  // exactly the same terms -- see there.
-  const markRenaming = useCallback(
-    (active: boolean) => setRenamesInFlight((n) => n + (active ? 1 : -1)), []);
-  // Held for the life of one turn so Cancel can reach it. A ref, not state:
-  // the controller is not rendered, and rebuilding the component tree on every
-  // send just to store it would remount the transcript mid-stream.
-  const abortRef = useRef<AbortController | null>(null);
-  // How Stop reaches the turn in flight. Closing the connection is no longer
-  // the cancel, so the run has to be addressable -- and addressable BEFORE its
-  // leading frame arrives, because the window where the server has accepted and
-  // detached the work but no frame has reached the browser is exactly the
-  // window a dying connection lands in. `attempt` is minted client-side and
-  // sent with the request, so it names the turn from the first byte; `id` is
-  // filled in when the leading frame confirms it, and Stop falls back to
-  // discovery by attempt when it has not.
-  const runRef = useRef<
-    { cid: string; sid: string; attempt: string; id: string | null } | null>(null);
   // The half of that which has to outlive this component -- see
   // `RunRegistryProvider`. `runRef` is the live turn's handle for Stop; this is
   // the record that a send happened at all, and it is the only thing left after
   // a navigation or a suspended tab.
   const registry = useRunRegistry();
-  // The in-flight `cancelRun`, so the stream's teardown can wait for it before
-  // releasing the scene. The route answers only once the run is really
-  // terminal, which is the authoritative "the partial is written and the
-  // exclusion key is free" signal -- without waiting for it, Stop re-enables
-  // Send while the old run still holds the scene and the next send is refused.
-  const cancelRef = useRef<Promise<void> | null>(null);
-  // The flush poll can outlive the view by up to its whole budget, and it calls
-  // setState on every tick. Nothing else here needs an unmount guard — a stream
-  // deliberately runs to completion after a navigation, and its refresh is a
-  // React warning at worst — but a loop that keeps refetching a scene nobody is
-  // looking at is waste with no upside.
-  const mountedRef = useRef(true);
-  // The transcript length the server last reported. A turn that failed without
-  // a response compares against this to find out whether its post landed after
-  // all — `beforeResponse` proves only that no response arrived, not that the
-  // request never did (review caught the difference). Counts, not content:
-  // `post_chat` expands macros before storing, so what came back never has to
-  // equal what was typed.
-  const totalRef = useRef(0);
-  // Which scene `totalRef` is a count of. It is written by whichever read
-  // landed last, which is not necessarily the scene a turn is about to run on.
-  const totalSceneRef = useRef<string | null>(null);
-  // Orders writes to the chip, because the proposal is read from two places
-  // that can answer out of order. `selectScene` fires a read and does not await
-  // it; the post-cancel `settleProposal` fires a later one deliberately. Making
-  // the fresh read bypass the shared promise (#95) was not enough on its own —
-  // review caught that it still left the older read free to resolve afterwards
-  // and put its pre-flush `null` back over the record that had just been
-  // settled, with the poll already finished. So: every write bumps this, and a
-  // read may only apply while its own bump is still the newest.
-  const proposalSeqRef = useRef(0);
-  // The banner's failure, and whether its Retry -- which generates -- is the
-  // recovery for it: `PlayError` says why each field is there.
-  const [error, setError] = useState<PlayError | null>(null);
-  /** Whether the dot has been told this connection is failing, so that the
-   *  next turn which works can tell it otherwise. Recovery is only visible if
-   *  something announces it, and the shell has no other way to hear. */
-  const sawProviderFailure = useRef(false);
-  const fail = (e: unknown, retryable = true, from?: string) => {
-    // A refusal of the model settings is not retried: the same request meets
-    // the same refusal. A missing installation may need repairing outside the
-    // app, so whether a settings page can fix it does not decide retryability.
-    setError({ text: errorText(e), retryable: retryable && !isSetupFailure(e), from, err: e });
-    // A turn that failed is the freshest thing anyone knows about that
-    // connection, and it arrives as an SSE frame — so it never passes through
-    // the api client's rejection path, where the same signal is raised for
-    // every other provider call (#146). Without this the status dot keeps
-    // yesterday's verdict until the reader navigates.
-    if (isProviderFailure(e)) {
-      sawProviderFailure.current = true;
-      invalidateConfigCache();
-      configChanged();
-    }
-  };
-  const [ctxKey, setCtxKey] = useState(0);
-  // The campaign's budget, and the level the reader has already been told about
-  // (#153). Held as a level rather than a boolean so dismissing the 80% warning
-  // does not also swallow the one that says the budget is gone: crossing into
-  // `over` is a different fact, and it gets said again.
-  //
-  // Held with the campaign it was read for, because it is read later than it
-  // used to be (see the effect that reads it): between a campaign switch and
-  // the new campaign's first transcript, the previous campaign's answer is
-  // still the one on hand, and it must not be shown -- or handed to the Cost
-  // section -- as this campaign's.
-  const [budgetRead, setBudgetRead] =
-    useState<{ cid: string; data: CampaignBudget } | null>(null);
-  const budget = budgetRead && budgetRead.cid === cid ? budgetRead.data : null;
-  const [budgetSeen, setBudgetSeen] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
-  /** The post an image is being picked for (#376). Holds the index and who
-   *  spoke it, because the picker is scoped by the speaker: an actor post
-   *  offers that actor's art, a narrator post the campaign's own library. */
-  const [picking, setPicking] = useState<{ index: number; target: PickerTarget } | null>(null);
-  // The post the regex test pane is open on (spec 6.2), or null.
-  const [regexTest, setRegexTest] = useState<RegexTestTarget | null>(null);
-  const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
-  // Which connection and model THIS reroll runs on (#77). One-shot, like the
-  // guidance beside it and like `pendingResponse`: reset whenever the popover
-  // opens, so a route chosen for one reroll cannot silently steer the next.
-  const [rerollRoute, setRerollRoute] = useState<RerollRoute>(NO_REROLL_ROUTE);
-  // Every variant of the generation reroll targets, refreshed by selectScene
-  // (which every mutating path already funnels through). `active` is null when
-  // the slot is empty — a reroll whose stream died — and picking a variant
-  // then puts one back rather than swapping.
-  const [alternates, setAlternates] = useState<ScopedAlternates>(NO_ALTERNATES);
-  // The in-flight alternates fetch: its token identifies the latest request, and
-  // its `sid` is re-keyed by a rename so a response still lands under the right
-  // scene. Replaced wholesale per request, so identity comparison is the test.
-  const altsReq = useRef({ token: 0, cid: "", sid: "" });
-  // `activeId` for callers that must know what is selected NOW rather than what
-  // was selected when they captured it — an awaited handler holds a stale one.
-  // Every write goes through `setActive` so the two cannot drift: they are one
-  // fact, and the rename/delete/first-send paths set it without going anywhere
-  // near `selectScene`.
-  const activeIdRef = useRef<string | null>(null);
-  // Which campaign the active scene belongs to. Scene ids repeat freely between
-  // campaigns, so "the sid in the URL is already the active one" is only true
-  // if the active scene is also THIS campaign's — A/scenes/s1 → B/scenes/s1
-  // otherwise reads as "already there" and B's transcript never loads.
-  // Taken from the render that selected it, not `cidRef`: a handler awaited
-  // across a campaign switch belongs to the campaign it started in, which is
-  // the campaign whose scene it is selecting.
-  const activeCidRef = useRef<string | null>(null);
-  function setActive(id: string | null) {
-    activeIdRef.current = id;
-    activeCidRef.current = id === null ? null : cid;
-    setActiveId(id);
-  }
-  // Same idea for the campaign: router reuses this component across
-  // /campaigns/A → /campaigns/B, and scene ids repeat freely between
-  // campaigns, so "still the same sid" is not "still the same scene". A
-  // handler that captured A must compare against where the router is NOW,
-  // which the render it was created in cannot tell it.
-  const cidRef = useRef(cid);
-  cidRef.current = cid;
-  // null = closed; open holds the in-progress notation/label/error, plus
-  // the popover's mode (dice notation vs. a module check) and check fields.
-  const [rollForm, setRollForm] = useState<{
-    mode: "dice" | "check"; notation: string; label: string; error: string | null;
-    checkActor: string; checkId: string; difficulty: number | ""; modifier: number;
-  } | null>(null);
-  const [checkActors, setCheckActors] = useState<SceneCheckActor[]>([]);
-  const checksFetched = useRef(false); // one getSceneChecks per popover session
-  // The in-flight-store-mutation latch, shared by the dice roll, the check roll
-  // and the alternate swap. Scoped to the scene that took it rather than being a
-  // bare boolean: it was component-wide, so an operation belonging to a scene
-  // the reader has left held every control in the scene they entered — Send,
-  // Retry, reroll, edit, roll — until an unrelated request settled. Review found
-  // that against the swap; the two roll paths had it already.
-  //
-  // The token is what makes releasing safe: a slow operation finishing after a
-  // newer one took the latch must not clear the newer one's.
-  const [rollingFor, setRollingFor] =
-    useState<{ cid: string; sid: string; token: number } | null>(null);
-  const rollTokenRef = useRef(0);
-  const rolling = !!rollingFor && rollingFor.cid === cid && rollingFor.sid === activeId;
 
-  function takeRollLatch(forSid: string) {
-    const token = ++rollTokenRef.current;
-    setRollingFor({ cid, sid: forSid, token });
-    return () => setRollingFor((cur) => (cur?.token === token ? null : cur));
-  }
-  // a pending/resolved roll-proposal record surfaced by the model mid-stream
-  // or rehydrated on scene select; RollProposal only renders pending/resolved.
-  const [proposal, setProposal] = useState<ProposalRecord | null>(null);
-  const [showRollSyntax, setShowRollSyntax] = useState(false);
-  const [colorQuotes, setColorQuotes] = useState(false);
-  const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
-  const [cast, setCast] = useState<Actor[]>([]);
-  // Group-play settings of the active scene; null until read, and after a failed read.
-  const [group, setGroup] = useState<GroupSettings | null>(null);
-  const [showGroup, setShowGroup] = useState(false);
-  // Which scene `group` was read for, and which read is the newest. A read that
-  // resolves after the scene changed, or after the panel saved, is stale.
-  const groupScopeRef = useRef<{ cid: string; sid: string | null }>({ cid: "", sid: null });
-  const groupReadRef = useRef(0);
-  // "Round n/of" of an automatic chain, from the `round_start` frames; cleared
-  // whenever the view stops being busy.
-  const [roundProgress, setRoundProgress] = useState<{ index: number; of: number } | null>(null);
-  useEffect(() => { if (!busy) setRoundProgress(null); }, [busy]);
-  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string; seed?: string | undefined }[]>([]);
-  const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
-  const [roster, setRoster] = useState<RosterEntry[]>([]);
-  /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
-   *  casefile in the column. Deliberately the only state the swap has —
-   *  "which mode is the column in" is derived from this and never stored
-   *  twice, so the two can never disagree. */
-  const [selectedActor, setSelectedActor] = useState<{ kind: string; id: string } | null>(null);
-  const [casefile, setCasefile] = useState<Casefile | null>(null);
-  const [briefing, setBriefing] = useState<Briefing | null>(null);
-  /** Why each stored line is there (#4a). Campaign-scoped and read once per
-   *  absorb rather than per scene: it is a rolling log of citations for values
-   *  already on screen, so a copy one absorb old is stale about a line the
-   *  reader has not been shown yet either. `{}` is a normal state — a campaign
-   *  absorbed before the store existed has no citations at all. */
-  const [provenance, setProvenance] = useState<Provenance>({});
-  /** The quote the reader is hovering a citation for, highlighted in the
-   *  transcript. "" is nothing hovered. */
-  const [citedQuote, setCitedQuote] = useState("");
-  const [sceneLocation, setSceneLocation] = useState<SceneLocation | null>(null);
-  const [weather, setWeather] = useState<SceneWeather | null>(null);
-  const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
-  const [showChanges, setShowChanges] = useState(false);
-  /** The campaign side of push/sync (#6). Its own toggle rather than a tab
-   *  inside Changes: that panel is what this campaign's own play changed, and
-   *  this is what the world changed underneath it — the same shape of question
-   *  about a different author. */
-  const [showIncoming, setShowIncoming] = useState(false);
-  /** The composition overview (#199): where every piece of this campaign stands
-   *  relative to the world it came from. Its own toggle beside World updates
-   *  rather than a tab inside it, for the reason that panel is its own toggle
-   *  beside Changes — three different questions about the same records, and
-   *  a reader mid-turn opens the one they mean. */
-  const [showComposition, setShowComposition] = useState(false);
-  /** The ref the composition panel sent to World updates, so the review opens on
-   *  the change the reader just read a status word for. Held here because it
-   *  crosses two panels, and re-boxed on every hand-off so pointing at the same
-   *  ref twice re-selects it. */
-  const [reviewRef, setReviewRef] = useState<IncomingRef | null>(null);
-  /** Bumped when an accept or reject lands in World updates. Both panels can be
-   *  open at once and read the same `/incoming`, so without it the composition
-   *  rows and its pending count go on reporting a change that is already
-   *  resolved — and one accept can resolve several of those rows. */
-  const [resolvedEpoch, setResolvedEpoch] = useState(0);
-  // The other direction of the same pairing: a pin lands in the composition
-  // panel and changes what `/incoming` answers the review panel beside it.
-  const [pinEpoch, setPinEpoch] = useState(0);
+  const { fail, setError, providerSucceeded, error } = usePlayErrors();
+
+  const session: RunSession = useRunSession();
+  const { busy, streamingId, streaming, streamingSpeakers, directorNote, roundProgress } = session;
+  const { refreshProposal, setProposalNow, claimProposalRead, applyProposalRead, proposal } = useProposalState();
+
+  const [ctxKey, setCtxKey] = useState(0);
   // The post a reader asked to replay FROM (#79) -- the one after the retcon,
   // since the retconned post itself stands. Held here rather than in the panel
   // because the transcript gutter is what sets it.
@@ -714,6 +126,95 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // refreshes the transcript, which is not what that panel reads. See
   // `attachToRun`.
   const [replayEpoch, setReplayEpoch] = useState(0);
+  const {
+    setDrawer, showChanges, setShowChanges, showIncoming, setShowIncoming, showComposition,
+    setShowComposition, showMechanics, setShowMechanics, showCalendar, setShowCalendar, showStyle,
+    setShowStyle, showCover, setShowCover, showTracker, setShowTracker, openPanel, closePanels, reviewRef,
+    pinEpoch, setResolvedEpoch, resolvedEpoch, setPinEpoch, setReviewRef, showInspector, showGroup,
+    setShowGroup, setShowInspector, drawer,
+  } = useCampaignPanels();
+
+  /** Whether this scene's director notes are visible.
+   *
+   *  Per scene and not persisted: it is a way of looking at what is on screen,
+   *  like scrolling, and a reader who turned notes on to check one turn should
+   *  not find them on in a scene they open next week. Reset by the effect that
+   *  reads a scene, beside every other piece of per-scene view state. */
+  const [showNotes, setShowNotes] = useState(false);
+  const { rolling, markRenaming, takeRollLatch, renamesInFlight } = useSceneMutationLatch({ cid, activeId });
+  const { refreshScenes, listSequence, sceneListCid, scenes, repointRow } = useSceneCatalog({ currentCampaign });
+  const { sceneTitle, activePcless, activeDone, activeClosed, activeBranched } = useSceneMetadata({ scenes, activeId });
+  const {
+    refreshPreset, restoreParked, restoreDurableOnce, repointPark, consumeText, input, directing,
+    setDirectMode, parkedTick, recoverPrompt, setPendingResponse, setInput, pendingResponse, setQuickNotice,
+    insertQuick, heldKind, sceneResponse, chooseResponseOverride, clearResponseOverride, quickNotice,
+  } = useComposerDraft({ activePcless, activeId, cid, selected, registry });
+  const refreshRemovedCast = useStableCallback((scope: SceneKey) => readScene(scope));
+  const {
+    refreshContinuity, forgetGroup, cast, setSelectedActor, groupSaved, setCitedQuote, selectedActor,
+    openActor, briefing, citedQuote, roster, closeActor, removeSelectedActor, casefile, provenance,
+    sceneLocation, dt, weather, group,
+  } = useSceneContinuity({ cid, activeId, ctxKey, readScene: refreshRemovedCast, fail, currentCampaign, selected });
+
+  const { clearAlternates, renameAlternates, fetchAlternates, alternates } = useSceneAlternates();
+  const { name, canGenerate, moduleBound, labels, worldName, sceneProblem, notReadyId, readModuleBound, colorQuotes } = useCampaignPresentation({ cid, ready, setError, currentCampaign, refreshScenes, listSequence });
+  const onSceneSwitch = useStableCallback((_scope: SceneKey) => {
+    // clear the previous scene's chip/popover synchronously so scene A's
+    // proposal never renders against scene B while the fetch below is in
+    // flight (and so a stale checkActors list can't leak across scenes).
+    setProposalNow(null);
+    setRollForm(null);
+    // a one-shot override belongs to the turn the player picked it for, on
+    // the scene they picked it on — switching scenes must not carry it
+    // silently onto an unrelated scene's next reply.
+    setPendingResponse(null);
+    // Director notes are per scene, and the toggle is a way of looking at
+    // the one on screen. Carried across, a reader who turned them on to
+    // check one turn would find them on in every scene they opened after.
+    setShowNotes(false);
+    // Same reasoning for the error banner: it reports what happened to a turn
+    // in the scene being left, and its Retry acts on whatever scene is open.
+    // Leaving it up invites the player to re-run one scene's failure against
+    // another (review, #95).
+    setError(null);
+    // scene A's alternates must never offer themselves against scene B while
+    // the fetch below is in flight — same reason the proposal chip clears here
+    clearAlternates();
+    // The post a reader asked to replay from is an INDEX, and an index means
+    // nothing in another scene: carried across, it prices — and would cut —
+    // whatever post happens to sit there. Same reasoning as the one-shot
+    // response override two blocks up.
+    setReplayAt(null);
+    // The reroll popover and the route in it, for the same reason and with
+    // more at stake than the rest of this block. It is anchored to "the post
+    // a reroll would replace", which is a different post in every scene — so
+    // left open across a switch it reappears over the new scene's trailing
+    // reply carrying the connection and model chosen for the old one's, and
+    // the next click sends B's reply to a model picked for A (Codex review,
+    // #77). The hint had the same hole before the route joined it; a wrong
+    // model is the version of it that costs a generation.
+    setRerollPrompt(null);
+    setRerollRoute(NO_REROLL_ROUTE);
+  });
+  const onReadRequested = useStableCallback((window: WindowKey, renamed: boolean) => {
+    fetchAlternates(window.cid, window.sid, window.token);
+    refreshContinuity(window.cid, window.sid, renamed);
+    setSelectedActor(null);
+    refreshProposal(window.cid, window.sid);
+    refreshPreset(window.cid, window.sid);
+  });
+  const onInstalled = useStableCallback((_window: WindowKey) => {
+    session.clearPreview();
+    setCtxKey((n) => n + 1);
+  });
+  const {
+    readScene, transcriptIsActive, loaded, clearScene: clearSceneWindow, readTranscript, renameTranscript,
+    verifiedTotal, followTail, windowToken, invalidateTranscript, showOptimistically, messages, firstIndex,
+    hasUserPost, landedScene, goToQuote, openedFrom, streamRef, onStreamScroll, loadOlder, loadingOlder,
+  } = useTranscriptWindow({
+    cid, activeId, setError, selectIdentity, streaming, currentCampaign, onSceneSwitch, onReadRequested,
+    onInstalled, setCitedQuote,
+  });
   // The end-of-scene review, whole (#378): its state, the absorb and save that
   // fill and commit it, and the counts its column and panel read off it. A
   // review is a MODE of this page rather than a panel inside it -- the
@@ -727,7 +228,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     dismissError: (from) => setError((e) => (e?.from === from ? null : e)),
     onSaved: () => setCtxKey((n) => n + 1),
   });
-  useReviewAddress({ cid, activeId, wrapUp, review });
 
   // A live REVIEW holds the scene on exactly the same terms as a turn -- `turn`
   // and `review` share one exclusion key server-side -- so an absorb in flight
@@ -749,1312 +249,222 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const sceneLocked = !!activeId
     && (activeId === streamingId || review.holdsScene(activeId));
   const { absorb } = review;
+  const { setSeedPrompt, seedPrompt } = useSceneSeed({ location, sid, cid, navigate });
 
-  const [chooserOpen, setChooserOpen] = useState(false);
-  // Campaign-scoped, like `loaded`, `rollingFor` and the alternate set, and for
-  // the reason all three carry a cid: scene ids repeat between campaigns. The
-  // premise is recorded before the relist that follows it, so a reader who
-  // switches campaigns during that await leaves it behind — and a sid-only
-  // match then hands campaign A's generated premise to an empty scene of B's
-  // that happens to wear the same id (codex review).
-  const [seedPrompt, setSeedPrompt] =
-    useState<{ cid: string; sid: string; prompt: string } | null>(null);
-  // A scene created from the Scenes page arrives here as a NAVIGATION, not
-  // through this page's own `sceneCreated`, so the premise it was created from
-  // rides the history entry (see `ScenesView`'s chooser). `sid` comes off
-  // `useMatch` above, so it is already the scene being landed on -- this does
-  // not have to wait for `activeId` to catch up.
-  //
-  // Adopted once, then cleared off the entry, because history outlives the
-  // visit: left in place, a premise the reader had since edited or emptied
-  // would be reinstated in the opener box by any Back into this entry or any
-  // reload of it, silently discarding what they typed over it. The seed is a
-  // handoff, not a property of the address.
-  const handoff = (location.state as { seedPrompt?: string } | null)?.seedPrompt;
-  useEffect(() => {
-    if (!handoff || !sid) return;
-    setSeedPrompt({ cid, sid, prompt: handoff });
-    // Search and hash carried along: this replace exists to drop the STATE, and
-    // rebuilding the entry from the pathname alone would quietly discard the
-    // rest of the address. Nothing on this route reads a query param today,
-    // which is exactly why a silent drop here would go unnoticed later.
-    void navigate(location.pathname + location.search + location.hash,
-             { replace: true, state: null });
-  }, [cid, sid, handoff, location.pathname, location.search, location.hash, navigate]);
-  // Response-length chip beside Send: the scene's own preset (its saved
-  // setting, from the loaded scene's frontmatter) versus a one-shot pending
-  // override the player just picked for the next reply only. `pendingResponse`
-  // is never persisted — it rides the next chat/retry/regenerate call and is
-  // cleared once a reply actually lands, but survives a failed stream so
-  // retry/reroll still honour it (see runStream/send/retry/reroll below).
-  // The server's resolved bundle for this scene — the ONLY source of truth for
-  // what the next reply is actually budgeted at. The cascade (turn → scene →
-  // campaign → global → built-in default) is deliberately not re-implemented
-  // here; a campaign-scope preset is invisible to the scene's own frontmatter.
-  const [sceneResponse, setSceneResponse] = useState<ResponseBundle | null>(null);
-  const [pendingResponse, setPendingResponse] = useState<ResponseOverride | null>(null);
-  // Whether this campaign resolves to a mechanics pack. `null` while unknown:
-  // the dice button renders on `true` only, so a control never appears and then
-  // vanishes a moment later once the read lands.
-  const [moduleBound, setModuleBound] = useState<boolean | null>(null);
-  // The composer's quick replies: the campaign's effective set (world replies
-  // with the campaign's layered on), read per campaign. Tagged with the
-  // campaign it was read for, so a set still on screen across a campaign
-  // switch is never offered for the new one.
-  const [quickSet, setQuickSet] = useState<{ cid: string; replies: QuickReply[] } | null>(null);
-  // What the last quick reply has to say -- a declined fold, a failed roll --
-  // scoped to the scene it was tapped in.
-  const [quickNotice, setQuickNotice] =
-    useState<{ cid: string; sid: string; text: string } | null>(null);
-  // The two manual tasks in flight, from the strip or the inspector, keyed
-  // `${origin}:${cid}/${sid}:${task}` -- so the same task is never started
-  // twice from two surfaces, and a run in one scene never holds another's.
-  // Bumped by an `opener` quick reply: the cast panel expands and focuses its
-  // opener prompt (see `CastPanel`'s `openerRequest`).
-  const [openerRequest, setOpenerRequest] = useState(0);
-  const [taskBusy, setTaskBusy] = useState<Record<string, true>>({});
-  const markTask = useCallback((key: string, on: boolean) => {
-    setTaskBusy((cur) => {
-      if (on === !!cur[key]) return cur;
-      const next = { ...cur };
-      if (on) next[key] = true;
-      else delete next[key];
-      return next;
-    });
-  }, []);
-  useEffect(() => {
-    let live = true;
-    api.getEffectiveQuickReplies(cid)
-      .then((b) => { if (live) setQuickSet({ cid, replies: b.replies }); })
-      // A set that cannot be read is a strip that is not there, not a page
-      // that is broken.
-      .catch(() => { if (live) setQuickSet({ cid, replies: [] }); });
-    return () => { live = false; };
-  }, [cid]);
-  const stripSummary = !!activeId && !!taskBusy[taskKey("strip", cid, activeId, "rolling_summary")];
-  const stripBreak = !!activeId && !!taskBusy[taskKey("strip", cid, activeId, "scene_break")];
-  // Stable unless one of the two flags moves: the inspector is memoized.
-  const stripTasks = useMemo(() => ({ rolling_summary: stripSummary, scene_break: stripBreak }),
-    [stripSummary, stripBreak]);
-  // Keyed on the scene it was handed to, so a run the inspector started in one
-  // scene clears its own flag even after the reader has moved on.
-  const onInspectorTaskBusy = useCallback(
-    (task: "rolling_summary" | "scene_break", on: boolean) => {
-      if (activeId) markTask(taskKey("inspector", cid, activeId, task), on);
-    }, [cid, activeId, markTask]);
-  function taskRunning(task: "rolling_summary" | "scene_break"): boolean {
-    return !!activeId && (!!taskBusy[taskKey("strip", cid, activeId, task)]
-      || !!taskBusy[taskKey("inspector", cid, activeId, task)]);
-  }
-  const streamRef = useRef<HTMLDivElement>(null);
-  /** The scene inspector, which used to be a permanently-open third column.
-   *
-   *  It is a panel now, opened from the composer's "What the model saw →".
-   *  That is a promotion rather than a demotion: what it answers — what went
-   *  into the last prompt, and what was dropped to fit — is a question about a
-   *  turn, so it belongs beside the control that takes the next one. The
-   *  continuity it also carried (who is here, where, when) does not live here
-   *  any more; that is the context column, permanently visible, which is the
-   *  whole point of the redesign.
-   *
-   *  Closed by default: an open panel over the transcript is the state the old
-   *  third column was in permanently. */
-  const [showInspector, setShowInspector] = useState(false);
-  /** The scene being renamed in place, or null. The rail's `EditableRow` used
-   *  to own this; the control moved to the scene's own heading with it. */
-  const [renamingScene, setRenamingScene] = useState<{ id: string; title: string } | null>(null);
-  // Read on every `cid` change and again whenever MechanicsConfig saves, so
-  // binding or clearing a pack updates the input bar without a reload.
-  //
-  // TWO guards, because they stop different things (Codex review):
-  //
-  // - `moduleReq` drops a read that STARTED earlier and landed later, exactly
-  //   as `lockReq`/`anchorReq` do.
-  // - `liveCid` drops a read that started later but belongs to a campaign the
-  //   reader has left. A token cannot catch that one: MechanicsConfig's save
-  //   holds the `onChanged` it was handed, so a PUT issued in campaign A and
-  //   settling after a move to B calls A's callback, which would start a
-  //   *newer* read of A and commit A's answer over B's.
-  //
-  // `reset` separates the two callers. A campaign change genuinely knows
-  // nothing yet, so it blanks to `null`; a refresh in place keeps the value it
-  // has, or the dice button would blink out and back on every save -- and the
-  // popover-closing effect below would read that blank as "unbound".
-  const liveCid = useRef(cid);
-  liveCid.current = cid;
-  const moduleReq = useRef(0);
-  function readModuleBound(reset = false) {
-    const forCid = liveCid.current;
-    const req = ++moduleReq.current;
-    if (reset) setModuleBound(null);
-    const settle = (v: boolean) => {
-      if (moduleReq.current === req && liveCid.current === forCid) setModuleBound(v);
-    };
-    api.getCampaignModule(forCid)
-      .then((m) => settle(m.resolved !== null))
-      // A failed READ is not evidence of anything. On a campaign change there
-      // is nothing better to fall back on, so it errs toward "no dice" -- the
-      // same side it errs on while the read is out. On a refresh in place there
-      // IS something better: the answer already on screen. Keeping it stops a
-      // transient failure from retracting the dice button and discarding a
-      // half-typed roll with it (Codex review round 2).
-      .catch(() => { if (reset) settle(false); });
-  }
-
-  useEffect(() => {
-    // Scene ids repeat between campaigns. A previous campaign's list failure
-    // must go even when selecting this campaign keeps the same scene id (and
-    // therefore does not enter selectScene's scene-switch reset). Clear before
-    // issuing this campaign's reads, so their own failures remain visible.
-    setError(null);
-    api.getCampaign(cid).then((c) => {
-      setName(c.meta.name);
-      setWorldName(c.meta.world_name ?? ""); // embedded: no second fetch
-    });
-    // Which scene to open is NOT decided here: the URL says, and the resolver
-    // below is the one place that reads it -- once this list has installed. A
-    // read that fails installs nothing, so dropping its rejection left the page
-    // with no scene, no rail and no word of why.
-    const mountScenes = loadScenes();
-    const mountSequence = sceneListSeq.current.get(cid);
-    mountScenes.catch((err: unknown) => {
-      // A retired mount read follows a newer mutation's refresh. That caller
-      // owns its refusal: only it knows whether the scene was already created.
-      if (cidRef.current === cid && sceneListSeq.current.get(cid) === mountSequence) {
-        setError({ text: `The scene list could not be read: ${errorText(err)}`, retryable: false });
+  const removeSelectedActorStable = useStableCallback(() => void removeSelectedActor());
+  const openDrawerActor = useStableCallback((kind: string, id: string) => setDrawer(
+    { type: "actor", kind: kind as "characters" | "pcs", id }));
+  const onCastChanged = useStableCallback(() => { if (activeId) void refreshAndAsk(activeId); });
+  const onInspectorSceneChanged = useStableCallback(() => { if (activeId) refreshSavedScene(activeId, "Scene saved"); });
+  // A restore from Turn history is a message edit, and asks what `saveEdit`
+  // asks after one: it rewrites text the rolling summary may already cover.
+  const onInspectorTranscriptEdited = useStableCallback(() => {
+    const id = activeId;
+    if (!id) return;
+    selectScene(id).then((seen) => askAfterPost(id, seen)).catch((err: unknown) => {
+      if (currentCampaign() === cid && (selected()?.sid ?? null) === id) {
+        setError({ text: `Post restored, but the scene could not be re-read: ${errorText(err)}`, retryable: false });
       }
     });
-    api.getConfig().then((c) => {
-      setColorQuotes(c.quote_color === "on");
-    }).catch(() => {});   // unread, quotes render uncoloured: a style, not the transcript
-    readModuleBound(true);   // new campaign: nothing known about it yet
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cid]);
+  });
+  const sceneRenamedStable = useStableCallback((id: string) => { sceneRenamed(id).catch((err: unknown) => fail(err, false)); });
+  const { postChips, sceneSpend, budget, budgetSeen, setBudgetSeen, sceneCosts, onBudgetSaved, sceneSpendIsSpend } = useSceneAccounting({ cid, transcriptIsActive, activeId, sceneListCid, scenes, ctxKey, loaded });
 
-  // The campaign check lives HERE rather than at each call site, because every
-  // caller reaches this after an await and the mistake is invisible from the
-  // outside: `cid` is the render's, so a relist for the campaign the reader has
-  // left installs its rows and labels them with the campaign that asked. If the
-  // new campaign's own list already landed, `sceneListCid` then names a
-  // campaign the resolver will never see again — and it returns early forever,
-  // leaving the new campaign wearing the old one's rail with every rail click
-  // and URL change dead until a reload (codex review).
-  //
-  // The mount read carried this guard alone and five mutation relists did not,
-  // which is the shape of bug this file has now been bitten by repeatedly: a
-  // rule spelled out at call sites is a rule the next call site forgets.
-  function installScenes(list: SceneMeta[]) {
-    if (cidRef.current !== cid) return;
-    setScenes(list);
-    setSceneListCid(cid);
-  }
+  const { setTrackerTick, tracker, trackerKeys, trackerRerun, dossierTracker } = useSceneTracker({ loaded, ctxKey, selectedActor, activeId, cid });
 
-  // Every read of the scene list goes through here, and only the newest one
-  // ISSUED may install — response order is not request order.
-  //
-  // Two mutations overlap easily: a rename's relist is still open when the
-  // reader deletes another row, and nothing in the UI serializes them
-  // (`renamesInFlight` blocks turns, not deletions). If the rename's older
-  // answer lands last it puts the deleted row back. That used to be a stale
-  // rail and nothing more; now the list decides which sid the URL may name, so
-  // the restored row is a ghost the reader can click straight into a read that
-  // 404s (codex review).
-  //
-  // Sequenced PER CAMPAIGN. A single global counter looked equivalent — the
-  // reasoning being that a read for the campaign the reader left is always
-  // older than the new campaign's own — and that reasoning is false: a
-  // mutation in A can finish, and issue its relist, AFTER B's mount read was
-  // already in flight. The global counter then hands A's later request the
-  // newer number, B's answer is retired by it, and A's own answer is refused by
-  // `installScenes` for being the wrong campaign. Nothing installs,
-  // `sceneListCid` never becomes B, and the resolver is disabled until reload —
-  // the exact stranding the guard exists to prevent, reintroduced by the fix
-  // for it (codex review).
-  //
-  // Keyed by campaign, each campaign's reads order only among themselves, and
-  // neither can retire the other's. One entry per campaign opened this session.
-  const sceneListSeq = useRef(new Map<string, number>());
-  // The newest read in flight per campaign, so a retired one can wait for it.
-  const sceneListPending = useRef(new Map<string, Promise<void>>());
+  const rerollFromSwipe = useStableCallback((id: string, guidance: string, route: RerollRoute) => rerollResponse(id, guidance, route).catch((err: unknown) => fail(err, false, "scene")));
+  const mutateFromSwipe = useStableCallback((id: string, variant: string) => mutateResponse(id, variant).catch((err: unknown) => fail(err, false, "scene")));
+  // The empty-scene cast panel's mount condition, which is also when a quick
+  // reply may open the opener generator inside it.
+  const openerOffered = !!activeId && landedScene?.cid === cid && landedScene.sid === activeId
+    && messages.length === 0;
 
-  // Resolves when a list at least as new as this call's has been INSTALLED —
-  // not merely when this call's own response arrived.
-  //
-  // The difference is what a caller does next. `sceneCreated` and the first
-  // send navigate to a row they have just created, and the resolver bounces a
-  // sid the installed list does not have. The rail stays interactive while a
-  // creation's relist is open, so a rename or delete can issue a newer read
-  // that retires it — and if that newer read has not landed yet, the installed
-  // list is still the one from before the scene existed. Returning here would
-  // send the caller to navigate against it, and the brand-new id would be read
-  // as stale and redirected away (codex review).
-  //
-  // Awaiting the newer read is not a self-deadlock: this branch is only
-  // reached when a newer read exists, so the map holds that one, never this.
-  function loadScenes(): Promise<void> {
-    const seq = (sceneListSeq.current.get(cid) ?? 0) + 1;
-    sceneListSeq.current.set(cid, seq);
-    // A later read FOR THIS CAMPAIGN was issued: it, not this one, is the
-    // answer, so the caller gets its completion rather than a false one.
-    const retired = () => sceneListSeq.current.get(cid) !== seq;
-    const followNewer = () => sceneListPending.current.get(cid);
-    const p = (async () => {
-      let list: SceneMeta[];
-      try {
-        // `listScenes` never coalesces, which is what makes the sequence number
-        // above honest: a read cannot be handed a promise older than the moment
-        // it was issued, so "newest number" and "newest request" agree.
-        list = await api.listScenes(cid);
-      } catch (err) {
-        // Retirement applies to a FAILED read exactly as it does to a
-        // successful one, and covering only the success half left the mirror
-        // image of the bug it fixed: a superseded read that rejects would
-        // reject its caller, so `sceneCreated` never navigated to the scene it
-        // had created even though the newer read installed a list containing
-        // it — and, being called from a dropped event-handler promise, it did
-        // so as an unhandled rejection (codex review).
-        //
-        // A retired read's failure describes a request nobody is waiting on.
-        // Only the campaign's newest read may speak for the list, in either
-        // direction.
-        if (retired()) return void await followNewer();
-        throw err;
-      }
-      if (retired()) return void await followNewer();
-      installScenes(list);
-    })();
-    sceneListPending.current.set(cid, p);
-    return p;
-  }
-
-  // The two places that open a scene without an awaiting caller — the resolver
-  // and a rail click on the row already open. `selectScene`'s rejection used to
-  // go nowhere from here (an unhandled rejection, no banner), which left a
-  // transcript that could not be read looking like a scene with no posts. Not
-  // retryable: the banner's Retry generates, and there is nothing to generate.
-  //
-  // Scoped to the read that failed. A rejection carries no window token of its
-  // own, so an unscoped handler raises its banner over whatever is on screen
-  // when it finally lands — and the scene switch that retired the read has
-  // already cleared the errors belonging to it, so the banner sticks, blaming
-  // the current scene for a failure in one the reader has left (codex review).
-  function readScene(id: string) {
-    const p = selectScene(id);
-    // Minted synchronously by the call above, before its first await.
-    const token = windowTokenRef.current;
-    p.catch((err: unknown) => {
-      if (windowTokenRef.current !== token) return;   // a later select retired it
-      setError({ text: `The scene could not be read: ` + errorText(err),
-                 retryable: false });
-    });
-  }
-
-  // Nothing is on screen: the campaign has no scenes, or the last one was just
-  // deleted. Mirrors what `selectScene` installs, in reverse.
-  function clearScene() {
-    windowTokenRef.current += 1;   // drop any page still in flight for it
-    setActive(null);
-    setMessages([]);
-    setLoaded(null);
-    setLandedScene(null);
-    setFirstIndex(0);
-    setHasUserPost(null);
-    forgetGroup(null);
-  }
-
-  /** Drop the group settings read for another scene (or campaign). Called
-   *  wherever the active scene changes, so the chips and the panel never show
-   *  the previous scene's settings while this one's read is out. */
-  function forgetGroup(sid: string | null) {
-    groupScopeRef.current = { cid, sid };
-    groupReadRef.current += 1;
-    setGroup(null);
-  }
-
-  // THE RESOLVER (#87). The URL names the scene; the rail's list says whether
-  // it still exists; `activeIdRef` says what is already loaded. Reconciling
-  // those three is this effect's whole job, and it is the ONLY place that
-  // decides what to read or where to send the reader instead — so a rail
-  // click, Back/Forward, a deep link, a delete and a rename all converge here
-  // rather than each re-deciding for itself.
-  //
-  // Two rules make it terminate and keep it honest:
-  //
-  //   - It reads `activeIdRef`, not `activeId`. The paths that adopt an id
-  //     WITHOUT navigating — a rename mints a new id for the scene already on
-  //     screen, and the first send into an empty campaign creates one — set
-  //     the ref and point the URL at it in the same batch. This then sees them
-  //     agreeing and does nothing, which is what preserves the rename's
-  //     `renamed` refresh (turn state kept) over a switch (turn state cleared).
-  //   - Every redirect it issues is a `replace`. A scene the reader never
-  //     chose — a fallback from a dead id, the scene a delete left behind — is
-  //     not a place they went, and Back must not return them to a URL that
-  //     resolves to nothing.
-  //
-  // `activeId` is in the deps because a divergence is exactly what has to be
-  // repaired: a background refresh (runStream's finally, the flush poll) calls
-  // `selectScene` with the scene the TURN belongs to, which is not always the
-  // scene the reader is now looking at. The URL is authoritative, so the fix
-  // is to read the URL's scene back — not to leave the two disagreeing.
-  useEffect(() => {
-    if (sceneListCid !== cid) return;      // the list is still the last campaign's
-    if (sid && scenes.some((s) => s.id === sid)) {
-      const loadedHere = sid === activeIdRef.current && activeCidRef.current === cid;
-      if (!loadedHere) readScene(sid);
-      return;
+  // The same treatment for the context column and the inspector, which are
+  // memoized too and were handed fresh closures on every render.
+  const goToQuoteStable = useStableCallback(goToQuote);
+  const closeActorStable = useStableCallback(closeActor);
+  // The posts on screen a stored rewrite changed, for Turn history. Only the
+  // active scene's own: a restore addresses `activeId` by these indices.
+  const rewrittenPosts = useMemo<RewrittenPost[]>(() => {
+    if (!transcriptIsActive) return NO_REWRITES;
+    const found = messages.flatMap((message, i) =>
+      message.rewritten ? [{ index: firstIndex + i, message }] : []);
+    return found.length ? found : NO_REWRITES;
+  }, [transcriptIsActive, messages, firstIndex]);
+  /** The scene the open review was absorbed FROM, which is not necessarily the
+   *  one selected: a review survives a scene switch, and `saveAbsorb` already
+   *  commits against `absorbSid` for that reason. Naming `activeId`'s title
+   *  here would tell the reviewer they are judging a scene they are not. */
+  const absorbTitle = review.absorbSid
+    ? scenes.find((s) => s.id === review.absorbSid)?.title || review.absorbSid
+    : sceneTitle;
+  const {
+    editing, refreshAndAsk, setEditing, toggleExcluded, saveEdit, saveRetcon, setPicking, deleteMessagesFrom,
+    openCharacterPassage, setRegexTest, refreshSavedScene, refreshAfterReplay, characterPassage,
+    setCharacterPassage, picking, insertImage, regexTest,
+  } = usePostEdits({
+    currentCampaign, cid, selected, selectScene, setError, activeId, loadScenes, setCtxKey, askAfterPost,
+    rolling, transcriptIsActive, activeDone, takeRollLatch, fail, busy, sceneLocked, firstIndex, messages,
+  });
+  const {
+    setRollForm, doRoll, resolve, toggleRollPop, rollForm, enterCheckMode, checkActors, doCheck,
+    rollFromForm, showRollSyntax, setShowRollSyntax,
+  } = useSceneRolls({
+    activeId, busy, sceneLocked, rolling, takeRollLatch, cid, selectScene, askAfterPost, moduleBound,
+    renamesInFlight, canGenerate, setProposalNow, runStream,
+  });
+  const { adoptPendingRun } = useRunRecovery({
+    registry, session, recoverPrompt, readTranscript, fail,
+    attachment: {
+      session, registry, fail, recoverPrompt, setProposalNow, setError,
+      readTranscript, bumpReplayEpoch: () => setReplayEpoch((n) => n + 1)
     }
-    // No scene in the URL, or one that names nothing: scene ids are filenames
-    // and a rename, a first date stamp or a repad all mint a new one, so a
-    // bookmarked id goes stale on its own. Never fetch it — a dead id is a 404
-    // and an error banner where a fallback belongs.
-    if (scenes.length) {
-      // Landing on /scenes with no scene named is a request for "the scenes of
-      // this campaign", so the newest is a reasonable answer. Landing on a sid
-      // that no longer resolves is not -- ids are filenames and a rename mints
-      // a new one -- and the same fallback covers both.
-      void navigate(sceneUrl(cid, scenes[0].id), { replace: true });
-    } else if (sid) {
-      // A named scene that resolves to nothing, in a campaign with none left:
-      // back to `/scenes`, which is the empty play view rather than a 404.
-      void navigate(`/campaigns/${encodeURIComponent(cid)}/scenes`, { replace: true });
-      if (activeIdRef.current) clearScene();
-    } else {
-      // An empty campaign sits here with its composer. Sending into it creates
-      // the first scene -- so bouncing to the hub would delete that path, and
-      // the hub's own "Start a scene" link lands right back here.
-      if (activeIdRef.current) clearScene();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cid, sid, scenes, sceneListCid, activeId]);
+  });
+  const {
+    responseDisabled, rerollAt, canReroll, canSwipe, altCount, altTitle, editingAny, variantSwipe,
+    swipeTarget, extendDisabled, responseSwipe, stepAlternate, stepVariant,
+  } = useTranscriptSwipes({
+    messages, alternates, transcriptIsActive, activeClosed, hasUserPost, firstIndex, cid, activeId, loaded,
+    editing, busy, rolling, sceneLocked, renamesInFlight, absorb, proposal, canGenerate, rerollFromSwipe,
+    mutateFromSwipe,
+  });
 
-  // A scene the reader chose: a real history entry, so Back returns to the one
-  // they were reading. Everything else moves the URL with `replace`.
-  function goToScene(id: string) {
+  const { citedNeedle, lastOfResponse, pickerTarget, runs, plateAvatar, noteCount, speakerOf, matchActor, isCited } = useTranscriptSpeakers({
+    busy, streamingId, activeId, streamingSpeakers, cast, citedQuote, review, messages, firstIndex, roster,
+    labels, showNotes, cid,
+  });
+
+  const {
+    setRerollPrompt, setRerollRoute, sendText, repointReroll, clearRerollRetry, reroll, rerollResponse,
+    extendResponse, rerollPrompt, rerollRoute, send, canRetry, retry, onKeyDown, respondAs,
+  } = useTurnActions({
+    busy, rolling, renamesInFlight, canGenerate, input, activeId, cid, loadScenes, currentCampaign,
+    selectIdentity, navigate, consumeText, followTail, directing, setProposalNow, runStream, pendingResponse,
+    recoverPrompt, setPendingResponse, session, showOptimistically, sceneLocked, editing, transcriptIsActive,
+    extendDisabled, swipeTarget, messages, rerollAt, firstIndex, setReplayAt, fail,
+  });
+  const { pickAlternate, mutateResponse } = useAlternateActions({
+    activeId, busy, rolling, sceneLocked, editing, transcriptIsActive, takeRollLatch, cid, currentCampaign,
+    selected, selectScene, fail, responseSwipe, alternates, clearRerollRetry, setError, setProposalNow,
+    invalidateTranscript, askAfterPost,
+  });
+
+  // ---- what the memoized transcript rows are handed ----
+  //
+  // Every handler is stable (`useStableHandlers`) and every value is memoized
+  // on the state it reads, so a render that changes none of them -- every
+  // composer keystroke, every streamed delta -- reaches no row at all. See
+  // `components/play/TranscriptPost` for the rows' side of the contract.
+  const transcriptActions = useStableHandlers<TranscriptActions>({
+    openActor,
+    openReroll: () => {
+      setRerollPrompt("");
+      // Cleared on OPEN rather than on close, so a popover dismissed with
+      // Escape and reopened does not come back wearing the route the player
+      // backed out of.
+      setRerollRoute(NO_REROLL_ROUTE);
+    },
+    stepAlternate: (delta) => { pickAlternate(stepAlternate(delta)).catch((err: unknown) => fail(err, false, "scene")); },
+    stepVariant,
+    edit: (index, text) => setEditing({ index, text }),
+    toggleExcluded: (index, excluded) => { toggleExcluded(index, excluded).catch((err: unknown) => fail(err, false, "scene")); },
+    cancelEdit: () => setEditing(null),
+    saveEdit: () => { saveEdit().catch((err: unknown) => fail(err, false, "scene")); },
+    saveRetcon: () => { saveRetcon().catch((err: unknown) => fail(err, false, "scene")); },
+    pickImage: (index, actor, speaker) =>
+      setPicking({ index, target: pickerTarget(actor, speaker) }),
+    cutFrom: (index) => { deleteMessagesFrom(index).catch((err: unknown) => fail(err, false, "scene")); },
+    replayFrom: (index) => setReplayAt(index),
+    branchFrom: (index) => { branchFrom(index).catch((err: unknown) => fail(err, false, "scene")); },
+    setRerollPrompt,
+    setRerollRoute,
+    reroll: () => { reroll().catch((err: unknown) => fail(err, false, "scene")); },
+    deleteResponse: (id) => { mutateResponse(id).catch((err: unknown) => fail(err, false, "scene")); },
+    rerollResponse: (id, guidance, route) => { rerollResponse(id, guidance, route).catch((err: unknown) => fail(err, false, "scene")); },
+    extendResponse: (id, guidance, route) => { extendResponse(id, guidance, route).catch((err: unknown) => fail(err, false, "scene")); },
+    activateVariant: (id, variant) => { mutateResponse(id, variant).catch((err: unknown) => fail(err, false, "scene")); },
+    createCharacter: (rid) => { openCharacterPassage(rid).catch((err: unknown) => fail(err, false, "scene")); },
+    // Depth over the stored transcript, which the window always ends at: the
+    // newest post is 0, whatever page of older ones is loaded above it.
+    testRules: (index, m) =>
+      setRegexTest({ message: m, depth: firstIndex + messages.length - 1 - index }),
+    refreshTracker: () => setTrackerTick((n) => n + 1),
+  });
+
+  // The column is one swap zone: cast, or one actor. `columnMode` is derived
+  // from `selectedActor` rather than stored beside it, so the two can never
+  // disagree about which is showing.
+  //
+  // Both are memoized and every handler here is stable, so neither re-renders
+  // for a keystroke or a streamed delta -- only for the state it shows.
+  const column = selectedActor
+    ? <DossierColumn cid={cid} casefile={casefile} provenance={provenance}
+      onHoverQuote={setCitedQuote} onGoToTurn={goToQuoteStable}
+      onBack={closeActorStable}
+      onOpenActor={openDrawerActor}
+      onRemove={removeSelectedActorStable} busy={sceneLocked}
+      tracker={dossierTracker}
+      onTrackerChanged={transcriptActions.refreshTracker} />
+    : <CastColumn cid={cid} sid={activeId ?? ""} hasPosts={messages.length > 0} refreshKey={ctxKey}
+      cast={cast} roster={roster} briefing={briefing}
+      moods={tracker?.moods ?? NO_MOODS}
+      onOpen={transcriptActions.openActor}
+      // A confirmed enter or leave writes a transition line into the
+      // transcript as well as moving the cast, so the scene is
+      // re-read whole rather than the cast alone.
+      onCastChanged={onCastChanged} />;
+  const { transcript } = useTranscriptPresentation({
+    cid, activeId, loaded, busy, rolling, transcriptIsActive, activeClosed, activeDone, responseDisabled,
+    canGenerate, firstIndex, messages, rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker,
+    trackerKeys, trackerRerun, canSwipe, alternates, altCount, altTitle, editingAny, sceneLocked,
+    variantSwipe, rerollPrompt, rerollRoute, swipeTarget, extendDisabled, runs, plateAvatar, labels,
+    transcriptActions, editing,
+  });
+
+  const goToScene = useStableCallback((id: string) => {
     // Clicking the row already open is a re-read, which is what that click did
     // before the scene lived in the URL. Routed through the resolver it would
     // do nothing at all instead: the pathname does not change, so the effect
     // never re-runs.
-    if (id === activeIdRef.current && activeCidRef.current === cid) {
-      readScene(id);
-      return;
-    }
+    if (id === selected()?.sid && selected()?.cid === cid) { readScene({ cid, sid: id }); return; }
     void navigate(sceneUrl(cid, id));
-  }
-
-  // Following the tail is the default and stays the default — but only while
-  // the reader is AT the tail. Two things now move the stream and they must
-  // not fight: new content at the bottom (scroll to it) and a page of older
-  // posts prepended at the top (hold the reader where they were, which means
-  // restoring the distance from the BOTTOM, since everything above them just
-  // grew). `atBottomRef` is written by onScroll below and starts true, so an
-  // untouched stream — and jsdom, where every scroll metric is 0 — follows.
-  const atBottomRef = useRef(true);
-  // distance from the bottom captured just before a prepend, consumed once
-  const prependAnchorRef = useRef<number | null>(null);
-  useLayoutEffect(() => {
-    const el = streamRef.current;
-    if (!el) return;
-    const anchor = prependAnchorRef.current;
-    if (anchor !== null) {
-      prependAnchorRef.current = null;
-      el.scrollTop = el.scrollHeight - anchor;
-      return;
-    }
-    if (atBottomRef.current) el.scrollTo({ top: el.scrollHeight });
-  }, [messages, streaming]);
-
-  function onStreamScroll() {
-    const el = streamRef.current;
-    if (!el) return;
-    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
-    if (el.scrollTop <= NEAR_TOP_PX) void loadOlder();
-  }
-
-  // Unstamped user lines fall back to the seated player's name on their plate.
-  //
-  // With several players present this is the FIRST in cast order, which is a
-  // deterministic pick and not a derivation: an unstamped post records which
-  // side of the table it came from and nothing finer, so it can name the wrong
-  // PC. It used to give up and print the reserved label in that case, which is
-  // strictly less informative and no more honest. The order is the server's
-  // `(kind, id)` sort, so this agrees with `appearances.player_label` -- the
-  // same name the book and every transcript-quoting prompt now use, and one
-  // that does not move when a second player joins mid-scene.
-  const playerName = useMemo(
-    () => cast.find((a) => a.role === "player")?.name ?? null, [cast]);
-
-  // The compounding silent failure this closes: one slow-but-healthy extraction
-  // can eat the whole shared budget, and the trailing steps then come back with
-  // nothing to show — which reads exactly like a model that had nothing to
-  // suggest. Named up front, before the reviewer reads the (short) edit list.
-  // offscreen scenes take director notes instead of PC dialogue
-  const activePcless = useMemo(
-    () => scenes.find((s) => s.id === activeId)?.pcless ?? false,
-    [scenes, activeId]);
-
-  // A scene absorbed into the chronicle is finished: its summary is written and
-  // its changes are applied, so anything appended now sits outside the record
-  // that was taken of it. The composer goes entirely rather than being disabled
-  // -- a greyed-out entry box still says "you could type here".
-  const activeDone = useMemo(
-    () => scenes.find((s) => s.id === activeId)?.done ?? false,
-    [scenes, activeId]);
-
-  // A closed branch (play controls III): a sibling in its branch group was
-  // absorbed, so the campaign's files now hold THAT past and this one is
-  // read-only. Rendered like an absorbed scene and further still -- no
-  // composer, no gutter actions, no swipes, no reroll keys -- because every
-  // write here is refused `branch_closed` anyway. The server resolves which
-  // sibling, so the banner can link it.
-  const activeClosed = useMemo(
-    () => scenes.find((s) => s.id === activeId)?.closed_by ?? null,
-    [scenes, activeId]);
-  // Whether the active scene has a sibling: its group has another row.
-  const activeBranched = useMemo(() => {
-    const group = scenes.find((s) => s.id === activeId)?.branch_group;
-    return !!group && scenes.filter((s) => s.branch_group === group).length > 1;
-  }, [scenes, activeId]);
-
-  function chooseResponseOverride(key: "response_continuation_words" | "response_continuation_paragraphs", value: string) {
-    if (value && !/^[1-9]\d*$/.test(value)) return;
-    setPendingResponse((current) => {
-      const next = { ...current };
-      if (value) next[key] = value;
-      else delete next[key];
-      return Object.keys(next).length ? next : null;
-    });
-  }
-  function clearResponseOverride() {
-    setPendingResponse(null);
-  }
-  // The custom listbox this used to be needed its own open state, an
-  // outside-click listener and an Escape handler. It is a native <select> now,
-  // which the browser opens, closes, dismisses and keyboard-drives for free --
-  // so all three are gone rather than reimplemented.
-  // The transient director note, and the scene it is steering. Codex review (P2): a
-  // bare string plus the GLOBAL `busy` rendered one scene's note inside
-  // another's transcript, because a turn deliberately survives navigation --
-  // the reader moves, the run does not. Campaign as well as scene: ids are
-  // campaign-local, so `s1` names a different scene in every campaign and a
-  // scene-only guard answers true for the wrong one.
-  const [directorNote, setDirectorNote] =
-    useState<{ cid: string; sid: string; text: string } | null>(null);
-
-  // #83: the composer's two modes. Speak writes a player post; Direct writes a
-  // director note — sent to steer one generation, never stored. Both have
-  // always existed; only Direct had no way to say so, which left it inferred
-  // (from an offscreen scene, or from an empty box) and unlabelled.
-  //
-  // Sticky across a scene switch, ON PURPOSE. The composer is one shared box
-  // whose text deliberately survives the move, and a mode that reset under
-  // surviving text would post as the player's own words something written as
-  // direction — the exact confusion the control exists to end.
-  const [directMode, setDirectMode] = useState(false);
-  // An offscreen scene has no other kind of turn, so it forces the mode rather
-  // than merely defaulting it: the toggle is shown locked, not hidden, because
-  // "there is no PC here to speak as" is the fact worth teaching.
-  const directing = activePcless || directMode;
-  // ...and the force is STAMPED, not merely applied for as long as the reader
-  // stays. `activePcless` is the scene's property; `directMode` is the
-  // composer's, and the composer is the thing the words are in. Without this,
-  // a note typed in an offscreen scene and carried into a normal one by the
-  // shared box arrived staged as a player post — the mode having quietly
-  // reverted while the text it labelled did not, which is the sticky rule
-  // above broken in the one case that writes it into the transcript.
-  // ...and only while there are WORDS for it to belong to (Codex review). The
-  // stamp exists because the composer's text survives a scene switch and its
-  // mode has to survive with it — so with an empty box it has nothing to
-  // protect, and stamping anyway left an ordinary scene silently in Direct
-  // after a visit to an offscreen one, spending the next line typed as a note
-  // instead of posting it. Keyed on `input` rather than on leaving, because
-  // leaving is when `activePcless` goes FALSE and this would no longer run.
-  useEffect(() => {
-    if (activePcless && input.trim()) setDirectMode(true);
-  }, [activePcless, input]);
-
-  // Prompts recovered from a turn that stored nothing, held under the scene
-  // they were written for until that scene is on screen.
-  //
-  // The composer is one shared box that survives a scene switch, so writing a
-  // recovered prompt into it straight away puts scene A's words in front of a
-  // player looking at scene B — and the next Send posts them to B. Review
-  // caught the same shape once before, in the reroll Retry that followed the
-  // player to another scene; this is the other half of it, and the one that
-  // moves text rather than an action.
-  //
-  // Parked rather than dropped, because dropping is the whole thing this
-  // machinery exists to prevent: the prompt is nowhere else. A map, not one
-  // slot, so a second scene failing does not evict the first — both are the
-  // player's and neither can be retyped from anywhere.
-  // Codex review (round 2, P2): the KIND travels with the words, not just the
-  // words. The mode buttons stay live while a turn runs — the composer is
-  // deliberately editable — so a player can be in Speak by the time a Direct
-  // turn fails, and text handed back into a Speak composer is posted as
-  // dialogue by the next Send. That is the "never posted" contract broken by
-  // the recovery meant to protect it.
-  // Keyed by CAMPAIGN AND SCENE (Codex review, round 4). Scene ids are
-  // campaign-local — `s1` names a different scene in every campaign — and this
-  // component is reused across campaign routes, so a scene-only key both
-  // collides between campaigns and hands A's words to B's composer. The
-  // durable registry has always been campaign-keyed; this half had not caught
-  // up, and since #83 getting it wrong also flips the wrong composer's mode.
-  const parkedPrompts = useRef<Map<string, { text: string; director: boolean }>>(new Map());
-  const parkKey = (c: string, sid: string) => `${c}\u0000${sid}`;
-  // Mirrors of the composer's two live facts, for the same reason
-  // `activeIdRef` exists: `recoverPrompt` runs from a callback that outlives
-  // the render it started in, and a captured `input`/`directing` would answer
-  // for the moment the turn began rather than the moment it failed.
-  const inputRef = useRef("");
-  const directingRef = useRef(false);
-  inputRef.current = input;
-  directingRef.current = directing;
-  // Something recovered for THIS scene that the box is not free to take yet.
-  // Read off the ref during render rather than mirrored into state: every
-  // trigger that can change the answer — parking, switching scene, typing,
-  // flipping the mode — is already a re-render.
-  const heldForScene = activeId
-    ? parkedPrompts.current.get(parkKey(cid, activeId)) : undefined;
-  // EITHER kind, not just the note (Codex review). The hold rule is symmetric —
-  // a rolled-back post waits behind a note being drafted exactly as a note
-  // waits behind dialogue — so a notice that only fired for notes left the
-  // player's own words waiting in a place nothing on screen named, which is
-  // the whole failure the notice exists to prevent.
-  const heldKind: "note" | "post" | null =
-    heldForScene && !!input.trim() && heldForScene.director !== directing
-      ? (heldForScene.director ? "note" : "post")
-      : null;
-  const [parkedTick, setParkedTick] = useState(0);
-
-  // Appending, not replacing: the composer stays editable while a turn runs,
-  // so the player may already be typing the next thing. Failed prompt first,
-  // since it was typed first, joined visibly so it reads as two things to edit
-  // rather than one. Shared by both delivery paths so they cannot drift.
-  const giveBackPrompt = useCallback((text: string) => {
-    setInput((cur) => (cur.trim() ? `${text}\n\n${cur}` : text));
-  }, []);
-
-  // Hand back anything parked for the scene now on screen. Runs on selection
-  // as well as on a fresh park, so a prompt recovered while the player was
-  // elsewhere arrives the moment they come back rather than on the next
-  // failure.
-  useEffect(() => {
-    if (!activeId) return;
-    const held = parkedPrompts.current.get(parkKey(cid, activeId));
-    if (held === undefined) return;
-    // Same rule as `recoverPrompt`: a draft of the other kind still owns the
-    // box, so the held text waits rather than merging into it. `input` is a
-    // dependency for exactly this — clearing or sending the draft is what
-    // releases it, and that is the moment it comes back.
-    if (input.trim() && held.director !== directing) return;
-    parkedPrompts.current.delete(parkKey(cid, activeId));
-    giveBackPrompt(held.text);
-    // Restored HERE rather than when the note was parked: the player may have
-    // been writing something of their own in another scene in the meantime,
-    // and flipping the shared composer's mode under that draft would mis-stage
-    // it. The mode arrives with the words it belongs to.
-    setDirectMode(held.director);   // both directions, as above
-  }, [cid, activeId, parkedTick, giveBackPrompt, input, directing]);
-
-  // Where a recovered prompt goes: the composer if the player is still on the
-  // scene it belongs to, the parking map otherwise. `activeIdRef`, not
-  // `activeId` — this runs from a callback that outlives the render it started
-  // in, and a captured `activeId` would be the scene the turn began on, which
-  // is exactly the stale answer this exists to avoid.
-  const recoverPrompt = useCallback((pcid: string, sid: string, text: string,
-                                     director = false) => {
-    // Merged only into a draft of the SAME kind (Codex review, round 3).
-    // `giveBackPrompt` prepends, and one composer carries one mode — so
-    // folding a recovered note into dialogue typed since would give the
-    // combined text a single mode that is wrong for half of it: as Direct the
-    // dialogue is spent as an ephemeral note and never posted, as Speak the
-    // note is posted as dialogue. Neither is acceptable, and discarding either
-    // text is worse than both. So the odd one out waits: it stays parked until
-    // the box is free, and `heldNote` says so on screen meanwhile.
-    if (activeCidRef.current === pcid && activeIdRef.current === sid
-        && (!inputRef.current.trim() || director === directingRef.current)) {
-      giveBackPrompt(text);
-      // BOTH directions (Codex review). One-sided, this restored dialogue into
-      // a composer left in Direct, and the next send spent it as an ephemeral
-      // note instead of posting it — the round-two bug with its mirror still
-      // in place. The recovered kind decides the mode, whichever kind it is.
-      setDirectMode(director);
-      return;
-    }
-    parkedPrompts.current.set(parkKey(pcid, sid), { text, director });
-    setParkedTick((n) => n + 1);
-  }, [giveBackPrompt]);
-  // Words the registry is still holding for a resolved-but-undurable send, put
-  // back where the player can see them. This is what makes the durable copy
-  // worth having: after a reload or an Android renderer restart, the component
-  // state that `recoverPrompt` wrote into is gone, and this is the pass that
-  // reads them out of storage again.
-  //
-  // Once per (cid, sid): `giveBackPrompt` APPENDS, so running twice for one
-  // scene would hand the player their words back doubled.
-  const reparked = useRef(new Set<string>());
-  useEffect(() => {
-    if (!activeId) return;
-    const once = `${cid}\u0000${activeId}`;
-    if (reparked.current.has(once)) return;
-    const held = registry.parked(cid, activeId);
-    if (held === undefined) return;
-    reparked.current.add(once);
-    recoverPrompt(cid, activeId, held);
-  }, [cid, activeId, registry, recoverPrompt]);
-
-  // Set on the way in as well as cleared on the way out. StrictMode runs the
-  // setup/cleanup/setup cycle on mount in development, so a cleanup-only effect
-  // leaves the flag false for the whole life of the view — and `owns()` below
-  // reads it, which would have every post-cancel flush poll bow out before its
-  // first look and leave a flushed partial invisible until the next refresh
-  // (review, #95). Dev-only, but dev is where cancelling gets exercised.
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  // A write the caller knows the answer to — a live SSE proposal, or a clear
-  // the player's own action implies. Retires every read still in flight, since
-  // all of them were issued against a world older than this.
-  function setProposalNow(record: ProposalRecord | null) {
-    proposalSeqRef.current += 1;
-    setProposal(record);
-  }
-
-  // A write from a read: `claim` is what `claimProposalRead` handed out when the
-  // request went out, and it applies only if nothing has been written or read
-  // since. Last *issued* wins rather than last resolved, which is the whole
-  // point — the slow answer is by definition the one asked earliest.
-  function claimProposalRead(): number {
-    proposalSeqRef.current += 1;
-    return proposalSeqRef.current;
-  }
-
-  function applyProposalRead(claim: number, record: ProposalRecord | null) {
-    if (claim === proposalSeqRef.current) setProposal(liveProposal(record));
-  }
-
-  // `stillWanted`, when given, is re-asked immediately before any state is
-  // applied. Only background refreshes need it — the post-cancel flush poll,
-  // which can be running while the player starts a new turn or opens another
-  // scene. Returns the transcript's total length, or -1 if it bowed out — to
-  // this predicate or to a later select retiring its page.
-  // Only the LATEST request may write the alternate state — a stale success and
-  // a stale rejection are both able to clobber the current scene's set, and the
-  // rejection path is the one a scoped success cannot guard. Minting a fresh
-  // token is also how a request is *retired*: a rename cannot change the scene
-  // id already sent in an outstanding GET, so that GET has to stop being
-  // authoritative rather than be re-labelled, or its eventual rejection clears
-  // a set that is perfectly valid under the new id.
-  function fetchAlternates(forCid: string, forSid: string) {
-    const req = { token: ++altsReq.current.token, cid: forCid, sid: forSid,
-                  // the transcript request this set describes: `selectScene`
-                  // mints it before calling here, so both land under the same one
-                  window: windowTokenRef.current };
-    altsReq.current = req;
-    api.getAlternates(forCid, forSid)
-      .then((a) => {
-        if (altsReq.current === req) {
-          setAlternates({ ...a, cid: req.cid, sid: req.sid, window: req.window });
-        }
-      })
-      .catch(() => { if (altsReq.current === req) setAlternates(NO_ALTERNATES); });
-  }
-
-  // `renamed` is for the one caller whose id CHANGES without the reader going
-  // anywhere: a rename mints a new scene id, so the `id !== activeId` test below
-  // reads it as a switch and throws away the turn state — a one-shot response
-  // preset picked for the next reply, and an open roll form. Same scene, same
-  // reader; only the filename moved.
-  async function selectScene(id: string, stillWanted?: () => boolean, renamed = false) {
-    // This closure belongs to the campaign it was created in. A background
-    // refresh outlives the view it started in — `runStream`'s finally and the
-    // flush poll both call this for the scene the TURN owns, long after the
-    // reader may have moved to another campaign — and every existing guard on
-    // those paths compares scene ids, which repeat freely between campaigns.
-    //
-    // So A's refresh for "s1" passes `activeIdRef.current === "s1"` while the
-    // reader is on B's "s1", installs A's transcript under B's URL, and leaves
-    // edits addressing B's file with A's message indices. The resolver could
-    // not repair it either: `setActiveId` is handed the value it already has,
-    // React bails out of the render, and the effect never re-runs (codex
-    // review, P1).
-    //
-    // Checked here rather than at the two call sites for the reason the rest of
-    // this file keeps re-learning: this is the one funnel every refresh passes
-    // through, so a future background path cannot forget it.
-    if (cidRef.current !== cid) return -1;
-    if (stillWanted && !stillWanted()) return -1;
-    // selectScene also runs to *refresh* the current scene (runStream's
-    // finally, doRoll/doCheck, saveEdit, …) — only an actual scene switch
-    // should clear the chip/popover synchronously below; clearing on every
-    // refresh would tear down and re-mount a live SSE-delivered proposal
-    // for no reason (flicker, and a stale ref by the time the re-fetch lands).
-    const switchingScenes = !renamed && id !== activeId;
-    const token = ++windowTokenRef.current; // retires any page still in flight
-    setActive(id);
-    if (switchingScenes) {
-      // clear the previous scene's chip/popover synchronously so scene A's
-      // proposal never renders against scene B while the fetch below is in
-      // flight (and so a stale checkActors list can't leak across scenes).
-      setProposalNow(null);
-      setRollForm(null);
-      // a one-shot override belongs to the turn the player picked it for, on
-      // the scene they picked it on — switching scenes must not carry it
-      // silently onto an unrelated scene's next reply.
-      setPendingResponse(null);
-      // Director notes are per scene, and the toggle is a way of looking at
-      // the one on screen. Carried across, a reader who turned them on to
-      // check one turn would find them on in every scene they opened after.
-      setShowNotes(false);
-      // Same reasoning for the error banner: it reports what happened to a turn
-      // in the scene being left, and its Retry acts on whatever scene is open.
-      // Leaving it up invites the player to re-run one scene's failure against
-      // another (review, #95).
-      setError(null);
-      // scene A's alternates must never offer themselves against scene B while
-      // the fetch below is in flight — same reason the proposal chip clears here
-      setAlternates(NO_ALTERNATES);
-      // The post a reader asked to replay from is an INDEX, and an index means
-      // nothing in another scene: carried across, it prices — and would cut —
-      // whatever post happens to sit there. Same reasoning as the one-shot
-      // response override two blocks up.
-      setReplayAt(null);
-      // The reroll popover and the route in it, for the same reason and with
-      // more at stake than the rest of this block. It is anchored to "the post
-      // a reroll would replace", which is a different post in every scene — so
-      // left open across a switch it reappears over the new scene's trailing
-      // reply carrying the connection and model chosen for the old one's, and
-      // the next click sends B's reply to a model picked for A (Codex review,
-      // #77). The hint had the same hole before the route joined it; a wrong
-      // model is the version of it that costs a generation.
-      setRerollPrompt(null);
-      setRerollRoute(NO_REROLL_ROUTE);
-      // a new scene opens at its most recent page, at the bottom
-      windowSizeRef.current = PAGE_SIZE;
-      atBottomRef.current = true;
-    }
-    fetchAlternates(cid, id);
-    api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
-    api.getCast(cid, id).then(setCast).catch(() => setCast([]));
-    api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
-    // The context column's own reads. Each settles independently and each
-    // empties only its own block on failure -- the column is continuity, and a
-    // weather request that 500s must not take the cast down with it.
-    //
-    // The dossier is deliberately NOT re-read here: it is keyed to
-    // `selectedActor`, which selecting a scene clears, so a stale casefile
-    // cannot outlive the scene it was opened from.
-    // Started inside a promise so a read that throws *synchronously* empties
-    // its own block like one that rejects, rather than taking the whole scene
-    // selection down with it — this runs before the transcript is fetched.
-    const columnRead = <T,>(read: () => Promise<T>, set: (v: T | null) => void) =>
-      Promise.resolve().then(read).then(set).catch(() => set(null));
-    columnRead(() => api.sceneBriefing(cid, id), setBriefing);
-    Promise.resolve().then(() => api.campaignProvenance(cid))
-      .then((p) => setProvenance(p ?? {}))
-      // Uncited rows are a normal state, so a failed read degrades to exactly
-      // that rather than to an error the reader can do nothing about.
-      .catch(() => setProvenance({}));
-    columnRead(() => api.getSceneLocation(cid, id), setSceneLocation);
-    columnRead(() => api.getSceneWeather(cid, id), setWeather);
-    setSelectedActor(null);
-    const claim = claimProposalRead();
-    api.getRollProposal(cid, id).then((r) => applyProposalRead(claim, r.record))
-      .catch(() => applyProposalRead(claim, null));
-    // Re-read on every selectScene, refresh included: the inspector's picker
-    // calls onSceneChanged after a save, so this is what keeps the chip from
-    // showing a preset the scene no longer has.
-    Promise.resolve(api.getSceneResponse?.(cid, id))
-      .then((r) => setSceneResponse(r ?? null))
-      .catch(() => setSceneResponse(null));
-    // Failed read: nobody is treated as sitting out, and the chips still work.
-    //
-    // Reset on a switch of scene or campaign (a rename keeps the scene, so it
-    // keeps its settings), and a response is applied only while it is still the
-    // newest read for the scene on screen.
-    const groupScope = groupScopeRef.current;
-    if (groupScope.cid !== cid || (groupScope.sid !== id && !renamed)) forgetGroup(id);
-    else groupScopeRef.current = { cid, sid: id };
-    const groupRead = ++groupReadRef.current;
-    const groupCurrent = () => groupReadRef.current === groupRead
-      && cidRef.current === cid && activeIdRef.current === id;
-    Promise.resolve(api.getSceneGroup?.(cid, id))
-      .then((g) => { if (groupCurrent()) setGroup(g ?? null); })
-      // A failed read of the scene already on screen keeps what it has; a
-      // scene just switched to has nothing yet, which is the same as no settings.
-      .catch(() => {});
-    const scene = await api.getScene(cid, id, { limit: windowSizeRef.current });
-    if (windowTokenRef.current !== token) return -1; // a later select already landed
-    // Asked again here, not only on entry: this fetch is an await, and a turn
-    // starting during it would otherwise have the stale response clear the new
-    // stream's live preview (`setStreaming`) below. Distinct from the window
-    // token above, which retires a page superseded by a *later select on this
-    // same view*; this one retires a refresh whose whole reason for existing
-    // has expired.
-    if (stillWanted && !stillWanted()) return -1;
-    setMessages(scene.messages);
-    setLoaded({ cid, sid: id, token });
-    setLandedScene({ cid, sid: id });
-    // an unwindowed reply (no `offset`) is the whole transcript, which starts at 0
-    setFirstIndex(scene.offset ?? 0);
-    setHasUserPost(scene.has_user_message ?? null);
-    setOpenedFrom(scene.meta.greeting ?? "");
-    setStreaming("");
-    setStreamingSpeakers([]);
-    setCtxKey((n) => n + 1);
-    // `total`, not `messages.length`: the fetch is windowed now (#94), so once a
-    // transcript is longer than a page the window size is a constant and would
-    // report no growth however much lands. The flush poll compares this across
-    // ticks to notice a cancelled turn's partial arriving.
-    totalRef.current = scene.total ?? scene.messages.length;
-    totalSceneRef.current = id;
-    return totalRef.current;
-  }
-
-  // Prepend the page of posts just above the window. Called by the scroll
-  // handler and by the button it backs; either way it is a no-op once the top
-  // of the transcript is on screen or another page is already in flight.
-  async function loadOlder() {
-    const id = activeId;
-    if (!id || loadingOlderRef.current || firstIndex <= 0) return;
-    loadingOlderRef.current = true;
-    setLoadingOlder(true);
-    const el = streamRef.current;
-    const token = windowTokenRef.current;
-    const from = `older:${cid}:${id}:${token}`;
-    try {
-      const page = await api.getScene(cid, id, { limit: PAGE_SIZE, before: firstIndex });
-      // the reader moved on (another scene, or a refresh that re-read the
-      // window): this page describes a transcript that is no longer on screen
-      // A new campaign's list may still be pending, before its selectScene
-      // can retire the window token. Its route already owns the screen.
-      if (cidRef.current !== cid || windowTokenRef.current !== token) return;
-      // A different operation may have replaced this window's failure banner.
-      setError((current) => current?.from === from ? null : current);
-      if (!page.messages.length) {
-        setFirstIndex(0); // the transcript shrank under us; nothing older is left
-        return;
-      }
-      // Measure from the bottom, not the top: the prepend pushes everything
-      // down by however tall the new posts render, and only the layout effect
-      // (after paint, when that height exists) can undo it.
-      if (el) prependAnchorRef.current = el.scrollHeight - el.scrollTop;
-      windowSizeRef.current += page.messages.length;
-      setMessages((m) => [...page.messages, ...m]);
-      setFirstIndex(page.offset ?? 0);
-    } catch (err: unknown) {
-      // The scroll handler and the button both drop this promise, so a page
-      // that would not load was an unhandled rejection and a button that went
-      // back to its label as if nothing had been asked. Scoped like
-      // `readScene`'s report: a page for a window the reader has left says
-      // nothing about the one on screen.
-      if (cidRef.current === cid && windowTokenRef.current === token) {
-        setError({ text: `Older posts could not be loaded: ${errorText(err)}`, retryable: false, from });
-      }
-    } finally {
-      loadingOlderRef.current = false;
-      setLoadingOlder(false);
-    }
-  }
-
-  function newScene() {
-    setChooserOpen(true);
-  }
-
-  /** Scroll the transcript to the post a citation was taken from.
-   *
-   *  Matched by substring against the post bodies, which is the only join
-   *  available: the citation records the model's excerpt, not a post index, and
-   *  an index would rot the moment a post was edited or a reroll replaced one.
-   *  A quote that matches nothing scrolls nowhere rather than guessing — the
-   *  transcript may simply be paged past it, and jumping to an arbitrary post
-   *  would be worse than not moving.
-   */
-  function goToQuote(quote: string) {
-    const needle = quote.trim().toLowerCase();
-    if (!needle) return;
-    if (!messages.some((m) => quotedIn(m, needle))) return;
-    setCitedQuote(quote);
-    // Queued behind the render that paints the highlight, so the element it
-    // scrolls to is the one that is about to be marked.
-    requestAnimationFrame(() => {
-      const el = streamRef.current?.querySelector(".msg.cited") as HTMLElement | null;
-      el?.scrollIntoView?.({ block: "center" });
+  });
+  const clearScene = useStableCallback(() => {
+    clearSceneWindow();
+    forgetGroup(null);
+  });
+  const {
+    newScene, branchFrom, sceneRenamed, renamingScene, setRenamingScene, commitSceneRename, forkAtScene,
+    deleteScene, openBranch, chooserOpen, closeChooser, sceneCreated,
+  } = useSceneMutations({
+    loadScenes, currentCampaign, cid, setError, setSeedPrompt, goToScene, refreshAndAsk, markRenaming,
+    registry, adoptSceneId, selected, selectScene, fail, activeId, setCtxKey, scenes, name, navigate,
+    rolling, activeDone, takeRollLatch,
+  });
+  const { taskRunning, stripTasks, onInspectorTaskBusy, openerRequest, quickSet, runQuickReply } = useQuickReplies({
+    cid, activeId, busy, rolling, renamesInFlight, canGenerate, followTail, sendText, doRoll, setQuickNotice,
+    newScene, sceneLocked, ready, messages, firstIndex, currentCampaign, selected, setCtxKey, insertQuick,
+  });
+  // What decides each quick reply: the guards of the controls they stand for.
+  const quickCtx: QuickReplyContext = {
+    busy, rolling, renaming: renamesInFlight > 0, sceneLocked, posts: messages.length,
+    moduleKnown: moduleBound !== null, pcless: activePcless, ready, canGenerate,
+    openerOffered, taskRunning,
+  };
+  // The setup date field retains this callback across its PUT. Unlike the
+  // inspector's latest-render adapter, it must retain the render that started
+  // the write: the child reports only the new id, not the initiating scene.
+  function onSetupSceneRenamed(id: string) {
+    const origin = activeId ? { cid, sid: activeId } : null;
+    sceneRenamed(id).catch((err: unknown) => {
+      if (origin && currentCampaign() === origin.cid && selected()?.cid === origin.cid
+          && (selected()?.sid === origin.sid || selected()?.sid === id)) fail(err, false);
     });
   }
 
-  // ---- the context column's cast/dossier swap (2a) ----
-
-  /** Open one actor in the column. Deliberately does NOT touch the transcript,
-   *  the composer or focus: this is a column state, not a modal, and the whole
-   *  claim of the design is that reading a dossier costs you nothing you were
-   *  holding. */
-  function openActor(kind: string, id: string) {
-    setSelectedActor({ kind, id });
-  }
-
-  function closeActor() {
-    setSelectedActor(null);
-  }
-
-  useEffect(() => {
-    if (!selectedActor || !activeId) { setCasefile(null); return; }
-    // Cleared first so the column shows its reading state rather than the
-    // previous actor's dossier under the new one's name -- these are two
-    // people's private states, and briefly attributing one to the other is the
-    // one failure this panel must not have.
-    setCasefile(null);
-    let live = true;
-    api.getCasefile(cid, activeId, selectedActor.kind, selectedActor.id)
-      .then((c) => { if (live) setCasefile(c); })
-      // An actor whose record cannot be read is one this column cannot
-      // describe; going back to the cast is the honest outcome, and the grid
-      // still shows she is there. Every route in here names someone in the
-      // scene's cast -- a tile, or a transcript plate, which is only a button
-      // when its speaker resolves against that same cast -- so the grid the
-      // fallback lands on is one she is in.
-      .catch(() => { if (live) setSelectedActor(null); });
-    return () => { live = false; };
-    // `ctxKey` bumps on every successful absorb save, which is exactly when
-    // every file behind this panel was rewritten.
-  }, [cid, activeId, selectedActor, ctxKey]);
-
-  // Where this campaign stands against its budget (#153). Re-read on `ctxKey`,
-  // which bumps once a turn -- the moment the number can have moved -- rather
-  // than on a timer, so a campaign with no budget costs one request per scene
-  // and the server does not even scan the ledger for it (`level: "off"`).
-  //
-  // Not read until the scene being opened has landed, though. Opening a scene
-  // bumps `ctxKey` when its transcript arrives, so a read taken on the way in
-  // -- the campaign changing, or this view mounting -- was answered again a
-  // few hundred milliseconds later with nothing spent in between, and with a
-  // budget set each of those is a scan of the ledger's period. `budgetFor` is
-  // the campaign once its transcript is the one on screen, or once its scene
-  // list has come back empty and there is no transcript to wait for; a
-  // campaign switch or a first open therefore reads once, on the landing.
-  //
-  // Every rejection is swallowed to a cleared banner, the rule this whole view
-  // follows: a budget lookup that failed is not a reason to put an error over a
-  // turn that landed, and the Cost section in the inspector is where a reader
-  // who actually wants the figure goes.
-  const budgetFor = transcriptIsActive
-    || (!activeId && sceneListCid === cid && scenes.length === 0) ? cid : null;
-  useEffect(() => {
-    if (!budgetFor) return;   // keep the last answer; it is scoped by `cid` anyway
-    let live = true;
-    api.getCampaignBudget(budgetFor)
-      .then((b) => { if (live) setBudgetRead({ cid: budgetFor, data: b }); })
-      .catch(() => { if (live) setBudgetRead(null); });
-    return () => { live = false; };
-  }, [budgetFor, ctxKey]);
-
-  // What each player post in this scene has cost, keyed by transcript index
-  // (#153), and the scene's whole usage read, which the inspector's Cost
-  // section renders rather than asking for it a second time. Read on the same
-  // `ctxKey` beat as the budget above.
-  //
-  // Held WITH the scene it was read for, and that is load-bearing rather than
-  // tidy. This view deliberately keeps scene A's messages on screen until B's
-  // transcript read lands, and the usage read is a separate request that could
-  // land FIRST — so a plain index-keyed map put B's costs beside A's posts, and
-  // left them there for good if B's transcript read then failed. Matching the
-  // costs to `loaded` (the transcript actually rendered) rather than to `cid`/
-  // `activeId` (the one requested) is what closes that window.
-  //
-  // And read FOR `loaded`, not for `activeId`, for the budget's reason: keyed
-  // on the scene being requested it fired once on the way in and again when
-  // the transcript's landing bumped `ctxKey`, and the first answer could only
-  // ever be discarded by the gate below. A ledger scan is the slowest read on
-  // this screen, so the one that cannot be shown is not asked for.
-  //
-  // Swallowed to "no chips" on failure, the rule this view follows everywhere:
-  // an accounting read that failed is not a reason to put an error over a
-  // transcript. The inspector's Cost section is where a reader who wants the
-  // figure and an explanation goes.
-  const [postCosts, setPostCosts] =
-    useState<{ cid: string; sid: string; byPost: Record<number, UsagePostBucket>;
-               usage: SceneUsage } | null>(null);
-  const usageCid = loaded?.cid ?? null;
-  const usageSid = loaded?.sid ?? null;
-  useEffect(() => {
-    // Not cleared when nothing is loaded, nor on the way to a refetch.
-    // `sceneCosts` below already refuses to render a read whose cid/sid is not
-    // the transcript on screen, so clearing bought nothing -- and it made the
-    // chips blink out and back on every `ctxKey` change, which is a real gap
-    // under load: the suite's own `findByText` for a cost could open and close
-    // inside it, and this test reds CI intermittently (#351's shape).
-    if (!usageCid || !usageSid) return;
-    let live = true;
-    api.getSceneUsage(usageCid, usageSid)
-      .then((u) => {
-        if (!live) return;
-        // The scene's own totals ride the read the chips already pay for.
-        // They are summed over every ledger row in the scene's lifetime, so
-        // they stay correct where the per-post list is capped or the scan is
-        // clamped -- which is why the bar says the total and the gutter says
-        // the breakdown, rather than the bar adding the gutter up.
-        setPostCosts({ cid: usageCid, sid: usageSid, usage: u,
-                       byPost: Object.fromEntries(u.by_post.map((b) => [b.post, b])) });
-      })
-      .catch(() => { if (live) setPostCosts(null); });
-    return () => { live = false; };
-  }, [usageCid, usageSid, ctxKey]);
-
-  // The scene state tracker (routes/tracker.py), read for `loaded` like the
-  // costs above and for the same reason: it describes the posts on screen, so
-  // it is held WITH the scene it was read for and only shown where that is
-  // still the transcript on screen. Re-read on every `ctxKey` beat, which is
-  // what a landed turn bumps; `trackerTick` is the disclosures asking for one
-  // (a retry, a re-run, an edit). Swallowed on failure: a tracker that cannot
-  // be read is not a reason to put an error over a transcript.
-  const [trackerRead, setTrackerRead] =
-    useState<{ cid: string; sid: string; summary: TrackerSummary } | null>(null);
-  const [trackerTick, setTrackerTick] = useState(0);
-  const trackerCid = loaded?.cid ?? null;
-  const trackerSid = loaded?.sid ?? null;
-  // Reads can land out of order -- the main read and the poll are separate
-  // requests -- and an older answer that lacks a post the newer one has would
-  // overwrite it, read as "never tracked", and (nothing pending) end the poll
-  // for good. So each request is stamped when it is ISSUED, and an answer older
-  // than the newest one already landed is dropped, as is one for a scene that
-  // is no longer the loaded one.
-  const trackerSeq = useRef({ issued: 0, landed: 0 });
-  const trackerScene = useRef<{ cid: string | null; sid: string | null }>({ cid: null, sid: null });
-  trackerScene.current = { cid: trackerCid, sid: trackerSid };
-  const readTracker = useCallback((tcid: string, tsid: string) => {
-    const seq = ++trackerSeq.current.issued;
-    return api.getTracker(tcid, tsid).then((summary) => {
-      if (seq < trackerSeq.current.landed) return;
-      if (trackerScene.current.cid !== tcid || trackerScene.current.sid !== tsid) return;
-      trackerSeq.current.landed = seq;
-      setTrackerRead((prev) => {
-        const before = prev && prev.cid === tcid && prev.sid === tsid ? prev.summary : null;
-        const shared = shareSummary(before, summary);
-        // Nothing moved: keep the very state object, so no render follows.
-        if (prev && before === shared) return prev;
-        return { cid: tcid, sid: tsid, summary: shared };
-      });
-    });
-  }, []);
-  useEffect(() => {
-    if (!trackerCid || !trackerSid) return;
-    readTracker(trackerCid, trackerSid).catch(() => { /* see above */ });
-  }, [trackerCid, trackerSid, ctxKey, trackerTick, readTracker]);
-  const tracker = trackerRead && trackerRead.cid === trackerCid && trackerRead.sid === trackerSid
-    ? trackerRead.summary : null;
-  const trackerKeys = useMemo(
-    () => Object.fromEntries((tracker?.keys ?? []).map((k) => [k.index, k.key])),
-    [tracker?.keys]);
-  // How many tracked posts "Re-run tracker from here" covers at each key --
-  // that one and every one after it -- so the confirm can name the cost.
-  const trackerRerun = useMemo(() => {
-    const keys = tracker?.keys ?? [];
-    return Object.fromEntries(keys.map((k, i) => [k.key, keys.length - i]));
-  }, [tracker?.keys]);
-  // What the dossier's "Now" section reads: the latest post whose tracking
-  // landed, for the open actor. Memoized -- a literal here would hand the
-  // memoized dossier a new object on every keystroke and streamed delta.
-  const nowKey = tracker ? lastOkKey(tracker.keys, tracker.entries) : null;
-  const nowEntry = nowKey && tracker ? tracker.entries[nowKey] : undefined;
-  const nowEnabled = tracker?.enabled ?? false;
-  const nowUpdating = tracker ? pendingAfter(tracker.keys, tracker.entries, nowKey) : false;
-  const dossierTracker = useMemo<NowTracker | null>(
-    () => selectedActor && activeId
-      ? { cid, sid: activeId, key: nowKey, ref: `${selectedActor.kind}:${selectedActor.id}`,
-          enabled: nowEnabled, entry: nowEntry, updating: nowUpdating }
-      : null,
-    [cid, activeId, selectedActor, nowKey, nowEnabled, nowEntry, nowUpdating]);
-  // While a post is being tracked, ask again every two seconds: one timeout
-  // chain, re-armed only once the last read has settled so a slow server is
-  // never asked twice at once, and cleared with the scene or the view. A read
-  // that fails doubles the wait (to 30 s) rather than hammering a server that
-  // is struggling; the next success goes back to two seconds.
-  const trackerPending = Object.values(tracker?.entries ?? {}).some((e) => e.status === "pending");
-  useEffect(() => {
-    if (!trackerPending || !trackerCid || !trackerSid) return;
-    let live = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const arm = (delay: number) => {
-      timer = setTimeout(() => {
-        void readTracker(trackerCid, trackerSid)
-          .then(() => 2000, () => Math.min(delay * 2, 30000))
-          .then((next) => { if (live) arm(next); });
-      }, delay);
-    };
-    arm(2000);
-    return () => { live = false; clearTimeout(timer); };
-  }, [trackerPending, trackerCid, trackerSid, readTracker]);
-
-  /** The chips, but only where they describe the transcript on screen. */
-  const sceneCosts =
-    postCosts && loaded && postCosts.cid === loaded.cid && postCosts.sid === loaded.sid
-      ? postCosts : null;
-  const postChips = sceneCosts?.byPost ?? null;
-  /** What this scene has cost, as the scene head prints it.
-   *
-   *  `bucketPrice` rather than a bare figure: a scene whose calls nobody
-   *  priced reads "not reported" instead of `$0.00`, and one the ledger has no
-   *  rows for at all prints nothing -- "never generated against" is not "cost
-   *  nothing". The design puts spend and modelled side by side here, and they
-   *  stay side by side: `Footnotes` in the inspector is where the three are
-   *  explained, and this is the one line of it the bar has room for. */
-  const sceneSpend = sceneCosts && sceneCosts.usage.totals.calls > 0
-    // `calls > 0` is the "never generated against" test, and it has to be made
-    // here: `bucketPrice` answers `$0.00` for an all-zero bucket, which is
-    // correct for a bucket of calls that genuinely cost nothing and wrong for
-    // a scene that has no calls in it at all. The two are the same numbers and
-    // different claims, and only the caller knows which one it is holding.
-    ? bucketPrice(sceneCosts.usage.totals)
-    : null;
-  /** Whether that figure is spend -- `cost_usd`, what a provider charged. An
-   *  estimate (`≈`) is real usage and not money anybody paid, so it is never
-   *  labelled SPEND; neither is "not reported". */
-  const sceneSpendIsSpend = sceneSpend !== null && sceneSpend !== UNPRICED
-    && !!sceneCosts && !headlineIsEstimate(sceneCosts.usage.totals);
-
-  // A dismissal belongs to the campaign it was made in, to the level it was
-  // made at, and to the budget it was made against. Without the campaign, "I
-  // have seen it" carried onto a different campaign's budget; without the limit
-  // and period, raising a cap that had been waved off at 80% and then filling
-  // it again said nothing, because the level had not changed since the
-  // dismissal even though the number it describes had.
-  useEffect(() => { setBudgetSeen(null); },
-            [cid, budget?.limit_usd, budget?.period]);
-
-  async function removeSelectedActor() {
-    if (!selectedActor || !activeId) return;
-    try {
-      await api.removeFromCast(cid, activeId, selectedActor.kind, selectedActor.id);
-      setSelectedActor(null);
-      // The removal landed: a cast that will not re-read is a stale panel until
-      // the next read, not a failed removal.
-      api.getCast(cid, activeId).then(setCast).catch(() => {});
-      // A join/leave appends a transition post (#85), so the transcript moved.
-      readScene(activeId);
-    } catch (err: unknown) {
-      fail(err, false);
-    }
-  }
-
-  /** What this page contributes to ⌘K: its scenes, its cast, and the two
-   *  actions that used to be buttons in a chrome bar.
-   *
-   *  This is where the scene rail went. A rail is a list you pay for in width
-   *  on every turn of every scene, to answer a question you ask a few times a
-   *  session; the same list behind ⌘K costs nothing until asked and searches,
-   *  which the rail never did. */
-  const paletteSource = useCallback((): PaletteItem[] => {
-    const out: PaletteItem[] = [];
-    for (const a of cast) {
-      out.push({
-        id: `cast:${a.kind}/${a.id}`, group: "IN THIS CAMPAIGN", label: a.name,
-        meta: `${a.role === "player" ? "player" : "character"} · in scene`,
-        badge: initialsOf(a.name),
-        run: () => openActor(a.kind, a.id),
-      });
-    }
-    for (const t of briefing?.plot ?? []) {
-      out.push({ id: `thread:${t.id}`, group: "IN THIS CAMPAIGN", label: t.title,
-                 meta: `thread · ${t.status}` });
-    }
-    for (const c of briefing?.commitments ?? []) {
-      out.push({ id: `owed:${c.id}`, group: "IN THIS CAMPAIGN", label: c.title,
-                 meta: `${c.kind} · ${c.due || "no deadline"}` });
-    }
-    for (const [i, sc] of scenes.entries()) {
-      out.push({
-        id: `scene:${sc.id}`, group: "SCENES", label: sc.title,
-        meta: [`scene ${sceneNumber(sc.id, scenes.length - i)}`,
-               sc.done ? "absorbed" : null].filter(Boolean).join(" · "),
-        run: () => goToScene(sc.id),
-      });
-    }
-    out.push({ id: "action:new-scene", group: "SCENES", label: "New scene",
-               meta: "in this campaign", action: true, run: newScene });
-    out.push({ id: "action:campaign-world", group: "ELSEWHERE", label: "This campaign's world",
-               meta: "locations, lore, cast",
-               to: sectionHref({ kind: "campaign", id: cid }, { kind: "section", at: "characters" }) });
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cid, cast, briefing, scenes]);
-  usePaletteSource(paletteSource);
-
-  // Dismissing the chooser (Escape/backdrop) after a soft failure -- once
-  // SceneConfirmForm's "Continue to scene" is the only OTHER exit -- still
-  // leaves a real, created scene behind, and `writing` is already clear by
-  // then so the dismissal goes through. NewSceneChooser reports that scene's
-  // id as `createdSid`; every other dismissal (Cancel, an idle Escape) reports
-  // none, so this stays a no-op for them -- reloading unconditionally would
-  // relist on every plain Cancel too, and most of those wrote nothing.
-  //
-  // Reuses `loadScenes` -- the same relist `sceneCreated` runs after a normal
-  // create -- rather than inventing a second refresh path. Unlike
-  // `sceneCreated`, this must NOT navigate: the user chose to leave the scene
-  // behind, not open it. The error handling mirrors `sceneCreated`'s, for the
-  // reason given in its comment below: this too is called from an event
-  // handler with the promise dropped, so a failure here would otherwise be an
-  // unhandled rejection describing a scene that really was created.
-  function closeChooser(createdSid?: string) {
-    setChooserOpen(false);
-    if (!createdSid) return;
-    loadScenes().catch((err: unknown) => {
-      if (cidRef.current === cid) {
-        setError({ text: `The scene was created, but the scene list could not be `
-                         + `refreshed: ` + errorText(err), retryable: false });
-      }
-    });
-  }
-
-  async function sceneCreated(id: string, initialPrompt?: string) {
-    setChooserOpen(false);
-    if (initialPrompt) setSeedPrompt({ cid, sid: id, prompt: initialPrompt });
-    try {
-      await loadScenes();
-    } catch (err: unknown) {
-      // Reports rather than throws, for the reason `renameScene` does: the
-      // chooser calls this from an event handler and drops the promise, so
-      // anything escaping is an unhandled rejection the player never sees —
-      // and the scene WAS created, so a silent failure leaves a real scene
-      // that the rail does not list and nothing navigates to. Not retryable:
-      // the banner's Retry generates, and there is nothing to generate.
-      // Scoped, like the success path right below it. The switch to another
-      // campaign already cleared that campaign's errors, so an unscoped late
-      // rejection raises a banner over it claiming ITS scene list failed
-      // (codex review).
-      if (cidRef.current === cid) {
-        setError({ text: `The scene was created, but the scene list could not be `
-                         + `refreshed: ` + errorText(err), retryable: false });
-      }
-      return;
-    }
-    // Asked AFTER the relist, not before it. The rows are guarded (a list for
-    // the campaign the reader left is dropped) and the navigation was not, so
-    // a switch during that await left the new scene's URL pointing back at the
-    // campaign they came from — dragging them into another campaign entirely
-    // (codex review). Guarding the data and not the navigation is the same
-    // half-fix twice over, so both halves are asked here.
-    if (cidRef.current !== cid) return;
-    // The list first, then the URL: the resolver only opens a scene the list
-    // knows about, so navigating to a row that has not landed yet would be
-    // read as a stale id and bounced straight back to the previous scene.
-    goToScene(id);
-    // A scene can be BORN past the threshold: starting from a greeting appends
-    // that greeting's posts, and a multi-speaker one appends several. None of
-    // this component's other triggers fire here — they all hang off a write the
-    // reader made in an open scene — so an opener-sized scene would sit with no
-    // summary until a later turn or a manual Refresh (#85). A manual (empty)
-    // scene answers `refreshed: false` having reached no provider.
-    void refreshAndAsk(id);
-  }
-
-  // Re-read a scene after a write made OUTSIDE this component, then ask whether
-  // its summary is now due, bounded by the length that re-read verified. The
-  // catch is what makes the pair safe to fire without awaiting: a failed read is
-  // no boundary, and `askAfterPost` declines a negative one rather than
-  // falling back to an unbounded fold.
-  async function refreshAndAsk(id: string) {
-    askAfterPost(id, await selectScene(id).catch(() => -1));
+  function loadScenes() { return refreshScenes(cid); }
+  function selectScene(id: string, stillWanted?: Current, renamed = false) {
+    return readTranscript({ cid, sid: id }, { stillWanted, renamed });
   }
 
   // A scene's id is its filename, so a rename mints a new one. `scene_refs.repoint`
@@ -2069,20 +479,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // but the id this state is scoped to lives only here — left stale, the
     // scope gate reads the set as another scene's and the control vanishes
     // until something else re-selects the scene.
-    setAlternates((a) => (a.sid === oldId ? { ...a, sid: newId } : a));
-    // Dropped, not re-keyed. The posts on screen are only known to be this
-    // scene's *transcript as fetched* — and a swap can be in flight against the
-    // old id, so what the backend holds may already differ from what is
-    // rendered. Re-keying would carry that readiness across a rename and let
-    // the renamed set's counter sit on pre-swap text; dropping it hides the
-    // control until a real load lands, which the callers below arrange.
-    setLoaded((l) => (l && l.sid === oldId ? null : l));
-    // Re-key what is on screen (the sidecar moved with the scene file, so the
-    // set is still correct and the control must not blink) — but retire the
-    // in-flight GET rather than re-label it: it still carries the *old* id, so
-    // its rejection says nothing about the renamed scene, and honouring that
-    // rejection would hide the controls until something re-selects the scene.
-    if (altsReq.current.sid === oldId) fetchAlternates(cid, newId);
+    renameAlternates({ cid, sid: oldId }, newId, windowToken());
+    renameTranscript({ cid, sid: oldId }, newId);
+
   }
 
   // A scene's id is its filename, so a rename mints a new one and every piece
@@ -2112,7 +511,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // that tells it to re-read.
     setCtxKey((k) => k + 1);
     if (oldId === newId) return;
-    // `activeIdRef`, not the render-captured `activeId`: this runs from handlers
+    // `selected`, not the render-captured `activeId`: this runs from handlers
     // that awaited a request, and the reader can have moved on since. Adopting
     // the new id for a scene they are no longer looking at moves them to it.
     //
@@ -2122,16 +521,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // campaign numbers its scenes from 001 — would otherwise adopt A's new id
     // and replace B's history entry with A's scene URL, moving the reader to
     // another campaign entirely (codex review).
-    // `cidRef` as well as `activeCidRef`, and the difference is not academic:
-    // `activeCidRef` says which campaign the loaded scene came from, which is
+    // `currentCampaign` as well as `selected`, and the difference is not academic:
+    // `selected` says which campaign the loaded scene came from, which is
     // still the OLD one during the window after the reader has navigated to
     // another campaign but before its first scene has loaded. A rename landing
-    // in that window passed an `activeCidRef`-only test and navigated them
-    // straight back. Only `cidRef` answers "is the view still here".
-    if (cidRef.current === cid
-        && activeIdRef.current === oldId && activeCidRef.current === cid) {
-      setActive(newId);
-      // …and the URL with it, in the same batch as `setActive`, so the resolver
+    // in that window passed an `selected`-only test and navigated them
+    // straight back. Only `currentCampaign` answers "is the view still here".
+    if (currentCampaign() === cid
+      && (selected()?.sid ?? null) === oldId && (selected()?.cid ?? null) === cid) {
+      selectIdentity({ cid, sid: newId });
+      // …and the URL with it, in the same batch as `selectIdentity`, so the resolver
       // sees one consistent pair and leaves this rename alone. `replace`: the
       // reader did not go anywhere, and the entry being replaced names a file
       // that no longer exists. React 18 batches both updates into one render,
@@ -2140,2197 +539,40 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // reader having navigated, and chase back to a scene that is now gone.
       void navigate(sceneUrl(cid, newId), { replace: true });
     }
-    // The rail's own metadata, not just the things pointing at it. `pcless` and
-    // the title are read off the row whose id matches `activeId`, so adopting
-    // the id without re-keying the row loses both — an offscreen scene silently
-    // offering the PC composer for sends the backend still handles as director
-    // notes. A relist would fix it, and a relist that FAILS is exactly the
-    // state this has to survive.
-    //
-    // Campaign-scoped, like the adoption above, and for a sharper reason than
-    // tidiness: the rail is what the resolver reads to decide whether the sid
-    // in the URL still exists. Re-keying a row in the campaign the reader moved
-    // to — B's `s1` matches `oldId` whenever both campaigns number from 001 —
-    // makes B's own URL look stale, and the resolver dutifully moves the reader
-    // off it. Scoping only the navigation above left this door open, which is
-    // how the test for that fix still failed.
-    if (cidRef.current === cid) {
-      setScenes((list) => list.map((s) => (s.id === oldId ? { ...s, id: newId } : s)));
-    }
+    repointRow({ cid, sid: oldId }, newId);
     // Compared against this handler's OWN campaign, not the one on screen: the
     // scene that was renamed is this campaign's, so its premise follows the new
     // id wherever the reader happens to be standing.
     setSeedPrompt((p) =>
       (p && p.cid === cid && p.sid === oldId ? { ...p, sid: newId } : p));
-    // The same scene's transcript is still the one on screen, which is all the
-    // setup panel asks of it -- see `landedScene`. Same campaign scoping as the
-    // premise just above.
-    setLandedScene((l) => (l && l.cid === cid && l.sid === oldId ? { cid, sid: newId } : l));
+    // Review, alternates, and transcript ownership follow the same source scope.
     reviewSceneRenamed(oldId, newId);
     // Campaign-scoped like the seed prompt just above, and for the same
     // sentence: the renamed scene is THIS handler's campaign's, so a bare
     // scene id would move a park belonging to whichever campaign shares that
     // number (Codex review, round 4).
-    const parked = parkedPrompts.current.get(parkKey(cid, oldId));
-    if (parked !== undefined) {
-      parkedPrompts.current.delete(parkKey(cid, oldId));
-      parkedPrompts.current.set(parkKey(cid, newId), parked);
-      setParkedTick((n) => n + 1);   // it may now be the scene on screen
-    }
-    const again = rerollToRetryRef.current;
-    if (again && again.sid === oldId) rerollToRetryRef.current = { ...again, sid: newId };
+    repointPark(cid, oldId, newId);
+    repointReroll(oldId, newId);
   }
 
-  // Reports rather than throws. `EditableRow` calls this from an event handler
-  // and drops the promise, so anything escaping here is an unhandled rejection
-  // the player never sees — and one half of it (a relist that fails after the
-  // rename landed) is not even a failed rename.
-  async function renameScene(id: string, title: string) {
-    markRenaming(true);
-    try {
-      const { id: newId } = await api.renameScene(cid, id, title);
-      // The `sid` carries the slug, so this scene has a new one -- and an
-      // unresolved send filed under the old one becomes unreachable, which for
-      // a rolled-back post means the player's words are stranded under an id
-      // nothing will select again.
-      registry.rekey(cid, id, newId);
-      adoptSceneId(id, newId);
-      try {
-        await loadScenes();
-      } catch (err: unknown) {
-        // The rename LANDED; only the rail is stale. Not retryable — the
-        // banner's Retry generates, and there is nothing here to generate.
-        setError({ text: `Renamed, but the scene list could not be refreshed: `
-                         + errorText(err), retryable: false });
-      } finally {
-        // Re-read the transcript, not only the ids that point at it. A swap in
-        // flight against the OLD id finds `activeIdRef` already moved on and
-        // skips its own refresh, so without this nothing ever replaces the
-        // pre-swap posts on screen — with the renamed set's counter on top of
-        // them, and edits saving against indices that have shifted.
-        //
-        // In a `finally`, because the rail relist above is unrelated to it:
-        // ordered first so the row exists before the reader is moved onto it,
-        // but its failure must not decide whether the transcript gets re-read.
-        // The re-read is the half that keeps edits from saving over the wrong
-        // post; the rail being stale is cosmetic.
-        //
-        // Asked HERE, against the new id, rather than remembered from before
-        // the rename: the relist above is a second await, and a flag captured
-        // ahead of it says what was true then. `selectScene` calls `setActive`,
-        // so a reader who moved on during the relist would not merely get a
-        // refresh they did not need — they would be dragged back to it.
-        //
-        // The new id is the right side of the comparison because `adoptSceneId`
-        // has already re-pointed the ref: a reader still on this scene is
-        // wearing `newId` by now, and one who left is somewhere else. Same test
-        // the first-date path makes, for the same reason.
-        if (activeIdRef.current === newId) await selectScene(newId, undefined, true);
-      }
-    } catch (err: unknown) {
-      fail(err, false);   // the rename itself; generating is not its recovery
-    } finally {
-      markRenaming(false);
-    }
-  }
-
-  // the first date set renames the scene file — re-list and adopt the new id.
-  // Only ever the active scene: the date controls live in the panels for the
-  // scene on screen.
-  async function sceneRenamed(id: string) {
-    const initiator = activeId;   // the scene whose inspector asked for the stamp
-    if (initiator) adoptSceneId(initiator, id);
-    try {
-      await loadScenes();
-    } catch (err: unknown) {
-      setError({ text: `Renamed, but the scene list could not be refreshed: `
-                       + errorText(err), retryable: false });
-    } finally {
-      // Only pull the renamed scene onto the screen if it is still the one being
-      // read. A slow first-date request can land after the reader has moved to
-      // another scene, and this callback belongs to the scene that started it —
-      // forcing that one back would be wrong on its own, and doing it as a
-      // *rename refresh* would carry the turn state of the scene they left onto
-      // the one they get.
-      // Compared against the NEW id, not the initiator: `adoptSceneId` re-points
-      // the ref as part of adopting, so the scene that asked for the stamp is
-      // already wearing `id` by now. A reader who moved on during the re-list
-      // leaves the ref somewhere else, and this stays put.
-      //
-      // In a `finally` for the same reason `renameScene` uses one: the relist is
-      // the rail's business, the re-read is the transcript's, and a failure in
-      // the first must not decide whether the second happens.
-      //
-      // Awaited and caught, also like `renameScene`. This is a callback the
-      // inspector fires and drops, so an unawaited rejection here goes nowhere:
-      // no banner, and the pre-rename posts left on screen under the new id,
-      // editable against indices that may have shifted.
-      if (initiator && activeIdRef.current === id) {
-        try {
-          await selectScene(id, undefined, true);
-        } catch (err: unknown) {
-          setError({ text: `Renamed, but the scene could not be re-read: `
-                           + errorText(err), retryable: false });
-        }
-      }
-    }
-  }
-
-  async function commitSceneRename() {
-    if (!renamingScene) return;
-    const { id, title } = renamingScene;
-    setRenamingScene(null);
-    await renameScene(id, title);
-  }
-
-  // Reports rather than throws, for `renameScene`'s reason: the ✕ drops the
-  // promise. A delete the server refuses -- a scene a review or another
-  // window's turn holds answers 409 -- otherwise left the row standing with
-  // nothing on screen to say it had been asked.
-  async function deleteScene(s: SceneMeta) {
-    if (!window.confirm(`Delete '${s.title}'?`)) return;
-    try {
-      await api.deleteScene(cid, s.id);
-    } catch (err: unknown) {
-      if (cidRef.current === cid) fail(err, false); // nothing was deleted; generating is not its recovery
-      return;
-    }
-    if (cidRef.current !== cid) return;
-    try {
-      await loadScenes();
-    } catch (err: unknown) {
-      if (cidRef.current === cid) {
-        setError({ text: `Deleted, but the scene list could not be refreshed: ${errorText(err)}`,
-                   retryable: false });
-      }
-    }
-    if (cidRef.current !== cid) return;
-    // Same reason as `renameScene`: the ledger resolves every thread,
-    // commitment and fact against the scene list, so a deletion changes what
-    // it returns. Bumped here rather than left to the refresh, because the two
-    // deletions that need it least are the ones that reach no refresh at all:
-    // deleting a scene the reader is not on moves nothing, and deleting the
-    // last one leaves nothing to read.
-    setCtxKey((k) => k + 1);
-    // Nothing else to do. The deleted row is gone from the list, so if it was
-    // the one in the URL the resolver now reads that sid as stale and moves
-    // the reader on — or, with nothing left, clears the view and drops the
-    // scene from the URL. Deleting a row the reader is NOT on leaves the sid
-    // valid, and the resolver leaves them where they are.
-  }
-
-  /** Fork the campaign at this scene (#72), leaving this one untouched.
-   *
-   *  Offered from the scene you are reading rather than from the shelf,
-   *  because "fork at an earlier turn" needs a scene and this is the only
-   *  place the app already has one in hand. The fork keeps this scene whole
-   *  and takes every later one off the copy, putting back what those scenes'
-   *  absorbs wrote wherever the change journal still reaches.
-   *
-   *  The confirmation says what a cut costs, for the reason
-   *  `deleteMessagesFrom`'s does: none of it is visible on the branch
-   *  afterwards. It is stated only when there ARE later scenes — forking at
-   *  the newest one copies the campaign whole and has nothing to warn about.
-   *
-   *  Navigates to the fork. The player asked to branch, and a branch you are
-   *  not looking at is a fork you have to go and find; this campaign is
-   *  unchanged and one click away in the shelf.
-   *
-   *  The note is raised BEFORE that navigation and is meant to survive it —
-   *  it describes the fork, so the fork's page is where it belongs. That works
-   *  because the `[cid]` effect above clears the campaign-scoped review state
-   *  and deliberately not `error`; a change there that started clearing it
-   *  would silently drop this report, which is what
-   *  `what the fork could not put back is reported, and outlives the
-   *  navigation` pins.
-   */
-  async function forkAtScene(sid: string, fromIndex?: number) {
-    // By NUMBER, as the server cuts (gate 9): every later scene goes, and so
-    // does every other scene sharing this one's number -- its branches. An id
-    // with no number falls back to the order ids sort in.
-    const mine = numberOf(sid);
-    const later = scenes.filter((x) => {
-      if (x.id === sid) return false;
-      const theirs = numberOf(x.id);
-      return mine === null || theirs === null ? x.id > sid : theirs >= mine;
-    }).length;
-    const title = scenes.find((x) => x.id === sid)?.title ?? sid;
-    const ask = [
-      ...(fromIndex === undefined ? [] : [
-        "This scene is absorbed, so branching it from this post makes a copy of the " +
-        "campaign cut at that post."]),
-      `Fork this campaign at '${title}'?`,
-      later === 0
-        ? "It is the newest scene, so the fork is a copy of this campaign as it stands."
-        : `The fork keeps this scene and drops the ${later} scene${later === 1 ? "" : "s"} ` +
-          "after it, putting back what their absorbs wrote wherever that is still on " +
-          "record. Records something else has written to since, and records a dropped " +
-          "scene created, keep what they hold and are reported.",
-      "This campaign is not changed.",
-    ].join("\n\n");
-    if (!window.confirm(ask)) return;
-    const forkName = window.prompt("Name the fork?", `${name} (fork)`)?.trim();
-    if (!forkName) return;
-    let report;
-    try {
-      report = fromIndex === undefined
-        ? await api.forkCampaign(cid, forkName, sid)
-        : await api.forkCampaign(cid, forkName, sid, {}, fromIndex);
-    } catch (err: unknown) {
-      // Not retryable: the banner's Retry generates, and there is nothing here
-      // to generate — the same call `deleteMessagesFrom` makes for the same
-      // reason.
-      fail(err, false);
-      return;
-    }
-    const notes = forkNotes(report);
-    if (notes) {
-      // A fork that could not put everything back stops here, in the campaign
-      // the reader is standing in, and says what did not come across. Leaving
-      // for the fork would unmount the only thing reporting it -- and the note
-      // is the reason to look at the fork before playing on in it, so carrying
-      // the reader past it defeats the point of writing it.
-      //
-      // The fork exists either way; the rail's Campaigns row and the shelf
-      // both have it. This is a pause, not a failure.
-      setError({ retryable: false, text: notes });
-      return;
-    }
-    // A clean fork takes the reader with it, to the scene it was cut at.
-    void navigate(`/campaigns/${report.id}/scenes`);
-  }
-
-  /** "Branch from here" (⑂ in the gutter, play controls III). An unabsorbed
-   *  scene branches into a sibling keeping everything through this post, and
-   *  the reader is taken there. An absorbed scene's past lives in the
-   *  campaign's files, which only a copy of the campaign can hold twice -- so
-   *  there it is the fork dialog, cut at this post. */
-  async function branchFrom(index: number) {
-    if (!activeId || rolling) return;
-    if (activeDone) {
-      await forkAtScene(activeId, index);
-      return;
-    }
-    // The latch every other write to this transcript takes, held until the
-    // reader is on the sibling: it disables ⑂ (and the gutter beside it), so a
-    // double click makes one branch rather than two (codex review, PR #458).
-    const release = takeRollLatch(activeId);
-    try {
-      let made;
-      try {
-        made = await api.branchScene(cid, activeId, index);
-      } catch (err) {
-        // Not retryable: the banner's Retry generates, and a branch is not a
-        // generation -- `forkAtScene`'s reason.
-        fail(err, false);
-        return;
-      }
-      await openBranch(made.id);
-    } finally {
-      release();
-    }
-  }
-
-  /** Open a sibling a branch has just created -- after the relist that lists
-   *  it, as `sceneCreated` does. The resolver only opens a scene the installed
-   *  list knows, so a URL naming the sibling ahead of that list is read as a
-   *  stale id and replaced with the scene the reader was on, and nothing
-   *  navigates back (codex review, PR #458). A failed relist is reported rather
-   *  than navigated past, for the same reason: the list it left lacks the row.
-   *  Not retryable: the banner's Retry generates, and the branch exists. */
-  async function openBranch(id: string) {
-    try {
-      await loadScenes();
-    } catch (err: unknown) {
-      if (cidRef.current === cid) {
-        setError({ text: `The branch was created, but the scene list could not be `
-                         + `refreshed: ` + errorText(err), retryable: false });
-      }
-      return;
-    }
-    // The campaign is asked after the relist, as `sceneCreated` asks it.
-    if (cidRef.current !== cid) return;
-    void navigate(sceneUrl(cid, id));
-  }
-
-  // How long to keep looking for a cancelled turn's partial. Aborting rejects
-  // the fetch the instant the socket is torn down here, but the backend only
-  // then notices the disconnect and runs its shielded flush — so the refresh
-  // that follows a Stop can legitimately read a transcript the partial has not
-  // reached yet, and the text would sit on disk while the screen denied it
-  // existed until some later refresh.
-  //
-  // The budget has to clear the backend's own cancellation grace, which review
-  // caught an earlier flat 1.5s falling short of: `llm._settle` gives an
-  // unresponsive provider up to `_CLOSE_TIMEOUT` (5s) to unwind and `_aclose`
-  // another 5s, and on the common path — cancellation arriving while waiting on
-  // the next delta — that unwinding happens *before* the write. Hence a
-  // doubling delay: the ordinary case (a provider that lets go at once) still
-  // resolves on the first retry, and the tail covers the documented worst case
-  // instead of giving up in the middle of it. Still bounded, because past this
-  // the write is contending on the store lock, which no amount of polling here
-  // will shorten, and the player's next action refreshes anyway.
-  const FLUSH_POLL_MS = 250;
-  const FLUSH_POLL_MAX_MS = 2000;
-  const FLUSH_POLL_BUDGET_MS = 12000;
-
-  async function awaitFlushedPartial(id: string, seen: number) {
-    // Stop the moment this poll stops being the thing that owns the view. A new
-    // turn (abortRef) or a different scene (activeIdRef) has its own refresh,
-    // and carrying on would have `selectScene` clear the new stream's live
-    // preview — or, worse, yank the player back to the scene they just left.
-    // Refs, not state: this loop runs across renders and a captured
-    // `busy`/`activeId` would be stale.
-    //
-    // Handed to `selectScene` as well as checked here, because checking only
-    // here leaves a window review caught: the check passes, then `getScene` is
-    // awaited, and a turn starting during that await still gets its preview
-    // cleared by the response.
-    const owns = () => mountedRef.current && !abortRef.current && activeIdRef.current === id;
-    let wait = FLUSH_POLL_MS;
-    let waited = 0;
-    // The length the screen was last refreshed to, so a tick can tell a
-    // transcript that moved some other way than growing from one that has not
-    // moved at all (below).
-    let onScreen = seen;
-    while (waited < FLUSH_POLL_BUDGET_MS) {
-      await new Promise((r) => setTimeout(r, wait));
-      waited += wait;
-      wait = Math.min(wait * 2, FLUSH_POLL_MAX_MS);
-      if (!owns()) return;
-      // What a tick asks is two questions, not a scene. Each used to be a whole
-      // `selectScene` -- the transcript window, the cast, the roster, the
-      // briefing, the column's reads, a dozen requests -- and a Stop that
-      // waited out the budget cost eight of them to learn one number. The
-      // transcript's LENGTH is what says the flush landed, so that is what is
-      // polled, and the full refresh runs once, on the tick that sees it grow.
-      //
-      // The proposal is the other question, and it is still asked every tick,
-      // because it is the one flush that need not grow the transcript: a reply
-      // that was nothing but a roll fence persists a proposal and no post.
-      // Fired and not awaited, exactly as `selectScene` fires it, and claimed
-      // BEFORE the length read, so the settling read after growth outranks it
-      // however late it lands.
-      const claim = claimProposalRead();
-      api.getRollProposal(cid, id)
-        .then((r) => { if (owns()) applyProposalRead(claim, r.record); })
-        .catch(() => {});
-      // A read that fails is a tick that learned nothing, not the end of the
-      // wait: the flush this is watching for happens on the server whether or
-      // not one GET made it there, and throwing here would escape a `finally`
-      // (review, #95). Keep polling until the budget runs out.
-      const n = await api.getScene(cid, id, { limit: 1 })
-        .then((s) => s.total ?? s.messages.length)
-        .catch(() => -1);
-      if (!owns()) return;
-      if (n > seen) {
-        const shown = await selectScene(id, owns).catch(() => -1);
-        if (!owns()) return;
-        // A refresh that failed has not put the partial on screen, so the wait
-        // goes on and the next tick tries again, as it always did.
-        if (shown < 0) continue;
-        return void await settleProposal(id, owns);
-      }
-      // Growth is what this waits for, but not the only thing the server can do
-      // meanwhile: a detached turn that fails after its connection has gone
-      // rolls its post back, and the transcript SHRINKS. The per-tick refresh
-      // this replaced put that on screen as a side effect; without it the post
-      // stayed, still offering Edit and Cut against an index the file no longer
-      // has. So a length that moved without growing is re-read once, and the
-      // wait goes on.
-      if (n >= 0 && n !== onScreen) {
-        const shown = await selectScene(id, owns).catch(() => -1);
-        if (!owns()) return;
-        if (shown < 0) continue;
-        onScreen = shown;
-        // The flush can land between the length read and this refresh.
-        if (shown > seen) return void await settleProposal(id, owns);
-      }
-    }
-  }
-
-  // The last word on the proposal, once the transcript proves the flush is done.
-  //
-  // `selectScene` fires its proposal fetch and awaits only `getScene`, so on the
-  // tick that catches the flush the two requests raced it independently — and
-  // `finalize` writes the proposal *before* the narration, so the read that saw
-  // the transcript grow is the one guaranteed to be after both writes, while the
-  // proposal read beside it may have landed before either. Its late `null` then
-  // clears a chip that does exist, and the poll has already stopped looking:
-  // a roll the player has to answer, invisible until something else refreshes.
-  // One awaited read, after growth, settles it (review, #95).
-  // Reaching the server is load-bearing here and is now the endpoint's own
-  // guarantee: `getRollProposal` never coalesces, so this cannot be handed the
-  // promise `selectScene` started before the flush — the stale answer it exists
-  // to overrule — and its claim, being newer, genuinely describes a newer read.
-  async function settleProposal(id: string, owns: () => boolean) {
-    const claim = claimProposalRead();   // issued after selectScene's, so it wins
-    const r = await api.getRollProposal(cid, id).catch(() => null);
-    if (r && owns()) applyProposalRead(claim, r.record);
-  }
-
-  // Returns whether the turn actually landed (no thrown error and no e.error
-  // event) — callers use this to decide whether a pending one-shot response
-  // override was honoured and can be cleared, or must survive for retry/reroll.
-  // `rerolling` decides what a failure OFFERS, and it turns on whether any
-  // narration arrived — the two reroll failures want opposite things:
-  //
-  // - some narration, then the error. The backend persisted that partial, so
-  //   the slot is FULL. Retry would append a second generation, move the slot
-  //   and retire the set the reroll was building. The transcript still ends on
-  //   an assistant post, so the gutter's own ↻ is there and replaces in place;
-  //   the banner offers nothing.
-  // - nothing at all. The backend archived and removed the old reply, so the
-  //   slot is EMPTY and the transcript ends on the player's post — `canReroll`
-  //   is false and there is no ↻ to fall back on. `/retry` streams straight
-  //   into the empty slot, so Retry is both safe and the only way forward.
-  //
-  // Trimmed, matching `streaming.py`'s `watcher.narration.strip()`: deltas that
-  // are only whitespace persist nothing, so that slot is empty too, and reading
-  // them as a landed partial takes away the one button that refills it.
-  // Ask the server whether the scene's running summary is now due (#85).
-  //
-  // Deliberately NOT awaited by any caller: the player's next action must never
-  // queue behind a summarization, which is the whole meaning of "non-blocking"
-  // here. Sent without `force`, so the decision — and the cost — stay on the
-  // server; a scene short of the threshold answers `refreshed: false` having
-  // reached no provider, which is why it is cheap enough to fire after every
-  // transcript write.
-  //
-  // Every rejection is swallowed. A missing key, a dead provider, a busy store:
-  // none is a reason to put a banner over a turn that landed, and the panel's
-  // own Refresh button reports the failure when the player actually asks.
-  //
-  // The `ctxKey` bump is guarded on the reader still being here, like every
-  // other post-await write in this component: a summary written for the scene
-  // they just left must not re-read the panel for the scene they are on.
-  //
-  // A function rather than a line inside `runStream`, because review caught
-  // that generated turns are not the only writer: a manual dice roll and a
-  // check both append narrator posts, so a mechanics-heavy stretch of play
-  // could cross the threshold repeatedly with nothing ever asking. Named for
-  // the SIGNAL rather than for one of its consumers, since #84 joined #85 here
-  // and a name that promised only a summary would be a lie the next reader
-  // trips over.
-  // `upto` is REQUIRED, and a negative one means "no boundary was read" — the
-  // re-read that would have supplied it was retired by a newer select, or the
-  // reader left. Review caught what the earlier `undefined` fallback did there:
-  // it sent an UNBOUNDED request, so the one case that most needed the bound —
-  // a newer turn already in flight — was the case that dropped it, and the fold
-  // could cover a player post whose reply had not been written yet. That reply
-  // is an append, so it would stay out of the "current" summary until another
-  // threshold. Skipping costs nothing: whatever superseded this read is itself
-  // a transcript write and asks again with a boundary it actually verified.
   function askAfterPost(id: string, upto: number) {
-    if (upto < 0) return;
-    api.refreshRollingSummary(cid, id, false, upto)
-      .then((r) => { if (r.refreshed && activeIdRef.current === id) setCtxKey((n) => n + 1); })
-      .catch(() => {});
-    // The scene-break question rides the same signal (#84) — every call site
-    // here is already "a post landed, at a boundary I verified", which is
-    // exactly when both gates want re-evaluating. Fired separately rather than
-    // chained, because neither answer is a precondition for the other and
-    // chaining would make a failed summary silently skip the break question.
-    // Not awaited and its rejection swallowed, for the summary's reason: no
-    // action should fail because a suggestion could not be written.
-    api.askSceneBreak(cid, id, false, upto)
-      .then((r) => { if (r.asked && activeIdRef.current === id) setCtxKey((n) => n + 1); })
-      .catch(() => {});
+    askPostFollowups({ cid, sid: id }, upto, selected, () => setCtxKey((n) => n + 1));
   }
-
-  /** Resolve a send this client made and never heard the end of.
-   *
-   *  Runs on mount and whenever the tab becomes visible, which are the two
-   *  moments a phone comes back. Four outcomes, and the fourth is the one an
-   *  implementation forgets:
-   *
-   *  - **live** -- the turn is still generating. Attach to its buffer from one
-   *    past the last frame we actually read and render the rest.
-   *  - **terminal** -- it finished while we were away. Refetch the scene; the
-   *    reply is in the transcript.
-   *  - **gone** -- it finished, nobody attached, and the retention window
-   *    passed. Indistinguishable from the above by looking at the registry, and
-   *    surfacing the 404 would report a lost turn that landed perfectly.
-   *  - **rolled back** -- it FAILED after the post was appended, the backend
-   *    took the post off, and the record expired. The refetched transcript is
-   *    correctly missing the post, so settling would discard the only surviving
-   *    copy of what the player typed. `attempt-state` is what tells these last
-   *    two apart, and where it cannot, the text is kept.
-   */
-  /** Read a run's buffered frames from where we left off, then keep reading.
-   *
-   *  The same rendering the live path does, driven from the run's buffer
-   *  instead of from the POST's own response: deltas accumulate into the
-   *  streaming preview, a proposal opens its chip, and `done` or an error ends
-   *  it. The cursor is `resumeFrom` -- one past the last frame actually read --
-   *  so nothing is replayed and nothing is skipped.
-   */
-  const attachToRun = useCallback(async (cid: string, sid: string, runId: string) => {
-    const controller = new AbortController();
-    abortRef.current = controller;
-    runRef.current = { cid, sid, attempt: registry.pending(cid, sid)?.attempt ?? "", id: runId };
-    setBusy(true);
-    setStreamingId(sid);
-    let acc = "";
-    // Where the part a `display` frame rewrites begins -- see `runStream`.
-    let partStart = acc.length;
-    setStreamingSpeakers([]);
-    setRoundProgress(null);
-    let finished = false;
-    try {
-      await api.attachRun(cid, sid, runId, registry.resumeFrom(runId), (e) => {
-        if (e.round_start) {
-          setRoundProgress(e.round_start);
-        } else if (e.response_start) {
-          const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
-            actor_ref: e.response_start.actor_ref, offset: acc.length,
-            // Keep writing: the reply the stream continues, rendered ahead of
-            // it but never part of `acc` (offsets, Retry and re-attach all
-            // read the stream alone).
-            seed: e.response_start.extend?.seed };
-          partStart = boundary.offset;
-          setStreamingSpeakers((prior) => [...prior, boundary]);
-        } else if (e.thinking_reset || e.thinking_delta) {
-          setStreamingSpeakers((prior) => prior.map((part, index) =>
-            index === prior.length - 1 ? { ...part, thinking: e.thinking_reset ? "" : (part.thinking ?? "") + e.thinking_delta } : part));
-        } else if (e.response_end) {
-          const endedId = e.response_end.id;
-          setStreamingSpeakers((prior) => prior.map((part) =>
-            part.id === endedId ? { ...part, ended: true } : part));
-        }
-        else if (e.delta) { acc += e.delta; setStreaming(acc); }
-        else if (e.display) { acc = applyDisplay(acc, partStart, e.display); setStreaming(acc); }
-        else if (e.error) {
-          fail(e.error, true, "scene");
-          finished = true;
-          // An ADOPTED run can fail the same way a watched one does, and it
-          // rolls the post back the same way -- `post_returned` says so. The
-          // registry is holding the only remaining copy of those words at that
-          // point (the transcript no longer has them, and the component that
-          // typed them may be long gone), and the `settle` below is about to
-          // drop it. Recovered first, so the settle retires an entry whose
-          // text has already been handed back.
-          if (e.error.post_returned) {
-            const held = registry.pending(cid, sid)?.text;
-            if (held) recoverPrompt(cid, sid, held);
-          }
-        } else if (e.proposal) {
-          setProposalNow({ id: e.proposal.id, status: "pending",
-                           payload: e.proposal, resolution: null });
-        } else if (e.done) { finished = true; }
-      }, controller.signal, (index) => registry.consume(runId, index));
-    } catch (err) {
-      // A reattach that fails is not a failed turn: the run is on the server
-      // and the reply is heading for the transcript either way. Left unsettled
-      // so the next visibility change tries again.
-      //
-      // AND LEFT LOCKED, which review caught was not the case. Clearing `busy`
-      // here put Send back over a run that still owns the scene -- and the next
-      // send's `registry.begin()` overwrites this scene's one pending entry, so
-      // if the original run then rolls its post back, the words it was holding
-      // are gone with it. The same posture as an unconfirmed Stop, for the same
-      // reason: nothing has established what became of that run, so nothing may
-      // act as though something had.
-      //
-      // `abortRef` alone is cleared, because the adoption pass -- which is what
-      // resolves this -- bows out while it is set.
-      if (!isAbortError(err)) {
-        setStreaming("");
-        setStreamingSpeakers([]);
-      }
-      abortRef.current = null;
-      // UNLESS a Stop is what aborted it. `runStream`'s finally is where a
-      // pending cancel is normally waited on, and an adopted run never goes
-      // through it -- so without this the player presses Stop, the backend
-      // duly cancels, and the composer stays locked forever on a turn that is
-      // over. Confirmed the same way and unconfirmed the same way: the wait is
-      // what makes the button honest, here as there.
-      const pending = cancelRef.current;
-      if (pending) {
-        cancelRef.current = null;
-        try {
-          await pending;
-          registry.settle(cid, sid);
-          runRef.current = null;
-          setStreamingId(null);
-          setStreaming("");
-          setStreamingSpeakers([]);
-          setBusy(false);
-        } catch {
-          setError({ text: "could not reach the server to stop this turn — it "
-                           + "may still be generating", retryable: false });
-        }
-      }
-      return;
-    }
-    if (finished) registry.settle(cid, sid);
-    abortRef.current = null;
-    setBusy(false);
-    setStreamingId(null);
-    // The refetch FIRST, and the preview cleared after it. Clearing first
-    // leaves a window with the text nowhere -- and that window is not
-    // theoretical: the aborted turn's flush poll is still refreshing this
-    // scene, and `selectScene`'s window token retires whichever refetch loses.
-    // Holding the preview means the reader sees the reply either way.
-    await selectScene(sid).catch(() => -1);
-    setStreaming("");
-    setStreamingSpeakers([]);
-    // The REPLAY PANEL does not read the transcript, it reads the replay
-    // session -- and it loads that once, on `cid`/`sid`. So an adopted run
-    // that happened to be a replay turn refreshes everything the panel does
-    // not look at: `session.pending` stays false and it keeps offering
-    // "Replay next turn", which the already-pending session then 409s.
-    //
-    // Bumped unconditionally rather than only for replay runs, because from
-    // here a run is just a run -- `attachRun` carries no kind, and inventing
-    // one to avoid a re-mount that costs one GET would be the wrong trade.
-    setReplayEpoch((n) => n + 1);
-  }, [registry, recoverPrompt]);   // eslint-disable-line react-hooks/exhaustive-deps
-
-  const adoptPendingRun = useCallback(async (cid: string, sid: string) => {
-    const held = registry.pending(cid, sid);
-    const observedTurn = streamTokenRef.current;
-    const ownsObservation = () => !abortRef.current
-      && streamTokenRef.current === observedTurn;
-    // NO HELD ATTEMPT IS NOT NOTHING TO DO. The provider is recreated empty by
-    // a full reload -- and on Android the WebView's renderer can be restarted
-    // out from under a perfectly healthy backend turn, which is precisely the
-    // scenario this feature exists for. Returning here left that view showing
-    // an unlocked composer over a stale transcript, and the next send refused
-    // with `run_in_flight` by the run it could not see.
-    //
-    // The attemptless lookup is a different question -- "what is the newest
-    // run on this scene?" -- and only its LIVE answer is acted on. A terminal
-    // one belongs to a turn some other client owns the words for; there is
-    // nothing here to restore and nothing to settle.
-    if (!held) {
-      if (abortRef.current) return;
-      let live;
-      try {
-        live = (await api.findRun(cid, sid)).run;
-      } catch {
-        return;                 // a failed lookup is not an answer; ask again later
-      }
-      if (!ownsObservation() || registry.pending(cid, sid)) return;
-      if (live && live.state === "running") {
-        // Only a TURN has frames to read. A `review` run is live work on this
-        // scene too -- an absorb the reader started before the phone locked --
-        // but its value is a payload the review panel fetches, not a stream,
-        // and attaching to its (empty, never-`done`) buffer would leave this
-        // view showing an endless empty reply over a scene that is being
-        // absorbed perfectly well. It is left alone rather than released:
-        // `useSceneReview` adopts it, and releasing here would unlock a
-        // composer the server is refusing anyway.
-        //
-        // Every class the server names that is not a turn, rather than the one
-        // that existed when this was written. A landed turn now schedules its
-        // own rolling-summary and scene-break work (#397), and those are
-        // `background` runs on this same scene -- so "not a review" stopped
-        // being the same question as "has frames". A run with no class at all
-        // still attaches, because `cls` is optional on the wire and the only
-        // thing that ever omitted it was a turn.
-        //
-        // Belt and braces: the backend keeps both classes out of an attemptless
-        // discovery in the first place (`runs.ATTACHABLE`).
-        if (live.cls && live.cls !== "turn") return;
-        await attachToRun(cid, sid, live.id);
-        return;
-      }
-      // NOTHING IS RUNNING HERE, and that is a real answer -- so it is also the
-      // release. A reattach that failed deliberately leaves this view locked
-      // (see `attachToRun`'s catch), and with no pending attempt there is no
-      // other pass that would ever let go. Unconditional because the ordinary
-      // case has nothing to release and setting state to what it already is
-      // costs nothing.
-      runRef.current = null;
-      setStreamingId(null);
-      setStreaming("");
-      setStreamingSpeakers([]);
-      setBusy(false);
-      return;
-    }
-    // Not while this component is already driving a turn. Adoption is for a
-    // send we LOST -- the socket died, the tab was suspended, the view
-    // unmounted -- and running it alongside a live stream has two of them
-    // rendering into one scene, refetching over each other and racing to
-    // settle. `abortRef` is set for exactly as long as this view owns a
-    // stream, which is the question being asked.
-    if (abortRef.current) return;
-    // A reload has no component-local busy state, but this pending send still
-    // owns the scene. Lock before the first await so an unavailable lookup or
-    // fence cannot expose Send over work whose outcome remains unknown.
-    setBusy(true);
-    setStreamingId(sid);
-    runRef.current = { cid, sid, attempt: held.attempt, id: held.runId };
-    // Visibility can start another recovery while this pass awaits a request.
-    // That pass may resolve this attempt and let the player send again. Every
-    // continuation must still own this attempt and have no active observer;
-    // otherwise settling by scene would erase the new send's durable words.
-    const current = () => ownsObservation()
-      && registry.pending(cid, sid)?.attempt === held.attempt;
-    // By ATTEMPT, not by the run id we may or may not have seen. The id is a
-    // shortcut; the attempt is what names this send in the window where no
-    // frame ever arrived, which is the window worth recovering from.
-    //
-    // A TRANSPORT FAILURE IS NOT AN ANSWER. `visibilitychange` fires the
-    // instant the tab comes forward, which is routinely before connectivity is
-    // actually back -- so this request is more likely to fail here than
-    // anywhere else in the app. Folding that into "no run" and carrying on
-    // discards the only handle to a chat that may still be generating, and
-    // then hands back a prompt that is sitting in the transcript, inviting the
-    // player to send it twice. Left pending instead: the next visibility
-    // change, or the next mount, asks again.
-    let handle;
-    try {
-      handle = await findOrFenceAttempt(cid, sid, held.attempt);
-    } catch {
-      return;
-    }
-    if (!current()) return;
-    if (handle && handle.state === "running") {
-      // STILL GENERATING, and this is the case the whole feature is for. Read
-      // the frames produced while we were away and keep reading live -- the
-      // backend buffered every one of them. Returning here instead (which an
-      // earlier revision of this function did, under a comment claiming
-      // otherwise) leaves the turn running perfectly on the server and the
-      // screen showing nothing until a manual reload.
-      await attachToRun(cid, sid, handle.id);
-      return;
-    }
-    // Either it finished, or its record is gone. Ask the durable question --
-    // and, for the reason above, only act on an ANSWER. A failed request here
-    // used to read as `retained: false`, which restores a prompt that may
-    // still be in the transcript AND settles the attempt, so the second
-    // recovery pass that would have got it right never runs.
-    let durable: boolean;
-    try {
-      const state = await api.attemptState(cid, sid, held.attempt);
-      if (!current()) return;
-      // Execution and post presence answer different questions. Preserve the
-      // later execution evidence too, rather than settling a still-live send
-      // merely because its player post is already durable.
-      if (state.run?.state === "running") {
-        await attachToRun(cid, sid, state.run.id);
-        return;
-      }
-      handle = state.run ?? handle;
-      durable = state.retained;
-    } catch {
-      return;
-    }
-    // SETTLED only when the words are safe somewhere else. A post still in the
-    // transcript is durable and this entry has nothing left to protect; a
-    // rolled-back one leaves this as the only copy, and settling it would move
-    // that copy into component state -- which is precisely what a reload or an
-    // Android renderer restart destroys, the event the record exists to
-    // survive. `recovered` keeps it, flagged, so recovery stops asking about a
-    // run that is over while the text stays durable until a later send.
-    if (durable) registry.settle(cid, sid);
-    else registry.recovered(cid, sid);
-    if (!durable && held.text) {
-      // The post is not in the scene. Either it was rolled back or it never
-      // landed -- and both mean the player's words exist only here. Ambiguity
-      // resolves toward the recoverable error every time: wrong this way costs
-      // one duplicate they can see and delete, wrong the other way costs them
-      // their words with no trace at all.
-      // Return the words before unlocking. A new Send replaces the registry
-      // entry, so delaying this behind a refresh could lose or mix the words
-      // while the player is already composing the next turn.
-      recoverPrompt(cid, sid, held.text);
-    }
-    // Whatever this component was left holding for that send is resolved now.
-    // An unconfirmed Stop deliberately leaves the composer locked and `runRef`
-    // set (see `runStream`'s finally), on the grounds that the run may still be
-    // generating; this is the pass that finally answers that question, so it
-    // has to be the pass that lets go. Unconditional because the ordinary case
-    // has nothing left to release -- `runStream` cleared it all -- and setting
-    // state that is already that value is a no-op.
-    runRef.current = null;
-    setStreamingId(null);
-    setStreaming("");
-    setStreamingSpeakers([]);
-    setBusy(false);
-    await selectScene(sid, ownsObservation).catch(() => -1);
-    if (!ownsObservation()) return;
-    // FAILED WHILE WE WERE AWAY, and the server knows why. The rest of recovery
-    // only asks whether the post was retained, refetches and unlocks, so a
-    // provider error, a store failure or a check that would not resolve simply
-    // vanished: the player came back to a scene with no reply, no banner and
-    // nothing to act on.
-    //
-    // AFTER the refresh, not before. `selectScene` clears the banner on a
-    // successful load -- which is right for an ordinary scene open and wrong
-    // here, so this has to be the last word rather than the first.
-    if (handle?.state === "failed" && handle.error) fail(handle.error, true, "scene");
-  }, [registry, recoverPrompt]);   // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!activeId) return;
-    void adoptPendingRun(cid, activeId);
-    const onVisible = () => {
-      if (document.visibilityState === "visible" && activeIdRef.current) {
-        void adoptPendingRun(cid, activeIdRef.current);
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [cid, activeId, adoptPendingRun]);
-
-  async function runStream(
-    id: string,
-    start: (onEvent: (e: ChatEvent) => void, signal: AbortSignal,
-            attempt: string, onIndex: (i: number) => void) => Promise<void>,
-    onPromptUnstored?: () => void,
-    rerolling = false,
-    // What the player typed into this turn, kept in the registry until the
-    // outcome proves it durable. Empty for the turns that submit no text of
-    // their own -- a reroll, a retry -- which have nothing to give back.
-    recoverableText = "",
-    // Whether this turn persists a post of its own. An ephemeral one does not,
-    // which changes what evidence the recovery below can use — see there.
-    ephemeral = false,
-    // The director note this generation is steering, or null for the generations that
-    // steer with nothing — an ordinary post, a reroll, a resolved proposal.
-    // Owned HERE rather than at the call sites (Codex review): every stream
-    // enters by this function, and `send` was only one of five ways in, so a
-    // note left over from a previous turn rendered beside a reroll or a
-    // proposal continuation as though it had steered them.
-    note: { cid: string; sid: string; text: string } | null = null,
-    // A chosen provider can recover a broken standing route. Model/preset-only
-    // overrides still depend on that route's connection, as the backend does.
-    route: RerollRoute = NO_REROLL_ROUTE,
-  ) {
-    if (!canGenerateOnRoute(canGenerate, route)) return false;
-    setDirectorNote(note);
-    // The authoritative rename guard, not the ones in `send`/`retry`/`reroll`.
-    // Those stop the optimistic UI work before it happens, but they are a list
-    // of call sites — and review found the one that was missing: resolving a
-    // roll proposal streams a continuation through here without going past any
-    // of them. Every stream enters by this function, so this is where the
-    // question belongs; the callers keep their checks so they can bail before
-    // clearing a composer, not because they are the guarantee (#95).
-    if (renamesInFlight) return false;
-    const controller = new AbortController();
-    abortRef.current = controller;
-    // Minted here, before anything is sent. This is what makes the turn
-    // addressable in the window between the server accepting it and its first
-    // frame arriving -- see `runRef`.
-    const attempt = newAttemptId();
-    // Registered BEFORE the request goes out. Registering when the leading
-    // frame arrives would leave nothing recorded in exactly the window this is
-    // for: the server accepts the send, mutates the scene, and the response
-    // dies before any frame reaches us.
-    registry.begin({ cid, sid: id, attempt, text: recoverableText, runId: null });
-    // The CAMPAIGN travels with the handle. React Router reuses this component
-    // across `/campaigns/A` -> `/campaigns/B`, so `cid` is whichever campaign
-    // is on screen when Stop is pressed -- and scene ids are campaign-local, so
-    // cancelling A's turn through B's id reaches nothing and the turn runs on.
-    runRef.current = { cid, sid: id, attempt, id: null };
-    const streamToken = ++streamTokenRef.current;
-    setBusy(true);
-    setStreamingId(id);
-    setError(null);
-    // How long this scene's transcript was before the turn wrote anything —
-    // the baseline the pre-response restore below compares against.
-    //
-    // `totalRef` alone is not it. It holds whichever scene was read last, and a
-    // turn can start on a scene that has not been read yet: Send stays enabled
-    // while a freshly selected scene is still loading, and `send` creates a
-    // scene and streams into it without a read in between. Measuring this
-    // scene's growth against another scene's length decides the restore by
-    // which transcript happened to be longer — restoring a prompt that landed
-    // (the player sends it twice) or dropping one that never did (review, #95).
-    // So: use the ref only when it is this scene's, and otherwise read the one
-    // number needed, which costs a request only inside that window.
-    //
-    // Raced against Stop rather than cancelled by it. This read runs before the
-    // POST, so the turn's controller has nothing to abort yet, and review caught
-    // that a stalled preflight against an unhealthy server then hung the whole
-    // turn here: outside the try, with `busy` set and no way to clear it. The
-    // race gives the wait an exit; the stray GET resolves into nothing, and an
-    // unknown baseline is the answer this already knows how to handle.
-    // Cancelling it properly would mean threading a signal through `request`,
-    // whose in-flight GET sharing hands one promise to several callers — one
-    // caller's Stop must not abort another component's read.
-    const totalBefore = totalSceneRef.current === id
-      ? totalRef.current
-      : await Promise.race([
-          api.getScene(cid, id, { limit: 1 })
-            .then((s) => s.total ?? s.messages.length)
-            .catch(() => null),   // unknown — treated as unverifiable below
-          settleOn(controller.signal, null),
-        ]);
-    let acc = "";
-    // Where the part a `display` frame rewrites begins: its `keep` counts from
-    // there, because the server runs one display pass per part. The last
-    // `response_start`'s offset on a character turn; on a stream with no
-    // boundary -- the legacy path, a roll's continuation among them -- the
-    // whole of this stream's own text, which starts wherever `acc` stood when
-    // it began (here, empty: every stream enters by this function).
-    let partStart = acc.length;
-    setStreamingSpeakers([]);
-    setRoundProgress(null);
-    // Three separate questions, and none of them is "did the promise resolve".
-    // `finished`: a `done` frame arrived, which the backend sends only after
-    // finalize has persisted. `errored`: an error frame arrived, so the backend
-    // ran its own handler before sending it. Review caught that a proxy closing
-    // the body cleanly before `done` resolves `streamPost` normally, which used
-    // to count as a landed turn while the reply was still in the flush.
-    let finished = false;
-    let errored = false;
-    // Whether this stream answered with a roll proposal rather than narration.
-    // A director turn that did is a turn whose note was SPENT, even though the
-    // transcript did not grow -- see the recovery condition below.
-    let proposed = false;
-    // Set below, once the transcript has been re-read: this turn finished but
-    // wrote nothing, so it did not land however cleanly it ended.
-    let producedNothing = false;
-    let unreached = false;  // the request never reached the server
-    // The server answered with a status instead of a stream. A fourth question,
-    // because it is the one outcome that is *complete* on arrival: `streamPost`
-    // throws a non-2xx before any body exists, so there is no stream that was
-    // cut short, no partial in flight and nothing for the flush poll to wait on.
-    let refused = false;
-    try {
-      await start((e) => {
-        if (e.round_start) {
-          setRoundProgress(e.round_start);
-        } else if (e.response_start) {
-          const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
-            actor_ref: e.response_start.actor_ref, offset: acc.length,
-            // Keep writing: the reply the stream continues, rendered ahead of
-            // it but never part of `acc` (offsets, Retry and re-attach all
-            // read the stream alone).
-            seed: e.response_start.extend?.seed };
-          partStart = boundary.offset;
-          setStreamingSpeakers((prior) => [...prior, boundary]);
-        } else if (e.thinking_reset || e.thinking_delta) {
-          setStreamingSpeakers((prior) => prior.map((part, index) =>
-            index === prior.length - 1 ? { ...part, thinking: e.thinking_reset ? "" : (part.thinking ?? "") + e.thinking_delta } : part));
-        } else if (e.response_end) {
-          const endedId = e.response_end.id;
-          setStreamingSpeakers((prior) => prior.map((part) =>
-            part.id === endedId ? { ...part, ended: true } : part));
-        } else if (e.delta) {
-          acc += e.delta;
-          setStreaming(acc);
-        } else if (e.display) {
-          acc = applyDisplay(acc, partStart, e.display);
-          setStreaming(acc);
-        } else if (e.run) {
-          // The leading frame confirms the run id, so Stop can skip the
-          // discovery round trip. It is a shortcut, not the mechanism: the
-          // attempt id above already names this turn.
-          if (runRef.current?.attempt === attempt) runRef.current.id = e.run.id;
-          registry.attach(cid, id, e.run.id);
-        } else if (e.error) {
-          fail(e.error, !ephemeral && !(rerolling && acc.trim().length > 0), "scene");
-          errored = true;
-          // The post is gone from the transcript, so the composer has to give
-          // the player their words back. Otherwise a failed send destroys what
-          // they typed and Retry cannot help — it calls /retry, which has no
-          // prompt of its own and 400s on a scene with nothing else in it (#95).
-          if (e.error.post_returned) onPromptUnstored?.();        } else if (e.proposal) {
-          // Live from the stream, so it outranks any read still in flight.
-          proposed = true;
-          setProposalNow({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
-        } else if (e.done) {
-          finished = true;
-          // A turn that worked is as much news about the connection as one
-          // that failed, and only in one direction does the shell find out on
-          // its own: `fail` announces, so a Retry that succeeds without leaving
-          // the page would otherwise leave the dot red until an unrelated
-          // navigation. Gated on having reported a provider failure, so an
-          // ordinary turn does not re-read the config every time (#146).
-          if (sawProviderFailure.current) {
-            sawProviderFailure.current = false;
-            invalidateConfigCache();
-            configChanged();
-          }
-        }
-      }, controller.signal, attempt, (index) => {
-        // The WIRE index, so a resume asks for one past what was really read.
-        // Counting the events this callback's sibling surfaced would undercount
-        // by every heartbeat and replay text mid-reply.
-        if (runRef.current?.id) registry.consume(runRef.current.id, index);
-      });
-    } catch (err: unknown) {
-      // A cancel is the user getting what they asked for, so it raises no error
-      // banner. `done` is parsed before the body reports EOF and Stop stays live
-      // until it does, so a press in that gap aborts a turn that is already
-      // written — `finished` below is what keeps that from being refunded as a
-      // cancellation and spending its response override twice (#95).
-      //
-      // `fail`, not `setError`: a failure carries whether GENERATING is the
-      // recovery it wants, and a reroll that already landed a partial does not
-      // want one — Retry would append past the reply it just parked.
-      // `!ephemeral`, for the reason the other `retryable: false` sites give
-      // (Codex review, round 3): the banner's Retry GENERATES, down `/retry`,
-      // which regenerates from the stored transcript. A director note is in no
-      // transcript, so Retry would quietly produce an undirected continuation
-      // — or, in a scene with nothing else, fail with "nothing to retry". The
-      // note is back in the composer by then, and Send is its retry.
-      if (!isAbortError(err)) fail(err, !ephemeral && !(rerolling && acc.trim().length > 0), "scene");
-      // Nothing reached the server, so nothing was stored — the same position
-      // the player is in after a rollback, and the same remedy. Review caught
-      // that Stop pressed during connection setup, or a server that is simply
-      // down, lost the prompt exactly as the rollback did: the composer was
-      // cleared, and the refresh below finds no post to restore it from. The
-      // response is the line, because `post_chat` appends before returning one.
-      // Deliberately not restoring here. `beforeResponse` says no response
-      // arrived, which is not the same as the request never arriving: the
-      // server can append the post and then have the abort beat its headers
-      // back to the browser. Deciding now would put text in the composer that
-      // is also in the transcript, and the next Send would duplicate it. The
-      // refresh below settles it (review, #95).
-      if (typeof err === "object" && err !== null && "beforeResponse" in err && err.beforeResponse) unreached = true;
-      // A refusal reaches the server but may still leave nothing behind: every
-      // 4xx `post_chat` raises comes from a check that runs *before* the post is
-      // appended, so the prompt was cleared out of a composer and stored
-      // nowhere — the same position a rollback leaves the player in. Not
-      // assumed, though: a 500 out of `build_messages` lands here too, and that
-      // one raises *after* the append. The transcript settles which, exactly as
-      // it does for `unreached` (review, #95).
-      else if (err instanceof ApiError) refused = true;
-    } finally {
-      // The outcome is established, however it ended: a `done` frame, an error
-      // frame the backend chose to send, or a refusal. Recovery is for the
-      // sends whose outcome nobody ever learned, so anything that got this far
-      // with an answer stops being one of those. A stream that was cut without
-      // an answer deliberately does NOT settle -- that is the case the registry
-      // exists for, and it is left for the adoption pass to resolve.
-      if (finished || errored || refused) registry.settle(cid, id);
-      abortRef.current = null;
-      // AHEAD OF EVERY RELEASE BELOW, `busy` included. Only a Stop sets this,
-      // so an ordinary turn is unaffected and keeps releasing as early as it
-      // always has. On a Stop it is the difference between the button lying and
-      // not: the cancel route answers only once the run is really terminal --
-      // after its abort hook has written the partial and freed the exclusion
-      // key -- and `send` gates on `busy` alone, so clearing that first let the
-      // player fire a turn the backend then refused with `run_in_flight`. The
-      // streamed text stays on screen for the wait, which is the honest picture:
-      // it is still being stopped.
-
-      // Set by the branch below that could not confirm the Stop. A Stop
-      // the server never heard is not a stopped turn, and the releases
-      // under the guard would say it was.
-      let unstopped = false;
-      const stopped = !!cancelRef.current;
-      if (cancelRef.current) {
-        const pending = cancelRef.current;
-        cancelRef.current = null;
-        // An unconfirmed cancel must not read as a finished one: `stopRun`
-        // rethrows when it could not reach the server, and settling anyway
-        // would put Send back over a run that is still generating. Reported,
-        // not swallowed -- the player pressed a button and it did not work.
-        try {
-          await pending;
-          // A CONFIRMED stop is an established outcome. The player asked for
-          // it and the server said the run is terminal, so there is nothing
-          // for recovery to resolve -- and leaving it pending would have the
-          // adoption pass re-litigate a turn the player already ended.
-          registry.settle(cid, id);
-        } catch {
-          // The player pressed a button and it did not work. Reported,
-          // not swallowed -- and NOT released: the backend run may still
-          // be generating and still holding the scene.
-          unstopped = true;
-          setError({ text: "could not reach the server to stop this turn — it "
-                           + "may still be generating", retryable: false });
-        }
-      }
-      // THE STREAM DIED WITH NO ANSWER, AND THIS TAB IS STILL HERE. Mount and
-      // `visibilitychange` are the only adoption triggers, and neither fires in
-      // this case: the component stayed mounted and visible while the response
-      // reset before its leading frame. The server accepted the POST and a run
-      // is generating -- so both of the answers below are wrong. Treating it as
-      // a failure restores the prompt and the player sends again, landing the
-      // turn twice against a run that was always fine; leaving it locked strands
-      // the scene until a remount.
-      //
-      // So ask, by attempt, before concluding anything. A run means attach to
-      // it and skip the whole teardown, because the turn is still ours.
-      // `abortRef` is already cleared above, which is what lets `attachToRun`
-      // take the view back.
-      //
-      // And a lookup that FAILED is not an answer of "no run". The socket
-      // dying and this request failing are the same outage, so of every call
-      // in this file these two are the likeliest to fail together -- and
-      // reading that as "no run" runs the teardown, unlocks the composer, and
-      // lets the next Send overwrite the registry's one pending entry for this
-      // scene while the original may still be generating. Held instead, like
-      // an unconfirmed Stop: the composer stays locked, the send stays
-      // pending, and `adoptPendingRun` resolves it when the tab next comes
-      // forward.
-      let adopted = false;
-      let undiscoverable = false;
-      let superseded = false;
-      if (!unstopped && !stopped && !finished && !errored && !refused) {
-        try {
-          const live = await findOrFenceAttempt(cid, id, attempt);
-          // Clearing the old abortRef allows visibility recovery to take over
-          // during this request. Its observer or a newly submitted attempt now
-          // owns the view; this continuation must neither attach again nor
-          // tear down that owner's preview, handle or durable words.
-          superseded = !!abortRef.current || streamTokenRef.current !== streamToken
-            || registry.pending(cid, id)?.attempt !== attempt;
-          if (!superseded && live && live.state === "running") {
-            adopted = true;
-            void attachToRun(cid, id, live.id);
-          }
-        } catch {
-          undiscoverable = true;
-        }
-      }
-      // NOT a `return` -- this is a `finally`, and returning from one
-      // discards whatever the block was already returning or throwing. The
-      // rest of the teardown is skipped by a guard instead.
-      //
-      // `abortRef` above is cleared either way: the socket really is gone,
-      // and leaving it set would block the adoption pass, which is what
-      // resolves this if the run ends on its own. Everything below --
-      // `busy`, the streamed preview, `runRef` -- is skipped when the Stop
-      // went unconfirmed, so Stop is still there to press and still knows
-      // what to press about.
-      if (!unstopped && !adopted && !undiscoverable && !superseded) {
-        // Beside `abortRef`, and load-bearing for the same reason: left set, a
-        // Stop pressed while the NEXT turn is still connecting would address this
-        // one -- terminal by then, so the route would answer politely and the
-        // live turn would keep generating with nothing to stop it.
-        runRef.current = null;
-        setStreaming("");
-        setStreamingSpeakers([]);
-        setBusy(false);
-        // NOT released with `busy`. Review caught that clearing it here unlocks
-        // the scene while `on_abort` may still be writing to it: the poll below
-        // exists precisely because the backend's shielded flush lands seconds
-        // after the socket died, and a rename in that gap moves the file out from
-        // under the very write the poll is waiting for. The lock is released at
-        // the bottom of this block instead, once there is nothing left to land.
-        // the reply is persisted as per-speaker posts — re-fetch to show them
-        // (selectScene also bumps ctxKey and refreshes the player name)
-        //
-        // Guarded, because `setBusy(false)` above already re-enabled Send and this
-        // fetch is an await: the player can start the next turn while it is in
-        // flight, and the stale response would then apply `setMessages` over that
-        // turn's optimistic post and `setStreaming("")` over its live preview.
-        // Review caught this one on the immediate refresh after it had already
-        // been fixed on the polling ones — the mechanism was sitting right here.
-        //
-        // Only `abortRef`, unlike the poll's predicate — and deliberately so,
-        // even though it means this refresh can install the turn's scene over
-        // one the reader has since opened. That pull-back is load-bearing: a
-        // turn that failed parks the player's words under ITS scene, and the
-        // composer is one shared box, so the view has to return to that scene
-        // or the recovered prompt is either invisible or shown against the
-        // wrong transcript ("a recovered prompt is never shown against the
-        // scene the player moved to").
-        //
-        // Adding a scene check here was tried and reverted: it silently broke
-        // prompt recovery, which is the one thing in this file that guards text
-        // existing nowhere else. The divergence it would have prevented is
-        // instead made harmless where it does damage — `saveEdit` refuses to
-        // write while the transcript on screen belongs to another scene.
-        //
-        // Its failure is caught rather than thrown, because it is the *same*
-        // failure the turn just had: a POST that never reached the server usually
-        // means this GET will not either. Letting it escape from a `finally`
-        // skipped the restoration below and replaced the original error on the
-        // way out, so the one case that most needs the player's words back was
-        // the one case that dropped them (review, #95).
-        let seen = -1;
-        let refreshed = false;
-        try {
-          seen = await selectScene(id, () => !abortRef.current);
-          refreshed = true;
-        } catch (err: unknown) {
-          // Keep whatever the turn itself reported; say something if it reported
-          // nothing, since the view is now showing a transcript it could not
-          // confirm (a cancel raises no banner of its own).
-          // Built here rather than through `fail`, which overwrites: the rule is
-          // to keep whatever the turn reported. Retryable — this is the failure
-          // path of a *generation*, so generating again is the right recovery.
-          setError((cur) => cur ?? { text: errorText(err), retryable: true });
-        }
-        // Anything that ended without `done` may have left a partial the backend
-        // is still flushing — a cancel, or a body cut short. An error frame is
-        // NOT one of those: the backend ran its handler before sending it, so the
-        // refresh above already sees whatever it wrote.
-        //
-        // Not gated on having seen text, either. Gating on `acc` was wrong and
-        // review caught it: what reached the client is not what the backend has to
-        // flush. `FenceWatcher.feed` returns "" for the whole of a roll fence and
-        // withholds anything that might yet become one, so a reply that opens with
-        // a fence streams nothing at all while the server still persists a
-        // proposal — invisible until some later refresh under the old gate.
-        // Now the transcript has answered it: no growth means the post never
-        // landed, so the prompt exists nowhere and the composer has to have it
-        // back. `seen < 0` is `selectScene` bowing out to a newer owner — it did
-        // not look, so it cannot say.
-        //
-        // And when the transcript cannot answer — the refresh failed, or this
-        // scene's length before the turn was never established — restore anyway.
-        // Both mean the same thing: nothing proves the post landed. Erring the
-        // other way risks a duplicate the player can see and delete; erring this
-        // way destroys text that exists in no other place.
-        //
-        // Both outcomes that can leave the post unwritten ask the same question,
-        // so they share the answer: the request that never arrived, and the one
-        // the server refused. `nothingLanded` is the transcript saying it, out
-        // loud — not merely the absence of evidence that it did.
-        //
-        // `seen < 0` belongs in `unverifiable`, and review caught that it was not
-        // there. It is `selectScene` retiring its own read because a newer owner
-        // took the view — the comment above already calls that "it did not look,
-        // so it cannot say", which is the definition of unverifiable, but the code
-        // said otherwise: the await did not throw, so `refreshed` was true, and a
-        // prompt that genuinely never landed went unrestored because the read that
-        // would have proved it was thrown away.
-        const unverifiable = !refreshed || totalBefore === null || seen < 0;
-        const nothingLanded = !unverifiable && seen <= totalBefore;
-        // A stream that started and then stopped without either frame is the
-        // third way to end up with no post, and review caught it as the one the
-        // client had no answer for: the backend rolls the post back *before* it
-        // yields the error frame, so a connection dropped in between leaves a
-        // rollback that happened and a client that was never told. Nothing is set
-        // — not errored, not unreached, not refused — and the poll cannot help,
-        // because it watches for growth and a rollback only ever shrinks.
-        //
-        // Only on positive proof, unlike the two above. Headers arrived, which
-        // for a chat means `post_chat` already appended; so an unverifiable
-        // refresh here means the post is most likely sitting in the transcript,
-        // and restoring on a guess would duplicate it. `nothingLanded` is the
-        // transcript saying the rollback ran.
-        const interrupted = !finished && !errored && !unreached && !refused;
-        // Codex review (round 2, P1). `errored` is excluded above, because for
-        // an ordinary post the error frame already recovers — the backend sets
-        // `post_returned` and the handler acts on it mid-stream. An ephemeral
-        // turn has no post to return, so that flag is NEVER set for one and
-        // the error frame recovers nothing; a provider that dies before any
-        // narration therefore destroyed the note. The transcript is the only
-        // witness left, and for an ephemeral turn it is a clean one:
-        // `nothingLanded` means the generation left no reply, with no post of
-        // its own to confuse the count. Safe to add only here — with
-        // `post_returned` unreachable for these turns, this cannot double up
-        // with the in-stream recovery.
-        const diedWithNothing = ephemeral && errored && nothingLanded;
-        // A provider can finish CLEANLY and write nothing: an empty safety
-        // response is a shape the backend supports, and it still ends the
-        // stream with `done` (Codex review). `landed` is then true, so none of
-        // the branches above fires and an ephemeral turn's note -- already
-        // cleared out of the composer -- would exist nowhere at all, with no
-        // reply to show for it either.
-        //
-        // `!proposed` is the exception that keeps this honest: a director turn
-        // that answered with a roll proposal instead of narration DID produce
-        // something, and its note was spent doing so. The transcript not
-        // growing is not "nothing happened" in that case.
-        const finishedWithNothing = ephemeral && !rerolling && finished && !errored
-          && nothingLanded && !proposed;
-        // Recorded for the RETURN as well as the recovery (Codex review). This
-        // turn reached the provider and came back with nothing at all, so
-        // reporting it as landed hands the caller a lie with a cost: `send`
-        // spends the one-shot response-length override on it, and the override
-        // was promised to the next REPLY. The note is being handed back for
-        // another attempt; the knob chosen for that attempt goes with it.
-        producedNothing = finishedWithNothing;
-        if (((unreached || refused) && (unverifiable || nothingLanded))
-            || (interrupted && nothingLanded) || diedWithNothing
-            || finishedWithNothing) {
-          onPromptUnstored?.();
-        }
-        // Nothing to wait for when nothing on the server can produce a partial: a
-        // refusal never started a stream, and a request that verifiably never
-        // arrived never made a turn.
-        //
-        // `unreached` alone is not that proof, and review caught it standing in
-        // for it. It says no *response* came back, which the server can do having
-        // already appended the post and begun generating — and growth in the
-        // refresh proves exactly that happened. So the poll is skipped only when
-        // the transcript confirms the turn does not exist; an unverified guess
-        // costs a few reads, while being wrong the other way loses the partial.
-        //
-        // The poll needs a length to watch for growth past, and a refresh that
-        // failed did not produce one. Fall back to this scene's pre-turn length:
-        // still the right question (did the flush land?), just measured from
-        // where the turn started. `-1` only when even that is unknown, which
-        // makes the first successful read count as growth — the poll refreshes
-        // once and stops, which is what an unmeasurable scene can honestly do.
-        if (!finished && !errored && !refused && !(unreached && nothingLanded)) {
-          await awaitFlushedPartial(id, seen >= 0 ? seen : (totalBefore ?? -1));
-        }
-        // Now nothing else can write to this scene through this turn, so its file
-        // is free to move again — unless a newer turn has claimed the lock in the
-        // meantime. `busy` was cleared before the poll, so that is a real race and
-        // clearing unconditionally would unlock the scene the *new* turn is
-        // streaming into. Same token idiom as `windowTokenRef`.
-        if (streamTokenRef.current === streamToken) setStreamingId(null);
-        // NO `askAfterPost` HERE, and its absence is the point (#397). The
-        // rolling-summary fold and the scene-break question used to be fired
-        // from exactly this line, once the streaming promise settled — which is
-        // precisely the thing that does not happen in the case detached turns
-        // exist for. The phone locks, this JavaScript is suspended or the page
-        // is gone, the turn lands server-side, and nothing here is left to ask:
-        // the summary falls behind by however many turns were taken with the
-        // app backgrounded, and the scene-break prompt never appears.
-        //
-        // So the backend schedules both itself, when the turn's terminal write
-        // finishes (`streaming._fire_follow_up` → `scenes.schedule_follow_ups`),
-        // with a boundary it reads under the lock that write held — strictly
-        // better than the `seen` this side could offer, which is a read taken
-        // after the scene was already released. Asking from here as well would
-        // simply run each of them twice.
-        //
-        // Every other transcript write in this component still asks for itself,
-        // and correctly so: an edit, a cut, a retcon, a roll and a check are all
-        // requests the player is waiting on, so there is a client here by
-        // construction. It is only the turn whose end this side can miss.
-      }
-      // However it ended: a turn that landed on the swipe target's response, or
-      // one that failed and left its content alone, both move what the swipe
-      // read answers without necessarily moving the text it refetches on.
-      responseSwipe.refresh();
-    }
-    // Landed means the backend said so, not that the promise resolved -- and
-    // not that it produced anything: an ephemeral turn that finished cleanly
-    // with no reply is being recovered, not completed.
-    return finished && !errored && !producedNothing;
-  }
-
-  async function send(speakerRef?: string) {
-    if (busy || rolling || renamesInFlight || !canGenerate) return;
-    const content = input.trim();
-    let id = activeId;
-    if (!id) {
-      if (!content) return;
-      id = (await api.createScene(cid)).id;
-      await loadScenes();
-      // The reader left while the scene was being created. Everything below
-      // this point writes to the VIEW — it clears the composer, appends the
-      // prompt optimistically, and streams deltas into it — and none of it is
-      // campaign-scoped, so carrying on would render this turn into the
-      // campaign they moved to and leave the polluted transcript there (the
-      // refresh that would replace it is refused for being the wrong campaign).
-      //
-      // An earlier version of this guard covered only the adopt-and-navigate
-      // just below, on the reasoning that the turn "posts to `cid`, so the
-      // write lands where the player typed it". True of the write, and beside
-      // the point for the eight lines after it (codex review).
-      //
-      // So the turn does not start. The scene stays — created, empty, in the
-      // campaign it belongs to — and the composer is not cleared, so the words
-      // are still there to send. Abandoning an empty scene is a smaller cost
-      // than either losing what was typed or showing it in the wrong campaign.
-      if (cidRef.current !== cid) return;
-      setActive(id);
-      // Same pairing as the rename: an id adopted without the reader going
-      // anywhere, so the URL follows it in the same batch with `replace`
-      // (there was no scene here to go Back to). Without this the resolver
-      // sees `activeId` moved while the URL still names no scene, and bounces
-      // the turn onto whatever the list happens to sort first.
-      void navigate(sceneUrl(cid, id), { replace: true });
-    }
-    setInput("");
-    // the player just spoke: put them back at the tail even if they had
-    // scrolled up into older history to re-read something
-    atBottomRef.current = true;
-    await sendText(id, content, directing, true, speakerRef);
-  }
-
-  /** One turn's worth of text, sent to scene `id` -- the body of `send` from
-   *  the point the composer has been read. Takes the text and the turn kind as
-   *  arguments, so a quick reply can send without writing composer state first:
-   *  it never reads or clears `input`, so a draft survives a quick reply.
-   *
-   *  `recover` is whether a failed turn hands `content` back to the composer
-   *  (and arms the durable copy). True for what the player typed; false for a
-   *  quick reply, whose canned text is re-tappable and would otherwise land in
-   *  the box -- and flip its mode -- on a failure. The one-shot response
-   *  targets are consumed exactly as Send consumes them. */
-  async function sendText(id: string, content: string, director: boolean, recover: boolean,
-                          speakerRef?: string) {
-    if (!canGenerate) return;
-    // A new prompt supersedes a failed reroll: whatever Retry would have
-    // repeated, the player has moved on from it.
-    rerollToRetryRef.current = null;
-    // a new turn supersedes any pending proposal durably on the backend —
-    // clear the chip optimistically rather than wait for the re-fetch. Ordered,
-    // so a read issued before this send cannot put the chip back afterwards.
-    setProposalNow(null);
-    // Ephemeral turns are never stored: a director note — asked for in Direct
-    // mode, or the only kind of turn an offscreen scene has — or, in any scene
-    // and either mode, an empty send meaning "next NPC round".
-    //
-    // The note is recovered in-session but NOT made durable, and that asymmetry
-    // is the whole of it (Codex review, P1).
-    //
-    // `onPromptUnstored` is safe here: it fires on what the STREAM said --
-    // refused, unreachable, or interrupted over a transcript that did not grow
-    // -- and for an ephemeral turn "did not grow" means no reply landed, with
-    // no post of its own to confuse the measurement. A refusal is the case that
-    // matters: nothing generated, nothing to duplicate, and the composer was
-    // cleared on send, so without this the player's words exist nowhere.
-    //
-    // `recoverableText` is deliberately NOT passed, and that is not timidity.
-    // The durable half settles by asking the server `attemptState().retained`,
-    // and an ephemeral turn writes no attempt record at all -- so it answers
-    // false for a note that WORKED exactly as loudly as for one that died. Arm
-    // it and every successful director turn hands its note back afterwards.
-    // In-session recovery can tell those apart; the durable one cannot.
-    // Identity is the ownership token (Codex review, round 3). `runStream`
-    // unlocks the composer before it returns -- the flush poll it awaits runs
-    // after `setBusy(false)` -- so a SECOND turn can be under way while this
-    // `send` is still awaiting, and an unconditional clear in the finally below
-    // would wipe that turn's note off the screen for the rest of its
-    // generation. Cleared only if what is on screen is still this one.
-    //
-    // Assigned BEFORE the branch, so an ordinary post says so too (round 4).
-    // With the clear made ownership-safe, a stale note otherwise outlived its
-    // own generation and rendered beside the NEXT turn's reply, claiming to
-    // have steered something it never saw. Every send now states what note is
-    // in force, and for a Speak post that statement is "none".
-    const note = director && content ? { cid, sid: id, text: content } : null;
-    // Trailing argument only when a chip named a speaker, so every other send
-    // is the same call it always was.
-    const speakerArg: [] | [string] = speakerRef ? [speakerRef] : [];
-    if (director || !content) {
-      try {
-        const landed = await runStream(id,
-          (onEvent, signal, attempt, onIndex) =>
-            api.chat(cid, id, content, onEvent, pendingResponse ?? undefined,
-                     signal, attempt, onIndex, director, ...speakerArg),
-          // An empty send has nothing to give back — it is the "next NPC round"
-          // fast path, not words anyone typed.
-          content && recover ? () => recoverPrompt(cid, id, content, true) : undefined,
-          false, "", true, note);
-        if (landed) setPendingResponse(null);
-      } finally {
-        setDirectorNote((cur) => (cur === note ? null : cur));
-      }
-      return;
-    }
-    showOptimistically((m) => [...m, { role: "user", content }]);
-    // The prompt is not in the transcript — either the backend took it back, or
-    // the request never got there — so this text now exists nowhere: the
-    // composer was cleared on send and the refresh dropped the optimistic copy.
-    // Put it back rather than lose what the player wrote, but never over
-    // something they have started typing since.
-    //
-    // From the callback rather than after the await: `runStream` does not
-    // return until its flush poll has finished, and the player should not have
-    // to wait that out to get their own words back.
-    // Through `recoverPrompt`, which decides *where* the words go: the composer
-    // if the player is still on this scene, parked under `id` if they have
-    // moved on. The appending rule that used to live here moved with it — see
-    // `giveBackPrompt`. `id`, captured here, is the scene this prompt was
-    // written for, and it stays right however long the recovery takes.
-    const landed = await runStream(id,
-      (onEvent, signal, attempt, onIndex) =>
-        // The trailing `false` is `director`: this is the branch that POSTS, so
-        // it is the one send that can never be a note.
-        api.chat(cid, id, content, onEvent, pendingResponse ?? undefined,
-                 signal, attempt, onIndex, false, ...speakerArg),
-      recover ? () => recoverPrompt(cid, id, content) : undefined, false,
-      // The words the player typed, held until the outcome proves them durable.
-      recover ? content : "");
-    if (landed) setPendingResponse(null);
-  }
-
-  /** A quick reply's send: the canned text, as the player or as a director
-   *  note, through the same path Send takes -- but the composer is neither read
-   *  nor cleared, and a failure does not hand the text back (it is still on the
-   *  button). The guard is Send's own. */
-  async function sendQuick(text: string, director: boolean) {
-    if (!activeId || busy || rolling || renamesInFlight || !canGenerate || !text.trim()) return;
-    atBottomRef.current = true;
-    await sendText(activeId, text.trim(), director, false);
-  }
-
-  /** A quick reply's insert: the canned text into the composer, to edit and
-   *  send. An empty box takes it and the reply's turn kind; a draft of the same
-   *  kind gets it appended after a blank line. A draft of the OTHER kind keeps
-   *  the box -- one composer carries one mode -- so the text waits exactly as a
-   *  recovered prompt does, behind the existing held-draft notice, and comes
-   *  back when the box is cleared. If something recovered is already waiting
-   *  for this scene, the insert is refused instead: parking over it would
-   *  drop words the player wrote. */
-  function insertQuick(text: string, director: boolean) {
-    if (!activeId) return;
-    if (!input.trim()) {
-      setInput(text);
-      setDirectMode(director);
-      return;
-    }
-    if (director === directing) {
-      setInput((cur) => `${cur.trimEnd()}\n\n${text}`);
-      return;
-    }
-    const key = parkKey(cid, activeId);
-    if (parkedPrompts.current.has(key)) {
-      setQuickNotice({ cid, sid: activeId,
-        text: `${director ? "note" : "post"} not inserted · clear the box first` });
-      return;
-    }
-    parkedPrompts.current.set(key, { text, director });
-    setParkedTick((n) => n + 1);
-  }
-
-  /** A saved roll: the dice button's route, with its own notice on failure. */
-  async function rollQuick(notation: string, label: string | undefined) {
-    const forCid = cid;
-    const sid = activeId;
-    const outcome = await doRoll(notation, label);
-    if (sid && typeof outcome === "object")
-      setQuickNotice({ cid: forCid, sid, text: `Roll failed: ${outcome.error}` });
-  }
-
-  /** A task on the strip: the rolling summary or the scene-break check run now
-   *  (forced, and bounded at the transcript on screen so a fold cannot swallow
-   *  a post the reply to which has not landed), or the next-scene chooser. */
-  async function runQuickTask(task: QuickReplyTask) {
-    if (task === "next_scene") {
-      newScene();
-      return;
-    }
-    if (!activeId || sceneLocked || !ready || messages.length === 0 || taskRunning(task)) return;
-    const forCid = cid;
-    const sid = activeId;
-    const key = taskKey("strip", forCid, sid, task);
-    // Absolute: the transcript is read in windows, and `messages[0]` is post
-    // `firstIndex`.
-    const upto = firstIndex + messages.length;
-    const here = () => cidRef.current === forCid && activeIdRef.current === sid;
-    const notice = (text: string) => { if (here()) setQuickNotice({ cid: forCid, sid, text }); };
-    markTask(key, true);
-    try {
-      if (task === "rolling_summary") {
-        const r = await api.refreshRollingSummary(forCid, sid, true, upto);
-        if (r.refreshed) { if (here()) setCtxKey((n) => n + 1); }
-        else notice("Summary already current — nothing new to fold");
-      } else {
-        const r = await api.askSceneBreak(forCid, sid, true, upto);
-        if (r.asked) { if (here()) setCtxKey((n) => n + 1); }
-        else notice("No scene-break question asked");
-      }
-    } catch (err: unknown) {
-      notice(`${task === "rolling_summary" ? "Summary" : "Scene-break check"} failed: ${errorText(err)}`);
-    } finally {
-      markTask(key, false);
-    }
-  }
-
-  function runQuickReply(r: QuickReply) {
-    setQuickNotice(null);
-    switch (r.kind) {
-      case "send":
-      case "direct":
-        if (r.mode === "insert") insertQuick(r.text ?? "", r.kind === "direct");
-        else void sendQuick(r.text ?? "", r.kind === "direct");
-        return;
-      case "roll":
-        void rollQuick(r.notation ?? "", r.roll_label);
-        return;
-      case "task":
-        if (r.task) void runQuickTask(r.task);
-        return;
-      case "opener":
-        setOpenerRequest((n) => n + 1);
-        return;
-      default:
-        return;
-    }
-  }
-
-  async function saveEdit() {
-    // `rolling` for the same reason the swipe buttons read it: an edit saved
-    // while a swap is in flight carries the index and text of the message on
-    // screen, which the promotion is in the middle of replacing. Whichever
-    // write loses the race silently discards the other, and the two refreshes
-    // can land out of order on top of that.
-    if (!editing || !activeId || rolling) return;
-    // The transcript ON SCREEN must be the active scene's own. `editing.index`
-    // is an index into what is rendered and `activeId` is where it would be
-    // written, and the two describe different scenes for exactly one read
-    // whenever a background refresh installs the turn's scene over the one the
-    // reader opened: the resolver then corrects `activeId` back to the URL's
-    // scene, and until that read lands the old messages are still on screen.
-    // Saving in that window overwrites an unrelated message of the scene now
-    // active (codex review, P1).
-    //
-    // `transcriptIsActive` is the named form of exactly this fact.
-    if (!transcriptIsActive) return;
-    await api.editMessage(cid, activeId, editing.index, editing.text);
-    setEditing(null);
-    const seen = await selectScene(activeId);
-    // An edit does not APPEND a post, so this never crosses the threshold by
-    // count — but it rewrites text the stored summary already covers, which
-    // moves `covered_digest` and makes that summary describe words no longer
-    // in the transcript. The server reads that as a from-scratch refold being
-    // due, so the ask is what turns a summary the panel can only flag as stale
-    // back into a correct one. Review caught that leaving it out meant the
-    // stale flag sat there until some later *generated* turn asked.
-    askAfterPost(activeId, seen);   // #85, #84
-  }
-
-  /** Retcon: the same rewrite `saveEdit` makes, plus the reversal of what this
-   *  scene's absorb wrote (#78).
-   *
-   *  Two buttons rather than one, because they are different intentions and
-   *  only one of them is destructive. A plain Save fixes the words; a retcon
-   *  says the scene did not happen that way, which makes the recorded summary,
-   *  the write-backs and the beats descriptions of a transcript that is no
-   *  longer there — so they are put back and the scene becomes unfinished,
-   *  ready to be absorbed again.
-   *
-   *  Guarded exactly as `saveEdit` and `deleteMessagesFrom` are, and for their
-   *  reasons: `rolling`, because a swap in flight is rewriting the posts this
-   *  index addresses, and `transcriptIsActive`, because during a background
-   *  refresh the messages on screen can belong to a scene other than `activeId`.
-   */
-  async function saveRetcon() {
-    if (!editing || !activeId || rolling || !transcriptIsActive) return;
-    if (!window.confirm(
-      "Retcon this post?\n\n" +
-      (activeDone
-        ? "This scene has been absorbed. Every recorded write-back is put back, its " +
-          "chronicle record, beats, change history and citations go, and it becomes " +
-          "unfinished so it can be absorbed again — which is how the re-extraction " +
-          "gets to disagree with what later scenes recorded.\n\n"
-        : "") +
-      "The posts after it are left alone. Replay them from the gutter if they no " +
-      "longer follow.")) return;
-    const release = takeRollLatch(activeId);
-    let report;
-    try {
-      report = await api.retconMessage(cid, activeId, editing.index, editing.text);
-    } catch (err: unknown) {
-      fail(err, false);            // not retryable: Retry re-runs the CHAT retry
-      return;
-    } finally {
-      release();
-    }
-    setEditing(null);
-    // The rail carries `done`, which an absorbed scene has just lost.
-    await loadScenes();
-    const seen = await selectScene(activeId);
-    setCtxKey((k) => k + 1);       // beats and citations left the ledger
-    askAfterPost(activeId, seen);   // #85/#84, exactly as `saveEdit` asks
-    // What the transcript afterwards cannot show, in the same two clauses the
-    // cut reports and for the same reason — plus the one thing specific to a
-    // retcon: which scenes were played after this one, and so can disagree with
-    // what a re-absorb now extracts.
-    const notes = [];
-    if (report.refused.length) {
-      notes.push(
-        `${report.refused.length} record${report.refused.length === 1 ? "" : "s"} ` +
-        "could not be put back: " + report.refused.map((r) => r.label).join(", "));
-    }
-    if (report.failed.length) {
-      notes.push("some continuity records could not be cleaned up (" +
-                 report.failed.join(", ") + ") — check them by hand");
-    }
-    if (report.later.length) {
-      notes.push(`${report.later.length} later scene${report.later.length === 1 ? "" : "s"} ` +
-                 "already recorded state from here on — absorb this scene again to see " +
-                 "which of its findings they contradict");
-    }
-    if (notes.length) setError({ retryable: false, text: notes.join(". ") });
-  }
-
-  /** Cascade post-delete: this post and everything after it (#75).
-   *
-   *  The confirmation is not a formality. A cascade delete reaches records the
-   *  transcript does not show — the chronicle entry, plot and commitment beats,
-   *  the change history — and puts back what the scene's absorb wrote. So the
-   *  prompt states the post count, names what a finished scene additionally
-   *  loses, and names the two things that survive on purpose (the roll log is
-   *  append-only; the timeline carries no scene attribution). Guessing at any of
-   *  that after the fact is not something the player can do from what is left.
-   *
-   *  Guarded exactly as `saveEdit` is, and for the same reasons: `rolling`,
-   *  because a swap in flight is rewriting the posts this index addresses, and
-   *  `transcriptIsActive`, because during a background refresh the messages on
-   *  screen can belong to a different scene than `activeId` — which here would
-   *  cut an unrelated scene at an index taken from this one.
-   */
-  async function openCharacterPassage(rid: string) {
-    if (!activeId || busy || sceneLocked) return;
-    const sid = activeId;
-    try {
-      const response = await api.getResponse(cid, sid, rid);
-      if (cidRef.current === cid && activeIdRef.current === sid)
-        setCharacterPassage({ cid, sid, rid, source: response.content });
-    } catch (err) { fail(err); }
-  }
-
-  async function mutateResponse(id: string, variant?: string) {
-    if (!activeId || busy || rolling || sceneLocked || editing || !transcriptIsActive) return;
-    if (!variant && !window.confirm("Delete only this response? Later messages remain and will be marked as having changed context.")) return;
-    const sid = activeId;
-    const release = takeRollLatch(sid);
-    try {
-      if (variant) await api.activateResponseVariant(cid, sid, id, variant);
-      else await api.deleteResponse(cid, sid, id);
-      if (cidRef.current === cid && activeIdRef.current === sid) await selectScene(sid);
-    } catch (err) { fail(err); }
-    finally {
-      release();
-      // Success or refusal alike: a 409 means the server's state is not the one
-      // the arrows were drawn from, and an activate that landed may have left
-      // the content unchanged (a variant with the same text).
-      responseSwipe.refresh();
-    }
-  }
-
-  /** A ledger reroll -- the swipe's ›, the reroll box (↻, `r`, → at the
-   *  newest) and the Response variants disclosure alike. It streams the frozen
-   *  snapshot and the server ignores `response`, so it never sends the pending
-   *  one-shot override and never clears it: doing either would spend the
-   *  player's next-turn length chip on a request that never used it. The
-   *  legacy `reroll` path, which recomposes, still carries and spends it. */
-  async function rerollResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
-    if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive
-      || !canGenerateOnRoute(canGenerate, route)) return;
-    const sid = activeId;
-    await runStream(sid, (onEvent, signal, attempt, onIndex) =>
-      api.regenerateResponse(cid, sid, id, onEvent, { guidance, ...rerollOverrides(route) }, signal, attempt, onIndex),
-      undefined, true, "", true, null, route);
-    // No swipe refresh here: `runStream`'s finally asks again on every
-    // outcome, including a failed generate that kept the previous variant.
-  }
-
-  /** Keep writing: continue the trailing response where it stops, landing as a
-   *  new variant (the unextended one stays a swipe back). The reroll's guards,
-   *  plus Keep writing's own disabled flag, re-checked here because a stale
-   *  click must do nothing the button could not. Like `rerollResponse`, it
-   *  never sends or clears the pending one-shot override. No bare key: it
-   *  spends money, so it is only ever a click. */
-  async function extendResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
-    if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive
-      || !canGenerateOnRoute(canGenerate, route)) return;
-    if (extendDisabled || swipeTarget?.response_id !== id) return;
-    const sid = activeId;
-    await runStream(sid, (onEvent, signal, attempt, onIndex) =>
-      api.extendResponse(cid, sid, id, onEvent, { guidance, ...rerollOverrides(route) }, signal, attempt, onIndex),
-      undefined, true, "", true, null, route);
-  }
-
-  async function respondAs(ref: string) {
-    if (!activeId || busy || rolling || sceneLocked || renamesInFlight || !transcriptIsActive || !canGenerate) return;
-    const sid = activeId;
-    const landed = await runStream(sid, (onEvent, signal, attempt, onIndex) =>
-      api.chat(cid, sid, "", onEvent, pendingResponse ?? undefined, signal, attempt, onIndex, false, ref),
-      undefined, false, "", true);
-    if (landed) setPendingResponse(null);
-  }
-
-  /** Hide a post from context, or return it. Guarded as `saveEdit` is, and for
-   *  its reasons: a swap in flight is rewriting these posts, and the indices on
-   *  screen must be the active scene's own. The same latch the cut takes, since
-   *  the toggle rewrites the transcript too. Exclusion moves the digests the
-   *  rolling summary and scene-break check are measured against, so the
-   *  follow-ups are asked for as after an edit. */
-  async function toggleExcluded(index: number, excluded: boolean) {
-    if (!activeId || rolling || !transcriptIsActive) return;
-    const release = takeRollLatch(activeId);
-    try {
-      await api.setExcluded(cid, activeId, index, excluded);
-    } catch (err: unknown) {
-      fail(err, false);
-      return;
-    } finally {
-      release();
-    }
-    const seen = await selectScene(activeId);
-    askAfterPost(activeId, seen);   // #85, #84
-  }
-
-  async function deleteMessagesFrom(index: number) {
-    if (!activeId || rolling || !transcriptIsActive) return;
-    // The window is always the transcript's TAIL, so this is the real total
-    // however few posts have been paged in.
-    const n = firstIndex + messages.length - index;
-    const ask = [
-      n === 1 ? "Delete this post?"
-              : `Delete this post and the ${n - 1} after it?`,
-      activeDone
-        ? "This scene has been absorbed. Its chronicle record, plot and commitment " +
-          "beats, change history and citations go with it, and it becomes unfinished " +
-          "so it can be absorbed again. Every recorded write-back is put back, except " +
-          "where the record has changed since — those are reported and left alone."
-        : "This cannot be undone.",
-      "Dice rolls stay in the roll log and the timeline is not rewritten.",
-    ].join("\n\n");
-    if (!window.confirm(ask)) return;
-    setEditing(null);
-    // The same latch reroll, retry and the two roll paths take, and taken for
-    // the reason it exists: it holds until an unrelated request has settled, and
-    // every one of those rewrites this transcript. Without it a second click
-    // lands a second cut against indices the first is in the middle of moving.
-    // Confirm is modal so it cannot be double-fired, but the await below is not,
-    // and this is the least reversible thing in the app.
-    const release = takeRollLatch(activeId);
-    let report;
-    try {
-      report = await api.deleteMessagesFrom(cid, activeId, index);
-    } catch (err: unknown) {
-      // Not retryable: Retry re-runs the CHAT retry, which would generate a
-      // reply into the scene the player was trying to cut back.
-      fail(err, false);
-      return;
-    } finally {
-      // Released before the refreshes rather than after: they are reads, and
-      // holding a latch that greys out the gutter across them buys nothing.
-      release();
-    }
-    // The rail carries `done`, which an absorbed scene has just lost — without
-    // this the composer stays hidden and the row still reads as absorbed.
-    await loadScenes();
-    const seen = await selectScene(activeId);
-    // The ledger resolves every thread, commitment and fact against the scenes,
-    // and this has just removed beats from it — same reason `deleteScene` bumps.
-    setCtxKey((k) => k + 1);
-    // The stored fold covers a prefix that may no longer exist. The server
-    // reports that as stale on its own (`at > total`, or a moved digest); this
-    // is what turns the flag back into a correct summary.
-    askAfterPost(activeId, seen);   // #85, #84
-    // What the shortened transcript cannot show. Two distinct outcomes, and
-    // reported as two clauses because conflating them would mislead:
-    //
-    //  - `refused` — records that could not be put back and still hold what the
-    //    deleted scene gave them. Both a record something else wrote to since
-    //    (the reversal declines rather than discarding that later change) and a
-    //    kind with no reversal at all (a character or lore entry the scene
-    //    CREATED, the one a player is most likely to meet) land here.
-    //    Deliberately not claiming which: naming the records is what lets the
-    //    player go and look, and asserting the wrong reason is worse than none.
-    //  - `failed` — cleanup that could not run, typically a store file edited by
-    //    hand into something that will not parse. The cut still happened, so
-    //    saying nothing would leave stale continuity looking authoritative.
-    const notes = [];
-    if (report.refused.length) {
-      notes.push(
-        `${report.refused.length} record${report.refused.length === 1 ? "" : "s"} ` +
-        `could not be put back and ${report.refused.length === 1 ? "was" : "were"} ` +
-        "left as it stands: " + report.refused.map((r) => r.label).join(", "));
-    }
-    if (report.failed.length) {
-      notes.push("some continuity records could not be cleaned up (" +
-                 report.failed.join(", ") + ") — check them by hand");
-    }
-    if (notes.length) setError({ retryable: false, text: notes.join(". ") });
-  }
-
-  // What the error banner's Retry re-runs. `/retry` continues from the
-  // transcript as it stands, which is the right redo for a chat or a retry —
-  // but not for a reroll. A failed reroll now puts the old reply back (#95), so
-  // "try that again" through `/retry` would generate a *continuation* of the
-  // reply the player asked to replace, and silently drop their guidance with
-  // it. Review caught this as a consequence of the restore: before it, the
-  // reply was gone, so `/retry` happened to do the right thing by accident.
-  //
-  // Reset on every turn that lands, so Retry only ever repeats the operation
-  // that actually failed.
-  //
-  // Carries the scene it belongs to, because the error banner does not: a
-  // reroll that fails in one scene leaves both the banner and this ref standing
-  // while the player moves to another, and Retry there would have rerolled the
-  // *new* scene — replacing a reply nobody asked to replace, with guidance
-  // written for a different scene (review, #95). A switch also clears the
-  // banner now, so the button is usually gone; the scene check is what makes
-  // that airtight rather than merely likely.
-  //
-  // The route rides along with the guidance (#77) for the same reason: "try
-  // that again" means the same reroll, and a Retry that quietly dropped the
-  // local endpoint the player chose would answer with the campaign's model
-  // while looking like a repeat.
-  const rerollToRetryRef =
-    useRef<{ sid: string; guidance: string; route: RerollRoute } | null>(null);
-
-  // A failed explicit reroute retries the provider it chose, not the broken
-  // default. The banner and shortcut read the same route-aware availability.
-  const canRetry = canGenerateOnRoute(canGenerate,
-    rerollToRetryRef.current?.sid === activeId ? rerollToRetryRef.current.route : NO_REROLL_ROUTE);
-
-  async function retry() {
-    if (!activeId || busy || rolling || renamesInFlight || !canRetry) return;
-    const again = rerollToRetryRef.current;
-    if (again && again.sid === activeId) return void await reroll(again);
-    const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
-      pendingResponse
-        ? api.retry(cid, activeId, onEvent, pendingResponse, signal, attempt, onIndex)
-        : api.retry(cid, activeId, onEvent, undefined, signal, attempt, onIndex));
-    if (landed) setPendingResponse(null);
-  }
-
-  async function reroll(repeat?: { guidance: string; route: RerollRoute }) {
-    if (!activeId || busy || rolling || renamesInFlight) return;
-    // The affordance and the optimistic removal below both read the RENDERED
-    // messages while `api.regenerate` targets `activeId`, so during the
-    // divergence window this replaces a reply of the active scene that the
-    // reader was never shown. Guarded here as well as on `canReroll`, because
-    // `retry` reaches this function without going past the button.
-    if (!transcriptIsActive) return;
-    const guidance = repeat?.guidance ?? (rerollPrompt ?? "").trim();
-    const route = repeat?.route ?? rerollRoute;
-    if (!canGenerateOnRoute(canGenerate, route)) return;
-    setRerollPrompt(null);
-    rerollToRetryRef.current = { sid: activeId, guidance, route };
-    const selectedResponse = messages[rerollAt - firstIndex];
-    if (selectedResponse?.response_id) {
-      rerollToRetryRef.current = null;
-      if (selectedResponse.response_can_reroll) await rerollResponse(selectedResponse.response_id, guidance, route);
-      else setReplayAt(rerollAt);
-      return;
-    }
-    // one turn is a run of assistant posts — drop the whole trailing run, but
-    // keep any trailing transition lines, which the backend also preserves
-    showOptimistically((m) => {
-      let end = m.length;
-      const kept: Message[] = [];
-      while (end > 0 && m[end - 1].speaker === TRANSITION_SPEAKER) kept.unshift(m[--end]);
-      while (end > 0 && m[end - 1].role === "assistant") end--;
-      return [...m.slice(0, end), ...kept];
+  function runStream(id: string, start: TurnRequest["start"], recoverText?: () => void,
+    rerolling = false, durableText = "", ephemeral = false,
+    note: DirectorNote | null = null, route: RerollRoute = NO_REROLL_ROUTE) {
+    return executeTurn({
+      scope: { cid, sid: id }, start, recoverText, rerolling,
+      durableText, ephemeral, note, route
+    }, {
+      canGenerate, renamesInFlight, session, registry, setError, verifiedTotal, fail,
+      setProposalNow, providerSucceeded, readTranscript, refreshSwipe: responseSwipe.refresh,
+      attachment: {
+        session, registry, fail, recoverPrompt, setProposalNow, setError,
+        readTranscript, bumpReplayEpoch: () => setReplayEpoch((n) => n + 1)
+      },
+      settlement: { session, selected, claimProposalRead, applyProposalRead, readTranscript },
     });
-    // One object, and `api.regenerate` drops the empty fields — what used to be
-    // a branch per combination of the two it could carry, which the route
-    // override would have doubled again. The pending one-shot response override
-    // rides regenerate here for the reason retry carries it: it is the promise
-    // both make.
-    const body = { guidance, ...(pendingResponse == null ? {} : { response: pendingResponse }),
-                   ...rerollOverrides(route) };
-    const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
-      // `rerolling`: a reroll that fails wants a different recovery offered
-      // than a failed send does — see `runStream`.
-      api.regenerate(cid, activeId, onEvent, body, signal, attempt, onIndex),
-      undefined, true, "", false, null, route);
-    if (landed) {
-      setPendingResponse(null);
-      rerollToRetryRef.current = null;   // it worked; Retry is a plain retry again
-    }
-  }
-
-  // Cycling is a swap, not a delete: whatever is on screen becomes an alternate
-  // in the slot the chosen one vacates, so ‹ and › tour the set indefinitely.
-  async function pickAlternate(index: number) {
-    // `editing` as well as `rolling` — the guard runs both ways. An edit form
-    // open on another post of this generation survives the swap: `selectScene`
-    // refreshes the messages without clearing it, so the form rebinds to the
-    // *promoted* variant's message at the same absolute index and Save would
-    // overwrite it with a draft of the text that variant replaced.
-    // `sceneLocked`, not just `busy`: `busy` clears the moment the socket dies
-    // while the post-cancel flush is still writing to this scene, and a swap in
-    // that window races the abort hook — landing first it loses the cancelled
-    // partial the hook was about to persist, landing second it parks it. Same
-    // rule every other transcript mutation outside `runStream` reads (#95).
-    if (!activeId || busy || rolling || editing || sceneLocked) return;
-    const sid = activeId;
-    // Send the variant's id, taken from the same snapshot the index came from.
-    // Retention shifts every index when a full set gains a take, so a position
-    // this tab computed before another tab rerolled would name different text
-    // by the time it arrives; an id that is no longer in the set 404s instead.
-    const target = alternates.alternates[index];
-    if (!target) return;
-    // The in-flight-store-mutation latch doRoll uses, and every control that
-    // must not fire alongside one already reads it. Without it a double-click
-    // computes both indices from the same `alternates.active` snapshot — two ‹
-    // clicks step back once — and the two selectScene refreshes can land out of
-    // order. Taken for `sid`, so leaving the scene releases the controls there
-    // rather than waiting on a request that no longer concerns the reader.
-    const releaseLatch = takeRollLatch(sid);
-    // Only the scene the swap was for, and only while it is still the one on
-    // screen: the user may have moved on while the POST was in flight, and
-    // refreshing would navigate them back to a scene they left. The campaign is
-    // half of "the same scene" — `selectScene` is this render's closure, so in
-    // campaign B it would fetch B's sid out of A.
-    const stillHere = () => cidRef.current === cid && activeIdRef.current === sid;
-    try {
-      try {
-        await api.pickAlternate(cid, sid, target.id);
-      } catch (err: unknown) {
-        // Scoped like every other write this component reports. Switching
-        // scenes clears the banner deliberately — one scene's failure must not
-        // offer its Retry against another — and a swap rejecting after the move
-        // would put it straight back under a scene it has nothing to do with.
-        if (!stillHere()) return;
-        fail(err, false);
-        // `promote` removes the live run and then appends the chosen one. If
-        // the append is what failed, the slot is now EMPTY — the sidecar still
-        // holds both variants, but the transcript does not, and leaving the old
-        // reply on screen means every message index below it is a lie and an
-        // edit saves over the wrong post. Re-read so the empty slot and the
-        // control that refills it are what the reader sees.
-        await selectScene(sid).catch(() => {});
-        return;
-      }
-      // Past here the swap has COMMITTED, and nothing that fails below may be
-      // reported as a failed swap: it would deny a change that happened, and
-      // the recovery it implies — do it again — is not the one that helps.
-      //
-      // The swap is also the recovery the player chose over Retry. Leaving a
-      // failed reroll's banner up offers a Retry that regenerates over the take
-      // just selected, with the guidance that failed, undoing the choice.
-      if (rerollToRetryRef.current?.sid === sid) rerollToRetryRef.current = null;
-      // Everything below writes shared view state, so it waits on the scope
-      // check. The destination scene is deliberately usable while this POST is
-      // open — that is the point of the scoped latch — so it can have raised a
-      // banner of its own, and clearing it here would take a failure that has
-      // nothing to do with this swap.
-      if (!stillHere()) return;
-      setError(null);
-      // The backend retires the pending decision as part of the swap, so the
-      // chip goes now rather than at the next read: left up it adjudicates
-      // narration no longer on screen, and its 409 surfaces a Retry that
-      // generates. Ordered before the refresh below, whose own proposal read is
-      // issued after this and so puts the chip back if the swap was a no-op.
-      setProposalNow(null);
-      let seen = -1;
-      try {
-        seen = await selectScene(sid);
-      } catch (err: unknown) {
-        // Asked again, not only before the first read. `selectScene` calls
-        // `setActive`, so a retry issued after the reader moved on does not
-        // merely refresh the wrong scene — it navigates them back to it, or in
-        // a campaign switch installs the old campaign's scene id in the new
-        // view. The banner below is scoped for the same reason.
-        if (!stillHere()) return;
-        // One more attempt before giving up — the read that failed is the only
-        // thing between the reader and a transcript that is already correct on
-        // disk.
-        try {
-          seen = await selectScene(sid);
-        } catch {
-          if (!stillHere()) return;
-          // Still stale. Drop the readiness the counter and the ‹/› control
-          // depend on, so nothing acts on a transcript the set no longer
-          // indexes, and say what actually happened.
-          setLoaded(null);
-          setError({ text: `The take was swapped, but the scene could not be re-read: `
-                           + errorText(err), retryable: false });
-        }
-      }
-      // A swap replaces the reply in place: the transcript is no longer than it
-      // was, but the words the stored summary covers are a take the player
-      // rejected. Same reasoning as `saveEdit` — the moved digest is what makes
-      // the refold due, and without this ask the panel would show a summary of
-      // the discarded take, flagged stale, until the next generated turn.
-      // Scoped like every other write above, and skipped when neither re-read
-      // produced a boundary.
-      if (stillHere()) askAfterPost(sid, seen);   // #85, #84
-    } finally {
-      releaseLatch();
-    }
-  }
-
-  // `sceneLocked`, not just `busy`: a roll appends a transcript line, and a
-  // reroll cancelled before its first token is at that moment waiting to put
-  // the reply it deleted back. `restore_trailing_assistant_run` steps over
-  // trailing *transitions* only — a roll deliberately blocks it, because the
-  // line has to stay in lockstep with rolls.json — so a roll landing in the
-  // flush window makes the restore refuse and the rerolled reply is gone for
-  // good. The backend cannot rescue that one; only not racing it can (#95).
-  /** Roll `notation` into the active scene: the popover's Roll ▸ and a saved
-   *  roll on the strip both come here. Takes the roll latch and asks for the
-   *  follow-ups exactly as before; says how it went rather than writing the
-   *  popover's form error itself, since the strip has no form. */
-  async function doRoll(notation: string, label: string | undefined):
-      Promise<"skipped" | "ok" | { error: string }> {
-    if (!activeId || busy || sceneLocked || rolling) return "skipped";
-    if (!notation.trim()) return "skipped";
-    const sid = activeId;
-    const releaseLatch = takeRollLatch(sid);
-    try {
-      await api.roll(cid, sid, notation.trim(), label);
-      const seen = await selectScene(sid);
-      // The length the re-read saw is this write's boundary, for the reason the
-      // turn loop passes one: nothing holds the scene once this returns.
-      askAfterPost(sid, seen);   // a roll is a post too (#85, #84)
-      return "ok";
-    } catch (err: unknown) {
-      return { error: errorText(err) };
-    } finally {
-      releaseLatch();
-    }
-  }
-
-  /** The popover's Enter / Roll ▸. */
-  async function rollFromForm() {
-    if (!rollForm) return;
-    const form = rollForm;
-    const outcome = await doRoll(form.notation.trim(), form.label.trim() || undefined);
-    if (outcome === "ok") setRollForm(null);
-    else if (outcome !== "skipped") setRollForm({ ...form, error: outcome.error });
-  }
-
-
-  // Unbinding the pack removes the dice button, which is the popover's only
-  // way in and its only way out -- left open it would be a form nothing can
-  // dismiss, offering a Check whose actor list is now empty.
-  //
-  // `=== false`, not `!== true`: `null` means "not known yet", and treating
-  // that as unbound threw away a half-typed roll every time the read ran --
-  // including a save that left the SAME pack bound (Codex review).
-  useEffect(() => {
-    if (moduleBound === false) setRollForm(null);
-  }, [moduleBound]);
-
-  function toggleRollPop() {
-    if (rollForm) {
-      setRollForm(null);
-      return;
-    }
-    checksFetched.current = false; // each popover session re-fetches once
-    setRollForm({ mode: "dice", notation: "", label: "", error: null,
-                  checkActor: "", checkId: "", difficulty: "", modifier: 0 });
-  }
-
-  // the actor/check lists load lazily on first entering Check mode — a
-  // dice-only popover session never fires the request
-  function enterCheckMode() {
-    if (!rollForm) return;
-    setRollForm({ ...rollForm, mode: "check" });
-    if (activeId && !checksFetched.current) {
-      checksFetched.current = true;
-      api.getSceneChecks(cid, activeId).then((r) => setCheckActors(r.actors)).catch(() => setCheckActors([]));
-    }
-  }
-
-  async function doCheck() {   // same window, same loss — see doRoll
-    if (!activeId || busy || sceneLocked || rolling || !rollForm) return;
-    if (!rollForm.checkActor || !rollForm.checkId) return;
-    const releaseLatch = takeRollLatch(activeId);
-    try {
-      const body: { check: string; actor: string; difficulty?: number; modifier: number } = {
-        check: rollForm.checkId, actor: rollForm.checkActor, modifier: rollForm.modifier,
-      };
-      if (rollForm.difficulty !== "") body.difficulty = rollForm.difficulty;
-      await api.rollCheck(cid, activeId, body);
-      setRollForm(null);
-      const seen = await selectScene(activeId);
-      askAfterPost(activeId, seen);   // as is a check (#85, #84)
-    } catch (err: unknown) {
-      setRollForm({ ...rollForm, error: errorText(err) });
-    } finally {
-      releaseLatch();
-    }
-  }
-
-  // runStream's finally always re-fetches the scene (selectScene), which
-  // also re-fetches the proposal record — so a stale/lost-CAS 409 from
-  // resolveProposal surfaces the server's current record without extra
-  // plumbing here; clearing eagerly avoids a stale chip lingering mid-stream.
-  async function resolve(body: ResolveBody) {
-    if (!activeId) return;
-    // Before the eager clear, not after. `runStream` refuses while a rename is
-    // in flight, and review caught that this cleared the chip first — so the
-    // resolution was never sent and the roll became unreachable, since a rename
-    // on another rail row only re-lists scenes and never refreshes this one.
-    // Bailing here leaves the chip exactly as it was, which is the honest state:
-    // the decision is still pending (#95).
-    if (renamesInFlight || !canGenerate) return;
-    setProposalNow(null);
-    await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
-      api.resolveProposal(cid, activeId, body, onEvent, signal, attempt, onIndex));
   }
 
   // No-op unless a turn is in flight; the abort rejects the fetch, `runStream`
@@ -4346,557 +588,32 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   //
   // The handle is read BEFORE the abort: `runStream`'s `finally` clears it.
   function cancelTurn() {
-    const handle = runRef.current;
-    const observing = !!abortRef.current;
-    abortRef.current?.abort();
+    const handle = session.handle();
+    const observing = !!session.observerActive();
+    session.abortObserver();
     // Stored, not awaited here: this is an onClick and the button must not hang
     // on it. `runStream`'s teardown awaits it before releasing the scene, which
     // is where the waiting belongs -- see `cancelRef`.
     if (handle) {
-      if (observing) cancelRef.current = stopRun(handle);
+      if (observing) session.storeCancellation(stopRun(handle));
       else {
         // A reload can be locked while recovery is still discovering. There
         // is no stream's finally to await cancellation in that state, so this
         // path owns its result and lets recovery establish the durable facts.
         void stopRun(handle).then(() => adoptPendingRun(handle.cid, handle.sid)).catch(() => {
           if (registry.pending(handle.cid, handle.sid)?.attempt === handle.attempt) {
-            setError({ text: "could not reach the server to stop this turn — it "
-                             + "may still be generating", retryable: false });
+            setError({
+              text: "could not reach the server to stop this turn — it "
+                + "may still be generating", retryable: false
+            });
           }
         });
       }
     }
   }
 
-  async function stopRun(
-    handle: { cid: string; sid: string; attempt: string; id: string | null },
-  ) {
-    // Every rejection is swallowed. A run that landed a moment before the press
-    // is already terminal and the route says so without complaining; anything
-    // else is a network failure on a request whose whole purpose was to stop
-    // work that is about to stop anyway, and a banner for it would be noise.
-    const { cid: from, sid, attempt } = handle;
-    try {
-      // No leading frame yet: cancel by ATTEMPT rather than looking the run up.
-      // A lookup is a one-shot question, and the POST being stopped may have
-      // been accepted and then blocked in the server's setup -- so "no run for
-      // this attempt" does not mean nothing will happen, and the reservation
-      // that follows would detach a turn the player had already stopped. The
-      // attempt route is remembered by the server and consumed when the
-      // reservation happens, which is the only version of this without a race.
-      // BY ID WHEN THERE IS ONE, on every round and not just the first. An
-      // adopted run is recorded with `attempt: ""` -- the provider was
-      // recreated empty, so this client never knew the id the backend reserved
-      // under -- and re-asking by that empty attempt matches nothing, so every
-      // poll answered null and a cancellation that was completing normally was
-      // reported unconfirmed. The id is the better handle wherever it exists;
-      // the attempt is what covers the window before any frame named one.
-      const ask = () => (handle.id
-        ? api.cancelRun(from, sid, handle.id)
-        : api.cancelAttempt(from, sid, attempt));
-      let state = (await ask()).run?.state;
-      // The server's wait is bounded (30s) and can answer while the run is
-      // still unwinding. Taking that as "it is over" is what re-enabled Send
-      // over a run that still held the scene, which is the whole failure this
-      // wait exists to prevent -- so ask again rather than assume.
-      //
-      // NO RUN AT ALL IS THE SAME ANSWER, and review caught that it was read
-      // as the opposite. A precancel recorded before the POST reserved returns
-      // `run: null`, which is not "there is nothing to stop" -- it is
-      // "cancellation is pending": the original request is still in its
-      // synchronous setup and will consume that record when it reserves.
-      // Resolving on it settled the attempt and unlocked the composer while
-      // that was still to happen, so the next Send raced the very request it
-      // had just cancelled.
-      //
-      // A short wait between rounds only on that branch: an unwinding run is
-      // already being waited on server-side, but a pending one needs the other
-      // request to get somewhere first, and four immediate re-asks would all
-      // arrive before it did.
-      for (let tries = 0;
-           (state === "running" || state === undefined) && tries < STOP_POLLS;
-           tries++) {
-        if (state === undefined) await new Promise((r) => setTimeout(r, 100));
-        state = (await ask()).run?.state;
-      }
-      if (state === "running" || state === undefined) {
-        // Out of rounds with the run still going, or still not reserved.
-        // Resolving here would settle the turn on a guess: the backend still
-        // holds the scene (or is about to), so Send comes back and the next
-        // turn is refused. Exhaustion is an UNCONFIRMED cancellation, which is
-        // the same answer as one that never arrived -- and it takes the same
-        // path below.
-        throw new Error("the run did not stop");
-      }
-    } catch {
-      // The cancel never reached the server -- connectivity dropped as the
-      // phone was backgrounded, most likely. Swallowing this and settling would
-      // be the worst answer available: aborting the subscriber does NOT stop a
-      // detached run, so the provider keeps spending, persists a reply the
-      // player stopped, and holds the scene against the next send. Re-thrown so
-      // the teardown leaves the turn unsettled and the composer keeps saying
-      // Stop, which is the truth: it has not been stopped yet.
-      throw new Error("the stop request could not be delivered");
-    }
-  }
+  useReviewAddress({ cid, activeId, wrapUp, review });
 
-  // A scene already in the chronicle comes back as 409 "already_absorbed" rather
-  // than silently re-absorbing: lore edits append and plot movements add a beat,
-  // so a second pass duplicates both (#235). Confirm, then retry with force.
-  function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      void send();
-    }
-  }
-
-  // rerolling regenerates the trailing assistant run; a run that reaches the
-  // first message is the opener and is not rerollable. Trailing scene
-  // transitions are stepped OVER (they are not model output and the backend
-  // preserves them), so the reroll affordance hangs off the last generated
-  // message beneath them rather than off the true last message. A manual dice
-  // roll (backend tags it speaker "Roll") still blocks reroll outright — its
-  // entry lives on in rolls.json and the line must stay in lockstep.
-  // window-relative; `rerollAt` below is the absolute index the rendered posts
-  // carry. Both the run and the transitions above it live in the loaded tail,
-  // so a windowed transcript reaches the same answer as a whole one.
-  const rerollIndex = (() => {
-    let i = messages.length - 1;
-    while (i >= 0 && messages[i].speaker === TRANSITION_SPEAKER) i--;
-    return i;
-  })();
-  const canReroll = transcriptIsActive && !activeClosed &&
-    rerollIndex >= 0 &&
-    messages[rerollIndex].role === "assistant" &&
-    messages[rerollIndex].speaker !== ROLL_SPEAKER &&
-    // "not the opener" — the regenerate route refuses an all-assistant
-    // transcript, so this has to be true of the WHOLE scene, not the window.
-    // Only the server can say (an offscreen scene stores no user posts however
-    // long it runs, so "there is history above" proves nothing); the local
-    // scan is the fallback for an unwindowed read, which holds everything.
-    (hasUserPost ?? messages.some((x) => x.role === "user"));
-  const rerollAt = rerollIndex < 0 ? -1 : firstIndex + rerollIndex;
-
-  // The ledger's swipe target (spec §6): the post Reroll hangs off, when it is
-  // a response. Nothing after it can share its id (only transitions follow, and
-  // they are not responses), so it is also the last part of that response —
-  // the one `TranscriptPost` hangs the response's controls off. Only while the
-  // posts on screen are the active scene's: the read is addressed by
-  // `activeId`, and a target taken from another scene's transcript would ask
-  // about a response this scene does not have. A trailing reply with no
-  // response id keeps the legacy alternates arrows below.
-  const swipeTarget = transcriptIsActive && rerollIndex >= 0
-    && messages[rerollIndex].role === "assistant" && messages[rerollIndex].response_id
-    ? messages[rerollIndex] : null;
-  const responseSwipe = useResponseSwipe({
-    cid, sid: swipeTarget ? activeId : null, rid: swipeTarget?.response_id ?? null,
-    content: swipeTarget?.content ?? null, windowToken: loaded?.token,
-  });
-
-  // The swipe control hangs off the same message as Reroll — they act on the
-  // same generation, so it renders against `rerollAt` (absolute), not
-  // `rerollIndex` (window-relative), like every other per-post affordance.
-  // Shown with two or more variants to tour, and also with a single one while
-  // nothing is live: that is a reroll whose stream died, and the one affordance
-  // that puts the lost reply back.
-  // Scope gate: a set fetched for another campaign or scene is not this one's,
-  // whatever order the responses came back in.
-  const altCount =
-    alternates.cid === cid && alternates.sid === activeId
-    && loaded?.cid === cid && loaded?.sid === alternates.sid
-    && loaded.token === alternates.window
-      ? alternates.alternates.length : 0;
-  const canSwipe = !activeClosed && rerollIndex >= 0 && (altCount > 1 || (altCount > 0 && alternates.active === null));
-  // Wraps, so ‹/› tour the set. With the slot empty, ‹ reaches for the newest
-  // variant and › for the oldest, which is what "one step off nothing" means.
-  const stepAlternate = (delta: number) =>
-    alternates.active === null
-      ? (delta > 0 ? 0 : altCount - 1)
-      : (alternates.active + delta + altCount) % altCount;
-  // What the counter says on hover. The guidance leads: while cycling, "which
-  // instruction produced this take" is the thing the preview cannot tell you,
-  // and it is the only place the stored hint is visible at all.
-  //
-  // The model follows it whenever the variant carries one (#77). Not filtered
-  // against the campaign's current model, deliberately: the control only
-  // appears while there are takes to tour, which is precisely when "which model
-  // produced this one" is the question — and a take generated somewhere else
-  // reads no differently from one that was not, so this is the only place it
-  // can be said. Every variant archived before the override existed, and every
-  // one reconciled out of the transcript, stores "" and adds no line.
-  const altTitle = (() => {
-    if (alternates.active === null) return "no alternate is showing — the last reroll didn't land";
-    const variant = alternates.alternates[alternates.active];
-    if (!variant) return undefined;
-    const lines = [
-      variant.guidance ? `Guided: ${variant.guidance}` : "",
-      variant.model ? `Model: ${variant.model}` : "",
-    ].filter(Boolean);
-    return lines.length ? `${lines.join("\n")}\n\n${variant.preview}` : variant.preview;
-  })();
-
-  // The transition tag is internal drift metadata, never a speaker: a
-  // transition renders as the unlabelled narration it was before the tag
-  // existed, so tagged and pre-existing untagged transitions look the same.
-  //
-  // A callback, like `matchActor` below, because `runs` is memoized on both:
-  // as plain functions they were new on every render and the memo would have
-  // recomputed every time.
-  const speakerOf = useCallback((m: Message) =>
-    (m.speaker === TRANSITION_SPEAKER ? undefined
-     // A note is assistant-role by the transcript format's construction (the
-     // role is derived from the label, and `You` is the only user label), so
-     // without this it would be plated as the narrator — the one thing it is
-     // definitely not.
-     : m.speaker === DIRECTOR_SPEAKER ? DIRECTOR_LABEL
-     : m.speaker)
-    ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant),
-  [playerName, labels]);
-
-  // A speaker label names a cast member if it matches exactly (case-insensitive)
-  // or is a word-boundary prefix of exactly one name — "Winifred" is Winifred
-  // Vance; an ambiguous or mid-word label matches no one. Mirrors the
-  // backend's scenes.match_name so role attribution and plates agree.
-  const matchActor = useCallback((speaker: string, actorRef?: string): Actor | undefined => {
-    if (actorRef) {
-      return cast.find((actor) => `${actor.kind}:${actor.id}` === actorRef);
-    }
-    const low = speaker.trim().toLowerCase();
-    if (!low) return undefined;
-    const exact = cast.filter((a) => a.name.toLowerCase() === low);
-    if (exact.length) return exact.length === 1 ? exact[0] : undefined;
-    const prefixed = cast.filter((a) => {
-      const n = a.name.toLowerCase();
-      return n.startsWith(low) && !/[\p{L}\p{N}]/u.test(n[low.length] ?? "");
-    });
-    return prefixed.length === 1 ? prefixed[0] : undefined;
-  }, [cast]);
-
-  // One highlight, two sources: the dossier's provenance popover and the
-  // review's "find in transcript". They can never both be open — the review
-  // replaces the play view outright — so one piece of state serves both.
-  const citedNeedle = (citedQuote || review.reviewQuote).trim().toLowerCase();
-  const isCited = (m: Message) => quotedIn(m, citedNeedle);
-
-  /** How many notes this scene is holding, for the toggle's label.
-   *
-   *  Counted over the loaded window rather than the whole scene, like
-   *  everything else on this screen: the number says how many are on the page
-   *  the toggle governs. */
-  const noteCount = messages.filter((m) => m.speaker === DIRECTOR_SPEAKER).length;
-
-  /** The response a Keep writing stream is continuing, while it streams here. */
-  const hiddenResponse = busy && streamingId === activeId
-    ? streamingSpeakers.find((part) => part.seed !== undefined)?.id ?? null : null;
-
-  // Consecutive messages by the same speaker form one run under a single plate.
-  // Memoized on what a run is made of, so the run objects -- and so the
-  // memoized rows that receive them -- survive every render that is not a
-  // change to the transcript: a keystroke, a streamed delta.
-  const runs = useMemo(() => {
-    const out: TranscriptRunData[] = [];
-    messages.forEach((m, i) => {
-      const index = firstIndex + i; // absolute: what edit/reroll address it by
-      // Hidden, not removed. The index above is computed from the position in
-      // the loaded window, so skipping here leaves every other post addressed
-      // exactly as before — filtering `messages` first would renumber them and
-      // send an edit to the wrong post.
-      if (m.speaker === DIRECTOR_SPEAKER && !showNotes) return;
-      // The reply Keep writing is continuing: the live bubble below draws it
-      // whole (its seed, then the stream), so drawing it here too would show
-      // it twice. Skipped while the groups are built, so a run it emptied
-      // draws no plate.
-      if (hiddenResponse !== null && m.response_id === hiddenResponse) return;
-      const speaker = speakerOf(m);
-      const last = out[out.length - 1];
-      if (last && last.speaker === speaker &&
-          last.posts[0].m.actor_ref === m.actor_ref) {
-        last.posts.push({ m, index });
-        return;
-      }
-      const actor = matchActor(speaker, m.actor_ref);
-      out.push({ speaker, pc: actor ? actor.role === "player" : m.role === "user",
-                 actor, posts: [{ m, index }] });
-    });
-    return out;
-  }, [messages, firstIndex, showNotes, speakerOf, matchActor, hiddenResponse]);
-
-  /** Which posts are the last part of their response in the window — the one
-   *  that carries the response's controls and its saved thinking.
-   *
-   *  One pass from the end. It used to be asked per post, by slicing the rest
-   *  of the window and scanning it, which made every render of a transcript
-   *  full of responses quadratic in its length. */
-  const lastOfResponse = useMemo(() => {
-    const out = new Set<number>();
-    const seen = new Set<string>();
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const rid = messages[i].response_id;
-      if (!rid || seen.has(rid)) continue;
-      seen.add(rid);
-      out.add(firstIndex + i);
-    }
-    return out;
-  }, [messages, firstIndex]);
-
-  /** Each actor's roster row -- the version the campaign has locked, and its
-   *  avatar's token -- keyed `kind/id`: a lookup per plate rather than a scan
-   *  of the roster per plate. */
-  const lockedEntry = useMemo(
-    () => new Map(roster.map((r) => [`${r.kind}/${r.id}`, r])), [roster]);
-
-  const plateAvatar = useCallback((run: Pick<TranscriptRunData, "actor" | "speaker" | "pc">,
-                                  actorRef?: string): string | null => {
-    if (isNarrator(run, actorRef, labels.assistant)) return "/grimoire-32.png";
-    if (!run.actor) return null;
-    // Either actor kind: a speaker plate used to fall back to initials for
-    // every PC, because PCs had no images to point at (#219).
-    const { kind, id } = run.actor;
-    const locked = lockedEntry.get(`${kind}/${id}`);
-    // A 26px plate: the smallest bucket, never the original. The token makes
-    // it immutable, so a reopened scene asks nothing for any of its plates.
-    // Null is the server's positive report that no avatar exists. An omitted
-    // token is the older API contract, which still needs its fallback request.
-    return locked?.version && locked.avatar_v !== null
-      ? api.actorImageUrl({ kind: "campaign", id: cid }, kind, id, locked.version, "avatar",
-                          { w: THUMB.row, v: locked.avatar_v })
-      : null;
-  }, [lockedEntry, cid, labels.assistant]);
-
-  /** Whose images the picker offers for a post by `speaker` (#376).
-   *
-   *  The speaker decides: an actor post offers that actor's art at the version
-   *  the roster has locked — the version that spoke, and the same one
-   *  `plateAvatar` draws the portrait from — and a narrator post offers the
-   *  campaign's own library, because "Grimoire" is nobody and has no record to
-   *  hang art off. An actor the roster cannot place gets the library too: that
-   *  is the one scope that is always there, and an empty picker would be worse
-   *  than a general one. */
-  function pickerTarget(actor: Actor | undefined, speaker: string): PickerTarget {
-    const ver = actor && lockedEntry.get(`${actor.kind}/${actor.id}`)?.version;
-    return actor && ver
-      ? { kind: actor.kind, id: actor.id, version: ver, name: speaker }
-      : { kind: "campaign", name: speaker };
-  }
-
-  /** Put one image reference into the post, by opening it for editing with the
-   *  markdown already in the buffer.
-   *
-   *  Which is what keeps this off any new persistence path: the existing Save
-   *  — and Retcon, and Cancel — is the save, with exactly the semantics it has
-   *  always had. Appended after a blank line rather than spliced at a cursor,
-   *  so it can never land mid-sentence, and the textarea it lands in is right
-   *  there to move it. */
-  function insertImage(index: number, markdown: string) {
-    setPicking(null);
-    // The same two conditions `saveEdit` refuses on, and for its reasons.
-    // `transcriptIsActive`: the picker is a modal that outlives a background
-    // refresh, and `index` addresses the transcript ON SCREEN — if the refresh
-    // has installed another scene's posts under it, this would open an
-    // unrelated message for editing with an image already pasted into it.
-    // `rolling`: the button that opened the picker is disabled while a turn is
-    // in flight, so the picker must not be a way around that.
-    if (!transcriptIsActive || rolling) return;
-    const post = messages[index - firstIndex];
-    if (!post) return;   // scrolled out of the loaded window; nothing to edit
-    const current = (editing?.index === index ? editing.text : post.content).trimEnd();
-    setEditing({ index, text: current ? `${current}\n\n${markdown}` : markdown });
-  }
-
-  // ---- what the memoized transcript rows are handed ----
-  //
-  // Every handler is stable (`useStableHandlers`) and every value is memoized
-  // on the state it reads, so a render that changes none of them -- every
-  // composer keystroke, every streamed delta -- reaches no row at all. See
-  // `components/play/TranscriptPost` for the rows' side of the contract.
-  const transcriptActions = useStableHandlers<TranscriptActions>({
-    openActor,
-    openReroll: () => {
-      setRerollPrompt("");
-      // Cleared on OPEN rather than on close, so a popover dismissed with
-      // Escape and reopened does not come back wearing the route the player
-      // backed out of.
-      setRerollRoute(NO_REROLL_ROUTE);
-    },
-    stepAlternate: (delta) => void pickAlternate(stepAlternate(delta)),
-    stepVariant,
-    edit: (index, text) => setEditing({ index, text }),
-    toggleExcluded: (index, excluded) => void toggleExcluded(index, excluded),
-    cancelEdit: () => setEditing(null),
-    saveEdit: () => void saveEdit(),
-    saveRetcon: () => void saveRetcon(),
-    pickImage: (index, actor, speaker) =>
-      setPicking({ index, target: pickerTarget(actor, speaker) }),
-    cutFrom: (index) => void deleteMessagesFrom(index),
-    replayFrom: (index) => setReplayAt(index),
-    branchFrom: (index) => void branchFrom(index),
-    setRerollPrompt,
-    setRerollRoute,
-    reroll: () => void reroll(),
-    deleteResponse: (id) => void mutateResponse(id),
-    rerollResponse: (id, guidance, route) => void rerollResponse(id, guidance, route),
-    extendResponse: (id, guidance, route) => void extendResponse(id, guidance, route),
-    activateVariant: (id, variant) => void mutateResponse(id, variant),
-    createCharacter: (rid) => void openCharacterPassage(rid),
-    // Depth over the stored transcript, which the window always ends at: the
-    // newest post is 0, whatever page of older ones is loaded above it.
-    testRules: (index, m) =>
-      setRegexTest({ message: m, depth: firstIndex + messages.length - 1 - index }),
-    refreshTracker: () => setTrackerTick((n) => n + 1),
-  });
-
-  const editingAny = editing !== null;
-  const responseDisabled = busy || rolling || sceneLocked || editingAny || renamesInFlight > 0;
-  // The empty-scene cast panel's mount condition, which is also when a quick
-  // reply may open the opener generator inside it.
-  const openerOffered = !!activeId && landedScene?.cid === cid && landedScene.sid === activeId
-    && messages.length === 0;
-  // What decides each quick reply: the guards of the controls they stand for.
-  const quickCtx: QuickReplyContext = {
-    busy, rolling, renaming: renamesInFlight > 0, sceneLocked, posts: messages.length,
-    moduleKnown: moduleBound !== null, pcless: activePcless, ready, canGenerate,
-    openerOffered, taskRunning,
-  };
-
-  // The ledger's arrows, worked out once for the row, the keys and the gesture.
-  // Shown with two complete variants to tour, or one that can be generated from
-  // (the ledger's `can_reroll` and this
-  // view's `canReroll`, so › has somewhere to go). An active variant that is not complete has no
-  // place among the complete ones to count from, so it shows none — the
-  // Response variants disclosure still lists it.
-  //
-  // `blocked` is every refusal the client can know about: the transcript's own
-  // guards; a landed review, whose watermark digests the content a swipe would
-  // change; any proposal, which `activate` would supersede; the server's
-  // `editable` and `round_open`; and a read still outstanding, whose count may
-  // be stale. Generating also needs what the reroll needs. The server still
-  // answers a race with 409, which `mutateResponse` reports.
-  const { swipe: ledgerSwipe, complete: swipeComplete, position: swipePosition,
-          pending: swipePending } = responseSwipe;
-  const swipeCount = swipeComplete.length;
-  const swipeShown = !activeClosed && !!ledgerSwipe && swipePosition !== null
-    && (swipeCount >= 2 || (swipeCount === 1 && ledgerSwipe.can_reroll && canReroll));
-  const swipeBlocked = responseDisabled || !!absorb || proposal !== null || swipePending
-    || !ledgerSwipe?.editable || !!ledgerSwipe.round_open;
-  const swipeGenerates = swipeShown && swipePosition === swipeCount - 1;
-  const swipePrevDisabled = swipeBlocked || swipePosition === 0;
-  const swipeNextDisabled = swipeBlocked
-    || (swipeGenerates && (!canGenerate || !canReroll || !ledgerSwipe?.can_reroll));
-  const swipeTip = ledgerSwipe ? swipeTitle(ledgerSwipe) : undefined;
-  // Keep writing, on the swipe target: what a generating › needs, minus the
-  // arrows' own position rules. A hand-edited reply (`edited`, active null) is
-  // continued from the trim, so it does not block; a non-complete active
-  // variant does, as the server refuses it (`variant_incomplete`).
-  const activeVariant = ledgerSwipe && ledgerSwipe.active !== null
-    ? ledgerSwipe.variants[ledgerSwipe.active] : undefined;
-  const extendDisabled = swipeBlocked || !canReroll || !ledgerSwipe?.can_reroll
-    || (activeVariant !== undefined && activeVariant.status !== "complete");
-  // Memoized on the primitives above, so a render that changes none of them
-  // hands the row the same object.
-  const variantSwipe = useMemo<TranscriptVariantSwipe | null>(() => (
-    swipeShown && swipePosition !== null
-      ? { position: swipePosition, count: swipeCount, title: swipeTip,
-          previousDisabled: swipePrevDisabled, nextDisabled: swipeNextDisabled,
-          generates: swipeGenerates }
-      : null
-  ), [swipeShown, swipePosition, swipeCount, swipeTip, swipePrevDisabled, swipeNextDisabled,
-      swipeGenerates]);
-
-  /** ‹ / › on the last response, from the arrows and the touch swipe. Each
-   *  re-checks its own disabled flag, so a gesture can do nothing the button
-   *  beside it could not. At the newest, › generates — the reroll popover's
-   *  plain submit, keeping the pending length chip. */
-  function stepVariant(delta: -1 | 1) {
-    const rid = swipeTarget?.response_id;
-    if (!variantSwipe || !rid) return;
-    if (delta < 0 ? variantSwipe.previousDisabled : variantSwipe.nextDisabled) return;
-    if (delta > 0 && variantSwipe.generates) {
-      void rerollResponse(rid, "", NO_REROLL_ROUTE);
-      return;
-    }
-    const vid = swipeComplete[variantSwipe.position + delta];
-    if (vid) void mutateResponse(rid, vid);
-  }
-
-  const transcriptReroll = useMemo<TranscriptReroll>(() => ({
-    swipe: canSwipe
-      ? { active: alternates.active, count: altCount, title: altTitle,
-          disabled: rolling || editingAny || sceneLocked }
-      : null,
-    variantSwipe,
-    pop: rerollPrompt !== null ? { prompt: rerollPrompt, route: rerollRoute } : null,
-    extend: swipeTarget ? { disabled: extendDisabled } : null,
-  }), [canSwipe, alternates.active, altCount, altTitle, rolling, editingAny, sceneLocked,
-       variantSwipe, rerollPrompt, rerollRoute, swipeTarget, extendDisabled]);
-  const transcriptCtx = useMemo<TranscriptContext>(() => ({
-    cid, sid: activeId ?? "",
-    loadedCid: loaded?.cid ?? null, loadedSid: loaded?.sid ?? null,
-    // A closed branch is read-only: no gutter actions, no response controls.
-    busy, rolling, active: transcriptIsActive && !activeClosed, absorbed: activeDone,
-    responseDisabled, generationDisabled: !canGenerate,
-    lastIndex: firstIndex + messages.length - 1,
-    rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker, trackerKeys,
-    trackerRerun,
-  }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, activeDone,
-       activeClosed, responseDisabled, canGenerate,
-       firstIndex, messages.length, rerollAt, canReroll,
-       postChips, citedNeedle, lastOfResponse, tracker, trackerKeys, trackerRerun]);
-
-  // The rows themselves, as one list built only when one of its inputs moves.
-  // Each row would skip a keystroke on its own; this skips even asking them,
-  // which on a long window is a few hundred elements built and compared per
-  // keystroke for nothing.
-  //
-  // The edit form and the reroll row's extras go to the one run that holds
-  // them, and null to every other, so typing in either re-renders one run.
-  const transcript = useMemo(() => runs.map((run) => {
-    const holds = (index: number) => run.posts.some((p) => p.index === index);
-    return (
-      <TranscriptRun key={run.posts[0].index} run={run} avatar={plateAvatar(run, run.posts[0].m.actor_ref)}
-                     narrator={isNarrator(run, run.posts[0].m.actor_ref, labels.assistant)}
-                     ctx={transcriptCtx} actions={transcriptActions}
-                     editing={editing && holds(editing.index) ? editing : null}
-                     reroll={holds(rerollAt) ? transcriptReroll : null} />
-    );
-  }), [runs, plateAvatar, transcriptCtx, transcriptActions, editing, rerollAt, transcriptReroll,
-       labels.assistant]);
-
-  // The same treatment for the context column and the inspector, which are
-  // memoized too and were handed fresh closures on every render.
-  const goToQuoteStable = useStableCallback(goToQuote);
-  const closeActorStable = useStableCallback(closeActor);
-  const removeSelectedActorStable = useStableCallback(() => void removeSelectedActor());
-  const openDrawerActor = useStableCallback((kind: string, id: string) => setDrawer(
-    { type: "actor", kind: kind as "characters" | "pcs", id }));
-  const onCastChanged = useStableCallback(() => { if (activeId) void refreshAndAsk(activeId); });
-  const onInspectorSceneChanged = useStableCallback(() => { if (activeId) void selectScene(activeId); });
-  // A restore from Turn history is a message edit, and asks what `saveEdit`
-  // asks after one: it rewrites text the rolling summary may already cover.
-  const onInspectorTranscriptEdited = useStableCallback(() => {
-    const id = activeId;
-    if (!id) return;
-    void selectScene(id).then((seen) => askAfterPost(id, seen));
-  });
-  // The posts on screen a stored rewrite changed, for Turn history. Only the
-  // active scene's own: a restore addresses `activeId` by these indices.
-  const rewrittenPosts = useMemo<RewrittenPost[]>(() => {
-    if (!transcriptIsActive) return NO_REWRITES;
-    const found = messages.flatMap((message, i) =>
-      message.rewritten ? [{ index: firstIndex + i, message }] : []);
-    return found.length ? found : NO_REWRITES;
-  }, [transcriptIsActive, messages, firstIndex]);
-  const sceneRenamedStable = useStableCallback((id: string) => void sceneRenamed(id));
-  const onBudgetSaved = useStableCallback(
-    (forCid: string, b: CampaignBudget) => setBudgetRead({ cid: forCid, data: b }));
-
-  const sceneTitle = scenes.find((s) => s.id === activeId)?.title ?? "";
-  /** The scene the open review was absorbed FROM, which is not necessarily the
-   *  one selected: a review survives a scene switch, and `saveAbsorb` already
-   *  commits against `absorbSid` for that reason. Naming `activeId`'s title
-   *  here would tell the reviewer they are judging a scene they are not. */
-  const absorbTitle = review.absorbSid
-    ? scenes.find((s) => s.id === review.absorbSid)?.title || review.absorbSid
-    : sceneTitle;
   // The global status bar can't work this out for itself: the router hands it
   // a cid, not a name, and which scene is open is state that lives only here.
   // During a review it names the scene being absorbed, not the one selected —
@@ -4906,193 +623,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // pathname, and which scene is open is state that lives only here.
   usePublishSceneSpend(absorb ? null : sceneSpend);
   usePublishShellContext(
-    name ? { campaign: name,
-             scene: absorb ? `Absorbing ${absorbTitle}`
-                    : wrapUp ? `Wrap-up · ${sceneTitle}` : sceneTitle } : null);
+    name ? {
+      campaign: name,
+      scene: absorb ? `Absorbing ${absorbTitle}`
+        : wrapUp ? `Wrap-up · ${sceneTitle}` : sceneTitle
+    } : null);
 
-  // Any model-settings write announces itself (the Inspector's Models section,
-  // /models, /providers), and each can move what the scene route resolves to.
-  useEffect(() => onConfigChanged(() => setModelsRev((n) => n + 1)), []);
-  // Cleared on a campaign switch only: the previous campaign's model must not
-  // sit in the header for as long as the read takes. A re-read of THIS one
-  // keeps what it shows until the answer lands, rather than dropping to the
-  // library's model for a moment on every config change (a theme included).
-  useEffect(() => {
-    setSceneModel(null);
-    setSceneReady(null);
-    setSceneProblem(null);
-    setLabels({ user: "You", assistant: "Grimoire" });
-  }, [cid]);
-  // #73: display labels follow this campaign's effective settings. Config is
-  // only a fallback after a failed campaign read, so a late global read can
-  // never overwrite a successful campaign answer. The effect's lifetime also
-  // fences responses from the previous campaign or an older config event.
-  useEffect(() => {
-    let live = true;
-    api.getCampaignSettings(cid).then((view) => {
-      if (live) setLabels({ user: view.effective.user_label || "You",
-        assistant: view.effective.assistant_label || "Grimoire" });
-    }).catch(() => {
-      if (!live) return;
-      api.getConfig().then((config) => {
-        if (live) setLabels({ user: config.user_label || "You",
-          assistant: config.assistant_label || "Grimoire" });
-      }).catch(() => {});
-    });
-    return () => { live = false; };
-  }, [cid, modelsRev]);
-  useEffect(() => {
-    let live = true;
-    api.getCampaignInference(cid).then((view) => {
-      if (!live) return;
-      // No scene route in the answer is no answer: the library's, as on a
-      // failed read, rather than the last one this campaign gave.
-      const scene = view.routes.find((r) => r.key === "scene");
-      setSceneModel(scene?.resolves?.model || null);
-      setSceneReady(scene ? scene.problem === null : null);
-      setSceneProblem(scene?.problem ?? null);
-      setSceneReadFor({ cid, revision: modelsRev });
-    }).catch(() => {
-      if (live) {
-        setSceneModel(null); setSceneReady(null); setSceneProblem(null);
-        setSceneReadFor({ cid, revision: modelsRev });
-      }
-    });
-    return () => { live = false; };
-  }, [cid, modelsRev]);
-  usePublishSceneModel(sceneModel, sceneReady);
-  // The banner that says why not, which is what explains a disabled Send.
-  const notReadyId = useId();
-
-  // The scene's own keyboard (#193). Every binding here mirrors a control that
-  // is on screen, and carries the same condition that control is disabled by —
-  // a shortcut that could do what no button offers is a second implementation
-  // of the guards, and the guards are the reason a turn cannot be sent twice.
-  // The functions guard themselves as well; this is what keeps the KEY inert,
-  // so nothing fires silently and the help sheet can say why.
-  //
-  // Nothing is bound bare that spends money without a further confirmation:
-  // `r` opens the reroll's guidance box exactly as ↻ does, and End scene —
-  // which absorbs a scene into the chronicle and cannot be undone by pressing
-  // the key again — is deliberately not bound at all.
-  useHotkeys([
-    {
-      keys: "mod+enter", label: "Send · continue the turn", group: "IN THIS SCENE",
-      // The one binding that belongs inside prose: the composer is where the
-      // reader IS. (The textarea's own Enter still handles the caret being in
-      // it, and prevents the default, so this cannot send the same keystroke
-      // twice.)
-      whileTyping: true,
-      // Nothing here about which popover is open, and that is the point. An
-      // inline Enter handler that answers the key now PREVENTS it (the reroll
-      // box, both dice inputs, both rename boxes), which is the signal the
-      // dispatcher has always read, so a chord typed into one of them never
-      // reaches this. A list of open widgets here would have to be extended by
-      // whoever adds the next inline handler -- and would silently go back to
-      // double-firing when they didn't (PR #400 review).
-      // `activeDone` is not a disabled control but a REPLACED one: an absorbed
-      // scene has its summary written and its changes applied, so the composer
-      // goes entirely and a post added now would sit outside the record taken
-      // of it. A chord that ignored that would put one there -- the transcript
-      // and the chronicle disagreeing, with nothing to say which is right
-      // (PR #400 review).
-      // A closed branch's composer is replaced the same way, for the same reason.
-      enabled: !absorb && !activeDone && !activeClosed && !busy && !rolling && !renamesInFlight
-        && canGenerate,
-      run: () => void send(),
-    },
-    {
-      keys: "n", label: "New scene", group: "IN THIS SCENE",
-      enabled: !absorb, run: newScene,
-    },
-    {
-      keys: "r", label: "Reroll the last reply", group: "IN THIS SCENE",
-      // `editing` as well, the guard `pickAlternate` takes and for its reason:
-      // a reroll replaces the post at this index, and an edit form open over
-      // it rebinds to the REPLACEMENT, so Save would overwrite the reply that
-      // was just generated. The ↻ button is hidden while its own post is being
-      // edited, so a key that fired anyway would reach past it (PR #400
-      // review).
-      enabled: !absorb && !activeClosed && !busy && !rolling && !editing && canReroll,
-      run: () => setRerollPrompt(""),
-    },
-    // The last response's ‹ and ›, carrying their buttons' disabled flags. →
-    // at the newest variant opens the reroll box, as `r` does, rather than
-    // generating as › does: the rule above, and a bare arrow is easily pressed
-    // with a tab button or any other non-typing control focused. Its enabled
-    // flag there already requires what that box's submit needs to reach the
-    // ledger reroll rather than fall through to Replay.
-    {
-      keys: "arrowleft", label: "Previous reply variant", group: "IN THIS SCENE",
-      enabled: !activeClosed && !!variantSwipe && !variantSwipe.previousDisabled,
-      run: () => stepVariant(-1),
-    },
-    {
-      keys: "arrowright", label: "Next reply variant", group: "IN THIS SCENE",
-      enabled: !activeClosed && !!variantSwipe && !variantSwipe.nextDisabled,
-      run: () => {
-        if (!variantSwipe?.generates) return stepVariant(1);
-        setRerollPrompt("");
-        setRerollRoute(NO_REROLL_ROUTE);
-      },
-    },
-    {
-      keys: "t", label: "Retry the turn that failed", group: "IN THIS SCENE",
-      // Only while the banner is up. `retry()` with nothing to recover is a
-      // fresh generation the reader did not ask for, and a bare letter is far
-      // too cheap to press for that.
-      enabled: !absorb && !!error?.retryable && !busy && !rolling && !renamesInFlight && canRetry,
-      run: () => void retry(),
-    },
-  ]);
-
-  /** Which panel is above the transcript, if any.
-   *
-   *  Derived rather than stored beside the eight flags, so it cannot disagree
-   *  with them. Only ONE can be open at a time in practice — every menu item
-   *  toggles and the panels stack — but the first match is what the Close
-   *  button names, and closing clears all eight anyway.
-   */
-  const openPanel = ([
-    [showChanges, "Changes"], [showIncoming, "World updates"],
-    [showComposition, "Composition"], [showMechanics, "Mechanics"],
-    [showCalendar, "Calendar"], [showStyle, "Response"], [showCover, "Cover"],
-    [showTracker, "Tracker"],
-  ] as const).flatMap(([open, label]) => (open ? [{ label }] : []))[0];
-
-  /** Shut everything the menu can open.
-   *
-   *  All eight rather than the one `openPanel` named: two can be open at once
-   *  (nothing forbids it), and a Close that shut only the one it happened to
-   *  name would leave the other with no control on the bar at all. */
-  function closePanels() {
-    setShowChanges(false); setShowIncoming(false); setShowComposition(false);
-    setShowMechanics(false); setShowCalendar(false); setShowStyle(false);
-    setShowCover(false); setShowTracker(false);
-  }
-
-  // The column is one swap zone: cast, or one actor. `columnMode` is derived
-  // from `selectedActor` rather than stored beside it, so the two can never
-  // disagree about which is showing.
-  //
-  // Both are memoized and every handler here is stable, so neither re-renders
-  // for a keystroke or a streamed delta -- only for the state it shows.
-  const column = selectedActor
-    ? <DossierColumn cid={cid} casefile={casefile} provenance={provenance}
-                     onHoverQuote={setCitedQuote} onGoToTurn={goToQuoteStable}
-                     onBack={closeActorStable}
-                     onOpenActor={openDrawerActor}
-                     onRemove={removeSelectedActorStable} busy={sceneLocked}
-                     tracker={dossierTracker}
-                     onTrackerChanged={transcriptActions.refreshTracker} />
-    : <CastColumn cid={cid} sid={activeId ?? ""} hasPosts={messages.length > 0} refreshKey={ctxKey}
-                  cast={cast} roster={roster} briefing={briefing}
-                  moods={tracker?.moods ?? NO_MOODS}
-                  onOpen={transcriptActions.openActor}
-                  // A confirmed enter or leave writes a transition line into the
-                  // transcript as well as moving the cast, so the scene is
-                  // re-read whole rather than the cast alone.
-                  onCastChanged={onCastChanged} />;
+  // Navigation initiates reads before draft restoration and run adoption.
+  useCampaignNavigation({ selected, cid, readScene, navigate, sceneListCid, sid, scenes, clearScene, activeId });
+  useComposerRecovery({ restoreParked, cid, activeId, parkedTick, input, directing, restoreDurableOnce, registry });
+  useRunRecoveryTriggers({ activeId, adoptPendingRun, cid, selected, fail });
+  useCampaignShortcuts({
+    absorb, activeDone, activeClosed, busy, rolling, renamesInFlight, canGenerate, send, newScene, editing,
+    canReroll, setRerollPrompt, variantSwipe, stepVariant, setRerollRoute, error, canRetry, retry, fail,
+  });
+  useCampaignPalette({ cast, openActor, briefing, scenes, goToScene, newScene, cid });
 
   // The wrap-up address with nothing to wrap up -- see `NothingToWrapUp`.
   //
@@ -5100,7 +645,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // payload has not landed: that is a review arriving, not one that is absent.
   if (wrapUp && !absorb && !review.absorbing) {
     return <NothingToWrapUp cid={cid} campaignName={name} sid={activeId}
-                            sceneTitle={sceneTitle} scenes={scenes} />;
+      sceneTitle={sceneTitle} scenes={scenes} />;
   }
 
   return (
@@ -5111,155 +656,52 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       footer={absorb
         ? <ApproveCitedButton review={review} />
         : <Conditions cid={cid} worldName={worldName} location={sceneLocation}
-                      datetime={dt} weather={weather} />}
+          datetime={dt} weather={weather} />}
     >
       <div className="workspace">
         {/* Export, Ledger, Calendar, Cover, End scene: all of them act on the
             scene, and a review is not the scene. The bar is replaced by one
             that names what is being judged, so the header still says where you
             are once the transcript stops being the thing on screen. */}
-        {absorb ? (
-        <div className="scene-actions review-actions">
-          <span className="eyebrow">{name}</span>
-          {/* Rename lives here during a review, and is the one scene control
-              that does. The rest act on a transcript this screen is not
-              showing, but a scene's id is derived from its title — so a rename
-              mints a new id, and `renameScene` migrates the open review's
-              `absorbSid` and every staged edit's scene ref onto it. Dropping
-              the control with the scene head would leave that migration with no
-              way to be reached, and take with it the only chance to fix a title
-              at the moment you are reading what the scene actually contained. */}
-          {renamingScene ? (
-            <input className="row-rename scene-rename" aria-label="Rename scene" autoFocus
-                   value={renamingScene.title}
-                   onChange={(e) => setRenamingScene({ id: renamingScene.id, title: e.target.value })}
-                   onKeyDown={(e) => {
-                     // See the reroll box: an inline Enter is claimed, not shared.
-                     if (e.key === "Enter") { e.preventDefault(); void commitSceneRename(); }
-                     if (e.key === "Escape") setRenamingScene(null);
-                   }} />
-          ) : (
-            <button className="review-absorbing" aria-label="Rename scene"
-                    title="Rename this scene"
-                    onClick={() => setRenamingScene({ id: review.absorbSid ?? activeId ?? "",
-                                                      title: absorbTitle })}>
-              Absorbing {absorbTitle}
-            </button>
-          )}
-          <span className="header-spacer" />
-          {/* The audit's verdict, and deliberately not a count of proposals:
-              the column already carries "18 edits · 14 approved · 1 rejected ·
-              3 left" and the footer the tally again. This is the one fact about
-              the absorb that neither of them states. */}
-          <span className="review-audit">Audit {absorb.mechanics.status}</span>
-        </div>
-        ) : focus ? null : (
-        <div className="scene-actions">
-          {/* The campaign's name is a link home, because the hub is now what
-              "this campaign" means and the scene is one thing inside it. */}
-          <Link className="eyebrow scene-home" to={`/campaigns/${cid}`}
-                aria-label={`${name} — back to the campaign`}>
-            <span aria-hidden>‹ </span><span>{name}</span>
-          </Link>
-          <span className="header-spacer" />
-          {/* Ledger, Timeline, Costs and Sheets used to sit here as well.
-              They are rail rows and hub links now, and having them in three
-              places at once was the "second navigation surface" the rail was
-              built to retire -- the reader saw the same four destinations in
-              the chrome, on the page, and in the palette. What is left on this
-              bar is what is about the SCENE in front of you; what belongs to
-              the campaign moved to the hub. */}
-          {/* Eight panels behind one control (`SceneMenu` says why). What
-              stays outside it is what the bar is FOR: the way back to the
-              campaign, and End scene. */}
-          {/* The director-notes toggle. On the bar rather than in the menu:
-              it is a way of LOOKING at what is on screen, and everything in
-              the menu opens something over the transcript. It renders only
-              where there is a note to show, so a scene played without them
-              never grows a control for them. */}
-          {noteCount > 0 && (
-            <button className="scene-action" aria-pressed={showNotes}
-                    onClick={() => setShowNotes((v) => !v)}>
-              {showNotes ? "Hide" : "Show"} director notes · {noteCount}
-            </button>
-          )}
-          <SceneMenu onNewScene={newScene} panels={[
-            { label: "Changes", open: showChanges, toggle: () => setShowChanges((v) => !v) },
-            { label: "World updates", open: showIncoming, toggle: () => setShowIncoming((v) => !v) },
-            { label: "Composition", open: showComposition, toggle: () => setShowComposition((v) => !v) },
-            { label: "Mechanics", open: showMechanics, toggle: () => setShowMechanics((v) => !v) },
-            { label: "Calendar", open: showCalendar, toggle: () => setShowCalendar((v) => !v) },
-            { label: "Response", open: showStyle, toggle: () => setShowStyle((v) => !v) },
-            { label: "Cover", open: showCover, toggle: () => setShowCover((v) => !v) },
-            { label: "Tracker", open: showTracker, toggle: () => setShowTracker((v) => !v) },
-          ]} />
-          {/* The one control the menu cannot carry. A panel is open ABOVE the
-              transcript and the button that closes it is behind a disclosure,
-              so closing costs two clicks and a hunt for which row has the tick.
-              It renders only while something is open, which is exactly when it
-              is worth the width. */}
-          {openPanel && (
-            <button className="scene-action" onClick={closePanels}>
-              Close {openPanel.label}
-            </button>
-          )}
-          {/* `busy` is not the whole of "a turn can still write here": it clears
-              when the socket dies, and the backend's shielded abort write lands
-              seconds later — which is the window `streamingId` covers. Absorb
-              inside it and the chronicle summarises a transcript the partial
-              has not reached yet, then the partial lands underneath a scene
-              already marked absorbed. That one does not come back: the review
-              is committed against a transcript that no longer matches (#95). */}
-          {/* `settlesScene`: a Discard still on its way to the server holds the
-              scene for the play controls above, and End scene is the one
-              operation that waits it out instead of being refused by it (see
-              `endScene`). Disabling it here would make the reader click twice
-              for a wait the code already does.
-              `streamingId` is spelled out again rather than left to
-              `sceneLocked`, because that waiver must not reach it: the two
-              halves of `sceneLocked` are a review holding the scene, which a
-              Discard on THIS scene is and which End scene waits out, and the
-              shielded-abort window above, which it is not and which End scene
-              must never be pressed inside. Folded together, a Discard settling
-              here would open the #95 door. */}
-          {/* Not on a closed branch: a sibling's absorb closed it, and the
-              server refuses to absorb it (`branch_closed`). */}
-          {!activeClosed && (
-            <button className="scene-action end" onClick={review.endScene}
-                    disabled={!activeId || review.absorbing || busy || rolling
-                              || activeId === streamingId
-                              || (sceneLocked && !review.settlesScene(activeId))}>
-              {review.absorbing ? "Ending…" : "End scene"}
-            </button>
-          )}
-          {/* The way out of an absorb that is still running (#396). A review
-              holds the scene against play for as long as it runs and
-              `absorb_budget = 0` means nothing bounds that, so without this a
-              wedged End scene locks the scene until the process restarts --
-              and until the review lands there is no panel, and so no Cancel.
-              The same argument the panel's Cancel already carries for a wedged
-              retry, one step earlier. */}
-          {review.absorbing && (
-            <button className="scene-action" onClick={() => void review.stopAbsorb()}>
-              Stop
-            </button>
-          )}
-          {/* A review that is on disk and unusable (#396). The scene was played
-              on after the absorb landed -- appended, cut, retconned -- and the
-              stored review summarises posts that are no longer there. Saying so
-              here is what lets the reader re-run instead of opening a panel
-              whose save is going to be refused; the notice is dismissible
-              because it is information, not a state to be stuck in. */}
-          {review.staleReview && (
-            <p className="field-hint" role="status">
-              The scene changed after its review was prepared
-              {" "}({review.staleReview.prepared_posts} → {review.staleReview.current_posts}
-              {" "}posts). End the scene again to review what is there now.
-              {" "}<button className="subtle" onClick={review.dismissStale}>Dismiss</button>
-            </p>
-          )}
-        </div>
-        )}
+        <CampaignSceneBar
+          absorb={absorb}
+          name={name}
+          renamingScene={renamingScene}
+          setRenamingScene={setRenamingScene}
+          commitSceneRename={commitSceneRename}
+          review={review}
+          activeId={activeId}
+          absorbTitle={absorbTitle}
+          focus={focus}
+          cid={cid}
+          noteCount={noteCount}
+          showNotes={showNotes}
+          setShowNotes={setShowNotes}
+          newScene={newScene}
+          showChanges={showChanges}
+          setShowChanges={setShowChanges}
+          showIncoming={showIncoming}
+          setShowIncoming={setShowIncoming}
+          showComposition={showComposition}
+          setShowComposition={setShowComposition}
+          showMechanics={showMechanics}
+          setShowMechanics={setShowMechanics}
+          showCalendar={showCalendar}
+          setShowCalendar={setShowCalendar}
+          showStyle={showStyle}
+          setShowStyle={setShowStyle}
+          showCover={showCover}
+          setShowCover={setShowCover}
+          showTracker={showTracker}
+          setShowTracker={setShowTracker}
+          openPanel={openPanel}
+          closePanels={closePanels}
+          activeClosed={activeClosed}
+          fail={fail}
+          busy={busy}
+          rolling={rolling}
+          streamingId={streamingId}
+          sceneLocked={sceneLocked} />
         {/* The scene rail is gone. It cost 220px of transcript on every turn of every scene
             to answer a question asked a few times a session, and it could not be
             searched. ⌘K lists the same scenes, costs nothing until asked, and
@@ -5276,598 +718,225 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           {/* The page's banners sit ABOVE that split, and are the only things
               that do (`PlayBanners` says why). */}
           <PlayBanners ready={canGenerate} problem={sceneProblem} readyId={notReadyId}
-                       budget={budget} budgetSeen={budgetSeen} onBudgetSeen={setBudgetSeen}
-                       error={error} onRetry={() => void retry()} retryDisabled={busy || rolling || !canRetry}
-                       onDismissError={() => setError(null)} />
-          {!absorb && (<>
-          {/* Every one of these eight is opened AND closed from the scene bar,
-              which focus mode does not render — so one left open when focus
-              starts would be a panel above the transcript with no control that
-              can shut it. They keep their state and come back with the bar. The
-              inspector below is deliberately not in this list: its toggle lives
-              in the composer, which focus mode keeps. */}
-          {!focus && showCalendar && (
-            <div className="panel-slot">
-              <CalendarConfig scope={{ kind: "campaign", id: cid }} />
-            </div>
-          )}
-          {!focus && showMechanics && (
-            <div className="panel-slot">
-              {/* Guarded against a save that settles after the reader has moved
-                  on: the callback this panel holds is the one it was handed, so
-                  it can name a campaign that is no longer on screen. */}
-              {/* No cid check on the callback. A save settling after the reader
-                  moved on does fire a stale `onChanged`, but `readModuleBound`
-                  keys off `liveCid`, so it reads and commits the campaign on
-                  SCREEN -- harmless, and the correct answer. Filtering by the
-                  saved cid would only skip a request MechanicsConfig's own
-                  `load()` has already made anyway, while masking that keying in
-                  any test (Codex review round 2). */}
-              {/* `key` remounts it per campaign. Its own save is a PUT followed
-                  by a re-read, both against the `cid` its render captured, and
-                  every commit in that chain is unguarded -- so a save started in
-                  one campaign and settling after a switch would write the old
-                  campaign's module into the new campaign's editor, and the next
-                  Save would then persist that selection to the wrong campaign.
-                  A fresh instance has no state for the stale chain to land in
-                  (Codex review round 2). */}
-              <MechanicsConfig key={cid} cid={cid} onChanged={() => readModuleBound()} />
-            </div>
-          )}
-          {!focus && showStyle && (
-            <div className="panel-slot">
-              <ResponseTargetsPicker scope="campaign" cid={cid}
-                                    onChanged={() => activeId && selectScene(activeId)} />
-            </div>
-          )}
-          {!focus && showCover && (
-            <div className="panel-slot">
-              <CampaignCover cid={cid} />
-            </div>
-          )}
-          {/* Keyed by scene as well as campaign: it holds one scene's layer, and
-              a rename or a switch must not show it another scene's fields. */}
-          {!focus && showTracker && activeId && (
-            <div className="panel-slot">
-              <SceneTrackerPanel key={`${cid}:${activeId}`} cid={cid} sid={activeId}
-                                 onChanged={transcriptActions.refreshTracker} />
-            </div>
-          )}
-          {!focus && showChanges && <ChangesPanel cid={cid} />}
-          {/* Keyed by cid for the reason MechanicsConfig is: this route keeps
-              its instance across a campaign switch, so an unkeyed panel would
-              show one campaign's pending list while another is on screen. */}
-          {!focus && showIncoming && (
-            <IncomingReview key={cid} cid={cid} focus={reviewRef} refreshKey={pinEpoch}
-                            onResolved={() => setResolvedEpoch((n) => n + 1)} />
-          )}
-          {/* Keyed by cid for `IncomingReview`'s reason: this route keeps its
-              instance across a campaign switch, so an unkeyed panel would show
-              one campaign's composition while another is on screen. */}
-          {!focus && showComposition && (
-            <CompositionPanel key={cid} cid={cid} refreshKey={resolvedEpoch}
-                              onPinned={() => setPinEpoch((n) => n + 1)}
-                              // Re-boxed rather than passed through: the panel hands back the
-                              // same `row.ref` object each time, and `IncomingReview`'s focus
-                              // effect keys on identity -- so without this, returning to a row
-                              // already reviewed once would not re-select it.
-                              onReview={(ref) => { setReviewRef({ ...ref }); setShowIncoming(true); }} />
-          )}
-          {review.editFailures.length > 0 && (
-            <div className="mechanics-notice">
-              <p>{review.editFailures.length} change{review.editFailures.length === 1 ? "" : "s"} did not apply</p>
-              {review.editFailures.map((f, i) => (
-                <p className="field-hint" key={i}>{f.label}: {f.reason} ({f.kind})</p>
-              ))}
-              <button className="subtle" onClick={review.dismissFailures}>Dismiss</button>
-            </div>
-          )}
-          {review.publishFailures.length > 0 && (
-            <div className="mechanics-notice">
-              <p>{review.publishFailures.length} record{review.publishFailures.length === 1 ? "" : "s"} could
-                not be published to the world library — saved to this campaign instead</p>
-              {review.publishFailures.map((f) => (
-                <p className="field-hint" key={`${f.kind}/${f.id}`}>{f.label}: {f.reason}</p>
-              ))}
-              {/* Spec 9.4: the reviewer is told how to finish the job, not only
-                  that it stopped. Rendered outside the review (`!absorb`), so
-                  it is still here once the save has closed it. */}
-              <p className="field-hint">
-                {review.publishFailures.length === 1
-                  ? "It is kept in this campaign. Resolve the conflict, then publish it with Publish to library in the record's editor."
-                  : "Each is kept in this campaign. Resolve each conflict, then publish it with Publish to library in that record's editor."}
-              </p>
-              <button className="subtle" onClick={review.dismissPublishFailures}>Dismiss</button>
-            </div>
-          )}
-          </>)}
+            budget={budget} budgetSeen={budgetSeen} onBudgetSeen={setBudgetSeen}
+            error={error} onRetry={() => { retry().catch((err: unknown) => fail(err, false, "scene")); }} retryDisabled={busy || rolling || !canRetry}
+            onDismissError={() => setError(null)} />
+          <CampaignPanels
+            absorb={absorb}
+            focus={focus}
+            showCalendar={showCalendar}
+            cid={cid}
+            showMechanics={showMechanics}
+            readModuleBound={readModuleBound}
+            showStyle={showStyle}
+            activeId={activeId}
+            refreshSavedScene={refreshSavedScene}
+            showCover={showCover}
+            showTracker={showTracker}
+            transcriptActions={transcriptActions}
+            showChanges={showChanges}
+            showIncoming={showIncoming}
+            reviewRef={reviewRef}
+            pinEpoch={pinEpoch}
+            setResolvedEpoch={setResolvedEpoch}
+            showComposition={showComposition}
+            resolvedEpoch={resolvedEpoch}
+            setPinEpoch={setPinEpoch}
+            setReviewRef={setReviewRef}
+            setShowIncoming={setShowIncoming}
+            review={review} />
           {absorb && <ReviewPanel review={review} />}
           {!absorb && (<>
-          {showInspector && activeId && (
-            <div className="panel-slot">
-              {/* Memoized, with stable handlers: it re-renders for the scene,
-                  the refresh beat and the cost reads, never for the composer.
-                  The usage and budget are the reads this view already holds,
-                  handed down so its Cost section does not repeat them. The
-                  usage only while the transcript on screen is the ACTIVE
-                  scene's: it is read for the transcript, which stays the scene
-                  being left until the new one lands (for good, if it never
-                  does), and this section is headed by the active scene. Until
-                  then it reads as a read in flight, not as the wrong scene's
-                  spend. */}
-              <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
-                              onSceneChanged={onInspectorSceneChanged}
-                              onSceneRenamed={sceneRenamedStable} pcless={activePcless}
-                              sceneLocked={sceneLocked}
-                              onRenaming={markRenaming}
-                              posts={messages.length}
-                              usage={transcriptIsActive ? sceneCosts?.usage ?? null : null}
-                              budget={budget}
-                              onBudgetSaved={onBudgetSaved}
-                              rewritten={rewrittenPosts}
-                              onTranscriptEdited={onInspectorTranscriptEdited}
-                              stripTasks={stripTasks}
-                              onTaskBusy={onInspectorTaskBusy} />
-            </div>
-          )}
-          {activeId && !focus && (
-            <div className="scene-head">
-              <div className="eyebrow">
-                SCENE {sceneNumber(activeId, scenes.length)} · {messages.length}{" "}
-                {messages.length === 1 ? "TURN" : "TURNS"}
-                {/* What the scene has cost, which used to be reachable only by
-                    opening the inspector. It is the ledger's own total for the
-                    scene, not a sum of the gutter chips: those are capped and
-                    can be clamped, and a headline built by adding a capped
-                    list would understate without saying so. */}
-                {sceneSpend && (
-                  <span className={sceneSpend === UNPRICED ? "money-unpriced" : undefined}
-                        title={sceneCosts ? estimatedTokensTitle(sceneCosts.usage.totals)
-                          : undefined}>
-                    {" · "}{sceneSpend}{sceneSpendIsSpend ? " SPEND" : ""}
-                  </span>
-                )}
-              </div>
-              {renamingScene ? (
-                <input
-                  className="row-rename scene-rename" aria-label="Rename scene" autoFocus
-                  value={renamingScene.title}
-                  onChange={(e) => setRenamingScene({ id: renamingScene.id, title: e.target.value })}
-                  onKeyDown={(e) => {
-                    // See the reroll box: an inline Enter is claimed, not shared.
-                    if (e.key === "Enter") { e.preventDefault(); void commitSceneRename(); }
-                    if (e.key === "Escape") setRenamingScene(null);
-                  }}
-                />
-              ) : (
-                <h2 className="scene-title">
-                  {sceneTitle}
-                  {activePcless && <span className="chip on offscreen-badge">Offscreen</span>}
-                  {activeBranched && <span className="chip">branch</span>}
-                  {activeClosed && (
-                    <span className="chip" title="A sibling branch was absorbed">closed</span>
-                  )}
-                </h2>
-              )}
-              {/* Rename and delete belong to the scene you are reading, and to
-                  no other. They used to sit on every row of the rail, where a
-                  ✕ was one mis-click from deleting a transcript you were not
-                  even looking at. Locked while this scene is the one being
-                  streamed into: renaming re-slugs the file, which moves it out
-                  from under the write in flight (#95). */}
-              <div className="row-actions">
-                <button aria-label="Rename scene" disabled={sceneLocked}
-                        title={sceneLocked ? LOCKED_WHILE_GENERATING : "Rename scene"}
-                        onClick={() => setRenamingScene({ id: activeId, title: sceneTitle })}>✎</button>
-                {/* Forking is not one of the two: it writes nothing here at
-                    all, and is offered from this row because the scene you are
-                    reading is the turn you would branch at. Locked with the
-                    others while a turn is streaming — a copy taken mid-write
-                    would carry half a reply. */}
-                <button aria-label="Fork campaign at this scene" disabled={sceneLocked}
-                        title={sceneLocked ? LOCKED_WHILE_GENERATING
-                                           : "Fork the campaign at this scene"}
-                        onClick={() => forkAtScene(activeId)}>⑂</button>
-                <button aria-label="Delete scene" disabled={sceneLocked}
-                        title={sceneLocked ? LOCKED_WHILE_GENERATING : "Delete scene"}
-                        onClick={() => {
-                          const meta = scenes.find((x) => x.id === activeId);
-                          if (meta) void deleteScene(meta);
-                        }}>✕</button>
-              </div>
-            </div>
-          )}
-          {/* Under the scene's title and above its composer, which it gives way
-              to: it shrinks to the room left and scrolls inside it (the
-              stylesheet), so the place to write is on screen when a new scene
-              opens. Above the title at its full height it pushed the composer
-              below the fold.
-              Only once THIS scene's transcript has landed and turned out empty.
-              `messages` is also empty in the gap between opening a scene and
-              its transcript arriving, and mounting here then cost a
-              campaign-wide character list and a suggestion scan for a panel
-              that unmounted as soon as the posts came in. `landedScene`
-              rather than `loaded`, so a rename from the panel's own date field
-              does not remount it -- see there. */}
-          {activeId && openerOffered && (
-            <CastPanel
+            <CampaignSceneSetup
+              showInspector={showInspector}
+              activeId={activeId}
               cid={cid}
-              sid={activeId}
+              ctxKey={ctxKey}
+              onInspectorSceneChanged={onInspectorSceneChanged}
+              sceneRenamedStable={sceneRenamedStable}
+            onSetupSceneRenamed={onSetupSceneRenamed}
+              activePcless={activePcless}
+              sceneLocked={sceneLocked}
+              markRenaming={markRenaming}
+              messages={messages}
+              transcriptIsActive={transcriptIsActive}
+              sceneCosts={sceneCosts}
+              budget={budget}
+              onBudgetSaved={onBudgetSaved}
+              rewrittenPosts={rewrittenPosts}
+              onInspectorTranscriptEdited={onInspectorTranscriptEdited}
+              stripTasks={stripTasks}
+              onInspectorTaskBusy={onInspectorTaskBusy}
+              focus={focus}
+              scenes={scenes}
+              sceneSpend={sceneSpend}
+              sceneSpendIsSpend={sceneSpendIsSpend}
+              renamingScene={renamingScene}
+              setRenamingScene={setRenamingScene}
+              commitSceneRename={commitSceneRename}
+              sceneTitle={sceneTitle}
+              activeBranched={activeBranched}
+              activeClosed={activeClosed}
+              forkAtScene={forkAtScene}
+              fail={fail}
+              deleteScene={deleteScene}
+              openerOffered={openerOffered}
               openerRequest={openerRequest}
               ready={ready}
-              onSeeded={() => refreshAndAsk(activeId)}
-              onSceneRenamed={sceneRenamed}
-              initialPrompt={seedPrompt?.cid === cid && seedPrompt.sid === activeId
-                               ? seedPrompt.prompt : undefined}
-              greeting={openedFrom || undefined}
-              pcless={activePcless}
-              sceneLocked={sceneLocked}
-              onRenaming={markRenaming}
-            />
-          )}
-          <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}
-               data-testid="stream" onScroll={onStreamScroll}>
-            {firstIndex > 0 && (
-              <div className="stream-older">
-                <button className="subtle" onClick={() => void loadOlder()} disabled={loadingOlder}>
-                  {loadingOlder ? "Loading…" : (() => {
-                    const n = Math.min(PAGE_SIZE, firstIndex);
-                    return `Load ${n} older post${n === 1 ? "" : "s"}`;
-                  })()}
-                </button>
+              refreshAndAsk={refreshAndAsk}
+              seedPrompt={seedPrompt}
+              openedFrom={openedFrom} />
+            <CampaignTranscript
+              colorQuotes={colorQuotes}
+              streamRef={streamRef}
+              onStreamScroll={onStreamScroll}
+              firstIndex={firstIndex}
+              loadOlder={loadOlder}
+              loadingOlder={loadingOlder}
+              transcript={transcript}
+              directorNote={directorNote}
+              busy={busy}
+              cid={cid}
+              activeId={activeId}
+              streaming={streaming}
+              streamingId={streamingId}
+              streamingSpeakers={streamingSpeakers}
+              messages={messages}
+              speakerOf={speakerOf}
+              labels={labels}
+              plateAvatar={plateAvatar}
+              matchActor={matchActor}
+              roundProgress={roundProgress} />
+            {proposal && activeId && (
+              <RollProposal key={proposal.id} record={proposal} busy={busy || rolling} generationDisabled={!canGenerate}
+                onResolve={(body) => { resolve(body).catch((err: unknown) => fail(err, false, "scene")); }} />
+            )}
+            {activeId && (
+              /* Keyed by scene: the panel holds the walk's local state (whether a
+                 turn has been run and is waiting on a verdict), and carrying that
+                 across a scene switch would offer Accept for a reply in another
+                 scene. `onChanged` is the same refresh every transcript mutation
+                 here funnels through. */
+              <CampaignReplay
+                activeId={activeId}
+                replayEpoch={replayEpoch}
+                cid={cid}
+                replayAt={replayAt}
+                busy={busy}
+                rolling={rolling}
+                canGenerate={canGenerate}
+                takeRollLatch={takeRollLatch}
+                adoptPendingRun={adoptPendingRun}
+                fail={fail}
+                setReplayAt={setReplayAt}
+                activeDone={activeDone}
+                activeClosed={activeClosed}
+                openBranch={openBranch}
+                navigate={navigate}
+                refreshAfterReplay={refreshAfterReplay} />
+            )}
+            {activeClosed && !activeDone ? (
+              /* A closed branch: replaced like an absorbed scene's composer, and
+                 with no editing either -- the sibling's absorb is the past the
+                 campaign holds, and every write here is refused. */
+              <div className="scene-complete scene-closed">
+                A sibling branch was absorbed:{" "}
+                <Link to={sceneUrl(cid, activeClosed.sid)}>{activeClosed.title}</Link>.
+                {" "}This branch is read-only — delete it to discard it.
               </div>
+            ) : activeDone ? (
+              /* The whole composer, not a disabled entry box. This scene's summary
+                 is written and its changes are applied, so a post added now would
+                 sit outside the record taken of it -- and a greyed-out textarea
+                 still says "you could type here". Editing and rerolling existing
+                 posts stay available: those change what was absorbed, rather than
+                 adding to a scene that is closed. */
+              <div className="scene-complete">✓ Scene complete</div>
+            ) : (
+              <CampaignComposer
+                directing={directing}
+                activePcless={activePcless}
+                setDirectMode={setDirectMode}
+                heldKind={heldKind}
+                pendingResponse={pendingResponse}
+                sceneResponse={sceneResponse}
+                chooseResponseOverride={chooseResponseOverride}
+                clearResponseOverride={clearResponseOverride}
+                activeId={activeId}
+                group={group}
+                showGroup={showGroup}
+                setShowGroup={setShowGroup}
+                selectedActor={selectedActor}
+                quickNotice={quickNotice}
+                cid={cid}
+                showInspector={showInspector}
+                setShowInspector={setShowInspector}
+                cast={cast}
+                currentCampaign={currentCampaign}
+                selected={selected}
+                groupSaved={groupSaved}
+                quickSet={quickSet}
+                quickCtx={quickCtx}
+                runQuickReply={runQuickReply}
+                moduleBound={moduleBound}
+                sceneLocked={sceneLocked}
+                busy={busy}
+                messages={messages}
+                toggleRollPop={toggleRollPop}
+                rollForm={rollForm}
+                rolling={rolling}
+                setRollForm={setRollForm}
+                enterCheckMode={enterCheckMode}
+                checkActors={checkActors}
+                doCheck={doCheck}
+                fail={fail}
+                rollFromForm={rollFromForm}
+                showRollSyntax={showRollSyntax}
+                setShowRollSyntax={setShowRollSyntax}
+                input={input}
+                setInput={setInput}
+                onKeyDown={onKeyDown}
+                renamesInFlight={renamesInFlight}
+                canGenerate={canGenerate}
+                send={send}
+                respondAs={respondAs}
+                cancelTurn={cancelTurn}
+                notReadyId={notReadyId} />
             )}
-            {/* Memoized per run and per post (`components/play/TranscriptPost`):
-                the context and the actions are the same objects across every
-                render that does not change the transcript, so a keystroke or a
-                streamed delta re-renders none of what is already on screen. */}
-            {transcript}
-            {directorNote && busy
-              && directorNote.cid === cid && directorNote.sid === activeId && (
-              /* Plated as a shown stored note is, which is what this one
-                 becomes once the turn lands. */
-              <div className="run director-note">
-                <div className="plate"><span className="plate-name">{DIRECTOR_LABEL}</span></div>
-                <div className="msg assistant">
-                  <span className="msg-gutter" />
-                  <div className="msg-body">{directorNote.text}</div>
-                </div>
-              </div>
-            )}
-            {(streaming || (busy && streamingId === activeId && streamingSpeakers.length > 0)) && (
-              <div className="run">
-                {streamingSpeakers.length === 0 && (messages.length === 0 ||
-                  speakerOf(messages[messages.length - 1]) !== labels.assistant) && (
-                  <div className="plate">
-                    <span className="plate-avatar"><Portrait src="/grimoire-32.png" name={labels.assistant} /></span>
-                    <span className="plate-name">{labels.assistant}</span>
-                    <span className="role-chip">narrator</span>
-                  </div>
-                )}
-                <div className="msg assistant">
-                  <span className="msg-gutter" />
-                  <div className="msg-body">
-                    {/* Art handles are hidden while the deltas arrive: the
-                        server rewrites them into markdown when the reply is
-                        persisted, so the reader would otherwise watch a raw
-                        `[[art:...]]` sit in the prose and then turn into a
-                        picture. Display only -- nothing here changes what is
-                        stored. */}
-                    {/* A block at a time (`StreamingMarkdown`), so the part that
-                        is still arriving re-parses its open tail per delta rather
-                        than everything above the cursor. */}
-                    {streamingSpeakers.length ? <>
-                      {streamingSpeakers[0].offset > 0 && <StreamingMarkdown text={streaming.slice(0, streamingSpeakers[0].offset)} />}
-                      {streamingSpeakers.map((part, index) => <div className="streaming-response" key={part.id}>
-                        <div className="plate">
-                          <span className="plate-avatar"><Portrait name={part.speaker}
-                            src={plateAvatar({ speaker: part.speaker, pc: false,
-                              actor: matchActor(part.speaker, part.actor_ref) }, part.actor_ref)} /></span>
-                          <strong className="plate-name">{part.speaker}</strong>
-                        </div>
-                        <Thinking content={part.thinking ?? ""} />
-                        {/* A Keep writing part grows from the reply it continues
-                            (its seed, display only: the server joins the
-                            landed variant itself, and the reload shows that). */}
-                        <StreamingMarkdown text={part.seed !== undefined
-                          ? part.seed + " " + streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)
-                          : streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)} />
-                        {busy && streamingId === activeId && !part.ended && index === streamingSpeakers.length - 1 && (
-                          <div className="response-progress" role="status" aria-label={`${part.speaker} is responding`}>
-                            <span className="cursor" aria-hidden="true" /> {roundProgress
-                              ? `Round ${roundProgress.index}/${roundProgress.of} · ` : ""}{part.speaker} is responding…
-                          </div>
-                        )}
-                      </div>)}
-                    </> : <><StreamingMarkdown text={streaming} /><span className="cursor" /></>}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          {proposal && activeId && (
-            <RollProposal key={proposal.id} record={proposal} busy={busy || rolling} generationDisabled={!canGenerate}
-                          onResolve={resolve} />
-          )}
-          {activeId && (
-            /* Keyed by scene: the panel holds the walk's local state (whether a
-               turn has been run and is waiting on a verdict), and carrying that
-               across a scene switch would offer Accept for a reply in another
-               scene. `onChanged` is the same refresh every transcript mutation
-               here funnels through. */
-            <ReplayPanel key={`${activeId}:${replayEpoch}`}
-                         cid={cid} sid={activeId} startAt={replayAt}
-                         disabled={busy || rolling} generationDisabled={!canGenerate}
-                         // The same latch every other write to this transcript
-                         // takes: a replayed turn is a generation into the scene
-                         // on screen, and while one runs nothing else here may
-                         // offer to start a second.
-                         latch={() => takeRollLatch(activeId)}
-                         // A replay stream that ended with no answer leaves a
-                         // run that may still own the scene. This is the same
-                         // pass mount and `visibilitychange` run; calling it
-                         // now is the difference between the panel re-enabling
-                         // itself over that run and the view taking it back.
-                         onUnanswered={() => { void adoptPendingRun(cid, activeId); }}
-                         onStartHandled={() => setReplayAt(null)}
-                         // Only an unabsorbed scene branches; an absorbed one's
-                         // branch is a campaign fork, which "Fork first" is.
-                         branchable={!activeDone}
-                         // A closed branch refuses every generation here; the
-                         // panel keeps only accept and stop, as the server does.
-                         closed={!!activeClosed}
-                         // The replay runs in the sibling; this scene was not
-                         // touched, so the reader goes where the walk is.
-                         onBranched={(branched) => { void openBranch(branched); }}
-                         // Into the SAME scene in the copy, not the campaign's
-                         // front door: a fork copies the scenes wholesale, so
-                         // this id is there, and the reader asked to replay one
-                         // particular post. `replayAt` is deliberately left
-                         // standing — the scene did not change, so the dialog
-                         // they were looking at is waiting for them in the copy.
-                         onForked={(forked) => void navigate(sceneUrl(forked, activeId))}
-                         onChanged={async (asked) => {
-                           void loadScenes();
-                           const seen = await selectScene(activeId);
-                           setCtxKey((k) => k + 1);
-                           // Same reason the cut asks (#85/#84): the stored
-                           // fold covers a prefix a replay has just cut,
-                           // regenerated or put back, so its digest no longer
-                           // describes the transcript — and a walk that has
-                           // just rewritten several turns is exactly when the
-                           // scene-break question wants re-asking too.
-                           //
-                           // Unless the write was a reroll, which goes through
-                           // `/regenerate` and so already scheduled both
-                           // server-side (#397). Asking again would put a
-                           // second scene-break question at the provider —
-                           // that route has no in-flight coalescing, so both
-                           // are billed and the later one is thrown away as
-                           // superseded.
-                           if (!asked) askAfterPost(activeId, seen);
-                         }} />
-          )}
-          {activeClosed && !activeDone ? (
-            /* A closed branch: replaced like an absorbed scene's composer, and
-               with no editing either -- the sibling's absorb is the past the
-               campaign holds, and every write here is refused. */
-            <div className="scene-complete scene-closed">
-              A sibling branch was absorbed:{" "}
-              <Link to={sceneUrl(cid, activeClosed.sid)}>{activeClosed.title}</Link>.
-              {" "}This branch is read-only — delete it to discard it.
-            </div>
-          ) : activeDone ? (
-            /* The whole composer, not a disabled entry box. This scene's summary
-               is written and its changes are applied, so a post added now would
-               sit outside the record taken of it -- and a greyed-out textarea
-               still says "you could type here". Editing and rerolling existing
-               posts stay available: those change what was absorbed, rather than
-               adding to a scene that is closed. */
-            <div className="scene-complete">✓ Scene complete</div>
-          ) : (
-          <div className={`composer${directing ? " directing" : ""}`}>
-          <ComposerMeta
-            directing={directing} pcless={activePcless} onDirect={setDirectMode} held={heldKind}
-            targets={{
-              words: pendingResponse?.response_continuation_words ?? "",
-              paragraphs: pendingResponse?.response_continuation_paragraphs ?? "",
-              wordsDefault: String(sceneResponse?.effective.continuation.words ?? 150),
-              paragraphsDefault: String(sceneResponse?.effective.continuation.paragraphs ?? 2),
-            }}
-            onTarget={chooseResponseOverride} onClearTargets={clearResponseOverride}
-            order={activeId && group ? GROUP_ORDER_LABEL[group.order] : null}
-            orderOpen={showGroup} onOrder={() => setShowGroup((v) => !v)}
-            dossierOpen={!!selectedActor}
-            notice={quickNotice && quickNotice.cid === cid && quickNotice.sid === activeId
-              ? quickNotice.text : null}
-            inspectorOpen={showInspector} onInspector={() => setShowInspector((v) => !v)} />
-          {showGroup && activeId && group && (
-            <GroupPanel key={`${cid}/${activeId}`} cid={cid} sid={activeId} cast={cast}
-              settings={group}
-              onChange={(next) => {
-                // A save that lands after the reader moved on belongs to the
-                // scene it was made in, and the read it supersedes is stale.
-                if (cidRef.current !== cid || activeIdRef.current !== activeId) return;
-                groupReadRef.current += 1;
-                setGroup(next);
-              }}
-              onClose={() => setShowGroup(false)} />
-          )}
-          {activeId && quickSet?.cid === cid && (
-            <QuickReplyStrip replies={quickSet.replies} ctx={quickCtx} onRun={runQuickReply} />
-          )}
-          <div className="inputbar">
-            {/* Dice are a mechanics affordance: both the popover's tabs lead to
-                routes that only mean something with a pack bound (Check needs one
-                outright; freeform Dice is offered alongside it as part of the same
-                tool). An unbound campaign is freeform play, so the button is not
-                there at all -- and not merely while the read is still out, which
-                would flash a control and then remove it. */}
-            {moduleBound === true && (
-              <button className="roll-btn"
-                      title={sceneLocked ? LOCKED_WHILE_GENERATING : "Roll dice"}
-                      aria-label="Roll dice"
-                      disabled={!activeId || busy || sceneLocked || messages.length === 0}
-                      onClick={toggleRollPop}>
-                ⚄
-              </button>
-            )}
-            {rollForm && (
-              <div className="roll-pop">
-                <div className="roll-mode-toggle">
-                  <button type="button" className={rollForm.mode === "dice" ? "active" : ""}
-                          disabled={rolling}
-                          onClick={() => setRollForm({ ...rollForm, mode: "dice" })}>
-                    Dice
-                  </button>
-                  <button type="button" className={rollForm.mode === "check" ? "active" : ""}
-                          disabled={rolling}
-                          onClick={enterCheckMode}>
-                    Check
-                  </button>
-                </div>
-                {rollForm.mode === "check" ? (
-                  <div className="check-pop">
-                    <select aria-label="Check actor" value={rollForm.checkActor} disabled={rolling}
-                            onChange={(e) => setRollForm({ ...rollForm, checkActor: e.target.value, checkId: "" })}>
-                      <option value="">Choose an actor…</option>
-                      {checkActors.map((a) => <option key={a.ref} value={a.ref}>{a.label}</option>)}
-                    </select>
-                    <select aria-label="Check" value={rollForm.checkId} disabled={rolling}
-                            onChange={(e) => setRollForm({ ...rollForm, checkId: e.target.value })}>
-                      <option value="">Choose a check…</option>
-                      {(checkActors.find((a) => a.ref === rollForm.checkActor)?.checks ?? [])
-                        .map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                    </select>
-                    <input type="number" aria-label="Difficulty" value={rollForm.difficulty} disabled={rolling}
-                           placeholder="default"
-                           onChange={(e) => setRollForm({ ...rollForm,
-                             difficulty: e.target.value === "" ? "" : Number(e.target.value) })} />
-                    <input type="number" aria-label="Modifier" value={rollForm.modifier} disabled={rolling}
-                           onChange={(e) => setRollForm({ ...rollForm, modifier: Number(e.target.value) })} />
-                    <button className="btn-chrome" onClick={doCheck}
-                            disabled={rolling || !rollForm.checkActor || !rollForm.checkId}>
-                      Roll ▸
-                    </button>
-                    {rollForm.error && <span className="roll-error">{rollForm.error}</span>}
-                  </div>
-                ) : (
-                <>
-                <input
-                  autoFocus
-                  placeholder="2d6+3, 4d6kh3, 7d10t6…"
-                  aria-label="Dice notation"
-                  value={rollForm.notation}
-                  disabled={rolling}
-                  onChange={(e) => setRollForm({ ...rollForm, notation: e.target.value })}
-                  onKeyDown={(e) => {
-                    // See the reroll box: an inline Enter is claimed, not shared.
-                    if (e.key === "Enter") { e.preventDefault(); void rollFromForm(); }
-                    if (e.key === "Escape") setRollForm(null);
-                  }}
-                />
-                <input
-                  placeholder="Label (optional)"
-                  aria-label="Roll label"
-                  value={rollForm.label}
-                  disabled={rolling}
-                  onChange={(e) => setRollForm({ ...rollForm, label: e.target.value })}
-                  onKeyDown={(e) => {
-                    // See the reroll box: an inline Enter is claimed, not shared.
-                    if (e.key === "Enter") { e.preventDefault(); void rollFromForm(); }
-                    if (e.key === "Escape") setRollForm(null);
-                  }}
-                />
-                <button className="btn-chrome" onClick={() => void rollFromForm()} disabled={rolling}>Roll ▸</button>
-                <button type="button" className="roll-syntax-help" aria-label="Dice notation syntax"
-                        aria-expanded={showRollSyntax}
-                        onClick={() => setShowRollSyntax((v) => !v)}>syntax {showRollSyntax ? "▾" : "▸"}</button>
-                {rollForm.error && <span className="roll-error">{rollForm.error}</span>}
-                {showRollSyntax && (
-                  <div className="roll-syntax">
-                    <div><code>NdM</code> — roll N dice with M sides (default N = 1), e.g. <code>2d6</code></div>
-                    <div><code>khN</code> / <code>klN</code> — keep highest/lowest N, e.g. <code>4d6kh3</code></div>
-                    <div><code>dhN</code> / <code>dlN</code> — drop highest/lowest N instead of keeping</div>
-                    <div><code>!</code> — exploding dice: max face rolls again, e.g. <code>5d6!</code></div>
-                    <div><code>+K</code> / <code>-K</code> — flat modifier on the total, e.g. <code>2d6+3</code></div>
-                    <div><code>tN</code> — pool mode: count dice ≥ N as successes, e.g. <code>7d10t6</code></div>
-                    <div><code>vs N</code> — grade the total success/failure vs a target, e.g. <code>1d20+5 vs 15</code></div>
-                    <div>Clauses combine freely (e.g. <code>4d6kh3!+2</code>); <code>tN</code> and <code>vs N</code> are mutually exclusive.</div>
-                  </div>
-                )}
-                </>
-                )}
-              </div>
-            )}
-            <textarea
-              rows={3}
-              placeholder={directing ? "Direct the scene (optional)…" : "Speak your intent…"}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-            />
-            {activeId && <div className="form-actions">
-              <ReplyChips cast={cast} sittingOut={group?.sitting_out ?? []}
-                disabled={busy || rolling || sceneLocked || renamesInFlight > 0 || !canGenerate}
-                onReply={(ref) => void (input.trim() ? send(ref) : respondAs(ref))} />
-            </div>}
-            {/* Selection and every handoff share the run's busy latch. Keep
-                Continue visible but unavailable until the entire run settles;
-                the separate Stop still cancels it before any prose arrives. */}
-            <div className="composer-run-actions">
-              {busy && <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>}
-              {/* Disabled where no model can answer, rather than sending into
-                  the refusal: the banner above says why, and is named as this
-                  button's description. */}
-              <button className="send" onClick={() => void send()}
-                      disabled={busy || rolling || renamesInFlight > 0 || !canGenerate}
-                      title={canGenerate ? undefined : "No model is ready to generate"}
-                      aria-describedby={canGenerate ? undefined : notReadyId}>
-                {/* An empty box requests one additional response in either mode. */}
-                {!input.trim() ? "Continue ▶" : directing ? "Direct ▸" : "Send ▸"}
-              </button>
-            </div>
-          </div>
-          </div>
-          )}
           </>)}
         </section>
-        {characterPassage && characterPassage.cid === cid && characterPassage.sid === activeId && (
-          <PassageCharacterDialog key={characterPassage.rid} cid={cid} sid={characterPassage.sid}
-            responseId={characterPassage.rid} sourceText={characterPassage.source}
-            onClose={() => setCharacterPassage(null)} onSaved={() => {
-              const saved = characterPassage;
-              setCharacterPassage(null);
-              if (cidRef.current === saved.cid && activeIdRef.current === saved.sid) void selectScene(saved.sid);
-            }} />
-        )}
-        {drawer && activeId && (
-          <RecordDrawer cid={cid} sid={activeId} target={drawer} onClose={() => setDrawer(null)} />
-        )}
-        {/* The third pane, and the reason the review is worth its own layout:
-            judging a proposal means reading the line it came from, and reading
-            it in another tab means losing the row. Rendered flat — speaker,
-            then text — rather than through the transcript's own machinery,
-            which carries edit, reroll and alternate controls that have no
-            business in a review. */}
-        {chooserOpen && (
-          <NewSceneChooser cid={cid} afterSid={activeId} ready={ready}
-                           onClose={closeChooser} onCreated={sceneCreated} />
-        )}
-        {picking && (
-          <PostImagePicker cid={cid} target={picking.target}
-                           onInsert={(md) => insertImage(picking.index, md)}
-                           onClose={() => setPicking(null)} />
-        )}
-        {regexTest && (
-          <RegexTestDialog cid={cid} target={regexTest} onClose={() => setRegexTest(null)} />
-        )}
+        <CampaignDialogs
+          characterPassage={characterPassage}
+          cid={cid}
+          activeId={activeId}
+          setCharacterPassage={setCharacterPassage}
+          currentCampaign={currentCampaign}
+          selected={selected}
+          refreshSavedScene={refreshSavedScene}
+          drawer={drawer}
+          setDrawer={setDrawer}
+          chooserOpen={chooserOpen}
+          ready={ready}
+          closeChooser={closeChooser}
+          sceneCreated={sceneCreated}
+          fail={fail}
+          picking={picking}
+          insertImage={insertImage}
+          setPicking={setPicking}
+          regexTest={regexTest}
+          setRegexTest={setRegexTest} />
       </div>
       {/* A SIBLING of the workspace, not a child of it. `.shell.review
           .shell-main` is a row flex whose two items are the review and this —
           which is the whole "three panes" layout — and nested inside the
           workspace's column flex it was never beside the review at all, only
           stacked under it and clipped to 320px. */}
+      {/* The third pane, and the reason the review is worth its own layout:
+            judging a proposal means reading the line it came from, and reading
+            it in another tab means losing the row. Rendered flat — speaker,
+            then text — rather than through the transcript's own machinery,
+            which carries edit, reroll and alternate controls that have no
+            business in a review. */}
       {absorb && (
         <ReviewTranscript messages={messages} speakerOf={speakerOf} isCited={isCited} />
       )}

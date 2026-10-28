@@ -24,7 +24,7 @@ beforeEach(() => {
 
 test("shows two-state select defaulting to None and saves the choice", async () => {
   render(<WorldMechanics wid="w" />);
-  const select = (await screen.findByLabelText("Mechanics")) as HTMLSelectElement;
+  const select = (await screen.findByLabelText<HTMLSelectElement>("Mechanics"));
   expect(select.value).toBe("");
   fireEvent.change(select, { target: { value: "pool-basic" } });
   fireEvent.click(screen.getByText("Save"));
@@ -42,7 +42,7 @@ test("shows the default-module hint when the world has a module set", async () =
 test("the starting-sheets picker calls onPickMid on selection", async () => {
   const onPickMid = vi.fn();
   render(<WorldMechanics wid="w" worldMid="" onPickMid={onPickMid} />);
-  const picker = (await screen.findByLabelText("Starting sheets module")) as HTMLSelectElement;
+  const picker = (await screen.findByLabelText<HTMLSelectElement>("Starting sheets module"));
   fireEvent.change(picker, { target: { value: "pool-basic" } });
   expect(onPickMid).toHaveBeenCalledWith("pool-basic");
 });

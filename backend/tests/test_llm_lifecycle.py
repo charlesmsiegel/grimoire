@@ -13,6 +13,7 @@ failures cannot leak into the next — and is checked here because this is where
 "what does an app own" is pinned.
 """
 
+import asyncio
 import importlib
 
 import anyio
@@ -101,6 +102,59 @@ def test_shutdown_closes_the_underlying_connection_pools(app):
         assert not any(pool.is_closed for pool in pools)
 
     assert all(pool.is_closed for pool in pools)
+
+
+@pytest.mark.parametrize(("faults", "expected"), [
+    ({"_openrouter": "error"}, RuntimeError),
+    ({"_openai_compatible": "error"}, RuntimeError),
+    ({"_anthropic": "error"}, RuntimeError),
+    ({"_openrouter": "cancel"}, asyncio.CancelledError),
+    ({"_openai_compatible": "cancel"}, asyncio.CancelledError),
+    ({"_anthropic": "cancel"}, asyncio.CancelledError),
+    ({"_openrouter": "error", "_openai_compatible": "error"}, ExceptionGroup),
+    ({"_openrouter": "cancel", "_openai_compatible": "error"}, asyncio.CancelledError),
+    ({"_openrouter": "error", "_openai_compatible": "cancel"}, asyncio.CancelledError),
+    ({"_openrouter": "error", "_anthropic": "cancel"}, asyncio.CancelledError),
+    ({"_openrouter": "cancel", "_openai_compatible": "cancel"}, asyncio.CancelledError),
+])
+async def test_provider_close_failures_do_not_leak_other_owned_pools(app, monkeypatch,
+                                                                  faults, expected):
+    """A broken provider is not permission to abandon the other app-owned
+    pools. Cancellation still wins over ordinary cleanup failures, which must
+    remain available as context instead of silently replacing that signal."""
+    gateway = app.state.llm
+    providers = {name: getattr(gateway, name) for name in
+                 ("_openrouter", "_openai_compatible", "_anthropic")}
+    pools = {name: provider._client() for name, provider in providers.items()}
+    errors = {}
+
+    def broken_close(error):
+        async def close():
+            raise error
+        return close
+
+    for name, kind in faults.items():
+        errors[name] = (asyncio.CancelledError(name) if kind == "cancel"
+                        else RuntimeError(name))
+        monkeypatch.setattr(providers[name], "aclose", broken_close(errors[name]))
+    try:
+        with pytest.raises(expected) as caught:
+            await gateway.aclose()
+        assert all(pool.is_closed for name, pool in pools.items() if name not in faults)
+        if expected is ExceptionGroup:
+            assert set(caught.value.exceptions) == set(errors.values())
+        elif expected is asyncio.CancelledError:
+            ordinary = {error for error in errors.values() if isinstance(error, Exception)}
+            if ordinary:
+                assert isinstance(caught.value.__cause__, ExceptionGroup)
+                assert set(caught.value.__cause__.exceptions) == ordinary
+        else:
+            assert caught.value is next(iter(errors.values()))
+    finally:
+        # A deliberately broken close cannot release its own pool. The test
+        # owns those injected failures and releases their real resources here.
+        for pool in pools.values():
+            await pool.aclose()
 
 
 def test_every_closable_the_app_holds_is_closed_by_shutdown(app):

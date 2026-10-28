@@ -45,7 +45,7 @@ export function WeatherWidget({ cid, sid, refreshKey }:
   const reload = useCallback(
     () => api.getSceneWeather(cid, sid).then(setData).catch(() => setData(null)),
     [cid, sid]);
-  useEffect(() => { reload(); }, [reload, refreshKey]);
+  useEffect(() => { void reload(); }, [reload, refreshKey]);
 
   // Resolution returns null when there is no location or no moment yet; the
   // widget renders nothing rather than a placeholder, matching how the
@@ -254,7 +254,7 @@ export function WeatherWidget({ cid, sid, refreshKey }:
           </div>
 
           <div className="form-actions">
-            <button className="primary" disabled={busy} onClick={save}>Save</button>
+            <button className="primary" disabled={busy} onClick={() => { void save(); }}>Save</button>
             {authored.length > 0 && (
               <button className="subtle" disabled={busy} onClick={clearAll}>Clear override</button>
             )}

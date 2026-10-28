@@ -1,7 +1,7 @@
 {
   "schema": "measurement-evidence/1",
   "subject": "grimoire",
-  "commit": "f290a7a9a6ea9b08b86f083ade7e5848b05add04",
+  "commit": "43d8349f + working tree fc99a43f0ceb",
   "coverage_score": null,
   "coverage_state": "not_assessed",
   "reason": "The installed measurement rubric cannot represent instrumented metrics whose run results were not audited. Assigning zero would assert unmeasured content; a baseline-only grade would overstate whole-unit coverage.",
@@ -258,11 +258,12 @@
     "This is an ungraded inventory of the selected measurement evidence, not a test pass rate, runtime-correctness score or claim that instrumentation is absent.",
     "Operational telemetry and performance profiles without selected run artifacts were not evaluated for production distributions."
   ],
-  "generated": "2026-10-26",
+  "generated": "2026-10-27",
   "refresh_notes": [
-    "Stored corpus sizes and embedding ranking scores were re-derived from checked-in data. No evaluation or provider experiment was run.",
-    "The history-planning aggregation refactor preserves the partial-token accounting issue; its definition and summary citations were refreshed.",
-    "Package measurement pages with no local measurement definitions remain ungraded. Root, evals, scripts and backend-tests coverage grades remain omitted because results-not-audited is not a status supported by the installed rubric."
+    "Full repository metric, example, fail-soft and threshold scans were rerun from the source root with explicit high display limits. Scanner candidates were checked against metric definitions and consumers; none were promoted solely from a heuristic.",
+    "Stored synthetic dataset sizes and embedding recall/MRR were recomputed from checked-in data. No provider experiment, eval replay or private-library inspection was performed.",
+    "Whole-unit measurement coverage remains unknown for repository/evals/scripts/backend-tests: the installed rubric cannot represent result_not_audited without falsely treating unknown as never measured or dropping measurable items. Existing no-definition package pages and the separate stored-baseline page are rebuilt; a readable evidence page exposes the ungraded inventory.",
+    "The generic example scanner misses nested/custom ground-truth schemas and flags intentionally malformed reply fixtures. Its zero recognized labels and unreadable-file count are candidates, not evidence of missing gold labels or damaged datasets. The embedding relevance sets were validated directly."
   ],
   "credited": [
     {
@@ -290,5 +291,73 @@
   "discovery_limits": [
     "Root-level find_metrics, count_examples and find_fail_soft scripts were run; their textual results are leads, not findings. Formula and consumer review confirmed the retained partial-token-accounting finding.",
     "The dataset scanner cannot recognize all project-specific nested labels and encounters deliberately malformed provider-reply fixtures. Corpus sizes in this report were therefore derived directly from their owning data structures rather than copied from the scanner headline."
+  ],
+  "source_manifest_sha256": "fc99a43f0cebd732a2cb35c29583332ce74e7f5daae9511a80897261d2c74f60",
+  "fresh_scanner_counts": {
+    "metrics": {
+      "files_scanned": 2525,
+      "files_skipped_unread": 0,
+      "files_skipped_generated": 0,
+      "lines_truncated": 0,
+      "metric_names": 106,
+      "candidates_total": 929,
+      "candidates_shown": 929
+    },
+    "examples": {
+      "datasets": 32,
+      "datasets_unparseable": 14,
+      "records_total": 212,
+      "records_read": 212,
+      "records_labeled_max": 0,
+      "candidates_total": 109
+    },
+    "fail-soft": {
+      "files_scanned": 2525,
+      "files_skipped_unread": 0,
+      "files_skipped_generated": 0,
+      "lines_truncated": 0,
+      "candidates_total": 2445,
+      "error_becomes_zero": 86,
+      "swallowed_error": 515,
+      "default_off_flag": 302,
+      "silent_cap": 329,
+      "nondeterminism": 720,
+      "unpinned_model": 493
+    },
+    "threshold-trace": {
+      "needle": "0.7",
+      "sites": 86,
+      "files": 32,
+      "files_scanned": 2729,
+      "files_skipped_unread": 0,
+      "files_skipped_generated": 0,
+      "lines_truncated": 0,
+      "definition": 2,
+      "config": 5,
+      "test": 77,
+      "comment": 2
+    }
+  },
+  "analysis_runs": [
+    {
+      "analyzer": "metrics",
+      "exit_code": 0,
+      "seconds": 145.4
+    },
+    {
+      "analyzer": "examples",
+      "exit_code": 0,
+      "seconds": 0.74
+    },
+    {
+      "analyzer": "fail-soft",
+      "exit_code": 0,
+      "seconds": 19.63
+    },
+    {
+      "analyzer": "threshold-trace",
+      "exit_code": 0,
+      "seconds": 2.52
+    }
   ]
 }

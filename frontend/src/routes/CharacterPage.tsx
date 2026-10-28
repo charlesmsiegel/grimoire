@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   api, type Appearance, type Card, type Casefile, type CharacterDetail,
   type CharacterSummary, type EntityScope, type Greeting, type LoreEntryDraft,
@@ -30,7 +30,7 @@ import { VersionList } from "../components/character/VersionList";
 import { VoiceAnchorSection } from "../components/character/VoiceAnchorSection";
 import {
   buildCard, characterHref, charactersHref,
-  ExportMenu, formatOf,
+  ExportMenu, formatOf, type CharacterImportNotice,
 } from "../components/character/shared";
 import { sectionHref } from "../worldPaths";
 
@@ -82,6 +82,15 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
   const scope: EntityScope = campaign
     ? { kind: "campaign", id: cidParam }
     : { kind: "world", id: widParam };
+  const importNotice = (useLocation().state as {
+    characterImportNotice?: CharacterImportNotice;
+  } | null)?.characterImportNotice;
+  // The notice is about this committed identity/version, never another record
+  // reached with copied route state or a different scope's shared slug.
+  const importWarning = importNotice?.scope?.kind === scope.kind
+    && importNotice.scope.id === scope.id && importNotice.character === eid
+    && importNotice.version === params.get("v") && typeof importNotice.warning === "string"
+    ? importNotice.warning : null;
   const worldScope = !campaign;
   const loreHref = (id: string) =>
     sectionHref(scope, { kind: "record", at: "lore", rid: id });
@@ -553,6 +562,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       }>
         <div className="page-wide view-anim">
         <div className="screen-head"><h1 className="screen-title">Character</h1></div>
+        {importWarning && <p className="field-hint" role="status">{importWarning}</p>}
         {error != null
           ? <div className="banner"><ErrorNote err={error} /></div>
           : <p className="field-hint">Reading…</p>}
@@ -696,6 +706,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
       </div>
 
       {error != null && <div className="banner"><ErrorNote err={error} /></div>}
+      {importWarning && <p className="field-hint" role="status">{importWarning}</p>}
       {importMsg && <p className="field-hint">{importMsg}</p>}
 
       <MobileArtEntry name={name} image={art.preview ? () => art.preview.thumb : null} focus={art.preview?.focus}

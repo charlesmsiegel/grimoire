@@ -4,107 +4,17 @@ import ConfigView from "./ConfigView";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import { EMBEDDINGS_COPY } from "../components/inference/copy";
 
-vi.mock("../api/client", () => ({
-  ApiError: class ApiError extends Error {},
-  api: {
-    getConfig: vi.fn(), putConfig: vi.fn(), getDataDir: vi.fn(), putDataDir: vi.fn(),
-    listBackups: vi.fn(), createBackup: vi.fn(), createImageBackup: vi.fn(),
-    getStoreConflicts: vi.fn(),
-    listStyles: vi.fn(),
-    listCampaigns: vi.fn(), listScenes: vi.fn(),
-    listScenePrompts: vi.fn(), getScenePrompt: vi.fn(),
-    getPromptLayout: vi.fn(), putPromptLayout: vi.fn(),
-    getPlayDecisionsInfo: vi.fn(),
-  },
-}));
-vi.mock("../components/ResponseTargetsPicker", () => ({
-  ResponseTargetsPicker: () => <div data-testid="response-preset-picker" />,
-}));
-vi.mock("../components/ImageStoreCard", () => ({
-  ImageStoreCard: () => <div data-testid="image-store-card" />,
-}));
-vi.mock("../components/RegexRulesEditor", () => ({
-  RegexRulesEditor: ({ scope }: { scope: unknown }) =>
-    <div data-testid="regex-rules" data-scope={JSON.stringify(scope)} />,
-}));
 import { api } from "../api/client";
 import type { Config, PromptSnapshot, SendImagesReach } from "../api/types";
 import { fixture } from "../testkit/fixture";
 
-const cfg = fixture<Config>({
-  theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
-  active_connection_id: "openrouter",
-  active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
-  data_dir: "/home/u/.grimoire",
-  llm_timeout: "120", absorb_budget: "600", llm_call_budget: "300",
-  llm_retries: "2",
-  context_budget: "0", context_scan_depth: "6", lore_recursion_depth: "0", archive_depth: "3",
-  prompt_log_depth: "50", offscene_known_limit: "40",
-  rolling_summary_every: "10",
-  scene_break_every: "20", replay_fork_threshold: "10",
-  advance_fork_threshold: "30",
-  semantic_recall_depth: "0",
-  semantic_recall_threshold: "0.4",
-  history_recall_depth: "0", history_recall_budget: "1200",
-  history_recall_threshold: "0.35", history_recall_rerank: "off",
-  history_plan: "off", history_plan_repair: "on",
-  prompt_layout_enabled: "off", speaker_turn_taking: "off",
-  backup_enabled: "off", backup_interval_hours: "24", backup_keep: "7", backup_dir: "",
-  // The roles as `GET /config` names them (`settings.summary`). Decision
-  // selects nothing of its own here, so the summary reports what it falls
-  // through to -- Fast's choice -- and null only when nothing selects one.
-  inference: {
-    roles: {
-      primary: { provider_name: "OpenRouter", model: "vendor/model-x", preset_name: "Warm" },
-      fast: { provider_name: "Local vectors", model: "small-1", preset_name: "" },
-      decision: { provider_name: "Local vectors", model: "small-1", preset_name: "" },
-    },
-    embedding_on: false,
-  },
-});
-const dataDir = {
-  data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
-  is_default: true, source: "default" as const, exists: true,
-};
-beforeEach(() => {
-  vi.clearAllMocks();
-  vi.mocked(api.getConfig).mockResolvedValue(cfg);
-  vi.mocked(api.putConfig).mockResolvedValue(cfg);
-  vi.mocked(api.getDataDir).mockResolvedValue(dataDir);
-  vi.mocked(api.putDataDir).mockResolvedValue(dataDir);
-  vi.mocked(api.getStoreConflicts).mockResolvedValue({ conflicts: [], truncated: false });
-  vi.mocked(api.listStyles).mockResolvedValue([
-    { id: "gothic-horror", name: "Gothic Horror", description: "", tags: [], built_in: true },
-    { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
-  ]);
-  vi.mocked(api.listBackups).mockResolvedValue({
-    dir: "/home/u/.grimoire/backups", backups: [], image_backups: [],
-  });
-  // The context bar's source: no campaigns unless a test says otherwise, which
-  // is also the "nothing to draw" case.
-  vi.mocked(api.listCampaigns).mockResolvedValue([]);
-  vi.mocked(api.listScenes).mockResolvedValue([]);
-  vi.mocked(api.listScenePrompts).mockResolvedValue({ entries: [] });
-});
+vi.mock("../api/client", async () => (await import("../testkit/configViewMocks")).configApiMock());
+vi.mock("../components/ResponseTargetsPicker", async () => (await import("../testkit/configViewMocks")).responseTargetsMock());
+vi.mock("../components/ImageStoreCard", async () => (await import("../testkit/configViewMocks")).imageStoreMock());
+vi.mock("../components/RegexRulesEditor", async () => (await import("../testkit/configViewMocks")).regexRulesMock());
+import { cfg, dataDir, installConfigMocks, renderView, open, save } from "../testkit/configViewHarness";
 
-// ConfigView renders a <Link to="/connections">, which throws outside a
-// Router context — wrap every render the same way CampaignsView.test.tsx does.
-function renderView() {
-  render(
-    <MemoryRouter>
-      <ThemeProvider initial={cfg.theme}><ConfigView /></ThemeProvider>
-    </MemoryRouter>,
-  );
-}
-
-/** Main shows one section at a time, so every field test opens its section
- *  first. The row's accessible name can carry a trailing state word ("unsaved",
- *  "off", "ready"), hence the anchored patterns. */
-async function open(name: RegExp) {
-  fireEvent.click(await screen.findByRole("button", { name }));
-}
-
-const save = () => fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+beforeEach(installConfigMocks);
 
 test("the column leads with Inference's three pages, then every section in three groups", async () => {
   renderView();
@@ -571,30 +481,6 @@ test("no stored prompt, no bar — the numbers are never invented", async () => 
   expect(screen.queryByText(/NOTHING DROPPED/)).toBeNull();
 });
 
-test("the Prompt layout section carries the toggle and the editor", async () => {
-  vi.mocked(api.getPromptLayout).mockResolvedValue({
-    enabled: false,
-    sections: [{ id: "world_info", label: "", default_label: "World info",
-                 tier: "spotlight", enabled: true }],
-  });
-  renderView();
-  await open(/^Prompt layout/);
-  expect(await screen.findByRole("checkbox", { name: /use my section order/i }))
-    .not.toBeChecked();
-  expect(await screen.findByLabelText("Label for World info")).toBeInTheDocument();
-});
-
-test("the section order toggle saves as on/off", async () => {
-  vi.mocked(api.getPromptLayout).mockResolvedValue({ enabled: false, sections: [] });
-  vi.mocked(api.putConfig).mockResolvedValue({ ...cfg, prompt_layout_enabled: "on" });
-  renderView();
-  await open(/^Prompt layout/);
-  fireEvent.click(await screen.findByRole("checkbox", { name: /use my section order/i }));
-  save();
-  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    expect.objectContaining({ prompt_layout_enabled: "on" })));
-});
-
 test("the active-speaker toggle lives in Context and saves as on/off", async () => {
   vi.mocked(api.putConfig).mockResolvedValue({ ...cfg, speaker_turn_taking: "on" });
   renderView();
@@ -654,106 +540,6 @@ test("an unset tracker reads as checked, since the default is on", async () => {
     { name: "Track each character's state after every post" })).toBeChecked();
   expect(screen.getByRole("checkbox",
     { name: /ask each character to note what it heard or saw/i })).toBeChecked();
-});
-
-const twoRows = () => ({
-  enabled: false,
-  sections: [
-    { id: "world_info", label: "", default_label: "World info",
-      tier: "spotlight", enabled: true },
-    { id: "weather", label: "", default_label: "Weather",
-      tier: "spotlight", enabled: true },
-  ],
-});
-
-test("reordering a section counts as an unsaved change on the page", async () => {
-  /** The trap this replaced: the panel held its own draft, so a reordered
-   *  section left the footer reading "No unsaved changes" while the page's
-   *  Save wrote everything except the reordering. */
-  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
-  renderView();
-  await open(/^Prompt layout/);
-  await screen.findByLabelText("Label for World info");
-  expect(screen.getByText(/no unsaved changes/i)).toBeInTheDocument();
-
-  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
-  expect(screen.getByText(/1 unsaved change$/i)).toBeInTheDocument();
-});
-
-test("the page's Save writes the layout, and writes no config when only it moved", async () => {
-  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
-  vi.mocked(api.putPromptLayout).mockImplementation((sections) =>
-    Promise.resolve({ enabled: false, sections: sections.map((s) => ({
-      ...s, default_label: s.id === "weather" ? "Weather" : "World info",
-      tier: "spotlight" })) }));
-  renderView();
-  await open(/^Prompt layout/);
-  await screen.findByLabelText("Label for World info");
-  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
-  save();
-
-  await waitFor(() => expect(api.putPromptLayout).toHaveBeenCalled());
-  expect(vi.mocked(api.putPromptLayout).mock.calls[0][0].map((s) => s.id))
-    .toEqual(["weather", "world_info"]);
-  // config.md is untouched: an empty patch is a read-modify-write storing nothing
-  expect(api.putConfig).not.toHaveBeenCalled();
-  await waitFor(() => expect(screen.getByText(/no unsaved changes/i)).toBeInTheDocument());
-});
-
-test("Revert puts a reordered layout back", async () => {
-  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
-  renderView();
-  await open(/^Prompt layout/);
-  await screen.findByLabelText("Label for World info");
-  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
-  expect(screen.getAllByTestId("layout-row").map((r) => r.getAttribute("data-id")))
-    .toEqual(["weather", "world_info"]);
-
-  fireEvent.click(screen.getByRole("button", { name: /^revert$/i }));
-  expect(screen.getAllByTestId("layout-row").map((r) => r.getAttribute("data-id")))
-    .toEqual(["world_info", "weather"]);
-  expect(screen.getByText(/no unsaved changes/i)).toBeInTheDocument();
-});
-
-test("Reset writes immediately and clears the pending reorder", async () => {
-  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
-  vi.mocked(api.putPromptLayout).mockResolvedValue(twoRows());
-  renderView();
-  await open(/^Prompt layout/);
-  await screen.findByLabelText("Label for World info");
-  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
-
-  fireEvent.click(screen.getByRole("button", { name: /reset to default order/i }));
-  await waitFor(() => expect(api.putPromptLayout).toHaveBeenCalledWith([]));
-  await waitFor(() => expect(screen.getByText(/no unsaved changes/i)).toBeInTheDocument());
-});
-
-test("the layout is fetched only when its section is opened", async () => {
-  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
-  renderView();
-  await screen.findByRole("button", { name: /^Storage/ });
-  expect(api.getPromptLayout).not.toHaveBeenCalled();
-  await open(/^Prompt layout/);
-  await waitFor(() => expect(api.getPromptLayout).toHaveBeenCalledTimes(1));
-});
-
-test("a failed layout write reports itself and leaves the settings unwritten", async () => {
-  /** One Save, one outcome: the settings must not land while the layout the
-   *  same click was meant to store did not. */
-  vi.mocked(api.getPromptLayout).mockResolvedValue(twoRows());
-  vi.mocked(api.putPromptLayout).mockRejectedValue({ detail: "disk full" });
-  renderView();
-  await open(/^Prompt layout/);
-  await screen.findByLabelText("Label for World info");
-  fireEvent.click(screen.getAllByRole("button", { name: /^move .+ down$/i })[0]);
-  fireEvent.click(await screen.findByRole("checkbox", { name: /use my section order/i }));
-  save();
-
-  expect(await screen.findByText(/disk full/i)).toBeInTheDocument();
-  expect(api.putConfig).not.toHaveBeenCalled();
-  // ...and the reorder is still on screen to retry, not silently discarded
-  expect(screen.getAllByTestId("layout-row").map((r) => r.getAttribute("data-id")))
-    .toEqual(["weather", "world_info"]);
 });
 
 // ---- backups (#32) ---------------------------------------------------------
@@ -999,4 +785,66 @@ test("Context saves history planning, its repair inert until planning is on", as
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({
     history_plan: "auto", history_plan_repair: "off",
   }));
+});
+
+// Failure controls keep read ownership and the ordinary save retry visible.
+// Losing the initial read catch used to leave Loading forever and reject globally.
+test.each([
+  [{ detail: "settings unavailable" }, "settings unavailable"],
+  [new Error("offline"), "Could not load these settings"],
+])("an initial settings rejection settles with a readable error (%#)", async (failure, message) => {
+  vi.mocked(api.getConfig).mockRejectedValueOnce(failure);
+  renderView();
+  expect(await screen.findByText(message)).toBeInTheDocument();
+  expect(screen.queryByText("Loading…")).toBeNull();
+  expect(api.putConfig).not.toHaveBeenCalled();
+  expect(api.putPromptLayout).not.toHaveBeenCalled();
+});
+
+test("an optional prompt read failure leaves Context usable without a fabricated bar", async () => {
+  vi.mocked(api.listCampaigns).mockRejectedValueOnce({ detail: "offline" });
+  renderView();
+  await open(/^Context/);
+  expect(screen.getByLabelText("Context budget")).toBeEnabled();
+  expect(screen.queryByText(/AGAINST THIS BUDGET/)).toBeNull();
+  expect(screen.queryByText("offline")).toBeNull();
+});
+
+test("a failed settings save keeps the draft and permits a successful retry", async () => {
+  vi.mocked(api.putConfig).mockRejectedValueOnce({ detail: "disk full" })
+    .mockResolvedValueOnce({ ...cfg, llm_retries: "4" });
+  renderView();
+  await open(/^Timeouts/);
+  fireEvent.change(screen.getByLabelText(/^retries$/i), { target: { value: "4" } });
+  save();
+  expect(await screen.findByText("disk full")).toBeInTheDocument();
+  expect(screen.getByLabelText(/^retries$/i)).toHaveValue("4");
+  expect(screen.getByText("1 unsaved change")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
+  save();
+  expect(await screen.findByText("No unsaved changes")).toBeInTheDocument();
+  expect(api.putConfig).toHaveBeenNthCalledWith(2, { llm_retries: "4" });
+});
+
+test("moving the library refreshes its conflict notice while retaining other edits", async () => {
+  vi.mocked(api.putDataDir).mockResolvedValue({
+    ...dataDir, data_dir: "/sync/grimoire", is_default: false, source: "custom",
+  });
+  renderView();
+  await open(/^Timeouts/);
+  fireEvent.change(screen.getByLabelText(/^retries$/i), { target: { value: "4" } });
+  await open(/^Storage/);
+  await screen.findByLabelText(/storage location/i);
+  vi.mocked(api.getStoreConflicts).mockResolvedValue({
+    conflicts: [{ path: "worlds/realm/lore/pact.sync-conflict-1.md",
+      name: "pact.sync-conflict-1.md", tool: "syncthing", kind: "file", size: 40,
+      modified: "2026-01-01T00:00:00Z" }], truncated: false,
+  });
+  fireEvent.change(screen.getByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
+  fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
+  expect(await screen.findByText("worlds/realm/lore/pact.sync-conflict-1.md")).toBeInTheDocument();
+  expect(screen.getByText("1 unsaved change in other sections")).toBeInTheDocument();
+  await open(/^Timeouts/);
+  expect(screen.getByLabelText(/^retries$/i)).toHaveValue("4");
+  expect(api.putConfig).not.toHaveBeenCalled();
 });
