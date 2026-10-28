@@ -141,14 +141,18 @@ test("after a stream completes the scene is re-fetched", async () => {
     ] }));
   vi.mocked(api.chat).mockImplementation(async (_c, _s, _t, onEvent) => {
     onEvent({ delta: "**Grimoire:** Thunder rolls." });
+    onEvent({ done: true });
   });
   renderCampaign();
   await screen.findByRole("heading", { name: /^Old$/ });
+  vi.mocked(api.findRun).mockClear();
   const ta = screen.getByRole("textbox");
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });
   await screen.findByText("Who goes there?");
   expect(api.getScene).toHaveBeenCalledTimes(2);
+  // A completed stream needs no recovery lookup or lingering flush poll.
+  expect(api.findRun).not.toHaveBeenCalled();
 });
 
 test("no Reroll when every message is assistant-side (multi-post opener)", async () => {
