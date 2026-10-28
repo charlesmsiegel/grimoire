@@ -456,10 +456,17 @@ def test_a_stop_recorded_before_an_identity_existed_is_still_honoured(client):
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/attempt-cancel?attempt=a-1")
     assert r.status_code == 200, r.text
     assert r.json()["run"] is None, "nothing had reserved yet"
+    assert store.scenes.scene_identity(cid, sid) is None, "Stop must not mint identity"
 
     # The reservation now mints an identity -- a different subject -- and must
-    # still find that Stop.
-    run, fresh = runs_mod.reserve_turn(client.app, cid, sid, "chat", "a-1")
-
-    assert fresh
-    assert run.cancel_requested, "the Stop was recorded and then never consumed"
+    # still find that Stop. Exercise the producing route: the cancelled turn
+    # must replay a terminal outcome before any synchronous setup can append.
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    sent = client.post(f"{base}/chat", json={"content": "Mara waits."},
+                       headers={"X-Grimoire-Attempt": "a-1"})
+    assert sent.status_code == 200, sent.text
+    state = client.get(f"{base}/attempt-state", params={"attempt": "a-1"}).json()
+    assert state["run"]["state"] == "cancelled"
+    assert not state["retained"]
+    assert store.scenes.scene_identity(cid, sid) is not None
+    assert store.scenes.read_scene(cid, sid)["messages"] == []

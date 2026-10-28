@@ -23,7 +23,7 @@ beforeEach(() => {
 
 test("shows tri-state select and saves the choice", async () => {
   render(<MechanicsConfig cid="run" />);
-  const select = (await screen.findByLabelText("Mechanics")) as HTMLSelectElement;
+  const select = (await screen.findByLabelText<HTMLSelectElement>("Mechanics"));
   expect(select.value).toBe("");                        // inherit
   expect(screen.getByText(/No mechanics/)).toBeInTheDocument();
   fireEvent.change(select, { target: { value: "pool-basic" } });
@@ -53,7 +53,7 @@ test("shows a stale-binding warning when the bound module is missing or invalid"
 test("shows an error hint and does not throw when save fails", async () => {
   vi.mocked(api.setCampaignModule).mockRejectedValue(new Error("boom"));
   render(<MechanicsConfig cid="run" />);
-  const select = (await screen.findByLabelText("Mechanics")) as HTMLSelectElement;
+  const select = (await screen.findByLabelText<HTMLSelectElement>("Mechanics"));
   fireEvent.change(select, { target: { value: "pool-basic" } });
   fireEvent.click(screen.getByText("Save"));
   expect(await screen.findByText(/boom/)).toBeInTheDocument();

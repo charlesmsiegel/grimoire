@@ -10,14 +10,20 @@ import { expressionResult } from '../tracker/expressionResult';
  * after the reader has already fetched the new post. */
 export function useVNStage(cid: string, sid: string, scene: VNScene | null, postId: string, paused = false) {
   const [stage, setStage] = useState<VNStage | null>(null);
-  const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [tracking, setTracking] = useState(false);
   const [error, setError] = useState('');
   const [readError, setReadError] = useState('');
   const [notice, setNotice] = useState('');
-  const scope = useMemo(() => ({ scene, postId, paused, active: true }), [scene, postId, paused]);
+  const scope = useMemo(() => ({ cid, sid, scene, postId, paused, active: true }), [cid, sid, scene, postId, paused]);
   const current = useRef(scope); current.current = scope;
+  // Capability belongs to a live scene, not a post or the previous render.
+  // Ownership is checked synchronously so a consumer before passive effects
+  // cannot spend the enabled answer from the scene it just left.
+  const capability = useMemo(() => ({ cid, sid, scene }), [cid, sid, scene]);
+  const currentCapability = useRef(capability); currentCapability.current = capability;
+  const [capabilityResult, setCapabilityResult] = useState<{ owner: typeof capability; enabled: boolean } | null>(null);
+  const enabled = capabilityResult?.owner === capability && capabilityResult.enabled;
   const generation = useRef(0);
   const waiting = useRef<AbortController | null>(null);
 
@@ -48,9 +54,24 @@ export function useVNStage(cid: string, sid: string, scene: VNScene | null, post
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const seen = new Map<string, string>();
-    setEnabled(false); setTracking(false);
-    void api.getTracker(cid, sid).then(summary => { if (active) setEnabled(summary.enabled); }).catch(() => {});
+    let capabilityKnown = false;
+    let capabilityPending = false;
+    setTracking(false);
+    async function discoverCapability() {
+      if (capabilityKnown || capabilityPending) return;
+      capabilityPending = true;
+      try {
+        const summary = await api.getTracker(cid, sid);
+        if (active && currentCapability.current === capability) {
+          capabilityKnown = true;
+          setCapabilityResult({ owner: capability, enabled: summary.enabled });
+        }
+      } catch { /* Unknown capability remains disabled until a later poll. */ }
+      finally { capabilityPending = false; }
+    }
     async function poll() {
+      // Capability failures or a stalled read must not block run discovery.
+      void discoverCapability();
       try {
         const { runs } = await api.getTrackerRuns(cid, sid);
         if (!active) return;
@@ -68,7 +89,7 @@ export function useVNStage(cid: string, sid: string, scene: VNScene | null, post
     }
     void poll();
     return () => { active = false; clearTimeout(timer); };
-  }, [cid, sid, scene, read]);
+  }, [cid, sid, scene, read, capability]);
 
   function saved(updated: VNStage) {
     const mine = current.current;
@@ -79,7 +100,7 @@ export function useVNStage(cid: string, sid: string, scene: VNScene | null, post
 
   async function refreshExpressions() {
     const mine = current.current;
-    if (!enabled || busy || tracking || !mine.scene || !mine.postId || mine.paused) return;
+    if (mine !== scope || !mine.active || !enabled || busy || tracking || !mine.scene || !mine.postId || mine.paused) return;
     const controller = new AbortController(); waiting.current = controller;
     setBusy(true); setError(''); setNotice('');
     try {

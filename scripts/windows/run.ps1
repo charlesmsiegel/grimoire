@@ -63,9 +63,10 @@ foreach ($port in $Ports) {
 # git stamps every file it writes with the checkout time. The inputs themselves
 # are compared as well as everything under them, since deleting a file changes
 # nothing but its directory's timestamp. A missing entry is skipped rather than
-# fatal; test_install_scripts.py asserts they all exist and that
-# scripts/unix/run.sh watches the same list.
-$BundleInputs = @("src", "public", "index.html", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts")
+# fatal. Desktop and Android read one inventory; the inventory itself is also
+# an input so adding a dependency invalidates the previous bundle.
+$BundleInputs = @("build-inputs.txt") + @(Get-Content -LiteralPath "$Root\frontend\build-inputs.txt" |
+    Where-Object { $_ -ne "" })
 
 function Test-BundleStale {
     if (-not (Test-Path -LiteralPath $DistIndex)) { return $true }

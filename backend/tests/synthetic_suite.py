@@ -45,7 +45,12 @@ def pytest_configure(config):
     phase_profile.register(config)
 '''
 
-INI = "[pytest]\nasyncio_mode = auto\n"
+# Keep pytest-asyncio's unset-scope warning out of captured child diagnostics.
+INI = (
+    "[pytest]\n"
+    "asyncio_mode = auto\n"
+    "asyncio_default_fixture_loop_scope = function\n"
+)
 
 
 def write(root: Path, files: dict[str, str]) -> Path:

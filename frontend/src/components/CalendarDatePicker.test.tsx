@@ -35,7 +35,7 @@ test("festival pseudo-months offer a single day", async () => {
                              onChange={onChange} ariaLabel="Scene date" />);
   await userEvent.type(screen.getByLabelText("Scene date year"), "1492");
   await userEvent.selectOptions(await screen.findByLabelText("Scene date month"), "Midwinter");
-  const day = screen.getByLabelText("Scene date day") as HTMLSelectElement;
+  const day = screen.getByLabelText<HTMLSelectElement>("Scene date day");
   expect([...day.options].map(o => o.value)).toEqual(["", "1"]);
 });
 
@@ -84,7 +84,7 @@ test("a year change that shortens the month clears a day that no longer fits", a
   const yearInput = screen.getByLabelText("Scene date year");
   await userEvent.clear(yearInput);
   await userEvent.type(yearInput, "5786");
-  const day = screen.getByLabelText("Scene date day") as HTMLSelectElement;
+  const day = screen.getByLabelText<HTMLSelectElement>("Scene date day");
   await waitFor(() =>
     expect([...day.options].map(o => o.value)).toEqual(
       ["", ...Array.from({ length: 29 }, (_, i) => String(i + 1))]));

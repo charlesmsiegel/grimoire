@@ -66,7 +66,7 @@ test("list view renders bullets; edit emits raw string", () => {
   expect(screen.getByText("rope")).toBeInTheDocument();
   const onChange = vi.fn();
   rerender(<FieldWidget def={list} value={"rope\n"} mode="edit" onChange={onChange} />);
-  const ta = screen.getByLabelText("Gear") as HTMLTextAreaElement;
+  const ta = screen.getByLabelText<HTMLTextAreaElement>("Gear");
   expect(ta.value).toBe("rope\n");
   fireEvent.change(ta, { target: { value: "rope\nlan" } });
   expect(onChange).toHaveBeenCalledWith("rope\nlan");

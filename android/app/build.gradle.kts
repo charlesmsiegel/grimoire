@@ -6,6 +6,10 @@ plugins {
     id("com.chaquo.python")
 }
 
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+}
+
 // The APK packages the working-tree backend sources and the freshly built
 // frontend bundle — there are no Android-side copies of any grimoire code.
 // See docs/reference/android.md.
@@ -137,16 +141,8 @@ val generateCompiledBuild = tasks.register<Exec>("generateCompiledBuild") {
         "--output", compiledStamp.get().asFile.absolutePath)
 }
 
-val buildFrontend = tasks.register<Exec>("buildFrontend") {
-    description = "Builds the shared React frontend with Vite"
-    workingDir = frontendDir
-    val npm = if (System.getProperty("os.name").lowercase().contains("windows")) "npm.cmd" else "npm"
-    commandLine(npm, "run", "build")
-    inputs.dir(File(frontendDir, "src"))
-    inputs.dir(File(frontendDir, "public"))
-    inputs.files(File(frontendDir, "package.json"), File(frontendDir, "index.html"))
-    outputs.dir(File(frontendDir, "dist"))
-}
+apply(from = rootProject.file("frontend.gradle.kts"))
+val buildFrontend = tasks.named("buildFrontend")
 
 val stageGrimoireAssets = tasks.register<Sync>("stageGrimoireAssets") {
     description = "Stages frontend dist, templates and compiled-build stamp as APK assets"

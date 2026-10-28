@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
+from collections.abc import Awaitable, Callable
 
 from .. import (
     adapters,
@@ -484,6 +486,36 @@ class LLMClient:
         await self._adapter(attempt.kind).check(attempt)
 
     async def aclose(self) -> None:
-        await self._openrouter.aclose()
-        await self._openai_compatible.aclose()
-        await self._anthropic.aclose()
+        """Release every owned pool, retaining failures until cleanup finishes.
+
+        A cancelled close still leaves the other providers owned by this
+        client. Preserve that cancellation after closing them, even when a
+        later pool also fails; ordinary failures remain its explicit cause.
+        """
+        failures: list[Exception | asyncio.CancelledError] = []
+
+        async def retain_failure(close: Callable[[], Awaitable[None]]) -> None:
+            try:
+                await close()
+            except (Exception, asyncio.CancelledError) as exc:
+                failures.append(exc)
+                raise
+
+        try:
+            # ExitStack continues releasing resources after a callback raises.
+            # Register in reverse to retain the providers' existing close order.
+            async with contextlib.AsyncExitStack() as cleanup:
+                for close in (self._anthropic.aclose, self._openai_compatible.aclose,
+                              self._openrouter.aclose):
+                    cleanup.push_async_callback(retain_failure, close)
+        except (Exception, asyncio.CancelledError):
+            cancelled = next((exc for exc in failures
+                              if isinstance(exc, asyncio.CancelledError)), None)
+            ordinary = [exc for exc in failures if isinstance(exc, Exception)]
+            if cancelled is not None:
+                if ordinary:
+                    raise cancelled from ExceptionGroup("Provider cleanup failed", ordinary)
+                raise
+            if len(ordinary) == 1:
+                raise
+            raise ExceptionGroup("Provider cleanup failed", ordinary) from None

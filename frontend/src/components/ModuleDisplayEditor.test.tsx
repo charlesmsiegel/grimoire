@@ -34,7 +34,7 @@ beforeEach(() => {
 test("layout textarea seeds from layout_source and previews the selected type", async () => {
   vi.mocked(api.putModuleLayout).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<LayoutSection pack={PACK} reload={vi.fn()} />);
-  const ta = screen.getByLabelText("Layout JSON") as HTMLTextAreaElement;
+  const ta = screen.getByLabelText<HTMLTextAreaElement>("Layout JSON");
   expect(ta.value).toContain('"warden"');
   // preview renders the group's fields via SheetLayout
   expect(await screen.findByText("Strength")).toBeInTheDocument();

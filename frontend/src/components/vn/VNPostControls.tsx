@@ -98,6 +98,17 @@ export function VNPostControls({ cid, sid, postId, revision, stage, reply, onCha
       }
     });
   }
+  async function suggestAfterSave() {
+    // As in play (#85/#84), suggestions require a verified raw boundary. This
+    // optional read must neither hold up reader refresh nor fail a saved edit.
+    try {
+      const page = await api.getScene(cid, sid);
+      if (!alive.current) return;
+      const upto = page.total ?? page.messages.length;
+      void api.refreshRollingSummary(cid, sid, false, upto).catch(() => {});
+      void api.askSceneBreak(cid, sid, false, upto).catch(() => {});
+    } catch { /* A missing boundary skips best-effort suggestions. */ }
+  }
   function save(retcon: boolean) {
     if (!editor) return;
     if (retcon && !window.confirm('Retcon this post?\n\nAn absorbed scene becomes unfinished and its recorded write-backs are reversed. Later posts are left alone; use replay in normal play if they no longer follow.')) return;
@@ -115,13 +126,7 @@ export function VNPostControls({ cid, sid, postId, revision, stage, reply, onCha
       if (report?.failed.length) notes.push(`Some reversals failed: ${report.failed.join(', ')}.`);
       if (report?.later.length) notes.push('Later scenes may need review in normal play.');
       setNotice(notes.join(' '));
-      // As in play (#85/#84), the suggestion requests need a verified boundary.
-      // A failed suggestion never turns a completed transcript edit into failure.
-      const page = await api.getScene(cid, sid);
-      if (!alive.current) return;
-      const upto = page.total ?? page.messages.length;
-      void api.refreshRollingSummary(cid, sid, false, upto).catch(() => {});
-      void api.askSceneBreak(cid, sid, false, upto).catch(() => {});
+      void suggestAfterSave();
       if (!await onChanged() && alive.current) setError('Post saved, but the reader could not refresh. Use Refresh in the menu.');
     });
   }

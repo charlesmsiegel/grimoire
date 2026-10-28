@@ -1,402 +1,25 @@
 import { MarkdownArtProvider } from "../markdown/MarkdownArtProvider";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
-import { ACTIVATION_FIELDS, ApiError, api, ENTITY_FIELDS, ENTITY_KINDS, SECRECY_LABELS, SECRECY_LEVELS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type GroupMembershipContext, type GroupRefBinding, type ModuleContentEntry, type ModuleDetail, type OptionSource, type RefKind, type Secrecy } from "../api/client";
+import { ApiError, api, ENTITY_FIELDS, type EntityFieldSpec, type EntityKind, type EntityScope, type EntitySummary, type GroupMembershipContext, type GroupRefBinding, type ModuleContentEntry, type ModuleDetail, type Secrecy } from "../api/client";
 import { errorText } from "../api/errors";
-import { loreOwnerOptions, refOptions, type RecordRef } from "../api/loreOwners";
-import { THUMB, thumbSet } from "../api/thumbs";
 import { onArtChanged } from "../appEvents";
-import { RecordArtEntry, RecordArtViewer } from "./art/RecordArtEntry";
-import { RecordArtPanel } from "./art/RecordArtPanel";
+import { RecordArtViewer } from "./art/RecordArtEntry";
 import { useRecordArt } from "./art/useRecordArt";
 import CreationWizard from "./CreationWizard";
-import { DemotePanel } from "./DemotePanel";
-import { Field } from "./Field";
-import { GroupStatePanel } from "./GroupStatePanel";
-import { LibraryPanel } from "./LibraryPanel";
-import { MobileArtEntry } from "./MobileArtEntry";
-import { OwnedLorePanel } from "./OwnedLorePanel";
-import { Portrait } from "./Portrait";
-import SheetPanel from "./SheetPanel";
 import { StaleRecordBanner } from "./StaleRecordBanner";
-import { sectionHref } from "../worldPaths";
+import { activationKeys, changedFields, parseRefs } from "./entityEditor/fields";
+import { KIND_LABELS, asSecrecy } from "./entityEditor/presentation";
+import { EntityFieldControl } from "./entityEditor/EntityFields";
+import { useEntityOptions } from "./entityEditor/useEntityOptions";
+import { EntityBrowse } from "./entityEditor/EntityBrowse";
+import { EntityDetails } from "./entityEditor/EntityDetails";
+import { EntityForm } from "./entityEditor/EntityForm";
 
-export const KIND_LABELS: Record<EntityKind, string> = {
-  locations: "location", lore: "lore entry", items: "item", groups: "group", creatures: "creature",
-};
-
-// What each referenceable kind is called, for saying what an empty picker is
-// missing (`many`) and for telling two same-named candidates apart (`one`).
-// Wider than KIND_LABELS because a ref field can name an actor, which is not an
-// entity kind and so has no entry there.
-const KIND_NOUNS: Record<RefKind, { one: string; many: string }> = {
-  characters: { one: "character", many: "characters" },
-  pcs: { one: "PC", many: "PCs" },
-  locations: { one: "location", many: "locations" },
-  lore: { one: "lore entry", many: "lore entries" },
-  items: { one: "item", many: "items" },
-  groups: { one: "group", many: "groups" },
-  creatures: { one: "creature", many: "creatures" },
-};
-
-/** Display text per ref, unique within `options`.
- *
- *  Names are not unique — only ids are — and a field like `holder` offers four
- *  kinds at once, so a PC and a group can both be called Mara. Two radios
- *  reading "Mara" is a control where the reader cannot tell which relationship
- *  they are about to store, and the accessible name is just as ambiguous as
- *  the visible one.
- *
- *  Qualified only where it is needed, and by the least that settles it: the
- *  kind for a cross-kind collision, the ref itself when even that still
- *  collides (two characters really can share a name). An unambiguous candidate
- *  keeps its plain name, so the common picker is not decorated for a case it
- *  does not have. */
-function displayLabels(options: RecordRef[]): Map<string, string> {
-  const byLabel = new Map<string, RecordRef[]>();
-  for (const o of options) byLabel.set(o.label, [...(byLabel.get(o.label) ?? []), o]);
-  const out = new Map<string, string>();
-  for (const [label, group] of byLabel) {
-    if (group.length === 1) { out.set(group[0].ref, label); continue; }
-    const kinds = new Map<string, number>();
-    for (const o of group) kinds.set(o.kind, (kinds.get(o.kind) ?? 0) + 1);
-    for (const o of group) {
-      out.set(o.ref, kinds.get(o.kind) === 1
-        ? `${label} (${KIND_NOUNS[o.kind].one})`
-        : `${label} (${o.ref})`);
-    }
-  }
-  return out;
-}
-
-// What a record's body costs when it reaches a prompt (#51). Counted on the
-// server with the same tokenizer the context inspector uses; the frontend only
-// formats it.
-//
-// The same TOKENIZER, not the same total: the World info section is the
-// activated bodies joined with blank lines, and BPE is not additive, so these
-// badges summed come out a token or so per join UNDER the inspector's row for
-// that section. Near enough to reason with, and not a figure to reconcile
-// arithmetically — the inspector remains the authority on what a prompt cost.
-//
-// The cost is per ACTIVATION, not per turn, and the tooltip says so: a keyed
-// entry pays it on the turns its keys hit and nothing on the rest, so a big
-// number here is only a big prompt if the entry is always-on. Reading it as a
-// standing cost is the obvious wrong conclusion to draw from a bare number.
-//
-// It is also a CEILING for a body that uses macros, which the tooltip says
-// because the rail has no room for a second line: the prompt gets the expanded
-// text, so `{{random:a,b,c}}` collapses to one option and the stored form can
-// measure double what is sent. Exact for the ordinary body that uses none.
-const TOKEN_HINT =
-  "Tokens this body costs each time it enters the prompt — keyed entries pay it only when they "
-  + "activate, and macros are counted unexpanded";
-
-// A gm-only body is dropped before every activation rule (#49), so it costs
-// nothing, ever. The count is still shown -- it is the size of the text, and it
-// is what the entry would cost the moment someone marks it public again -- but
-// it has to LOOK spent-out rather than sit there reading like a live charge.
-const TOKEN_HINT_NEVER =
-  "This body never reaches the prompt while it is GM-only — what it would cost if published";
-
-function tokenLabel(n: number): string {
-  return `${n.toLocaleString()} ${n === 1 ? "token" : "tokens"}`;
-}
-
-const isNeverCharged = (level: Secrecy) => level === "gm-only";
-const tokenClass = (level: Secrecy, base = "token-badge") =>
-  base + (isNeverCharged(level) ? " never-charged" : "");
-const tokenTitle = (level: Secrecy) => (isNeverCharged(level) ? TOKEN_HINT_NEVER : TOKEN_HINT);
-// Struck-through text does not announce as struck through, so the exemption has
-// to be in the name rather than only in the styling.
-const tokenAria = (n: number, level: Secrecy) =>
-  isNeverCharged(level) ? `${tokenLabel(n)}, never charged` : tokenLabel(n);
-
-// What each secrecy level does to the prompt, in the words the picker shows.
-// "this text", not "this entry": secrecy gates the BODY, and the record still
-// has a name the app uses where it must refer to the place at all — the
-// scene-suggestion picker, a mechanics sheet label. Claiming the whole entry
-// disappears would be a promise the app does not keep.
-const SECRECY_HINTS: Record<Secrecy, string> = {
-  public: "activates normally; any character may know it",
-  secret: "activates normally, but uninvolved characters must not reveal it",
-  "gm-only": "this text never reaches the model; the name may still be used",
-};
-
-// Anything unrecognised (a hand-edited file) reads as public, exactly as
-// store.entities.normalize_secrecy does on the other side -- INCLUDING the trim
-// and the lowercase. Matching only the canonical spelling looked harmless and
-// was not: the backend reads `secrecy: Secret` as secret and keeps the entry
-// out of ignorant characters' mouths, while this returned "public", badged the
-// entry Public, and made the next save send `secrecy: "public"` -- a valid
-// level, so the route accepts it and the key is deleted. Editing the body of a
-// hand-marked secret silently published it.
-const asSecrecy = (v: unknown): Secrecy => {
-  const level = String(v ?? "").trim().toLowerCase();
-  return (SECRECY_LEVELS as readonly string[]).includes(level) ? (level as Secrecy) : "public";
-};
-
-/** The union of the record kinds this kind's `ref` fields can name, in first
- *  appearance order and without repeats — what to fetch once for the whole
- *  form. Empty for a kind that declares no ref field, which is what the effect
- *  below checks before making any request at all. */
-function refKindsFor(specs: EntityFieldSpec[]): RefKind[] {
-  const out: RefKind[] = [];
-  for (const spec of specs) {
-    for (const k of spec.kinds ?? []) if (!out.includes(k)) out.push(k);
-  }
-  return out;
-}
-
-/** The declared fields whose value differs from what was loaded.
- *
- *  A create passes `{}` as `loaded`, so everything the user typed is "changed"
- *  and an untouched field is simply absent — which is what `create_entity`
- *  wants anyway, since it drops empties. */
-function changedFields(
-  current: Record<string, string>, loaded: Record<string, string>,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(current)) {
-    if (value !== (loaded[key] ?? "")) out[key] = value;
-  }
-  return out;
-}
-
-/** Refs stored in one field, in the `owners:` spelling: comma-separated
- *  `<kind>:<id>`. Same parse as `entity_schema.parse_refs` on the other side.
- *
- *  Takes the undefined a `fields[key]` lookup can hand back rather than
- *  `unknown`: everything that reaches this has already been read out of the
- *  editor's own string map, and widening it would only invite a caller to
- *  stringify something that has no spelling. */
-const parseRefs = (v: string | undefined): string[] =>
-  (v ?? "").split(",").map((r) => r.trim()).filter(Boolean);
-
-/** The activation controls as the field specs the form already knows how to
- *  draw. `bool` has no spec (it is a checkbox, drawn by hand below); `refs` is
- *  the multi-ref picker over the two kinds of actor `known_by` may name. */
-const KNOWN_BY_SPEC: EntityFieldSpec = {
-  key: "known_by", label: "Known by", widget: "ref", kinds: ["characters", "pcs"], multi: true,
-};
-const activationSpec = (a: (typeof ACTIVATION_FIELDS)[number]): EntityFieldSpec =>
-  a.widget === "refs" ? KNOWN_BY_SPEC
-    : { key: a.key, label: a.label, widget: a.widget as EntityFieldSpec["widget"],
-        ...(a.min === undefined ? {} : { min: a.min }),
-        ...(a.max === undefined ? {} : { max: a.max }),
-        ...(a.options === undefined ? {} : { options: a.options }) };
-// Read at call time, not at import: this module is loaded by suites that mock
-// the client without the catalog and never render an editor.
-const activationKeys = () => ACTIVATION_FIELDS.map((a) => a.key);
-// Timed and windowed values count posts, and the chip says so.
-const ACTIVATION_POSTS = new Set(["sticky", "cooldown", "scan_depth"]);
-// `keep` is "true" or absent on the backend; anything else reads as off there,
-// so the sidebar must not draw a chip for it either.
-const isKeepOn = (v: string | undefined) => (v ?? "").trim().toLowerCase() === "true";
-
-// What a ref that resolves to nothing says when hovered. Not an error and not
-// hidden: a delete deliberately leaves refs dangling (#222), so the chip's job
-// is to say the record is gone rather than to look like a field nobody filled in.
-const DANGLING_HINT = "This record no longer exists here — it may have been deleted, "
-  + "or it may live outside this campaign";
-
-// ...and what it says when we do not actually know. A candidate list that
-// failed to load leaves every ref unresolved, and reporting that as "deleted"
-// turns a dropped request into a claim about the store — one the reader may
-// act on by clearing a relationship that was perfectly fine.
-const UNLOADED_HINT = "Could not load the list of records, so this reference could not be "
-  + "resolved — it has not necessarily gone anywhere";
-
-/** The picker for one `ref` field (#222).
- *
- *  Real radios and real checkboxes, for the reason the secrecy picker gives:
- *  a native group gets arrow-key navigation and roving focus for free, which a
- *  row of buttons wearing `role="radio"` does not. Which of the two a field
- *  gets is `multi` — a group has one leader and a creature ranges over several
- *  places, and a control that let you tick two leaders would be offering a save
- *  the backend refuses.
- *
- *  Not wrapped in `Field`: `Field` labels ONE control by id, and this is a set
- *  of them. The heading is carried by the group's `aria-label` instead, which
- *  is what makes each option's own label unambiguous — "Mara" under Leader and
- *  "Mara" under Held by are two different controls, and only the group says so.
- */
-type ChoiceOption = { value: string; label: string };
-
-/** How each named `source` on a `choice` spec is resolved. One entry per
- *  `OptionSource`; the type is what keeps a source the schema names and the
- *  editor cannot load from compiling. */
-const OPTION_SOURCES: Record<OptionSource, () => Promise<ChoiceOption[]>> = {
-  climates: () => api.listClimates().then((r) =>
-    r.climates.map((c) => ({ value: c.id, label: c.name }))),
-};
-
-/** What a sourced `choice` field knows about its list: the list, `"failed"`
- *  when the request for it did not come back, and absent while it is still in
- *  flight. Three states, because two would conflate the two the picker must
- *  keep apart -- a list that has not arrived is not an empty list, and only
- *  one that has can say a stored value is not on it. */
-type ChoiceList = ChoiceOption[] | "failed";
-
-/** The options a `choice` spec offers: its literal list, or what its source
- *  answered so far. */
-function choiceOptions(spec: EntityFieldSpec,
-                       loaded: Record<string, ChoiceList>): ChoiceList | undefined {
-  if (spec.options) return spec.options.map((o) => ({ value: o, label: o }));
-  return loaded[spec.key];
-}
-
-/** A `choice` as a picker. A stored value none of the options answers to -- a
- *  climate since deleted, a hand-edited file -- is kept as a row of its own so
- *  it is VISIBLE and clearable rather than silently blanked on the next save,
- *  the same reason `RefField` keeps a dangling ref. It is called "not an
- *  option" only once the list has actually arrived; until then (and after a
- *  failed load) the value is simply shown, because a request outage is not a
- *  fact about the value -- and a failed load says so under the control, since
- *  a picker that offers nothing and says nothing reads as a broken one. */
-function ChoiceField({ spec, options, value, onChange }: {
-  spec: EntityFieldSpec; options: ChoiceList | undefined; value: string;
-  onChange: (v: string) => void;
-}) {
-  const list = Array.isArray(options) ? options : null;
-  const listed = list !== null && list.some((o) => o.value === value);
-  return (
-    <Field label={spec.label}
-           hint={options === "failed" ? "Could not load the choices for this field." : undefined}>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">(none)</option>
-        {value !== "" && !listed && (
-          <option value={value}>{list === null ? value : `${value} (not an option)`}</option>
-        )}
-        {(list ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </Field>
-  );
-}
-
-/** HTML's "valid floating-point number", the grammar `<input type="number">`
- *  applies before it sanitizes a value it cannot parse to blank. `Number()`
- *  is wider (`0x10`, padded strings) and would say yes to values the input
- *  then shows as empty. */
-const HTML_FLOAT = /^-?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/;
-
-/** Can a number input show this stored value? A hand-written `wet` cannot be
- *  rendered by `<input type="number">` -- the browser sanitizes it to blank --
- *  which would make the field look unfilled while still holding the value it
- *  would resend. Such a value gets the text box instead, where it is visible. */
-function numberInputCanShow(value: string): boolean {
-  return value === "" || HTML_FLOAT.test(value);
-}
-
-const worldRefLabel = (ref: string) => `World reference: ${ref}`;
-const WORLD_BINDING_HINT = "Binding uses the present or future campaign actor with this reference.";
-const SEVERAL_REFS_HINT = "This field holds more than one reference; choose one (or None) to bind it or to save.";
-
-function RefField({ spec, options, value, onChange, unresolvedHint, optionsComplete, foreignRefs = [] }: {
-  spec: EntityFieldSpec;
-  options: RecordRef[];
-  value: string;
-  onChange: (v: string) => void;
-  /** What a ref no candidate answers to means right now — "the record is gone"
-   *  only when the candidate lists actually loaded. See `unresolvedHint` in the
-   *  editor below. */
-  unresolvedHint: string;
-  /** Whether `options` is the whole truth. False while the listings are in
-   *  flight or after one failed, and it is what stops an empty picker from
-   *  claiming the store is empty. */
-  optionsComplete: boolean;
-  /** Server identity diagnostics override even a matching campaign option.
-   *  Candidate names are presentation, not evidence that a World ref binds. */
-  foreignRefs?: string[];
-}) {
-  const selected = parseRefs(value);
-  const candidates = options.filter((o) => !selected.includes(o.ref) || !foreignRefs.includes(o.ref));
-  const shown = displayLabels(options);
-  const labelOf = (o: RecordRef) => shown.get(o.ref) ?? o.label;
-  // A stored ref that no candidate answers to — the record was deleted, or it
-  // lives outside this scope. It gets a row of its own, checked, so the value
-  // is VISIBLE and clearable. Leaving it out was the tempting shortcut and the
-  // wrong one: the field would look unset while still saving the old ref, and
-  // the one thing the user cannot then do is remove it.
-  const dangling = selected.filter((r) => !candidates.some((o) => o.ref === r));
-  // Only what this field is allowed to name, in the words the field uses. A
-  // picker that offered nothing and said nothing reads as a broken control.
-  //
-  // ...but "there are none" is a claim about the store, and only a listing
-  // that arrived can make it. A single-kind field whose one listing failed
-  // would otherwise sit there reading "No locations yet." — a request outage
-  // presented as an empty library, with no error and nothing to retry.
-  const empty = optionsComplete
-    ? `No ${spec.kinds?.map((k) => KIND_NOUNS[k].many).join(" or ")} yet.`
-    : "Could not load the list of records to choose from.";
-  const danglingRow = (ref: string, type: "radio" | "checkbox", onClear: () => void) => (
-    <label key={ref} className="owner-option dangling"
-           title={foreignRefs.includes(ref) ? WORLD_BINDING_HINT : unresolvedHint}>
-      <input type={type} name={spec.key}
-             aria-label={foreignRefs.includes(ref) ? worldRefLabel(ref) : ref} checked onChange={onClear} />
-      {foreignRefs.includes(ref) ? worldRefLabel(ref) : ref}
-    </label>
-  );
-  if (spec.multi) {
-    return (
-      <div className="field">
-        <label>{spec.label}</label>
-        <div className="chips owner-picker" role="group" aria-label={spec.label}>
-          {candidates.map((o) => (
-            <label key={o.ref} className="owner-option">
-              <input type="checkbox" aria-label={labelOf(o)} checked={selected.includes(o.ref)}
-                     onChange={(e) => onChange(
-                       (e.target.checked
-                         ? [...selected, o.ref]
-                         : selected.filter((r) => r !== o.ref)).join(", "))} />
-              {labelOf(o)}
-            </label>
-          ))}
-          {dangling.map((ref) => danglingRow(ref, "checkbox",
-            () => onChange(selected.filter((r) => r !== ref).join(", "))))}
-          {options.length === 0 && dangling.length === 0
-            && <span className="field-hint">{empty}</span>}
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="field">
-      <label>{spec.label}</label>
-      <div className="chips owner-picker" role="radiogroup" aria-label={spec.label}>
-        {/* An explicit None, because a radio group has no way back to unset:
-            without it, picking a leader by accident could never be undone. */}
-        <label className="owner-option">
-          <input type="radio" name={spec.key} aria-label="None" checked={selected.length === 0}
-                 onChange={() => onChange("")} />
-          None
-        </label>
-        {candidates.map((o) => (
-          <label key={o.ref} className="owner-option">
-            <input type="radio" name={spec.key} aria-label={labelOf(o)}
-                   checked={selected[0] === o.ref} onChange={() => onChange(o.ref)} />
-            {labelOf(o)}
-          </label>
-        ))}
-        {/* Clearing it means picking None or another candidate; the row itself
-            is checked and stays checked until one of those happens, which is
-            how a radio group says "this is the current value". */}
-        {dangling.map((ref) => danglingRow(ref, "radio", () => undefined))}
-        {options.length === 0 && dangling.length === 0
-          && <span className="field-hint">{empty}</span>}
-      </div>
-    </div>
-  );
-}
-
-/** How wide a card's image is drawn, at the breakpoints `.entity-grid` uses in
- *  index.css: one column on a phone, two to 720px, three above. A sizes hint
- *  that describes a retired rail makes the browser fetch a wider file than the
- *  half-width card shows, or a smaller one than a desktop card needs. */
-const ENTITY_CARD_SIZES = "(max-width: 420px) calc(100vw - 32px), (max-width: 720px) calc((100vw - 50px) / 2), (max-width: 1120px) 33vw, 340px";
+export { KIND_LABELS } from "./entityEditor/presentation";
 
 export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = false, newOwner, sectionPath, newHref, recordHref, onOpenOwner, onReclassified, module = null }: {
   wid: string;
@@ -444,29 +67,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
   // The declared fields as LOADED. A save sends the difference against this,
   // never the whole set — see `changedFields`.
   const [loadedFields, setLoadedFields] = useState<Record<string, string>>({});
-  // The candidates every `ref` field on this kind can offer, fetched once for
-  // the union of their kinds and filtered per field below — `holder` and
-  // `headquarters` both want locations, and asking twice would be two requests
-  // for one answer.
-  const [refOpts, setRefOpts] = useState<RecordRef[]>([]);
-  // Whether `refOpts` is the whole truth. False while the listings are in
-  // flight and after any of them failed, and that is the only thing that
-  // entitles the UI to call an unresolved ref *deleted*.
-  const [refOptsComplete, setRefOptsComplete] = useState(false);
-  // What each sourced `choice` field on this kind may offer, by field key.
-  // Loaded per kind; a literal `options` list never lands here.
-  const [choiceOpts, setChoiceOpts] = useState<Record<string, ChoiceList>>({});
-  // Token for the in-flight candidate fetch, so a slow earlier response cannot
-  // land on top of a newer one — the same guard `PCEditor` uses for its lock
-  // lookup, and for the same reason.
-  const refReq = useRef(0);
-  // The same guard for the record READS. `select` and the image shelf both
+  // The guard for the record READS. `select` and the image shelf both
   // await and then write view state, and this editor stays mounted across a
   // world-to-world navigation — so without a token the previous scope's record
   // lands under the new one, where Save and Delete act on the new `scope`.
   // Bumped by each read and by the scope change below.
   const readReq = useRef(0);
-  // Bumped only when the scope (or kind) changes. An adopt request outlives the
+  // Bumped when the scope/kind changes or its owner unmounts. An adopt request outlives the
   // click that sent it, and what it does on completion -- reload the rail, open
   // a record, set the note or the error -- is about the scope it was sent from.
   const scopeGen = useRef(0);
@@ -475,18 +82,28 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
   const summaryReads = useRef(0);
   // Every completion that can reload, reset, or navigate must still belong to
   // the view that started it. A record change matters within one scope too.
+  const moduleIdentity = useRef(module?.id);
+  moduleIdentity.current = module?.id;
   const captureViewGuard = () => {
     const reading = readReq.current;
     const generation = scopeGen.current;
-    return () => reading === readReq.current && generation === scopeGen.current;
+    const moduleId = moduleIdentity.current;
+    return () => reading === readReq.current && generation === scopeGen.current
+      && moduleId === moduleIdentity.current;
   };
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
   const [secrecy, setSecrecy] = useState<Secrecy>("public");    // audience gate (#49)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
-  const [ownerOpts, setOwnerOpts] = useState<RecordRef[]>([]); // candidates for the picker
   const [tokenCost, setTokenCost] = useState<number | null>(null); // selected record's prompt cost
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
+  // A committed create/remove owns one destination, including its summary
+  // readback. Only that route transition may inherit the notice; a later
+  // record, New form, scope or module must retire it like any other request.
+  const summaryNavigation = useRef<{
+    destination: string | null; read: number; generation: number;
+    moduleId: string | undefined; arrived: boolean; message: string | null;
+  } | null>(null);
   // The rev of the record as loaded, echoed back on save so a write cannot
   // land on top of an edit made outside the app (#35); `stale` holds the
   // refusal, with the on-disk rev an overwrite would have to be based on.
@@ -567,135 +184,19 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     const gen = scopeGen.current;
     void reload(false).catch((err: unknown) => { if (gen === scopeGen.current) setError(errorText(err)); });
     resetForm();
+    return () => {
+      // This route can unmount entirely, rather than merely receive new props.
+      // Retire writes too: a late create must not navigate back into this page.
+      readReq.current += 1;
+      scopeGen.current += 1;
+      summaryReads.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wid, kind, scope.kind, scope.id]);
 
-  useEffect(() => {
-    if (kind === "lore") loreOwnerOptions(scope).then(setOwnerOpts);
-  }, [wid, kind]);
-
-
-  useEffect(() => {
-    // Fetched on mount and on every kind change rather than cached across
-    // them: the climates are the user's list, and coming back from the
-    // Climates page (which remounts this editor) must offer what was just
-    // saved. `live` discards a reply that lands after the kind moved on.
-    let live = true;
-    setChoiceOpts({});
-    for (const spec of fieldSpecs) {
-      if (spec.widget !== "choice" || !spec.source) continue;
-      const key = spec.key;
-      OPTION_SOURCES[spec.source]()
-        .then((opts) => { if (live) setChoiceOpts((cur) => ({ ...cur, [key]: opts })); })
-        .catch(() => { if (live) setChoiceOpts((cur) => ({ ...cur, [key]: "failed" })); });
-    }
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind]);
-
-  /** A field value as the sidebar shows it: a choice by its option's label
-   *  when the option is known, anything else as stored. */
-  const displayValue = (spec: EntityFieldSpec, value: string) => {
-    const list = spec.widget === "choice" ? choiceOptions(spec, choiceOpts) : undefined;
-    return (Array.isArray(list) && list.find((o) => o.value === value)?.label) || value;
-  };
-
-  useEffect(() => {
-    // Cleared FIRST, and every response checked against the request that is
-    // current when it lands. Navigating between two worlds can keep this
-    // editor mounted, and without both halves the picker offers the previous
-    // scope's records until the new listing settles — or permanently, if the
-    // older request resolves second. Picking one of those saves a ref into a
-    // scope where it names nothing, and since existence is deliberately not
-    // validated the backend takes it.
-    setRefOpts([]);
-    setRefOptsComplete(false);
-    const kinds = refKindsFor(fieldSpecs);
-    // Guarded rather than unconditional: a kind with no ref fields (lore, and
-    // locations, which has three text fields and none of these) would
-    // otherwise pay a listing request per record kind on every mount for a
-    // picker it never renders.
-    if (!kinds.length) { setRefOptsComplete(true); return; }
-    const req = ++refReq.current;
-    refOptions(scope, kinds)
-      .then(({ options, failed }) => {
-        if (req !== refReq.current) return;
-        setRefOpts(options);
-        // A partial answer still populates the picker with the kinds that DID
-        // load — losing three of a `holder`'s four kinds to one bad request is
-        // a worse picker for no reason — but it is not complete, so nothing
-        // built on it may call a ref dead.
-        setRefOptsComplete(failed.length === 0);
-      })
-      .catch(() => { if (req === refReq.current) setRefOpts([]); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wid, kind, scope.kind, scope.id]);
-
-  // The actors `known_by` may name, fetched on their own and only when something
-  // draws them -- the Activation disclosure is open, or the record being read
-  // already has a `known_by`. Opening a section is counted by what it lists
-  // (WorldView.test pins it), and a picker nobody opened is not worth two
-  // listings per mount on every kind. The token is bumped whether or not a
-  // fetch follows, so a reply for a scope or a need that has gone is dropped.
-  const [actorOpts, setActorOpts] = useState<RecordRef[]>([]);
-  const [actorsComplete, setActorsComplete] = useState(false);
-  const actorReq = useRef(0);
   const wantActors = activationOpen || (loadedFields.known_by ?? "").trim() !== "";
-  useEffect(() => {
-    const req = ++actorReq.current;
-    setActorOpts((cur) => (cur.length ? [] : cur));   // same array: no re-render
-    setActorsComplete(false);
-    if (!wantActors) return;
-    refOptions(scope, KNOWN_BY_SPEC.kinds ?? [])
-      .then(({ options, failed }) => {
-        if (req !== actorReq.current) return;
-        setActorOpts(options);
-        setActorsComplete(failed.length === 0);
-      })
-      .catch(() => { if (req === actorReq.current) setActorOpts([]); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wid, kind, scope.kind, scope.id, wantActors]);
-
-  /** The candidates one field may name — the same filter the form's picker
-   *  applies. The sidebar has to use it too: resolving a value against the
-   *  WHOLE union let a `leader` holding `locations:realm` resolve off the
-   *  locations fetched for `headquarters` and render as an ordinary clickable
-   *  chip, so the read view called a malformed relationship valid while the
-   *  form, one click away, correctly showed it unresolved. */
-  const optionsFor = useCallback(
-    (spec: EntityFieldSpec) =>
-      (spec === KNOWN_BY_SPEC ? actorOpts : refOpts).filter((o) => spec.kinds?.includes(o.kind)),
-    [refOpts, actorOpts],
-  );
-  const completeFor = (spec: EntityFieldSpec) =>
-    spec === KNOWN_BY_SPEC ? actorsComplete : refOptsComplete;
-
-  /** The record one of `spec`'s stored refs names, or null when nothing this
-   *  field may name answers to it — deleted, out of scope, its listing failed,
-   *  or (as above) a kind this field does not accept. Null is the interesting
-   *  answer: it is what the sidebar renders as a dangling chip rather than
-   *  dropping (#222). */
-  const resolveRef = useCallback(
-    (spec: EntityFieldSpec, ref: string) => {
-      const opts = optionsFor(spec);
-      const hit = opts.find((o) => o.ref === ref);
-      return hit ? { ...hit, label: displayLabels(opts).get(hit.ref) ?? hit.label } : null;
-    },
-    [optionsFor],
-  );
-  // Which of the two stories an unresolved ref gets. Reading `refOptsComplete`
-  // rather than assuming the worst is the whole point: only a listing that
-  // actually arrived can say a record is gone.
-  const unresolvedHint = refOptsComplete ? DANGLING_HINT : UNLOADED_HINT;
-
-  // The owner candidates by ref. The rail asks for an owner's label and avatar
-  // once per owner per row, and a scan of every candidate for each of those
-  // made a large lore rail cost owners × entries on every render.
-  const ownerById = useMemo(() => new Map(ownerOpts.map((o) => [o.ref, o])), [ownerOpts]);
-  const ownerLabel = useCallback(
-    (ref: string) => ownerById.get(ref)?.label ?? ref,
-    [ownerById],
-  );
+  const candidates = useEntityOptions({ scopeKind: scope.kind, scopeId: scope.id, kind, fieldSpecs, wantActors });
+  const { ownerOpts, ownerById, ownerLabel, optionsFor, completeFor, choiceOpts } = candidates;
 
   // Whatever the route names.
   //
@@ -704,6 +205,18 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
   // lands and reopens A at an address that names no record.
   useEffect(() => {
     const req = ++readReq.current;
+    const summary = summaryNavigation.current;
+    if (summary) {
+      if (!summary.arrived && summary.read === req - 1 && summary.generation === scopeGen.current
+          && summary.moduleId === moduleIdentity.current && summary.destination === (selected ?? null)
+          && !isNew && !newOwner) {
+        summary.read = req;
+        summary.arrived = true;
+      } else {
+        summaryNavigation.current = null;
+        if (summary.message !== null) setError(null);
+      }
+    }
     if (selected) {
       // A bookmarked/reload address is exactly what this branch made
       // possible -- so a read that 404s here has to say so rather than
@@ -743,7 +256,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     setMembership(null);
     setBindings([]);
     setIdentityConflict(false);
-    setError(null);
+    const summary = summaryNavigation.current;
+    setError(summary?.destination === id && summary.read === req ? summary.message : null);
     setStale(null);
     setContentPreview(null);
     setWizardOpen(false);
@@ -854,29 +368,55 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
 
   async function selectContent(id: string) {
     if (!module) return;
+    // A new preview supersedes any older preview/read even within one scope.
+    readReq.current += 1;
+    const stillHere = captureViewGuard();
     setError(null);
-    const entry = await api.readModuleContent(module.id, kind, id);
-    setContentPreview(entry);
-    setEditing(null);
-    setMode("view");
+    try {
+      const entry = await api.readModuleContent(module.id, kind, id);
+      if (!stillHere()) return;
+      setContentPreview(entry);
+      setEditing(null);
+      setMode("view");
+    } catch (err) {
+      if (stillHere()) setError(errorText(err));
+    }
   }
 
   async function instantiate() {
     if (!module || !contentPreview) return;
+    const stillHere = captureViewGuard();
     setError(null);
     try {
       const { id } = await api.instantiateContent(scope, kind, module.id, contentPreview.id);
+      if (!stillHere()) return;
       setContentPreview(null);
-      await reload();
-      // Navigate rather than `select` directly: the address still names the
-      // section root, so `+ New …` (a `Link` to `sectionPath`) would point at
-      // the screen already showing and silently do nothing (#follow-up to
-      // GreetingEditor's own fix for the same defect). The URL-driven
-      // `selected` effect is what actually opens the record read-only.
-      void navigate(recordHref(id));
+      await finishCreation(id, stillHere);
     } catch (err: unknown) {
-      setError(errorText(err));
+      if (stillHere()) setError(errorText(err));
     }
+  }
+
+  // Record/sheet creation has committed. A failed readback cannot roll it back
+  // or strand its URL on the section root. The caller captures ownership before
+  // its write starts, including when the wizard eventually invokes onDone.
+  async function finishCreation(id: string, stillHere: () => boolean) {
+    if (!stillHere()) return;
+    let refreshError: string | null = null;
+    try { await reload(); }
+    catch (err) { refreshError = errorText(err); }
+    if (!stillHere()) return;
+    if (refreshError !== null) {
+      beginSummaryNavigation(id, refreshError);
+      setError(refreshError);
+    }
+    setWizardOpen(false);
+    // Navigate rather than `select` directly: the address still names the
+    // section root, so `+ New …` (a `Link` to `sectionPath`) would point at
+    // the screen already showing and silently do nothing (#follow-up to
+    // GreetingEditor's own fix for the same defect). The URL-driven
+    // `selected` effect is what actually opens the record read-only.
+    void navigate(recordHref(id));
   }
 
   /** `base` is the rev the write claims to be replacing. Normally the one this
@@ -916,13 +456,11 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
         if (!stillHere()) return;
         await select(editing); // back to the read-only view
       } else {
-        await api.createEntity(scope, kind,
+        const { id } = await api.createEntity(scope, kind,
           { name, body, keys, owners: ownerStr,
             secrecy, ...(Object.keys(patch).length ? { fields: patch } : {}) });
         if (!stillHere()) return;
-        await reload();
-        if (!stillHere()) return;
-        resetForm();
+        await finishCreation(id, stillHere);
       }
     } catch (err: unknown) {
       if (!stillHere()) return;
@@ -1019,18 +557,62 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     }
   }
 
-  async function remove(e: EntitySummary) {
+  async function cancelEdit() {
+    if (!editing) return;
+    // select increments readReq itself by default; capture the exact token
+    // used by this read so its rejection can still report on this draft.
+    const req = ++readReq.current;
+    const stillHere = captureViewGuard();
+    try { await select(editing, req); }
+    catch (err) { if (stillHere()) setError(errorText(err)); }
+  }
+
+  async function remove(e: Pick<EntitySummary, "id" | "name">) {
     if (!window.confirm(`Delete '${e.name}'?`)) return;
     const stillHere = captureViewGuard();
-    await api.deleteEntity(scope, kind, e.id);
+    setError(null);
+    try { await api.deleteEntity(scope, kind, e.id); }
+    catch (err) { if (stillHere()) setError(errorText(err)); return; }
     if (!stillHere()) return;
     if (editing === e.id) {
       // The address still names the record just deleted; leave it for the grid
       // rather than a blank form under a dead id.
-      resetForm();
-      void navigate(sectionPath);
+      await finishRemoval();
+      return;
     }
-    await reload();
+    try { await reload(); }
+    catch (err) { if (stillHere()) setError(errorText(err)); }
+  }
+
+  function beginSummaryNavigation(destination: string | null, message: string | null = null) {
+    const owner = {
+      destination, message, read: readReq.current, generation: scopeGen.current,
+      moduleId: moduleIdentity.current, arrived: false,
+    };
+    summaryNavigation.current = owner;
+    return owner;
+  }
+
+  async function finishRemoval() {
+    const owner = beginSummaryNavigation(null);
+    resetForm();
+    void navigate(sectionPath);
+    try { await reload(); }
+    catch (err) {
+      // The grid's own route effect advances this owner's read exactly once.
+      // Another route change (including grid→New with no selected id) retires
+      // the object rather than allowing its old failure onto the new screen.
+      if (summaryNavigation.current === owner && owner.read === readReq.current
+          && owner.generation === scopeGen.current && owner.moduleId === moduleIdentity.current) {
+        owner.message = errorText(err);
+        setError(owner.message);
+      }
+    }
+  }
+
+  function refreshSidebar(stillHere: () => boolean) {
+    if (!stillHere()) return;
+    void reload().catch((err: unknown) => { if (stillHere()) setError(errorText(err)); });
   }
 
   // A selected record is not yet an Art owner while another record/scope is
@@ -1061,249 +643,29 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
     });
   }, [scope.kind, scope.id, kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const keyList = keys.split(",").map((k) => k.trim()).filter(Boolean);
-  // How often that cost is actually paid, which is the whole reason a raw
-  // number needs a sentence next to it. The branches mirror the activation
-  // rules in `context.world_state`: gm-only drops the body before any other
-  // rule, then owners gate the entry, keys decide the turns, and a keyless
-  // LOCATION is the exception to the rest — it never joins world info at all
-  // and is charged only as the scene's current setting.
-  const costHint =
-    secrecy === "gm-only"
-      ? "Never charged: a GM-only body does not reach the prompt at all."
-      : kind === "locations"
-        ? keyList.length > 0
-          ? "Charged when these keys activate it, or when it is the scene's setting."
-          : "Charged only when it is the scene's current setting."
-        : owners.length > 0
-          ? keyList.length > 0
-            ? "Charged when an owner is in the scene and these keys hit."
-            : "Charged on every turn an owner is in the scene."
-          : keyList.length > 0
-            ? "Charged on the turns these keys activate the entry."
-            : "Always-on: charged on every turn of a scene it reaches.";
-  // Beside the title in both header layouts, so it is written once rather than
-  // in the plain-<h3> branch and the image branch separately.
-  const heading = (
-    <h3 ref={art.focusRef} tabIndex={-1}>
-      {name}
-      {tokenCost !== null && (
-        <span className={tokenClass(secrecy)} title={tokenTitle(secrecy)}
-              aria-label={tokenAria(tokenCost, secrecy)}>
-          {tokenLabel(tokenCost)}
-        </span>
-      )}
-    </h3>
+  function setField(key: string, value: string) {
+    setFields((current) => ({ ...current, [key]: value }));
+    // Once removed, a slot loses its opt-in. Re-adding it cannot revive a
+    // consent captured against the earlier form value.
+    setBindings((current) => current.filter((binding) =>
+      binding.field !== key || parseRefs(value).includes(binding.actor)));
+  }
+  function setBinding(binding: GroupRefBinding, checked: boolean) {
+    setBindings((current) => checked ? [...current, binding]
+      : current.filter((b) => b.field !== binding.field || b.actor !== binding.actor));
+  }
+  const renderSpec = (spec: EntityFieldSpec) => (
+    <EntityFieldControl key={spec.key} spec={spec} value={fields[spec.key] ?? ""}
+      options={optionsFor(spec)} optionsComplete={completeFor(spec)} choiceOptionsByKey={choiceOpts}
+      foreignRefs={unresolvedFor(spec)} bindings={bindings}
+      onChange={(value) => setField(spec.key, value)} onBindingChange={setBinding} />
   );
+  const draft = { name, body, keys, secrecy, fields, owners };
 
-  // What the rail is currently showing, and — for lore — grouped: "Unowned
-  // (world)" first, then one group per distinct owner ref, in the order the
-  // owners are first met.
-  //
-  // Memoized on the rail's own inputs. This editor re-renders on every
-  // keystroke in the body, and rebuilding the rail each time -- a filter, and a
-  // group per owner that re-filtered the whole list and re-split every entry's
-  // owners string -- is what made typing in a large world's lore lag. Now each
-  // entry's owners are parsed once, the groups are filled in one pass, and none
-  // of it runs for a keystroke.
-  //
-  // Name and keys are searched, because those are what a reader knows a record
-  // BY -- the id is a slug they never typed and the body is not in the summary.
-  const { shown, groups } = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const shown = needle
-      ? items.filter((e) => (e.name ?? "").toLowerCase().includes(needle)
-                         || (e.keys ?? "").toLowerCase().includes(needle))
-      : items;
-    const groups: { key: string; label: string; rows: EntitySummary[] }[] = [];
-    if (kind === "lore") {
-      const unowned: EntitySummary[] = [];
-      const byOwner = new Map<string, EntitySummary[]>();
-      for (const e of shown) {
-        const refs = parseRefs(e.owners);
-        if (!refs.length) { unowned.push(e); continue; }
-        // Once per group even if the owners string names someone twice, as
-        // the per-owner filter this replaces did.
-        for (const ref of new Set(refs)) {
-          const rows = byOwner.get(ref);
-          if (rows) rows.push(e); else byOwner.set(ref, [e]);
-        }
-      }
-      if (unowned.length) groups.push({ key: "", label: "Unowned (world)", rows: unowned });
-      for (const [ref, rows] of byOwner) groups.push({ key: ref, label: ownerLabel(ref), rows });
-    }
-    return { shown, groups };
-  }, [items, query, kind, ownerLabel]);
-
-  // The rows themselves, for the same keystroke's reason: built when what they
-  // show changes -- the list, the selection, the owners' avatars -- and handed
-  // back as the same elements otherwise, which React then skips outright.
-  const scopeKind = scope.kind;
-  const scopeId = scope.id;
-  const rail = useMemo(() => {
-    const at: EntityScope = { kind: scopeKind, id: scopeId };
-    const row = (e: EntitySummary) => (
-      <Link key={e.id}
-            className={"row loc-row" + (editing === e.id ? " active" : "")}
-            to={recordHref(e.id)}>
-        {e.has_image && (
-          // The 220px rail, or the whole width once the editor stacks on a
-          // phone -- past what the 1024 fills there, so the original is offered.
-          <img className="loc-row-img" alt="" loading="lazy" decoding="async"
-               style={e.image_focus == null ? undefined : { objectPosition: e.image_focus + "% " + e.image_focus + "%" }}
-               {...thumbSet((w) => api.entityImageUrl(at, kind, e.id, "avatar", { w, v: e.image_v }),
-                            ENTITY_CARD_SIZES, THUMB.tile,
-                            api.entityImageUrl(at, kind, e.id, "avatar", { v: e.image_v }))}
-               onError={(ev) => { (ev.currentTarget).style.display = "none"; }} />
-        )}
-        <span className="row-name">{e.name}</span>
-        {asSecrecy(e.secrecy) !== "public" && (
-          <span className={`chip secrecy-tag ${asSecrecy(e.secrecy)}`}>
-            {SECRECY_LABELS[asSecrecy(e.secrecy)]}
-          </span>
-        )}
-        {kind === "lore" && (
-          <span className="owner-stack">
-            {parseRefs(e.owners).map((ref) => {
-              const o = ownerById.get(ref);
-              return o?.avatar ? (
-                <img key={ref} className="owner-stack-img" alt="" title={o.label}
-                     loading="lazy" decoding="async" src={o.avatar}
-                     onError={(ev) => { (ev.currentTarget).style.display = "none"; }} />
-              ) : null;
-            })}
-          </span>
-        )}
-        {/* The unit is dropped for width -- the rail is a fixed 220px -- so the
-            accessible name carries it instead. The row is a link named from
-            its contents, so without this a screen reader reads "Salt 1,240" and
-            the number could be anything; `title` alone is not announced. */}
-        {typeof e.tokens === "number" && (
-          <span className={tokenClass(asSecrecy(e.secrecy), "row-tokens")}
-                title={tokenTitle(asSecrecy(e.secrecy))}
-                aria-label={tokenAria(e.tokens, asSecrecy(e.secrecy))}>
-            {e.tokens.toLocaleString()} {e.tokens === 1 ? "token" : "tokens"}
-          </span>
-        )}
-      </Link>
-    );
-    return kind === "lore"
-      ? groups.map((g) => (
-          <div key={g.key} className="rail-group">
-            <div className="rail-group-head">{g.label}</div>
-            {g.rows.map(row)}
-          </div>
-        ))
-      : shown.map(row);
-  }, [kind, shown, groups, editing, ownerById, recordHref, scopeKind, scopeId]);
-
-  // The owner picker: a checkbox per character, PC and location the world
-  // holds, so as long as the rail in a large world -- and it sits in the same
-  // form as the body, so it was rebuilt for every keystroke there too. The
-  // updater reads the owners as they are when the box is clicked, not as this
-  // memo last saw them.
-  const ownerPicker = useMemo(() => ownerOpts.map((o) => (
-    <label key={o.ref} className="owner-option">
-      <input
-        type="checkbox"
-        aria-label={o.label}
-        checked={owners.includes(o.ref)}
-        onChange={(e) => {
-          const on = e.target.checked;
-          setOwners((cur) => (on ? [...cur, o.ref] : cur.filter((r) => r !== o.ref)));
-        }}
-      />
-      {o.label}
-    </label>
-  )), [ownerOpts, owners]);
-
-  /** One declared field as its control -- the kind's own fields and the
-   *  Activation disclosure's both go through here. */
-  const renderSpec = (f: EntityFieldSpec) => {
-    const set = (v: string) => {
-      setFields({ ...fields, [f.key]: v });
-      // Once removed, a slot loses its opt-in. Re-adding it cannot revive a
-      // consent captured against the earlier form value.
-      setBindings((current) => current.filter((binding) =>
-        binding.field !== f.key || parseRefs(v).includes(binding.actor)));
-    };
-    const value = fields[f.key] ?? "";
-    switch (f.widget) {
-      case "ref":
-        return (
-          <div key={f.key}>
-            <RefField spec={f} options={optionsFor(f)} value={value}
-                      foreignRefs={unresolvedFor(f)}
-                      unresolvedHint={completeFor(f) ? DANGLING_HINT : UNLOADED_HINT}
-                      optionsComplete={completeFor(f)} onChange={set} />
-            {unresolvedFor(f).filter((actor) => parseRefs(value).includes(actor)).map((actor) => (
-              // A single-valued field still holding a legacy second ref cannot
-              // be resent as it stands (the save boundary refuses two Leaders),
-              // so no opt-in could reach the store: say how to resolve it.
-              !f.multi && parseRefs(value).length > 1 ? (
-                <div className="field-hint" key={actor}>{worldRefLabel(actor)}. {SEVERAL_REFS_HINT}</div>
-              ) : (
-              <div className="field" key={actor}>
-                <label>
-                  <input type="checkbox" aria-label={`Bind ${f.label} reference ${actor}`}
-                         checked={bindings.some((b) => b.field === f.key && b.actor === actor)}
-                         onChange={(event) => {
-                           const binding: GroupRefBinding = { field: f.key === "leader" ? "leader" : "members", actor };
-                           const checked = event.target.checked;
-                           setBindings((current) => checked ? [...current, binding]
-                             : current.filter((b) => b.field !== binding.field || b.actor !== actor));
-                         }} />
-                  Bind {f.label} reference {actor}
-                </label>
-                <div className="field-hint">{WORLD_BINDING_HINT}</div>
-              </div>
-              )
-            ))}
-          </div>
-        );
-      case "choice":
-        return (
-          <ChoiceField key={f.key} spec={f} options={choiceOptions(f, choiceOpts)}
-                       value={value} onChange={set} />
-        );
-      case "number":
-        if (!numberInputCanShow(value)) break;   // the text box below
-        // `step="any"`: the bound is on the value, not its precision --
-        // a persistence of 0.35 is as valid as 0.5. The activation counts are
-        // whole numbers, and the backend refuses a fraction, so they step by 1.
-        return (
-          <Field key={f.key} label={f.label}>
-            <input type="number" value={value} min={f.min} max={f.max}
-                   step={activationKeys().includes(f.key) ? 1 : "any"}
-                   onChange={(e) => set(e.target.value)} />
-          </Field>
-        );
-      default:
-        break;
-    }
-    return (
-      <Field key={f.key} label={f.label}>
-        <input type="text" value={value} onChange={(e) => set(e.target.value)} />
-      </Field>
-    );
-  };
-
-  // The set activation controls as sidebar chips, in catalog order. `known_by`
-  // is not among them: it names records, so it gets chips of its own.
   // Open in the form with a record under it: the bulk apply re-reads that
   // record, and the form's unsaved text would go with it. A blank NEW form has
   // no record to re-read, so it is not blocked.
   const adoptAllBlocked = mode === "edit" && editing !== null;
-  // Each is [key, heading, chip]: the heading is the label the form's
-  // Activation disclosure uses, so the sidebar and the form say the same word.
-  const activationChips: [string, string, string][] = ACTIVATION_FIELDS.flatMap((a) => {
-    const v = (fields[a.key] ?? "").trim();
-    if (!v || a.widget === "refs") return [];
-    if (a.widget === "bool") return isKeepOn(v) ? [[a.key, a.label, "yes"] as [string, string, string]] : [];
-    const unit = ACTIVATION_POSTS.has(a.key) ? (v === "1" ? " post" : " posts") : "";
-    return [[a.key, a.label, `${v}${unit}`] as [string, string, string]];
-  });
-
   // Apply-to-all is a sweep over the whole library, so it is reachable from a
   // record too: the rail that used to hold it is gone from a record's screen.
   const adoptAllControls = kind === "lore" ? (
@@ -1325,6 +687,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
   // must not take the grid away for a blank form nobody asked for.
   const browsing = selected == null && !isNew && !(wizardOpen && module) && !contentPreview;
 
+  // This rendered callback belongs to the operation that starts with it.
+  const wizardStillHere = captureViewGuard();
+  const sidebarStillHere = captureViewGuard();
   return (
     <div className="editor">
       {/* Two states, not one layout (#437): the section root is the browse grid
@@ -1332,57 +697,16 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
           Back link. The grid is the roster; `GreetingEditor`'s rail stays for a
           handful. */}
       {browsing ? (
-        <div className="entity-browse">
-          {error && <div className="banner">{error}</div>}
-          <div className="entity-browse-head">
-            <Link className="primary new" to={newHref}>+ New {label}</Link>
-            {/* Adoption is per record on the banner, and here for the whole
-                library: a world's worth of imported entries is not something to
-                walk one at a time. It sweeps every kind, which is why it lives
-                on the one rail an import fills, not on each. */}
-          {adoptAllControls}
-            {/* Shown once there is enough to lose something in. Below that the
-                filter is a control that costs a row and saves nothing. */}
-            {items.length > 8 && (
-              <>
-                <input className="rail-search" type="search" value={query}
-                       aria-label={`Search ${kind}`} placeholder={`Search ${kind}…`}
-                       onChange={(e) => setQuery(e.target.value)} />
-                <div className="rail-count">
-                  {shown.length === items.length
-                    ? `${items.length} ${label}${items.length === 1 ? "" : "s"}`
-                    : `${shown.length} of ${items.length}`}
-                </div>
-              </>
-            )}
-            {module && Object.values(module.sheets.sheet_types).some((st) => st.kind === kind) && (
-              <button className="subtle" onClick={() => art.transition(() => { resetForm(); setWizardOpen(true); })}>
-                + New {label} with sheet…
-              </button>
-            )}
-          </div>
-          {/* Three different answers, and they must not share one line: nothing
-              here yet, nothing MATCHING here, and a filter narrowing a real set. */}
-          {items.length === 0 && <div className="editor-empty">No {kind} yet.</div>}
-          {items.length > 0 && shown.length === 0 && (
-            <div className="editor-empty">Nothing matches “{query}”.</div>
-          )}
-          <div className="entity-grid">
-            {rail}
-            {module?.content.filter((c) => c.kind === kind).map((c) => (
-              <button key={`content-${c.id}`} className="row content-row"
-                      onClick={() => art.transition(() => { void selectContent(c.id); })}>
-                <span className="row-name">{c.name}</span>
-                <span className="chip">template</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        <EntityBrowse scope={scope} kind={kind} items={items} editing={editing} query={query}
+          setQuery={setQuery} ownerById={ownerById} ownerLabel={ownerLabel} newHref={newHref}
+          recordHref={recordHref} module={module} error={error} adoptAllControls={adoptAllControls}
+          onOpenWizard={() => art.transition(() => { readReq.current += 1; resetForm(); setWizardOpen(true); })}
+          onOpenTemplate={(id) => art.transition(() => { void selectContent(id); })} />
       ) : (
         <div className="editor-body">
           <div className="entity-record-bar">
           <Link className="subtle entity-back" to={sectionPath}
-                onClick={() => { setWizardOpen(false); setContentPreview(null); }}>← Back to the list</Link>
+                onClick={() => { readReq.current += 1; setWizardOpen(false); setContentPreview(null); }}>← Back to the list</Link>
             {adoptAllControls}
           </div>
           <RecordArtViewer controller={art} />
@@ -1390,24 +714,24 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
         {groupNeedsReload && (
           <div className="banner">
             Reload the group to review its current World references before saving.
-            <button className="subtle" onClick={() => { if (editing) void select(editing).catch((err: unknown) => setError(errorText(err))); }}>
+            <button className="subtle" onClick={() => { void cancelEdit(); }}>
               Reload group (discard edits)
             </button>
           </div>
         )}
         {stale && (
-          <StaleRecordBanner label={label} rev={stale.rev} onReload={discardAndReload}
+          <StaleRecordBanner label={label} rev={stale.rev} onReload={() => { void discardAndReload(); }}
                              overwriteLabel={stale.to ? "Reclassify anyway" : undefined}
-                             onOverwrite={() => (stale.to
+                             onOverwrite={() => { void (stale.to
                                ? reclassify(stale.to, stale.rev)
-                               : save(stale.rev))} />
+                               : save(stale.rev)); }} />
         )}
         {wizardOpen && module ? (
           <CreationWizard scope={scope} kind={kind} module={module}
                           createRecord={(n) => api.createEntity(scope, kind, { name: n }).then((r) => r.id)}
                           deleteRecord={(id) => api.deleteEntity(scope, kind, id).then(() => {})}
-                          onDone={async (id) => { setWizardOpen(false); await reload(); void navigate(recordHref(id)); }}
-                          onCancel={() => setWizardOpen(false)} />
+                          onDone={(id) => { void finishCreation(id, wizardStillHere); }}
+                          onCancel={() => { readReq.current += 1; setWizardOpen(false); }} />
         ) : contentPreview ? (
           <div className="detail-view">
             <div className="detail-main">
@@ -1418,7 +742,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
             </div>
             <aside className="detail-sidebar">
               <div className="form-actions">
-                <button className="primary" onClick={instantiate}>Instantiate</button>
+                <button className="primary" onClick={() => { void instantiate(); }}>Instantiate</button>
               </div>
               <div className="side-section">
                 <h4>Module</h4>
@@ -1427,312 +751,26 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, isNew = fa
             </aside>
           </div>
         ) : mode === "view" && editing ? (
-          <div className="detail-view">
-            <div className="detail-main">
-              <div className="entity-record-head">
-                {heading}
-                <RecordArtEntry controller={art} name={name} onOpenArt={() => selectRecordTab("art")} />
-              </div>
-              <MobileArtEntry name={name} image={art.preview ? () => art.preview.thumb : null} focus={art.preview?.focus}
-                onOpenArt={() => selectRecordTab("art")}
-                onOpenPreview={opener => { if (art.preview) art.openImage(art.preview, opener); }} />
-              <div className="card-tabs" role="tablist" aria-label="Record">
-                <button role="tab" aria-selected={recordTab === "details"} className={"tab" + (recordTab === "details" ? " active" : "")}
-                  onClick={() => selectRecordTab("details")}>Details</button>
-                <button role="tab" aria-selected={recordTab === "art"} className={"tab" + (recordTab === "art" ? " active" : "")}
-                  onClick={() => selectRecordTab("art")}>{art.count === null ? "Art" : "Art " + art.count}</button>
-              </div>
-              <div role="tabpanel">
-                {recordTab === "art" ? <RecordArtPanel controller={art} /> : <>
-              {adopt?.inherited && (
-                // A record the campaign only reads from its world: the world's
-                // copy is the one that takes the import, so there is nothing to
-                // apply from here.
-                <div className="banner adopt-banner" role="status" aria-label="Imported settings">
-                  <p>Imported SillyTavern settings are available on the world's copy of this entry.</p>
-                </div>
-              )}
-              {adopt && !adopt.inherited && (
-                <div className="banner adopt-banner" role="status" aria-label="Imported settings">
-                  <p>
-                    <strong>This entry carries imported SillyTavern settings that are not
-                    applied yet:</strong>{" "}
-                    {Object.entries(adopt.fields).map(([k, v], i) => (
-                      <span key={k}>{i > 0 && ", "}<code title={`${k}: ${v}`}>{k}</code></span>
-                    ))}
-                    .
-                    {adopt.unmapped.length > 0 && (
-                      <> Not mapped to anything here: {adopt.unmapped.join(", ")}.</>
-                    )}
-                  </p>
-                  <button className="subtle" onClick={() => { void applyAdopt(); }}
-                          disabled={adoptBusy}>Apply</button>
-                </div>
-              )}
-                  <div className="detail-rendered">
-                    <MarkdownArtProvider enabled contextKey={JSON.stringify([scope.kind, scope.id, kind, editing])}><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{body}</Markdown></MarkdownArtProvider>
-                  </div>
-                </>}
-              </div>
-            </div>
-            <aside className="detail-sidebar">
-              <div className="form-actions">
-                <button className="subtle" onClick={() => art.transition(() => { selectRecordTab("details"); setMode("edit"); })}>Edit</button>
-              </div>
-              {/* Keyed on the record, so switching rows remounts rather than
-                  showing the previous record's library state while the new one
-                  loads. The two are opposites and never both apply: a campaign
-                  puts a record INTO the library, a world takes one out. */}
-              {editing && (scope.kind === "campaign" ? (
-                <LibraryPanel key={`${scope.id}:${kind}:${editing}`}
-                              cid={scope.id} kind={kind} id={editing}
-                              onMoved={() => { void reload(); }} />
-              ) : (
-                <DemotePanel key={`${scope.id}:${kind}:${editing}`}
-                             wid={scope.id} kind={kind} id={editing}
-                             beforeDemote={() => {
-                               let allowed = false; art.transition(() => { allowed = true; }); return allowed;
-                             }}
-                             onDemoted={() => {
-                               // A completed sidebar write belongs to the record
-                               // that opened it, not a later selection's form.
-                               // The address still names the record just removed: go to the grid.
-                               if (selectedRead === readReq.current) { void reload(); resetForm(); void navigate(sectionPath); }
-                             }} />
-              ))}
-              <div className="side-section">
-                <h4>Keys</h4>
-                {keyList.length > 0
-                  ? <div className="chips">{keyList.map((k) => <span key={k} className="chip on">{k}</span>)}</div>
-                  : <div className="field-hint">always-on</div>}
-              </div>
-              <div className="side-section">
-                <h4>Secrecy</h4>
-                <div className="chips">
-                  <span className={`chip on secrecy-tag ${secrecy}`}>{SECRECY_LABELS[secrecy]}</span>
-                </div>
-                <div className="field-hint">{SECRECY_HINTS[secrecy]}</div>
-              </div>
-              {tokenCost !== null && (
-                <div className="side-section">
-                  <h4>Context cost</h4>
-                  <div className="chips"><span className="chip on">{tokenLabel(tokenCost)}</span></div>
-                  <div className="field-hint">{costHint}</div>
-                </div>
-              )}
-              {fieldSpecs.some((f) => f.widget !== "ref" && fields[f.key]) && (
-                <div className="side-section">
-                  <h4>Details</h4>
-                  <div className="chips">
-                    {fieldSpecs.filter((f) => f.widget !== "ref" && fields[f.key]).map((f) => (
-                      <span key={f.key} className="chip on">
-                        {f.label}: {displayValue(f, fields[f.key])}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {/* One section per ref field rather than a row inside Details:
-                  these are records, and the list/detail contract says metadata
-                  referencing another record renders as a clickable chip under
-                  its own heading — the same shape lore's Owners has. */}
-              {fieldSpecs.filter((f) => f.widget === "ref" && fields[f.key]).map((f) => (
-                <div className="side-section" key={f.key}>
-                  <h4>{f.label}</h4>
-                  <div className="chips">
-                    {parseRefs(fields[f.key]).map((ref) => {
-                      if (unresolvedFor(f).includes(ref)) return (
-                        <span key={ref} className="chip dangling" title={WORLD_BINDING_HINT}>{worldRefLabel(ref)}</span>
-                      );
-                      const hit = requiresGroupContext && !groupContext && (f.key === "members" || f.key === "leader")
-                        ? null : resolveRef(f, ref);
-                      return hit === null ? (
-                        // Not a button: there is nothing to navigate to. It is
-                        // shown at all because a delete does not scrub the refs
-                        // that name the record (#222), and a field that quietly
-                        // rendered nothing would read as one nobody filled in.
-                        <span key={ref} className="chip dangling" title={unresolvedHint}>{ref}</span>
-                      ) : (
-                        <button key={ref} className="chip owner-chip"
-                                onClick={() => onOpenOwner?.(ref)}>
-                          <Portrait src={hit.avatar ?? null} name={hit.label} />
-                          {hit.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-              {/* One section per set activation field (spec 3), as the
-                  other metadata above is drawn. */}
-              {activationChips.map(([key, heading, text]) => (
-                <div key={key} className="side-section">
-                  <h4>{heading}</h4>
-                  <div className="chips">
-                    <span className="chip on">{text}</span>
-                  </div>
-                </div>
-              ))}
-              {parseRefs(fields.known_by).length > 0 && (
-                <div className="side-section">
-                  <h4>{KNOWN_BY_SPEC.label}</h4>
-                  <div className="chips">
-                    {parseRefs(fields.known_by).map((ref) => {
-                      const hit = resolveRef(KNOWN_BY_SPEC, ref);
-                      if (hit) {
-                        // A host that cannot open an actor gets a label, not
-                        // a button that does nothing when pressed.
-                        return onOpenOwner ? (
-                          <button key={ref} className="chip owner-chip"
-                                  onClick={() => onOpenOwner(ref)}>
-                            <Portrait src={hit.avatar ?? null} name={hit.label} />
-                            {hit.label}
-                          </button>
-                        ) : (
-                          <span key={ref} className="chip on">
-                            <Portrait src={hit.avatar ?? null} name={hit.label} />
-                            {hit.label}
-                          </span>
-                        );
-                      }
-                      // Gone only if the listing actually arrived; a failed
-                      // or pending one has no standing to say so.
-                      return actorsComplete ? (
-                        <span key={ref} className="chip missing" title={DANGLING_HINT}>
-                          missing: {ref}
-                        </span>
-                      ) : (
-                        <span key={ref} className="chip dangling" title={UNLOADED_HINT}>{ref}</span>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              {sdPrompt && (
-                <div className="side-section">
-                  <h4>Image prompt</h4>
-                  <div className="field-hint">{sdPrompt}</div>
-                </div>
-              )}
-              {kind === "lore" && (
-                <div className="side-section">
-                  <h4>Owners</h4>
-                  {owners.length > 0 ? (
-                    <div className="chips">
-                      {owners.map((ref) => (
-                        <button key={ref} className="chip owner-chip" onClick={() => onOpenOwner?.(ref)}>
-                          <Portrait src={ownerOpts.find((x) => x.ref === ref)?.avatar ?? null}
-                                    name={ownerLabel(ref)} />
-                          {ownerLabel(ref)}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="field-hint">world-level</div>
-                  )}
-                </div>
-              )}
-              {kind === "locations" && editing && (
-                <OwnedLorePanel
-                  scope={scope}
-                  ownerRef={`locations:${editing}`}
-                  hrefFor={(id) => sectionHref(scope, { kind: "record", at: "lore", rid: id })}
-                  newHref={sectionHref(scope,
-                                       { kind: "section", at: "lore", newOwner: `locations:${editing}` })}
-                />
-              )}
-              {kind === "groups" && scope.kind === "campaign" && editing && (
-                <GroupStatePanel cid={scope.id} gid={editing} />
-              )}
-              {/* The record keeps its id across the move (#119), so everything
-                  filed against it -- its images, its sheet, its pins, its undo
-                  history -- comes with it. A select rather than a row of
-                  buttons: there are four destinations and this is a rare,
-                  deliberate correction, not a control to make prominent. */}
-              <div className="side-section">
-                <h4>Reclassify</h4>
-                <select aria-label="Reclassify as" value=""
-                        onChange={(e) => art.transition(() => askReclassify(e.target.value as EntityKind))}>
-                  <option value="">Reclassify as…</option>
-                  {ENTITY_KINDS.filter((k) => k !== kind).map((k) => (
-                    <option key={k} value={k}>{KIND_LABELS[k]}</option>
-                  ))}
-                </select>
-                <div className="field-hint">
-                  {scope.kind === "world"
-                    ? "Moves this record for every campaign of this world."
-                    : "Moves this campaign's copy only; the world keeps its own."}
-                </div>
-              </div>
-              {module && editing && (
-                <SheetPanel scope={scope} module={module} kind={kind} eid={editing}
-                            onOpenRef={(kind, id) => onOpenOwner?.(`${kind}:${id}`)} />
-              )}
-            </aside>
-          </div>
+          <EntityDetails scope={scope} kind={kind} editing={editing} draft={draft} tokenCost={tokenCost}
+            sdPrompt={sdPrompt} fieldSpecs={fieldSpecs} candidates={candidates}
+            group={{ required: requiresGroupContext, loaded: groupContext !== null, unresolvedFor }}
+            art={art} recordTab={recordTab} selectRecordTab={selectRecordTab} adopt={adopt} adoptBusy={adoptBusy}
+            onApplyAdopt={() => { void applyAdopt(); }}
+            onEdit={() => art.transition(() => { selectRecordTab("details"); setMode("edit"); })}
+            onMoved={() => refreshSidebar(sidebarStillHere)}
+            onDemoted={() => {
+              // A completed sidebar write belongs to the record that opened it,
+              // not a later selection. Leave the removed record's address for the grid.
+              if (selectedRead === readReq.current && sidebarStillHere()) void finishRemoval();
+            }}
+            onReclassify={askReclassify} onOpenOwner={onOpenOwner} module={module} />
         ) : (
-          <div className="form">
-            <h3>{editing ? `Edit ${label}` : `New ${label}`}</h3>
-            <Field label="Name">
-              <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
-            </Field>
-            <Field label="Body">
-              <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={10} />
-            </Field>
-            <Field label="Keys" hint="comma-separated activation triggers; blank = always-on">
-              <input type="text" value={keys} onChange={(e) => setKeys(e.target.value)} />
-            </Field>
-            {/* Real radio inputs, like the Owners checkboxes above: a native
-                group gets arrow-key navigation and roving focus for free,
-                which a row of buttons wearing role="radio" does not. */}
-            <Field label="Secrecy" hint={SECRECY_HINTS[secrecy]}>
-              <div className="secrecy-picker" role="radiogroup" aria-label="Secrecy">
-                {SECRECY_LEVELS.map((level) => (
-                  <label key={level} className="secrecy-option">
-                    <input type="radio" name="secrecy" value={level}
-                           checked={secrecy === level}
-                           onChange={() => setSecrecy(level)} />
-                    {SECRECY_LABELS[level]}
-                  </label>
-                ))}
-              </div>
-            </Field>
-            {fieldSpecs.map(renderSpec)}
-            {/* One disclosure for every kind, closed unless the record already
-                sets something in it: most entries use none of these, and nine
-                controls under every body would bury the four that matter. The
-                summary toggles state rather than the native `open`, so the
-                contents can be left undrawn while it is shut. */}
-            <details className="activation-settings" open={activationOpen}>
-              <summary onClick={(e) => { e.preventDefault(); setActivationOpen(!activationOpen); }}>
-                Activation
-              </summary>
-              {activationOpen && ACTIVATION_FIELDS.map((a) => (
-                a.widget === "bool" ? (
-                  <Field key={a.key} label={a.label}
-                         hint="keep this entry when the world-info budget has to drop others">
-                    <input type="checkbox" checked={isKeepOn(fields[a.key])}
-                           onChange={(e) => setFields({ ...fields, [a.key]: e.target.checked ? "true" : "" })} />
-                  </Field>
-                ) : renderSpec(activationSpec(a))
-              ))}
-            </details>
-            {kind === "lore" && (
-              <Field label="Owners" hint="lore activates only when an owner is in the scene; none = world-level">
-                <div className="chips owner-picker">
-                  {ownerPicker}
-                  {ownerOpts.length === 0 && <span className="field-hint">Nothing to own it yet.</span>}
-                </div>
-              </Field>
-            )}
-            <div className="form-actions">
-              {editing && <button className="subtle" onClick={() => remove(items.find((x) => x.id === editing)!)}>Delete</button>}
-              {editing && <button className="subtle" onClick={() => select(editing)}>Cancel</button>}
-              <button className="primary" onClick={() => save()} disabled={!name.trim() || groupNeedsReload}>
-                {editing ? "Save" : `Create ${label}`}
-              </button>
-            </div>
-          </div>
+          <EntityForm kind={kind} editing={editing} draft={draft} setName={setName} setBody={setBody}
+            setKeys={setKeys} setSecrecy={setSecrecy} setOwners={setOwners} setField={setField}
+            activationOpen={activationOpen} setActivationOpen={setActivationOpen} ownerOpts={ownerOpts}
+            fieldControls={fieldSpecs.map(renderSpec)} renderActivation={renderSpec} groupNeedsReload={groupNeedsReload}
+            onDelete={() => { if (editing) void remove({ id: editing, name }); }}
+            onCancel={() => { void cancelEdit(); }} onSave={() => { void save(); }} />
         )}
         </div>
       )}

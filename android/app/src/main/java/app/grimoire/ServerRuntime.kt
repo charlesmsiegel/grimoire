@@ -45,19 +45,16 @@ interface RunCallback {
  * Process-wide owner of the embedded Python server.
  *
  * The server thread starts once per process and blocks in uvicorn for the
- * process's lifetime; Android reclaiming the process is the shutdown path
- * (lossless — the store is file-per-record, see docs/android-architecture.md §2).
+ * process's lifetime; Android reclaiming the process is the shutdown path.
+ * Completed file writes follow the store's persistence contract; live runs
+ * and an interrupted multi-file publication are not made durable by this host.
  */
 object ServerRuntime {
     private const val TAG = "GrimoireServer"
 
-    @Volatile
-    var port: Int = -1
-        private set
-
-    @Volatile
-    var failure: String? = null
-        private set
+    private val startup = ServerStartup()
+    val port: Int get() = startup.port
+    val failure: String? get() = startup.failure
 
     /** Set by the service before the server starts, so the callbacks below
      *  have somewhere to go. Null on any host without a service. */
@@ -78,8 +75,6 @@ object ServerRuntime {
     @Volatile
     var foreground: Boolean = false
 
-    private val portListeners = mutableListOf<(Int) -> Unit>()
-    private val failureListeners = mutableListOf<(String) -> Unit>()
     private var started = false
 
     @Synchronized
@@ -90,38 +85,11 @@ object ServerRuntime {
         thread(name = "grimoire-server") { bootstrap(app) }
     }
 
-    /** Runs [onReady] with the port — immediately if the server is already up,
-     * otherwise from the server thread once it is. [onFailure] mirrors that
-     * for a bootstrap error. Callers marshal to the main thread themselves. */
-    @Synchronized
-    fun subscribe(onReady: (Int) -> Unit, onFailure: (String) -> Unit) {
-        val p = port
-        val f = failure
-        when {
-            p > 0 -> onReady(p)
-            f != null -> onFailure(f)
-            else -> {
-                portListeners.add(onReady)
-                failureListeners.add(onFailure)
-            }
-        }
-    }
-
-    @Synchronized
-    private fun publishPort(p: Int) {
-        port = p
-        portListeners.forEach { it(p) }
-        portListeners.clear()
-        failureListeners.clear()
-    }
-
-    @Synchronized
-    private fun publishFailure(message: String) {
-        failure = message
-        failureListeners.forEach { it(message) }
-        portListeners.clear()
-        failureListeners.clear()
-    }
+    /** A port can arrive before bootstrap finishes; [onFailure] stays active
+     * afterward. Callers marshal to the main thread and invoke the returned
+     * unsubscribe function when their activity is destroyed. */
+    fun subscribe(onReady: (Int) -> Unit, onFailure: (String) -> Unit): () -> Unit =
+        startup.subscribe(onReady, onFailure)
 
     private fun bootstrap(app: Context) {
         try {
@@ -142,7 +110,7 @@ object ServerRuntime {
                 dirs.templates.absolutePath,
                 PortCallback { p ->
                     Log.i(TAG, "listening on 127.0.0.1:$p")
-                    publishPort(p)
+                    startup.publishPort(p)
                 },
                 // Forwarded into `app.state`, where the run registry and the
                 // runner can reach them. Passing null here -- no service, as in
@@ -174,13 +142,13 @@ object ServerRuntime {
                 },
             )
             // start_server blocks forever; returning means uvicorn exited
-            publishFailure("server exited unexpectedly")
+            startup.publishFailure("server exited unexpectedly")
         } catch (e: PyException) {
             Log.e(TAG, "python bootstrap failed", e)
-            publishFailure(e.message ?: "python bootstrap failed")
+            startup.publishFailure(e.message ?: "python bootstrap failed")
         } catch (e: Exception) {
             Log.e(TAG, "server bootstrap failed", e)
-            publishFailure(e.message ?: "server bootstrap failed")
+            startup.publishFailure(e.message ?: "server bootstrap failed")
         }
     }
 }

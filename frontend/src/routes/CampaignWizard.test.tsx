@@ -149,7 +149,7 @@ test("module picker defaults to inherit and passes the chosen module", async () 
 test("step 1 shows the calendar select alongside holidays", async () => {
   renderWizard();
   await screen.findByText("Realm");
-  const calendar = screen.getByLabelText(/^calendar$/i) as HTMLSelectElement;
+  const calendar = screen.getByLabelText<HTMLSelectElement>(/^calendar$/i);
   expect(calendar.value).toBe("gregorian");
   expect(screen.getByText(/regional holiday set/i)).toBeInTheDocument();
 });

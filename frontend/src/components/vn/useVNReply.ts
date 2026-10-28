@@ -5,6 +5,7 @@ import { awaitRun } from '../../api/runs';
 import { ApiError, RunEndedError } from '../../api/transport';
 import { isAbortError, newAttemptId, type RunHandle } from '../../api/stream';
 import { useRunRegistry, type Attempt } from '../../runs/RunRegistryProvider';
+import { findOrFenceAttempt } from '../../runs/recoverAttempt';
 
 type Phase = 'checking' | 'ready' | 'sending' | 'waiting' | 'stopping' | 'blocked';
 type Outcome = { done: boolean; error: string };
@@ -73,13 +74,9 @@ export function useVNReply(cid: string, sid: string, onSettled: (target?: Attemp
     const terminal = !!(outcome?.done || outcome?.error);
     let run = cancelled;
     if (run === undefined && !terminal) {
-      run = (await api.findRun(cid, sid, held?.attempt, controller.signal)).run;
-      assertCurrent(controller);
-    }
-    // A lost POST can still be in setup before it reserves a run. Fence that
-    // attempt before treating an empty discovery as permission to send again.
-    if (held && !terminal && run == null && cancelled === undefined) {
-      run = (await api.cancelAttempt(cid, sid, held.attempt)).run;
+      run = held
+        ? await findOrFenceAttempt(cid, sid, held.attempt, controller.signal)
+        : (await api.findRun(cid, sid, undefined, controller.signal)).run;
       assertCurrent(controller);
     }
     const result = await wait(controller, run ?? null);

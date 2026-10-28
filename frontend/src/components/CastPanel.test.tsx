@@ -83,7 +83,7 @@ test("a cast row's avatar carries the roster's token, so it is cached immutable"
 test("initialPrompt seeds the opener prompt", async () => {
   renderPanel({ initialPrompt: "A debt-collector arrives." });
   await waitFor(() => expect(
-    (screen.getByLabelText("Opener prompt") as HTMLInputElement).value,
+    (screen.getByLabelText<HTMLInputElement>("Opener prompt")).value,
   ).toBe("A debt-collector arrives."));
 });
 
@@ -92,11 +92,11 @@ test("switching scenes clears a previously seeded prompt", async () => {
     <CastPanel cid="c" sid="s" ready onSeeded={() => {}} initialPrompt="A premise" />,
   );
   await waitFor(() => expect(
-    (screen.getByLabelText("Opener prompt") as HTMLInputElement).value,
+    (screen.getByLabelText<HTMLInputElement>("Opener prompt")).value,
   ).toBe("A premise"));
   rerender(<CastPanel cid="c" sid="s2" ready onSeeded={() => {}} />);
   await waitFor(() => expect(
-    (screen.getByLabelText("Opener prompt") as HTMLInputElement).value,
+    (screen.getByLabelText<HTMLInputElement>("Opener prompt")).value,
   ).toBe(""));
 });
 

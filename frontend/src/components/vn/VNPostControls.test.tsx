@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { api, type Message } from '../../api/client';
 import { VNPostControls } from './VNPostControls';
@@ -26,6 +26,8 @@ function mount() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  changed.mockResolvedValue(true);
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
   messages = [{ role: 'user', content: 'Hello', post_id: 'u' }, { role: 'assistant', content: 'Raw words', shown: 'Displayed words', post_id: 'a' }];
   vi.mocked(api.getScene).mockImplementation(async () => ({ meta: { id: 's', title: 'Saltmarch' }, messages: structuredClone(messages) }));
   vi.mocked(api.listScenes).mockResolvedValue([{ id: 's', title: 'Saltmarch', model: '', created: '', updated: '', date: '' }]);
@@ -33,8 +35,86 @@ beforeEach(() => {
   vi.mocked(api.findRun).mockResolvedValue({ run: null });
   vi.mocked(api.getRollProposal).mockResolvedValue({ record: null });
   vi.mocked(api.editMessage).mockResolvedValue({} as never);
+  vi.mocked(api.retconMessage).mockResolvedValue({ refused: [], failed: [], later: [] } as never);
   vi.mocked(api.refreshRollingSummary).mockResolvedValue({} as never);
   vi.mocked(api.askSceneBreak).mockResolvedValue({} as never);
+});
+
+test.each(['Save', 'Retcon'])('%s refreshes the reader when optional boundary read rejects', async action => {
+  mount(); await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  await screen.findByRole('textbox', { name: 'Post text' });
+  const write = action === 'Save' ? api.editMessage : api.retconMessage;
+  vi.mocked(write).mockImplementationOnce(async () => {
+    vi.mocked(api.getScene).mockRejectedValue(new Error('Optional boundary unavailable'));
+    return { refused: [], failed: [], later: [] } as never;
+  });
+  changed.mockResolvedValue(false);
+  fireEvent.click(screen.getByRole('button', { name: action }));
+  await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole('status')).toHaveTextContent('Post saved.');
+  expect(screen.getByRole('alert')).toHaveTextContent('Post saved, but the reader could not refresh. Use Refresh in the menu.');
+  expect(api.refreshRollingSummary).not.toHaveBeenCalled();
+  expect(api.askSceneBreak).not.toHaveBeenCalled();
+});
+
+test.each(['Save', 'Retcon'])('%s refreshes without waiting for a pending optional boundary', async action => {
+  mount(); await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  await screen.findByRole('textbox', { name: 'Post text' });
+  const write = action === 'Save' ? api.editMessage : api.retconMessage;
+  vi.mocked(write).mockImplementationOnce(async () => {
+    vi.mocked(api.getScene).mockImplementation(() => new Promise(() => {}));
+    return { refused: [], failed: [], later: [] } as never;
+  });
+  fireEvent.click(screen.getByRole('button', { name: action }));
+  await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole('status')).toHaveTextContent('Post saved.');
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(api.refreshRollingSummary).not.toHaveBeenCalled();
+  expect(api.askSceneBreak).not.toHaveBeenCalled();
+});
+
+test('successful retcon preserves refused, failed reversal and later scene notices', async () => {
+  vi.mocked(api.retconMessage).mockResolvedValue({ refused: [{ label: 'Mara' }], failed: ['Tracker reversal'], later: ['later'] } as never);
+  mount(); await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  await screen.findByRole('textbox', { name: 'Post text' });
+  fireEvent.click(screen.getByRole('button', { name: 'Retcon' }));
+  await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole('status')).toHaveTextContent('Post saved. Could not restore: Mara. Some reversals failed: Tracker reversal. Later scenes may need review in normal play.');
+});
+
+test('unmount prevents a detached boundary response from dispatching suggestions', async () => {
+  let finishBoundary!: (page: Awaited<ReturnType<typeof api.getScene>>) => void;
+  const { unmount } = mount();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  await screen.findByRole('textbox', { name: 'Post text' });
+  vi.mocked(api.editMessage).mockImplementationOnce(async () => {
+    vi.mocked(api.getScene).mockImplementation(() => new Promise(resolve => { finishBoundary = resolve; }));
+    return {} as never;
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await screen.findByRole('status');
+  unmount();
+  await act(async () => finishBoundary({ meta: { id: 's', title: 'Saltmarch' }, messages }));
+  expect(api.refreshRollingSummary).not.toHaveBeenCalled();
+  expect(api.askSceneBreak).not.toHaveBeenCalled();
+});
+
+test.each(['Save', 'Retcon'])('%s write failure preserves the draft and reports the primary error', async action => {
+  vi.mocked(action === 'Save' ? api.editMessage : api.retconMessage).mockRejectedValueOnce(new Error('Write refused'));
+  mount(); await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  const editor = await screen.findByRole('textbox', { name: 'Post text' });
+  fireEvent.change(editor, { target: { value: 'My draft' } });
+  fireEvent.click(screen.getByRole('button', { name: action }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Write refused');
+  expect(editor).toHaveValue('My draft');
+  expect(changed).not.toHaveBeenCalled();
+  expect(api.refreshRollingSummary).not.toHaveBeenCalled();
+  expect(api.askSceneBreak).not.toHaveBeenCalled();
 });
 
 test('edit saves raw prose at its fresh stable index and requests bounded follow-up', async () => {

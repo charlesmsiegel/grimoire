@@ -98,7 +98,7 @@ describe("CreationWizard", () => {
     fireEvent.click(screen.getByText("Next"));
     fireEvent.change(await screen.findByLabelText("Sheet type"), { target: { value: "hero" } });
     fireEvent.click(screen.getByText("Next"));
-    const createButton = screen.getByText("Create") as HTMLButtonElement;
+    const createButton = screen.getByText<HTMLButtonElement>("Create");
     fireEvent.change(screen.getByLabelText("Vigor"), { target: { value: "10" } });
     expect(createButton.disabled).toBe(true);
   });
@@ -138,14 +138,14 @@ describe("CreationWizard", () => {
     fireEvent.change(await screen.findByLabelText("Sheet type"), { target: { value: "hero" } });
     fireEvent.click(screen.getByText("Next"));
 
-    const input = screen.getByLabelText("Strength") as HTMLInputElement;
+    const input = screen.getByLabelText<HTMLInputElement>("Strength");
     expect(input.value).toBe("1"); // floor, not 0
     expect(screen.getByText(/0 \/ 10/)).toBeInTheDocument(); // spend at rest is 0, not (1-0)*4=4
 
     fireEvent.change(input, { target: { value: "3" } });
     expect(screen.getByText(/8 \/ 10/)).toBeInTheDocument(); // (3-1)*4, not (3-0)*4=12
 
-    const createButton = screen.getByText("Create") as HTMLButtonElement;
+    const createButton = screen.getByText<HTMLButtonElement>("Create");
     expect(createButton.disabled).toBe(false);
     fireEvent.click(createButton);
 

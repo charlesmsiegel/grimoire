@@ -214,7 +214,7 @@ test("list textarea preserves newlines while typing", () => {
                       kind="characters" eid="mara" initial={SHEET}
                       onClose={() => {}} onSaved={() => {}} />);
   fireEvent.click(screen.getByText("Edit"));
-  const gear = screen.getByLabelText("Gear") as HTMLTextAreaElement;
+  const gear = screen.getByLabelText<HTMLTextAreaElement>("Gear");
   fireEvent.change(gear, { target: { value: "lantern\n" } });
   expect(gear.value).toBe("lantern\n");
   fireEvent.change(gear, { target: { value: "lantern\nrope" } });
@@ -239,7 +239,7 @@ test("number widget carries schema min/max bounds", async () => {
                       kind="characters" eid="mara" initial={SHEET}
                       onClose={() => {}} onSaved={() => {}} />);
   fireEvent.click(screen.getByText("Edit"));
-  const strength = screen.getByLabelText("Strength") as HTMLInputElement;
+  const strength = screen.getByLabelText<HTMLInputElement>("Strength");
   expect(strength.min).toBe("1");
   expect(strength.max).toBe("20");
 });

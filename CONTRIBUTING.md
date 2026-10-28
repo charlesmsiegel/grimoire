@@ -77,7 +77,7 @@ locally with the same one-line command.
 | `make check-eslint` | eslint, against `lint-baselines/eslint.json` | eslint |
 | `make check-templates` | `scripts/verify_templates.py` — builders and templates agree byte-for-byte, and every template is rendered by a check or named in `UNRENDERED` with why | templates |
 | `make check-pydantic1` | the same suite again, in a throwaway venv resolved to what the APK ships, across `WORKERS` processes | pydantic1 |
-| `make check-apk` | builds `frontend/dist` and then the debug APK | apk |
+| `make check-apk` | builds `frontend/dist`, runs Android unit tests, then builds the debug APK | apk |
 
 The two backend runs, `check-py` and `check-pydantic1`, spread the suite over
 `WORKERS` pytest-xdist processes, four unless told otherwise; coverage is
