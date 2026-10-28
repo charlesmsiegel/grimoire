@@ -23,7 +23,7 @@ One successful monster capture consumes a ball, creates or reuses an individual 
 
 ## Dependencies and boundaries
 
-Works with [Mechanics](mechanics.md), [Inventory](inventory.md), [Creature → Character](creature-to-character.md) and [World Maintenance](world-maintenance.md). It preserves the [file-authority contract](../principles.md): an event journal, when authoritative, is a human-editable file, not a disposable cache.
+Works with [Mechanics](mechanics.md), [Inventory](inventory.md), [Creature → Character](creature-to-character.md) and [World Maintenance](world-maintenance.md). It preserves the [file-authority contract](../../principles.md): an event journal, when authoritative, is a human-editable file, not a disposable cache.
 
 ## Open questions
 
