@@ -1,47 +1,55 @@
 # Grimoire V2 — architecture charter
 
-**Status:** exploratory, first-slice contracts only. This document owns architectural intent, not a final persistent schema or blanket migration approval.
+**Status:** proposal and tiny in-memory experimental kernel. The V2 `core/model.py` still names `CharacterDefinition` and `CampaignActor`; these are *temporary first-slice types*, not a commitment to a character-exclusive ontology. Follow the [ordered V2 roadmap](roadmap/README.md) before introducing persisted schemas.
 
-## The conceptual model
+## Fundamental concepts
 
-1. **Content sources and worlds.** A world can own its characters and setting directly. It may optionally import catalogs from other sources. The **source-qualified identity** of a record is not a display name or an import-order slot. Alternative portrayals and adaptations are explicit relations, not string-matched duplicates.
-2. **Character definitions and authored portrayals.** Definitions carry reusable authored identity and characterization; portrayals carry alternate interpretations or eras. Character Card V2/V3/CHARX are future *interchange adapters*, never mandatory runtime ontologies.
-3. **Campaign actors.** A campaign owns its particular individuals, each with a stable **instance identity** and optional link to a source definition and portrayal. Multiple actors may intentionally reference the same definition. No world definition owns all its campaign histories.
-4. **Controller assignments and permissions.** A PC is an actor assigned human decision authority in a campaign; an NPC is not a distinct ontological type. Controller, narrator, reader and director permissions must not be conflated.
-5. **Events, observations and beliefs.** Objective events are not automatically known. Observations describe what a particular actor could perceive through a channel; beliefs are tentative interpretations and can be false. The canonical event and each subjective record have separate provenance.
-6. **Ephemeral actor perspective.** At a given point in a scene, derive the actor's relevant identity, goals, observations, remembered evidence and beliefs; do **not** copy the entire transcript or objective director knowledge into every NPC. The current `actor_view` is a tiny proof of this boundary, not a production context builder.
-7. **Actions and authoritative outcomes.** Human/AI actors propose actions under explicit authority. An adjudicator determines legal/fiction-first consequences; guarded writers commit effects once; narrators express that result without changing it. Scene wrap-up consolidates evidence rather than reapplying consumed items.
+1. **Source-qualified definition.** A catalog or world owns a reusable authored description and optionally a portrayal/era. Source identity, kind, entity ID and version must be stable; same name or slug from another source is never an automatic match. No compulsory global character catalog; self-contained worlds remain first-class.
+2. **Instance and controller.** An individual campaign has its own entity instances with identity, derived-from links, overrides and lived continuity. PC and NPC are control/authority roles, not intrinsic entity types; one source can yield multiple actual instances (clones/parallel histories).
+3. **Composable capabilities.** A physical object may be portable, spatial, biological, sentient or collective. Facets are typed domain contracts with invariants, not freeform LLM-created booleans. Editor templates may still be named Character, Creature, Item, Location, Group and Lore, but these do not define mutually exclusive engine species.
+4. **Typed relations and graph.** Membership, possession, kinship, containment, source inheritance, rivalry, communication and causal dependency are typed, scoped and potentially time-bound edges. Complex transactions can be represented by an event node with participants. Graph traversal is bounded and perspective-aware. Canonical relation files are human-editable; a graph database/search index is rebuildable, not secretly authoritative.
+5. **Objective events and subjective evidence.** Accepted physical/social events are distinct from actor observations, messages, false claims, uncertainties and beliefs. Graph reachability is *not* a right to know. A director sees appropriate canonical facts; an NPC may see only attributed percepts and their own conclusions. Revisions and retcons preserve source evidence.
+6. **Ephemeral actor perspective.** For a particular moment and speaker, derive portrayal/voice anchors, relevant goals and relationships, perceived scene history, memories and supported beliefs. Do not store a giant per-character copy of the entire scene; do not send every piece of director knowledge to an NPC.
+7. **Actions and state authority.** Human intentions, game rules, AI choices, adjudicated outcomes, committed effects and narrative prose have separate owners. Player-character voluntary speech and decisions remain under player authority unless explicitly delegated. Deterministic guarded writers commit accepted effects once, narration merely expresses them.
+8. **Independent per-NPC generation.** V0.2.1's separately prompted individual NPC contributions are the quality baseline and must be preserved. A scene with two speaking NPCs gets two independent RP-model generation calls, not a consolidated all-NPC narrator. Hidden NPCs do not require continuously running minds.
+9. **Inference economics and flags.** Graph lookup, audience filters, ordinary memory selection, image placement and most state application are deterministic. Optional model-based planning, uncertainty analysis, critiques and intensive simulations are opt-in, visibly metered and bounded by user turn/session budgets. Performance comparisons must use actual billable tokens and matched quality against the `0.2.1` tag.
+10. **Versioned, sync-safe human-editable storage.** Root/campaign records and identity mapping carry stable revisions, provenance and stale-write guards. Supported transfers between phone and desktop are an *early feature*. The sync contract preserves concurrent edits with conflict review; app-managed authenticated transfer is not tied to Syncthing. Peer connections work only when reachable; off-LAN operation needs an optional reachable endpoint/relay or another transport.
 
-## Provisional human-editable storage layout
+## Storage root and provisional organization
 
-The exact paths, revision spelling and manifests are **not implemented or settled**:
+**Default desktop V2 library: `~/.grimoire-v2/`.** A V2-specific `GRIMOIRE_V2_HOME` override may select a different directory. Never fall back to V1's `GRIMOIRE_HOME`, `~/.grimoire/` or its bootstrap pointer. Android defaults to its separate app-private V2 area until an explicit location is chosen. The V2 baseline currently contains no production path resolver; this is the mandatory Wave 1 storage contract.
 
 ```text
-library/
-  catalogs/             # optional reusable content
-  worlds/<world>/       # independently usable setting, authored records
+~/.grimoire-v2/                        # target example; not implemented yet
+  catalogs/                           # optional shared, reusable definitions
+  worlds/<world>/                     # self-contained setting and authored content
   campaigns/<campaign>/
-    actors/             # instances and local overrides, NOT world cards
-    scenes/             # accepted dialogue / authorial contributions
-    events/             # accepted causal events, provenance and outcomes
-    knowledge/          # audience-scoped observation and belief records
+    instances/                        # individual entities and overrides
+    scenes/                           # accepted authored contributions, exact text
+    events/                           # committed happenings and consequences
+    evidence/                         # observations, reports, beliefs and provenance
+    relations/                        # scoped typed relationship records
+  assets/                             # content-addressed image objects and placements
+  .cache/                             # disposable derived graph, search, embeddings
 ```
 
-World-authored root characters remain world-owned unless explicitly published to a shared catalog. Campaign histories and beliefs are never nested in a giant root character file. Derived prompt caches, embeddings or SQLite indexes may accelerate reads but are not secret canonical state.
+The actual file names and graph schema remain subject to the native-storage sprint. Data files must remain usable by humans and external agents. Derived indexes, embeddings and cached actor views are disposable and may not become a second canonical store.
 
-## Source updates and selective merging
+## Root change, world adaptation and campaign evolution
 
-Source, instance, common-ancestor revision and explicit overrides are different facts. A campaign may **follow compatible changes, review/merge, pin, or detach**; none may silently reinterpret previously accepted scenes. A three-way merge needs the actual common-ancestor data, not only a hash. Promote selected campaign-origin changes upstream only by explicit review, never by incidental scene generation. Absent source files must remain unresolved rather than rebind to similarly named replacements.
+A world may directly define a character or explicitly adapt a catalog definition. Each campaign instance retains its source relation, retained common-ancestor revision and independently accumulated state. Possible policies: **follow compatible fields, review/merge, pin revision, detach, promote selected authored changes upstream**. A three-way merge needs actual base content, not just hash equality. A correction to a source's childhood story cannot rewrite accepted campaign history; changes to one campaign never automatically import another's private memories or bonds.
 
-## Scenario the architecture must eventually prove
+## Required proving scenario and early product gates
 
-Two campaign instances reference the same reusable character. Only the instance in Campaign A witnesses a secret and develops a different relationship. The world character changes later. Campaign A pins its prior portrayal, Campaign B accepts a compatible update, and an explicit merge can bring one authored biographical correction to A without importing B's memories or overwriting A's history. Separately, one of the actors switches from NPC to human control without changing their identity. A private telepathic message reaches only its recipients; narration follows one accepted action outcome. Every step is traceable and recoverable.
+Use purely synthetic materials in repo/test output. Two worlds contain same-named characters, one source yields two independent campaign instances. The group relation graph identifies an organization without leaking secret membership into an uninformed actor. A private conversation gives one actor new evidence and another a mistaken belief. A source definition changes; one instance accepts a correction and the other pins its version. An image object is shared through two distinct avatar/expression placements and retains both crops.
 
-## Constraints and intentionally unsettled choices
+Then **import this scenario from a `0.2.1`-format library** using a source-preserving migration plan, run one real text interaction with **separate NPC generation**, save/reload, and sync the campaign plus art to a phone and back. The original source library must remain unchanged, failures must be recoverable and all additional inference costs must be visible.
 
-- Respect source and actor IDs rather than display names.
-- Respect player control, known evidence, private channels and rules outcomes; no invisible LLM state writes.
-- Human-editable files remain canonical; locks and failure recovery become explicit before stateful gameplay.
-- Preserve source- and campaign-specific historical snapshots sufficiently for forks, retcons and reproducible prompts.
-- **Still open:** exact on-disk format, source DAG limits, event-record granularity, belief persistence, version pin semantics, merge UX, default inheritance, multi-device conflict resolution and ruleset execution interface.
-- Prefer one playable vertical slice over a universal content graph or all-encompassing event framework.
+## Constraints and still-open choices
+
+- No source ID substitution, implicit knowledge leak, forced PC narrative, or silent state write.
+- No model-priced graph traversals by default and no hidden NPC inference jobs.
+- Quiescent V1 source and distinct V2 destination; import requires explicit preview and approval, with loss-aware source/image records.
+- Keep storage revisions and sync conflict ancestry compatible with editable file-authoritative records.
+- Open design questions: exact file schema, relation granularity, revision retention, materialized versus derived beliefs, remote/relay sync, selective history merge UX, and mechanics module interface.
+- Build one playable vertical slice before optimizing the full living-world/VR/simulation moonshots.

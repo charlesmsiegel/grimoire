@@ -33,6 +33,14 @@ No model keys, network service, user library or LLM are required for the tests. 
 4. Port proven, compatible V1 code deliberately from `main` or a recorded V1 commit. Do not merge the V1 application tree or introduce parallel canonical stores to avoid a migration decision.
 5. Preserve human-editable Markdown/JSON authority, strict writes, no secret data in the repository, and loss-aware card interoperability when those features return.
 
-The broader [roadmapping notebook](https://github.com/charlesmsiegel/grimoire/tree/roadmapping/docs/roadmapping) remains planning-only. Its original wave schedule assumed an evolved V1 baseline; V2 integration must validate new dependencies rather than blindly treating every old wave as ready.
+## Prioritized V2 delivery roadmap
+
+Start with the [**ordered V2 sprint roadmap**](docs/roadmap/README.md): 106 proposals are arranged into 11 dependency-safe parallel waves with a critical migration/play path. The original [roadmapping notebook](https://github.com/charlesmsiegel/grimoire/tree/roadmapping/docs/roadmapping) remains an archived V1-era planning reference; the V2 wave order supersedes it.
+
+- **V2 desktop library default:** `~/.grimoire-v2/` (future environment override `GRIMOIRE_V2_HOME`), never V1's `~/.grimoire/` or `GRIMOIRE_HOME`. The current headless prototype has **not yet implemented the storage resolver**; the path contract is in Wave 1.
+- **Migration from `0.2.1`:** begin with [the migration skill](.agents/skills/migrate-v1-to-v2/SKILL.md), which currently specifies the preview/apply/verification workflow, including image objects, galleries, expressions and inheritance. This is **not yet an executable converter**.
+- **Playable testing:** native storage and graph first; a real imported desktop text scene is the Wave 5 gate, with phone play and device synchronization in Wave 6.
+- **Sync without Syncthing:** authenticated app-managed transfer and conflict-preserving revisions are early work. An off-LAN sync needs reachable infrastructure (remote endpoint or optional relay).
+- **Token economics:** separate actor-specific model generation for every speaking NPC is the required default. Additional paid inference is optional, feature-flagged and metered.
 
 V1 source snapshot for this cut: [`e4c4ec4`](https://github.com/charlesmsiegel/grimoire/commit/e4c4ec4abacd0beb87fc9f1cdd06e6787d5a88ce).
