@@ -6,11 +6,13 @@
 - Support independent difficulty, drama-versus-simulation, pacing, tone, lethality, pressure, scarcity and spotlight controls.
 - Route each setting to at least one real consumer; never retroactively change established rules outcomes.
 - Offer optional transparent adaptive difficulty based on future obstacles and resources, not rewritten dice.
+- **Player taste learning:** with explicit opt-in, learn from accepted/rejected scene suggestions and direct feedback about pacing, style and dramatic focus; never silently infer sensitive traits or secretly rewrite rules, relationships or boundaries.
 
 ## Milestones
 1. Implement one consequential setting with side-by-side scenario tests.
 2. Add the other controls only with concrete consumers and visible explanations.
 3. Introduce opt-in adaptation with inspectable policy changes and player overrides.
+4. Explore preference learning that the player can inspect, correct, export, disable and reset independently of the campaign's established facts.
 
 ## Moonshot
 A campaign intelligently shifts tone and intensity as player interests evolve without pretending a tragedy or victory never happened.
@@ -25,3 +27,4 @@ Can grow dial-by-dial using existing campaign settings and obstacle/decision pol
 - Which controls are independently identifiable?
 - How do contradictory settings resolve?
 - What needs player consent for adaptation?
+- Which user feedback is reliable evidence of taste rather than a one-scene preference, and how is it kept private?

@@ -2,7 +2,7 @@
 
 Use a familiar capability label to find its **current thematic owner**. The original 102 future-oriented labels are all preserved below and remapped from 26 broad proposals to the new smaller sprints. A label points to **one primary proposal**, not a stack of prerequisites. Adjacent features coordinate through narrow interfaces.
 
-These are proposals, not 102 approved implementation tickets. The 74 current files are indexed by outcome in [README](README.md). Start with the [voice design brief](VOICE.md) for the largest open interaction question; [old/](sprints/old/README.md) holds the 26 archived broad proposals.
+These are proposals, not 102 approved implementation tickets. The 90 current files are scheduled by hard dependency in [README](README.md) and indexed by theme in [CATALOG](CATALOG.md). Start with the [voice design brief](VOICE.md) for the largest open interaction question; [old/](sprints/old/README.md) holds the 26 archived broad proposals.
 
 ## Rules & Adjudication
 
@@ -195,4 +195,27 @@ These are proposals, not 102 approved implementation tickets. The 74 current fil
 | Quantitative roleplay-quality evaluation | [story quality benchmarks](sprints/story-quality-benchmarks.md) |
 | Bounded voice and non-voice tool permissions | [safe tool execution](sprints/safe-tool-execution.md) |
 
-**Coverage:** All 102 previously listed future-facing labels map to one live proposal. The 19 additional entries highlight newly independent work or first-class voice/moonshot capabilities. Completed foundations, including the initial VN/expressions system and bulk module splitting, are not reintroduced as unfinished work. All substantive undecided design choices live in the relevant sprint's **Open questions** section.
+## New independent capabilities from the RP-quality gap analysis
+
+| Capability | Primary sprint |
+|---|---|
+| Player character sovereignty | [Player character sovereignty](sprints/player-sovereignty.md) |
+| Mechanics-free fair adjudication | [Mechanics-free fair adjudication](sprints/fiction-first-adjudication.md) |
+| Local physical scene continuity | [Local physical scene continuity](sprints/scene-physical-continuity.md) |
+| Fictional communication channels | [Fictional communication channels](sprints/diegetic-communication.md) |
+| Narration contradiction referee | [Narration contradiction referee](sprints/narration-continuity-referee.md) |
+| Campaign archaeology and import preview | [Campaign archaeology and import preview](sprints/campaign-archaeology.md) |
+| NPC second-order beliefs | [NPC second-order beliefs](sprints/npc-theory-of-mind.md) |
+| Ensemble dialogue dynamics | [Ensemble dialogue dynamics](sprints/ensemble-conversation.md) |
+| Fair mysteries and evidence | [Fair mysteries and evidence](sprints/fair-mysteries-and-deduction.md) |
+| Multimodal player input | [Multimodal player input](sprints/multimodal-player-input.md) |
+| Instant one-premise campaigns | [Instant one-premise campaigns](sprints/instant-campaign-creation.md) |
+| Offline multi-device sync | [Offline multi-device sync](sprints/offline-multi-device-sync.md) |
+| Combat encounter orchestration | [Combat encounter orchestration](sprints/combat-encounter-orchestration.md) |
+| Session-zero narrative boundaries | [Session-zero narrative boundaries](sprints/session-zero-boundaries.md) |
+| Freeform supernatural abilities | [Freeform supernatural abilities](sprints/fictional-abilities.md) |
+| Actor-specific inference research | [Actor-specific inference research](sprints/actor-specific-inference.md) |
+
+The five moonshot extensions—player-taste learning, ruleset compilation, generational storytelling, counterfactual rehearsal and playable fictional artifacts—are integrated into the existing [Campaign Tuning](sprints/campaign-tuning.md), [Mechanics Module Authoring](sprints/mechanics-module-authoring.md), [Character Growth](sprints/character-growth.md), [Scene Forks](sprints/scenes-forks-and-retcons.md) and [Unique Equipment](sprints/unique-equipment.md) proposals, respectively, rather than duplicate new sprint files.
+
+**Coverage:** All 102 previously listed future-facing labels map to one live proposal. The original 19 additional entries plus 16 new RP-quality entries (35 in total) highlight newly independent work and first-class voice/moonshot capabilities. Completed foundations, including the initial VN/expressions system and bulk module splitting, are not reintroduced as unfinished work. All substantive undecided design choices live in the relevant sprint's **Open questions** section.

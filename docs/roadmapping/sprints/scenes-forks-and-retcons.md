@@ -6,11 +6,13 @@
 - Track scene identity, order, revision, actor versions, derived summaries and downstream evidence.
 - Preview consequences of edit, cut, replacement, replay or fork while preserving original branches.
 - Define resolution for actions already committed, invalidated claims and imported/derived assets.
+- Add **read-only counterfactual rehearsal**: explore plausible alternative causal developments in a quarantined speculative branch, never updating active canon until explicitly promoted.
 
 ## Milestones
 1. Characterize current fork/replay behavior and stale derived state.
 2. Preview downstream effects of rewriting an earlier accepted event.
 3. Support deliberate reconcile, branch or rollback instead of silent continuity drift.
+4. Preview several bounded counterfactual continuations with clear uncertainty, cost and dependency impact, then allow selection of a new fork without touching the original.
 
 ## Moonshot
 An editable causal timeline lets players explore alternate histories with coherent derived states and story consequences.
@@ -25,3 +27,4 @@ Operates on current scene/ledger records; event links can be added incrementally
 - When does a retcon invalidate state rather than mark a contradiction?
 - What can be recomputed from transcript?
 - How much branching history is retained?
+- How are speculative model outputs tagged so they can never leak into canonical memory or retrieval?

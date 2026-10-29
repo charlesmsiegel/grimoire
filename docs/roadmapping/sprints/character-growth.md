@@ -6,11 +6,13 @@
 - Record persistent personal changes independently from reusable source archetypes.
 - Use ruleset-specific advancement contracts if available; otherwise retain descriptive development.
 - Handle respec, evolution, actor versions and source rebasing without invalid sheet assignments.
+- Support **generational storytelling**: time-dependent life stages, mortality, descendants, mentorship, succession, inheritance and legacy, without conflating family relationships with reusable archetype identity.
 
 ## Milestones
 1. Advance a mechanics-free character's learned skill and personal history.
 2. Support one system's XP, costs and training procedure correctly.
 3. Prove long-lived evolution/advancement through fork and source update.
+4. Track a generational handoff across a time skip: changed cast, inherited possessions, remembered history and a successor who is a distinct character.
 
 ## Moonshot
 A character's accumulated experiences shape future decisions and writing style without hardcoding personality as fixed slider values.
@@ -25,3 +27,4 @@ Can start as story-state updates; exact mechanical progression is provided by a 
 - Which progression belongs in a sheet versus campaign state?
 - What changes can a model merely propose?
 - How are evolution and incompatible sheets handled?
+- How are lineages, family ties and cultural inheritance represented without deterministic personality inheritance?

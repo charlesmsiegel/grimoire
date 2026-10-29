@@ -45,6 +45,12 @@ Audio is **not the source of truth for game events**. Accepted scene text, durab
 
 Each can be prototyped without waiting for the rest: STT need not perform TTS; character TTS can read saved text without listening; a command router can consume text; turn-taking can run on synthetic audio events. Live voice integrates them when the interaction contract has evidence behind it.
 
+## Distinguish spoken control from *fictional* communication
+
+Even an accurately transcribed microphone utterance can mean a private fictional message, a narrated action, ordinary dialogue, or a UI command. The voice intent router decides **input destination**; [Diegetic Communication](sprints/diegetic-communication.md) decides which fictional characters receive a committed message. [Player Sovereignty](sprints/player-sovereignty.md) prevents the director from volunteering additional PC speech, while [Session Zero](sprints/session-zero-boundaries.md) controls agreed content boundaries. Neither real microphone audio nor text-to-speech performance independently changes in-world knowledge.
+
+Related optional interfaces: [Multimodal Input](sprints/multimodal-player-input.md) can stage a pointed-at or sketched reference; [Ensemble Conversation](sprints/ensemble-conversation.md) coordinates directed replies and interruptions. These are **separate sprints**, not hidden dependencies for the typed voice-routing experiment.
+
 ## Critical design questions and evidence
 
 - **What should be the default microphone state?** Explicit push-to-talk is a plausible baseline, not an entitlement to background listening.
