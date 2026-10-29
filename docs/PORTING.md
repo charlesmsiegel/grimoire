@@ -1,35 +1,44 @@
-# Selective migration and porting from V1
+# V0.2.1 → Grimoire V2 selective porting and migration
 
-**Do not merge V1 `main` wholesale into V2.** The first V2 commit intentionally deletes the old application code from this *branch* only. No source, committed history, license, or user library is destroyed: V1 remains in `main`, and the exact baseline is `e4c4ec4abacd0beb87fc9f1cdd06e6787d5a88ce`.
+**Do not merge V1 `main` wholesale into `v2`.** V1 remains working and its tested code is reference material. V2's implementation branch is `v2`; the approved [V2 ordered roadmap](roadmap/README.md) now supersedes the loose early PR sequence below.
 
-## Candidates to port, not assumptions to inherit
+## Paths and safety
+
+- **Source:** an explicitly selected frozen V1 **`0.2.1`** library or backup. V1 ordinarily defaults to `~/.grimoire/`. Never read that path implicitly, and never write to its source.
+- **Destination:** V2 desktop default `~/.grimoire-v2/` (V2 override `GRIMOIRE_V2_HOME`) or distinct user-selected location. Android's sandbox has its own default. No automatic `GRIMOIRE_HOME` fallback and no source/destination path aliases.
+- **Authority:** portable native Markdown/JSON, stored scene text, events, typed relations, image placement associations and reviewed mappings. Never import cache, credentials, logs or inferred private details as facts.
+- **Cost:** source scanning, image mapping, graph building and ordinary migration verification do not call paid models. Optional content extraction is explicitly consented and billed.
+
+The repository includes an *early migration skill specification*, [`migrate-v1-to-v2`](../.agents/skills/migrate-v1-to-v2/SKILL.md), with [V1 file mapping](../.agents/skills/migrate-v1-to-v2/references/v1-layout.md), [art/expressions](../.agents/skills/migrate-v1-to-v2/references/images.md) and [verification](../.agents/skills/migrate-v1-to-v2/references/verification.md). It is **not yet an implemented importer**.
+
+## Migration milestones in delivery order
+
+| Gate | Deliverable |
+|---|---|
+| Wave 1 | V2 library-path resolver, source-qualified IDs and cost/authority contracts |
+| Wave 2 | Composable entity/instance model, canonical file revisions and a read-only **V1 inventory plan** |
+| Wave 3 | Typed graph/event evidence, shared images/placements and device conflict-safe revisions |
+| Wave 4 | Reviewed **import/apply** of a V1 world plus character/PC versions, images, expressions and an accepted scene; separate per-NPC model generation; app-managed transport |
+| Wave 5 | **Playable desktop text loop** using the imported V1 scenario, with stable persistence and actual token accounting |
+| Wave 6 | **Playable phone client with actual sync/handoff** of scene, picture and actor knowledge to desktop |
+
+## Port selectively, only behind V2 contracts
 
 | V1 subsystem | V2 treatment |
 |---|---|
-| V3/V2/PNG/CHARX card parser and writer | Port later as a loss-aware import/export adapter, not the character store |
-| LLM providers, routing, retries and cost accounting | Port after independent provider interfaces; no card-specific prompt coupling |
-| Async scene streaming, run fencing and cancellation | Reuse proven lifecycle and failure tests when V2 owns turns/events |
-| Atomic file writes, locking, conflict and recovery tests | Port guarded file protocols behind native domain writers |
-| Dice parser and existing mechanic packs | Port independent dice utility; preserve different ruleset semantics |
-| Images, content-addressed blobs, expression outfits and art | Port independently of the V1 actor directory/asset assumptions |
-| React design system, web UI, VN view and Android shell | Reuse selectively only after stable V2 API contracts; no dead V1 routes |
-| History/retrieval/epistemic filters | Mine for invariants and tests; feed the native subjective actor view |
-| Stored V1 worlds and campaigns | Add a previewable, non-destructive converter; never rewrite on first boot |
+| Character V2/V3/PNG/CHARX and PC Markdown | Import authored definitions/portrayals; share native entity model and keep original source for a loss-aware export |
+| World entities and relation/knowledge ledgers | Resolve to typed entity facets, relations, explicit campaign instances, events and attributed evidence |
+| Content-addressed image store, placement refs and expressions | Reuse validated blob decoding/identity logic; map picture IDs and **per-version/per-scope placement links** separately; preserve crop, captions, outfit fallback and hidden inheritance |
+| LLM providers, routing, retries and cost accounting | Port thin provider adapters; **separate model generation for each speaking NPC** remains required, optional thinking calls are feature-flagged |
+| Async scene streaming and lifecycle | Preserve cancellation and stale-run fencing when the new text runner exists |
+| Atomic file writes, locks and crash tests | Reuse proven semantics with V2 revisions and device conflict protocol |
+| Mechanics, voice, React/VN UI and Android | Port useful components independently after first working text scenario; **minimal phone + sync** is promoted early |
+| V1 world/campaign data | Preview/approve import into isolated V2; no silent migration on boot and no V1 source writes |
 
-This initial branch cut **does not claim these subsystems are unimportant**. They are valuable reference code and regression specifications. Their old dependency graph, however, is not the new domain contract.
+## Operational acceptance
 
-## Suggested V2 PR sequence
+The first imported scenario must retain stable record IDs, selected portrayal, actual image bytes and crops, expression/outfit visibility, scene order and authorship, and unknown source fields with provenance. Import rerun is idempotent, and a test forced halfway through an asset transfer must be recoverable without modifying V1 or an existing V2 record.
 
-1. **Records and source resolution:** human-editable source definitions, world-owned characters, optional catalogs and strict ID resolution.
-2. **Campaign identities:** separate actor instances, controller assignments, source baselines and local overrides.
-3. **Character perspectives:** event evidence, observation channels, beliefs and a bounded view for one actor.
-4. **A complete freeform turn:** user intent, fair adjudication, one accepted event and stable narration of the result.
-5. **A minimal playable interface:** one scene, text input, actor presentation, deterministic persistence and visible correction.
-6. **Interoperability and rich infrastructure:** V1 importer/compatibility, card I/O, image assets, model routing, mechanic packs, voices, VN and Android, each through narrow adapters.
-7. **Long-running worlds:** selective root rebases, history-preserving forks, durable actions, memory, campaign simulation and multiplayer.
+Device synchronization is a built-in product goal, not a particular sync client requirement. Peer-to-peer on LAN works when both apps can reach each other; roaming/off-LAN requires an optional endpoint or relay. Transferred revisions, image assets and conflicts are verified; nothing depends on silent timestamp-based overwrite.
 
-These are *guiding capability stages*, not a mandatory serialized issue queue. Submit mutually independent PRs in parallel when contracts are stable.
-
-## Migration safety
-
-Do not import real user data into this public repository, examples or tests. Synthetic worlds and actors only. Build a read-only migration report first, with explicit compatibility/failure fixtures, then a distinct user-approved apply operation with rollback. Export/import must avoid dropping unknown source fields, unrelated art, historical responses and privately held character knowledge.
+The initial V2 branch remains headless. None of the production migration, mobile play or sync features are implemented merely because this plan or its skill exists.

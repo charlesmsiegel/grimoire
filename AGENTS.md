@@ -2,13 +2,18 @@
 
 **You are on the clean-core `v2` integration branch. Target `v2` in new pull requests, not `main`.** V1 is a separate working product on `main`. The first V2 commit intentionally removes the V1 application from this branch. Do not reimport V1 en masse.
 
-Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/PORTING.md](docs/PORTING.md) before building or porting a subsystem.
+Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [the ordered V2 roadmap](docs/roadmap/README.md), and [docs/PORTING.md](docs/PORTING.md) before building or porting a subsystem.
 
 - Make one independently useful vertical slice at a time, with executable behavior/failure tests.
 - Source-qualified definitions, campaign actors, control assignments, objective events and private observation/belief evidence are separate concepts. **PC and NPC are authority roles**, not distinct fictional species or permanent record kinds.
 - The `backend/src/grimoire/core` prototype is pure and must not import LLM providers, filesystems or UI modules. Add persistent adapters outside it after a storage contract is reviewed.
 - Do not freeze an invented schema because a dataclass appears in this first experiment. Historical migration, selective rebase and failure guarantees require explicit specs.
 - User-owned Markdown/JSON is canonical. Embedded DBs, indexes, embeddings and prompt views are rebuildable derivatives.
+- V2 defaults to `~/.grimoire-v2/` (explicit `GRIMOIRE_V2_HOME` override; Android private storage). Never point V2 implicitly at V1's `~/.grimoire/` or reuse `GRIMOIRE_HOME`; source/destination migration paths must be distinct.
+- V2 entities have typed composable capabilities and source-qualified instances. Canonical typed graph relations are separate from derived graph indices, with scope/time/evidence-aware traversal; graph connectivity never automatically grants actor knowledge.
+- Every speaking NPC gets its own generation call by default, preserving V0.2.1's character voice. Optional extra model calls must be feature-flagged, costed and user-budgeted; ordinary graph traversal and observation lookup must not invoke an LLM.
+- App-managed desktop/phone synchronization is an early release gate. Build revisions/conflict safety first and authenticated transport before mobile integration; Syncthing is not required, and conflicting offline edits must not be silently overwritten.
+- For V0.2.1 asset translation, read [migration skill](.agents/skills/migrate-v1-to-v2/SKILL.md) and its image/verification references. The skill currently specifies a process and is not an executable converter.
 - Narration never silently commits world/campaign state. A model may propose intentions or outcomes only under the applicable authority rules.
 - Preserve character-specific epistemic boundaries and player control. Director-only events are not a character's memories.
 - No user worlds, campaigns, transcripts, provider secrets, names or aggregate facts about private libraries may enter the public repository or CI artifacts. Use synthetic fixtures.
