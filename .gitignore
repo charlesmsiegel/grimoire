@@ -20,3 +20,6 @@ coverage.xml
 # User libraries and provider secrets must never be committed
 .grimoire/
 grimoire-home/
+
+# V2 private/temporary specification, planning and review artifacts
+.superpowers/
