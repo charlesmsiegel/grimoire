@@ -1,3 +1,1 @@
-# Claude instructions
-
-Read and follow [AGENTS.md](AGENTS.md) for all repository instructions.
+See [AGENTS.md](AGENTS.md) for V2 architecture, privacy and PR target rules.

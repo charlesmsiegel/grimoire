@@ -1,64 +1,22 @@
-# Local-only reference copies
-OLD/
-
-# Git worktrees
-.worktrees/
-# ...and the ones agent tooling creates inside the repo
-.claude/worktrees/
-
-# Local Claude permissions (personal machine settings)
-/.claude/settings.local.json
-
-# Brainstorming visual companion
-.superpowers/
-
-# Python
-backend/.venv/
+# Python and local build
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
-# Tool caches. ruff is run with --no-cache by the gate, but a bare
-# `ruff check` from a shell still writes one.
-.ruff_cache/
 .mypy_cache/
-
-# Eval run files (`evals/run.py --out`): they name the user's providers and
-# models, so the suggested place for them is never committed.
-evals/out/
-
-# Node / Vite
-frontend/node_modules/
-frontend/dist/
-frontend/*.tsbuildinfo
-
-# Coverage reports written by the two `check-*` targets that measure them
-# (lcov.info + the HTML render on one side, Cobertura XML and coverage.py's
-# data file on the other). Regenerated on every run, so they are build outputs
-# rather than checked-in numbers; CI uploads each as a job artifact instead.
-# The floor those runs are held to is `COV_FLOOR` in the Makefile, which *is*
-# checked in.
-frontend/coverage/
-backend/coverage.xml
-.coverage
-# Parallel, per-context and sharded runs write one data file per process
-# (`.coverage.<host>.<pid>.<random>`); a crashed run leaves them behind.
-.coverage.*
-
-# Build outputs staged by the Makefile (APKs)
-/build/
-
-# Run-time pidfiles
-.run/
-**/results.json
-.playwright-mcp/
-
-# Local Codex plugin model override (personal preference, not a repo convention)
-.codex/
-
-# Personal VS Code multi-root workspace (references an absolute local path)
-*.code-workspace
-
-# Scratch working files (manifests, intermediate data) -- never commit real
-# store data or references to it here; ~/.grimoire (store.home()) is the
-# only place that belongs, per the privacy rule in CLAUDE.md.
-/scratchpad/
+.ruff_cache/
+.venv/
+backend/.venv/
+*.egg-info/
+dist/
+build/
+coverage.xml
+.coverage*
+# Local editor and machine state
+.idea/
+.vscode/
+.DS_Store
+.env
+.env.*
+# User libraries and provider secrets must never be committed
+.grimoire/
+grimoire-home/

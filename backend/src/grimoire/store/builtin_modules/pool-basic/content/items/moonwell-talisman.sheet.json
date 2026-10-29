@@ -1,7 +1,0 @@
-{
-  "sheet_type": "talisman",
-  "fields": {
-    "power": 3,
-    "charges": {"current": 10, "max": 10}
-  }
-}

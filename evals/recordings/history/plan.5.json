@@ -1,4 +1,0 @@
-{
-  "plan": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"Where was the ring hidden?\"], \"terms\": [\"slipped\", \"floorboard\"], \"scopes\": [], \"max_scenes\": 3}",
-  "check": "maybe, it is hard to say"
-}

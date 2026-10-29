@@ -1,4 +1,0 @@
-{
-  "plan": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"When did Mara give up the sea?\"], \"terms\": [\"swore\", \"sea\", \"wreck\"], \"scopes\": [], \"max_scenes\": 3}",
-  "check": "{\"0\": {\"answers\": {\"sufficient\": true}}}"
-}

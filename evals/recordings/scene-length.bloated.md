@@ -1,3 +1,0 @@
-"Mine until midnight," Seraphine says, turning the ledger toward Winifred. "After that, whoever stands closest can claim them. The fog makes a poor witness, so take your answer and leave the pier while you still can. I have watched three crews unload those crates and none of them wanted their names in the book. The first hid the marks beneath fresh tar, the second paid a guard to look away, and the third arrived without lights and would not answer when I called."
-
-"You keep asking about the crates as though a name will make them safer. It will not. Names travel further than boats, and there are people who will come looking for anyone who heard this one. If you go now, I can still say you never reached the pier. If you stay, I will have to write down that we spoke."

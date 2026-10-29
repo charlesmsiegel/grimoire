@@ -1,4 +1,0 @@
-{
-  "plan": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"What did Winifred keep hidden from Mara, and for how long?\"], \"terms\": [\"hid\", \"brasscompass\", \"winters\"], \"scopes\": [], \"max_scenes\": 3}",
-  "check": "{\"0\": {\"answers\": {\"sufficient\": true}}}"
-}

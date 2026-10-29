@@ -1,6 +1,0 @@
-{
-  "plan": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"Who set a fire at the mill?\"], \"terms\": [\"fire\", \"mill\"], \"scopes\": [], \"max_scenes\": 3}",
-  "check": "{\"0\": {\"answers\": {\"sufficient\": false}}}",
-  "repair": "{\"needs_history\": true, \"subjects\": [], \"questions\": [\"Who lit the second fire with lamp oil?\"], \"terms\": [\"lampoil\", \"second fire\", \"lit\"], \"scopes\": [], \"max_scenes\": 3}",
-  "final": "{\"0\": {\"answers\": {\"sufficient\": true}}}"
-}

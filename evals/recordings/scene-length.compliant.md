@@ -1,1 +1,0 @@
-"Mine until midnight," Seraphine says, turning the ledger toward Winifred. "After that, whoever stands closest can claim them. The fog makes a poor witness, so take your answer and leave the pier while you still can."

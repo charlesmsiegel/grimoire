@@ -1,6 +1,0 @@
-{#- #131: annotate one rendered contribution only when the inspector asks.
-    With no callback this is an identity, including in standalone template
-    previews. The shared render removes boundaries before packing. -#}
-{%- macro source_text(label, text, ref="") -%}
-{{ capture_source(label, text, ref) if capture_source is defined else text }}
-{%- endmacro -%}

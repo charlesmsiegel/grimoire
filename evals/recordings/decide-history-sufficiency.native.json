@@ -1,3 +1,0 @@
-[
-  {"model": "gpt-6-luna", "answers": [{"type": "predicate", "name": "sufficient", "probability": 0.12, "confidence": 0.9}], "usage": {"input_tokens": 180, "output_tokens": 0, "total_tokens": 180}}
-]
