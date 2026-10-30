@@ -167,8 +167,10 @@ this kind, and `submit_contribution` then refuses anyone who does not control th
 
 No lane yields an `interiority` or `commitment` contribution: "I promise to return at dawn" routes
 to `pc_action`, so a narration claim that the PC committed to something is refused rather than
-authorized. Actor ids here are campaign-local segments (`CampaignActor.actor_id`), not reference
-texts. Pinned by `backend/tests/test_wave1_integration.py`; owners: the first text runner (turn
+authorized. Actor ids here are campaign-local segments (`CampaignActor.actor_id`, an
+`InstanceRef`'s `instance_id`), not reference texts; a caller holding an `InstanceRef` converts it with
+`CampaignRoster.segment_for` ([entity facets](ENTITIES.md#control-the-campaign-roster)). Pinned by
+`backend/tests/test_wave1_integration.py`; owners: the first text runner (turn
 submission) and [Local multi-PC](roadmap/sprints/local-multi-pc.md) (who is speaking).
 
 ## Known limitations
