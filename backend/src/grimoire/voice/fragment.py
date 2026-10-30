@@ -11,12 +11,12 @@ a renderer (see ``render.SpeakerRequest``).
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import InitVar, dataclass
 from typing import Literal
 
 from grimoire.core.identity import InstanceRef, SourceRef
-from grimoire.evals.text import contains_marker
+from grimoire.evals.text import contains_marker, has_words
 
 from .binding import ResolvedVoice
 from .errors import InvalidVoice
@@ -46,7 +46,7 @@ class SecretFact:
         if isinstance(self.markers, str):
             raise InvalidVoice("bad_markers", f"secret {self.fact_id} markers must be a sequence")
         markers = tuple(self.markers)
-        if not markers or not all(isinstance(m, str) and m.strip() for m in markers):
+        if not markers or not all(isinstance(m, str) and has_words(m) for m in markers):
             raise InvalidVoice("bad_markers", f"secret {self.fact_id} needs nonblank markers")
         if len(set(markers)) != len(markers):
             raise InvalidVoice("bad_markers", f"secret {self.fact_id} repeats a marker")
@@ -94,7 +94,7 @@ def _known_ids(known: Iterable[str]) -> frozenset[str]:
 def _screen(item: VoiceAnchor | VoiceExample, known: frozenset[str],
             hidden: tuple[SecretFact, ...]) -> Omission | None:
     kind = "anchor" if isinstance(item, VoiceAnchor) else "example"
-    for fact_id in getattr(item, "reveals", ()):
+    for fact_id in item.reveals if isinstance(item, VoiceExample) else ():
         if fact_id not in known:
             return Omission(kind, item.item_id, "unknown_fact", fact_id)
     for secret in hidden:
@@ -109,11 +109,14 @@ def speaker_fragment(voice: ResolvedVoice, *, secrets: Iterable[SecretFact], kno
 
     Anchors then examples, in authored order, each included whole while the text
     stays within ``max_chars``; the examples header counts with the first example.
+    The speaker's own name is not screened: it is authored or director-assigned.
     """
     if not isinstance(voice, ResolvedVoice):
         raise InvalidVoice("bad_voice", "speaker_fragment needs a ResolvedVoice")
     if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < MIN_MAX_CHARS:
         raise InvalidVoice("bad_budget", f"max_chars must be an integer of at least {MIN_MAX_CHARS}")
+    if isinstance(secrets, (set, frozenset, Mapping, str)):  # ordered, so audit subjects are stable
+        raise InvalidVoice("bad_secrets", "secrets must be an ordered sequence of SecretFact values")
     secrets = tuple(secrets)
     if not all(isinstance(secret, SecretFact) for secret in secrets):
         raise InvalidVoice("bad_secrets", "secrets must be SecretFact values")

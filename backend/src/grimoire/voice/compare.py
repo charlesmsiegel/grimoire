@@ -43,7 +43,11 @@ def flattened(voices: Iterable[ResolvedVoice],
     if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
             or not 0 <= threshold <= 1):
         raise InvalidVoice("bad_threshold", "threshold must be a number in [0, 1]")
-    profiles = {str(voice.actor): _profile(voice) for voice in voices}
+    profiles = {}
+    for voice in voices:
+        if str(voice.actor) in profiles:
+            raise InvalidVoice("duplicate_voice", f"{voice.actor} is given twice")
+        profiles[str(voice.actor)] = _profile(voice)
     return tuple(sorted(
         (left, right) for left, right in combinations(sorted(profiles), 2)
         if cosine(profiles[left], profiles[right]) >= threshold

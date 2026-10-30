@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from grimoire.core.identity import LegacyId, SourceRef, validate_segment
+from grimoire.evals.text import has_words
 
 from .errors import InvalidVoice
 
@@ -22,6 +23,7 @@ MAX_ANCHOR_CHARS = 400
 MAX_EXAMPLE_CHARS = 600
 MAX_ITEMS = 32
 CARD_FORMATS = ("chara_card_v3",)
+MAX_EXTENSION_DEPTH = 64
 
 
 def check_id(value: object, label: str) -> None:
@@ -33,8 +35,8 @@ def check_id(value: object, label: str) -> None:
 
 
 def _text(value: object, label: str, cap: int) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise InvalidVoice("blank_text", f"{label} must be nonblank text")
+    if not isinstance(value, str) or not has_words(value):
+        raise InvalidVoice("blank_text", f"{label} must contain words")
     if len(value) > cap:
         raise InvalidVoice("text_too_long", f"{label} is longer than {cap} characters")
 
@@ -73,8 +75,8 @@ class VoiceExample:
     def __post_init__(self) -> None:
         check_id(self.example_id, "example_id")
         _text(self.text, f"example {self.example_id}", MAX_EXAMPLE_CHARS)
-        if isinstance(self.reveals, str):
-            raise InvalidVoice("bad_reveals", f"example {self.example_id} reveals must be a sequence")
+        if not isinstance(self.reveals, (list, tuple)):  # ordered, so audit subjects are stable
+            raise InvalidVoice("bad_reveals", f"example {self.example_id} reveals must be a list or tuple")
         reveals = tuple(self.reveals)
         for fact_id in reveals:
             check_id(fact_id, f"example {self.example_id} reveals")
@@ -110,17 +112,19 @@ def validate_items(anchors: object, examples: object, label: str) -> tuple[tuple
 
 # --- imported card fields ----------------------------------------------------
 
-def _freeze(value: object, path: str) -> object:
+def _freeze(value: object, path: str, depth: int = 0) -> object:
     """Lossless, immutable JSON-shaped copy; problems are located by index path, never key text."""
+    if depth > MAX_EXTENSION_DEPTH:
+        raise InvalidVoice("bad_extension", f"{path} nests deeper than {MAX_EXTENSION_DEPTH} levels")
     if isinstance(value, Mapping):
         frozen = {}
         for position, (key, item) in enumerate(value.items()):
             if not isinstance(key, str):
                 raise InvalidVoice("bad_extension", f"{path}[{position}] has a non-text key")
-            frozen[key] = _freeze(item, f"{path}[{position}]")
+            frozen[key] = _freeze(item, f"{path}[{position}]", depth + 1)
         return MappingProxyType(frozen)
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item, f"{path}[{position}]") for position, item in enumerate(value))
+        return tuple(_freeze(item, f"{path}[{position}]", depth + 1) for position, item in enumerate(value))
     if isinstance(value, float) and not math.isfinite(value):
         raise InvalidVoice("bad_extension", f"{path} is not a finite number")
     if value is None or isinstance(value, (str, bool, int, float)):
@@ -141,8 +145,11 @@ class ImportedVoiceSource:
     """Card voice fields kept exactly for a loss-aware import and export; never rendered.
 
     Sprint 026 decides how ``example_messages`` and ``anchor_text`` become native
-    examples and anchors. Tuples in ``extensions`` thaw back to lists.
+    examples and anchors. Tuples in ``extensions`` thaw back to lists. Not
+    hashable (nor is a profile carrying one): extensions are read-only mappings.
     """
+
+    __hash__ = None  # type: ignore[assignment]
 
     format: str
     card_version: LegacyId | None = None

@@ -65,6 +65,29 @@ class ResolvedVoice:
     provenance: Mapping[str, str]  # item id -> "source" | "campaign"
     imported: ImportedVoiceSource | None = None
 
+    __hash__ = None  # type: ignore[assignment]  # provenance is a read-only mapping
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.actor, InstanceRef):
+            raise InvalidVoice("bad_actor", "a resolved voice belongs to an InstanceRef")
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise InvalidVoice("bad_name", f"{self.actor} needs a nonblank name")
+        for revision in (self.actor_revision, self.portrayal):
+            if revision is not None and not (isinstance(revision, SourceRef) and revision.pinned):
+                raise InvalidVoice("unpinned_portrayal", f"{self.actor} revisions must be pinned refs")
+        anchors, examples = validate_items(self.anchors, self.examples, "resolved voice")
+        if not isinstance(self.provenance, Mapping):
+            raise InvalidVoice("bad_provenance", "provenance must map item ids to their origin")
+        provenance = dict(self.provenance)
+        if (set(provenance) != {item.item_id for item in (*anchors, *examples)}
+                or not set(provenance.values()) <= {"source", "campaign"}):
+            raise InvalidVoice("bad_provenance", f"{self.actor} provenance does not match its items")
+        if self.imported is not None and not isinstance(self.imported, ImportedVoiceSource):
+            raise InvalidVoice("bad_imported", "imported must be an ImportedVoiceSource")
+        object.__setattr__(self, "anchors", anchors)
+        object.__setattr__(self, "examples", examples)
+        object.__setattr__(self, "provenance", MappingProxyType(provenance))
+
 
 def _missing(error: MissingDefinition) -> MissingVoice:
     return MissingVoice("missing_definition", f"no definition for {error.ref}", detail=error.reason)
@@ -97,6 +120,9 @@ def _merge(source_anchors: tuple[VoiceAnchor, ...], source_examples: tuple[Voice
         return source_anchors, source_examples, provenance
     source_ids = {item.item_id for item in (*source_anchors, *source_examples)}
     local_ids = {item.item_id for item in (*binding.anchors, *binding.examples)}
+    if ({a.item_id for a in binding.anchors} & {e.item_id for e in source_examples}
+            or {e.item_id for e in binding.examples} & {a.item_id for a in source_anchors}):
+        raise InvalidVoice("kind_mismatch", "a local item can replace only a source item of its own kind")
     for item_id in binding.suppress:
         if item_id not in source_ids:
             raise InvalidVoice("stale_override", "binding suppresses an item the source does not have")
@@ -177,6 +203,6 @@ def resolve_voice(actor: CampaignActor, catalog: VoiceCatalog, definitions: Defi
         portrayal=profile.portrayal if profile else None,
         anchors=anchors,
         examples=examples,
-        provenance=MappingProxyType(provenance),
+        provenance=provenance,
         imported=profile.imported if profile else None,
     )

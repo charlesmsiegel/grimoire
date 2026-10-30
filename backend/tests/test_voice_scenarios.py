@@ -56,10 +56,10 @@ def test_a1_attribution_does_not_depend_on_the_cue(cast, scene):
 def test_the_metric_is_sensitive_to_which_fragment_reached_which_speaker(cast, scene):
     rotate = dict(zip(fx.NPCS, fx.NPCS[1:] + fx.NPCS[:1]))
     rotated = fx.run(scene, cast["scenario"], run_id="rotated", relabel=rotate)
-    assert distinguishability(cast["scenario"], rotated) <= Fraction(1, 4)
+    assert distinguishability(cast["scenario"], rotated) == 0
     cue_only = fx.run(fx.render_scene(cast["voices"], cast["controls"], fx.cue_only_renderer),
                       cast["scenario"], run_id="cue-only")
-    assert distinguishability(cast["scenario"], cue_only) <= Fraction(5, 12)
+    assert distinguishability(cast["scenario"], cue_only) <= Fraction(1, 4)
 
 
 def test_rendered_lines_and_cues_copy_no_example(cast, scene):

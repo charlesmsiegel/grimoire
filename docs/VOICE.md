@@ -16,7 +16,8 @@ A voice is **authored evidence about how one portrayal sounds in text**. It is n
 
 Validation is constructor-enforced and raises `InvalidVoice`:
 - Ids follow the [identity](IDENTITY.md) segment grammar.
-- Text must not be blank.
+- Text must contain words. Blank, invisible-only or punctuation-only text is refused.
+- `reveals` must be a list or tuple, so audit subjects keep a stable order. Sets and mappings are refused.
 - Anchors are capped at 400 characters and examples at 600.
 - A profile holds at most 32 anchors and 32 examples. Ids are unique across both, and a profile must have at least one item.
 
@@ -26,6 +27,8 @@ These caps are **provisional** first-slice values.
 - A dict becomes a read-only mapping, and a list or tuple becomes a tuple.
 - The allowed leaves are str, int, finite float, bool and None.
 - `thaw()` returns plain data. A tuple thaws to a list.
+- An `ImportedVoiceSource` is not hashable, and neither is a profile that carries one or a `ResolvedVoice` (they hold read-only mappings).
+- Nesting is capped at 64 levels.
 - A bad value is located **by index path only** (`extensions[0][1]`). Card keys can carry private names, so error messages never echo them. No error message echoes an offending id, marker or text.
 
 How V1 `mes_example` and `voice_anchor.md` content becomes native examples and anchors is decided by the importer (026), not here.
@@ -45,13 +48,13 @@ How V1 `mes_example` and `voice_anchor.md` content becomes native examples and a
   `same_individual`, `derived_variant` and `overrides` do not qualify. There is no transitive search and no name lookup. Anything else is `VoiceMismatch("unlinked_portrayal")`. The display name stays the actor's (`local_name`, or its own definition's name).
 - **Exact revision.** The catalog must hold the exact resolved revision; otherwise `MissingVoice("no_profile")`. A voice for `r1` is never used for `r2`. A missing definition is `MissingVoice("missing_definition")` with the index reason in `.detail`.
 - **Local edits.**
-  - A local item with a source item's id replaces it in place. Other local items are appended.
+  - A local item with a source item's id replaces it in place, but only an item of the same kind: an example cannot replace an anchor, or the reverse (`InvalidVoice("kind_mismatch")`). Other local items are appended.
   - `suppress` removes source items.
   - Suppressing an unknown id is `InvalidVoice("stale_override")`. Suppressing an id that is also replaced is `InvalidVoice("suppress_replaced")`. The merged result obeys the caps.
 - **Campaign-original actors** (no `source`) speak only from local items. A portrayal on one is `VoiceMismatch("campaign_original")`.
 - **Other refusals.** A binding for another actor or campaign is `VoiceMismatch("other_actor")`. An actor left with no items is `MissingVoice("no_profile")`.
 
-`ResolvedVoice` records:
+`ResolvedVoice` validates itself on construction: typed items within caps, pinned revisions, and provenance covering exactly its item ids. It records:
 - `actor_revision`: the actor's own definition revision;
 - `portrayal`: the profile revision used;
 - the merged items;
@@ -61,6 +64,8 @@ How V1 `mes_example` and `voice_anchor.md` content becomes native examples and a
 ## One speaker's fragment
 
 `speaker_fragment(voice, *, secrets, known, max_chars=1200) -> SpeakerFragment`. The epistemic inputs `secrets` and `known` have **no defaults**: forgetting them is a `TypeError`, not an unscreened brief.
+
+`secrets` must be an ordered sequence (sets are refused), and each marker must contain words.
 
 1. **Tag allowlist.** An example is included only if **every** id in `reveals` is in `known`. Otherwise the omission reason is `unknown_fact`, which covers facts that appear in neither `secrets` nor `known`.
 2. **Marker denylist.** An anchor or example whose text states a marker of any `SecretFact` not in `known` is omitted as `secret_marker`. Matching uses `grimoire.evals.text.contains_marker`, which is the [story-quality gate](evals/STORY_QUALITY.md)'s normaliser and whole-phrase matcher: curly quotes, zero-width spaces and case all fold, and `duke` does not match `dukedom`.
@@ -75,7 +80,7 @@ Style examples (reference only; never repeat them verbatim):
 > <example>
 ```
 
-`SpeakerFragment.omitted` lists `Omission(kind, item_id, reason, subject)`: ids and fact ids only, for audit. Only `speaker_fragment` can construct a fragment. A seal passed as an `InitVar` makes direct construction and `dataclasses.replace` raise `InvalidVoice("unsealed_fragment")`. This guards against accidental hand-built briefs, not a hostile caller.
+`SpeakerFragment.omitted` lists `Omission(kind, item_id, reason, subject)`: ids and fact ids only, for audit. The speaker's own name is **not screened**: it is authored or director-assigned. Only `speaker_fragment` can construct a fragment. A seal passed as an `InitVar` makes direct construction and `dataclasses.replace` raise `InvalidVoice("unsealed_fragment")`. This guards against accidental hand-built briefs, not a hostile caller.
 
 ## Rendering contract
 
@@ -97,7 +102,7 @@ Style examples (reference only; never repeat them verbatim):
 
 - `example_copies(text, voices)` returns `(actor, example_id)` for every example of every given voice that `text` reproduces: at least `SAMPLE_COPY_CHARS` (24, imported from the gate) contiguous normalised characters. Screened-out examples count too. Given the scene's voices, it agrees with the gate's `voice_sample_copy`.
 - `voice_overlap(a, b)` is the character-trigram cosine of two voices' authored text.
-- `flattened(voices, threshold=0.85)` returns the sorted actor-ref pairs whose overlap is at or above the threshold. It is a provisional authoring warning: it catches near-duplicate voices, not bland ones, and it is not a quality score.
+- `flattened(voices, threshold=0.85)` returns the sorted actor-ref pairs whose overlap is at or above the threshold. Giving the same actor twice is `InvalidVoice`. It is a provisional authoring warning: it catches near-duplicate voices, not bland ones, and it is not a quality score.
 
 **Dependency note.** Production voice screening imports `grimoire.evals.text` and `grimoire.evals.checks.SAMPLE_COPY_CHARS` (only those modules; enforced by the purity allowlist). Changing the gate's normaliser or copy length therefore changes runtime screening, by design: generation and evaluation use one matcher.
 
@@ -109,7 +114,7 @@ The parsed `story-quality/1` run has:
 - no hard findings: no leaks, no copies, and one `npc_generation` call per line;
 - distinguishability exactly 1, and still 1 with the cues removed.
 
-Two controls show the attribution comes from the fragments. Relabelling the lines (rotated speakers) scores 0, and a cue-only renderer scores at most 5/12. Several variants fail:
+Two controls show the attribution comes from the fragments. Relabelling the lines (rotated speakers) scores 0, and a cue-only renderer scores at most 1/4. Several variants fail:
 - a copied example: `voice_sample_copy`;
 - one call voicing all four NPCs: `separate_generation`;
 - flattened voices: `voice_regression` against the distinct cast;

@@ -239,3 +239,24 @@ def test_resolve_requires_real_contract_values():
         resolve_voice(actor(), list(CATALOG), index())
     with pytest.raises(InvalidVoice):
         resolve_voice(actor(), CATALOG, index(), binding="npc-oda")
+
+
+def test_a_local_item_cannot_replace_a_source_item_of_the_other_kind():
+    binding = VoiceBinding("c-ember", "npc-oda", examples=(VoiceExample("a1", "Not an anchor."),))
+    with pytest.raises(InvalidVoice) as raised:
+        resolve_voice(actor(), CATALOG, index(), binding)
+    assert raised.value.reason == "kind_mismatch"
+
+
+def test_a_linked_portrayal_without_a_definition_or_a_profile_is_missing():
+    ghost = ref("ghost-mask")
+    bellamy = actor("npc-bellamy", ref("bellamy"))
+    with pytest.raises(MissingVoice) as undefined:
+        resolve_voice(bellamy, CATALOG, index(link(ref("bellamy"), ghost)),
+                      VoiceBinding("c-ember", "npc-bellamy", portrayal=ghost))
+    assert undefined.value.reason == "missing_definition"
+    unvoiced = VoiceCatalog([p for p in PROFILES if p.portrayal != MASK2])
+    with pytest.raises(MissingVoice) as missing:
+        resolve_voice(bellamy, unvoiced, index(link(ref("bellamy"), ref("bellamy-masked"))),
+                      VoiceBinding("c-ember", "npc-bellamy", portrayal=ref("bellamy-masked")))
+    assert missing.value.reason == "no_profile"

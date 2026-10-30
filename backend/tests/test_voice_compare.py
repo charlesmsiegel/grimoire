@@ -64,3 +64,8 @@ def test_overlap_and_flattening():
 def test_threshold_must_be_a_fraction(threshold):
     with pytest.raises(InvalidVoice):
         flattened([ODA, BEL], threshold)
+
+
+def test_one_actor_cannot_be_compared_twice():
+    with pytest.raises(InvalidVoice):
+        flattened([ODA, ODA])

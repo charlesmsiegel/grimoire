@@ -174,3 +174,36 @@ def test_errors_carry_reasons_and_pickle():
     assert pickle.loads(pickle.dumps(MissingVoice("x", "m", detail="d"))).detail == "d"
     assert issubclass(InvalidVoice, ValueError) and issubclass(VoiceMismatch, ValueError)
     assert issubclass(MissingVoice, LookupError)
+
+
+@pytest.mark.parametrize("text", ["​⁠", "­", "...", " - "])
+def test_text_without_words_is_blank(text):
+    with pytest.raises(InvalidVoice):
+        anchor(text=text)
+    with pytest.raises(InvalidVoice):
+        example(text=text)
+
+
+@pytest.mark.parametrize("reveals", [{"b-f", "a-f"}, frozenset({"a-f"}), {"a-f": 1}, "a-f"])
+def test_reveals_must_be_ordered(reveals):
+    with pytest.raises(InvalidVoice):
+        example(reveals=reveals)
+
+
+def test_values_with_read_only_mappings_are_not_hashable():
+    imported = ImportedVoiceSource("chara_card_v3", extensions={"k": 1})
+    with pytest.raises(TypeError):
+        hash(imported)
+    hash(anchor())
+    hash(profile())
+
+
+def test_extension_nesting_is_capped_with_a_located_error():
+    deep: list = []
+    node = deep
+    for _ in range(100):
+        node.append([])
+        node = node[0]
+    with pytest.raises(InvalidVoice) as raised:
+        ImportedVoiceSource("chara_card_v3", extensions={"k": deep})
+    assert raised.value.reason == "bad_extension" and "extensions[0]" in str(raised.value)

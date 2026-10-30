@@ -224,3 +224,47 @@ def test_omissions_never_carry_item_text():
 def test_only_a_resolved_voice_can_be_fragmented():
     with pytest.raises(InvalidVoice):
         speaker_fragment("Bellamy", secrets=(), known=())
+
+
+@pytest.mark.parametrize("marker", ["­", "​", "...", " "])
+def test_markers_must_say_something(marker):
+    with pytest.raises(InvalidVoice):
+        SecretFact("f", (marker,))
+
+
+@pytest.mark.parametrize("secrets", [{BETRAYAL}, frozenset({BETRAYAL}), {BETRAYAL: 1}])
+def test_secrets_must_be_ordered(secrets):
+    with pytest.raises(InvalidVoice):
+        fragment(resolved((A1,)), secrets=secrets)
+
+
+def test_resolved_voices_are_validated():
+    class Duck:
+        item_id, text = "e1", "quack"
+
+    provenance = MappingProxyType({"e1": "source"})
+    for build in (
+        lambda: ResolvedVoice(ACTOR, "N", None, None, (), (Duck(),), provenance),
+        lambda: ResolvedVoice("npc-bellamy", "N", None, None, (), (E1,), provenance),
+        lambda: ResolvedVoice(ACTOR, " ", None, None, (), (E1,), provenance),
+        lambda: ResolvedVoice(ACTOR, "N", PORTRAYAL.unpinned(), None, (), (E1,), provenance),
+        lambda: ResolvedVoice(ACTOR, "N", None, None, (), (E1,), MappingProxyType({})),
+        lambda: ResolvedVoice(ACTOR, "N", None, None, (), (E1,), MappingProxyType({"e1": "elsewhere"})),
+        lambda: ResolvedVoice(ACTOR, "N", None, None, (), (E1,), provenance, imported="card"),
+    ):
+        with pytest.raises(InvalidVoice):
+            build()
+
+
+def test_resolved_voice_copies_its_provenance():
+    source = {"e1": "source"}
+    voice = ResolvedVoice(ACTOR, "N", None, None, (), [E1], source)
+    source["e1"] = "campaign"
+    assert voice.provenance["e1"] == "source" and voice.examples == (E1,)
+    with pytest.raises(TypeError):
+        hash(voice)
+
+
+def test_the_speakers_own_name_is_not_screened():
+    frag = fragment(resolved((A1,), name="The Duke Sold The Guild"))
+    assert frag.text.startswith("Voice of The Duke Sold The Guild.")
