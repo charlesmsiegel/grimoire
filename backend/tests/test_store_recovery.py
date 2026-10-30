@@ -558,3 +558,18 @@ def test_preservation_never_drops_distinct_bytes(tmp_path):
         pass
     assert conflict.read_bytes() == b"a human's notes in the conflict file"
     assert (conflict.parent / (conflict.name + ".1")).read_bytes() == staged
+
+
+def test_a_look_alike_conflicts_folder_is_refused_not_retried_forever(tmp_path):
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(locker)(RootedFileOps(root, record=False), root)
+    _crash_after_commit_point(root, locker)
+    (root / LIB / ".CONFLICTS").mkdir()
+    (root / LIB / ".CONFLICTS" / "notes.txt").write_text("a human's folder")
+    (root / MANIFEST).write_bytes(HUMAN)  # forces preservation
+    with pytest.raises(RecoveryFailed, match="differently spelled"):
+        LibraryStore.open(root / LIB, locker=locker)
+    assert (root / LIB / ".txn" / "journal.json").exists()  # nothing settled
+    assert locker.held == set()

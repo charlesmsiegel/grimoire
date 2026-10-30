@@ -388,6 +388,7 @@ class _Commit:
         for put in self.puts:
             if self.access.presence(put.parts) == "mismatch":
                 raise NameCollision(f"{'/'.join(put.parts)} collides with a differently spelled existing entry")
+            self.access.check_conflict_folder(conflict_parts(put.parts, etag(put.data)))
 
     def _check_sources(self) -> None:
         touched: dict[str, tuple[SourceManifest | None, list[SourceRef]]] = {}

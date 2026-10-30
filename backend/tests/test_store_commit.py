@@ -348,3 +348,14 @@ def test_reads_are_by_exact_address(library):
         library.read(WREN.at("r9"))
     with pytest.raises(ValueError):
         library.read(WREN)
+
+
+def test_a_look_alike_conflicts_folder_refuses_a_commit_before_authorization(library):
+    (library.root / ".CONFLICTS").mkdir()
+    (library.root / ".CONFLICTS" / "notes.txt").write_text("a human's folder")
+    authority = authorizer()
+    txn = library.transaction()
+    txn.put(instance(InstanceRef("c3", "character", "x"), WREN), None)
+    with pytest.raises(NameCollision):
+        txn.commit(authority.handle_for(OWNER, trusted=True))
+    assert authority.audit() == ()

@@ -31,13 +31,15 @@ from typing import Literal
 from grimoire.library import LibraryPathError
 
 from .diskops import FileOps, is_link, lstat_or_none
-from .errors import LinkRefused, RecoveryFailed, StoreError, UnstorableIdentifier
+from .errors import LinkRefused, NameCollision, RecoveryFailed, StoreError, UnstorableIdentifier
 from .guard import Guard
 from .journal import Entry, Journal, is_staging_name, parse
 from .jsonfmt import MAX_FILE_BYTES, etag
 from .layout import JOURNAL, TXN, Parts, conflict_parts, name_key
 
 Presence = Literal["absent", "present", "mismatch"]
+#: Distinct versions kept beside one conflict name before giving up (a backstop, never reached).
+MAX_CONFLICT_ATTEMPTS = 100
 #: The "etag" of a path only a look-alike spelling occupies: equal to no old or new etag.
 LOOKALIKE = "lookalike"
 
@@ -123,6 +125,11 @@ class Access:
         if info is not None and not stat.S_ISREG(info.st_mode):
             raise UnstorableIdentifier(f"{path} is not a regular file")
 
+    def check_conflict_folder(self, conflict: Parts) -> None:
+        """Preserving needs ``.conflicts/<hash>`` spelled exactly; a look-alike folder is refused."""
+        if self.presence(conflict[:-1]) == "mismatch":
+            raise NameCollision(f"{'/'.join(conflict[:-1])} collides with a differently spelled folder")
+
     def check_staging(self) -> None:
         """``.txn`` and its lock are real entries of this library, never links elsewhere."""
         staging = self.path((TXN,))
@@ -175,6 +182,7 @@ def check_entry_paths(access: Access, journal: Journal) -> None:
             access.check_staged_file(entry.temp)
         access.guard.check_write(entry.target, staging_device=device)
         access.guard.check_write(conflict_parts(entry.target, entry.new), staging_device=device)
+        access.check_conflict_folder(conflict_parts(entry.target, entry.new))
 
 
 def _replace_journal(access: Access, journal: Journal) -> None:
@@ -187,10 +195,10 @@ def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str)
     """Move a staged version into ``.conflicts``, named by its *actual* digest; never drop distinct bytes."""
     staging = lstat_or_none(access.path((TXN,)))
     temp = access.path((TXN, entry.temp))
-    attempt = 0
-    while True:
+    for attempt in range(MAX_CONFLICT_ATTEMPTS):
         conflict = conflict_parts(entry.target, digest, attempt)
         access.guard.check_write(conflict, staging_device=staging.st_dev if staging else None)
+        access.check_conflict_folder(conflict)  # a renamed folder never resolves by renaming the file
         if access.presence(conflict) == "absent":
             access.make_parent(conflict)
             access.ops.replace(temp, access.path(conflict))
@@ -198,7 +206,9 @@ def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str)
         if access.etag_of(conflict) == digest:
             access.ops.remove(temp)  # the same bytes were preserved by an earlier attempt
             break
-        attempt += 1  # an edited conflict file or a digest-prefix clash: keep both
+        # an edited conflict file or a look-alike name: keep both, try the next name
+    else:
+        raise StoreError(f"no free conflict name for {_text(entry.target)} after {MAX_CONFLICT_ATTEMPTS} tries")
     settlement.preserved.append(_text(conflict))
 
 
