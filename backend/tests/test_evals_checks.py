@@ -309,3 +309,21 @@ def test_blank_model_lines_still_count_as_model_authorship(bench, text):
     shared = mutate(run, lambda r: r["turns"][0]["contributions"].append(
         {"speaker_id": "npc-oda", "author": "model", "text": text, "call_id": "t1-oda"}))
     assert checks(findings_for(scenario, shared)) == {"separate_generation"}
+
+
+def test_repeated_identical_choices_each_need_their_own_evidence():
+    scenario = mutate(minimal_scenario(), lambda s: s["choices"].append(
+        {**s["choices"][0], "choice_id": "c2"}))
+
+    def repeat(run, answered):
+        run["choice_outcomes"]["c2"] = "honored"
+        lines = run["turns"][0]["contributions"]
+        lines.append({"speaker_id": "pc", "author": "player", "text": "I knock.", "call_id": None})
+        if answered:
+            run["calls"].append({**run["calls"][0], "call_id": "k2"})
+            lines.append({"speaker_id": "npc-a", "author": "model", "text": "Another knock.",
+                          "call_id": "k2"})
+    unanswered = findings_for(scenario, mutate(minimal_run(), lambda r: repeat(r, False)))
+    assert [(f.check, f.subject, f.evidence) for f in unanswered] == [
+        ("choice_negated", "c2", "unrealized")]
+    assert findings_for(scenario, mutate(minimal_run(), lambda r: repeat(r, True))) == ()

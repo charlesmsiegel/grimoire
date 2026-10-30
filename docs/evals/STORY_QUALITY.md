@@ -66,7 +66,7 @@ Hard invariants (the candidate fails on any; a baseline that has one is `baselin
 | `knowledge_leak` | an NPC line states a fact before that NPC's `known_from` turn; narration states a fact no player character knows yet |
 | `player_sovereignty` | the model authors a player character's contribution, or any model text contains a PC authorship marker |
 | `player_input_altered` | each scripted choice is not played exactly once, verbatim, or other player contributions appear |
-| `choice_negated` | the outcome label is `negated`; model text in the window has a negation marker; or no model text after the player's line (and in the window) has an effect marker (`unrealized`) |
+| `choice_negated` | the outcome label is `negated`; model text in the window has a negation marker; or no model text after the player's line (and in the window) has an effect marker (`unrealized`). Identical repeated choices each need evidence after their own line |
 | `continuity_contradiction` | model text contradicts an established fact from its turn on |
 | `script_incomplete` | a scripted turn is missing or a scripted speaker did not speak |
 | `separate_generation` | an NPC line is not from its own `npc_generation` call, narration is not from a `narration` call, or one call produced several contributions |
@@ -76,7 +76,8 @@ Hard invariants (the candidate fails on any; a baseline that has one is `baselin
 
 Comparisons with the baseline: `incomparable` (any `conditions` value differs),
 `flag_not_allowed` (candidate enables a flag the baseline didn't and the gate did not allow),
-`no_npc_contributions` (nothing to score fails closed), `voice_regression` (cast
+`no_npc_contributions` (nothing to score fails closed; a baseline with no NPC lines is
+`baseline_invalid`, so voice is never left uncompared), `voice_regression` (cast
 distinguishability below baseline minus tolerance), `cost_regression` and opt-in
 `latency_regression`.
 

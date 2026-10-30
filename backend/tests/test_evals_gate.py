@@ -190,3 +190,17 @@ def test_policy_reports_only_loosened_values():
     assert GatePolicy().non_defaults() == {}
     assert GatePolicy(max_cost_increase=0.5, allowed_flags=frozenset({"b", "a"})).non_defaults() == {
         "max_cost_increase": 0.5, "allowed_flags": ["a", "b"]}
+
+
+def test_a_baseline_without_npc_lines_cannot_certify_voice():
+    from evals_helpers import minimal_run, minimal_scenario
+    scenario_raw = mutate(minimal_scenario(), lambda s: s["script"][0].update(speakers=[]))
+
+    def narration_only(run):
+        run["calls"][0].update(purpose="narration", actor_id=None)
+        contribution(run, 1, "npc-a").update(speaker_id=None)
+    scenario, baseline = parsed(scenario_raw, mutate(minimal_run(), narration_only))
+    candidate = parse_run(minimal_run(), scenario)
+    report = compare(scenario, baseline, candidate)
+    assert checks(report) == {"baseline_invalid"}
+    assert report.findings[0].subject == "no_npc_contributions"

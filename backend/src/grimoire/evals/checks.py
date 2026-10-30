@@ -142,17 +142,24 @@ def _player_input(scenario: Scenario, run: Run) -> Iterator[Finding]:
                           choice.choice_id)
 
 
-def _evidence_text(run: Run, choice_turn: int, actor_id: str, text: str, window: int) -> list[str]:
-    """Model text that may realise a choice: after the scripted line on its turn, then the window."""
+def _evidence_text(run: Run, choice_turn: int, actor_id: str, text: str, window: int,
+                   occurrence: int) -> list[str]:
+    """Model text that may realise a choice: after its scripted line on its turn, then the window.
+
+    ``occurrence`` picks which of several identical scripted lines this choice is, so each
+    repeated choice needs evidence after its own line.
+    """
     texts = []
     for turn in run.turns:
         if turn.turn == choice_turn:
-            after = None
+            after, seen = None, 0
             for position, contribution in enumerate(turn.contributions):
                 if (contribution.author == "player" and contribution.speaker_id == actor_id
                         and contribution.text == text):
-                    after = position
-                    break
+                    if seen == occurrence:
+                        after = position
+                        break
+                    seen += 1
             if after is not None:
                 texts += [c.text for c in turn.contributions[after + 1:] if c.author == "model"]
         elif choice_turn < turn.turn <= choice_turn + window:
@@ -161,11 +168,16 @@ def _evidence_text(run: Run, choice_turn: int, actor_id: str, text: str, window:
 
 
 def _choices(scenario: Scenario, run: Run) -> Iterator[Finding]:
+    occurrences: Counter[tuple[int, str, str]] = Counter()
     for choice in scenario.choices:
+        key = (choice.turn, choice.actor_id, choice.text)
+        occurrence = occurrences[key]
+        occurrences[key] += 1
         if run.choice_outcomes[choice.choice_id] == "negated":
             yield Finding("choice_negated", "label", "run labels the choice negated",
                           choice.turn, choice.choice_id, "label")
-        texts = _evidence_text(run, choice.turn, choice.actor_id, choice.text, choice.window)
+        texts = _evidence_text(run, choice.turn, choice.actor_id, choice.text, choice.window,
+                               occurrence)
         negations = sorted({index for text in texts
                             if (index := first_marker(text, choice.negation_markers)) is not None})
         for index in negations:

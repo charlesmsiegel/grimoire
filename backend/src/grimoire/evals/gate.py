@@ -50,6 +50,10 @@ def compare(scenario: Scenario, baseline: Run, candidate: Run,
     findings.extend(hard_findings(scenario, candidate))
 
     base, cand = scorecard(scenario, baseline, policy), scorecard(scenario, candidate, policy)
+    if base.distinguishability is None:
+        findings.append(Finding("baseline_invalid", "comparison",
+                                "the baseline has no NPC lines, so voice cannot be compared",
+                                subject="no_npc_contributions"))
     if cand.distinguishability is None:
         findings.append(Finding("no_npc_contributions", "comparison",
                                 "candidate has no NPC lines to score"))
