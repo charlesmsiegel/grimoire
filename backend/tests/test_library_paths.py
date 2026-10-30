@@ -517,3 +517,44 @@ def test_core_stays_free_of_the_filesystem_adapter():
                 continue
             for name in names:
                 assert "library" not in name.split("."), f"{file} imports {name}"
+
+
+# ---- review findings ----------------------------------------------------------
+
+def test_doubled_slash_after_tilde_stays_under_home(home):
+    # V1's `Path("~//x").expanduser()` is `$HOME/x`; joining "/x" would escape home.
+    assert resolve_library(environ={"GRIMOIRE_V2_HOME": "~//lib"}, home=home).path == home / "lib"
+    young = v1_library(home / "Sync" / "grimoire", young=True)
+    write_pointer(home, {"data_dir": "~//Sync/grimoire"})
+    for target in (young, young / "v2"):
+        with pytest.raises(V1IsolationError, match="named by ~/.grimoire.json"):
+            check_write_destination(target, environ={}, home=home)
+
+
+@pytest.mark.parametrize("call", [
+    lambda h, t: check_write_destination(str(t / "x\0y"), environ={}, home=h),
+    lambda h, t: check_migration_paths(str(t / "s\0"), t / "d", environ={}, home=h),
+    lambda h, t: resolve_library(environ={"GRIMOIRE_V2_HOME": str(t / "x\0")}, home=h),
+    lambda h, t: check_write_destination(b"/tmp/x", environ={}, home=h),
+    lambda h, t: check_migration_paths(b"/tmp/s", t / "d", environ={}, home=h),
+])
+def test_bad_path_values_raise_library_errors(home, tmp_path, call):
+    with pytest.raises(LibraryPathError):
+        call(home, tmp_path)
+
+
+@pytest.mark.parametrize("payload", ['{"data_dir": "/x\\u0000"}', "[" * 400_000 + "]" * 400_000])
+def test_hostile_pointer_fails_closed(home, payload):
+    write_pointer(home, payload)
+    with pytest.raises(V1IsolationError, match=r"\.grimoire\.json"):
+        resolve_library(environ={}, home=home)
+
+
+def test_relative_v1_home_with_a_vanished_cwd_fails_closed(home, tmp_path, monkeypatch):
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    with pytest.raises(LibraryPathError):
+        resolve_library(environ={"GRIMOIRE_HOME": "relative-v1"}, home=home)
+    monkeypatch.chdir(tmp_path)

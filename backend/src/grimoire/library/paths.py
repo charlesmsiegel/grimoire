@@ -151,10 +151,13 @@ def _expand_tilde(raw: str, home: Path | None, what: str) -> Path:
         raise LibraryPathError(f"{what}: {raw!r} names another user's home; spell the path out")
     if home is None:
         raise LibraryPathError(f"{what}: cannot expand {raw!r} without a home directory")
-    return home / rest if sep and rest else home
+    rest = rest.lstrip("/")  # V1's `expanduser` reads "~//x" as $HOME/x; joining "/x" would drop home
+    return home / rest if rest else home
 
 
-def _parse_user_path(raw: str, home: Path | None, what: str) -> Path:
+def _parse_user_path(raw: object, home: Path | None, what: str) -> Path:
+    if not isinstance(raw, str):
+        raise LibraryPathError(f"{what}: {raw!r} is not a text path")
     if not raw or raw != raw.strip():
         raise LibraryPathError(f"{what}: {raw!r} is empty or has surrounding whitespace")
     path = _expand_tilde(raw, home, what) if raw.startswith("~") else Path(raw)
@@ -170,7 +173,7 @@ def _realpath(path: Path) -> Path:
         return Path(os.path.realpath(path, strict=True))
     except (FileNotFoundError, NotADirectoryError):
         return Path(os.path.realpath(path))
-    except (OSError, RuntimeError) as error:
+    except (OSError, RuntimeError, ValueError) as error:  # ValueError: an embedded NUL
         raise LibraryPathError(f"cannot resolve {path}: {error}") from error
 
 
@@ -180,7 +183,7 @@ def _probe(path: Path, *, follow: bool = True) -> os.stat_result | None:
         return os.stat(path) if follow else os.lstat(path)
     except (FileNotFoundError, NotADirectoryError):
         return None
-    except OSError as error:
+    except (OSError, ValueError) as error:
         raise LibraryPathError(f"cannot inspect {path}: {error}") from error
 
 
@@ -202,7 +205,11 @@ def _guarded_roots(environ: Mapping[str, str], home: Path | None) -> list[tuple[
     v1_home = environ.get(V1_HOME_ENV, "")
     if v1_home:
         # V1 read it as `Path(env)`: relative to its cwd and with no `~` expansion.
-        roots.append((f"the V1 library in {V1_HOME_ENV}", Path(os.path.abspath(v1_home))))
+        try:
+            literal = Path(os.path.abspath(v1_home))
+        except (OSError, ValueError) as error:  # a vanished cwd, an embedded NUL
+            raise LibraryPathError(f"cannot locate the V1 library in {V1_HOME_ENV}: {error}") from error
+        roots.append((f"the V1 library in {V1_HOME_ENV}", literal))
         if v1_home.startswith("~") and home is not None:
             try:
                 roots.append((f"the V1 library in {V1_HOME_ENV}", _expand_tilde(v1_home, home, V1_HOME_ENV)))
@@ -225,24 +232,32 @@ def _pointer_library(home: Path) -> Path | None:
             f"is; fix or remove that file")
 
     try:
-        info = os.stat(pointer)
+        # Non-blocking, and typed by the open descriptor: a FIFO swapped in after
+        # a separate stat would otherwise block this open forever.
+        fd = os.open(pointer, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
     except (FileNotFoundError, NotADirectoryError):
         return None
     except OSError as error:
-        raise unusable(f"cannot be inspected ({error})") from error
-    if not stat.S_ISREG(info.st_mode) or info.st_size > _POINTER_MAX_BYTES:
-        raise unusable("is not a small regular file")
+        raise unusable(f"cannot be opened ({error})") from error
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > _POINTER_MAX_BYTES:
+            raise unusable("is not a small regular file")
+        try:
+            text = handle.read(_POINTER_MAX_BYTES + 1)
+        except OSError as error:
+            raise unusable(f"cannot be read ({error})") from error
     try:
-        data = json.loads(pointer.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:  # UnicodeDecodeError and JSONDecodeError are ValueErrors
+        data = json.loads(text.decode("utf-8"))
+    except (ValueError, RecursionError) as error:  # bad UTF-8, bad JSON, absurd nesting
         raise unusable(f"cannot be read ({error})") from error
     if not isinstance(data, dict):
         raise unusable("is not a JSON object")
     raw = data.get("data_dir")
     if raw is None or raw == "":
         return None
-    if not isinstance(raw, str):
-        raise unusable("has a data_dir that is not a string")
+    if not isinstance(raw, str) or "\0" in raw:
+        raise unusable("has a data_dir that is not a usable path string")
     if raw.startswith("~"):
         try:
             return _expand_tilde(raw, home, "pointer")
