@@ -191,6 +191,16 @@ def test_apply_is_bound_to_its_context():
         config().apply(set_(player("gore", "avoid")), "not a context")
 
 
+def test_group_withdraw_is_bound_to_its_context():
+    other = BoundaryContext("campaign-b", frozenset({P1, P2}))
+    zero = config(group("fear", "allow"))
+    with pytest.raises(BoundaryAuthorityError):
+        zero.apply(BoundaryChange("withdraw", P2, boundary_id="g-campaign-fear"), other)
+    mine = config(player("fear", "avoid"))
+    assert mine.apply(BoundaryChange("withdraw", P1, boundary_id="b-human:p1-fear"),
+                      other).boundaries == ()
+
+
 def test_unagree_requires_membership():
     with pytest.raises(BoundaryAuthorityError):
         config(group("fear", "allow")).apply(
@@ -430,6 +440,14 @@ def test_inputs_must_be_typed_values():
         decide_request(request("skip", "s1"), CTX, [fake])
     with pytest.raises(ValueError):
         group("gore", "allow", agreed_by=[["x"]])
+    with pytest.raises(ValueError):
+        decide_presentation(config(), CTX, 5)
+    with pytest.raises(ValueError):
+        agreed_limits({"fear"}, config(), "not a context", controller=P1, target_id="c1")
+    with pytest.raises(ValueError):
+        agreed_limits({"fear"}, config(), CTX, controller=[P1], target_id="c1")
+    with pytest.raises(ValueError):
+        owner_boundaries("not a config", P1)
 
 
 def test_decision_has_no_canon_edit_fields():
@@ -589,6 +607,23 @@ def test_segment_consent_does_not_satisfy_a_condition():
     seg = NarrationSegment(CAMPAIGN, "c1", "text", frozenset({"fear"}), "proposed")
     assert limits(zero, "fear", consents=[CheckInConsent.for_segment(seg, "fear", P1)]).reason \
         == "needs_check_in"
+
+
+@pytest.mark.parametrize("stricter", [
+    player("fear", "fade_to_black", owner=P2), group("fear", "skip"),
+    group("fear", "skip", agreed_by=frozenset({P2})),
+])
+def test_stricter_boundary_keeps_controllers_check_in(stricter):
+    zero = config(player("fear", "check_in"), stricter)
+    assert limits(zero, "fear").reason == "needs_check_in"
+    consent = CheckInConsent.for_condition(CAMPAIGN, "c1", "fear", P1)
+    assert limits(zero, "fear", consents=[consent]).within
+
+
+def test_agreed_check_in_group_boundary_still_asks_first():
+    zero = config(group("fear", "check_in"), player("fear", "skip", owner=P2)).apply(
+        BoundaryChange("agree", P1, boundary_id="g-campaign-fear"), CTX)
+    assert limits(zero, "fear").reason == "needs_check_in"
 
 
 def test_reason_precedence_is_worst_across_themes():

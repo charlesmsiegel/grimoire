@@ -39,6 +39,7 @@ _ACCEPTED_ACTION = {"allow": "present", "check_in": "check_in", "fade_to_black":
 _NOTICE = {("proposed", "skip"): "skipped_proposal", ("proposed", "avoid"): "avoided_theme",
            ("accepted", "avoid"): "canon_touches_avoided_theme"}
 _LIMIT_FAILURES = ("avoided", "needs_check_in", "unset", "not_agreed")  # worst first
+_OCCURS = frozenset({"allow", "fade_to_black", "skip"})  # limit depiction, not occurrence
 
 
 class BoundaryAuthorityError(Exception):
@@ -86,7 +87,10 @@ def _people(values: Iterable[str], label: str) -> frozenset[str]:
 
 
 def _all(items: Iterable, kind: type, label: str) -> tuple:
-    items = tuple(items)
+    try:
+        items = tuple(items)
+    except TypeError:
+        raise ValueError(f"{label} must be a collection") from None
     if not all(isinstance(item, kind) for item in items):
         raise ValueError(f"{label} must be {kind.__name__} values")
     return items
@@ -205,7 +209,8 @@ class SessionZero:
                 new = replace(new, agreed_by=old.agreed_by)
             items[index] = new
         elif change.kind == "withdraw":
-            if old is None or old.set_by != who:
+            if old is None or old.set_by != who or (
+                    old.scope != "player" and not _scope_matches(old, context)):
                 raise BoundaryAuthorityError()
             del items[index]
         else:
@@ -325,6 +330,8 @@ def visible_boundaries(config: SessionZero,
 
 def owner_boundaries(config: SessionZero, viewer: str) -> tuple[Boundary, ...]:
     """The authenticated viewer's own boundaries in full, private notes included."""
+    if not isinstance(config, SessionZero):
+        raise ValueError("expected a SessionZero")
     _person(viewer, "viewer")
     return tuple(b for b in config.boundaries if b.set_by == viewer)
 
@@ -555,6 +562,8 @@ def agreed_limits(themes: Iterable[str], config: SessionZero, context: BoundaryC
     The rule/effect writer passes `within` into `ImposedCondition`. Nothing is
     cached: recompute on every review so a tightened boundary applies at once.
     """
+    if not isinstance(config, SessionZero) or not isinstance(context, BoundaryContext):
+        raise ValueError("expected a SessionZero and a BoundaryContext")
     themes = _themes(themes)
     consents = _all(consents, CheckInConsent, "consents")
     if not themes:
@@ -563,6 +572,7 @@ def agreed_limits(themes: Iterable[str], config: SessionZero, context: BoundaryC
     _same_campaign(consents, context.campaign_id, "consent")
     if controller is None:
         raise ValueError("an uncontrolled actor has no agreed limits")
+    _nonempty(controller, "controller")
     applicable = _applicable(config, context, frozenset({controller}))
     if controller == DIRECTOR:
         return LimitCheck(True, "npc")
@@ -572,16 +582,17 @@ def agreed_limits(themes: Iterable[str], config: SessionZero, context: BoundaryC
 
     def failure(theme: str) -> str | None:
         relevant = [b for b in applicable if b.theme == theme]
+        mine = [b for b in relevant if (b.scope_id == controller if b.scope == "player"
+                                        else controller in b.agreed_by)]
         treatment = _strictest(b.treatment for b in relevant)
         if treatment == "avoid":
             return "avoided"
         if treatment == UNSET:
             return "unset"
-        if treatment == "check_in":
+        # The controller's own "ask me first" survives anyone else's stricter treatment.
+        if treatment == "check_in" or any(b.treatment == "check_in" for b in mine):
             return None if theme in consented else "needs_check_in"
-        agreed = any(b.scope_id == controller if b.scope == "player"
-                     else controller in b.agreed_by for b in relevant)
-        return None if agreed else "not_agreed"
+        return None if any(b.treatment in _OCCURS for b in mine) else "not_agreed"
 
     failures = {failure(theme) for theme in themes} - {None}
     worst = next((reason for reason in _LIMIT_FAILURES if reason in failures), None)

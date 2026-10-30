@@ -92,6 +92,25 @@ def test_private_data_never_leaves_owner_view():
     assert mine.private_note == NOTE
 
 
+def test_unsafe_scenario_nobody_can_loosen_or_remove_another_players_limit():
+    """Failed/unsafe scenario: P2 tries to undo P1's fade, and an outsider tries to skip."""
+    zero = session_zero()
+    for change in (BoundaryChange("withdraw", P2, boundary_id="ines-gore"),
+                   BoundaryChange("set", P2, boundary=Boundary(
+                       "ines-gore", "player", P2, "graphic_violence", "allow", P2))):
+        with pytest.raises(BoundaryAuthorityError):
+            zero.apply(change, TABLE)
+    # A laxer boundary of P2's own changes nothing: the most protective treatment wins.
+    louder = zero.apply(BoundaryChange("set", P2, boundary=Boundary(
+        "oto-gore", "player", P2, "graphic_violence", "allow", P2)), TABLE)
+    (duel,) = decide_presentation(louder, TABLE, [DUEL])
+    assert (duel.action, duel.preserved_event_id) == ("fade_to_black", "e-duel")
+    outsider = decide_request(BoundaryRequest(CAMPAIGN, "r1", P3, "skip", ("seg-duel",)),
+                              TABLE, [DUEL])
+    assert (outsider.status, outsider.reason, outsider.skip_presentation) == (
+        "refused", "not_participant", ())
+
+
 def test_hard_limit_proposal_vs_canon():
     zero = SessionZero((Boundary("oto-spiders", "player", P2, "spiders", "avoid", P2),))
     nest = NarrationSegment(CAMPAIGN, "seg-nest", "Spiders pour from the vault.",

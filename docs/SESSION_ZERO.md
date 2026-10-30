@@ -41,7 +41,7 @@ Applicability:
 `SessionZero.apply(change, context)` returns a new configuration. It is bound to its context: the requester must be in the authenticated `audience`, and a group boundary must belong to the context's campaign, world or setting. That stops one player planting a boundary for another campaign, or a world boundary that would make every world-less call fail. Ownership is checked before any shape check:
 
 - **`set`:** add a new boundary or replace your own. A replacement may change only treatment, attribution and note; to change scope, scope id or theme, withdraw and set a new one. Changing the treatment resets group agreement to the setter alone.
-- **`withdraw`:** remove your own boundary.
+- **`withdraw`:** remove your own boundary. A group boundary is withdrawn only from its own context, where the participants who agreed to it can see the change.
 - **`agree` / `unagree`:** add or remove *yourself* in the `agreed_by` of a group boundary in force in this context. You can never record agreement for someone else. Only a current member may unagree, and the setter cannot.
 
 All refusals raise the same `BoundaryAuthorityError("not your boundary")`, so a refusal does not confirm that a hidden id exists. A fresh `set` of a taken id is still refused, so ids must be opaque. Because the most protective treatment wins, adding a laxer boundary never weakens another player's.
@@ -105,7 +105,8 @@ All refusals raise the same `BoundaryAuthorityError("not your boundary")`, so a 
 
 - **`DIRECTOR`** gives `npc` (within). **`None`** raises.
 - **The controller's own player boundaries always apply**, even when the controller is not in the audience.
-- **A theme counts as agreed** when its strictest treatment is `allow`, `fade_to_black` or `skip` (these limit depiction, not occurrence) **and** the controller agreed to it. Agreement means either the controller's own boundary for the theme, or membership in `agreed_by` of an applicable group boundary. A campaign `allow` that another player set does not count.
+- **A theme counts as agreed** when its strictest treatment is `allow`, `fade_to_black` or `skip` (these limit depiction, not occurrence) **and** the controller agreed to it. Agreement means either the controller's own `allow`, `fade_to_black` or `skip` boundary for the theme, or membership in `agreed_by` of such an applicable group boundary. A campaign `allow` that another player set does not count.
+- **The controller's own `check_in` survives.** If the controller set, or agreed to, a `check_in` for the theme, their consent is required even when someone else's stricter fade or skip sets the effective treatment. Otherwise another player's stricter boundary would remove their "ask me first".
 - **A `check_in` theme** is agreed only through the controller's own `CheckInConsent.for_condition(campaign_id, condition_id, theme, controller)` for this `target_id`. A segment consent never counts for a condition.
 - **Failures** are reported as the worst one across all themes: `avoided` > `needs_check_in` > `unset` > `not_agreed`.
 
@@ -119,8 +120,29 @@ Nothing caches the result. Callers recompute it on every review, so a tightened 
 | Carrying over only genuine V1 preferences; missing ones stay unset | [V1 import](roadmap/sprints/v1-to-v2-import-apply.md) (#026) |
 | Rendering visible rulings into prompts, never `SessionZero` directly | #027 |
 | Authenticated audience and speakers, consent collection, request execution, extending the [intent router](intent-routing.md) with skip/redirect lanes, a visible correction | #035 |
+| A participant's view of the group boundaries they agreed to (only the setter's owner view shows `agreed_by`) | #035 |
 | Group governance of shared scopes (who may author or withdraw a campaign, world or setting boundary beyond its recorder) | [Collaborative Multiplayer](roadmap/sprints/collaborative-multiplayer.md) |
 | Theme synonyms or taxonomies, audio/visual staging, confidential multi-player negotiation | Later milestones |
+
+## Acceptance and unsafe scenarios
+
+Synthetic and pinned in `backend/tests/test_session_zero_scenarios.py`.
+
+**Acceptance:**
+
+- The proving scenario: a fade-to-black duel keeps its accepted outcome, can be skipped, and is easy to correct.
+- Group conflicts stay visible and anonymous.
+- Private data never leaves the owner's view.
+- A hard limit withholds a proposal but only re-presents canon.
+- A mixed redirect or skip withdraws proposals only.
+- An absent player's boundary drops out of presentation.
+- Agreed limits feed `ImposedCondition` and `review_narration`.
+- A check-in is cleared only when the whole audience consents.
+
+**Failed / unsafe:**
+
+- `test_unsafe_scenario_nobody_can_loosen_or_remove_another_players_limit`: P2 cannot withdraw or replace P1's limit, a laxer boundary cannot weaken it, and a non-participant's skip is refused without effect.
+- `test_rephrase_cannot_launder_outcome_or_pc_speech`: a rephrase cannot launder a recorded outcome or PC speech.
 
 ## Downstream consumers
 
