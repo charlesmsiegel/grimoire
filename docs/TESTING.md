@@ -116,8 +116,8 @@ Not simulated:
 | Inference/provider failures, truncated streams, cancellation and stale-run fencing | Model Routing And Budgeting (013), extended by Per-NPC Generation Runtime (027) |
 | Multi-process readers overlapping a commit (writers are excluded by an OS lock: `backend/tests/test_store_commit.py::test_the_writer_lock_is_held_across_processes_and_dies_with_its_holder`) | Effective World Snapshots (022), Durable Action Recovery (030) |
 | Network transport faults during sync | App-Managed Device Sync (028) |
-| Real disk-full or permission errors (only simulated via `Fail`; the store's handling of them is proven under `Fail`) | revisit with a device-level test owner |
-| Malformed authored Markdown (malformed JSON records are covered by `backend/tests/test_store_load.py::test_bad_instance_files_are_reported_and_never_rewritten` and `backend/tests/test_store_format.py::test_strict_parse_maps_every_hazard_to_one_error`) | V1-to-V2 Migration Skill (011), a future Markdown payload codec |
+| Real disk-full or permission errors (only simulated via `Fail`; the store's handling of them is proven under `Fail`) | Native File Store (010), later milestone |
+| Malformed authored Markdown (malformed JSON records are covered by `backend/tests/test_store_load.py::test_bad_instance_files_are_reported_and_never_rewritten` and `backend/tests/test_store_format.py::test_strict_parse_maps_every_hazard_to_one_error`) | Native File Store (010) Markdown payload codec, V1-to-V2 Migration Skill (011) |
 | Property and state-machine generation across forks, retcons and imports | moonshot |
 | A synthetic world/campaign fixture library with expected outcomes (the store's synthetic fixtures are in `backend/tests/store_helpers.py`) | Entity Facets (009), joined with the store in Wave 3 |
 | Reducing redundant setups across test modules | revisit when a second family of file-backed writer tests exists |

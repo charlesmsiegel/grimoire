@@ -157,3 +157,31 @@ def test_a_linked_staging_directory_is_refused_everywhere(tmp_path):
     with pytest.raises(LinkRefused):
         LibraryStore.discard_journal(lib, locker=ProcessLocker())
     assert snapshot(outside) == before
+
+
+def test_a_v1_shaped_directory_inside_the_library_is_never_written(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        seed(store)
+        v1 = _v1_library(tmp_path / "lib" / "campaigns" / "c7")
+        before = snapshot(v1)
+        txn = store.transaction()
+        txn.put(instance(InstanceRef("c7", "character", "x"), WREN_R1), None)
+        with pytest.raises(V1IsolationError):
+            txn.commit(owner_handle())
+    assert snapshot(v1) == before
+
+
+def test_the_executor_writes_only_the_resource_it_was_authorized_for(tmp_path):
+    from grimoire.security import Decision, Reason, ResourcePath
+    from grimoire.store import WriteDenied
+
+    class Elsewhere:
+        def authorize(self, permission, resource, payload=None, approval_id=None):
+            return Decision(True, Reason.GRANTED, ResourcePath.parse("campaigns/c1/instances/character/other.json"))
+
+    with LibraryStore.create(tmp_path / "lib") as store:
+        txn = store.transaction()
+        txn.put(instance(InstanceRef("c3", "character", "x"), WREN_R1), None)
+        with pytest.raises(WriteDenied):
+            txn.commit(Elsewhere())
+    assert not (tmp_path / "lib" / "campaigns").exists()

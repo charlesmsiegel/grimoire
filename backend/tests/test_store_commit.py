@@ -17,7 +17,7 @@ from grimoire.library import LibraryPathError
 from grimoire.security import Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest
 from grimoire.store import (
     CrossDevice, ImmutableRevision, InvalidEnvelope, InvalidSourceState, LibraryLocked, LibraryStore,
-    LockUnavailable, NameCollision, NotALibrary, OsLocker, PendingRecovery, RecordEnvelope, RecordNotFound,
+    LockUnavailable, NameCollision, NotALibrary, PendingRecovery, RecordEnvelope, RecordNotFound,
     SourceManifest, StaleWrite, StoreError, UnstorableIdentifier, WriteDenied, etag,
 )
 from grimoire.testing.fileops import snapshot
@@ -346,4 +346,3 @@ def test_reads_are_by_exact_address(library):
         library.read(WREN.at("r9"))
     with pytest.raises(ValueError):
         library.read(WREN)
-    assert isinstance(OsLocker(), OsLocker)

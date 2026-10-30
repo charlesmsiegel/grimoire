@@ -1,6 +1,6 @@
 # Human-editable V2 file storage and revisions
 
-**Status:** first slice implemented as `grimoire.store`; contract in [STORAGE.md](../../STORAGE.md). Persistence of the security audit/grants/approvals and of PC delegations/corrections is the next 010 pull request ([remaining obligations](../../STORAGE.md#remaining-010-obligations)).
+**Status:** first slice implemented as `grimoire.store` (JSON-only by decision; Markdown payloads are a remaining obligation); contract in [STORAGE.md](../../STORAGE.md). Persistence of the security audit/grants/approvals and of PC delegations/corrections is the next 010 pull request ([remaining obligations](../../STORAGE.md#remaining-010-obligations)).
 
 **Outcome:** Native canonical Markdown/JSON records support definitions and campaign instances independently, with stable references and safe revisioned writes.
 

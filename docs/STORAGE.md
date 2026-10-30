@@ -4,7 +4,8 @@
 
 Not in this slice:
 - persistence of the security audit, grants and approvals ([TOOL_AUTHORITY](TOOL_AUTHORITY.md)), and of PC delegations and corrections ([PLAYER_SOVEREIGNTY](PLAYER_SOVEREIGNTY.md)). These come next, in a follow-up 010 pull request built on this store; see [Remaining 010 obligations](#remaining-010-obligations);
-- the image blob store (018), sync (019), events and evidence (020), effective views (022), and Markdown payloads.
+- the image blob store (018), sync (019), events and evidence (020), and effective views (022);
+- **Markdown.** The sprint's outcome names "Markdown/JSON" records. By the requester's decision this slice is JSON-only (stdlib, no YAML dependency); a Markdown payload codec is a remaining 010 obligation.
 
 ## Library layout
 
@@ -35,6 +36,7 @@ Not in this slice:
   These follow the [architecture layout](ARCHITECTURE.md#storage-root-and-provisional-organization) and are a deliberate deviation from an earlier draft that reserved root-level `events`/`evidence`. No root entry is a [V1 marker name](ARCHITECTURE.md#library-location-and-v1-isolation-implemented-grimoirelibrary).
 - **Ignored silently:** OS and editor droppings (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `*~`, `*.swp`, `*.swo`, `.#*`) and directories with no file below them. Empty directories are not state: a failed commit can leave some behind, and nothing can remove them through the file seam. Per-target `.conflicts/<hash16>/` folders accumulate in the same way.
 - **Device-local:** `.txn/` and `.conflicts/` must never be transferred by sync (019/028).
+- **Root entries the store does not own** (for example the `worlds/` or `catalogs/` of the [architecture's example tree](ARCHITECTURE.md#storage-root-and-provisional-organization), including a `worlds` link into V1) are reported by `load` and never written, because no store address maps to them.
 
 ## File formats
 
@@ -115,8 +117,8 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 
    A hand-made problem in an unrelated entity does not block a write, so repairs can be made incrementally.
 7. **Authorization.** Every target is authorized with `Permission.APPLY` on its logical address over its exact bytes. Any denial raises `WriteDenied` and no target is written. **Trade-off:** every target is decided, so approvals already allowed for other targets in that transaction are consumed; `WriteDenied.consumed_approvals` lists them. Steps 1–6 never consume an approval.
-8. **Staging.** Missing directories are created and each file is staged as `.txn/*.new`. An `OSError` here propagates and nothing is published; any consumed approvals are named in an exception note.
-9. **Commit point:** the journal is written and atomically replaced to `.txn/journal.json`. If that fails before the replace, nothing is published.
+8. **Staging.** Missing target directories are created and each file is staged as `.txn/*.new`. A `.conflicts/<hash16>/` directory is created only when something is actually preserved (after the commit point); its path was already checked in step 3, so only a genuine I/O error can fail there. An `OSError` here propagates and nothing is published; any consumed approvals are named in an exception note.
+9. **Commit point:** the root is re-verified (step 3's session check), then the journal is written and atomically replaced to `.txn/journal.json`. If that fails before the replace, nothing is published.
 10. **Pre-publish guard.** If any target now equals neither its old nor its new etag, an external edit raced the commit. The journal is first durably rewritten as `abort`, then every staged version is preserved in `.conflicts/`, and `WriteConflict(published=())` is raised.
 11. **Publish.** Each target is re-hashed immediately before its `replace`. An edit caught there is kept, the store's version is preserved, the remaining entries publish, and `WriteConflict` names both what was published and what was preserved.
 12. The journal is removed. Any failure in steps 10–12 raises `CommitIncomplete`, and the on-disk journal then blocks reads and commits until recovery. If staged files vanished before publication (removed by another program), commit also raises `CommitIncomplete` naming the targets that were not written; it never reports success for them.
@@ -184,8 +186,8 @@ Broken-reference reasons are the index's `missing_source`, `missing_entity` and 
   - On a filesystem that cannot lock (some network shares), a writable open fails with `LockUnavailable`; a read-only open still works.
   - The locker is injectable. Crash-exploration tests use a process-local `ProcessLocker`.
 - **A `LibraryStore` is single-threaded.** Its per-load listing cache is not shared safely between threads; use one store per thread or serialize access.
-- **A linked `.txn`** is refused everywhere, read-only opens and `discard_journal` included (`LinkRefused`). Remove the link by hand.
-- **Readers** (`writable=False`) take no lock and never recover. They are consistent only while no writer is active: a `load` that overlaps another process's commit may see a mix of old and new files. Cross-process read isolation is deferred to 019/030.
+- **A linked `.txn`** is never entered. Writable opens, commits and `discard_journal` refuse with `LinkRefused`; a read-only open succeeds, but its reads raise `LinkRefused`. Remove the link by hand.
+- **Readers** (`writable=False`) take no lock and never recover. They are consistent only while no writer is active: a `load` that overlaps another process's commit may see a mix of old and new files. Cross-process read isolation is deferred to Effective World Snapshots (022) and Durable Action Recovery (030).
 - **Durability:** files are fsynced before they are renamed. On POSIX the parent directory is fsynced after each rename and after each directory the store creates; this is best-effort where a filesystem does not support it, but genuine I/O errors are raised. Power loss is not simulated by the harness.
 - **Windows reparse points:** every reparse point counts as a link and is refused, not only symlinks and junctions. A library inside a cloud-synced folder that uses placeholder files (such as OneDrive Files-On-Demand) is therefore refused. Narrowing this to specific reparse tags is future work.
 - A malformed **instance** can be replaced by passing its exact etag (`MalformedRecord.etag`); the caller has, in effect, seen those bytes. The old bytes are not copied first. A malformed definition revision can only be fixed by hand.
@@ -199,4 +201,5 @@ Broken-reference reasons are the index's `missing_source`, `missing_entity` and 
 These are owned by the follow-up 010 pull request:
 - **Durable security audit, and the grant and approval lifecycle** ([TOOL_AUTHORITY](TOOL_AUTHORITY.md#requirements-on-later-sprints)). The typed journal (entry `kind`) is meant to carry audit-append and approval-consumption entries atomically with publication. The follow-up must also decide whether a durable "consumed if and only if committed" rule supersedes step 7's in-memory consumption. It needs a trusted record family under the reserved `authority/` root that is written without worker grants.
 - **PC delegations, revocations and corrections, and control-assignment history** ([PLAYER_SOVEREIGNTY](PLAYER_SOVEREIGNTY.md#correction-flow)).
-- **Later milestones** of the sprint: versioned snapshots and change journals, external-edit watching, and cross-process read isolation.
+- **A Markdown payload codec**, so prose-heavy records can be authored as Markdown while the envelope stays JSON.
+- **Later milestones** of the sprint: versioned snapshots and change journals, external-edit watching, and device-level tests of real disk-full and permission errors.

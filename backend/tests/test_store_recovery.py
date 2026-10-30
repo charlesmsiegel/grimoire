@@ -160,7 +160,7 @@ def _edit_manifest_if_pending(ops, root):
 def test_an_edit_made_while_down_is_kept_and_never_half_published(tmp_path):
     sc = scenario(head_move, meddle=_edit_manifest_if_pending, invariants=(
         preserves_meddle(), idempotent_recovery(), Invariant("all_or_nothing", _all_or_nothing)))
-    report = explore_crashes(sc, tmp_path, recovery_crashes=True)  # I/O errors: explored above
+    report = explore_crashes(sc, tmp_path, errors=True, recovery_crashes=True)
     report.assert_ok()
     assert any(run.meddled_paths for run in report.runs)
 
@@ -431,3 +431,24 @@ def test_a_lookalike_created_while_down_is_never_overwritten(tmp_path):
         assert store.last_recovery.preserved and not store.last_recovery.published
     assert (folder / "X.json").read_bytes() == HUMAN
     assert sorted(path.name for path in folder.iterdir()) == ["X.json", "bystander.json"]
+
+
+@pytest.mark.parametrize("crash_after", ["commit-point", "first-publish"])
+def test_tampered_staging_is_preserved_and_never_published(tmp_path, crash_after):
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(locker)(RootedFileOps(root, record=False), root)
+    old_manifest = (root / MANIFEST).read_bytes()
+    at = JOURNAL if crash_after == "commit-point" else Target("replace", target=R2)
+    with pytest.raises(BaseException):
+        head_move(RootedFileOps(root, plan=[Crash(at, "after")], record=False), root, locker)
+    journal = json.loads((root / LIB / ".txn" / "journal.json").read_bytes())
+    manifest_temp = next(entry["temp"] for entry in journal["entries"] if entry["target"].endswith("manifest.json"))
+    (root / LIB / ".txn" / manifest_temp).write_bytes(b'{"tampered": true}')
+    with LibraryStore.open(root / LIB, locker=locker) as store:
+        assert any("manifest.json~" in path for path in store.last_recovery.preserved)
+        assert all(not target.endswith("manifest.json") for target, _ in store.last_recovery.published)
+        assert b'{"tampered": true}' in [
+            (root / LIB / path).read_bytes() for path in store.conflicts()]
+    assert (root / MANIFEST).read_bytes() == old_manifest

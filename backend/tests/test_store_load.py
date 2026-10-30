@@ -50,12 +50,14 @@ def _write(root: Path, relative: str, document) -> None:
 
 
 def test_a_clean_library_resolves_with_nothing_reported(library):
+    _commit(library, (instance(InstanceRef("c6", "character", "wren-c"), WREN_R1,
+                               base_etag=library.read(WREN_R1).etag), None))
     view = library.load()
     assert view.problems == () and view.broken == () and view.excluded == ()
     definition = view.index.resolve(WREN)
     assert isinstance(definition, StoredDefinition) and definition.name == "Wren"
     assert definition.envelope.payload["bio"] == "a sailor"
-    assert set(view.instances) == {WREN_A, WREN_B}
+    assert set(view.instances) == {WREN_A, WREN_B, InstanceRef("c6", "character", "wren-c")}
     assert view.index.find_by_name("wren") == (WREN,)
 
 
@@ -113,7 +115,6 @@ def test_an_add_on_cannot_speak_for_another_source(library, smuggle):
     assert view.excluded == (ADDON,)
     assert ("ownership", ADDON) in _codes(view)
     assert view.index.resolve(WREN).ref == WREN_R1  # harbor keeps its own head
-    assert WREN.at("r9") not in {d.ref for d in [view.index.resolve(WREN)]}
 
 
 def test_head_problems_drop_only_their_entity(library):
@@ -396,3 +397,22 @@ def test_links_of_a_source_the_loader_excludes_do_not_block_a_commit(library):
     links = [LinkSpec(str(zed), "derived_variant", str(why)), LinkSpec(str(WREN_R1), "derived_variant", str(zed))]
     _commit(library, (harbor_manifest(links=links), library.read_source(HARBOR).etag))
     assert library.load().excluded == (ADDON,)
+
+
+def test_in_source_links_register_before_cross_source_ones(library):
+    """A world's own link survives an add-on cycle; the dropped link is a cross-source one."""
+    a, b = SourceRef(HARBOR, "character", "a", "r1"), SourceRef(HARBOR, "character", "b", "r1")
+    c = SourceRef(ADDON, "character", "c", "r1")
+    _commit(library, (RecordEnvelope(a, {}), None), (RecordEnvelope(b, {}), None),
+            (SourceManifest(ADDON, "human:fan"), None), (RecordEnvelope(c, {}), None))
+    _commit(library, (harbor_manifest(links=[LinkSpec(str(b), "derived_variant", str(c)),
+                                             LinkSpec(str(a), "derived_variant", str(b))]),
+                      library.read_source(HARBOR).etag))
+    path = library.root / "sources/addon/fan/_source/manifest.json"
+    addon = json.loads(path.read_bytes())
+    addon["links"] = [{"subject": str(c), "relation": "derived_variant", "object": str(a)}]
+    path.write_text(json.dumps(addon))
+    view = library.load()
+    kept = {(str(link.subject), str(link.object)) for link in view.index.links_for(a.unpinned())}
+    assert (str(a), str(b)) in kept
+    assert [p.code for p in view.problems] == ["bad_link"]

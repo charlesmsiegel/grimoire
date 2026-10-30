@@ -344,6 +344,7 @@ class _Commit:
         self._authorize()                                 # 7. authorization
         entries = self._stage(staging)                    # 8. directories and temps
         journal = Journal("commit", entries)
+        self.access.guard.check_session()                 # the root is still ours, just before publishing
         self._commit_point(journal)                       # 9. journal replace
         try:
             settlement = engine.settle(self.access, journal)  # 10-12
