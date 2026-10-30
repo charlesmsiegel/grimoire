@@ -5,6 +5,7 @@ docs/VOICE.md for the accepted contract.
 """
 
 from .binding import ResolvedVoice, VoiceBinding, resolve_voice
+from .compare import FLATTENED_THRESHOLD, example_copies, flattened, voice_overlap
 from .errors import InvalidVoice, MissingVoice, VoiceMismatch
 from .fragment import (
     DEFAULT_MAX_CHARS, EXAMPLES_HEADER, HEADER, MIN_MAX_CHARS, Omission, SecretFact, SpeakerFragment,
@@ -17,6 +18,7 @@ from .profile import (
 )
 
 __all__ = [
+    "FLATTENED_THRESHOLD", "example_copies", "flattened", "voice_overlap",
     "SpeakerRenderer", "SpeakerRequest", "SpokenLine", "render_speakers",
     "DEFAULT_MAX_CHARS", "EXAMPLES_HEADER", "HEADER", "MIN_MAX_CHARS", "Omission", "SecretFact",
     "SpeakerFragment", "speaker_fragment",
