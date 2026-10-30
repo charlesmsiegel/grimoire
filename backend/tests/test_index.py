@@ -416,3 +416,29 @@ def test_legacy_map_rejects_unpinned_targets_and_one_to_many():
             (LegacyId("arch-a", "a.md"), ref(LANTERN, "vessa", "v1")),
         ])
     assert caught.value.sources == ()  # the migration mapping is at fault, not either source
+
+
+@dataclass
+class _MutableDef:
+    ref: SourceRef
+    name: str
+
+
+def test_mutable_dataclass_definitions_are_rejected():
+    with pytest.raises(IdentityConflict) as caught:
+        DefinitionIndex(**with_parts(
+            sources=descriptors(LANTERN), definitions=[_MutableDef(ref(LANTERN, "vessa", "v1"), "Vessa")],
+        ))
+    assert caught.value.sources == (LANTERN,)
+
+
+def test_a_definition_whose_ref_changes_after_build_is_never_returned():
+    class Shifty:
+        def __init__(self, ref, name):
+            self.ref, self.name = ref, name
+
+    shifty = Shifty(ref(LANTERN, "vessa", "v1"), "Vessa")
+    index = DefinitionIndex(**with_parts(sources=descriptors(LANTERN), definitions=[shifty]))
+    shifty.ref = ref(EMBER, "vessa", "r1")
+    with pytest.raises(ValueError):
+        index.resolve(ref(LANTERN, "vessa", "v1"))

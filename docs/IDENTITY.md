@@ -34,7 +34,7 @@ The scheme makes the three forms mutually unambiguous. `parse_ref` dispatches on
 
 ## Definition index
 
-`DefinitionIndex(sources, definitions, heads, links)` is immutable and read-only. It accepts any definition with a pinned `.ref` and a `.name`.
+`DefinitionIndex(sources, definitions, heads, links)` is immutable and read-only. It accepts any immutable definition with a pinned `.ref` and a `.name`: non-frozen dataclasses are rejected, and a definition whose ref is mutated after registration is never returned.
 
 - `resolve(ref)` returns the definition. Otherwise it raises `MissingDefinition` with `.reason`: `missing_source`, `missing_entity` or `missing_revision`.
 - `check(ref)` returns a `BrokenReference` or `None`, and `check_links()` reports link endpoints that do not resolve. Core never rewrites or drops a broken reference. Persisting broken-reference information is the file store's job.

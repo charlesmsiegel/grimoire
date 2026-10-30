@@ -10,6 +10,7 @@ cannot make a user's own world unresolvable.
 
 from __future__ import annotations
 
+import dataclasses
 import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -27,7 +28,11 @@ EntityKey = tuple[str, str, str]
 
 
 class Definition(Protocol):
-    """Anything with a pinned source-qualified ref and a display name."""
+    """An immutable value with a pinned source-qualified ref and a display name.
+
+    Dataclass definitions must be frozen; the index also refuses to return a
+    definition whose ref no longer matches the one it was registered under.
+    """
 
     @property
     def ref(self) -> SourceRef: ...
@@ -159,6 +164,8 @@ class DefinitionIndex:
                     f"{ref.source} uses entity id {ref.entity_id} for both {kind} and {ref.kind}",
                     (ref.source,),
                 )
+            if dataclasses.is_dataclass(definition) and not type(definition).__dataclass_params__.frozen:
+                raise IdentityConflict(f"definition {ref} must be immutable (a frozen dataclass)", (ref.source,))
             if not isinstance(getattr(definition, "name", None), str):
                 raise IdentityConflict(f"definition {ref} has no text name", (ref.source,))
             revisions = self._revisions.setdefault(ref.entity_key, {})
@@ -243,7 +250,10 @@ class DefinitionIndex:
         revision = ref.revision if ref.pinned else self._heads[ref.entity_key]
         if revision not in revisions:
             return BrokenReference(ref, "missing_revision")
-        return revisions[revision]
+        definition = revisions[revision]
+        if definition.ref != ref.at(revision):
+            raise ValueError(f"definition registered as {ref.at(revision)} was mutated to {definition.ref}")
+        return definition
 
     def resolve(self, ref: SourceRef) -> Definition:
         """The exact pinned revision, or the head for an unpinned reference."""
