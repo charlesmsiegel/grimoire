@@ -4,7 +4,7 @@ V1's media model is **not** just `images/<filename>`. The migration must preserv
 
 ## V1 layout
 
-The 0.2.1 `image_store.py` contract stores immutable encoded image bytes at `<V1-home>/assets/image-store/blobs/<first-two-hash-chars>/<sha256>.<ext>` and picture-object sidecars at `.../objects/<prefix>/px1-<id>.json`. `image_refs.py` stores one placement at `<record-assets-dir>/image-refs/<logical-name>.json`, referring to the pixel object, plus optional focus. Legacy loose files may coexist and act as fallback when a placement is unavailable.
+The 0.2.1 `image_store.py` contract stores immutable encoded image bytes at `<V1-home>/assets/image-store/blobs/<first-two-hash-chars>/<sha256>.<ext>` and picture-object sidecars at `.../objects/<id[4:6]>/px1-<64 hex>.json` (the shard is the two hex digits *after* `px1-`). `image_refs.py` stores one placement at `<record-assets-dir>/image-refs/<logical-name>.json` (`{"format": 1, "image": "px1-…", "focus": 0-100}`; a focus-only file is a crop override, not a picture). Expression sprites are placements under `<actor>/assets/<version>/expressions/revisions/<revision>/<outfit>/image-refs/<expression>.json`, made live by `expressions/manifest.json`, whose content digest must match or the whole layer is unavailable. Legacy loose files may coexist and act as fallback when a placement is unavailable.
 
 An object (same picture/pixels) is not the same as its encoded blob (byte-for-byte content); and an object's identity is not the same as the use of that object as an avatar, gallery illustration or expression sprite.
 
