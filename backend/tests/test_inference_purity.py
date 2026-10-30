@@ -10,7 +10,7 @@ ALLOWED_STDLIB = {"__future__", "collections", "dataclasses", "enum", "functools
                   "itertools", "types", "typing"}
 OWN_PACKAGE = "grimoire.core.inference"
 BANNED_BUILTINS = {"open", "exec", "eval", "compile", "__import__", "input", "print",
-                   "breakpoint"}
+                   "breakpoint", "__builtins__", "globals", "locals", "vars"}
 
 
 def _sources():

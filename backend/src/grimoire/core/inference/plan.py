@@ -144,6 +144,9 @@ class TurnInferencePlan:
             identifier(phase, "phase")
         if len(set(self.phases)) != len(self.phases):
             raise InferencePlanError(f"repeated phase in {self.phases!r}")
+        for call in self.calls:
+            if not isinstance(call, PlannedCall):
+                raise InferencePlanError(f"not a planned call: {call!r}")
         if len(self.call_ids) != len(self.calls):
             raise InferencePlanError("duplicate call id")
 
@@ -152,8 +155,6 @@ class TurnInferencePlan:
         generated: set[str] = set()
         reached = 0
         for call in self.calls:
-            if not isinstance(call, PlannedCall):
-                raise InferencePlanError(f"not a planned call: {call!r}")
             cid = call.call_id
             if (cid.campaign_id, cid.turn_id) != (self.campaign_id, self.turn_id):
                 raise InferencePlanError(f"{cid!r} belongs to another turn")

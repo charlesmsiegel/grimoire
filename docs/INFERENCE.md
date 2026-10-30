@@ -41,6 +41,8 @@ These raise `InferencePlanError` before anything is planned:
 
 - a speaker who is absent, listed twice, or already generated this turn;
 - a player-controlled speaker (player sovereignty);
+- a duplicate present actor id;
+- a baseline stage (`npc_generation`) in an optional request;
 - an optional request about an absent or player-controlled actor;
 - a blank id, or a repeated phase.
 
@@ -86,7 +88,7 @@ A ledger's `summary()` breaks usage down into `total`, `baseline`, `optional`, `
 - `complete`: no unmetered call, and every attempt reported input and output.
 - `provider_reported_only`: `complete`, and every count was provider-reported. It is never true for an empty ledger.
 
-Summaries are validated: their breakdowns must add up to their total, and the flags are derived from their own figures.
+Summaries are validated: their breakdowns must add up, stage by stage, and the flags are derived from their own figures. A summary or session cannot check itself against the plan, so **only a summary produced by `TurnUsageLedger.summary()` from a ledger bound to the turn's final plan is evidence of what a turn used**; never trust a hand-built or deserialised one for cost comparisons.
 
 `SessionUsage(campaign_id)` aggregates turn summaries and counts each turn once. It carries the same totals and breakdowns (`total`, `baseline`, `optional`, `by_stage`, `by_actor`) and the same flags (`unmetered_call_ids`, `measurements`, `complete`, `provider_reported_only`). Usage values are immutable and hashable.
 

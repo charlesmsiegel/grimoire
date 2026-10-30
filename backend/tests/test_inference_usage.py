@@ -331,3 +331,18 @@ def test_unsent_attempts_do_not_taint_measurements():
     assert summary.provider_reported_only
     session = SessionUsage("campaign-1").add(summary)
     assert session.measurements == {PROVIDER} and session.provider_reported_only
+
+
+def test_hand_built_summaries_keep_baseline_and_optional_apart():
+    plan = two_speakers(optional_requests=[OptionalRequest("critique", None, "check")],
+                        policy=InferencePolicy({"critique": 1}))
+    real = booked(plan, attempt(plan.calls[0], 10, 1), attempt(plan.calls[1], 10, 1),
+                  attempt(plan.calls[2], 900, 9)).summary()
+    with pytest.raises(ValueError):  # optional tokens passed off as baseline
+        replace(real, baseline=real.optional, optional=real.baseline)
+    with pytest.raises(ValueError):
+        replace(real, by_stage={"bogus": real.total})
+    with pytest.raises(ValueError):
+        replace(real, phases=(1, 2))
+    with pytest.raises(ValueError):
+        replace(real, declined=("junk",))

@@ -195,3 +195,21 @@ def test_hand_built_plans_keep_phase_order_and_honest_declines():
         replace(late_call, declined=(DeclinedRequest("early", decide, "cap_reached"),))
     with pytest.raises(ValueError):
         DeclinedRequest("main", decide, ["disabled"])  # type: ignore[arg-type]
+
+
+def test_hand_built_calls_and_declines_must_follow_phase_order():
+    decide = OptionalRequest("decision", None, "choose")
+    critique = OptionalRequest("critique", None, "check")
+    turn = plan(phase="select", speaking_npc_ids=(), optional_requests=[decide, critique],
+                policy=InferencePolicy({"decision": 1}))
+    turn = turn.add_phase("main", speaking_npc_ids=("npc-b",), optional_requests=[critique])
+    select_call, main_call = turn.calls
+    with pytest.raises(InferencePlanError, match="phase order"):
+        replace(turn, calls=(main_call, select_call))
+    with pytest.raises(InferencePlanError, match="phase order"):
+        replace(turn, declined=tuple(reversed(turn.declined)))
+
+
+def test_hand_built_plan_with_a_non_call_is_a_plan_error():
+    with pytest.raises(InferencePlanError):
+        replace(plan(), calls=("not a call",))

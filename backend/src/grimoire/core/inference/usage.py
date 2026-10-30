@@ -178,9 +178,10 @@ def _provider_reported_only(complete: bool, measurements: frozenset[Measurement]
 class TurnUsageSummary:
     """A turn's usage by stage and actor, with its missing data called out.
 
-    Validated on construction (the breakdowns must add up to the total), and
-    ``complete`` and ``provider_reported_only`` are derived, so a summary cannot
-    claim completeness its own figures contradict.
+    Validated on construction (the breakdowns must add up, stage by stage), and
+    ``complete`` and ``provider_reported_only`` are derived from its own figures.
+    A summary cannot check itself against the plan, though: only one produced by
+    ``TurnUsageLedger.summary()`` is evidence of what a turn actually used.
     """
 
     campaign_id: str
@@ -198,7 +199,12 @@ class TurnUsageSummary:
         identifier(self.campaign_id, "campaign_id")
         identifier(self.turn_id, "turn_id")
         object.__setattr__(self, "phases", collection(self.phases, "phases"))
+        for phase in self.phases:
+            identifier(phase, "phase")
         object.__setattr__(self, "declined", collection(self.declined, "declined"))
+        for declined in self.declined:
+            if not isinstance(declined, DeclinedRequest):
+                raise ValueError(f"not a declined request: {declined!r}")
         object.__setattr__(self, "unmetered_call_ids",
                            frozenset(collection(self.unmetered_call_ids, "unmetered_call_ids")))
         for name in ("by_stage", "by_actor"):
@@ -208,11 +214,20 @@ class TurnUsageSummary:
         for name in ("total", "baseline", "optional"):
             if not isinstance(getattr(self, name), UsageTotals):
                 raise ValueError(f"{name} must be UsageTotals")
-        for label, parts in (("baseline + optional", (self.baseline, self.optional)),
-                             ("by_stage", self.by_stage.values()),
-                             ("by_actor", self.by_actor.values())):
-            if _sum(parts) != self.total:
-                raise ValueError(f"{label} does not add up to the total")
+        if not all(isinstance(stage, InferenceStage) for stage in self.by_stage):
+            raise ValueError("by_stage keys must be inference stages")
+        if not all(actor is None or isinstance(actor, str) for actor in self.by_actor):
+            raise ValueError("by_actor keys must be actor ids or None")
+        stage_totals = self.by_stage.items()
+        for label, parts, expected in (
+                ("baseline + optional", (self.baseline, self.optional), self.total),
+                ("by_stage", self.by_stage.values(), self.total),
+                ("by_actor", self.by_actor.values(), self.total),
+                ("baseline stages", (t for s, t in stage_totals if s.is_baseline), self.baseline),
+                ("optional stages", (t for s, t in stage_totals if not s.is_baseline),
+                 self.optional)):
+            if _sum(parts) != expected:
+                raise ValueError(f"{label} does not add up")
         for cid in self.unmetered_call_ids:
             if not isinstance(cid, CallId) or (cid.campaign_id, cid.turn_id) != (
                     self.campaign_id, self.turn_id):
