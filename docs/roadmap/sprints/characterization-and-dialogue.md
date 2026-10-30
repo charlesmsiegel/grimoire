@@ -1,5 +1,7 @@
 # Distinct Characterization and Dialogue Quality
 
+**Status:** first slice (milestone 1 and the Wave 2 handoff) implemented as the pure `grimoire.voice` package; see the [voice evidence contract](../../VOICE.md). Portrayal-scoped profiles, campaign pins/overrides, a fail-closed single-speaker fragment and a one-call-per-NPC rendering contract are proved **on synthetic fixtures with a deterministic fake renderer**, scored by the offline story-quality checks. No provider, persistence or scene runner calls it yet (027, 010, 035). Milestones 2 and 3 are open.
+
 > **V2 scope correction:** Retain V0.2.1's *separate generation per speaking NPC* as the default. Never replace this with one ensemble model call merely to save money. Preserve distinctive source voice evidence in compact individual prompts; no paid per-NPC background thinking by default. See the [V2 ordered roadmap](../README.md) for prerequisites, waves and current first-slice proof. Older references to shipped V1 APIs describe behavior to *port*, not V2 capabilities.
 
 
