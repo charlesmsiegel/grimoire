@@ -296,3 +296,10 @@ def test_unauditable_decisions_deny_and_do_not_consume(authority, monkeypatch):
     assert not decision.allowed and decision.reason is Reason.INTERNAL_ERROR
     assert authority.audit() == ()
     assert [a.approval_id for a in authority.pending_approvals()] == ["a-wren"]
+
+
+def test_handle_cannot_be_reinitialized(authority):
+    handle = authority.handle_for(WORKER)
+    with pytest.raises(AttributeError):
+        handle.__init__(authority, WORKER, True)
+    assert handle.trusted is False

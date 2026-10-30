@@ -200,6 +200,8 @@ class WorkerHandle:
     __slots__ = ("_authority", "_principal", "_trusted")
 
     def __init__(self, authority: Authorizer, principal: str, trusted: bool) -> None:
+        if hasattr(self, "_authority"):
+            raise AttributeError("a worker handle's principal and origin are fixed")
         object.__setattr__(self, "_authority", authority)
         object.__setattr__(self, "_principal", principal)
         object.__setattr__(self, "_trusted", trusted)

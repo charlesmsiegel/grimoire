@@ -11,6 +11,7 @@ Imported Markdown, character cards (including extensions and greetings), rules s
 - Trusted application code owns the `Authorizer`: grants, approvals, policy and audit.
 - Each worker gets only a `WorkerHandle` from `authorizer.handle_for(principal, trusted=False)`. The handle fixes the principal and origin and exposes only `authorize(permission, resource, payload=None, approval_id=None)`. Its API offers no way to add grants, register approvals, pick an identity or claim trust, and it refuses attribute writes. Arguments must be exact `str`/`bytes` instances; subclasses that could override hashing, equality or methods are `malformed_request`.
 - Only `human:` and `app:` principals may hold a trusted handle. **Any code path that parses imported content or model output must use an untrusted handle, whatever its principal namespace.** For example, an `app:` importer must not be trusted.
+- An `Authorizer` and its handles are single-threaded; callers that share one across threads must serialize access (approval consumption is not locked).
 - This is an API boundary enforced by tests and review. It is not an in-process sandbox: Python code that deliberately reaches into private attributes, closures or other modules can subvert any in-process check; isolating community scripts remains the sprint's moonshot.
 
 ## Permissions
@@ -30,7 +31,7 @@ Requests name **logical addresses** inside one V2 library, such as `worlds/harbo
 
 - relative and `/`-separated, with 1–32 segments and at most 1024 characters in total;
 - each segment has 1–128 characters and at most 255 UTF-8 bytes, and equals its `NFKC(casefold(NFKC(·)))` form;
-- allowed characters are Unicode letters, combining marks (not as a segment's first character), decimal digits and `-`, `_`, `.`; default-ignorable code points that render as nothing (variation selectors, Hangul fillers, joiners) are rejected;
+- allowed characters are Unicode letters, combining marks (not as a segment's first character), decimal digits and `-`, `_`, `.`; Unicode `Default_Ignorable_Code_Point` characters (variation selectors, Hangul fillers, zero-width joiners) are rejected — other near-invisible marks are caught only by the non-ASCII flag described below;
 - no segment may start or end with `.`, and no segment may be a Windows device name (`con`, `nul.txt`, `com1` and so on).
 
 These rules reject traversal, absolute paths, separators, whitespace, control/format/surrogate/private/unassigned characters, uppercase and compatibility aliases. Scope containment compares whole segments, so `worlds/harbor2` is not inside `worlds/harbor`. Some words cannot appear verbatim (`straße`, final sigma); display names belong in record content. Validation follows the running Python's Unicode tables, so a newer address may be rejected by an older runtime. That fails closed.
