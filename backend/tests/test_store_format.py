@@ -211,3 +211,9 @@ def test_nesting_is_capped_so_whatever_is_written_reads_back():
     assert parse_record(parse_strict(render(record_document(envelope, None))))[0] == envelope
     with pytest.raises(JsonError):
         parse_strict(b'{"a": ' + b"[" * 150 + b"]" * 150 + b"}")
+
+
+def test_a_document_larger_than_a_reader_accepts_is_refused_when_written():
+    big = RecordEnvelope(INST, {"text": "x" * (8 * 1024 * 1024)})
+    with pytest.raises(InvalidEnvelope, match="larger than"):
+        render(record_document(big, None))

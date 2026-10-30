@@ -104,7 +104,7 @@ def is_link(path: PathArg) -> bool:
     if stat.S_ISLNK(status.st_mode):
         return True
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    return bool(getattr(status, "st_file_attributes", 0) & reparse)
+    return bool((getattr(status, "st_file_attributes", 0) or 0) & reparse)
 
 
 def lstat_or_none(path: PathArg) -> os.stat_result | None:

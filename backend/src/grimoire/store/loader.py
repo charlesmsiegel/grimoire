@@ -27,7 +27,8 @@ from .diskops import is_link, lstat_or_none
 from .engine import Access
 from .envelope import EnvelopeError, LinkSpec, RecordEnvelope, SourceManifest, link_problem, parse_record, parse_source
 from .errors import (
-    AddressMismatch, MalformedRecord, RecordNotFound, StoreError, UnstorableIdentifier, UnsupportedFormat,
+    AddressMismatch, LinkRefused, MalformedRecord, RecordNotFound, StoreError, UnstorableIdentifier,
+    UnsupportedFormat,
 )
 from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
@@ -99,9 +100,9 @@ def _text(parts: Parts) -> str:
 
 def _document(access: Access, parts: Parts) -> tuple[Mapping[str, object], str]:
     """Parsed JSON and its etag; ``MalformedRecord`` for anything unreadable."""
-    if access.too_large(parts):
-        raise MalformedRecord(f"{_text(parts)} is too large to read", None)
     try:
+        if access.too_large(parts):
+            raise MalformedRecord(f"{_text(parts)} is too large to read", None)
         data = access.read(parts)
     except OSError as error:
         raise MalformedRecord(f"{_text(parts)} cannot be read: {error}", None) from error
@@ -156,8 +157,12 @@ class SourceScan:
 
 
 def _is_dir(access: Access, parts: Parts) -> bool:
-    info = lstat_or_none(access.path(parts))
-    return info is not None and stat.S_ISDIR(info.st_mode)
+    """A real directory (an unreadable or linked one is not entered)."""
+    try:
+        info = lstat_or_none(access.path(parts))
+    except OSError:
+        return False
+    return info is not None and stat.S_ISDIR(info.st_mode) and not is_link(access.path(parts))
 
 
 def _listing(access: Access, parts: Parts, problems: list[LoadProblem], source: str | None) -> list[str]:
@@ -228,11 +233,13 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
                 scan.excluded_by.append(LoadProblem(_text(base + (MANIFEST,)), "ownership", found[1], source_id))
     if access.presence(base) != "present" or not _is_dir(access, base):
         return scan
-    for name in _listing(access, base, problems, source_id):
+    access.guard.check_read(base)  # never list through a linked ancestor (LinkRefused)
+    names = _listing(access, base, problems, source_id)  # links are reported here, not entered
+    for name in names:
         if name not in (MANIFEST, RECORDS):
             _unrecognized(access, base + (name,), problems, source_id)
     records = base + (RECORDS,)
-    if access.presence(records) != "present" or not _is_dir(access, records):
+    if RECORDS not in names or not _is_dir(access, records):
         return scan
     for kind in _listing(access, records, problems, source_id):
         for entity_id in _listing(access, records + (kind,), problems, source_id) if _is_dir(
@@ -270,6 +277,17 @@ def scan_source(access: Access, source_id: str) -> SourceScan:
         if not _is_dir(access, records + (kind,)):
             _unrecognized(access, records + (kind,), problems, source_id)
     return scan
+
+
+def _contained_scan(access: Access, source_id: str) -> SourceScan:
+    """``scan_source``, with any I/O or link failure excluding only this source."""
+    try:
+        return scan_source(access, source_id)
+    except (OSError, StoreError, ValueError) as error:
+        scan = SourceScan(source_id)
+        code = "link" if isinstance(error, LinkRefused) else "unreadable"
+        scan.excluded_by.append(LoadProblem(_text(manifest_parts(source_id)[:-1]), code, str(error), source_id))
+        return scan
 
 
 def _code(error: BaseException) -> str:
@@ -412,32 +430,40 @@ def _valid_segment(name: str) -> bool:
 def _discover_instances(access: Access, problems: list[LoadProblem]) -> dict[InstanceRef, StoredRecord]:
     instances: dict[InstanceRef, StoredRecord] = {}
     for campaign in _listing(access, (CAMPAIGNS,), problems, None):
-        base = (CAMPAIGNS, campaign)
-        if not _is_dir(access, base) or not _valid_segment(campaign):
-            _unrecognized(access, base, problems, None)
-            continue
-        for entry in _listing(access, base, problems, None):
-            if entry in RESERVED_CAMPAIGN_ENTRIES:
-                continue
-            if entry != INSTANCES or not _is_dir(access, base + (entry,)):
-                _unrecognized(access, base + (entry,), problems, None)
-                continue
-            for kind in _listing(access, base + (INSTANCES,), problems, None):
-                folder = base + (INSTANCES, kind)
-                if not _is_dir(access, folder) or not _valid_segment(kind):
-                    _unrecognized(access, folder, problems, None)
-                    continue
-                for name in _listing(access, folder, problems, None):
-                    parts = folder + (name,)
-                    found = classify(parts)
-                    if found is None or found[0] != "instance":
-                        _unrecognized(access, parts, problems, None)
-                        continue
-                    try:
-                        instances[found[1]] = read_record(access, parts)  # type: ignore[index]
-                    except (StoreError, ValueError, OSError) as error:
-                        problems.append(LoadProblem(_text(parts), _code(error), str(error)))
+        try:
+            _discover_campaign(access, campaign, instances, problems)
+        except OSError as error:  # an unreadable campaign folder: report it, load the rest
+            problems.append(LoadProblem(_text((CAMPAIGNS, campaign)), "unreadable", str(error)))
     return instances
+
+
+def _discover_campaign(access: Access, campaign: str, instances: dict[InstanceRef, StoredRecord],
+                       problems: list[LoadProblem]) -> None:
+    base = (CAMPAIGNS, campaign)
+    if not _is_dir(access, base) or not _valid_segment(campaign):
+        _unrecognized(access, base, problems, None)
+        return
+    for entry in _listing(access, base, problems, None):
+        if entry in RESERVED_CAMPAIGN_ENTRIES:
+            continue
+        if entry != INSTANCES or not _is_dir(access, base + (entry,)):
+            _unrecognized(access, base + (entry,), problems, None)
+            continue
+        for kind in _listing(access, base + (INSTANCES,), problems, None):
+            folder = base + (INSTANCES, kind)
+            if not _is_dir(access, folder) or not _valid_segment(kind):
+                _unrecognized(access, folder, problems, None)
+                continue
+            for name in _listing(access, folder, problems, None):
+                parts = folder + (name,)
+                found = classify(parts)
+                if found is None or found[0] != "instance":
+                    _unrecognized(access, parts, problems, None)
+                    continue
+                try:
+                    instances[found[1]] = read_record(access, parts)  # type: ignore[index]
+                except (StoreError, ValueError, OSError) as error:
+                    problems.append(LoadProblem(_text(parts), _code(error), str(error)))
 
 
 def load(access: Access) -> LibraryView:
@@ -456,7 +482,7 @@ def _load(access: Access) -> LibraryView:
             continue
         _unrecognized(access, (name,), problems, None)
 
-    scans = {source_id: scan_source(access, source_id) for source_id in
+    scans = {source_id: _contained_scan(access, source_id) for source_id in
              (discover_sources(access, problems) if SOURCES in roots else [])}
     excluded: set[str] = set()
     for source_id, scan in scans.items():

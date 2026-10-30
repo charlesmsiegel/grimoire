@@ -417,3 +417,39 @@ def test_in_source_links_register_before_cross_source_ones(library):
     kept = {(str(link.subject), str(link.object)) for link in view.index.links_for(a.unpinned())}
     assert (str(a), str(b)) in kept
     assert [p.code for p in view.problems] == ["bad_link"]
+
+
+def test_an_unreadable_source_is_excluded_and_the_rest_still_loads(library, monkeypatch):
+    import os as _os
+    _commit(library, (SourceManifest(ADDON, "human:fan"), None), (RecordEnvelope(ALT, {}), None))
+    real = _os.lstat
+    denied = str(library.root / "sources" / "addon" / "fan" / "_source" / "manifest.json")
+
+    def lstat(path, *args, **kwargs):  # a `_source` folder the reader may list but not search
+        if str(path) == denied:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(_os, "lstat", lstat)
+    view = library.load()
+    assert view.excluded == (ADDON,) and view.index.resolve(WREN).ref == WREN_R1
+
+
+def test_a_linked_records_folder_is_never_listed(library, tmp_path):
+    _commit(library, (SourceManifest(ADDON, "human:fan"), None), (RecordEnvelope(ALT, {}), None))
+    records = library.root / "sources/addon/fan/_source/records"
+    shutil.move(str(records), str(tmp_path / "elsewhere"))
+    make_dir_link(records, tmp_path / "elsewhere")
+    ops = RootedFileOps(library.root, record=False)  # raises on any operation through a link
+    with LibraryStore.open(library.root, ops=ops, writable=False) as reader:
+        view = reader.load()
+    assert ops.sandbox_violation is None
+    assert ("sources/addon/fan/_source/records", "link") in {(p.path, p.code) for p in view.problems}
+
+
+def test_links_are_validated_against_every_manifest_in_the_transaction(library):
+    a, b = SourceRef("world:a", "k", "x", "r1"), SourceRef("world:b", "k", "y", "r1")
+    with pytest.raises(InvalidSourceState, match="cycle"):
+        _commit(library,
+                (SourceManifest("world:a", OWNER, links=(LinkSpec(str(a), "derived_variant", str(b)),)), None),
+                (SourceManifest("world:b", OWNER, links=(LinkSpec(str(b), "derived_variant", str(a)),)), None),
+                (RecordEnvelope(a, {}), None), (RecordEnvelope(b, {}), None))

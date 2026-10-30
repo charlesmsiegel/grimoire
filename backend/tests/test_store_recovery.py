@@ -480,3 +480,81 @@ def test_tampered_staging_is_preserved_and_never_published(tmp_path, crash_after
         assert b'{"tampered": true}' in [
             (root / LIB / path).read_bytes() for path in store.conflicts()]
     assert (root / MANIFEST).read_bytes() == old_manifest
+
+
+# -- regressions from the Codex review ----------------------------------------------------
+
+@pytest.mark.parametrize("swap", ["staged-link", "journal-link", "staged-fifo"])
+def test_recovery_never_reads_or_moves_unsafe_staging(tmp_path, swap):
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(locker)(RootedFileOps(root, record=False), root)
+    _crash_after_commit_point(root, locker)
+    txn = root / LIB / ".txn"
+    outside = tmp_path / "outside.json"
+    entry = json.loads((txn / "journal.json").read_bytes())["entries"][0]
+    if swap == "staged-link":
+        outside.write_bytes((txn / entry["temp"]).read_bytes())  # identical bytes: digest matches
+        (txn / entry["temp"]).unlink()
+        try:
+            os.symlink(outside, txn / entry["temp"])
+        except (OSError, NotImplementedError):
+            pytest.skip("cannot create file links here")
+    elif swap == "journal-link":
+        outside.write_bytes((txn / "journal.json").read_bytes())
+        (txn / "journal.json").unlink()
+        try:
+            os.symlink(outside, txn / "journal.json")
+        except (OSError, NotImplementedError):
+            pytest.skip("cannot create file links here")
+    else:
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("no FIFOs here")
+        (txn / entry["temp"]).unlink()
+        os.mkfifo(txn / entry["temp"])
+    names = sorted(os.listdir(txn))  # never snapshot: reading a FIFO would block the test itself
+    target = root / LIB / entry["target"]
+    target_bytes = target.read_bytes() if target.exists() else None
+    with pytest.raises(RecoveryFailed):
+        LibraryStore.open(root / LIB, locker=locker)
+    assert (target.read_bytes() if target.exists() else None) == target_bytes
+    assert sorted(os.listdir(txn)) == names  # nothing moved, nothing removed
+    assert locker.held == set()
+
+
+def test_recovery_without_a_journal_still_refuses_a_swapped_root(tmp_path):
+    locker = ProcessLocker()
+    store = LibraryStore.create(tmp_path / "lib", locker=locker)
+    seed(store)
+    victim = tmp_path / "victim"
+    (victim / ".txn").mkdir(parents=True)
+    (victim / ".txn" / "precious.new").write_text("not the store's")
+    os.rename(tmp_path / "lib", tmp_path / "lib-original")
+    os.rename(victim, tmp_path / "lib")
+    with pytest.raises(RecoveryFailed):
+        store.recover()
+    assert (tmp_path / "lib" / ".txn" / "precious.new").read_text() == "not the store's"
+    store.close()
+
+
+def test_preservation_never_drops_distinct_bytes(tmp_path):
+    """An edited conflict file at the computed name is kept; the store's version goes beside it."""
+    from grimoire.store.layout import conflict_parts
+    from grimoire.store import etag as etag_of
+    locker = ProcessLocker()
+    root = tmp_path / "root"
+    root.mkdir()
+    _setup(locker)(RootedFileOps(root, record=False), root)
+    _crash_after_commit_point(root, locker)
+    journal = json.loads((root / LIB / ".txn" / "journal.json").read_bytes())
+    entry = next(e for e in journal["entries"] if e["target"].endswith("manifest.json"))
+    staged = (root / LIB / ".txn" / entry["temp"]).read_bytes()
+    conflict = root / LIB / Path(*conflict_parts(tuple(entry["target"].split("/")), etag_of(staged)))
+    conflict.parent.mkdir(parents=True)
+    conflict.write_bytes(b"a human's notes in the conflict file")
+    (root / MANIFEST).write_bytes(HUMAN)  # forces preservation
+    with LibraryStore.open(root / LIB, locker=locker):
+        pass
+    assert conflict.read_bytes() == b"a human's notes in the conflict file"
+    assert (conflict.parent / (conflict.name + ".1")).read_bytes() == staged

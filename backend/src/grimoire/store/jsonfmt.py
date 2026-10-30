@@ -183,4 +183,7 @@ def render(document: Mapping[str, object]) -> bytes:
         raise
     except (ValueError, TypeError, RecursionError) as error:
         raise InvalidEnvelope(f"cannot be written as JSON: {error}") from None
-    return (text + "\n").encode("utf-8")
+    data = (text + "\n").encode("utf-8")
+    if len(data) > MAX_FILE_BYTES:
+        raise InvalidEnvelope(f"the document is larger than {MAX_FILE_BYTES} bytes, more than a reader accepts")
+    return data

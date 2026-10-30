@@ -114,6 +114,15 @@ class Access:
         data = self.read(parts)
         return None if data is None else etag(data)
 
+    def check_staged_file(self, name: str) -> None:
+        """A file in ``.txn`` the store will read or move: a real regular file, never a link."""
+        path = self.path((TXN, name))
+        if is_link(path):
+            raise LinkRefused(f"refusing a staged file that is a link: {path}")
+        info = lstat_or_none(path)
+        if info is not None and not stat.S_ISREG(info.st_mode):
+            raise UnstorableIdentifier(f"{path} is not a regular file")
+
     def check_staging(self) -> None:
         """``.txn`` and its lock are real entries of this library, never links elsewhere."""
         staging = self.path((TXN,))
@@ -160,7 +169,10 @@ def check_entry_paths(access: Access, journal: Journal) -> None:
     access.guard.check_write((TXN, JOURNAL), staging_device=None)
     staging = lstat_or_none(access.path((TXN,)))
     device = staging.st_dev if staging is not None else None
+    staged = set(access.ops.list_dir(access.path((TXN,))))
     for entry in journal.entries:
+        if entry.temp in staged:
+            access.check_staged_file(entry.temp)
         access.guard.check_write(entry.target, staging_device=device)
         access.guard.check_write(conflict_parts(entry.target, entry.new), staging_device=device)
 
@@ -171,16 +183,22 @@ def _replace_journal(access: Access, journal: Journal) -> None:
     access.ops.replace(temp, access.journal)
 
 
-def _preserve(access: Access, entry: Entry, settlement: Settlement) -> None:
-    conflict = conflict_parts(entry.target, entry.new)
+def _preserve(access: Access, entry: Entry, settlement: Settlement, digest: str) -> None:
+    """Move a staged version into ``.conflicts``, named by its *actual* digest; never drop distinct bytes."""
     staging = lstat_or_none(access.path((TXN,)))
-    access.guard.check_write(conflict, staging_device=staging.st_dev if staging else None)
     temp = access.path((TXN, entry.temp))
-    if access.presence(conflict) == "present":
-        access.ops.remove(temp)  # same digest, same name: preserved by an earlier attempt
-    else:
-        access.make_parent(conflict)
-        access.ops.replace(temp, access.path(conflict))
+    attempt = 0
+    while True:
+        conflict = conflict_parts(entry.target, digest, attempt)
+        access.guard.check_write(conflict, staging_device=staging.st_dev if staging else None)
+        if access.presence(conflict) == "absent":
+            access.make_parent(conflict)
+            access.ops.replace(temp, access.path(conflict))
+            break
+        if access.etag_of(conflict) == digest:
+            access.ops.remove(temp)  # the same bytes were preserved by an earlier attempt
+            break
+        attempt += 1  # an edited conflict file or a digest-prefix clash: keep both
     settlement.preserved.append(_text(conflict))
 
 
@@ -200,6 +218,7 @@ def settle(access: Access, journal: Journal) -> Settlement:
     def temp_digest(entry: Entry) -> str | None:
         if entry.temp not in staged:
             return None
+        access.check_staged_file(entry.temp)  # never read through a link or block on a FIFO
         return etag(access.ops.read_bytes(access.path((TXN, entry.temp))))
 
     if journal.state == "commit" and all(entry.temp in staged for entry in journal.entries):
@@ -213,8 +232,9 @@ def settle(access: Access, journal: Journal) -> Settlement:
             if journal.state == "commit" and entry.old != entry.new and access.etag_of(entry.target) == entry.old:
                 settlement.incomplete.append(_text(entry.target))
             continue
-        if journal.state == "abort" or temp_digest(entry) != entry.new:
-            _preserve(access, entry, settlement)
+        digest = temp_digest(entry)
+        if journal.state == "abort" or digest != entry.new:
+            _preserve(access, entry, settlement, digest)
             continue
         current = access.etag_of(entry.target)  # per-entry guard, immediately before acting
         if current == entry.old:
@@ -222,7 +242,7 @@ def settle(access: Access, journal: Journal) -> Settlement:
         elif current == entry.new:
             access.ops.remove(access.path((TXN, entry.temp)))
         else:
-            _preserve(access, entry, settlement)
+            _preserve(access, entry, settlement, digest)
     settlement.aborted = journal.state == "abort"
     access.ops.remove(access.journal)
     clean_staging(access)
@@ -237,11 +257,14 @@ def clean_staging(access: Access) -> None:
 
 
 def recover(access: Access) -> Settlement:
-    """Validate the journal and every path it names before changing anything."""
+    """Validate the root, the journal and every path it names before changing anything."""
     try:
+        access.guard.check_session()  # even with no journal: cleanup must not follow a swapped root
         access.check_staging()
-    except (StoreError, ValueError) as error:
-        raise RecoveryFailed(f"refusing to recover through an unsafe staging directory: {error}") from error
+        if access.journal_exists():
+            access.check_staged_file(JOURNAL)
+    except (StoreError, ValueError) as error:  # LibraryPathError is a ValueError
+        raise RecoveryFailed(f"refusing to recover through an unsafe root or staging: {error}") from error
     if not access.journal_exists():
         if access.presence((TXN,)) == "present":
             clean_staging(access)

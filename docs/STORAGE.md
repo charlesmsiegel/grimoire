@@ -16,7 +16,7 @@ Not in this slice:
   sources/<segs>/_source/records/<kind>/<entity_id>/<revision>.json   # one definition revision
   campaigns/<campaign_id>/instances/<kind>/<instance_id>.json     # one campaign instance
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
-  .conflicts/<hash16>/<name>~<digest12>                           # preserved versions awaiting a human
+  .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
   .conflicts/discarded-<digest12>/…                               # output of discard_journal
 ```
 
@@ -48,7 +48,7 @@ All files are JSON: UTF-8 without a BOM, a top-level object, at most 8 MiB.
 - lone surrogates, nesting deeper than 100 levels;
 - an unreadable file, or anything other than a regular file (a directory, FIFO or device) where a file belongs. These are never opened, so they cannot hang a reader.
 
-**Writing is deterministic:** sorted keys, two-space indent, `ensure_ascii=False`, trailing newline. A caller value that could not be read back is refused as `InvalidEnvelope`; this includes nesting deeper than 99 levels inside an envelope. A rewrite may reformat a hand-edited file; *values*, including unknown ones, are preserved. For the envelope's own optional fields (`name`, `owner`, `derived_from`, `base`, `base_etag`, `title`), an explicit `null` means absent and is not written back.
+**Writing is deterministic:** sorted keys, two-space indent, `ensure_ascii=False`, trailing newline. A caller value that could not be read back is refused as `InvalidEnvelope`; this includes nesting deeper than 99 levels inside an envelope and a rendered document larger than 8 MiB. A rewrite may reformat a hand-edited file; *values*, including unknown ones, are preserved. For the envelope's own optional fields (`name`, `owner`, `derived_from`, `base`, `base_etag`, `title`), an explicit `null` means absent and is not written back.
 
 **Etag (content revision):** `sha256:<hex>` of a file's exact bytes. It is never stored inside the file.
 
@@ -129,7 +129,7 @@ with LibraryStore.open(path) as store:                 # writer lock + recovery
 
 A writable `open` (and `store.recover()`) recovers before anything else.
 
-**Validation first.** Nothing changes unless the journal parses strictly, every target is a canonical record or manifest path, and every temp is a bare staging name in `.txn/`. All paths are re-checked as in step 3, so a link swapped in while the app was down is never written through. Any failure raises `RecoveryFailed`.
+**Validation first.** Nothing changes, not even cleanup of uncommitted staging when there is no journal, unless the root is still the one opened and outside V1. Recovery also requires that the journal and every staged file it names are regular files, not links or FIFOs, that the journal parses strictly, that every target is a canonical record or manifest path, and that every temp is a bare staging name in `.txn/`. All paths are re-checked as in step 3, so a link swapped in while the app was down is never written through. Any failure raises `RecoveryFailed`.
 
 Then each entry follows one table, shared with publication:
 
@@ -141,7 +141,7 @@ Then each entry follows one table, shared with publication:
 | present | = new | = new | temp removed |
 | present | = new | other, or only a differently spelled look-alike | preserved; the human's file is kept |
 
-An `abort` journal never publishes. A commit journal whose temps are all still present, and which would preserve any entry, is first rewritten as `abort`. A crash part-way through preserving can therefore never resume as a partial publish. Recovery then removes the journal and any uncommitted staging, and records `store.last_recovery`: what was published, preserved and left incomplete.
+A preserved version is named by the digest of its *actual* bytes. If that name already holds different bytes (for example, a human edited the conflict file), the version goes beside it as `….N`, so distinct bytes are never dropped. An `abort` journal never publishes. A commit journal whose temps are all still present, and which would preserve any entry, is first rewritten as `abort`. A crash part-way through preserving can therefore never resume as a partial publish. Recovery then removes the journal and any uncommitted staging, and records `store.last_recovery`: what was published, preserved and left incomplete.
 
 **Recovery blocked.** A persistent I/O error makes a writable `open` raise `RecoveryBlocked` and release the lock. A read-only open still works, but its reads raise `PendingRecovery`. The explicit human way out is `LibraryStore.discard_journal(path)`:
 - it takes the writer lock;

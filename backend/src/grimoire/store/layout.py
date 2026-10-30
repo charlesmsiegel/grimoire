@@ -136,7 +136,12 @@ def classify(parts: Parts) -> tuple[Kind, SourceRef | InstanceRef | str] | None:
     return found if canonical == parts else None
 
 
-def conflict_parts(target: Parts, new_etag: str) -> Parts:
-    """A bounded, flat home for a preserved version of ``target``."""
+def conflict_parts(target: Parts, new_etag: str, attempt: int = 0) -> Parts:
+    """A bounded, flat home for a preserved version of ``target``.
+
+    ``attempt`` distinguishes different bytes that would otherwise share a name
+    (an edited conflict file, or two versions with the same digest prefix).
+    """
     folder = hashlib.sha256("/".join(target).encode("utf-8")).hexdigest()[:16]
-    return (CONFLICTS, folder, f"{target[-1]}~{new_etag.removeprefix('sha256:')[:12]}")
+    name = f"{target[-1]}~{new_etag.removeprefix('sha256:')[:12]}"
+    return (CONFLICTS, folder, name if not attempt else f"{name}.{attempt}")

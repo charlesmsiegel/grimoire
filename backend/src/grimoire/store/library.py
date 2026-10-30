@@ -399,8 +399,9 @@ class _Commit:
                 ref = put.envelope.address
                 assert isinstance(ref, SourceRef)
                 touched.setdefault(ref.source, (None, []))[1].append(ref)
+        proposed = {source_id: manifest for source_id, (manifest, _) in touched.items() if manifest is not None}
         for source_id, (manifest, new_refs) in touched.items():
-            _validate_source(self.access, source_id, manifest, new_refs)
+            _validate_source(self.access, source_id, manifest, new_refs, proposed)
 
     def _authorize(self) -> None:
         decisions, denied = [], []
@@ -475,7 +476,7 @@ def _unsupported(data: bytes, manifest: bool) -> bool:
 
 
 def _validate_source(access: Access, source_id: str, manifest: SourceManifest | None,
-                     new_refs: list[SourceRef]) -> None:
+                     new_refs: list[SourceRef], proposed: Mapping[str, SourceManifest]) -> None:
     """Refuse new or worsened head, kind and link problems; leave unrelated old ones alone."""
     scan = loader.scan_source(access, source_id)
     disk_manifest = scan.stored.manifest if scan.stored else None
@@ -508,17 +509,17 @@ def _validate_source(access: Access, source_id: str, manifest: SourceManifest | 
         if head is None and len(files) > 1:
             raise InvalidSourceState(f"{unpinned} would have {len(files)} revisions and no head")
     if manifest is not None:
-        _validate_links(access, source_id, disk_manifest, manifest)
+        _validate_links(access, source_id, disk_manifest, manifest, proposed)
 
 
 def _validate_links(access: Access, source_id: str, before: SourceManifest | None,
-                    after: SourceManifest) -> None:
+                    after: SourceManifest, proposed: Mapping[str, SourceManifest]) -> None:
     """Refuse links the loader would drop that are not already dropped today (duplicates,
     reversed symmetric duplicates, derivation cycles, also against every other source)."""
     with access.cached_listings():
-        others = []
+        others = [manifest for other, manifest in proposed.items() if other != source_id]  # the post-commit view
         for other in loader.discover_sources(access):
-            if other == source_id:
+            if other == source_id or other in proposed:
                 continue
             try:
                 manifest = loader.read_source(access, other).manifest
