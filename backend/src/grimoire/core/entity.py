@@ -22,6 +22,7 @@ from .facets import Agent, Communicative, Durable, Facet, FacetBundle, FacetErro
 from .identity import InstanceRef, SourceRef
 from .index import DefinitionIndex
 from .json_value import JsonObject, JsonValueError, freeze_object
+from .model import CampaignActor, CharacterDefinition
 
 Nature = Literal["individual", "template"]
 Origin = Literal["trait", "replaced", "added"]
@@ -268,3 +269,16 @@ def propose_damage(instance: EntityInstance, amount: int, index: DefinitionIndex
         raise EntityError("only a durable entity can be damaged", "state_without_facet")
     others = tuple(value for value in instance.state if not isinstance(value, Integrity))
     return replace(instance, state=(*others, Integrity(max(0, current - amount))))
+
+
+# --- legacy first-slice bridge ----------------------------------------------------
+
+def entity_from_character(definition: CharacterDefinition) -> EntityDefinition:
+    """A Wave 1 character as an entity that can act; physicality is not invented."""
+    return EntityDefinition(definition.ref, definition.name, "individual", FacetSet([Agent()]),
+                            definition.description)
+
+
+def instance_from_actor(actor: CampaignActor) -> EntityInstance:
+    """A Wave 1 actor as an instance with the same segment, so its control still applies."""
+    return EntityInstance(actor.ref, actor.source, actor.local_name)
